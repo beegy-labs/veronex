@@ -15,11 +15,15 @@ It queues incoming requests and processes them sequentially, streaming results i
 
 ## Branch Strategy
 
+```
+develop → release → main
+```
+
 | Branch | Purpose |
 |--------|---------|
-| `main` | Stable production releases |
-| `release` | Release candidates / staging |
 | `develop` | Active development |
+| `release` | Release candidates / staging |
+| `main` | Stable production releases |
 
 ## License
 
