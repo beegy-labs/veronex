@@ -16,14 +16,18 @@ It queues incoming requests and processes them sequentially, streaming results i
 ## Branch Strategy
 
 ```
-develop → release → main
+develop → main
 ```
 
 | Branch | Purpose |
 |--------|---------|
 | `develop` | Active development |
-| `release` | Release candidates / staging |
 | `main` | Stable production releases |
+
+> **`release` branch** will be introduced when:
+> - A separate staging environment is available
+> - Multiple contributors require a QA freeze period
+> - Release candidates need independent validation before merging to `main`
 
 ## License
 
