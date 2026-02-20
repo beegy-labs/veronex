@@ -14,12 +14,10 @@
 ### Phase 2 — Enums
 
 - [ ] `JobStatus`: PENDING, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED
-- [ ] `BackendType`: OLLAMA, GEMINI, OPENAI, ANTHROPIC, OPENAI_COMPATIBLE
+- [ ] `BackendType`: OLLAMA, GEMINI
   - OLLAMA: local GPU server (url required, no api_key)
-  - GEMINI: Google Gemini API — **1차 클라우드 API 타겟**
-  - OPENAI: OpenAI API (api.openai.com)
-  - ANTHROPIC: Anthropic API (api.anthropic.com)
-  - OPENAI_COMPATIBLE: custom endpoint (vLLM, LocalAI, Groq, Together AI, etc.)
+  - GEMINI: Google Gemini API
+  - *(확장 시 새 값 추가만 하면 됨 — 포트/라우터는 변경 없음)*
 - [ ] `ModelStatus`: AVAILABLE, LOADING, LOADED, UNLOADING
 - [ ] `ObservabilityBackend`: OTEL, CLICKHOUSE, STDOUT
 
