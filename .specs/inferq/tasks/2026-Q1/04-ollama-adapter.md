@@ -21,11 +21,13 @@ class IGpuPort(Protocol):
 
 ### Phase 2 — OllamaAdapter
 
-- [ ] Implement `OllamaAdapter(IGpuPort)` using `httpx.AsyncClient`:
+- [ ] `OllamaAdapter(IGpuPort)` — **서버 1개당 1 인스턴스**, url 주입:
 
 ```python
 class OllamaAdapter:
-    BASE_URL = "http://ollama:11434"
+    def __init__(self, server: GpuServer, client: httpx.AsyncClient):
+        self.server = server
+        self.client = client  # base_url = server.url
 
     async def stream_infer(self, job) -> AsyncIterator[StreamToken]:
         async with self.client.stream("POST", "/api/generate", json={
@@ -39,15 +41,71 @@ class OllamaAdapter:
                 yield StreamToken(data["response"], data.get("done", False))
 
     async def get_loaded_models(self):
-        resp = await self.client.get("/api/ps")  # Ollama loaded models API
+        resp = await self.client.get("/api/ps")
         return [(m["name"], m["size_vram"]) for m in resp.json()["models"]]
 
     async def unload_model(self, model_name):
-        # keep_alive=0 triggers immediate unload
         await self.client.post("/api/generate", json={
-            "model": str(model_name),
-            "keep_alive": 0,
+            "model": str(model_name), "keep_alive": 0,
         })
+
+    async def health(self) -> bool:
+        try:
+            resp = await self.client.get("/", timeout=3.0)
+            return resp.status_code == 200
+        except Exception:
+            return False
+```
+
+### Phase 2-1 — GPU Server Registry
+
+- [ ] `IGpuServerRegistry` 구현 (`PostgresGpuServerRegistry`):
+  - GPU 서버 목록: PostgreSQL `gpu_servers` 테이블
+  - 헬스 상태 캐시: Valkey `gpu:server:{id}:status` (TTL 30s)
+  - 헬스체크 백그라운드 태스크: 매 15초 전체 서버 ping
+
+```sql
+CREATE TABLE gpu_servers (
+    id          VARCHAR(64) PRIMARY KEY,   -- "gpu-01"
+    url         VARCHAR(255) NOT NULL,     -- "http://host:11434"
+    total_vram_mb INTEGER NOT NULL DEFAULT 0,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    registered_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+### Phase 2-2 — ModelAffinityRouter
+
+- [ ] `application/use_cases/model_affinity_router.py`:
+
+```python
+class ModelAffinityRouter:
+    """
+    라우팅 우선순위:
+    1. 해당 모델이 로드된 서버 중 active_calls 최소
+    2. 모델 미로드 → free VRAM 최대 서버 선택 후 load
+    3. 없으면 ResourceExhaustedError
+    """
+    async def route(self, model_name: ModelName) -> tuple[GpuServer, IGpuPort]:
+        servers = await self.registry.list_online()
+
+        # 모델 로드된 서버 필터
+        loaded = [
+            s for s in servers
+            if model_name in await self._get_loaded_models(s)
+        ]
+        if loaded:
+            # least active_calls
+            target = min(loaded, key=lambda s: self._active_calls(s))
+            return target, self._adapter(target)
+
+        # 모델 미로드 → VRAM 여유 최대
+        candidates = sorted(servers, key=lambda s: self._free_vram(s), reverse=True)
+        if not candidates:
+            raise ResourceExhaustedError("No GPU servers available")
+        target = candidates[0]
+        await self._adapter(target).load_model(model_name)
+        return target, self._adapter(target)
 ```
 
 ### Phase 3 — Error Handling
@@ -64,10 +122,26 @@ curl http://localhost:11434/api/tags
 python -c "from src.infrastructure.outbound.gpu.ollama_adapter import OllamaAdapter"
 ```
 
+### Phase 4 — GPU Server 등록 API
+
+- [ ] Ollama 서버는 **코드가 아닌 API로 직접 등록**:
+
+```
+POST /v1/servers          → 서버 등록 (url, id, total_vram_mb)
+GET  /v1/servers          → 서버 목록 (상태, 로드된 모델 포함)
+DELETE /v1/servers/{id}   → 서버 제거
+POST /v1/servers/{id}/sync → 해당 서버 모델 목록 즉시 동기화
+```
+
+- [ ] 등록 시 즉시 헬스체크 → 실패 시 `DEGRADED` 상태로 등록
+- [ ] k8s/docker-compose 환경 모두 동일: 앱 시작 후 API로 서버 추가
+
 ## Done
 
 - [ ] `IGpuPort` protocol in `application/ports/outbound/`
-- [ ] `OllamaAdapter` implements all port methods
+- [ ] `OllamaAdapter` 서버 1개당 1 인스턴스 (url 주입)
+- [ ] `IGpuServerRegistry` + `ModelAffinityRouter` 구현
+- [ ] GPU 서버 등록/제거/조회 API (`/v1/servers`)
+- [ ] 헬스체크 백그라운드 태스크 (15초 주기)
 - [ ] `keep_alive=-1` on all inference requests
-- [ ] `keep_alive=0` for forced unload
 - [ ] Error mapping to domain exceptions complete
