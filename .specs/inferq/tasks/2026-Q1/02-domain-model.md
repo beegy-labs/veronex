@@ -14,7 +14,12 @@
 ### Phase 2 — Enums
 
 - [ ] `JobStatus`: PENDING, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED
-- [ ] `BackendType`: OLLAMA, LLAMA_CPP (future)
+- [ ] `BackendType`: OLLAMA, GEMINI, OPENAI, ANTHROPIC, OPENAI_COMPATIBLE
+  - OLLAMA: local GPU server (url required, no api_key)
+  - GEMINI: Google Gemini API — **1차 클라우드 API 타겟**
+  - OPENAI: OpenAI API (api.openai.com)
+  - ANTHROPIC: Anthropic API (api.anthropic.com)
+  - OPENAI_COMPATIBLE: custom endpoint (vLLM, LocalAI, Groq, Together AI, etc.)
 - [ ] `ModelStatus`: AVAILABLE, LOADING, LOADED, UNLOADING
 - [ ] `ObservabilityBackend`: OTEL, CLICKHOUSE, STDOUT
 
@@ -58,8 +63,30 @@ class InferenceResult:
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int
+    ttft_ms: int | None    # time-to-first-token
     tokens: list[str]
+    finish_reason: str     # stop | length | cancelled | error
 ```
+
+- [ ] `LlmBackend` (GpuServer 일반화):
+
+```python
+@dataclass
+class LlmBackend:
+    id: str                    # "gpu-01", "openai-main", "claude-prod"
+    name: str                  # display name
+    backend_type: BackendType
+    url: str                   # Ollama/custom: "http://host:11434"
+                               # OpenAI: "https://api.openai.com"
+                               # Anthropic: "https://api.anthropic.com"
+    api_key_encrypted: str | None   # None for Ollama (local)
+    is_active: bool
+    total_vram_mb: int         # 0 for cloud APIs
+    status: LlmBackendStatus   # ONLINE / OFFLINE / DEGRADED
+    registered_at: datetime
+```
+
+- [ ] `LlmBackendStatus`: ONLINE, OFFLINE, DEGRADED
 
 ### Phase 4 — Domain Exceptions
 
