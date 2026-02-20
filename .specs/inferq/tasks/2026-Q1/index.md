@@ -17,6 +17,7 @@
 - [ ] 08: Observability adapters (OTel / ClickHouse / stdout)
 - [ ] 09: docker-compose (base + monitoring/analytics profiles)
 - [ ] 10: API Key & Usage Tracking (key gen, auth middleware, rate limit, usage query)
+- [ ] 11: Web Dashboard (Next.js 15 + shadcn/ui — overview, usage, perf, backend mgmt, keys)
 
 ## Completed
 
@@ -33,6 +34,7 @@
           03, 04 → 05
           05 → 06, 07
           06, 07 → 08
-          08 → 09, 10
+          08 → 09, 10, 11
           06 → 10  (disconnect → cancelled finish_reason)
+          10 → 11  (API key mgmt UI)
 ```
