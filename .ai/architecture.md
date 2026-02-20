@@ -31,23 +31,28 @@ infrastructure → application → domain
 | --------------------- | --------- | ----------------------- |
 | IInferenceUseCase     | Inbound   | HTTP/SSE Adapter        |
 | IQueuePort            | Outbound  | Valkey Adapter          |
-| IGpuPort              | Outbound  | OllamaAdapter (per server) |
-| IGpuServerRegistry    | Outbound  | PostgreSQL / Valkey     |
+| IInferenceBackendPort | Outbound  | OllamaAdapter / GeminiAdapter / OpenAIAdapter / AnthropicAdapter |
+| ILlmBackendRegistry   | Outbound  | PostgreSQL / Valkey     |
 | IStreamPort           | Outbound  | SSE Adapter             |
 | IObservabilityPort    | Outbound  | OTel / ClickHouse / stdout |
 | IApiKeyRepository     | Outbound  | PostgreSQL Adapter      |
 
-## Multi-GPU Load Balancing
+## Multi-Backend Load Balancing
 
-inferq = queue + LB. GPU 서버가 N개로 늘어도 외부 LB 불필요.
+inferq = queue + LB + multi-backend gateway.
 
 ```
-Client → inferq → [ModelAffinityRouter] → GPU Server 1
-                                        → GPU Server 2
-                                        → GPU Server N
+Client → inferq → [ModelAffinityRouter] → Ollama (local GPU)  ← OLLAMA
+                                        → Gemini API           ← GEMINI (1차)
+                                        → OpenAI API           ← OPENAI
+                                        → Anthropic API        ← ANTHROPIC
+                                        → Any OpenAI-compat    ← OPENAI_COMPATIBLE
 ```
 
-라우팅: model 로드된 서버 + least-connections 우선.
-단일 GPU는 서버 1개 등록으로 동일 코드 동작.
+- 모든 백엔드 = `IInferenceBackendPort` 동일 포트
+- 로컬(Ollama): model-affinity + least-connections 라우팅
+- 클라우드 API: least-connections (model load 개념 없음)
+- 백엔드 등록: API (`POST /v1/backends`) — 코드/재배포 불필요
+- 배포 환경 무관: URL + api_key(선택)만으로 연결
 
 **SSOT**: `docs/llm/policies/architecture.md`

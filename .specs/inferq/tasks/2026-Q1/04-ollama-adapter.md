@@ -1,22 +1,30 @@
 # Task 04: Ollama Adapter (IGpuPort)
 
 > Ref: best-practices.md → Ollama Integration section
+> BackendType: OLLAMA | OPENAI | ANTHROPIC | OPENAI_COMPATIBLE
+> 동일 포트(IInferenceBackendPort) → 어댑터만 교체
 
 ## Steps
 
-### Phase 1 — IGpuPort Protocol
+### Phase 1 — IInferenceBackendPort (IGpuPort 일반화)
 
-- [ ] Define in `application/ports/outbound/gpu_port.py`:
+- [ ] Define in `application/ports/outbound/inference_backend_port.py`:
 
 ```python
-class IGpuPort(Protocol):
+class IInferenceBackendPort(Protocol):
+    """
+    단일 LlmBackend 인스턴스에 대한 인터페이스.
+    Ollama, OpenAI, Anthropic, OpenAI-compatible 모두 동일 포트.
+    """
     async def infer(self, job: InferenceJob) -> InferenceResult: ...
     async def stream_infer(self, job: InferenceJob) -> AsyncIterator[StreamToken]: ...
     async def list_models(self) -> list[Model]: ...
+    async def health(self) -> bool: ...
+
+    # Ollama/local 전용 (cloud API는 no-op)
     async def load_model(self, model_name: ModelName) -> None: ...
     async def unload_model(self, model_name: ModelName) -> None: ...
-    async def get_loaded_models(self) -> list[tuple[ModelName, int]]: ...  # (name, vram_mb)
-    async def health(self) -> bool: ...
+    async def get_loaded_models(self) -> list[tuple[ModelName, int]]: ...
 ```
 
 ### Phase 2 — OllamaAdapter
@@ -108,7 +116,99 @@ class ModelAffinityRouter:
         return target, self._adapter(target)
 ```
 
-### Phase 3 — Error Handling
+### Phase 3 — OpenAI / Anthropic Adapters
+
+- [ ] `OpenAIAdapter(IInferenceBackendPort)`:
+
+```python
+class OpenAIAdapter:
+    """OPENAI + OPENAI_COMPATIBLE 공용 (base_url 주입)"""
+    def __init__(self, backend: LlmBackend):
+        self.client = openai.AsyncOpenAI(
+            api_key=decrypt(backend.api_key_encrypted),
+            base_url=backend.url,   # custom endpoint 지원
+        )
+
+    async def stream_infer(self, job) -> AsyncIterator[StreamToken]:
+        stream = await self.client.chat.completions.create(
+            model=str(job.model_name),
+            messages=[{"role": "user", "content": str(job.prompt)}],
+            stream=True,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content or ""
+            done = chunk.choices[0].finish_reason is not None
+            yield StreamToken(delta, done)
+
+    async def load_model(self, _): pass    # no-op for cloud
+    async def unload_model(self, _): pass  # no-op for cloud
+    async def get_loaded_models(self): return []
+```
+
+- [ ] `AnthropicAdapter(IInferenceBackendPort)`:
+
+```python
+class AnthropicAdapter:
+    def __init__(self, backend: LlmBackend):
+        self.client = anthropic.AsyncAnthropic(
+            api_key=decrypt(backend.api_key_encrypted),
+        )
+
+    async def stream_infer(self, job) -> AsyncIterator[StreamToken]:
+        async with self.client.messages.stream(
+            model=str(job.model_name),
+            messages=[{"role": "user", "content": str(job.prompt)}],
+            max_tokens=4096,
+        ) as stream:
+            async for text in stream.text_stream:
+                yield StreamToken(text, False)
+            yield StreamToken("", True)
+```
+
+- [ ] `GeminiAdapter(IInferenceBackendPort)` — **1차 클라우드 API 타겟**:
+
+```python
+class GeminiAdapter:
+    """google-generativeai SDK 사용"""
+    def __init__(self, backend: LlmBackend):
+        import google.generativeai as genai
+        genai.configure(api_key=decrypt(backend.api_key_encrypted))
+        self.genai = genai
+
+    async def stream_infer(self, job) -> AsyncIterator[StreamToken]:
+        model = self.genai.GenerativeModel(str(job.model_name))
+        # google-generativeai async streaming
+        async for chunk in await model.generate_content_async(
+            str(job.prompt), stream=True
+        ):
+            yield StreamToken(chunk.text, False)
+        yield StreamToken("", True)
+
+    async def list_models(self) -> list[Model]:
+        return [
+            Model(name=m.name, backend=BackendType.GEMINI, vram_mb=0, status=ModelStatus.AVAILABLE)
+            for m in self.genai.list_models()
+            if "generateContent" in m.supported_generation_methods
+        ]
+
+    async def load_model(self, _): pass    # no-op
+    async def unload_model(self, _): pass  # no-op
+    async def get_loaded_models(self): return []
+```
+
+- [ ] `BackendAdapterFactory`: `BackendType` → 어댑터 인스턴스 반환
+
+```python
+def create_adapter(backend: LlmBackend) -> IInferenceBackendPort:
+    match backend.backend_type:
+        case BackendType.OLLAMA:            return OllamaAdapter(backend)
+        case BackendType.GEMINI:            return GeminiAdapter(backend)
+        case BackendType.OPENAI:            return OpenAIAdapter(backend)
+        case BackendType.ANTHROPIC:         return AnthropicAdapter(backend)
+        case BackendType.OPENAI_COMPATIBLE: return OpenAIAdapter(backend)
+```
+
+### Phase 4 — Error Handling
 
 - [ ] 503 from Ollama → `ResourceExhaustedError` (server overloaded)
 - [ ] Connection timeout → retry with exponential backoff (max 3)
