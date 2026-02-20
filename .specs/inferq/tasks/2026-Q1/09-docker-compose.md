@@ -16,7 +16,9 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://inferq:inferq@postgres:5432/inferq
       - VALKEY_URL=redis://valkey:6379
-      - OLLAMA_URL=http://host.docker.internal:11434  # Ollama on host or k8s
+      # OLLAMA_URL 없음 — GPU 서버는 API로 등록 (POST /v1/servers)
+      # 선택: 시작 시 자동 등록할 서버 목록 (쉼표 구분)
+      - INFERQ_BOOTSTRAP_SERVERS=${INFERQ_BOOTSTRAP_SERVERS:-}
       - OBSERVABILITY_BACKEND=${OBSERVABILITY_BACKEND:-stdout}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       - CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-}
@@ -26,9 +28,10 @@ services:
     build: .
     command: arq src.infrastructure.outbound.queue.worker.WorkerSettings
     environment:
+      - DATABASE_URL=postgresql+asyncpg://inferq:inferq@postgres:5432/inferq
       - VALKEY_URL=redis://valkey:6379
-      - OLLAMA_URL=http://host.docker.internal:11434
-    depends_on: [valkey]
+      # GPU 서버 정보는 PostgreSQL에서 읽음 — 환경변수 불필요
+    depends_on: [postgres, valkey]
 
   postgres:
     image: postgres:17-alpine
@@ -95,19 +98,26 @@ volumes:
 - [ ] Document:
 
 ```bash
-# Minimal
+# 1. 시작
 docker compose up
+
+# 2. GPU 서버 등록 (배포 환경 무관 — URL만 있으면 됨)
+curl -X POST http://localhost:8000/v1/servers \
+  -H "Content-Type: application/json" \
+  -d '{"id": "gpu-01", "url": "http://host.docker.internal:11434", "total_vram_mb": 98304}'
+
+# 또는 시작 시 자동 등록 (bootstrap)
+INFERQ_BOOTSTRAP_SERVERS=http://host.docker.internal:11434 docker compose up
+
+# k8s Ollama 연결
+INFERQ_BOOTSTRAP_SERVERS=http://ollama-service.gpu-ns.svc.cluster.local:11434 \
+docker compose up inferq inferq-worker
 
 # With monitoring
 docker compose --profile monitoring up
 
 # With analytics
 docker compose --profile analytics up
-
-# k8s environment (point to existing infra)
-OBSERVABILITY_BACKEND=otel \
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
-docker compose up inferq inferq-worker
 ```
 
 ## Done

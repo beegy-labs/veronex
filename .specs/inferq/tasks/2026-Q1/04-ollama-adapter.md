@@ -124,17 +124,32 @@ python -c "from src.infrastructure.outbound.gpu.ollama_adapter import OllamaAdap
 
 ### Phase 4 — GPU Server 등록 API
 
-- [ ] Ollama 서버는 **코드가 아닌 API로 직접 등록**:
+배포 환경(k8s / docker-compose / bare metal)에 무관하게 **URL만으로 연결**.
+
+- [ ] Ollama 서버 등록 API:
 
 ```
-POST /v1/servers          → 서버 등록 (url, id, total_vram_mb)
-GET  /v1/servers          → 서버 목록 (상태, 로드된 모델 포함)
-DELETE /v1/servers/{id}   → 서버 제거
-POST /v1/servers/{id}/sync → 해당 서버 모델 목록 즉시 동기화
+POST   /v1/servers             → 서버 등록 {id, url, total_vram_mb}
+GET    /v1/servers             → 서버 목록 (status, loaded models)
+DELETE /v1/servers/{id}        → 서버 제거
+POST   /v1/servers/{id}/sync   → 모델 목록 즉시 동기화
 ```
 
-- [ ] 등록 시 즉시 헬스체크 → 실패 시 `DEGRADED` 상태로 등록
-- [ ] k8s/docker-compose 환경 모두 동일: 앱 시작 후 API로 서버 추가
+- [ ] 등록 정보는 **PostgreSQL `gpu_servers` 테이블에 영속 저장** → 재시작 후 자동 복구
+- [ ] 등록 시 즉시 헬스체크 → 실패 시 `DEGRADED` 상태로 등록 (거부 안 함)
+- [ ] `INFERQ_BOOTSTRAP_SERVERS` 환경변수: 쉼표 구분 URL 목록 → 앱 시작 시 자동 등록
+
+```python
+# startup bootstrap (main.py lifespan)
+if bootstrap_urls := settings.INFERQ_BOOTSTRAP_SERVERS:
+    for url in bootstrap_urls.split(","):
+        url = url.strip()
+        if url:
+            await server_registry.register_if_not_exists(GpuServer(
+                id=_url_to_id(url),  # "http://host:11434" → "host-11434"
+                url=url,
+            ))
+```
 
 ## Done
 
