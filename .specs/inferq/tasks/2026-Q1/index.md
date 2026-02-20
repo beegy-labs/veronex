@@ -10,7 +10,7 @@
 
 - [ ] 02: Domain model (InferenceJob, Model, StreamToken, enums)
 - [ ] 03: ARQ worker + Valkey queue adapter
-- [ ] 04: Ollama adapter (IGpuPort implementation)
+- [ ] 04: Inference backends — OllamaAdapter + GeminiAdapter (IInferenceBackendPort, factory)
 - [ ] 05: Model manager (greedy allocation + LRU eviction)
 - [ ] 06: SSE streaming endpoint + disconnect handling
 - [ ] 07: PostgreSQL job repository (SQLAlchemy 2.0 async + Alembic)

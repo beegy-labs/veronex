@@ -31,7 +31,7 @@ infrastructure → application → domain
 | --------------------- | --------- | ----------------------- |
 | IInferenceUseCase     | Inbound   | HTTP/SSE Adapter        |
 | IQueuePort            | Outbound  | Valkey Adapter          |
-| IInferenceBackendPort | Outbound  | OllamaAdapter / GeminiAdapter / OpenAIAdapter / AnthropicAdapter |
+| IInferenceBackendPort | Outbound  | OllamaAdapter (MVP) / GeminiAdapter (MVP) / *(추후 추가)* |
 | ILlmBackendRegistry   | Outbound  | PostgreSQL / Valkey     |
 | IStreamPort           | Outbound  | SSE Adapter             |
 | IObservabilityPort    | Outbound  | OTel / ClickHouse / stdout |
@@ -42,17 +42,15 @@ infrastructure → application → domain
 inferq = queue + LB + multi-backend gateway.
 
 ```
-Client → inferq → [ModelAffinityRouter] → Ollama (local GPU)  ← OLLAMA
-                                        → Gemini API           ← GEMINI (1차)
-                                        → OpenAI API           ← OPENAI
-                                        → Anthropic API        ← ANTHROPIC
-                                        → Any OpenAI-compat    ← OPENAI_COMPATIBLE
+Client → inferq → [InferenceRouter] → OllamaAdapter  (OLLAMA, MVP)
+                                    → GeminiAdapter   (GEMINI, MVP)
+                                    → *(새 어댑터 파일 1개 + factory case 1줄로 확장)*
 ```
 
-- 모든 백엔드 = `IInferenceBackendPort` 동일 포트
+- 모든 백엔드 = `IInferenceBackendPort` 동일 포트 (포트는 변경 없음)
 - 로컬(Ollama): model-affinity + least-connections 라우팅
-- 클라우드 API: least-connections (model load 개념 없음)
-- 백엔드 등록: API (`POST /v1/backends`) — 코드/재배포 불필요
+- 클라우드(Gemini, ...): least-connections
+- 백엔드 등록: `POST /v1/backends` API — 코드/재배포 불필요
 - 배포 환경 무관: URL + api_key(선택)만으로 연결
 
 **SSOT**: `docs/llm/policies/architecture.md`
