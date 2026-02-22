@@ -1,0 +1,263 @@
+pub mod api_key;
+pub use api_key::*;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use super::enums::{
+    BackendType, FinishReason, JobStatus, LlmBackendStatus, ModelStatus,
+};
+use super::value_objects::{JobId, ModelName, Prompt};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceJob {
+    pub id: JobId,
+    pub prompt: Prompt,
+    pub model_name: ModelName,
+    pub status: JobStatus,
+    pub backend: BackendType,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Model {
+    pub name: ModelName,
+    pub backend_id: Uuid,
+    pub backend_type: BackendType,
+    pub vram_mb: i64,
+    pub status: ModelStatus,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub active_calls: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceResult {
+    pub job_id: JobId,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub latency_ms: u32,
+    pub ttft_ms: Option<u32>,
+    pub tokens: Vec<String>,
+    pub finish_reason: FinishReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmBackend {
+    pub id: Uuid,
+    pub name: String,
+    pub backend_type: BackendType,
+    pub url: String,
+    pub api_key_encrypted: Option<String>,
+    pub is_active: bool,
+    pub total_vram_mb: i64,
+    pub status: LlmBackendStatus,
+    pub registered_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_inference_job() -> InferenceJob {
+        InferenceJob {
+            id: JobId::new(),
+            prompt: Prompt::new("What is Rust?").unwrap(),
+            model_name: ModelName::new("llama3.2").unwrap(),
+            status: JobStatus::Pending,
+            backend: BackendType::Ollama,
+            created_at: Utc::now(),
+            started_at: None,
+            completed_at: None,
+            error: None,
+        }
+    }
+
+    fn make_llm_backend() -> LlmBackend {
+        LlmBackend {
+            id: Uuid::now_v7(),
+            name: "local-ollama".to_string(),
+            backend_type: BackendType::Ollama,
+            url: "http://localhost:11434".to_string(),
+            api_key_encrypted: None,
+            is_active: true,
+            total_vram_mb: 24576,
+            status: LlmBackendStatus::Online,
+            registered_at: Utc::now(),
+        }
+    }
+
+    fn make_model() -> Model {
+        Model {
+            name: ModelName::new("llama3.2").unwrap(),
+            backend_id: Uuid::now_v7(),
+            backend_type: BackendType::Ollama,
+            vram_mb: 8192,
+            status: ModelStatus::Loaded,
+            last_used_at: Some(Utc::now()),
+            active_calls: 2,
+        }
+    }
+
+    fn make_inference_result() -> InferenceResult {
+        InferenceResult {
+            job_id: JobId::new(),
+            prompt_tokens: 10,
+            completion_tokens: 50,
+            latency_ms: 1200,
+            ttft_ms: Some(150),
+            tokens: vec!["Hello".to_string(), " world".to_string()],
+            finish_reason: FinishReason::Stop,
+        }
+    }
+
+    #[test]
+    fn inference_job_creation() {
+        let job = make_inference_job();
+        assert_eq!(job.status, JobStatus::Pending);
+        assert_eq!(job.backend, BackendType::Ollama);
+        assert_eq!(job.prompt.as_str(), "What is Rust?");
+        assert_eq!(job.model_name.as_str(), "llama3.2");
+        assert!(job.started_at.is_none());
+        assert!(job.completed_at.is_none());
+        assert!(job.error.is_none());
+    }
+
+    #[test]
+    fn inference_job_with_all_fields() {
+        let now = Utc::now();
+        let job = InferenceJob {
+            id: JobId::new(),
+            prompt: Prompt::new("Explain quantum computing").unwrap(),
+            model_name: ModelName::new("gemini-pro").unwrap(),
+            status: JobStatus::Failed,
+            backend: BackendType::Gemini,
+            created_at: now,
+            started_at: Some(now),
+            completed_at: Some(now),
+            error: Some("timeout".to_string()),
+        };
+        assert_eq!(job.status, JobStatus::Failed);
+        assert!(job.started_at.is_some());
+        assert!(job.completed_at.is_some());
+        assert_eq!(job.error.as_deref(), Some("timeout"));
+    }
+
+    #[test]
+    fn llm_backend_creation_with_uuidv7() {
+        let backend = make_llm_backend();
+        assert_eq!(backend.id.get_version_num(), 7);
+        assert_eq!(backend.name, "local-ollama");
+        assert_eq!(backend.backend_type, BackendType::Ollama);
+        assert!(backend.is_active);
+        assert_eq!(backend.status, LlmBackendStatus::Online);
+        assert!(backend.api_key_encrypted.is_none());
+    }
+
+    #[test]
+    fn llm_backend_with_api_key() {
+        let mut backend = make_llm_backend();
+        backend.backend_type = BackendType::Gemini;
+        backend.api_key_encrypted = Some("encrypted_key_data".to_string());
+        assert!(backend.api_key_encrypted.is_some());
+        assert_eq!(backend.backend_type, BackendType::Gemini);
+    }
+
+    #[test]
+    fn model_creation() {
+        let model = make_model();
+        assert_eq!(model.name.as_str(), "llama3.2");
+        assert_eq!(model.backend_type, BackendType::Ollama);
+        assert_eq!(model.vram_mb, 8192);
+        assert_eq!(model.status, ModelStatus::Loaded);
+        assert!(model.last_used_at.is_some());
+        assert_eq!(model.active_calls, 2);
+    }
+
+    #[test]
+    fn model_backend_id_is_uuidv7() {
+        let model = make_model();
+        assert_eq!(model.backend_id.get_version_num(), 7);
+    }
+
+    #[test]
+    fn inference_result_creation() {
+        let result = make_inference_result();
+        assert_eq!(result.prompt_tokens, 10);
+        assert_eq!(result.completion_tokens, 50);
+        assert_eq!(result.latency_ms, 1200);
+        assert_eq!(result.ttft_ms, Some(150));
+        assert_eq!(result.tokens.len(), 2);
+        assert_eq!(result.finish_reason, FinishReason::Stop);
+    }
+
+    #[test]
+    fn inference_result_without_ttft() {
+        let result = InferenceResult {
+            job_id: JobId::new(),
+            prompt_tokens: 5,
+            completion_tokens: 20,
+            latency_ms: 800,
+            ttft_ms: None,
+            tokens: vec!["response".to_string()],
+            finish_reason: FinishReason::Length,
+        };
+        assert!(result.ttft_ms.is_none());
+        assert_eq!(result.finish_reason, FinishReason::Length);
+    }
+
+    #[test]
+    fn inference_job_serde_roundtrip() {
+        let job = make_inference_job();
+        let json = serde_json::to_string(&job).unwrap();
+        let deserialized: InferenceJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, job.id);
+        assert_eq!(deserialized.status, job.status);
+        assert_eq!(deserialized.backend, job.backend);
+        assert_eq!(deserialized.prompt.as_str(), job.prompt.as_str());
+        assert_eq!(deserialized.model_name.as_str(), job.model_name.as_str());
+    }
+
+    #[test]
+    fn llm_backend_serde_roundtrip() {
+        let backend = make_llm_backend();
+        let json = serde_json::to_string(&backend).unwrap();
+        let deserialized: LlmBackend = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, backend.id);
+        assert_eq!(deserialized.name, backend.name);
+        assert_eq!(deserialized.backend_type, backend.backend_type);
+        assert_eq!(deserialized.url, backend.url);
+        assert_eq!(deserialized.is_active, backend.is_active);
+        assert_eq!(deserialized.status, backend.status);
+    }
+
+    #[test]
+    fn model_serde_roundtrip() {
+        let model = make_model();
+        let json = serde_json::to_string(&model).unwrap();
+        let deserialized: Model = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name.as_str(), model.name.as_str());
+        assert_eq!(deserialized.backend_id, model.backend_id);
+        assert_eq!(deserialized.backend_type, model.backend_type);
+        assert_eq!(deserialized.vram_mb, model.vram_mb);
+        assert_eq!(deserialized.status, model.status);
+        assert_eq!(deserialized.active_calls, model.active_calls);
+    }
+
+    #[test]
+    fn inference_result_serde_roundtrip() {
+        let result = make_inference_result();
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: InferenceResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.job_id, result.job_id);
+        assert_eq!(deserialized.prompt_tokens, result.prompt_tokens);
+        assert_eq!(deserialized.completion_tokens, result.completion_tokens);
+        assert_eq!(deserialized.latency_ms, result.latency_ms);
+        assert_eq!(deserialized.ttft_ms, result.ttft_ms);
+        assert_eq!(deserialized.tokens, result.tokens);
+        assert_eq!(deserialized.finish_reason, result.finish_reason);
+    }
+}
