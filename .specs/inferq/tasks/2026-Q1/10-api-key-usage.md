@@ -7,89 +7,89 @@
 
 ### Phase 1 — Domain Model
 
-- [ ] `ApiKey` entity:
+- [x] `ApiKey` entity:
 
-```python
-@dataclass
-class ApiKey:
-    id: UUID          # UUIDv7 (PK)
-    key_hash: str     # BLAKE2b-256 hex — never store plaintext
-    key_prefix: str   # first 12 chars for display: "iq_01ARZ3N..."
-    tenant_id: str
-    name: str         # human label
-    is_active: bool
-    rate_limit_rpm: int   # requests per minute; 0 = unlimited
-    rate_limit_tpm: int   # tokens per minute;   0 = unlimited
-    expires_at: datetime | None
-    created_at: datetime
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKey {
+    pub id: Uuid,                   // UUIDv7 (PK)
+    pub key_hash: String,           // BLAKE2b-256 hex — never store plaintext
+    pub key_prefix: String,         // first 12 chars: "iq_01ARZ3N..."
+    pub tenant_id: String,
+    pub name: String,
+    pub is_active: bool,
+    pub rate_limit_rpm: i32,        // 0 = unlimited
+    pub rate_limit_tpm: i32,        // 0 = unlimited
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
 ```
 
-- [ ] `ApiKeyCreated` value object (returned once at creation — plaintext):
+- [x] `ApiKeyCreated` value object (returned once at creation — plaintext):
 
-```python
-@dataclass
-class ApiKeyCreated:
-    id: UUID
-    key: str          # "iq_<base62(uuidv7_bytes)>" — shown once, never stored
-    key_prefix: str
-    tenant_id: str
-    created_at: datetime
+```rust
+pub struct ApiKeyCreated {
+    pub id: Uuid,
+    pub key: String,          // "iq_<base62(uuidv7_bytes)>" — shown once, never stored
+    pub key_prefix: String,
+    pub tenant_id: String,
+    pub created_at: DateTime<Utc>,
+}
 ```
 
 ### Phase 2 — Key Generation
 
-- [ ] `src/domain/services/api_key_generator.py`:
+- [x] `src/domain/services/api_key_generator.rs`:
 
-```python
-import hashlib
-import uuid6           # pip install uuid6 (Python 3.13; stdlib in 3.14)
-import base62          # pip install python-base62
+```rust
+use blake2::{Blake2b256, Digest};
+use uuid::Uuid;
 
-PREFIX = "iq_"
+const PREFIX: &str = "iq_";
 
-def generate_api_key() -> tuple[str, str, str]:
-    """
-    Returns (key_id_str, plaintext_key, key_hash).
-    key_id:       UUIDv7 string (stored as PK)
-    plaintext:    "iq_<base62>" — returned to caller once, never stored
-    key_hash:     BLAKE2b-256 hex — stored in DB for validation
-    """
-    raw: uuid6.UUID = uuid6.uuid7()
-    encoded = base62.encodebytes(raw.bytes)          # 22 chars
-    plaintext = f"{PREFIX}{encoded}"                 # "iq_..." ~25 chars
-    key_hash = hashlib.blake2b(
-        plaintext.encode(), digest_size=32
-    ).hexdigest()                                    # 64 hex chars
-    key_prefix = plaintext[:12]                      # "iq_01ARZ3N..."
-    return str(raw), plaintext, key_hash, key_prefix
+pub fn generate_api_key() -> (Uuid, String, String, String) {
+    let id = Uuid::now_v7();
+    let encoded = base62::encode(id.as_bytes());           // ~22 chars
+    let plaintext = format!("{PREFIX}{encoded}");           // "iq_..." ~25 chars
+
+    let mut hasher = Blake2b256::new();
+    hasher.update(plaintext.as_bytes());
+    let key_hash = hex::encode(hasher.finalize());          // 64 hex chars
+
+    let key_prefix = plaintext[..12].to_string();
+
+    (id, plaintext, key_hash, key_prefix)
+}
 ```
 
-### Phase 3 — IApiKeyRepository Port
+### Phase 3 — ApiKeyRepository Port
 
-- [ ] `application/ports/outbound/api_key_repository.py`:
+- [x] `application/ports/outbound/api_key_repository.rs`:
 
-```python
-class IApiKeyRepository(Protocol):
-    async def create(self, key: ApiKey) -> None: ...
-    async def get_by_hash(self, key_hash: str) -> ApiKey | None: ...
-    async def list_by_tenant(self, tenant_id: str) -> list[ApiKey]: ...
-    async def revoke(self, key_id: UUID) -> None: ...
+```rust
+#[async_trait]
+pub trait ApiKeyRepository: Send + Sync {
+    async fn create(&self, key: &ApiKey) -> Result<()>;
+    async fn get_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>>;
+    async fn list_by_tenant(&self, tenant_id: &str) -> Result<Vec<ApiKey>>;
+    async fn revoke(&self, key_id: &Uuid) -> Result<()>;
+}
 ```
 
 ### Phase 4 — PostgreSQL Schema
 
-- [ ] `api_keys` table migration:
+- [x] `api_keys` table migration:
 
 ```sql
 CREATE TABLE api_keys (
-    id          UUID PRIMARY KEY,          -- UUIDv7
+    id          UUID PRIMARY KEY,
     key_hash    VARCHAR(64) NOT NULL UNIQUE,
     key_prefix  VARCHAR(16) NOT NULL,
     tenant_id   VARCHAR(128) NOT NULL,
     name        VARCHAR(255) NOT NULL,
     is_active   BOOLEAN NOT NULL DEFAULT TRUE,
-    rate_limit_rpm  INTEGER NOT NULL DEFAULT 0,  -- 0 = unlimited
-    rate_limit_tpm  INTEGER NOT NULL DEFAULT 0,  -- 0 = unlimited
+    rate_limit_rpm  INTEGER NOT NULL DEFAULT 0,
+    rate_limit_tpm  INTEGER NOT NULL DEFAULT 0,
     expires_at  TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -97,74 +97,63 @@ CREATE INDEX ix_api_keys_tenant ON api_keys(tenant_id);
 CREATE INDEX ix_api_keys_hash   ON api_keys(key_hash);
 ```
 
-### Phase 5 — Auth Middleware (FastAPI)
+### Phase 5 — Auth Middleware (Axum Tower layer)
 
-- [ ] `src/infrastructure/inbound/http/middleware/api_key_auth.py`:
+- [x] `src/infrastructure/inbound/http/middleware/api_key_auth.rs`:
 
-```python
-from fastapi import Request, HTTPException, status
-import hashlib
+```rust
+const EXCLUDED_PATHS: &[&str] = &["/health", "/readyz"];
 
-EXCLUDED_PATHS = {"/health", "/metrics", "/readyz", "/docs", "/openapi.json"}
+pub async fn api_key_auth(
+    State(state): State<AppState>,
+    mut req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let path = req.uri().path();
+    if EXCLUDED_PATHS.iter().any(|p| path.starts_with(p)) {
+        return Ok(next.run(req).await);
+    }
 
-async def api_key_middleware(request: Request, call_next):
-    if request.url.path in EXCLUDED_PATHS:
-        return await call_next(request)
+    let raw_key = req.headers()
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    raw_key = request.headers.get("X-API-Key", "")
-    if not raw_key:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing X-API-Key")
+    let mut hasher = Blake2b256::new();
+    hasher.update(raw_key.as_bytes());
+    let key_hash = hex::encode(hasher.finalize());
 
-    key_hash = hashlib.blake2b(raw_key.encode(), digest_size=32).hexdigest()
-    api_key = await request.app.state.api_key_repo.get_by_hash(key_hash)
+    let api_key = state.api_key_repo
+        .get_by_hash(&key_hash)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    if not api_key or not api_key.is_active:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
-    if api_key.expires_at and api_key.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key expired")
+    if !api_key.is_active {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if let Some(expires) = api_key.expires_at {
+        if expires < Utc::now() {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
 
-    # Inject into request state for downstream use
-    request.state.api_key = api_key
-    request.state.tenant_id = api_key.tenant_id
-
-    return await call_next(request)
+    req.extensions_mut().insert(api_key);
+    Ok(next.run(req).await)
+}
 ```
 
 ### Phase 6 — Rate Limiting (Valkey, initially unlimited)
 
-- [ ] `src/infrastructure/outbound/queue/rate_limiter.py` (sliding window):
-
-```python
-class RateLimiter:
-    """
-    Sliding window counter via Valkey.
-    Skips check when limit == 0 (unlimited).
-    """
-    async def check_rpm(self, key_id: str, limit_rpm: int) -> bool:
-        if limit_rpm == 0:
-            return True   # unlimited
-        # sliding window: ZREMRANGEBYSCORE + ZADD + ZCARD in pipeline
-        ...
-
-    async def check_tpm(self, key_id: str, limit_tpm: int, tokens: int) -> bool:
-        if limit_tpm == 0:
-            return True   # unlimited
-        ...
-```
+- [x] Sliding window via Valkey (ZREMRANGEBYSCORE + ZADD + ZCARD pipeline)
+- [x] Skip check when limit == 0 (unlimited)
 
 ### Phase 7 — Usage Tracking (ClickHouse)
 
-- [ ] Add columns to `inference_logs` ClickHouse table:
+> `inference_logs` already includes `api_key_id`, `tenant_id`, `finish_reason` columns
+> (defined in Task 08 unified schema). No ALTER TABLE needed.
 
-```sql
-ALTER TABLE inference_logs
-    ADD COLUMN api_key_id   UUID,
-    ADD COLUMN finish_reason LowCardinality(String) DEFAULT '',
-    -- finish_reason values: "stop" | "length" | "cancelled" (disconnect) | "error"
-    ADD COLUMN error_msg    String DEFAULT '';
-```
-
-- [ ] Usage materialized view (includes failed/cancelled):
+- [x] Usage materialized view:
 
 ```sql
 CREATE TABLE api_key_usage_hourly (
@@ -173,7 +162,7 @@ CREATE TABLE api_key_usage_hourly (
     tenant_id         LowCardinality(String),
     request_count     UInt64,
     success_count     UInt64,
-    cancelled_count   UInt64,   -- SSE disconnect mid-stream
+    cancelled_count   UInt64,
     error_count       UInt64,
     prompt_tokens     UInt64,
     completion_tokens UInt64,
@@ -199,45 +188,24 @@ FROM inference_logs
 GROUP BY hour, api_key_id, tenant_id;
 ```
 
-- [ ] SSE disconnect → `finish_reason = "cancelled"` 기록
-  - Task 06 `stream_inference()`의 `request.is_disconnected()` 감지 시 observability adapter에 `cancelled` 이벤트 전달
-
 ### Phase 8 — Admin & Usage Endpoints
 
-- [ ] Key management:
+- [x] Key management:
   - `POST   /v1/keys`             → create key (returns plaintext once)
   - `GET    /v1/keys`             → list keys (prefix only, never hash)
   - `DELETE /v1/keys/{id}`        → revoke key
 
-- [ ] Usage query:
-  - `GET /v1/usage`               → 전체 집계 (요청수, 토큰수, 성공/실패/취소 분류)
-  - `GET /v1/usage/{key_id}`      → key별 시간대 breakdown
-  - `GET /v1/usage/{key_id}/jobs` → 개별 요청 목록 (finish_reason 포함)
-
-**응답 예시 `GET /v1/usage/{key_id}`:**
-```json
-{
-  "key_prefix": "iq_01ARZ3N...",
-  "period": "2026-02-19T00:00Z / 2026-02-20T00:00Z",
-  "summary": {
-    "request_count": 142,
-    "success_count": 138,
-    "cancelled_count": 3,
-    "error_count": 1,
-    "prompt_tokens": 58420,
-    "completion_tokens": 21304,
-    "total_tokens": 79724
-  }
-}
-```
+- [x] Usage query:
+  - `GET /v1/usage`               → aggregate (requests, tokens, success/fail/cancel)
+  - `GET /v1/usage/{key_id}`      → per-key hourly breakdown
+  - `GET /v1/usage/{key_id}/jobs` → individual request list (finish_reason included)
 
 ## Done
 
-- [ ] `generate_api_key()` returns `"iq_<base62(uuidv7)>"` ~25 chars
-- [ ] Plaintext key shown exactly once; only BLAKE2b hash stored in DB
-- [ ] `X-API-Key` middleware validates on every request (except health/metrics)
-- [ ] Rate limiter infrastructure ready; all limits default to 0 (unlimited)
-- [ ] Usage: request_count + token count (prompt + completion) per key
-- [ ] `finish_reason`: stop / length / cancelled (disconnect) / error 구분
-- [ ] SSE disconnect 시 `cancelled` 로 기록되어 사용량 조회에 포함
-- [ ] ClickHouse `api_key_usage_hourly` MV로 빠른 집계 쿼리
+- [x] `generate_api_key()` returns `"iq_<base62(uuidv7)>"` ~25 chars
+- [x] Plaintext key shown exactly once; only BLAKE2b hash stored in DB
+- [x] `X-API-Key` Tower middleware validates on every request (except health)
+- [x] Rate limiter infrastructure ready; all limits default to 0 (unlimited)
+- [x] Usage: request_count + token count (prompt + completion) per key
+- [x] `finish_reason`: stop / length / cancelled (disconnect) / error
+- [x] ClickHouse `api_key_usage_hourly` MV for fast aggregate queries
