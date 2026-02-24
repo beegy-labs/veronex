@@ -1,26 +1,36 @@
 'use client'
 
-import { clsx } from 'clsx'
 import type { Job } from '@/lib/types'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table'
+import { Card } from '@/components/ui/card'
 
-const STATUS_STYLES: Record<string, string> = {
-  completed: 'bg-emerald-900 text-emerald-300 border-emerald-700',
-  failed:    'bg-red-900 text-red-300 border-red-700',
-  cancelled: 'bg-slate-700 text-slate-300 border-slate-600',
-  pending:   'bg-amber-900 text-amber-300 border-amber-700',
-  running:   'bg-blue-900 text-blue-300 border-blue-700',
+const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+  completed: 'default',
+  failed:    'destructive',
+  cancelled: 'secondary',
+  pending:   'outline',
+  running:   'secondary',
+}
+
+const STATUS_EXTRA: Record<string, string> = {
+  completed: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20',
+  failed:    'bg-red-500/15 text-red-400 border-red-500/30 hover:bg-red-500/20',
+  cancelled: 'bg-slate-500/15 text-slate-400 border-slate-500/30 hover:bg-slate-500/20',
+  pending:   'bg-amber-500/15 text-amber-400 border-amber-500/30 hover:bg-amber-500/20',
+  running:   'bg-blue-500/15 text-blue-400 border-blue-500/30 hover:bg-blue-500/20',
 }
 
 function StatusBadge({ status }: { status: string }) {
   return (
-    <span
-      className={clsx(
-        'inline-flex items-center px-2 py-0.5 rounded border text-xs font-medium',
-        STATUS_STYLES[status] ?? 'bg-slate-700 text-slate-300 border-slate-600',
-      )}
+    <Badge
+      variant="outline"
+      className={STATUS_EXTRA[status] ?? 'bg-slate-500/15 text-slate-400 border-slate-500/30'}
     >
       {status}
-    </span>
+    </Badge>
   )
 }
 
@@ -30,63 +40,52 @@ function truncateId(id: string) {
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
   })
 }
 
-interface JobTableProps {
-  jobs: Job[]
-}
-
-export default function JobTable({ jobs }: JobTableProps) {
+export default function JobTable({ jobs }: { jobs: Job[] }) {
   if (jobs.length === 0) {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-500">
-        No jobs found.
-      </div>
+      <Card>
+        <div className="p-8 text-center text-muted-foreground">No jobs found.</div>
+      </Card>
     )
   }
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900 overflow-hidden">
+    <Card>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-800 bg-slate-900/80">
-              <th className="px-4 py-3 text-left font-medium text-slate-400">ID</th>
-              <th className="px-4 py-3 text-left font-medium text-slate-400">Model</th>
-              <th className="px-4 py-3 text-left font-medium text-slate-400">Backend</th>
-              <th className="px-4 py-3 text-left font-medium text-slate-400">Status</th>
-              <th className="px-4 py-3 text-left font-medium text-slate-400">Created</th>
-              <th className="px-4 py-3 text-right font-medium text-slate-400">Latency</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>ID</TableHead>
+              <TableHead>Model</TableHead>
+              <TableHead>Backend</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Created</TableHead>
+              <TableHead className="text-right">Latency</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {jobs.map((job) => (
-              <tr key={job.id} className="hover:bg-slate-800/50 transition-colors">
-                <td className="px-4 py-3 font-mono text-slate-300 text-xs">
+              <TableRow key={job.id}>
+                <TableCell className="font-mono text-xs text-muted-foreground">
                   <span title={job.id}>{truncateId(job.id)}</span>
-                </td>
-                <td className="px-4 py-3 text-slate-200">{job.model_name}</td>
-                <td className="px-4 py-3 text-slate-400">{job.backend}</td>
-                <td className="px-4 py-3">
-                  <StatusBadge status={job.status} />
-                </td>
-                <td className="px-4 py-3 text-slate-400 text-xs">
-                  {formatDate(job.created_at)}
-                </td>
-                <td className="px-4 py-3 text-right text-slate-400 tabular-nums">
+                </TableCell>
+                <TableCell>{job.model_name}</TableCell>
+                <TableCell className="text-muted-foreground">{job.backend}</TableCell>
+                <TableCell><StatusBadge status={job.status} /></TableCell>
+                <TableCell className="text-xs text-muted-foreground">{formatDate(job.created_at)}</TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
                   {job.latency_ms != null ? `${job.latency_ms} ms` : '—'}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
-    </div>
+    </Card>
   )
 }

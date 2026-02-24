@@ -5,6 +5,15 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import JobTable from '@/components/job-table'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 const PAGE_SIZE = 50
 
@@ -39,11 +48,6 @@ export default function JobsPage() {
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
 
-  function handleStatusChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    setStatus(e.target.value)
-    setPage(0)
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -55,57 +59,65 @@ export default function JobsPage() {
         </div>
 
         {/* Status filter */}
-        <select
+        <Select
           value={status}
-          onChange={handleStatusChange}
-          className="bg-slate-800 border border-slate-700 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          onValueChange={(val) => { setStatus(val); setPage(0) }}
         >
-          {STATUS_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="w-40">
+            <SelectValue placeholder="All statuses" />
+          </SelectTrigger>
+          <SelectContent>
+            {STATUS_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {isLoading && (
-        <div className="flex items-center justify-center h-48 text-slate-400">
+        <div className="flex h-48 items-center justify-center text-muted-foreground">
           Loading jobs…
         </div>
       )}
 
       {error && (
-        <div className="rounded-xl border border-red-800 bg-red-950 p-6 text-red-300">
-          <p className="font-semibold">Failed to load jobs</p>
-          <p className="text-sm mt-1 text-red-400">
-            {error instanceof Error ? error.message : 'Unknown error'}
-          </p>
-        </div>
+        <Card className="border-destructive/50 bg-destructive/10">
+          <CardContent className="p-6">
+            <p className="font-semibold text-destructive">Failed to load jobs</p>
+            <p className="text-sm mt-1 text-destructive/80">
+              {error instanceof Error ? error.message : 'Unknown error'}
+            </p>
+          </CardContent>
+        </Card>
       )}
 
       {data && <JobTable jobs={data.jobs} />}
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm text-slate-400">
-          <span>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
             Page {page + 1} of {totalPages}
-          </span>
+          </p>
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="outline"
+              size="icon"
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={page === 0}
-              className="p-2 rounded-lg border border-slate-700 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronLeft className="h-4 w-4" />
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
               onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
               disabled={page >= totalPages - 1}
-              className="p-2 rounded-lg border border-slate-700 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronRight className="h-4 w-4" />
-            </button>
+            </Button>
           </div>
         </div>
       )}

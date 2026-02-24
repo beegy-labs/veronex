@@ -13,6 +13,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 const STATUS_COLORS: Record<string, string> = {
   completed: '#10b981',
@@ -31,7 +32,7 @@ export default function OverviewPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64 text-slate-400">
+      <div className="flex h-64 items-center justify-center text-muted-foreground">
         Loading stats…
       </div>
     )
@@ -39,12 +40,14 @@ export default function OverviewPage() {
 
   if (error || !stats) {
     return (
-      <div className="rounded-xl border border-red-800 bg-red-950 p-6 text-red-300">
-        <p className="font-semibold">Failed to load stats</p>
-        <p className="text-sm mt-1 text-red-400">
-          {error instanceof Error ? error.message : 'Unknown error'}
-        </p>
-      </div>
+      <Card className="border-destructive/50 bg-destructive/10">
+        <CardContent className="p-6 text-destructive">
+          <p className="font-semibold">Failed to load stats</p>
+          <p className="text-sm mt-1 opacity-80">
+            {error instanceof Error ? error.message : 'Unknown error'}
+          </p>
+        </CardContent>
+      </Card>
     )
   }
 
@@ -87,42 +90,46 @@ export default function OverviewPage() {
       </div>
 
       {/* Jobs by status chart */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-        <h2 className="text-base font-semibold text-slate-200 mb-6">Jobs by Status</h2>
-        <ResponsiveContainer width="100%" height={240}>
-          <BarChart data={chartData} barCategoryGap="30%">
-            <XAxis
-              dataKey="status"
-              tick={{ fill: '#94a3b8', fontSize: 12 }}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={{ fill: '#64748b', fontSize: 12 }}
-              axisLine={false}
-              tickLine={false}
-              width={40}
-            />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#1e293b',
-                border: '1px solid #334155',
-                borderRadius: '8px',
-                color: '#e2e8f0',
-              }}
-              cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-            />
-            <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-              {chartData.map((entry) => (
-                <Cell
-                  key={entry.status}
-                  fill={STATUS_COLORS[entry.status] ?? '#6366f1'}
-                />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Jobs by Status</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={chartData} barCategoryGap="30%">
+              <XAxis
+                dataKey="status"
+                tick={{ fill: '#94a3b8', fontSize: 12 }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <YAxis
+                tick={{ fill: '#64748b', fontSize: 12 }}
+                axisLine={false}
+                tickLine={false}
+                width={40}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: 'hsl(217 33% 11%)',
+                  border: '1px solid hsl(215 28% 17%)',
+                  borderRadius: '8px',
+                  color: 'hsl(213 31% 91%)',
+                }}
+                cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+              />
+              <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                {chartData.map((entry) => (
+                  <Cell
+                    key={entry.status}
+                    fill={STATUS_COLORS[entry.status] ?? '#6366f1'}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
     </div>
   )
 }
