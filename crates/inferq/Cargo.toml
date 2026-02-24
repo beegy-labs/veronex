@@ -24,7 +24,7 @@ fred = { version = "9", features = ["serde-json"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 
 # Auth / Crypto
-uuid = { version = "1", features = ["v7", "serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 blake2 = "0.10"
 base62 = "2"
 hex = "0.4"
@@ -48,6 +48,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 anyhow = "1"
 async-trait = "0.1"
+async-stream = "0.3"
 futures = "0.3"
 tokio-stream = "0.1"
 time = { version = "0.3.47", features = ["formatting"] }

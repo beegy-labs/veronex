@@ -1,6 +1,7 @@
 pub mod api_key_repository;
 pub mod inference_backend;
 pub mod job_repository;
+pub mod model_manager_port;
 pub mod llm_backend_registry;
 pub mod model_repository;
 pub mod observability_port;

@@ -48,11 +48,12 @@ pub struct StatusResponse {
 /// POST /v1/inference - Submit a new inference request.
 pub async fn submit_inference(
     State(state): State<AppState>,
+    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
     Json(req): Json<SubmitRequest>,
 ) -> Result<Json<SubmitResponse>, StatusCode> {
     let job_id = state
         .use_case
-        .submit(&req.prompt, &req.model, &req.backend)
+        .submit(&req.prompt, &req.model, &req.backend, Some(api_key.id))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -142,7 +143,9 @@ mod tests {
     use super::*;
     use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
     use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
-    use crate::domain::entities::ApiKey;
+    use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
+    use crate::domain::entities::{ApiKey, LlmBackend};
+    use crate::domain::enums::LlmBackendStatus;
     use crate::domain::enums::JobStatus;
     use crate::domain::value_objects::StreamToken;
     use crate::infrastructure::inbound::http::router;
@@ -167,6 +170,7 @@ mod tests {
             _prompt: &str,
             _model_name: &str,
             _backend_type: &str,
+            _api_key_id: Option<Uuid>,
         ) -> Result<JobId> {
             Ok(JobId::new())
         }
@@ -219,14 +223,58 @@ mod tests {
         }
     }
 
+    struct MockBackendRegistry;
+
+    #[async_trait]
+    impl LlmBackendRegistry for MockBackendRegistry {
+        async fn register(&self, _backend: &LlmBackend) -> Result<()> {
+            Ok(())
+        }
+        async fn list_active(&self) -> Result<Vec<LlmBackend>> {
+            Ok(vec![])
+        }
+        async fn list_all(&self) -> Result<Vec<LlmBackend>> {
+            Ok(vec![])
+        }
+        async fn get(&self, _id: Uuid) -> Result<Option<LlmBackend>> {
+            Ok(None)
+        }
+        async fn update_status(&self, _id: Uuid, _status: LlmBackendStatus) -> Result<()> {
+            Ok(())
+        }
+        async fn deactivate(&self, _id: Uuid) -> Result<()> {
+            Ok(())
+        }
+    }
+
     fn make_app() -> axum::Router {
+        let fake_key = ApiKey {
+            id: Uuid::now_v7(),
+            key_hash: "testhash".to_string(),
+            key_prefix: "iq_test".to_string(),
+            tenant_id: "test-tenant".to_string(),
+            name: "test-key".to_string(),
+            is_active: true,
+            rate_limit_rpm: 0,
+            rate_limit_tpm: 0,
+            expires_at: None,
+            created_at: chrono::Utc::now(),
+        };
+        let pg_pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://test:test@localhost/test")
+            .expect("lazy pool creation should not fail");
         let state = AppState {
             use_case: Arc::new(MockUseCase),
             api_key_repo: Arc::new(MockApiKeyRepo),
+            backend_registry: Arc::new(MockBackendRegistry),
             valkey_pool: None,
             clickhouse_client: None,
+            pg_pool,
         };
-        router::build_api_router().with_state(state)
+        // Inject a fake ApiKey extension so handlers that extract it work in tests.
+        router::build_api_router()
+            .layer(axum::Extension(fake_key))
+            .with_state(state)
     }
 
     // ── submit_inference tests ─────────────────────────────────────
