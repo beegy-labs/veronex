@@ -83,15 +83,20 @@ pub async fn aggregate_usage(
     let result = client
         .query(
             "SELECT
-                sum(request_count)     AS request_count,
-                sum(success_count)     AS success_count,
-                sum(cancelled_count)   AS cancelled_count,
-                sum(error_count)       AS error_count,
-                sum(prompt_tokens)     AS prompt_tokens,
-                sum(completion_tokens) AS completion_tokens,
-                sum(total_tokens)      AS total_tokens
-            FROM api_key_usage_hourly
-            WHERE hour >= now() - INTERVAL ? HOUR",
+                request_count, success_count, cancelled_count, error_count,
+                prompt_tokens, completion_tokens,
+                prompt_tokens + completion_tokens AS total_tokens
+            FROM (
+                SELECT
+                    count()                               AS request_count,
+                    countIf(finish_reason = 'stop')       AS success_count,
+                    countIf(finish_reason = 'cancelled')  AS cancelled_count,
+                    countIf(finish_reason = 'error')      AS error_count,
+                    sum(prompt_tokens)                    AS prompt_tokens,
+                    sum(completion_tokens)                AS completion_tokens
+                FROM inference_logs
+                WHERE event_time >= now() - INTERVAL ? HOUR
+            )",
         )
         .bind(params.hours)
         .fetch_one::<UsageAggregate>()
@@ -116,17 +121,23 @@ pub async fn key_usage(
     let rows = client
         .query(
             "SELECT
-                hour,
-                request_count,
-                success_count,
-                cancelled_count,
-                error_count,
-                prompt_tokens,
-                completion_tokens,
-                total_tokens
-            FROM api_key_usage_hourly
-            WHERE api_key_id = ? AND hour >= now() - INTERVAL ? HOUR
-            ORDER BY hour ASC",
+                hour, request_count, success_count, cancelled_count, error_count,
+                prompt_tokens, completion_tokens,
+                prompt_tokens + completion_tokens AS total_tokens
+            FROM (
+                SELECT
+                    toStartOfHour(event_time)             AS hour,
+                    count()                               AS request_count,
+                    countIf(finish_reason = 'stop')       AS success_count,
+                    countIf(finish_reason = 'cancelled')  AS cancelled_count,
+                    countIf(finish_reason = 'error')      AS error_count,
+                    sum(prompt_tokens)                    AS prompt_tokens,
+                    sum(completion_tokens)                AS completion_tokens
+                FROM inference_logs
+                WHERE api_key_id = ? AND event_time >= now() - INTERVAL ? HOUR
+                GROUP BY hour
+                ORDER BY hour ASC
+            )",
         )
         .bind(uuid)
         .bind(params.hours)

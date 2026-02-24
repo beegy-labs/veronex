@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: inferq
+      POSTGRES_USER: inferq
+      POSTGRES_PASSWORD: inferq
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inferq -d inferq"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    platform: linux/amd64
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: inferq
+      CLICKHOUSE_USER: inferq
+      CLICKHOUSE_PASSWORD: inferq
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./docker/clickhouse/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  inferq:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    environment:
+      DATABASE_URL: postgres://inferq:inferq@postgres:5432/inferq
+      VALKEY_URL: redis://valkey:6379
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: inferq
+      CLICKHOUSE_PASSWORD: inferq
+      CLICKHOUSE_DB: inferq
+      CLICKHOUSE_ENABLED: "true"
+      OLLAMA_URL: http://host.docker.internal:11434
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      BOOTSTRAP_API_KEY: ${BOOTSTRAP_API_KEY:-inferq-bootstrap-admin-key}
+      RUST_LOG: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  inferq-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_INFERQ_API_URL: http://localhost:3001
+        NEXT_PUBLIC_INFERQ_ADMIN_KEY: ${BOOTSTRAP_API_KEY:-inferq-bootstrap-admin-key}
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_INFERQ_API_URL: http://localhost:3001
+      NEXT_PUBLIC_INFERQ_ADMIN_KEY: ${BOOTSTRAP_API_KEY:-inferq-bootstrap-admin-key}
+    depends_on:
+      - inferq
+
+volumes:
+  postgres_data:
+  clickhouse_data:
