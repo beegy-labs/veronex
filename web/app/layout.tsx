@@ -20,7 +20,7 @@ export default function RootLayout({
   }))
 
   return (
-    <html lang="en" className="h-full">
+    <html lang="en" className="h-full dark">
       <head>
         <title>inferq Dashboard</title>
         <meta name="description" content="inferq inference management dashboard" />

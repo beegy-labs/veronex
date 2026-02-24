@@ -9,6 +9,15 @@ import {
 } from 'recharts'
 import { Hash, Coins, CheckCircle, XCircle } from 'lucide-react'
 import StatsCard from '@/components/stats-card'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 const HOUR_OPTIONS = [6, 12, 24, 48, 72]
 
@@ -67,31 +76,30 @@ export default function UsagePage() {
           <p className="text-slate-400 mt-1 text-sm">Token consumption and request volume</p>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-slate-400">Last</span>
+          <span className="text-sm text-muted-foreground">Last</span>
           {HOUR_OPTIONS.map((h) => (
-            <button
+            <Button
               key={h}
+              variant={hours === h ? 'default' : 'outline'}
+              size="sm"
               onClick={() => setHours(h)}
-              className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                hours === h
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-              }`}
             >
               {h}h
-            </button>
+            </Button>
           ))}
         </div>
       </div>
 
       {/* ClickHouse unavailable */}
       {aggError && (
-        <div className="rounded-xl border border-amber-700 bg-amber-950 p-5 text-amber-300">
-          <p className="font-semibold">Analytics unavailable</p>
-          <p className="text-sm mt-1 text-amber-400">
-            ClickHouse is not enabled. Set <code className="font-mono">CLICKHOUSE_ENABLED=true</code> to track usage.
-          </p>
-        </div>
+        <Card className="border-amber-500/30 bg-amber-500/10">
+          <CardContent className="p-5">
+            <p className="font-semibold text-amber-400">Analytics unavailable</p>
+            <p className="text-sm mt-1 text-amber-400/80">
+              ClickHouse is not enabled. Set <code className="font-mono">CLICKHOUSE_ENABLED=true</code> to track usage.
+            </p>
+          </CardContent>
+        </Card>
       )}
 
       {/* Aggregate stats */}
@@ -125,95 +133,106 @@ export default function UsagePage() {
           </div>
 
           {isNoData && (
-            <div className="rounded-xl border border-slate-800 bg-slate-900 p-10 text-center text-slate-500">
-              <p className="font-medium">No data yet</p>
-              <p className="text-sm mt-1">Submit inference requests to see usage analytics.</p>
-            </div>
+            <Card>
+              <CardContent className="p-10 text-center text-muted-foreground">
+                <p className="font-medium">No data yet</p>
+                <p className="text-sm mt-1">Submit inference requests to see usage analytics.</p>
+              </CardContent>
+            </Card>
           )}
         </>
       )}
 
       {/* Per-key hourly breakdown */}
       {!aggError && keys && keys.length > 0 && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-          <div className="flex items-center justify-between mb-5">
-            <h2 className="text-base font-semibold text-slate-200">Hourly Breakdown</h2>
-            <select
-              value={activeKeyId ?? ''}
-              onChange={(e) => setSelectedKey(e.target.value)}
-              className="bg-slate-800 border border-slate-700 text-slate-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              {keys.map((k) => (
-                <option key={k.id} value={k.id}>
-                  {k.name} ({k.key_prefix}…)
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {hourlyLoading && (
-            <div className="flex items-center justify-center h-48 text-slate-400 text-sm">
-              Loading…
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Hourly Breakdown</CardTitle>
+              <Select
+                value={activeKeyId ?? ''}
+                onValueChange={setSelectedKey}
+              >
+                <SelectTrigger className="w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {keys.map((k) => (
+                    <SelectItem key={k.id} value={k.id}>
+                      {k.name} ({k.key_prefix}…)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          )}
-
-          {!hourlyLoading && chartData.length === 0 && (
-            <div className="flex items-center justify-center h-48 text-slate-500 text-sm">
-              No data for this key in the selected time range.
-            </div>
-          )}
-
-          {!hourlyLoading && chartData.length > 0 && (
-            <div className="space-y-8">
-              {/* Token area chart */}
-              <div>
-                <p className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-3">Tokens / Hour</p>
-                <ResponsiveContainer width="100%" height={200}>
-                  <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient id="tokenGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} width={45} tickFormatter={fmt} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#e2e8f0' }}
-                      cursor={{ stroke: 'rgba(255,255,255,0.08)' }}
-                      formatter={(v: number) => [fmt(v), 'Tokens']}
-                    />
-                    <Area type="monotone" dataKey="tokens" stroke="#6366f1" fill="url(#tokenGrad)" strokeWidth={2} dot={false} />
-                  </AreaChart>
-                </ResponsiveContainer>
+          </CardHeader>
+          <CardContent>
+            {hourlyLoading && (
+              <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">
+                Loading…
               </div>
+            )}
 
-              {/* Request / error bar chart */}
-              <div>
-                <p className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-3">Requests / Hour</p>
-                <ResponsiveContainer width="100%" height={160}>
-                  <BarChart data={chartData} barGap={2}>
-                    <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} width={35} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#e2e8f0' }}
-                      cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: '12px', color: '#94a3b8' }} />
-                    <Bar dataKey="requests" name="Requests" fill="#6366f1" radius={[3, 3, 0, 0]} />
-                    <Bar dataKey="errors" name="Errors" fill="#ef4444" radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+            {!hourlyLoading && chartData.length === 0 && (
+              <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">
+                No data for this key in the selected time range.
               </div>
-            </div>
-          )}
-        </div>
+            )}
+
+            {!hourlyLoading && chartData.length > 0 && (
+              <div className="space-y-8">
+                {/* Token area chart */}
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Tokens / Hour</p>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <AreaChart data={chartData}>
+                      <defs>
+                        <linearGradient id="tokenGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+                          <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} width={45} tickFormatter={fmt} />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: 'hsl(217 33% 11%)', border: '1px solid hsl(215 28% 17%)', borderRadius: '8px', color: 'hsl(213 31% 91%)' }}
+                        cursor={{ stroke: 'rgba(255,255,255,0.08)' }}
+                        formatter={(v: number) => [fmt(v), 'Tokens']}
+                      />
+                      <Area type="monotone" dataKey="tokens" stroke="#6366f1" fill="url(#tokenGrad)" strokeWidth={2} dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Request / error bar chart */}
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Requests / Hour</p>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <BarChart data={chartData} barGap={2}>
+                      <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} width={35} />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: 'hsl(217 33% 11%)', border: '1px solid hsl(215 28% 17%)', borderRadius: '8px', color: 'hsl(213 31% 91%)' }}
+                        cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: '12px', color: '#94a3b8' }} />
+                      <Bar dataKey="requests" name="Requests" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="errors" name="Errors" fill="#ef4444" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {!aggError && (!keys || keys.length === 0) && !aggLoading && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-center text-slate-500 text-sm">
-          No API keys found. Create one to start tracking per-key usage.
-        </div>
+        <Card>
+          <CardContent className="p-6 text-center text-muted-foreground text-sm">
+            No API keys found. Create one to start tracking per-key usage.
+          </CardContent>
+        </Card>
       )}
     </div>
   )

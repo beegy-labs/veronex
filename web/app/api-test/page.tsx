@@ -4,6 +4,17 @@ import { useState, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { Send, Loader2, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 export default function ApiTestPage() {
   const [prompt, setPrompt] = useState('')
@@ -39,6 +50,7 @@ export default function ApiTestPage() {
       setModel(availableModels[0])
     }
   }, [availableModels, model])
+
   const [tokens, setTokens] = useState<string[]>([])
   const [status, setStatus] = useState<'idle' | 'submitting' | 'streaming' | 'done' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
@@ -160,113 +172,123 @@ export default function ApiTestPage() {
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Model + Backend */}
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Backend</label>
-            <select
+          <div className="space-y-1.5">
+            <Label>Backend</Label>
+            <Select
               value={backend}
-              onChange={(e) => { setBackend(e.target.value); setModel('') }}
+              onValueChange={(v) => { setBackend(v); setModel('') }}
               disabled={isRunning}
-              className="w-full bg-slate-800 border border-slate-700 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
             >
-              {availableBackendTypes.map((b) => (
-                <option key={b} value={b}>{b}</option>
-              ))}
-            </select>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {availableBackendTypes.map((b) => (
+                  <SelectItem key={b} value={b}>{b}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Model</label>
-            <select
+          <div className="space-y-1.5">
+            <Label>Model</Label>
+            <Select
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              onValueChange={(v) => setModel(v)}
               disabled={isRunning || availableModels.length === 0}
-              className="w-full bg-slate-800 border border-slate-700 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
             >
-              {availableModels.length === 0 && (
-                <option value="">No models available</option>
-              )}
-              {availableModels.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
+              <SelectTrigger>
+                <SelectValue placeholder="No models available" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableModels.map((m) => (
+                  <SelectItem key={m} value={m}>{m}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
         {/* Prompt */}
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1">Prompt</label>
+        <div className="space-y-1.5">
+          <Label>Prompt</Label>
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             disabled={isRunning}
             rows={4}
             placeholder="Enter your prompt here…"
-            className="w-full bg-slate-800 border border-slate-700 text-slate-200 text-sm rounded-lg px-3 py-2 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y disabled:opacity-50"
+            className="flex min-h-[96px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-y"
           />
         </div>
 
         {/* Submit button */}
         <div className="flex gap-3">
-          <button
+          <Button
             type="submit"
             disabled={!prompt.trim() || isRunning}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
           >
             {isRunning ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
             ) : (
-              <Send className="h-4 w-4" />
+              <Send className="h-4 w-4 mr-2" />
             )}
             {status === 'submitting' ? 'Submitting…' : status === 'streaming' ? 'Streaming…' : 'Run'}
-          </button>
+          </Button>
 
           {(status !== 'idle') && (
-            <button
+            <Button
               type="button"
+              variant="outline"
               onClick={handleReset}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 text-sm transition-colors"
             >
-              <X className="h-4 w-4" />
+              <X className="h-4 w-4 mr-2" />
               Reset
-            </button>
+            </Button>
           )}
         </div>
       </form>
 
       {/* Job ID info */}
       {jobId && (
-        <p className="text-xs text-slate-500 font-mono">Job ID: {jobId}</p>
+        <p className="text-xs text-muted-foreground font-mono">Job ID: {jobId}</p>
       )}
 
       {/* Output */}
       {(output || status === 'streaming' || status === 'done') && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Output</p>
-            {status === 'streaming' && (
-              <span className="flex items-center gap-1.5 text-xs text-blue-400">
-                <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />
-                Streaming
-              </span>
-            )}
-            {status === 'done' && (
-              <span className="text-xs text-emerald-400">Complete</span>
-            )}
-          </div>
-          <pre className="text-sm text-slate-200 whitespace-pre-wrap font-mono leading-relaxed min-h-[2rem]">
-            {output}
-            {status === 'streaming' && (
-              <span className="inline-block w-0.5 h-4 bg-slate-400 animate-pulse ml-px align-middle" />
-            )}
-          </pre>
-        </div>
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Output</p>
+              {status === 'streaming' && (
+                <span className="flex items-center gap-1.5 text-xs text-blue-400">
+                  <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />
+                  Streaming
+                </span>
+              )}
+              {status === 'done' && (
+                <Badge variant="outline" className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30">
+                  Complete
+                </Badge>
+              )}
+            </div>
+            <pre className="text-sm text-slate-200 whitespace-pre-wrap font-mono leading-relaxed min-h-[2rem]">
+              {output}
+              {status === 'streaming' && (
+                <span className="inline-block w-0.5 h-4 bg-slate-400 animate-pulse ml-px align-middle" />
+              )}
+            </pre>
+          </CardContent>
+        </Card>
       )}
 
       {/* Error */}
       {status === 'error' && (
-        <div className="rounded-xl border border-red-800 bg-red-950 p-5 text-red-300">
-          <p className="font-semibold">Error</p>
-          <p className="text-sm mt-1 text-red-400">{errorMsg}</p>
-        </div>
+        <Card className="border-destructive/50 bg-destructive/10">
+          <CardContent className="p-5 text-destructive">
+            <p className="font-semibold">Error</p>
+            <p className="text-sm mt-1 opacity-80">{errorMsg}</p>
+          </CardContent>
+        </Card>
       )}
     </div>
   )
