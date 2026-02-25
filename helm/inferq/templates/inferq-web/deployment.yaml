@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "inferq.fullname" . }}-web
+  labels:
+    {{- include "inferq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: {{ .Values.inferqWeb.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "inferq.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        {{- include "inferq.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: web
+    spec:
+      containers:
+        - name: inferq-web
+          image: "{{ .Values.inferqWeb.image.repository }}:{{ .Values.inferqWeb.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3002
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3002"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: NEXT_PUBLIC_INFERQ_API_URL
+              value: {{ .Values.inferqWeb.env.nextPublicInferqApiUrl | quote }}
+            - name: NEXT_PUBLIC_INFERQ_ADMIN_KEY
+              value: {{ .Values.inferqWeb.env.nextPublicInferqAdminKey | quote }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.inferqWeb.resources | nindent 12 }}

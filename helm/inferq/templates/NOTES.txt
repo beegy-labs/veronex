@@ -1,0 +1,47 @@
+inferq has been deployed.
+
+inferq API:    kubectl port-forward svc/{{ include "inferq.fullname" . }} 3000:3000 -n {{ .Release.Namespace }}
+inferq Web UI: kubectl port-forward svc/{{ include "inferq.fullname" . }}-web 3002:3002 -n {{ .Release.Namespace }}
+
+Bootstrap API key: {{ .Values.inferq.env.bootstrapApiKey }}
+
+{{- if not .Values.otelCollector.enabled }}
+
+OTel Collector is DISABLED. Add the following scrape config to your existing
+OTel Collector to enable Prometheus HTTP SD for node-exporter targets:
+
+  receivers:
+    prometheus:
+      config:
+        scrape_configs:
+          - job_name: inferq-node-exporters
+            scrape_interval: 30s
+            http_sd_configs:
+              - url: http://{{ include "inferq.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:3000/v1/metrics/targets
+                refresh_interval: 30s
+{{- end }}
+
+{{- if not .Values.postgres.enabled }}
+
+PostgreSQL is DISABLED. Ensure inferq.env.databaseUrl is set to a reachable
+PostgreSQL 17 instance.
+{{- end }}
+
+{{- if not .Values.valkey.enabled }}
+
+Valkey is DISABLED. Ensure inferq.env.valkeyUrl is set to a reachable
+Valkey/Redis-compatible instance.
+{{- end }}
+
+{{- if not .Values.clickhouse.enabled }}
+
+ClickHouse is DISABLED. Ensure inferq.env.clickhouseUrl is set to a reachable
+ClickHouse instance.
+{{- end }}
+
+{{- if not .Values.redpanda.enabled }}
+
+Redpanda is DISABLED. Set redpanda.externalBrokers to your Kafka broker list
+(e.g. kafka-broker-1:9092,kafka-broker-2:9092) so the OTel Collector can fan
+out traces and metrics to the streaming layer.
+{{- end }}
