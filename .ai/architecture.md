@@ -1,21 +1,21 @@
 # Architecture
 
-> Hexagonal Architecture overview | **Last Updated**: 2026-02-19
+> Hexagonal Architecture overview | **Last Updated**: 2026-02-25
 
 ## Structure
 
 ```
-src/
-├── domain/          # Core entities & value objects (no deps)
-├── application/     # Use cases + ports (interfaces)
+crates/inferq/src/
+├── domain/          # Entities, value objects, enums (no deps)
+├── application/     # Use cases + ports (traits)
 │   ├── ports/
-│   │   ├── inbound/   # Driving ports (IInferenceUseCase, etc.)
-│   │   └── outbound/  # Driven ports (IQueuePort, IGpuPort, etc.)
-│   └── use-cases/
+│   │   ├── inbound/   # InferenceUseCase
+│   │   └── outbound/  # Repositories, registries, adapters
+│   └── use_cases/
 ├── infrastructure/  # Adapters (implements ports)
-│   ├── inbound/     # HTTP, SSE, WebSocket adapters
-│   └── outbound/    # Redis, GPU worker, DB adapters
-└── main.py          # Composition root (wires everything)
+│   ├── inbound/http/  # Axum handlers, middleware, router
+│   └── outbound/      # Postgres, Valkey, Ollama, Gemini, OTel
+└── main.rs          # Composition root (wires everything)
 ```
 
 ## Dependency Rule
@@ -27,30 +27,25 @@ infrastructure → application → domain
 
 ## Key Ports
 
-| Port                  | Direction | Implemented By          |
-| --------------------- | --------- | ----------------------- |
-| IInferenceUseCase     | Inbound   | HTTP/SSE Adapter        |
-| IQueuePort            | Outbound  | Valkey Adapter          |
-| IInferenceBackendPort | Outbound  | OllamaAdapter (MVP) / GeminiAdapter (MVP) / *(추후 추가)* |
-| ILlmBackendRegistry   | Outbound  | PostgreSQL / Valkey     |
-| IStreamPort           | Outbound  | SSE Adapter             |
-| IObservabilityPort    | Outbound  | OTel / ClickHouse / stdout |
-| IApiKeyRepository     | Outbound  | PostgreSQL Adapter      |
+| Port                   | Direction | Implemented By                       |
+| ---------------------- | --------- | ------------------------------------ |
+| `InferenceUseCase`     | Inbound   | HTTP/SSE handlers                    |
+| `InferenceBackendPort` | Outbound  | OllamaAdapter / GeminiAdapter        |
+| `LlmBackendRegistry`   | Outbound  | PostgresBackendRegistry              |
+| `GpuServerRegistry`    | Outbound  | PostgresGpuServerRegistry            |
+| `JobRepository`        | Outbound  | PostgresJobRepository                |
+| `ApiKeyRepository`     | Outbound  | PostgresApiKeyRepository             |
+| `ObservabilityPort`    | Outbound  | ClickHouseObservabilityAdapter       |
+| `ModelManagerPort`     | Outbound  | OllamaModelManager (LRU eviction)    |
 
-## Multi-Backend Load Balancing
-
-inferq = queue + LB + multi-backend gateway.
+## Multi-Backend Routing
 
 ```
-Client → inferq → [InferenceRouter] → OllamaAdapter  (OLLAMA, MVP)
-                                    → GeminiAdapter   (GEMINI, MVP)
-                                    → *(새 어댑터 파일 1개 + factory case 1줄로 확장)*
+Client → POST /v1/inference
+       → DynamicBackendRouter
+         → VRAM check → claim best GPU → tokio::spawn
+         → OllamaAdapter | GeminiAdapter
+       → SSE stream → Client
 ```
-
-- 모든 백엔드 = `IInferenceBackendPort` 동일 포트 (포트는 변경 없음)
-- 로컬(Ollama): model-affinity + least-connections 라우팅
-- 클라우드(Gemini, ...): least-connections
-- 백엔드 등록: `POST /v1/backends` API — 코드/재배포 불필요
-- 배포 환경 무관: URL + api_key(선택)만으로 연결
 
 **SSOT**: `docs/llm/policies/architecture.md`

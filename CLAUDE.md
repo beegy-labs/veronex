@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> **Claude Entry Point** | **Last Updated**: 2026-02-19
+> **Claude Entry Point** | **Last Updated**: 2026-02-25
 
 ## Quick Start
 
@@ -34,20 +34,23 @@
 
 ## Tech Stack
 
-| Layer          | Tech                        |
-| -------------- | --------------------------- |
-| **Runtime**    | Python 3.13, FastAPI        |
-| **Queue**      | Redis + ARQ / BullMQ        |
-| **Streaming**  | SSE (Server-Sent Events)    |
-| **GPU**        | Single GPU, serial queue    |
-| **Deploy**     | Kubernetes, Docker          |
+| Layer          | Tech                              |
+| -------------- | --------------------------------- |
+| **Runtime**    | Rust (Axum 0.8, tokio, Edition 2024) |
+| **DB**         | PostgreSQL 17 (sqlx 0.8)         |
+| **Queue**      | Valkey (fred 9, BLPOP/RPUSH)     |
+| **Streaming**  | SSE (Server-Sent Events)         |
+| **Analytics**  | ClickHouse + OTel Collector      |
+| **Messaging**  | Redpanda (Kafka-compatible)      |
+| **Deploy**     | Kubernetes (Helm), Docker        |
+| **Web**        | Next.js 15, Tailwind v4, shadcn/ui |
 
 ## Policies
 
-| Topic        | Path                                     |
-| ------------ | ---------------------------------------- |
-| Architecture | `docs/llm/policies/architecture.md`      |
-| Git Flow     | `docs/llm/policies/git-flow.md`          |
+| Topic          | Path                                     |
+| -------------- | ---------------------------------------- |
+| Architecture   | `docs/llm/policies/architecture.md`      |
+| Git Flow       | `docs/llm/policies/git-flow.md`          |
 
 ---
 

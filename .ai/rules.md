@@ -1,6 +1,6 @@
 # Core Development Rules
 
-> Essential rules for AI assistants | **Last Updated**: 2026-02-19
+> CDD Tier 1 — Essential rules for AI assistants | **Last Updated**: 2026-02-25
 
 ## Language Policy
 
@@ -15,26 +15,29 @@
 | 3    | `docs/en/`  | **NO**       | Generated              |
 | 4    | `docs/kr/`  | **NO**       | Translated             |
 
+**Never edit `docs/en/` or `docs/kr/` directly.**
+
 ## Architecture: Hexagonal
 
 ```
 Inbound Adapters → [Ports] → Application Core → [Ports] → Outbound Adapters
-  (HTTP, SSE)                  (Use Cases)                  (GPU, Redis, DB)
+  (HTTP, SSE)                  (Use Cases)                  (Valkey, Postgres, OTel)
 ```
 
 ## NEVER / ALWAYS
 
-| NEVER                         | Alternative                     |
-| ----------------------------- | ------------------------------- |
-| Business logic in adapters    | Use application layer use cases |
-| Direct GPU call outside ports | Use InferencePort               |
-| Hardcode secrets              | Use env/ConfigService           |
-| Block GPU without queue       | Always enqueue first            |
+| NEVER                           | Alternative                       |
+| ------------------------------- | --------------------------------- |
+| Business logic in adapters      | Use application layer use cases   |
+| Direct GPU call outside ports   | Use InferenceBackendPort          |
+| Hardcode secrets                | Use environment variables         |
+| Dispatch without queue          | Always RPUSH to Valkey queue      |
+| Edit `docs/en/` or `docs/kr/`  | Edit `.ai/` or `docs/llm/` only   |
+| Hardcode CSS colors in components | Reference `--theme-*` tokens    |
 
-| ALWAYS                        | Details                         |
-| ----------------------------- | ------------------------------- |
-| Enqueue before GPU work       | Serial processing guaranteed    |
-| Stream via SSE                | Real-time token delivery        |
-| Define ports before adapters  | Dependency rule respected       |
-
-**SSOT**: `docs/llm/rules.md`
+| ALWAYS                          | Details                           |
+| ------------------------------- | --------------------------------- |
+| Enqueue before GPU work         | Serial processing guaranteed      |
+| Stream via SSE                  | Real-time token delivery          |
+| Define ports before adapters    | Dependency rule respected         |
+| Use `--theme-*` tokens in CSS   | `tokens.css` is the design SSOT   |
