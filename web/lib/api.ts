@@ -1,4 +1,4 @@
-import type { ApiKey, Backend, CreateKeyRequest, CreateKeyResponse, DashboardStats, HourlyUsage, Job, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, UsageAggregate } from './types'
+import type { ApiKey, Backend, CreateKeyRequest, CreateKeyResponse, DashboardStats, GpuServer, HourlyUsage, Job, NodeMetrics, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest, UsageAggregate } from './types'
 
 const BASE = process.env.NEXT_PUBLIC_INFERQ_API_URL ?? 'http://localhost:3001'
 const KEY  = process.env.NEXT_PUBLIC_INFERQ_ADMIN_KEY ?? ''
@@ -14,6 +14,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
 
@@ -44,6 +45,24 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  servers: () =>
+    req<GpuServer[]>('/v1/servers'),
+
+  registerServer: (body: RegisterGpuServerRequest) =>
+    req<{ id: string }>('/v1/servers', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  deleteServer: (id: string) =>
+    req<void>(`/v1/servers/${id}`, { method: 'DELETE' }),
+
+  serverMetrics: (id: string) =>
+    req<NodeMetrics>(`/v1/servers/${id}/metrics`),
+
+  serverMetricsHistory: (id: string, hours = 1) =>
+    req<ServerMetricsPoint[]>(`/v1/servers/${id}/metrics/history?hours=${hours}`),
+
   backends: () =>
     req<Backend[]>('/v1/backends'),
 
@@ -56,11 +75,20 @@ export const api = {
   deleteBackend: (id: string) =>
     req<void>(`/v1/backends/${id}`, { method: 'DELETE' }),
 
+  updateBackend: (id: string, body: UpdateBackendRequest) =>
+    req<Backend>(`/v1/backends/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
   healthcheckBackend: (id: string) =>
     req<{ id: string; status: string }>(`/v1/backends/${id}/healthcheck`, { method: 'POST' }),
 
   backendModels: (id: string) =>
     req<{ models: string[] }>(`/v1/backends/${id}/models`),
+
+  syncBackendModels: (id: string) =>
+    req<{ models: string[]; synced: boolean }>(`/v1/backends/${id}/models/sync`, { method: 'POST' }),
 
   usageAggregate: (hours = 24) =>
     req<UsageAggregate>(`/v1/usage?hours=${hours}`),

@@ -75,6 +75,35 @@ export interface CreateKeyRequest {
   rate_limit_tpm?: number
 }
 
+export interface GpuServer {
+  id: string
+  name: string
+  node_exporter_url: string | null
+  registered_at: string
+}
+
+export interface RegisterGpuServerRequest {
+  name: string
+  node_exporter_url?: string
+}
+
+export interface NodeMetrics {
+  scrape_ok: boolean
+  mem_total_mb: number
+  mem_available_mb: number
+  cpu_cores: number
+  gpus: GpuNodeMetrics[]
+}
+
+export interface GpuNodeMetrics {
+  card: string
+  temp_c: number | null
+  power_w: number | null
+  vram_used_mb: number | null
+  vram_total_mb: number | null
+  busy_pct: number | null
+}
+
 export interface Backend {
   id: string
   name: string
@@ -82,6 +111,12 @@ export interface Backend {
   url: string
   is_active: boolean
   total_vram_mb: number
+  /** GPU index on the host (0-based). Used to filter node-exporter metrics. */
+  gpu_index: number | null
+  /** FK → gpu_servers. null for cloud backends. */
+  server_id: string | null
+  /** Reserved for Phase 2 sidecar. */
+  agent_url: string | null
   status: 'online' | 'offline' | 'degraded'
   registered_at: string
 }
@@ -92,6 +127,26 @@ export interface RegisterBackendRequest {
   url?: string
   api_key?: string
   total_vram_mb?: number
+  gpu_index?: number
+  server_id?: string
+  agent_url?: string
+}
+
+export interface UpdateBackendRequest {
+  name: string
+  url?: string
+  api_key?: string
+  total_vram_mb?: number
+  gpu_index?: number | null
+  server_id?: string | null
+}
+
+export interface ServerMetricsPoint {
+  ts: string
+  mem_total_mb: number
+  mem_avail_mb: number
+  gpu_temp_c: number | null
+  gpu_power_w: number | null
 }
 
 export interface RegisterBackendResponse {
