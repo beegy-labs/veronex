@@ -22,8 +22,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full dark">
       <head>
-        <title>inferq Dashboard</title>
-        <meta name="description" content="inferq inference management dashboard" />
+        <title>InferQ</title>
+        <meta name="description" content="InferQ — LLM inference queue and routing dashboard" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
       </head>
       <body className="h-full bg-slate-950 text-slate-100">
         <QueryClientProvider client={queryClient}>

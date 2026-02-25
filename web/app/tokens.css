@@ -1,0 +1,193 @@
+/* ============================================================
+   INFERQ DESIGN TOKEN SSOT
+   SSOT: docs/llm/specs/18-web-design-system.md
+   ============================================================
+   4-layer architecture:
+     Layer 0  @property     — CSS type safety + color transition support
+     Layer 1  --palette-*   — raw hex values  (never reference in components)
+     Layer 2  --theme-*     — semantic tokens  (use in components + Recharts)
+     Layer 3  @theme inline — Tailwind utility generation (bg-background, etc.)
+
+   Rules:
+     - Add new colors: Layer 1 palette → Layer 2 semantic → Layer 0 @property
+     - Components use --theme-* or Tailwind utilities (bg-card, text-foreground)
+     - Never hardcode hex in TSX. Never use --palette-* outside this file.
+
+   Palette reference (HSL → hex):
+     hsl(222 47%  7%) = #090e1a  (page bg)
+     hsl(217 33% 11%) = #131a25  (card bg)
+     hsl(215 28% 17%) = #1f2937  (border/hover)
+     hsl(213 31% 91%) = #e1e7ef  (primary text)
+     hsl(215 20% 55%) = #7588a3  (muted text)
+     hsl(239 84% 67%) = #6467f2  (brand primary)
+     hsl(  0 72% 51%) = #dc2828  (destructive)
+     hsl(160 72% 40%) = #1daf7e  (chart-2)
+     hsl( 38 92% 50%) = #f59e0b  (chart-3 / warning)
+     hsl(200 72% 51%) = #28a0dc  (chart-5)
+   ============================================================ */
+
+/* ------------------------------------------------------------------
+   LAYER 0 — @property type definitions
+   ------------------------------------------------------------------ */
+
+/* Background tokens */
+@property --theme-bg-page       { syntax: '<color>'; inherits: true; initial-value: #090e1a; }
+@property --theme-bg-card       { syntax: '<color>'; inherits: true; initial-value: #131a25; }
+@property --theme-bg-elevated   { syntax: '<color>'; inherits: true; initial-value: #192535; }
+@property --theme-bg-hover      { syntax: '<color>'; inherits: true; initial-value: #1f2937; }
+
+/* Text tokens */
+@property --theme-text-primary   { syntax: '<color>'; inherits: true; initial-value: #e1e7ef; }
+@property --theme-text-secondary { syntax: '<color>'; inherits: true; initial-value: #7588a3; }
+
+/* Border token */
+@property --theme-border { syntax: '<color>'; inherits: true; initial-value: #1f2937; }
+
+/* Brand tokens */
+@property --theme-primary            { syntax: '<color>'; inherits: true; initial-value: #6467f2; }
+@property --theme-primary-foreground { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+@property --theme-ring               { syntax: '<color>'; inherits: true; initial-value: #6467f2; }
+
+/* State tokens */
+@property --theme-destructive        { syntax: '<color>'; inherits: true; initial-value: #dc2828; }
+@property --theme-status-success     { syntax: '<color>'; inherits: true; initial-value: #10b981; }
+@property --theme-status-error       { syntax: '<color>'; inherits: true; initial-value: #ef4444; }
+@property --theme-status-warning     { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
+@property --theme-status-info        { syntax: '<color>'; inherits: true; initial-value: #3b82f6; }
+
+/* Chart tokens */
+@property --theme-chart-1 { syntax: '<color>'; inherits: true; initial-value: #6467f2; }
+@property --theme-chart-2 { syntax: '<color>'; inherits: true; initial-value: #1daf7e; }
+@property --theme-chart-3 { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
+@property --theme-chart-4 { syntax: '<color>'; inherits: true; initial-value: #dc2828; }
+@property --theme-chart-5 { syntax: '<color>'; inherits: true; initial-value: #28a0dc; }
+
+/* ------------------------------------------------------------------
+   LAYER 1 — Palette (raw hex values, never reference directly in components)
+   ------------------------------------------------------------------ */
+
+:root {
+  /* Backgrounds — anchored to original HSL exact values */
+  --palette-bg-950: #090e1a;  /* hsl(222 47%  7%) — page background */
+  --palette-bg-900: #131a25;  /* hsl(217 33% 11%) — card/popover     */
+  --palette-bg-800: #192535;  /* intermediate — elevated surfaces     */
+  --palette-bg-700: #1f2937;  /* hsl(215 28% 17%) — border/hover     */
+
+  /* Text */
+  --palette-text-100: #e1e7ef;  /* hsl(213 31% 91%) — primary text   */
+  --palette-text-400: #7588a3;  /* hsl(215 20% 55%) — muted text      */
+
+  /* Brand */
+  --palette-indigo-500: #6467f2;  /* hsl(239 84% 67%) — primary/ring  */
+  --palette-white:      #ffffff;
+
+  /* State (Tailwind standard — not in original, kept as-is) */
+  --palette-emerald-500: #10b981;  /* status-success */
+  --palette-red-500:     #ef4444;  /* status-error   */
+  --palette-amber-500:   #f59e0b;  /* status-warning */
+  --palette-blue-500:    #3b82f6;  /* status-info    */
+
+  /* Destructive / Chart palette — exact HSL conversions */
+  --palette-red-700:     #dc2828;  /* hsl(  0 72% 51%) — destructive + chart-4 */
+  --palette-chart-green: #1daf7e;  /* hsl(160 72% 40%) — chart-2               */
+  --palette-chart-sky:   #28a0dc;  /* hsl(200 72% 51%) — chart-5               */
+}
+
+/* ------------------------------------------------------------------
+   LAYER 2 — Semantic tokens (single dark theme — :root only)
+   ------------------------------------------------------------------ */
+
+:root {
+  /* Backgrounds */
+  --theme-bg-page:     var(--palette-bg-950);
+  --theme-bg-card:     var(--palette-bg-900);
+  --theme-bg-elevated: var(--palette-bg-800);
+  --theme-bg-hover:    var(--palette-bg-700);
+
+  /* Text */
+  --theme-text-primary:   var(--palette-text-100);
+  --theme-text-secondary: var(--palette-text-400);
+
+  /* Border */
+  --theme-border: var(--palette-bg-700);
+
+  /* Brand */
+  --theme-primary:            var(--palette-indigo-500);
+  --theme-primary-foreground: var(--palette-white);
+  --theme-ring:               var(--palette-indigo-500);
+
+  /* State */
+  --theme-destructive:    var(--palette-red-700);
+  --theme-status-success: var(--palette-emerald-500);
+  --theme-status-error:   var(--palette-red-500);
+  --theme-status-warning: var(--palette-amber-500);
+  --theme-status-info:    var(--palette-blue-500);
+
+  /* Charts */
+  --theme-chart-1: var(--palette-indigo-500);   /* hsl(239 84% 67%) */
+  --theme-chart-2: var(--palette-chart-green);  /* hsl(160 72% 40%) */
+  --theme-chart-3: var(--palette-amber-500);    /* hsl( 38 92% 50%) */
+  --theme-chart-4: var(--palette-red-700);      /* hsl(  0 72% 51%) */
+  --theme-chart-5: var(--palette-chart-sky);    /* hsl(200 72% 51%) */
+
+  /* Radius */
+  --radius: 0.5rem;
+}
+
+/* ------------------------------------------------------------------
+   LAYER 3 — @theme inline: Tailwind utility generation
+   Maps semantic tokens → Tailwind color utilities (bg-background, etc.)
+   shadcn/ui components rely on these names.
+   ------------------------------------------------------------------ */
+
+@theme inline {
+  /* Core */
+  --color-background:         var(--theme-bg-page);
+  --color-foreground:         var(--theme-text-primary);
+
+  /* Card */
+  --color-card:               var(--theme-bg-card);
+  --color-card-foreground:    var(--theme-text-primary);
+
+  /* Popover */
+  --color-popover:            var(--theme-bg-card);
+  --color-popover-foreground: var(--theme-text-primary);
+
+  /* Primary */
+  --color-primary:            var(--theme-primary);
+  --color-primary-foreground: var(--theme-primary-foreground);
+
+  /* Secondary */
+  --color-secondary:            var(--theme-bg-elevated);
+  --color-secondary-foreground: var(--theme-text-primary);
+
+  /* Muted */
+  --color-muted:            var(--theme-bg-elevated);
+  --color-muted-foreground: var(--theme-text-secondary);
+
+  /* Accent */
+  --color-accent:            var(--theme-bg-hover);
+  --color-accent-foreground: var(--theme-text-primary);
+
+  /* Destructive */
+  --color-destructive:            var(--theme-destructive);
+  --color-destructive-foreground: var(--palette-white);
+
+  /* Border / Input / Ring */
+  --color-border: var(--theme-border);
+  --color-input:  var(--theme-border);
+  --color-ring:   var(--theme-ring);
+
+  /* Charts */
+  --color-chart-1: var(--theme-chart-1);
+  --color-chart-2: var(--theme-chart-2);
+  --color-chart-3: var(--theme-chart-3);
+  --color-chart-4: var(--theme-chart-4);
+  --color-chart-5: var(--theme-chart-5);
+
+  /* Radius */
+  --radius: 0.5rem;
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 172 44" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="1.8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- ── mark (44×44) ── -->
+  <rect width="44" height="44" rx="10" fill="url(#bg)"/>
+
+  <!--
+    Letters pivoted at mark centre (22,22) then skewX(-12°) for italic lean.
+    Pre-skew layout: i glow left≈5.1  →  Q+arrow right≈39.8  →  centre≈22.4 ≈ 22 ✓
+  -->
+  <g transform="translate(22,22) skewX(-12) translate(-22,-22)">
+    <!-- i: dot halo -->
+    <circle cx="10.3" cy="7.6"  r="5.2"  fill="white" opacity="0.20"/>
+    <!-- i: dot -->
+    <circle cx="10.3" cy="7.6"  r="3.2"  fill="white" filter="url(#glow)"/>
+    <!-- i: stem -->
+    <rect   x="7.9"  y="13.1"  width="4.8" height="24.1" rx="2.4" fill="white"/>
+
+    <!-- Q: circle -->
+    <circle cx="28.2" cy="22.7" r="10.3" stroke="white" stroke-width="3.4"/>
+    <!-- Q: inner node -->
+    <circle cx="28.2" cy="22.7" r="2.2"  fill="white" opacity="0.55"/>
+    <!-- Q: tail -->
+    <line   x1="35.1" y1="30.5" x2="38.5" y2="35.75"
+            stroke="white" stroke-width="3.4" stroke-linecap="round"/>
+    <!-- Q: arrowhead -->
+    <polyline points="36.2,33.4 38.5,35.75 36.7,38.1"
+              stroke="white" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </g>
+
+  <!-- ── wordmark ── -->
+  <!-- "Infer" in white italic -->
+  <text
+    x="56" y="30"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+    font-size="22" font-weight="700" font-style="italic" letter-spacing="-0.5"
+    fill="white"
+  >Infer</text>
+  <!-- "Q" highlighted in violet-300 italic to echo the mark -->
+  <text
+    x="117" y="30"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+    font-size="22" font-weight="700" font-style="italic" letter-spacing="-0.5"
+    fill="#c4b5fd"
+  >Q</text>
+</svg>

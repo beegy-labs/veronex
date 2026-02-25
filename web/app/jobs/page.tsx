@@ -18,7 +18,7 @@ import {
 const PAGE_SIZE = 50
 
 const STATUS_OPTIONS = [
-  { value: '',          label: 'All statuses' },
+  { value: 'all',       label: 'All statuses' },
   { value: 'pending',   label: 'Pending' },
   { value: 'running',   label: 'Running' },
   { value: 'completed', label: 'Completed' },
@@ -28,7 +28,7 @@ const STATUS_OPTIONS = [
 
 export default function JobsPage() {
   const [page, setPage] = useState(0)
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState('all')
 
   const offset = page * PAGE_SIZE
 
@@ -40,7 +40,7 @@ export default function JobsPage() {
         limit: String(PAGE_SIZE),
         offset: String(offset),
       })
-      if (status) params.set('status', status)
+      if (status && status !== 'all') params.set('status', status)
       return api.jobs(params.toString())
     },
     refetchInterval: 30_000,

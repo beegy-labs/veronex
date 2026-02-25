@@ -195,7 +195,7 @@ export default function UsagePage() {
                       <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} width={45} tickFormatter={fmt} />
                       <Tooltip
-                        contentStyle={{ backgroundColor: 'hsl(217 33% 11%)', border: '1px solid hsl(215 28% 17%)', borderRadius: '8px', color: 'hsl(213 31% 91%)' }}
+                        contentStyle={{ backgroundColor: 'var(--theme-bg-card)', border: '1px solid var(--theme-border)', borderRadius: '8px', color: 'var(--theme-text-primary)' }}
                         cursor={{ stroke: 'rgba(255,255,255,0.08)' }}
                         formatter={(v: number) => [fmt(v), 'Tokens']}
                       />
@@ -212,7 +212,7 @@ export default function UsagePage() {
                       <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} width={35} />
                       <Tooltip
-                        contentStyle={{ backgroundColor: 'hsl(217 33% 11%)', border: '1px solid hsl(215 28% 17%)', borderRadius: '8px', color: 'hsl(213 31% 91%)' }}
+                        contentStyle={{ backgroundColor: 'var(--theme-bg-card)', border: '1px solid var(--theme-border)', borderRadius: '8px', color: 'var(--theme-text-primary)' }}
                         cursor={{ fill: 'rgba(255,255,255,0.04)' }}
                       />
                       <Legend wrapperStyle={{ fontSize: '12px', color: '#94a3b8' }} />

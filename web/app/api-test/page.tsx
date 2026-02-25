@@ -117,26 +117,26 @@ export default function ApiTestPage() {
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
 
+        // SSE format: "event: <name>\ndata: <value>\n\n"
+        // Track the current event name so we can dispatch correctly.
+        let currentEvent = ''
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const raw = line.slice(6).trim()
-            if (raw === '[DONE]') {
+          const trimmed = line.trimEnd()
+          if (trimmed === '') {
+            // Blank line = end of event block; reset event type.
+            currentEvent = ''
+          } else if (trimmed.startsWith('event:')) {
+            currentEvent = trimmed.slice(6).trim()
+          } else if (trimmed.startsWith('data:')) {
+            const data = trimmed.slice(5).trimStart()
+            if (currentEvent === 'token') {
+              if (data) setTokens((prev) => [...prev, data])
+            } else if (currentEvent === 'done') {
               setStatus('done')
               reader.cancel()
               return
-            }
-            try {
-              const parsed = JSON.parse(raw) as { token?: string; done?: boolean }
-              if (parsed.token != null) {
-                setTokens((prev) => [...prev, parsed.token!])
-              }
-              if (parsed.done) {
-                setStatus('done')
-                reader.cancel()
-                return
-              }
-            } catch {
-              // ignore malformed SSE data
+            } else if (currentEvent === 'error') {
+              throw new Error(data || 'stream error')
             }
           }
         }

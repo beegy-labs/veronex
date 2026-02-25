@@ -111,10 +111,10 @@ export default function OverviewPage() {
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: 'hsl(217 33% 11%)',
-                  border: '1px solid hsl(215 28% 17%)',
+                  backgroundColor: 'var(--theme-bg-card)',
+                  border: '1px solid var(--theme-border)',
                   borderRadius: '8px',
-                  color: 'hsl(213 31% 91%)',
+                  color: 'var(--theme-text-primary)',
                 }}
                 cursor={{ fill: 'rgba(255,255,255,0.04)' }}
               />
