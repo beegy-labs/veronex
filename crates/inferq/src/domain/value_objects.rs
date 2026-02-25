@@ -62,4 +62,10 @@ impl Prompt {
 pub struct StreamToken {
     pub value: String,
     pub is_final: bool,
+    /// Actual prompt token count from the backend's usage metadata.
+    /// Only populated on the final token when the backend reports real counts.
+    pub prompt_tokens: Option<u32>,
+    /// Actual completion token count from the backend's usage metadata.
+    /// Only populated on the final token when the backend reports real counts.
+    pub completion_tokens: Option<u32>,
 }

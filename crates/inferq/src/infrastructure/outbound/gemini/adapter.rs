@@ -110,6 +110,13 @@ fn is_done(candidates: &[Candidate]) -> bool {
         .is_some_and(|r| !r.is_empty())
 }
 
+fn extract_usage(resp: &GenerateResponse) -> (Option<u32>, Option<u32>) {
+    let usage = resp.usage_metadata.as_ref();
+    let prompt = usage.and_then(|u| u.prompt_token_count);
+    let completion = usage.and_then(|u| u.candidates_token_count);
+    (prompt, completion)
+}
+
 fn map_finish_reason(candidates: &[Candidate]) -> FinishReason {
     match candidates
         .first()
@@ -179,17 +186,24 @@ impl InferenceBackendPort for GeminiAdapter {
         let client = self.client.clone();
 
         Box::pin(async_stream::try_stream! {
+            if api_key.is_empty() {
+                Err(anyhow::anyhow!("Gemini backend has no API key configured"))?;
+            }
+
             let url = format!(
                 "{BASE_URL}/v1beta/models/{model}:streamGenerateContent?key={api_key}&alt=sse"
             );
             let body = GenerateRequest::new(&prompt);
 
-            let response = client.post(&url).json(&body).send().await?;
-
-            let status = response.status();
-            if !status.is_success() {
-                Err(anyhow::anyhow!("Gemini returned {status}"))?;
-            }
+            // error_for_status() consumes the response on error (returns Err)
+            // and returns Ok(response) on success, preserving it for byte streaming.
+            let response = client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await?
+                .error_for_status()
+                .map_err(|e| anyhow::anyhow!("Gemini API error: {e}"))?;
 
             let mut byte_stream = response.bytes_stream();
             let mut buf = String::new();
@@ -206,22 +220,61 @@ impl InferenceBackendPort for GeminiAdapter {
 
                     let json_str = match line.strip_prefix("data:") {
                         Some(s) => s.trim(),
-                        None => continue, // skip blank / comment lines
+                        None => continue, // skip blank / comment / event: lines
                     };
 
-                    let chunk: GenerateResponse = serde_json::from_str(json_str)
-                        .map_err(|e| anyhow::anyhow!("failed to parse Gemini response: {e}: {json_str}"))?;
+                    if json_str.is_empty() {
+                        continue;
+                    }
 
-                    let text = extract_text(&chunk.candidates);
-                    let done = is_done(&chunk.candidates);
+                    // Soft parse: skip unparseable lines (e.g. Gemini comment lines)
+                    // rather than terminating the stream.
+                    let parsed: GenerateResponse = match serde_json::from_str(json_str) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!("skipping unparseable Gemini SSE line: {e}");
+                            continue;
+                        }
+                    };
 
-                    yield StreamToken { value: text, is_final: done };
+                    let text = extract_text(&parsed.candidates);
+                    let done = is_done(&parsed.candidates);
+
+                    let (prompt_tokens, completion_tokens) = if done {
+                        extract_usage(&parsed)
+                    } else {
+                        (None, None)
+                    };
+
+                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens };
 
                     if done {
                         return;
                     }
                 }
             }
+
+            // ── Flush remaining buffer ────────────────────────────────────────
+            // If the final SSE event arrived without a trailing '\n' (the HTTP
+            // response body ended mid-line), buf still holds the last JSON.
+            // Parse it and emit a final token so run_job can complete the job.
+            let line = buf.trim().to_string();
+            if let Some(s) = line.strip_prefix("data:") {
+                let s = s.trim();
+                if !s.is_empty() {
+                    if let Ok(parsed) = serde_json::from_str::<GenerateResponse>(s) {
+                        let text = extract_text(&parsed.candidates);
+                        let (prompt_tokens, completion_tokens) = extract_usage(&parsed);
+                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens };
+                        return;
+                    }
+                }
+            }
+
+            // Stream ended without a finishReason event — emit empty done marker
+            // so run_job marks the job as completed and the SSE client receives
+            // a 'done' event.
+            yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None };
         })
     }
 }

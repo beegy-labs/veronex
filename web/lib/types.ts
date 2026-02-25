@@ -18,6 +18,28 @@ export interface Job {
   created_at: string
   completed_at: string | null
   latency_ms: number | null
+  ttft_ms: number | null
+  completion_tokens: number | null
+  tps: number | null
+  api_key_name: string | null
+}
+
+export interface JobDetail {
+  id: string
+  model_name: string
+  backend: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  latency_ms: number | null
+  ttft_ms: number | null
+  completion_tokens: number | null
+  tps: number | null
+  api_key_name: string | null
+  prompt: string
+  result_text: string | null
+  error: string | null
 }
 
 export interface DashboardStats {
@@ -117,6 +139,8 @@ export interface Backend {
   server_id: string | null
   /** Reserved for Phase 2 sidecar. */
   agent_url: string | null
+  /** true = Google free-tier project; RPM/RPD limits come from gemini_rate_limit_policies. */
+  is_free_tier: boolean
   status: 'online' | 'offline' | 'degraded'
   registered_at: string
 }
@@ -130,6 +154,7 @@ export interface RegisterBackendRequest {
   gpu_index?: number
   server_id?: string
   agent_url?: string
+  is_free_tier?: boolean
 }
 
 export interface UpdateBackendRequest {
@@ -139,6 +164,27 @@ export interface UpdateBackendRequest {
   total_vram_mb?: number
   gpu_index?: number | null
   server_id?: string | null
+  is_free_tier?: boolean
+}
+
+/** Per-model Gemini rate-limit policy. model_name="*" = global fallback. */
+export interface GeminiRateLimitPolicy {
+  id: string
+  model_name: string
+  rpm_limit: number
+  rpd_limit: number
+  /**
+   * When false: skip all free-tier backends and route directly to a paid backend.
+   * RPM/RPD counters are also suppressed for paid backends.
+   */
+  available_on_free_tier: boolean
+  updated_at: string
+}
+
+export interface UpsertGeminiPolicyRequest {
+  rpm_limit: number
+  rpd_limit: number
+  available_on_free_tier: boolean
 }
 
 export interface ServerMetricsPoint {

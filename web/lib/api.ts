@@ -1,4 +1,4 @@
-import type { ApiKey, Backend, CreateKeyRequest, CreateKeyResponse, DashboardStats, GpuServer, HourlyUsage, Job, NodeMetrics, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest, UsageAggregate } from './types'
+import type { ApiKey, Backend, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiRateLimitPolicy, GpuServer, HourlyUsage, Job, JobDetail, NodeMetrics, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest, UpsertGeminiPolicyRequest, UsageAggregate } from './types'
 
 const BASE = process.env.NEXT_PUBLIC_INFERQ_API_URL ?? 'http://localhost:3001'
 const KEY  = process.env.NEXT_PUBLIC_INFERQ_ADMIN_KEY ?? ''
@@ -26,6 +26,9 @@ export const api = {
     req<{ jobs: Job[]; total: number }>(
       `/v1/dashboard/jobs${params ? '?' + params : ''}`,
     ),
+
+  jobDetail: (id: string) =>
+    req<JobDetail>(`/v1/dashboard/jobs/${id}`),
 
   keys: () =>
     req<ApiKey[]>('/v1/keys'),
@@ -98,4 +101,13 @@ export const api = {
 
   performance: (hours = 24) =>
     req<PerformanceStats>(`/v1/dashboard/performance?hours=${hours}`),
+
+  geminiPolicies: () =>
+    req<GeminiRateLimitPolicy[]>('/v1/gemini/policies'),
+
+  upsertGeminiPolicy: (modelName: string, body: UpsertGeminiPolicyRequest) =>
+    req<GeminiRateLimitPolicy>(`/v1/gemini/policies/${encodeURIComponent(modelName)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
 }

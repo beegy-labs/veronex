@@ -154,6 +154,9 @@ pub struct RegisterBackendRequest {
     pub server_id: Option<Uuid>,
     /// inferq-agent URL (Phase 2, reserved). E.g. `"http://192.168.1.10:9091"`.
     pub agent_url: Option<String>,
+    /// true = key is on a Google free-tier project.
+    /// RPM/RPD limits are managed globally via `gemini_rate_limit_policies`.
+    pub is_free_tier: Option<bool>,
 }
 
 /// Update request for `PATCH /v1/backends/{id}`.
@@ -171,6 +174,7 @@ pub struct UpdateBackendRequest {
     pub total_vram_mb: Option<i64>,
     pub gpu_index: Option<i16>,
     pub server_id: Option<Uuid>,
+    pub is_free_tier: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -184,6 +188,7 @@ pub struct BackendSummary {
     pub gpu_index: Option<i16>,
     pub server_id: Option<Uuid>,
     pub agent_url: Option<String>,
+    pub is_free_tier: bool,
     pub status: String,
     pub registered_at: DateTime<Utc>,
 }
@@ -211,6 +216,7 @@ impl From<LlmBackend> for BackendSummary {
             gpu_index: b.gpu_index,
             server_id: b.server_id,
             agent_url: b.agent_url,
+            is_free_tier: b.is_free_tier,
             status,
             registered_at: b.registered_at,
         }
@@ -287,6 +293,7 @@ pub async fn register_backend(
         gpu_index: req.gpu_index,
         server_id: req.server_id,
         agent_url: req.agent_url.filter(|s| !s.is_empty()),
+        is_free_tier: req.is_free_tier.unwrap_or(false),
         status: LlmBackendStatus::Offline, // initial; overwritten by health check
         registered_at: Utc::now(),
     };
@@ -463,6 +470,7 @@ pub async fn update_backend(
     backend.total_vram_mb = req.total_vram_mb.unwrap_or(backend.total_vram_mb);
     backend.gpu_index = req.gpu_index;   // null clears the field
     backend.server_id = req.server_id;  // null clears the field
+    if let Some(v) = req.is_free_tier { backend.is_free_tier = v; }
 
     if let Err(e) = registry.update(&backend).await {
         tracing::error!(%id, "update_backend: failed: {e}");
@@ -496,6 +504,7 @@ mod tests {
             gpu_index: Some(0),
             server_id: None,
             agent_url: None,
+            is_free_tier: false,
             status: LlmBackendStatus::Online,
             registered_at: Utc::now(),
         };
@@ -520,6 +529,7 @@ mod tests {
             gpu_index: None,
             server_id: None,
             agent_url: None,
+            is_free_tier: true,
             status: LlmBackendStatus::Offline,
             registered_at: Utc::now(),
         };

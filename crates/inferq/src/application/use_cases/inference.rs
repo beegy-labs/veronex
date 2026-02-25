@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
+use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
 use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
@@ -18,7 +19,7 @@ use crate::application::ports::outbound::observability_port::{InferenceEvent, Ob
 use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{BackendType, FinishReason, JobStatus};
 use crate::domain::value_objects::{JobId, ModelName, Prompt, StreamToken};
-use crate::infrastructure::outbound::backend_router::{get_ollama_available_vram_mb, make_adapter, pick_best_backend};
+use crate::infrastructure::outbound::backend_router::{get_ollama_available_vram_mb, increment_gemini_counters, make_adapter, pick_best_backend};
 
 // ── Queue key ──────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,8 @@ pub struct InferenceUseCaseImpl {
     /// Registry of all registered backends (Ollama servers, Gemini keys).
     /// Used at dispatch time to pick the best available backend via VRAM check.
     registry: Arc<dyn LlmBackendRegistry>,
+    /// Shared Gemini rate-limit policies (per model). Used by pick_best_backend.
+    gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
     job_repo: Arc<dyn JobRepository>,
     valkey_pool: Option<fred::clients::RedisPool>,
     observability: Option<Arc<dyn ObservabilityPort>>,
@@ -55,6 +58,7 @@ pub struct InferenceUseCaseImpl {
 impl InferenceUseCaseImpl {
     pub fn new(
         registry: Arc<dyn LlmBackendRegistry>,
+        gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
         job_repo: Arc<dyn JobRepository>,
         valkey_pool: Option<fred::clients::RedisPool>,
         observability: Option<Arc<dyn ObservabilityPort>>,
@@ -62,6 +66,7 @@ impl InferenceUseCaseImpl {
     ) -> Self {
         Self {
             registry,
+            gemini_policy_repo,
             job_repo,
             valkey_pool,
             observability,
@@ -90,11 +95,13 @@ impl InferenceUseCaseImpl {
         let observability = self.observability.clone();
         let model_manager = self.model_manager.clone();
         let busy_backends = self.busy_backends.clone();
+        let gemini_policy_repo = self.gemini_policy_repo.clone();
 
         tokio::spawn(async move {
             queue_dispatcher_loop(
                 jobs,
                 registry,
+                gemini_policy_repo,
                 job_repo,
                 valkey_pool,
                 observability,
@@ -189,6 +196,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             completed_at: None,
             error: None,
             result_text: None,
+            api_key_id,
+            latency_ms: None,
+            ttft_ms: None,
+            completion_tokens: None,
         };
 
         self.job_repo.save(&job).await?;
@@ -222,6 +233,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     spawn_job_direct(
                         self.jobs.clone(),
                         self.registry.clone(),
+                        self.gemini_policy_repo.clone(),
                         self.job_repo.clone(),
                         self.valkey_pool.clone(),
                         self.observability.clone(),
@@ -237,6 +249,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             spawn_job_direct(
                 self.jobs.clone(),
                 self.registry.clone(),
+                self.gemini_policy_repo.clone(),
                 self.job_repo.clone(),
                 None,
                 self.observability.clone(),
@@ -270,16 +283,21 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         let _ = api_key_id; // used in spawned path; process() ignores it
 
         // For process(), pick the best available backend now.
-        let backend = match pick_best_backend(
+        let backend_cfg = match pick_best_backend(
             &*self.registry,
+            self.gemini_policy_repo.as_deref(),
             &job.backend,
+            job.model_name.as_str(),
             self.valkey_pool.as_ref(),
         )
         .await
         {
-            Ok(cfg) => make_adapter(&cfg),
+            Ok(cfg) => cfg,
             Err(e) => return Err(e),
         };
+        let backend_id = backend_cfg.id;
+        let backend_is_free_tier = backend_cfg.is_free_tier;
+        let backend = make_adapter(&backend_cfg);
 
         run_job(
             self.jobs.clone(),
@@ -290,6 +308,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             self.model_manager.clone(),
             uuid,
             job,
+            Some(backend_id),
+            backend_is_free_tier,
         )
         .await
     }
@@ -311,10 +331,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     Some(job) if job.status == JobStatus::Completed => {
                         if let Some(text) = job.result_text {
                             if !text.is_empty() {
-                                yield StreamToken { value: text, is_final: false };
+                                yield StreamToken { value: text, is_final: false, prompt_tokens: None, completion_tokens: None };
                             }
                         }
-                        yield StreamToken { value: String::new(), is_final: true };
+                        yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None };
                         return;
                     }
                     Some(job) if job.status == JobStatus::Failed => {
@@ -401,6 +421,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 fn spawn_job_direct(
     jobs: Arc<Mutex<HashMap<Uuid, JobEntry>>>,
     registry: Arc<dyn LlmBackendRegistry>,
+    gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
     job_repo: Arc<dyn JobRepository>,
     valkey_pool: Option<fred::clients::RedisPool>,
     observability: Option<Arc<dyn ObservabilityPort>>,
@@ -411,7 +432,8 @@ fn spawn_job_direct(
 ) {
     tokio::spawn(async move {
         // Pick a backend from the registry.
-        let backend_cfg = match pick_best_backend(&*registry, &job.backend, valkey_pool.as_ref()).await {
+        let policy_ref = gemini_policy_repo.as_deref();
+        let backend_cfg = match pick_best_backend(&*registry, policy_ref, &job.backend, job.model_name.as_str(), valkey_pool.as_ref()).await {
             Ok(cfg) => cfg,
             Err(e) => {
                 tracing::error!(job_id = %uuid, "no backend available: {e}");
@@ -419,6 +441,7 @@ fn spawn_job_direct(
             }
         };
         let backend_id = backend_cfg.id;
+        let backend_is_free_tier = backend_cfg.is_free_tier;
         busy_backends.lock().unwrap().insert(backend_id);
         let adapter = make_adapter(&backend_cfg);
 
@@ -431,6 +454,8 @@ fn spawn_job_direct(
             model_manager,
             uuid,
             job,
+            Some(backend_id),
+            backend_is_free_tier,
         )
         .await
         {
@@ -457,6 +482,7 @@ fn spawn_job_direct(
 async fn queue_dispatcher_loop(
     jobs: Arc<Mutex<HashMap<Uuid, JobEntry>>>,
     registry: Arc<dyn LlmBackendRegistry>,
+    _gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
     job_repo: Arc<dyn JobRepository>,
     valkey_pool: fred::clients::RedisPool,
     observability: Option<Arc<dyn ObservabilityPort>>,
@@ -560,6 +586,7 @@ async fn queue_dispatcher_loop(
         match claimed {
             Some(backend_cfg) => {
                 let backend_id = backend_cfg.id;
+                let backend_is_free_tier = backend_cfg.is_free_tier;
                 let adapter = make_adapter(&backend_cfg);
 
                 tracing::info!(
@@ -586,6 +613,8 @@ async fn queue_dispatcher_loop(
                         mm_c,
                         uuid,
                         job,
+                        Some(backend_id),
+                        backend_is_free_tier,
                     )
                     .await
                     {
@@ -622,6 +651,11 @@ async fn run_job(
     model_manager: Option<Arc<dyn ModelManagerPort>>,
     uuid: Uuid,
     job: InferenceJob,
+    backend_id: Option<Uuid>,
+    // True when the selected backend is a Google free-tier project.
+    // RPM/RPD counters are only incremented for free-tier backends —
+    // paid backends have no such limits to enforce.
+    backend_is_free_tier: bool,
 ) -> Result<()> {
     // ── Model manager: ensure model is loaded (Ollama only) ──────────
     if job.backend == BackendType::Ollama {
@@ -664,6 +698,12 @@ async fn run_job(
     let mut token_stream = backend.stream_tokens(&job);
     let mut token_count: u64 = 0;
     let mut accumulated_text = String::new();
+    // Actual token counts from backend usage metadata (e.g. Gemini usageMetadata).
+    // Set when the final StreamToken carries real counts; None = fall back to token_count.
+    let mut actual_prompt_tokens: Option<u32> = None;
+    let mut actual_completion_tokens: Option<u32> = None;
+    // Time to first token (ms from started_at to first non-final non-empty token).
+    let mut ttft_ms_value: Option<i32> = None;
 
     while let Some(result) = token_stream.next().await {
         let mut guard = jobs.lock().await;
@@ -680,12 +720,26 @@ async fn run_job(
             Ok(token) => {
                 token_count += 1;
                 accumulated_text.push_str(&token.value);
+                // Capture actual token counts from backend usage metadata.
+                if token.prompt_tokens.is_some() || token.completion_tokens.is_some() {
+                    actual_prompt_tokens = token.prompt_tokens;
+                    actual_completion_tokens = token.completion_tokens;
+                }
+                // Record TTFT on the first non-empty, non-final token.
+                if ttft_ms_value.is_none() && !token.is_final && !token.value.is_empty() {
+                    ttft_ms_value = Some(
+                        chrono::Utc::now()
+                            .signed_duration_since(started_at)
+                            .num_milliseconds()
+                            .max(0) as i32,
+                    );
+                }
                 // If the final token carries text, split it into a text token
                 // followed by a separate done marker so the SSE handler never
                 // discards text that arrives on the same chunk as is_final=true.
                 if token.is_final && !token.value.is_empty() {
-                    entry.tokens.push(StreamToken { value: token.value, is_final: false });
-                    entry.tokens.push(StreamToken { value: String::new(), is_final: true });
+                    entry.tokens.push(StreamToken { value: token.value, is_final: false, prompt_tokens: None, completion_tokens: None });
+                    entry.tokens.push(StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None });
                 } else {
                     entry.tokens.push(token);
                 }
@@ -724,7 +778,8 @@ async fn run_job(
                     uuid,
                     api_key_id,
                     &job,
-                    token_count as u32,
+                    actual_prompt_tokens.unwrap_or(0),
+                    actual_completion_tokens.unwrap_or(token_count as u32),
                     latency_ms,
                     FinishReason::Error,
                     "failed".to_string(),
@@ -763,12 +818,24 @@ async fn run_job(
         Some(accumulated_text)
     };
 
+    let stored_latency_ms = completed_at
+        .signed_duration_since(started_at)
+        .num_milliseconds()
+        .max(0) as i32;
+
+    let stored_completion_tokens = actual_completion_tokens
+        .map(|v| v as i32)
+        .or_else(|| if token_count > 0 { Some(token_count as i32) } else { None });
+
     if let Err(e) = job_repo
         .save(&InferenceJob {
             status: JobStatus::Completed,
             started_at: Some(started_at),
             completed_at: Some(completed_at),
             result_text: result_text.clone(),
+            latency_ms: Some(stored_latency_ms),
+            ttft_ms: ttft_ms_value,
+            completion_tokens: stored_completion_tokens,
             ..job.clone()
         })
         .await
@@ -784,9 +851,20 @@ async fn run_job(
     }
 
     // ── Record TPM ───────────────────────────────────────────────────
-    if let (Some(pool), Some(key_id)) = (valkey_pool, api_key_id) {
-        if let Err(e) = record_tpm(&pool, key_id, token_count).await {
+    if let (Some(pool), Some(key_id)) = (&valkey_pool, api_key_id) {
+        if let Err(e) = record_tpm(pool, key_id, token_count).await {
             tracing::warn!(job_id = %uuid, "failed to record TPM usage: {e}");
+        }
+    }
+
+    // ── Increment Gemini RPM/RPD counters (free-tier only) ────────
+    // Counters are only tracked for free-tier backends: paid backends
+    // have no RPM/RPD limits to enforce, so counting is unnecessary.
+    if job.backend == BackendType::Gemini && backend_is_free_tier {
+        if let (Some(pool), Some(bid)) = (&valkey_pool, backend_id) {
+            if let Err(e) = increment_gemini_counters(pool, bid, job.model_name.as_str()).await {
+                tracing::warn!(job_id = %uuid, "failed to increment Gemini rate limit counters: {e}");
+            }
         }
     }
 
@@ -806,7 +884,8 @@ async fn run_job(
         uuid,
         api_key_id,
         &job,
-        token_count as u32,
+        actual_prompt_tokens.unwrap_or(0),
+        actual_completion_tokens.unwrap_or(token_count as u32),
         latency_ms,
         finish_reason,
         status_str,
@@ -825,6 +904,7 @@ async fn emit_inference_event(
     uuid: Uuid,
     api_key_id: Option<Uuid>,
     job: &InferenceJob,
+    prompt_tokens: u32,
     completion_tokens: u32,
     latency_ms: u32,
     finish_reason: FinishReason,
@@ -844,7 +924,7 @@ async fn emit_inference_event(
             tenant_id: String::new(),
             model_name: job.model_name.as_str().to_string(),
             backend: backend_str,
-            prompt_tokens: 0,
+            prompt_tokens,
             completion_tokens,
             latency_ms,
             ttft_ms: None,

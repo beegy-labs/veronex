@@ -7,6 +7,7 @@ use tower_http::trace::TraceLayer;
 
 use super::backend_handlers;
 use super::dashboard_handlers;
+use super::gemini_policy_handlers;
 use super::gpu_server_handlers;
 use super::handlers;
 use super::key_handlers;
@@ -49,6 +50,7 @@ pub fn build_api_router() -> Router<AppState> {
         // Dashboard routes
         .route("/v1/dashboard/stats", get(dashboard_handlers::get_stats))
         .route("/v1/dashboard/jobs", get(dashboard_handlers::list_jobs))
+        .route("/v1/dashboard/jobs/{id}", get(dashboard_handlers::get_job_detail))
         .route(
             "/v1/dashboard/performance",
             get(dashboard_handlers::get_performance),
@@ -76,6 +78,9 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/v1/servers/{id}", delete(gpu_server_handlers::delete_gpu_server))
         .route("/v1/servers/{id}/metrics", get(gpu_server_handlers::get_server_metrics))
         .route("/v1/servers/{id}/metrics/history", get(gpu_server_handlers::get_server_metrics_history))
+        // Gemini rate-limit policy management
+        .route("/v1/gemini/policies", get(gemini_policy_handlers::list_gemini_policies))
+        .route("/v1/gemini/policies/{model_name}", axum::routing::put(gemini_policy_handlers::upsert_gemini_policy))
 }
 
 /// Build the full application router with health endpoints and middleware.

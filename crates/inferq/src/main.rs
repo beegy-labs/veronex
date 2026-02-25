@@ -22,6 +22,7 @@ use inferq::infrastructure::outbound::observability::ClickHouseObservabilityAdap
 use inferq::infrastructure::outbound::persistence::api_key_repository::PostgresApiKeyRepository;
 use inferq::infrastructure::outbound::persistence::backend_registry::PostgresBackendRegistry;
 use inferq::infrastructure::outbound::persistence::database;
+use inferq::infrastructure::outbound::persistence::gemini_policy_repository::PostgresGeminiPolicyRepository;
 use inferq::infrastructure::outbound::persistence::gpu_server_registry::PostgresGpuServerRegistry;
 use inferq::infrastructure::outbound::persistence::job_repository::PostgresJobRepository;
 
@@ -123,6 +124,8 @@ async fn main() -> Result<()> {
         Arc::new(PostgresBackendRegistry::new(pg_pool.clone()));
     let gpu_server_registry: Arc<dyn inferq::application::ports::outbound::gpu_server_registry::GpuServerRegistry> =
         Arc::new(PostgresGpuServerRegistry::new(pg_pool.clone()));
+    let gemini_policy_repo: Arc<dyn inferq::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository> =
+        Arc::new(PostgresGeminiPolicyRepository::new(pg_pool.clone()));
 
     // ── Bootstrap admin key ────────────────────────────────────────
     // If BOOTSTRAP_API_KEY is set, create it in the DB if it doesn't exist yet.
@@ -177,6 +180,7 @@ async fn main() -> Result<()> {
                 gpu_index: None,
                 server_id: None,
                 agent_url: None,
+                is_free_tier: false,
                 status: inferq::domain::enums::LlmBackendStatus::Offline,
                 registered_at: chrono::Utc::now(),
             };
@@ -206,6 +210,7 @@ async fn main() -> Result<()> {
                     gpu_index: None,
                     server_id: None,
                     agent_url: None,
+                    is_free_tier: false,
                     status: inferq::domain::enums::LlmBackendStatus::Offline,
                     registered_at: chrono::Utc::now(),
                 };
@@ -225,6 +230,7 @@ async fn main() -> Result<()> {
 
     let use_case_impl = Arc::new(InferenceUseCaseImpl::new(
         backend_registry.clone(), // registry used for VRAM-aware dynamic routing
+        Some(gemini_policy_repo.clone()),
         job_repo,
         valkey_pool.clone(),
         observability,
@@ -246,6 +252,7 @@ async fn main() -> Result<()> {
         api_key_repo,
         backend_registry,
         gpu_server_registry,
+        gemini_policy_repo,
         valkey_pool,
         clickhouse_client,
         pg_pool,

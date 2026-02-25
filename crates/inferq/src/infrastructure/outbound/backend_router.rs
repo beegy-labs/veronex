@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use futures::StreamExt as _;
 
+use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
 use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
 use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
 use crate::domain::entities::{InferenceJob, InferenceResult, LlmBackend};
@@ -100,14 +101,14 @@ impl DynamicBackendRouter {
     /// Select the best available backend for the given type.
     /// Returns the `LlmBackend` record so callers can build a specific adapter.
     pub async fn pick_backend(&self, bt: &BackendType) -> Result<LlmBackend> {
-        pick_best_backend(&*self.registry, bt, None).await
+        pick_best_backend(&*self.registry, None, bt, "", None).await
     }
 }
 
 #[async_trait]
 impl InferenceBackendPort for DynamicBackendRouter {
     async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
-        let cfg = pick_best_backend(&*self.registry, &job.backend, None).await?;
+        let cfg = pick_best_backend(&*self.registry, None, &job.backend, job.model_name.as_str(), None).await?;
         make_adapter(&cfg).as_ref().infer(job).await
     }
 
@@ -119,7 +120,7 @@ impl InferenceBackendPort for DynamicBackendRouter {
         let job = job.clone();
 
         Box::pin(async_stream::stream! {
-            let cfg = match pick_best_backend(&*registry, &job.backend, None).await {
+            let cfg = match pick_best_backend(&*registry, None, &job.backend, job.model_name.as_str(), None).await {
                 Ok(c) => c,
                 Err(e) => { yield Err(e); return; }
             };
@@ -135,14 +136,93 @@ impl InferenceBackendPort for DynamicBackendRouter {
 
 // ── Backend selection helpers ──────────────────────────────────────────────────
 
-/// Pick the best backend from the registry for the given type.
+// ── Gemini rate-limit helpers ──────────────────────────────────────────────────
+
+/// Valkey key for per-(backend, model) RPM counter.
+/// Bucketed by minute — TTL=120s so it always expires naturally.
+fn gemini_rpm_key(backend_id: uuid::Uuid, model: &str) -> String {
+    let minute = chrono::Utc::now().timestamp() / 60;
+    format!("inferq:gemini:rpm:{}:{}:{}", backend_id, model, minute)
+}
+
+/// Valkey key for per-(backend, model) RPD counter.
+/// Bucketed by UTC date — TTL=90000s (~25h).
+fn gemini_rpd_key(backend_id: uuid::Uuid, model: &str) -> String {
+    let date = chrono::Utc::now().format("%Y-%m-%d");
+    format!("inferq:gemini:rpd:{}:{}:{}", backend_id, model, date)
+}
+
+/// Returns `(rpm_exhausted, rpd_exhausted)` for a given free-tier backend + model.
+/// Both false when Valkey is unavailable (fail-open).
+async fn gemini_limit_status(
+    backend_id: uuid::Uuid,
+    model: &str,
+    rpm_limit: i32,
+    rpd_limit: i32,
+    valkey: &fred::clients::RedisPool,
+) -> (bool, bool) {
+    use fred::prelude::*;
+
+    let rpm_exhausted = if rpm_limit > 0 {
+        let count: i64 = valkey
+            .get::<Option<i64>, _>(gemini_rpm_key(backend_id, model))
+            .await
+            .unwrap_or(None)
+            .unwrap_or(0);
+        count >= rpm_limit as i64
+    } else {
+        false
+    };
+
+    let rpd_exhausted = if rpd_limit > 0 {
+        let count: i64 = valkey
+            .get::<Option<i64>, _>(gemini_rpd_key(backend_id, model))
+            .await
+            .unwrap_or(None)
+            .unwrap_or(0);
+        count >= rpd_limit as i64
+    } else {
+        false
+    };
+
+    (rpm_exhausted, rpd_exhausted)
+}
+
+/// Increment per-(backend, model) RPM and RPD counters after a successful inference.
+pub async fn increment_gemini_counters(
+    pool: &fred::clients::RedisPool,
+    backend_id: uuid::Uuid,
+    model: &str,
+) -> anyhow::Result<()> {
+    use fred::prelude::*;
+
+    let rpm_key = gemini_rpm_key(backend_id, model);
+    let rpd_key = gemini_rpd_key(backend_id, model);
+
+    let _: i64 = pool.incr_by(&rpm_key, 1).await?;
+    let _: bool = pool.expire(&rpm_key, 120).await?;
+
+    let _: i64 = pool.incr_by(&rpd_key, 1).await?;
+    let _: bool = pool.expire(&rpd_key, 90_000).await?;
+
+    Ok(())
+}
+
+/// Pick the best backend from the registry for the given type and model.
 ///
-/// Ollama: selects the server with the most available VRAM.
-///         If `total_vram_mb = 0` (unknown), the backend is always considered available.
-/// Gemini: selects the first active key (simple round-robin).
+/// Gemini dispatch rules:
+///   - Free-tier backends checked first (registration order).
+///   - RPD exhausted → skip this backend for today.
+///   - RPM exhausted but RPD ok → ALL free-tier backends are RPM-limited:
+///       sleep until next minute boundary, then retry (up to MAX_RPM_RETRIES times).
+///   - All free-tier RPD-exhausted → fall back to paid.
+///
+/// Ollama: picks the server with the most available VRAM.
 pub async fn pick_best_backend(
     registry: &dyn LlmBackendRegistry,
+    policy_repo: Option<&dyn GeminiPolicyRepository>,
     bt: &BackendType,
+    model_name: &str,
     valkey: Option<&fred::clients::RedisPool>,
 ) -> Result<LlmBackend> {
     let all = registry.list_all().await?;
@@ -159,13 +239,11 @@ pub async fn pick_best_backend(
     }
 
     match bt {
-        BackendType::Gemini => candidates
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("no Gemini backend")),
+        BackendType::Gemini => {
+            pick_gemini_backend(candidates, policy_repo, model_name, valkey).await
+        }
 
         BackendType::Ollama => {
-            // For each Ollama candidate, check available VRAM (Valkey cache → /api/ps fallback).
             let mut best: Option<(LlmBackend, i64)> = None;
             for b in candidates {
                 let avail = get_ollama_available_vram_mb(&b, valkey).await;
@@ -179,6 +257,122 @@ pub async fn pick_best_backend(
                 .ok_or_else(|| anyhow::anyhow!("no Ollama backend with available VRAM"))
         }
     }
+}
+
+/// Maximum times we will wait for an RPM window to reset before giving up.
+const MAX_RPM_RETRIES: u32 = 3;
+
+async fn pick_gemini_backend(
+    candidates: Vec<LlmBackend>,
+    policy_repo: Option<&dyn GeminiPolicyRepository>,
+    model_name: &str,
+    valkey: Option<&fred::clients::RedisPool>,
+) -> Result<LlmBackend> {
+    // Look up the shared rate-limit policy for this model.
+    let policy = if let Some(repo) = policy_repo {
+        repo.get_for_model(model_name).await.unwrap_or(None)
+    } else {
+        None
+    };
+    let rpm_limit = policy.as_ref().map(|p| p.rpm_limit).unwrap_or(0);
+    let rpd_limit = policy.as_ref().map(|p| p.rpd_limit).unwrap_or(0);
+    let available_on_free_tier = policy.as_ref().map(|p| p.available_on_free_tier).unwrap_or(true);
+
+    let (free_backends, paid_backends): (Vec<_>, Vec<_>) =
+        candidates.into_iter().partition(|b| b.is_free_tier);
+
+    // If the model is not available on free tier, skip free-tier backends entirely.
+    if !available_on_free_tier {
+        if let Some(paid) = paid_backends.first() {
+            tracing::info!(
+                model_name = %model_name,
+                backend_id = %paid.id,
+                name = %paid.name,
+                "model not available on free tier, routing directly to paid backend"
+            );
+            return Ok(paid.clone());
+        }
+        return Err(anyhow::anyhow!(
+            "model '{}' requires a paid Gemini backend but none is configured",
+            model_name
+        ));
+    }
+
+    for attempt in 0..=MAX_RPM_RETRIES {
+        let Some(pool) = valkey else {
+            // No Valkey → skip rate-limit checks entirely, use first free or paid.
+            if let Some(b) = free_backends.first() {
+                return Ok(b.clone());
+            }
+            if let Some(b) = paid_backends.first() {
+                return Ok(b.clone());
+            }
+            return Err(anyhow::anyhow!("no active Gemini backend available"));
+        };
+
+        let mut all_rpd_exhausted = !free_backends.is_empty();
+        let mut any_rpm_available = false;
+
+        for b in &free_backends {
+            let (rpm_ex, rpd_ex) =
+                gemini_limit_status(b.id, model_name, rpm_limit, rpd_limit, pool).await;
+
+            if rpd_ex {
+                tracing::info!(backend_id = %b.id, name = %b.name,
+                    "Gemini backend RPD exhausted for today, skipping");
+                continue;
+            }
+
+            // This key still has daily quota.
+            all_rpd_exhausted = false;
+
+            if !rpm_ex {
+                // Found a key with both RPM and RPD available.
+                return Ok(b.clone());
+            }
+
+            // RPM-limited but RPD still ok → flag that we might retry after waiting.
+            any_rpm_available = true;
+        }
+
+        // All free keys are RPD-exhausted → fall back to paid.
+        if all_rpd_exhausted {
+            if let Some(paid) = paid_backends.first() {
+                tracing::info!(backend_id = %paid.id, name = %paid.name,
+                    "all Gemini free-tier backends RPD-exhausted, using paid backend");
+                return Ok(paid.clone());
+            }
+            return Err(anyhow::anyhow!(
+                "all Gemini free-tier backends exhausted daily quota and no paid backend configured"
+            ));
+        }
+
+        // Some free keys have RPD quota but all are currently RPM-limited.
+        // Wait until the next minute boundary, then retry.
+        if any_rpm_available && attempt < MAX_RPM_RETRIES {
+            let now_secs = chrono::Utc::now().timestamp();
+            let secs_to_next_minute = 60 - (now_secs % 60) + 1; // +1 buffer
+            tracing::info!(
+                wait_secs = secs_to_next_minute,
+                attempt = attempt + 1,
+                "all Gemini free-tier backends RPM-limited, waiting for next minute"
+            );
+            tokio::time::sleep(Duration::from_secs(secs_to_next_minute as u64)).await;
+            continue;
+        }
+
+        break;
+    }
+
+    // Retries exhausted.
+    if let Some(paid) = paid_backends.first() {
+        tracing::warn!(backend_id = %paid.id, "Gemini RPM retries exhausted, falling back to paid");
+        return Ok(paid.clone());
+    }
+
+    Err(anyhow::anyhow!(
+        "all Gemini free-tier backends are RPM-limited and no paid backend available"
+    ))
 }
 
 /// Return available VRAM in MiB for an Ollama backend.
