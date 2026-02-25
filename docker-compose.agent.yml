@@ -1,0 +1,36 @@
+# inferq-agent — deploy this on each machine running Ollama.
+#
+# Usage (on the Ollama server):
+#   OLLAMA_URL=http://localhost:11434 docker compose -f docker-compose.agent.yml up -d
+#
+# Then in the inferq admin, register the backend with:
+#   Ollama URL:  http://<this-server-ip>:11434
+#   Agent URL:   http://<this-server-ip>:9091
+#
+# The agent exposes:
+#   GET /api/metrics  → GPU temp, VRAM, system RAM, loaded model count
+#   GET /health       → {"status":"ok"}
+
+services:
+  inferq-agent:
+    build:
+      context: .
+      dockerfile: docker/agent/Dockerfile
+    image: ghcr.io/beegy/inferq-agent:latest
+    ports:
+      - "9091:9091"
+    volumes:
+      # AMD GPU sysfs counters (read-only)
+      - /sys:/sys:ro
+      # System RAM info (read-only)
+      - /proc/meminfo:/proc/meminfo:ro
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      PORT: 9091
+      RUST_LOG: info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

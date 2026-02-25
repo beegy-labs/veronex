@@ -1,0 +1,19 @@
+{{- if .Values.redpanda.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "inferq.fullname" . }}-redpanda
+  labels:
+    {{- include "inferq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redpanda
+spec:
+  type: {{ .Values.redpanda.service.type }}
+  selector:
+    {{- include "inferq.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redpanda
+  ports:
+    - name: kafka
+      port: {{ .Values.redpanda.service.port }}
+      targetPort: kafka
+      protocol: TCP
+{{- end }}

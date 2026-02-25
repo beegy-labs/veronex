@@ -1,0 +1,19 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "inferq.fullname" . }}-postgres
+  labels:
+    {{- include "inferq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  type: {{ .Values.postgres.service.type }}
+  selector:
+    {{- include "inferq.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.service.port }}
+      targetPort: postgres
+      protocol: TCP
+{{- end }}

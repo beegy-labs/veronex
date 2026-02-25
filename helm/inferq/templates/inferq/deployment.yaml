@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "inferq.fullname" . }}
+  labels:
+    {{- include "inferq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.inferq.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "inferq.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "inferq.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      containers:
+        - name: inferq
+          image: "{{ .Values.inferq.image.repository }}:{{ .Values.inferq.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              value: {{ include "inferq.databaseUrl" . | quote }}
+            - name: VALKEY_URL
+              value: {{ include "inferq.valkeyUrl" . | quote }}
+            - name: CLICKHOUSE_URL
+              value: {{ include "inferq.clickhouseUrl" . | quote }}
+            - name: CLICKHOUSE_USER
+              value: {{ .Values.inferq.env.clickhouseUser | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              value: {{ .Values.inferq.env.clickhousePassword | quote }}
+            - name: CLICKHOUSE_DB
+              value: {{ .Values.inferq.env.clickhouseDb | quote }}
+            - name: CLICKHOUSE_ENABLED
+              value: {{ .Values.inferq.env.clickhouseEnabled | quote }}
+            - name: OLLAMA_URL
+              value: {{ .Values.inferq.env.ollamaUrl | quote }}
+            - name: GEMINI_API_KEY
+              value: {{ .Values.inferq.env.geminiApiKey | quote }}
+            - name: BOOTSTRAP_API_KEY
+              value: {{ .Values.inferq.env.bootstrapApiKey | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.inferq.env.rustLog | quote }}
+            {{- if .Values.otelCollector.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://{{ include "inferq.fullname" . }}-otel-collector:4317"
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.inferq.resources | nindent 12 }}
+          {{- if .Values.inferq.mountDrmSysfs }}
+          volumeMounts:
+            - name: drm-sysfs
+              mountPath: /sys/class/drm
+              readOnly: true
+          {{- end }}
+      {{- if .Values.inferq.mountDrmSysfs }}
+      volumes:
+        - name: drm-sysfs
+          hostPath:
+            path: /sys/class/drm
+            type: DirectoryOrCreate
+      {{- end }}
