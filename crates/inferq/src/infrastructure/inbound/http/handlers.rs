@@ -187,10 +187,14 @@ mod tests {
                 Ok(StreamToken {
                     value: "Hello".to_string(),
                     is_final: false,
+                    prompt_tokens: None,
+                    completion_tokens: None,
                 }),
                 Ok(StreamToken {
                     value: "".to_string(),
                     is_final: true,
+                    prompt_tokens: None,
+                    completion_tokens: None,
                 }),
             ];
             Box::pin(futures::stream::iter(tokens))

@@ -33,12 +33,13 @@ export default function ApiTestPage() {
     (b) => b.backend_type === backend && b.is_active
   )
 
-  // Fetch models for the selected backend
+  // Fetch models for the selected backend — long staleTime avoids repeated fetches.
+  // Models rarely change; use the Sync button on the Backends page to force a refresh.
   const { data: modelsData } = useQuery({
     queryKey: ['backend-models', selectedBackend?.id],
     queryFn: () => api.backendModels(selectedBackend!.id),
     enabled: !!selectedBackend,
-    staleTime: 60_000,
+    staleTime: 10 * 60_000, // 10 minutes
   })
 
   const availableModels = modelsData?.models ?? []
@@ -128,7 +129,9 @@ export default function ApiTestPage() {
           } else if (trimmed.startsWith('event:')) {
             currentEvent = trimmed.slice(6).trim()
           } else if (trimmed.startsWith('data:')) {
-            const data = trimmed.slice(5).trimStart()
+            // SSE spec: strip exactly one optional space after "data:"
+            const raw = trimmed.slice(5)
+            const data = raw.startsWith(' ') ? raw.slice(1) : raw
             if (currentEvent === 'token') {
               if (data) setTokens((prev) => [...prev, data])
             } else if (currentEvent === 'done') {

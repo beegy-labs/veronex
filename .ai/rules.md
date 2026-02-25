@@ -11,11 +11,20 @@
 | Tier | Path        | LLM Editable | Purpose                |
 | ---- | ----------- | ------------ | ---------------------- |
 | 1    | `.ai/`      | **YES**      | Pointer (≤50 lines)    |
-| 2    | `docs/llm/` | **YES**      | SSOT (token-optimized) |
+| 2    | `docs/llm/` | **YES**      | SSOT (topic-based)     |
 | 3    | `docs/en/`  | **NO**       | Generated              |
 | 4    | `docs/kr/`  | **NO**       | Translated             |
 
 **Never edit `docs/en/` or `docs/kr/` directly.**
+
+`docs/llm/` 구조: `policies/` (architecture, git-flow) + topic docs (backends, hardware, jobs, infrastructure, web)
+
+## Agentic Dev Protocol
+
+`vendor/agentic-dev-protocol/` (git submodule)
+→ https://github.com/beegy-labs/agentic-dev-protocol
+
+개발 프로세스·워크플로우 정책의 upstream SSOT. inferq 전용 규칙은 `.ai/`와 `docs/llm/policies/`에서 관리.
 
 ## Architecture: Hexagonal
 

@@ -26,6 +26,21 @@ pub struct InferenceJob {
     /// in-memory only).
     #[serde(default)]
     pub result_text: Option<String>,
+    /// The API key that submitted this job. `None` for internally-created jobs.
+    #[serde(default)]
+    pub api_key_id: Option<Uuid>,
+    /// Inference execution latency in ms (started_at → completed_at).
+    /// `None` while the job is pending/running.
+    #[serde(default)]
+    pub latency_ms: Option<i32>,
+    /// Time to first token in ms (started_at → first token received).
+    /// `None` while pending/running or not yet measured.
+    #[serde(default)]
+    pub ttft_ms: Option<i32>,
+    /// Number of completion tokens generated.
+    /// `None` while pending/running.
+    #[serde(default)]
+    pub completion_tokens: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,8 +99,32 @@ pub struct LlmBackend {
     /// e.g. `http://192.168.1.10:9091`
     #[serde(default)]
     pub agent_url: Option<String>,
+    /// true = key is on a Google free-tier project.
+    /// RPM/RPD limits are read from `gemini_rate_limit_policies` (per model, shared).
+    #[serde(default)]
+    pub is_free_tier: bool,
     pub status: LlmBackendStatus,
     pub registered_at: DateTime<Utc>,
+}
+
+/// Per-model Gemini rate limit policy (shared across all free-tier backends).
+///
+/// Stored in `gemini_rate_limit_policies` and editable from the admin UI.
+/// `model_name = "*"` is the global fallback used when no model-specific row exists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiRateLimitPolicy {
+    pub id: Uuid,
+    /// e.g. "gemini-2.5-flash" or "*" (global default)
+    pub model_name: String,
+    /// Max requests per minute (0 = no enforcement)
+    pub rpm_limit: i32,
+    /// Max requests per day (0 = no enforcement)
+    pub rpd_limit: i32,
+    /// Whether this model can be used on a Google free-tier project.
+    /// When false: skip all free-tier backends and route directly to a paid backend.
+    /// RPM/RPD counters are also suppressed for paid backends.
+    pub available_on_free_tier: bool,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[cfg(test)]
@@ -104,6 +143,10 @@ mod tests {
             completed_at: None,
             error: None,
             result_text: None,
+            api_key_id: None,
+            latency_ms: None,
+            ttft_ms: None,
+            completion_tokens: None,
         }
     }
 
@@ -119,6 +162,7 @@ mod tests {
             gpu_index: None,
             server_id: None,
             agent_url: None,
+            is_free_tier: false,
             status: LlmBackendStatus::Online,
             registered_at: Utc::now(),
         }
@@ -174,6 +218,10 @@ mod tests {
             completed_at: Some(now),
             error: Some("timeout".to_string()),
             result_text: None,
+            api_key_id: None,
+            latency_ms: None,
+            ttft_ms: None,
+            completion_tokens: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());

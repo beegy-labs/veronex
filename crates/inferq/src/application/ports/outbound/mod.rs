@@ -1,4 +1,5 @@
 pub mod api_key_repository;
+pub mod gemini_policy_repository;
 pub mod gpu_server_registry;
 pub mod inference_backend;
 pub mod job_repository;

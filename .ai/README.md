@@ -14,14 +14,16 @@ VRAM-aware multi-GPU routing, and hardware metrics dashboard.
 | Core rules      | `.ai/rules.md`                      |
 | Architecture    | `.ai/architecture.md`               |
 | Git & commits   | `.ai/git-flow.md`                   |
-| All specs       | `docs/llm/README.md`                |
+| All docs        | `docs/llm/README.md`                |
 | Full policies   | `docs/llm/policies/`                |
+| Dev protocol    | `vendor/agentic-dev-protocol/` (submodule: https://github.com/beegy-labs/agentic-dev-protocol) |
 
-## Specs Index (Tier 2)
+## Docs Index (Tier 2 — topic-based)
 
-| # | Topic | Path |
-|---|-------|------|
-| 15 | Backend Hardware Metrics | `docs/llm/specs/15-backend-metrics.md` |
-| 16 | Deployment Infrastructure | `docs/llm/specs/16-deployment-infra.md` |
-| 17 | Brand Identity | `docs/llm/specs/17-brand-identity.md` |
-| 18 | Web Design System (CSS SSOT) | `docs/llm/specs/18-web-design-system.md` |
+| Topic | Path |
+|-------|------|
+| Backends (Ollama/Gemini, routing, rate limit rolling) | `docs/llm/backends.md` |
+| Hardware (GPU Server, node-exporter, metrics pipeline) | `docs/llm/hardware.md` |
+| Jobs (lifecycle, token observability, ClickHouse) | `docs/llm/jobs.md` |
+| Infrastructure (docker-compose, OTel, Helm, ports) | `docs/llm/infrastructure.md` |
+| Web (brand, design system, pages) | `docs/llm/web.md` |

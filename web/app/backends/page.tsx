@@ -3,8 +3,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Backend, GpuServer, NodeMetrics, RegisterBackendRequest, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest } from '@/lib/types'
-import { Plus, Trash2, RefreshCw, RotateCcw, Server, Key, Wifi, WifiOff, AlertCircle, Cpu, Thermometer, Zap, BarChart2, Pencil, MemoryStick } from 'lucide-react'
+import type { Backend, GeminiRateLimitPolicy, GpuServer, NodeMetrics, RegisterBackendRequest, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest } from '@/lib/types'
+import { Plus, Trash2, RefreshCw, RotateCcw, Server, Key, Wifi, WifiOff, AlertCircle, Thermometer, Zap, BarChart2, Pencil, MemoryStick, ShieldCheck } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts'
@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import {
   Dialog,
@@ -327,6 +328,7 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
   const [vram, setVram] = useState(backend.total_vram_mb > 0 ? String(backend.total_vram_mb) : '')
   const [gpuIndex, setGpuIndex] = useState(backend.gpu_index !== null ? String(backend.gpu_index) : 'none')
   const [serverId, setServerId] = useState<string>(backend.server_id ?? 'none')
+  const [isFreeTier, setIsFreeTier] = useState(backend.is_free_tier)
 
   const { data: serverMetrics } = useQuery<NodeMetrics>({
     queryKey: ['server-metrics', serverId],
@@ -346,6 +348,7 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
         total_vram_mb: vram ? parseInt(vram, 10) : 0,
         gpu_index: gpuIndex !== 'none' && gpuIndex !== '' ? parseInt(gpuIndex, 10) : null,
         server_id: serverId !== 'none' ? serverId : null,
+        ...(backend.backend_type === 'gemini' && { is_free_tier: isFreeTier }),
       }
       return api.updateBackend(backend.id, body)
     },
@@ -421,12 +424,27 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
           )}
 
           {backend.backend_type === 'gemini' && (
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-apikey">
-                Gemini API Key <span className="text-muted-foreground font-normal">— leave blank to keep existing</span>
-              </Label>
-              <Input id="edit-apikey" type="password" value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)} placeholder="AIza… (blank = keep current)" />
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-apikey">
+                  Gemini API Key <span className="text-muted-foreground font-normal">— leave blank to keep existing</span>
+                </Label>
+                <Input id="edit-apikey" type="password" value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)} placeholder="AIza… (blank = keep current)" />
+                <p className="text-xs text-muted-foreground">
+                  Rate limits are per Google project. Use keys from different accounts for rolling.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Free Tier</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Mark as Google free-tier project — rate limits are managed globally in the Gemini Policies section below.
+                  </p>
+                </div>
+                <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} />
+              </div>
             </div>
           )}
         </div>
@@ -520,6 +538,7 @@ function RegisterModal({ servers, onClose }: { servers: GpuServer[]; onClose: ()
   const [vram, setVram] = useState('')
   const [gpuIndex, setGpuIndex] = useState('none')
   const [serverId, setServerId] = useState<string>('none')
+  const [isFreeTier, setIsFreeTier] = useState(false)
 
   const { data: serverMetrics } = useQuery<NodeMetrics>({
     queryKey: ['server-metrics', serverId],
@@ -541,7 +560,10 @@ function RegisterModal({ servers, onClose }: { servers: GpuServer[]; onClose: ()
           gpu_index: gpuIndex !== 'none' && gpuIndex !== '' ? parseInt(gpuIndex, 10) : undefined,
           server_id: serverId !== 'none' ? serverId : undefined,
         }),
-        ...(backendType === 'gemini' && { api_key: apiKey.trim() }),
+        ...(backendType === 'gemini' && {
+          api_key: apiKey.trim(),
+          is_free_tier: isFreeTier,
+        }),
       }
       return api.registerBackend(body)
     },
@@ -636,10 +658,25 @@ function RegisterModal({ servers, onClose }: { servers: GpuServer[]; onClose: ()
           )}
 
           {backendType === 'gemini' && (
-            <div className="space-y-1.5">
-              <Label htmlFor="backend-apikey">Gemini API Key <span className="text-destructive">*</span></Label>
-              <Input id="backend-apikey" type="password" value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)} placeholder="AIza…" />
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="backend-apikey">Gemini API Key <span className="text-destructive">*</span></Label>
+                <Input id="backend-apikey" type="password" value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)} placeholder="AIza…" />
+                <p className="text-xs text-muted-foreground">
+                  Rate limits are per Google project, not per key. Use keys from different accounts for rolling.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Free Tier</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Mark as Google free-tier project — rate limits are managed globally in the Gemini Policies section.
+                  </p>
+                </div>
+                <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} />
+              </div>
             </div>
           )}
         </div>
@@ -658,6 +695,189 @@ function RegisterModal({ servers, onClose }: { servers: GpuServer[]; onClose: ()
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ── Gemini Policies section ────────────────────────────────────────────────────
+
+function EditPolicyModal({
+  policy,
+  onClose,
+}: {
+  policy: GeminiRateLimitPolicy
+  onClose: () => void
+}) {
+  const [rpm, setRpm] = useState(String(policy.rpm_limit))
+  const [rpd, setRpd] = useState(String(policy.rpd_limit))
+  const [availableOnFreeTier, setAvailableOnFreeTier] = useState(policy.available_on_free_tier)
+  const queryClient = useQueryClient()
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.upsertGeminiPolicy(policy.model_name, {
+        rpm_limit: rpm ? parseInt(rpm, 10) : 0,
+        rpd_limit: rpd ? parseInt(rpd, 10) : 0,
+        available_on_free_tier: availableOnFreeTier,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['gemini-policies'] })
+      onClose()
+    },
+  })
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-purple-400" />
+            Edit Rate Limit Policy
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-1 mb-1">
+          <p className="text-sm text-muted-foreground">Model</p>
+          <p className="font-mono text-sm font-semibold text-slate-100">
+            {policy.model_name === '*' ? '* (global default)' : policy.model_name}
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          {/* Free tier availability toggle */}
+          <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">Available on Free Tier</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {availableOnFreeTier
+                  ? 'Routes to free-tier backends first, enforces RPM/RPD.'
+                  : 'Skips free-tier backends — routes directly to paid. No counter increment.'}
+              </p>
+            </div>
+            <Switch checked={availableOnFreeTier} onCheckedChange={setAvailableOnFreeTier} />
+          </div>
+
+          {/* RPM / RPD limits (only relevant when free tier is enabled) */}
+          {availableOnFreeTier && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="pol-rpm" className="text-xs">RPM <span className="text-muted-foreground font-normal">(req/min)</span></Label>
+                <Input id="pol-rpm" type="number" min={0} value={rpm}
+                  onChange={(e) => setRpm(e.target.value)} placeholder="e.g. 10" className="h-8 text-sm" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="pol-rpd" className="text-xs">RPD <span className="text-muted-foreground font-normal">(req/day)</span></Label>
+                <Input id="pol-rpd" type="number" min={0} value={rpd}
+                  onChange={(e) => setRpd(e.target.value)} placeholder="e.g. 250" className="h-8 text-sm" />
+              </div>
+              <p className="col-span-2 text-[11px] text-muted-foreground -mt-1">
+                0 = no enforcement. 2026 free limits: 2.5-pro 5/100 · 2.5-flash 10/250 · 2.5-flash-lite 15/1000
+              </p>
+            </div>
+          )}
+        </div>
+
+        {mutation.error && (
+          <p className="text-sm text-destructive">
+            {mutation.error instanceof Error ? mutation.error.message : 'Failed to save'}
+          </p>
+        )}
+        <DialogFooter className="gap-3">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+            {mutation.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function GeminiPoliciesSection() {
+  const [editingPolicy, setEditingPolicy] = useState<GeminiRateLimitPolicy | null>(null)
+
+  const { data: policies, isLoading } = useQuery({
+    queryKey: ['gemini-policies'],
+    queryFn: () => api.geminiPolicies(),
+    refetchInterval: 60_000,
+  })
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-xl font-bold text-slate-100 tracking-tight flex items-center gap-2">
+          <ShieldCheck className="h-5 w-5 text-purple-400" />
+          Gemini Rate Limit Policies
+        </h2>
+        <p className="text-sm text-slate-400 mt-0.5">
+          Shared RPM/RPD limits per model, applied to all free-tier backends.
+          {' '}Use <code className="text-[11px] bg-slate-800 px-1 py-0.5 rounded">*</code> as a global fallback for models without a specific row.
+        </p>
+      </div>
+
+      {isLoading && (
+        <div className="flex h-16 items-center justify-center text-muted-foreground text-sm animate-pulse">
+          Loading policies…
+        </div>
+      )}
+
+      {policies && policies.length === 0 && (
+        <Card className="border-dashed">
+          <CardContent className="p-6 text-center text-muted-foreground text-sm">
+            No policies configured. Run the migration to seed defaults.
+          </CardContent>
+        </Card>
+      )}
+
+      {policies && policies.length > 0 && (
+        <Card>
+          <CardContent className="p-0 overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-b border-border hover:bg-transparent">
+                  <TableHead className="text-slate-400 font-semibold">Model</TableHead>
+                  <TableHead className="text-slate-400 font-semibold w-28 text-right">RPM</TableHead>
+                  <TableHead className="text-slate-400 font-semibold w-28 text-right">RPD</TableHead>
+                  <TableHead className="text-slate-400 font-semibold w-40">Last Updated</TableHead>
+                  <TableHead className="text-right text-slate-400 font-semibold w-20">Edit</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {policies.map((p) => (
+                  <TableRow key={p.id}>
+                    <TableCell className="py-3">
+                      <span className="font-mono text-sm text-slate-100">
+                        {p.model_name === '*'
+                          ? <span className="flex items-center gap-1.5"><span className="text-slate-400">* </span><span className="text-xs text-muted-foreground font-sans">global default</span></span>
+                          : p.model_name}
+                      </span>
+                    </TableCell>
+                    <TableCell className="py-3 text-right tabular-nums font-mono text-sm">
+                      {p.rpm_limit > 0 ? p.rpm_limit : <span className="text-slate-600">—</span>}
+                    </TableCell>
+                    <TableCell className="py-3 text-right tabular-nums font-mono text-sm">
+                      {p.rpd_limit > 0 ? p.rpd_limit : <span className="text-slate-600">—</span>}
+                    </TableCell>
+                    <TableCell className="py-3 text-xs text-slate-400">
+                      {fmtDate(p.updated_at)}
+                    </TableCell>
+                    <TableCell className="py-3 text-right">
+                      <Button variant="ghost" size="icon"
+                        className="h-8 w-8 text-slate-400 hover:text-blue-400 hover:bg-blue-500/10"
+                        onClick={() => setEditingPolicy(p)} title="Edit limits">
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {editingPolicy && (
+        <EditPolicyModal policy={editingPolicy} onClose={() => setEditingPolicy(null)} />
+      )}
+    </section>
   )
 }
 
@@ -914,7 +1134,17 @@ export default function BackendsPage() {
                               </div>
                             </div>
                           ) : (
-                            <span className="text-xs text-slate-600 italic">cloud API</span>
+                            <div className="text-xs">
+                              {b.is_free_tier ? (
+                                <Badge variant="outline" className="bg-amber-500/15 text-amber-400 border-amber-500/30 text-[10px] px-1.5 py-0">
+                                  Free Tier
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px] px-1.5 py-0">
+                                  Paid
+                                </Badge>
+                              )}
+                            </div>
                           )}
                         </TableCell>
 
@@ -972,6 +1202,9 @@ export default function BackendsPage() {
           </Card>
         )}
       </section>
+
+      {/* ── Gemini Rate Limit Policies ─────────────────────────────── */}
+      <GeminiPoliciesSection />
 
       {/* Modals */}
       {showRegisterServer && <RegisterServerModal onClose={() => setShowRegisterServer(false)} />}

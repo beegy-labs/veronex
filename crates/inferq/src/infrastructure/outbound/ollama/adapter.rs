@@ -123,6 +123,8 @@ impl InferenceBackendPort for OllamaAdapter {
                     yield StreamToken {
                         value: chunk.response,
                         is_final: chunk.done,
+                        prompt_tokens: None,
+                        completion_tokens: None,
                     };
 
                     if chunk.done {
