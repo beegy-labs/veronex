@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Result;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -15,6 +16,124 @@ use crate::infrastructure::outbound::health_checker::check_backend;
 
 use super::state::AppState;
 
+// ── Model cache helpers ─────────────────────────────────────────────────────────
+
+/// Valkey TTL for the model list cache (1 hour).
+const MODELS_CACHE_TTL: i64 = 3600;
+
+fn models_cache_key(id: Uuid) -> String {
+    format!("inferq:models:{id}")
+}
+
+/// Fetch the list of available models directly from the backend (bypasses cache).
+///
+/// * Ollama → `GET {url}/api/tags`
+/// * Gemini → `GET https://generativelanguage.googleapis.com/v1beta/models?key={api_key}`
+///   filtered to models that support `generateContent`.
+async fn fetch_models_live(backend: &LlmBackend) -> Result<Vec<String>> {
+    let client = reqwest::Client::new();
+
+    match backend.backend_type {
+        BackendType::Ollama => {
+            let url = format!("{}/api/tags", backend.url.trim_end_matches('/'));
+            let json: serde_json::Value = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!("cannot reach ollama: {e}"))?
+                .error_for_status()
+                .map_err(|e| anyhow::anyhow!("ollama returned error: {e}"))?
+                .json()
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to parse ollama response: {e}"))?;
+
+            let models = json["models"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|m| m["name"].as_str().map(String::from))
+                .collect();
+
+            Ok(models)
+        }
+
+        BackendType::Gemini => {
+            let api_key = backend
+                .api_key_encrypted
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("gemini backend has no api key stored"))?;
+
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+            );
+
+            let json: serde_json::Value = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!("cannot reach gemini api: {e}"))?
+                .error_for_status()
+                .map_err(|e| anyhow::anyhow!("gemini api returned error: {e}"))?
+                .json()
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to parse gemini response: {e}"))?;
+
+            let models = json["models"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .filter(|m| {
+                    m["supportedGenerationMethods"]
+                        .as_array()
+                        .map(|methods| {
+                            methods
+                                .iter()
+                                .any(|method| method.as_str() == Some("generateContent"))
+                        })
+                        .unwrap_or(false)
+                })
+                .filter_map(|m| {
+                    m["name"]
+                        .as_str()
+                        .map(|s| s.strip_prefix("models/").unwrap_or(s).to_string())
+                })
+                .collect();
+
+            Ok(models)
+        }
+    }
+}
+
+/// Write models to the Valkey cache (fire-and-forget; errors are logged, not surfaced).
+async fn store_models_cache(pool: &fred::clients::RedisPool, key: &str, models: &[String]) {
+    use fred::prelude::*;
+
+    let Ok(json_str) = serde_json::to_string(models) else {
+        return;
+    };
+    if let Err(e) = pool
+        .set::<String, _, _>(
+            key,
+            json_str,
+            Some(Expiration::EX(MODELS_CACHE_TTL)),
+            None,
+            false,
+        )
+        .await
+    {
+        tracing::warn!("failed to cache model list: {e}");
+    }
+}
+
+/// Read models from the Valkey cache. Returns `None` on miss or error.
+async fn load_models_cache(pool: &fred::clients::RedisPool, key: &str) -> Option<Vec<String>> {
+    use fred::prelude::*;
+
+    let cached: Option<String> = pool.get(key).await.unwrap_or(None);
+    let json_str = cached?;
+    serde_json::from_str::<Vec<String>>(&json_str).ok()
+}
+
 // ── Request / Response DTOs ────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -27,8 +146,31 @@ pub struct RegisterBackendRequest {
     pub url: Option<String>,
     /// Required for Gemini. Stored as-is (PoC — no encryption).
     pub api_key: Option<String>,
-    /// Reported GPU VRAM in MiB (informational, 0 if unknown).
+    /// GPU VRAM capacity in MiB (manual). 0 = unknown.
     pub total_vram_mb: Option<i64>,
+    /// GPU index on the host (0-based). For metric correlation.
+    pub gpu_index: Option<i16>,
+    /// FK → gpu_servers. Optional; Gemini backends leave this null.
+    pub server_id: Option<Uuid>,
+    /// inferq-agent URL (Phase 2, reserved). E.g. `"http://192.168.1.10:9091"`.
+    pub agent_url: Option<String>,
+}
+
+/// Update request for `PATCH /v1/backends/{id}`.
+///
+/// The web UI pre-fills all current values before submission, so every field
+/// is always present.  `gpu_index` / `server_id` = `null` explicitly clears them.
+/// `api_key` = `null` or empty string keeps the existing stored key.
+#[derive(Debug, Deserialize)]
+pub struct UpdateBackendRequest {
+    pub name: String,
+    /// Ollama URL. Leave empty for Gemini.
+    pub url: Option<String>,
+    /// Replace the stored key when non-empty; otherwise keep existing.
+    pub api_key: Option<String>,
+    pub total_vram_mb: Option<i64>,
+    pub gpu_index: Option<i16>,
+    pub server_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -39,6 +181,9 @@ pub struct BackendSummary {
     pub url: String,
     pub is_active: bool,
     pub total_vram_mb: i64,
+    pub gpu_index: Option<i16>,
+    pub server_id: Option<Uuid>,
+    pub agent_url: Option<String>,
     pub status: String,
     pub registered_at: DateTime<Utc>,
 }
@@ -63,6 +208,9 @@ impl From<LlmBackend> for BackendSummary {
             url: b.url,
             is_active: b.is_active,
             total_vram_mb: b.total_vram_mb,
+            gpu_index: b.gpu_index,
+            server_id: b.server_id,
+            agent_url: b.agent_url,
             status,
             registered_at: b.registered_at,
         }
@@ -136,6 +284,9 @@ pub async fn register_backend(
         api_key_encrypted: req.api_key,
         is_active: true,
         total_vram_mb: req.total_vram_mb.unwrap_or(0),
+        gpu_index: req.gpu_index,
+        server_id: req.server_id,
+        agent_url: req.agent_url.filter(|s| !s.is_empty()),
         status: LlmBackendStatus::Offline, // initial; overwritten by health check
         registered_at: Utc::now(),
     };
@@ -264,6 +415,68 @@ pub async fn healthcheck_backend(
         .into_response()
 }
 
+/// `PATCH /v1/backends/{id}` — update mutable fields of a backend.
+///
+/// All fields are optional; only provided (non-null) fields are applied.
+/// Passing `api_key: ""` leaves the existing key unchanged.
+pub async fn update_backend(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateBackendRequest>,
+) -> impl IntoResponse {
+    let registry = backend_registry(&state);
+
+    let mut backend = match registry.get(id).await {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "backend not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!(%id, "update_backend: db error: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    if req.name.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "name must not be empty"})),
+        )
+            .into_response();
+    }
+    backend.name = req.name.trim().to_string();
+    if let Some(url) = req.url {
+        backend.url = url;
+    }
+    // Empty / absent api_key = keep existing stored value.
+    if let Some(key) = req.api_key.filter(|s| !s.is_empty()) {
+        backend.api_key_encrypted = Some(key);
+    }
+    backend.total_vram_mb = req.total_vram_mb.unwrap_or(backend.total_vram_mb);
+    backend.gpu_index = req.gpu_index;   // null clears the field
+    backend.server_id = req.server_id;  // null clears the field
+
+    if let Err(e) = registry.update(&backend).await {
+        tracing::error!(%id, "update_backend: failed: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "database error"})),
+        )
+            .into_response();
+    }
+
+    tracing::info!(%id, "backend updated");
+    (StatusCode::OK, Json(BackendSummary::from(backend))).into_response()
+}
+
 // ── Unit tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -280,6 +493,9 @@ mod tests {
             api_key_encrypted: None,
             is_active: true,
             total_vram_mb: 8192,
+            gpu_index: Some(0),
+            server_id: None,
+            agent_url: None,
             status: LlmBackendStatus::Online,
             registered_at: Utc::now(),
         };
@@ -288,6 +504,7 @@ mod tests {
         assert_eq!(s.status, "online");
         assert_eq!(s.url, "http://localhost:11434");
         assert!(s.is_active);
+        assert_eq!(s.gpu_index, Some(0));
     }
 
     #[test]
@@ -300,6 +517,9 @@ mod tests {
             api_key_encrypted: Some("secret".to_string()),
             is_active: true,
             total_vram_mb: 0,
+            gpu_index: None,
+            server_id: None,
+            agent_url: None,
             status: LlmBackendStatus::Offline,
             registered_at: Utc::now(),
         };
@@ -328,14 +548,14 @@ mod tests {
 
 /// `GET /v1/backends/{id}/models` — list models available on a backend.
 ///
-/// For Ollama: calls `GET {url}/api/tags`.
-/// For Gemini: returns a static list of supported model names.
+/// Returns the cached model list if available (TTL: 1 h).
+/// On cache miss, fetches live from Ollama (`/api/tags`) or the Gemini models API,
+/// stores the result in Valkey, and returns it.
 pub async fn list_backend_models(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let registry = backend_registry(&state);
-    let backend = match registry.get(id).await {
+    let backend = match backend_registry(&state).get(id).await {
         Ok(Some(b)) => b,
         Ok(None) => {
             return (
@@ -354,47 +574,80 @@ pub async fn list_backend_models(
         }
     };
 
-    match backend.backend_type {
-        BackendType::Ollama => {
-            let url = format!("{}/api/tags", backend.url.trim_end_matches('/'));
-            let client = reqwest::Client::new();
-            match client.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.json::<serde_json::Value>().await {
-                        Ok(json) => {
-                            let models: Vec<String> = json["models"]
-                                .as_array()
-                                .unwrap_or(&vec![])
-                                .iter()
-                                .filter_map(|m| m["name"].as_str().map(String::from))
-                                .collect();
-                            (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response()
-                        }
-                        Err(e) => {
-                            tracing::error!(%id, "failed to parse ollama tags: {e}");
-                            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": "failed to parse ollama response"}))).into_response()
-                        }
-                    }
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": format!("ollama returned {status}")}))).into_response()
-                }
-                Err(e) => {
-                    tracing::error!(%id, "failed to reach ollama: {e}");
-                    (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": "cannot reach ollama"}))).into_response()
-                }
-            }
+    let cache_key = models_cache_key(id);
+
+    // ── Cache hit ────────────────────────────────────────────────────────────────
+    if let Some(ref pool) = state.valkey_pool {
+        if let Some(models) = load_models_cache(pool, &cache_key).await {
+            return (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response();
         }
-        BackendType::Gemini => {
-            // Return commonly available Gemini models
-            let models = vec![
-                "gemini-2.0-flash",
-                "gemini-2.0-flash-lite",
-                "gemini-1.5-flash",
-                "gemini-1.5-pro",
-            ];
+    }
+
+    // ── Cache miss: fetch live ───────────────────────────────────────────────────
+    match fetch_models_live(&backend).await {
+        Ok(models) => {
+            if let Some(ref pool) = state.valkey_pool {
+                store_models_cache(pool, &cache_key, &models).await;
+            }
             (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response()
+        }
+        Err(e) => {
+            tracing::error!(%id, "failed to fetch models: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `POST /v1/backends/{id}/models/sync` — force-refresh the model list from the backend.
+///
+/// Ignores the Valkey cache, fetches live, stores the fresh list, and returns it.
+pub async fn sync_backend_models(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let backend = match backend_registry(&state).get(id).await {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "backend not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!(%id, "failed to fetch backend: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    match fetch_models_live(&backend).await {
+        Ok(models) => {
+            let cache_key = models_cache_key(id);
+            if let Some(ref pool) = state.valkey_pool {
+                store_models_cache(pool, &cache_key, &models).await;
+            }
+            tracing::info!(%id, count = models.len(), "model list synced");
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"models": models, "synced": true})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!(%id, "model sync failed: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
         }
     }
 }

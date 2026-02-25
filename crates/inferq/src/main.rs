@@ -22,6 +22,7 @@ use inferq::infrastructure::outbound::observability::ClickHouseObservabilityAdap
 use inferq::infrastructure::outbound::persistence::api_key_repository::PostgresApiKeyRepository;
 use inferq::infrastructure::outbound::persistence::backend_registry::PostgresBackendRegistry;
 use inferq::infrastructure::outbound::persistence::database;
+use inferq::infrastructure::outbound::persistence::gpu_server_registry::PostgresGpuServerRegistry;
 use inferq::infrastructure::outbound::persistence::job_repository::PostgresJobRepository;
 
 // ── Entry point ────────────────────────────────────────────────────
@@ -120,6 +121,8 @@ async fn main() -> Result<()> {
     let job_repo = Arc::new(PostgresJobRepository::new(pg_pool.clone()));
     let backend_registry: Arc<dyn LlmBackendRegistry> =
         Arc::new(PostgresBackendRegistry::new(pg_pool.clone()));
+    let gpu_server_registry: Arc<dyn inferq::application::ports::outbound::gpu_server_registry::GpuServerRegistry> =
+        Arc::new(PostgresGpuServerRegistry::new(pg_pool.clone()));
 
     // ── Bootstrap admin key ────────────────────────────────────────
     // If BOOTSTRAP_API_KEY is set, create it in the DB if it doesn't exist yet.
@@ -151,7 +154,9 @@ async fn main() -> Result<()> {
     }
 
     // ── Background backend health checker ──────────────────────────
-    start_health_checker(backend_registry.clone(), 30);
+    // Also polls inferq-agent metrics (GPU temp/VRAM/RAM) when agent_url is set,
+    // and caches the result in Valkey for the VRAM-aware dispatcher.
+    start_health_checker(backend_registry.clone(), 30, valkey_pool.clone());
 
     // ── Auto-seed backends from environment (optional convenience) ──────
     // If OLLAMA_URL or GEMINI_API_KEY are set, register them in the DB
@@ -169,6 +174,9 @@ async fn main() -> Result<()> {
                 api_key_encrypted: None,
                 is_active: true,
                 total_vram_mb: 0,
+                gpu_index: None,
+                server_id: None,
+                agent_url: None,
                 status: inferq::domain::enums::LlmBackendStatus::Offline,
                 registered_at: chrono::Utc::now(),
             };
@@ -195,6 +203,9 @@ async fn main() -> Result<()> {
                     api_key_encrypted: Some(key.clone()),
                     is_active: true,
                     total_vram_mb: 0,
+                    gpu_index: None,
+                    server_id: None,
+                    agent_url: None,
                     status: inferq::domain::enums::LlmBackendStatus::Offline,
                     registered_at: chrono::Utc::now(),
                 };
@@ -234,6 +245,7 @@ async fn main() -> Result<()> {
         use_case,
         api_key_repo,
         backend_registry,
+        gpu_server_registry,
         valkey_pool,
         clickhouse_client,
         pg_pool,
