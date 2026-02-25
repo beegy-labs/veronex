@@ -21,6 +21,11 @@ pub struct InferenceJob {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
+    /// Full concatenated output of the inference. Populated on completion so the
+    /// result can be replayed after a server restart (since the token buffer is
+    /// in-memory only).
+    #[serde(default)]
+    pub result_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +50,19 @@ pub struct InferenceResult {
     pub finish_reason: FinishReason,
 }
 
+/// Physical GPU server (one node-exporter per host).
+///
+/// `node_exporter_url` is the only connection point to the hardware.
+/// CPU / memory / GPU metrics are fetched live from that endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuServer {
+    pub id: Uuid,
+    pub name: String,
+    /// node-exporter endpoint, e.g. `"http://192.168.1.10:9100"`.
+    pub node_exporter_url: Option<String>,
+    pub registered_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmBackend {
     pub id: Uuid,
@@ -53,7 +71,19 @@ pub struct LlmBackend {
     pub url: String,
     pub api_key_encrypted: Option<String>,
     pub is_active: bool,
+    /// GPU VRAM capacity in MiB (manual). 0 = unknown → treat as unlimited for dispatch.
     pub total_vram_mb: i64,
+    /// GPU index on this host (0-based). Correlates with node-exporter drm/hwmon metrics.
+    /// `None` = GPU 0 / not specified.
+    #[serde(default)]
+    pub gpu_index: Option<i16>,
+    /// FK → gpu_servers. `None` for cloud backends (Gemini, etc.).
+    #[serde(default)]
+    pub server_id: Option<Uuid>,
+    /// inferq-agent URL (Phase 2, currently unused).
+    /// e.g. `http://192.168.1.10:9091`
+    #[serde(default)]
+    pub agent_url: Option<String>,
     pub status: LlmBackendStatus,
     pub registered_at: DateTime<Utc>,
 }
@@ -73,6 +103,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             error: None,
+            result_text: None,
         }
     }
 
@@ -85,6 +116,9 @@ mod tests {
             api_key_encrypted: None,
             is_active: true,
             total_vram_mb: 24576,
+            gpu_index: None,
+            server_id: None,
+            agent_url: None,
             status: LlmBackendStatus::Online,
             registered_at: Utc::now(),
         }
@@ -139,6 +173,7 @@ mod tests {
             started_at: Some(now),
             completed_at: Some(now),
             error: Some("timeout".to_string()),
+            result_text: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());

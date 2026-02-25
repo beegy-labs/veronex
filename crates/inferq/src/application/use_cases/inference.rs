@@ -188,6 +188,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             started_at: None,
             completed_at: None,
             error: None,
+            result_text: None,
         };
 
         self.job_repo.save(&job).await?;
@@ -269,7 +270,13 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         let _ = api_key_id; // used in spawned path; process() ignores it
 
         // For process(), pick the best available backend now.
-        let backend = match pick_best_backend(&*self.registry, &job.backend).await {
+        let backend = match pick_best_backend(
+            &*self.registry,
+            &job.backend,
+            self.valkey_pool.as_ref(),
+        )
+        .await
+        {
             Ok(cfg) => make_adapter(&cfg),
             Err(e) => return Err(e),
         };
@@ -289,17 +296,52 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
     fn stream(&self, job_id: &JobId) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
         let jobs = self.jobs.clone();
+        let job_repo = self.job_repo.clone();
         let uuid = job_id.0;
 
         Box::pin(async_stream::try_stream! {
-            let mut idx: usize = 0;
+            // Fast-path: job is in the in-memory store (same process run).
+            let in_memory = jobs.lock().await.contains_key(&uuid);
 
+            if !in_memory {
+                // DB fallback: replay stored result for completed jobs that were
+                // processed before the last server restart.
+                let jid = JobId(uuid);
+                match job_repo.get(&jid).await? {
+                    Some(job) if job.status == JobStatus::Completed => {
+                        if let Some(text) = job.result_text {
+                            if !text.is_empty() {
+                                yield StreamToken { value: text, is_final: false };
+                            }
+                        }
+                        yield StreamToken { value: String::new(), is_final: true };
+                        return;
+                    }
+                    Some(job) if job.status == JobStatus::Failed => {
+                        let msg = job.error.unwrap_or_else(|| "inference failed".to_string());
+                        Err(anyhow::anyhow!("{msg}"))?;
+                        return;
+                    }
+                    Some(_) => {
+                        // Pending/running but not in memory — should not normally happen.
+                        Err(anyhow::anyhow!("job not in memory: {uuid}"))?;
+                        return;
+                    }
+                    None => {
+                        Err(anyhow::anyhow!("job not found: {uuid}"))?;
+                        return;
+                    }
+                }
+            }
+
+            // In-memory streaming path.
+            let mut idx: usize = 0;
             loop {
                 let (new_tokens, done, notify) = {
                     let guard = jobs.lock().await;
                     let entry = guard
                         .get(&uuid)
-                        .ok_or_else(|| anyhow::anyhow!("job not found: {uuid}"))?;
+                        .ok_or_else(|| anyhow::anyhow!("job entry disappeared: {uuid}"))?;
 
                     let new_tokens = entry.tokens[idx..].to_vec();
                     let done = entry.done;
@@ -369,7 +411,7 @@ fn spawn_job_direct(
 ) {
     tokio::spawn(async move {
         // Pick a backend from the registry.
-        let backend_cfg = match pick_best_backend(&*registry, &job.backend).await {
+        let backend_cfg = match pick_best_backend(&*registry, &job.backend, valkey_pool.as_ref()).await {
             Ok(cfg) => cfg,
             Err(e) => {
                 tracing::error!(job_id = %uuid, "no backend available: {e}");
@@ -493,7 +535,9 @@ async fn queue_dispatcher_loop(
         let mut availability: Vec<(crate::domain::entities::LlmBackend, i64)> = Vec::new();
         for b in candidates {
             let avail = match b.backend_type {
-                BackendType::Ollama => get_ollama_available_vram_mb(&b).await,
+                BackendType::Ollama => {
+                    get_ollama_available_vram_mb(&b, Some(&valkey_pool)).await
+                }
                 BackendType::Gemini => i64::MAX, // no VRAM constraint
             };
             availability.push((b, avail));
@@ -619,6 +663,7 @@ async fn run_job(
     // ── Stream tokens ────────────────────────────────────────────────
     let mut token_stream = backend.stream_tokens(&job);
     let mut token_count: u64 = 0;
+    let mut accumulated_text = String::new();
 
     while let Some(result) = token_stream.next().await {
         let mut guard = jobs.lock().await;
@@ -634,7 +679,16 @@ async fn run_job(
         match result {
             Ok(token) => {
                 token_count += 1;
-                entry.tokens.push(token);
+                accumulated_text.push_str(&token.value);
+                // If the final token carries text, split it into a text token
+                // followed by a separate done marker so the SSE handler never
+                // discards text that arrives on the same chunk as is_final=true.
+                if token.is_final && !token.value.is_empty() {
+                    entry.tokens.push(StreamToken { value: token.value, is_final: false });
+                    entry.tokens.push(StreamToken { value: String::new(), is_final: true });
+                } else {
+                    entry.tokens.push(token);
+                }
                 entry.notify.notify_one();
             }
             Err(e) => {
@@ -703,11 +757,18 @@ async fn run_job(
         }
     };
 
+    let result_text = if accumulated_text.is_empty() {
+        None
+    } else {
+        Some(accumulated_text)
+    };
+
     if let Err(e) = job_repo
         .save(&InferenceJob {
             status: JobStatus::Completed,
             started_at: Some(started_at),
             completed_at: Some(completed_at),
+            result_text: result_text.clone(),
             ..job.clone()
         })
         .await

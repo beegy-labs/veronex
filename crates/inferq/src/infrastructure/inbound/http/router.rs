@@ -1,14 +1,16 @@
 use axum::http::Method;
 use axum::middleware;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use super::backend_handlers;
 use super::dashboard_handlers;
+use super::gpu_server_handlers;
 use super::handlers;
 use super::key_handlers;
+use super::metrics_handlers;
 use super::middleware::api_key_auth::api_key_auth;
 use super::middleware::rate_limiter::rate_limiter;
 use super::state::AppState;
@@ -55,6 +57,7 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/v1/backends", post(backend_handlers::register_backend))
         .route("/v1/backends", get(backend_handlers::list_backends))
         .route("/v1/backends/{id}", delete(backend_handlers::delete_backend))
+        .route("/v1/backends/{id}", patch(backend_handlers::update_backend))
         .route(
             "/v1/backends/{id}/healthcheck",
             post(backend_handlers::healthcheck_backend),
@@ -63,6 +66,16 @@ pub fn build_api_router() -> Router<AppState> {
             "/v1/backends/{id}/models",
             get(backend_handlers::list_backend_models),
         )
+        .route(
+            "/v1/backends/{id}/models/sync",
+            post(backend_handlers::sync_backend_models),
+        )
+        // GPU server management routes
+        .route("/v1/servers", post(gpu_server_handlers::register_gpu_server))
+        .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers))
+        .route("/v1/servers/{id}", delete(gpu_server_handlers::delete_gpu_server))
+        .route("/v1/servers/{id}/metrics", get(gpu_server_handlers::get_server_metrics))
+        .route("/v1/servers/{id}/metrics/history", get(gpu_server_handlers::get_server_metrics_history))
 }
 
 /// Build the full application router with health endpoints and middleware.
@@ -71,13 +84,18 @@ pub fn build_api_router() -> Router<AppState> {
 /// Health/readiness endpoints bypass authentication.
 pub fn build_app(state: AppState) -> Router {
     let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS, Method::PATCH])
         .allow_headers(tower_http::cors::Any)
         .allow_origin(tower_http::cors::Any);
 
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/readyz", get(|| async { "ok" }))
+        // Prometheus HTTP SD — consumed by OTel Collector, no auth required.
+        .route(
+            "/v1/metrics/targets",
+            get(metrics_handlers::list_metrics_targets),
+        )
         .merge(
             build_api_router()
                 .route_layer(middleware::from_fn_with_state(

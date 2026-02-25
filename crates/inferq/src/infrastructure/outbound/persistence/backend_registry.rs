@@ -63,6 +63,9 @@ fn row_to_backend(row: &sqlx::postgres::PgRow) -> Result<LlmBackend> {
     let api_key_encrypted: Option<String> = row.try_get("api_key_encrypted").context("api_key_encrypted")?;
     let is_active: bool = row.try_get("is_active").context("is_active")?;
     let total_vram_mb: i64 = row.try_get("total_vram_mb").context("total_vram_mb")?;
+    let gpu_index: Option<i16> = row.try_get("gpu_index").context("gpu_index")?;
+    let server_id: Option<Uuid> = row.try_get("server_id").context("server_id")?;
+    let agent_url: Option<String> = row.try_get("agent_url").context("agent_url")?;
     let status_str: String = row.try_get("status").context("status")?;
     let registered_at: DateTime<Utc> = row.try_get("registered_at").context("registered_at")?;
 
@@ -74,6 +77,9 @@ fn row_to_backend(row: &sqlx::postgres::PgRow) -> Result<LlmBackend> {
         api_key_encrypted,
         is_active,
         total_vram_mb,
+        gpu_index,
+        server_id,
+        agent_url,
         status: str_to_status(&status_str),
         registered_at,
     })
@@ -86,8 +92,10 @@ impl LlmBackendRegistry for PostgresBackendRegistry {
     async fn register(&self, backend: &LlmBackend) -> Result<()> {
         sqlx::query(
             "INSERT INTO llm_backends
-                 (id, name, backend_type, url, api_key_encrypted, is_active, total_vram_mb, status, registered_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                 (id, name, backend_type, url, api_key_encrypted, is_active,
+                  total_vram_mb, gpu_index, server_id, agent_url,
+                  status, registered_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(backend.id)
         .bind(&backend.name)
@@ -96,6 +104,9 @@ impl LlmBackendRegistry for PostgresBackendRegistry {
         .bind(&backend.api_key_encrypted)
         .bind(backend.is_active)
         .bind(backend.total_vram_mb)
+        .bind(backend.gpu_index)
+        .bind(backend.server_id)
+        .bind(&backend.agent_url)
         .bind(status_to_str(&backend.status))
         .bind(backend.registered_at)
         .execute(&self.pool)
@@ -107,7 +118,7 @@ impl LlmBackendRegistry for PostgresBackendRegistry {
 
     async fn list_active(&self) -> Result<Vec<LlmBackend>> {
         let rows = sqlx::query(
-            "SELECT id, name, backend_type, url, api_key_encrypted, is_active, total_vram_mb, status, registered_at
+            "SELECT id, name, backend_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, agent_url, status, registered_at
              FROM llm_backends
              WHERE is_active = true AND status = 'online'
              ORDER BY registered_at ASC",
@@ -121,7 +132,7 @@ impl LlmBackendRegistry for PostgresBackendRegistry {
 
     async fn list_all(&self) -> Result<Vec<LlmBackend>> {
         let rows = sqlx::query(
-            "SELECT id, name, backend_type, url, api_key_encrypted, is_active, total_vram_mb, status, registered_at
+            "SELECT id, name, backend_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, agent_url, status, registered_at
              FROM llm_backends
              ORDER BY registered_at ASC",
         )
@@ -134,7 +145,7 @@ impl LlmBackendRegistry for PostgresBackendRegistry {
 
     async fn get(&self, id: Uuid) -> Result<Option<LlmBackend>> {
         let row = sqlx::query(
-            "SELECT id, name, backend_type, url, api_key_encrypted, is_active, total_vram_mb, status, registered_at
+            "SELECT id, name, backend_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, agent_url, status, registered_at
              FROM llm_backends
              WHERE id = $1",
         )
@@ -161,11 +172,38 @@ impl LlmBackendRegistry for PostgresBackendRegistry {
     }
 
     async fn deactivate(&self, id: Uuid) -> Result<()> {
-        sqlx::query("UPDATE llm_backends SET is_active = false, status = 'offline' WHERE id = $1")
+        sqlx::query("DELETE FROM llm_backends WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await
-            .context("failed to deactivate backend")?;
+            .context("failed to delete backend")?;
+
+        Ok(())
+    }
+
+    async fn update(&self, backend: &LlmBackend) -> Result<()> {
+        sqlx::query(
+            "UPDATE llm_backends
+             SET name = $1,
+                 url = $2,
+                 api_key_encrypted = COALESCE($3, api_key_encrypted),
+                 total_vram_mb = $4,
+                 gpu_index = $5,
+                 server_id = $6,
+                 agent_url = $7
+             WHERE id = $8",
+        )
+        .bind(&backend.name)
+        .bind(&backend.url)
+        .bind(&backend.api_key_encrypted)
+        .bind(backend.total_vram_mb)
+        .bind(backend.gpu_index)
+        .bind(backend.server_id)
+        .bind(&backend.agent_url)
+        .bind(backend.id)
+        .execute(&self.pool)
+        .await
+        .context("failed to update backend")?;
 
         Ok(())
     }

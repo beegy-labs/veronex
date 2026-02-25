@@ -14,6 +14,7 @@ use crate::domain::entities::{InferenceJob, InferenceResult, LlmBackend};
 use crate::domain::enums::BackendType;
 use crate::domain::value_objects::StreamToken;
 use crate::infrastructure::outbound::gemini::GeminiAdapter;
+use crate::infrastructure::outbound::hw_metrics::load_hw_metrics;
 use crate::infrastructure::outbound::ollama::OllamaAdapter;
 
 // ── Static backend router (kept for tests) ─────────────────────────────────────
@@ -99,14 +100,14 @@ impl DynamicBackendRouter {
     /// Select the best available backend for the given type.
     /// Returns the `LlmBackend` record so callers can build a specific adapter.
     pub async fn pick_backend(&self, bt: &BackendType) -> Result<LlmBackend> {
-        pick_best_backend(&*self.registry, bt).await
+        pick_best_backend(&*self.registry, bt, None).await
     }
 }
 
 #[async_trait]
 impl InferenceBackendPort for DynamicBackendRouter {
     async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
-        let cfg = pick_best_backend(&*self.registry, &job.backend).await?;
+        let cfg = pick_best_backend(&*self.registry, &job.backend, None).await?;
         make_adapter(&cfg).as_ref().infer(job).await
     }
 
@@ -118,7 +119,7 @@ impl InferenceBackendPort for DynamicBackendRouter {
         let job = job.clone();
 
         Box::pin(async_stream::stream! {
-            let cfg = match pick_best_backend(&*registry, &job.backend).await {
+            let cfg = match pick_best_backend(&*registry, &job.backend, None).await {
                 Ok(c) => c,
                 Err(e) => { yield Err(e); return; }
             };
@@ -142,6 +143,7 @@ impl InferenceBackendPort for DynamicBackendRouter {
 pub async fn pick_best_backend(
     registry: &dyn LlmBackendRegistry,
     bt: &BackendType,
+    valkey: Option<&fred::clients::RedisPool>,
 ) -> Result<LlmBackend> {
     let all = registry.list_all().await?;
     let candidates: Vec<LlmBackend> = all
@@ -163,10 +165,10 @@ pub async fn pick_best_backend(
             .ok_or_else(|| anyhow::anyhow!("no Gemini backend")),
 
         BackendType::Ollama => {
-            // For each Ollama candidate, check available VRAM and pick the most free.
+            // For each Ollama candidate, check available VRAM (Valkey cache → /api/ps fallback).
             let mut best: Option<(LlmBackend, i64)> = None;
             for b in candidates {
-                let avail = get_ollama_available_vram_mb(&b).await;
+                let avail = get_ollama_available_vram_mb(&b, valkey).await;
                 match &best {
                     None => best = Some((b, avail)),
                     Some((_, v)) if avail > *v => best = Some((b, avail)),
@@ -179,33 +181,53 @@ pub async fn pick_best_backend(
     }
 }
 
-/// Query Ollama's `/api/ps` endpoint and return available VRAM in MiB.
+/// Return available VRAM in MiB for an Ollama backend.
 ///
-/// Returns `i64::MAX` if `total_vram_mb == 0` (VRAM size unknown → treat as unlimited).
-/// Returns `0` on network/parse errors (treats backend as full).
-pub async fn get_ollama_available_vram_mb(backend: &LlmBackend) -> i64 {
+/// Priority:
+/// 1. Valkey hardware metrics cache (set by health_checker when agent_url is configured).
+///    Also enforces a temperature guard: backends at or above 85 °C are treated as
+///    unavailable (returns `i64::MIN`).
+/// 2. Live Ollama `/api/ps` poll (fallback when no agent data is cached).
+/// 3. `i64::MAX` when `total_vram_mb == 0` (VRAM unknown → treat as unlimited).
+/// 4. `0` on any network / parse error (treats backend as full).
+pub async fn get_ollama_available_vram_mb(
+    backend: &LlmBackend,
+    valkey: Option<&fred::clients::RedisPool>,
+) -> i64 {
+    // ── 1. Valkey cache (agent data) ─────────────────────────────────────────
+    if let Some(pool) = valkey {
+        if let Some(hw) = load_hw_metrics(pool, backend.id).await {
+            if hw.is_overheating() {
+                tracing::warn!(
+                    backend_id = %backend.id,
+                    name = %backend.name,
+                    temp = hw.temp_c,
+                    "backend overheating — skipping dispatch"
+                );
+                return i64::MIN;
+            }
+            if hw.vram_total_mb > 0 {
+                return hw.vram_free_mb();
+            }
+        }
+    }
+
+    // ── 2. VRAM unknown → treat as unlimited ─────────────────────────────────
     if backend.total_vram_mb == 0 {
-        // VRAM unknown → always consider this backend available.
         return i64::MAX;
     }
 
+    // ── 3. Live /api/ps fallback ─────────────────────────────────────────────
     let client = reqwest::Client::new();
     let url = format!("{}/api/ps", backend.url.trim_end_matches('/'));
 
-    let Ok(resp) = client
-        .get(&url)
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await
-    else {
+    let Ok(resp) = client.get(&url).timeout(Duration::from_secs(3)).send().await else {
         return 0;
     };
-
     let Ok(json) = resp.json::<serde_json::Value>().await else {
         return 0;
     };
 
-    // `size_vram` is in bytes; sum all loaded models.
     let used_bytes: i64 = json["models"]
         .as_array()
         .unwrap_or(&vec![])
@@ -213,8 +235,7 @@ pub async fn get_ollama_available_vram_mb(backend: &LlmBackend) -> i64 {
         .filter_map(|m| m["size_vram"].as_i64())
         .sum();
 
-    let used_mb = used_bytes / (1024 * 1024);
-    backend.total_vram_mb - used_mb
+    backend.total_vram_mb - used_bytes / (1024 * 1024)
 }
 
 /// Build a concrete inference adapter from a backend DB record.

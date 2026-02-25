@@ -25,4 +25,8 @@ pub trait LlmBackendRegistry: Send + Sync {
 
     /// Soft-delete: mark the backend as inactive so it is excluded from routing.
     async fn deactivate(&self, id: Uuid) -> Result<()>;
+
+    /// Update mutable fields (name, url, api_key_encrypted, total_vram_mb,
+    /// gpu_index, server_id, agent_url).  Status and registered_at are unchanged.
+    async fn update(&self, backend: &LlmBackend) -> Result<()>;
 }

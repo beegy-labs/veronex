@@ -83,6 +83,9 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
     let completed_at: Option<DateTime<Utc>> = row
         .try_get("completed_at")
         .context("missing column: completed_at")?;
+    let result_text: Option<String> = row
+        .try_get("result_text")
+        .context("missing column: result_text")?;
 
     Ok(InferenceJob {
         id: JobId(id),
@@ -94,6 +97,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         created_at,
         started_at,
         completed_at,
+        result_text,
     })
 }
 
@@ -109,11 +113,12 @@ impl JobRepository for PostgresJobRepository {
     async fn save(&self, job: &InferenceJob) -> Result<()> {
         sqlx::query(
             "INSERT INTO inference_jobs
-                 (id, prompt, model_name, backend, status, error, created_at, started_at, completed_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 (id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT (id) DO UPDATE SET
                  status       = EXCLUDED.status,
                  error        = EXCLUDED.error,
+                 result_text  = COALESCE(EXCLUDED.result_text, inference_jobs.result_text),
                  started_at   = EXCLUDED.started_at,
                  completed_at = EXCLUDED.completed_at",
         )
@@ -123,6 +128,7 @@ impl JobRepository for PostgresJobRepository {
         .bind(backend_to_str(&job.backend))
         .bind(status_to_str(job.status))
         .bind(&job.error)
+        .bind(&job.result_text)
         .bind(job.created_at)
         .bind(job.started_at)
         .bind(job.completed_at)
@@ -135,7 +141,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn get(&self, job_id: &JobId) -> Result<Option<InferenceJob>> {
         let row = sqlx::query(
-            "SELECT id, prompt, model_name, backend, status, error, created_at, started_at, completed_at
+            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at
              FROM inference_jobs
              WHERE id = $1",
         )
@@ -163,7 +169,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn list_pending(&self) -> Result<Vec<InferenceJob>> {
         let rows = sqlx::query(
-            "SELECT id, prompt, model_name, backend, status, error, created_at, started_at, completed_at
+            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at
              FROM inference_jobs
              WHERE status IN ('pending', 'running')
              ORDER BY created_at ASC",
