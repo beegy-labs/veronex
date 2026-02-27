@@ -8,9 +8,11 @@ use async_trait::async_trait;
 use futures::Stream;
 use futures::StreamExt as _;
 
+use crate::application::ports::outbound::backend_model_selection::BackendModelSelectionRepository;
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
 use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
 use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
+use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::{InferenceJob, InferenceResult, LlmBackend};
 use crate::domain::enums::BackendType;
 use crate::domain::value_objects::StreamToken;
@@ -91,24 +93,42 @@ impl BackendRouterBuilder {
 /// If no backend of the requested type is registered, the stream yields an error.
 pub struct DynamicBackendRouter {
     registry: Arc<dyn LlmBackendRegistry>,
+    model_selection_repo: Option<Arc<dyn BackendModelSelectionRepository>>,
+    ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
 }
 
 impl DynamicBackendRouter {
     pub fn new(registry: Arc<dyn LlmBackendRegistry>) -> Self {
-        Self { registry }
+        Self { registry, model_selection_repo: None, ollama_model_repo: None }
+    }
+
+    pub fn with_model_selection(
+        mut self,
+        repo: Arc<dyn BackendModelSelectionRepository>,
+    ) -> Self {
+        self.model_selection_repo = Some(repo);
+        self
+    }
+
+    pub fn with_ollama_model_repo(
+        mut self,
+        repo: Arc<dyn OllamaModelRepository>,
+    ) -> Self {
+        self.ollama_model_repo = Some(repo);
+        self
     }
 
     /// Select the best available backend for the given type.
     /// Returns the `LlmBackend` record so callers can build a specific adapter.
     pub async fn pick_backend(&self, bt: &BackendType) -> Result<LlmBackend> {
-        pick_best_backend(&*self.registry, None, bt, "", None).await
+        pick_best_backend(&*self.registry, None, self.model_selection_repo.as_deref(), self.ollama_model_repo.as_deref(), bt, "", None, None).await
     }
 }
 
 #[async_trait]
 impl InferenceBackendPort for DynamicBackendRouter {
     async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
-        let cfg = pick_best_backend(&*self.registry, None, &job.backend, job.model_name.as_str(), None).await?;
+        let cfg = pick_best_backend(&*self.registry, None, self.model_selection_repo.as_deref(), self.ollama_model_repo.as_deref(), &job.backend, job.model_name.as_str(), None, None).await?;
         make_adapter(&cfg).as_ref().infer(job).await
     }
 
@@ -117,10 +137,12 @@ impl InferenceBackendPort for DynamicBackendRouter {
         job: &InferenceJob,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
         let registry = self.registry.clone();
+        let model_selection_repo = self.model_selection_repo.clone();
+        let ollama_model_repo = self.ollama_model_repo.clone();
         let job = job.clone();
 
         Box::pin(async_stream::stream! {
-            let cfg = match pick_best_backend(&*registry, None, &job.backend, job.model_name.as_str(), None).await {
+            let cfg = match pick_best_backend(&*registry, None, model_selection_repo.as_deref(), ollama_model_repo.as_deref(), &job.backend, job.model_name.as_str(), None, None).await {
                 Ok(c) => c,
                 Err(e) => { yield Err(e); return; }
             };
@@ -142,14 +164,14 @@ impl InferenceBackendPort for DynamicBackendRouter {
 /// Bucketed by minute — TTL=120s so it always expires naturally.
 fn gemini_rpm_key(backend_id: uuid::Uuid, model: &str) -> String {
     let minute = chrono::Utc::now().timestamp() / 60;
-    format!("inferq:gemini:rpm:{}:{}:{}", backend_id, model, minute)
+    format!("veronex:gemini:rpm:{}:{}:{}", backend_id, model, minute)
 }
 
 /// Valkey key for per-(backend, model) RPD counter.
 /// Bucketed by UTC date — TTL=90000s (~25h).
 fn gemini_rpd_key(backend_id: uuid::Uuid, model: &str) -> String {
     let date = chrono::Utc::now().format("%Y-%m-%d");
-    format!("inferq:gemini:rpd:{}:{}:{}", backend_id, model, date)
+    format!("veronex:gemini:rpd:{}:{}:{}", backend_id, model, date)
 }
 
 /// Returns `(rpm_exhausted, rpd_exhausted)` for a given free-tier backend + model.
@@ -210,20 +232,29 @@ pub async fn increment_gemini_counters(
 
 /// Pick the best backend from the registry for the given type and model.
 ///
+/// `tier_filter` restricts which Gemini backends are considered:
+///   - `Some("free")` — only `is_free_tier=true` backends; no paid fallback.
+///   - `None` (default) — auto: free-tier first, paid fallback when exhausted.
+///
 /// Gemini dispatch rules:
 ///   - Free-tier backends checked first (registration order).
 ///   - RPD exhausted → skip this backend for today.
 ///   - RPM exhausted but RPD ok → ALL free-tier backends are RPM-limited:
 ///       sleep until next minute boundary, then retry (up to MAX_RPM_RETRIES times).
-///   - All free-tier RPD-exhausted → fall back to paid.
+///   - All free-tier RPD-exhausted → fall back to paid (unless tier_filter="free").
+///   - Paid backends: if model_selection_repo has rows for the backend and the
+///     requested model is NOT enabled, that paid backend is skipped.
 ///
 /// Ollama: picks the server with the most available VRAM.
 pub async fn pick_best_backend(
     registry: &dyn LlmBackendRegistry,
     policy_repo: Option<&dyn GeminiPolicyRepository>,
+    model_selection_repo: Option<&dyn BackendModelSelectionRepository>,
+    ollama_model_repo: Option<&dyn OllamaModelRepository>,
     bt: &BackendType,
     model_name: &str,
     valkey: Option<&fred::clients::RedisPool>,
+    tier_filter: Option<&str>,
 ) -> Result<LlmBackend> {
     let all = registry.list_all().await?;
     let candidates: Vec<LlmBackend> = all
@@ -240,12 +271,41 @@ pub async fn pick_best_backend(
 
     match bt {
         BackendType::Gemini => {
-            pick_gemini_backend(candidates, policy_repo, model_name, valkey).await
+            pick_gemini_backend(candidates, policy_repo, model_selection_repo, model_name, valkey, tier_filter).await
         }
 
         BackendType::Ollama => {
+            // Filter to backends that have the requested model synced (if DB is populated).
+            let filtered_candidates = if let Some(repo) = ollama_model_repo {
+                if !model_name.is_empty() {
+                    match repo.backends_for_model(model_name).await {
+                        Ok(ids) if !ids.is_empty() => {
+                            let id_set: std::collections::HashSet<uuid::Uuid> =
+                                ids.into_iter().collect();
+                            let filtered: Vec<_> = candidates
+                                .iter()
+                                .filter(|b| id_set.contains(&b.id))
+                                .cloned()
+                                .collect();
+                            if filtered.is_empty() {
+                                // Model not found in DB — fall back to all candidates.
+                                candidates
+                            } else {
+                                filtered
+                            }
+                        }
+                        // DB empty or error → no filter, use all candidates.
+                        _ => candidates,
+                    }
+                } else {
+                    candidates
+                }
+            } else {
+                candidates
+            };
+
             let mut best: Option<(LlmBackend, i64)> = None;
-            for b in candidates {
+            for b in filtered_candidates {
                 let avail = get_ollama_available_vram_mb(&b, valkey).await;
                 match &best {
                     None => best = Some((b, avail)),
@@ -265,8 +325,10 @@ const MAX_RPM_RETRIES: u32 = 3;
 async fn pick_gemini_backend(
     candidates: Vec<LlmBackend>,
     policy_repo: Option<&dyn GeminiPolicyRepository>,
+    model_selection_repo: Option<&dyn BackendModelSelectionRepository>,
     model_name: &str,
     valkey: Option<&fred::clients::RedisPool>,
+    tier_filter: Option<&str>,
 ) -> Result<LlmBackend> {
     // Look up the shared rate-limit policy for this model.
     let policy = if let Some(repo) = policy_repo {
@@ -278,11 +340,49 @@ async fn pick_gemini_backend(
     let rpd_limit = policy.as_ref().map(|p| p.rpd_limit).unwrap_or(0);
     let available_on_free_tier = policy.as_ref().map(|p| p.available_on_free_tier).unwrap_or(true);
 
-    let (free_backends, paid_backends): (Vec<_>, Vec<_>) =
+    let (free_backends_all, raw_paid_backends_all): (Vec<_>, Vec<_>) =
         candidates.into_iter().partition(|b| b.is_free_tier);
+
+    // Apply tier filter: restrict which pools are considered.
+    let (free_backends, raw_paid_backends) = match tier_filter {
+        Some("free") => (free_backends_all, Vec::new()),  // free only, no paid fallback
+        _ => (free_backends_all, raw_paid_backends_all),  // auto: free-first, paid-fallback
+    };
+
+    // Filter paid backends by model selection: if a backend has selection rows
+    // and the requested model is not enabled, skip that backend.
+    let mut paid_backends: Vec<LlmBackend> = Vec::new();
+    for b in raw_paid_backends {
+        if let Some(repo) = model_selection_repo {
+            match repo.list_enabled(b.id).await {
+                Ok(enabled) if !enabled.is_empty() => {
+                    if enabled.iter().any(|m| m == model_name) {
+                        paid_backends.push(b);
+                    } else {
+                        tracing::debug!(
+                            backend_id = %b.id,
+                            name = %b.name,
+                            model_name = %model_name,
+                            "model not in paid backend's enabled list, skipping"
+                        );
+                    }
+                }
+                // No rows or error → no restriction, include this backend.
+                _ => paid_backends.push(b),
+            }
+        } else {
+            paid_backends.push(b);
+        }
+    }
 
     // If the model is not available on free tier, skip free-tier backends entirely.
     if !available_on_free_tier {
+        if tier_filter == Some("free") {
+            return Err(anyhow::anyhow!(
+                "model '{}' is not available on free tier (policy restriction)",
+                model_name
+            ));
+        }
         if let Some(paid) = paid_backends.first() {
             tracing::info!(
                 model_name = %model_name,

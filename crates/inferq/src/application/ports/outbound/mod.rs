@@ -1,5 +1,8 @@
 pub mod api_key_repository;
+pub mod backend_model_selection;
+pub mod gemini_model_repository;
 pub mod gemini_policy_repository;
+pub mod gemini_sync_config_repository;
 pub mod gpu_server_registry;
 pub mod inference_backend;
 pub mod job_repository;
@@ -7,5 +10,7 @@ pub mod model_manager_port;
 pub mod llm_backend_registry;
 pub mod model_repository;
 pub mod observability_port;
+pub mod ollama_model_repository;
+pub mod ollama_sync_job_repository;
 pub mod queue_port;
 pub mod stream_port;

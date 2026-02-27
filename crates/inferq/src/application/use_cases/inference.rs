@@ -10,12 +10,14 @@ use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
+use crate::application::ports::outbound::backend_model_selection::BackendModelSelectionRepository;
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
 use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
 use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::{InferenceEvent, ObservabilityPort};
+use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{BackendType, FinishReason, JobStatus};
 use crate::domain::value_objects::{JobId, ModelName, Prompt, StreamToken};
@@ -23,7 +25,7 @@ use crate::infrastructure::outbound::backend_router::{get_ollama_available_vram_
 
 // ── Queue key ──────────────────────────────────────────────────────────────────
 
-const QUEUE_KEY: &str = "inferq:queue:jobs";
+const QUEUE_KEY: &str = "veronex:queue:jobs";
 
 // ── In-memory job store ────────────────────────────────────────────────────────
 
@@ -35,6 +37,8 @@ struct JobEntry {
     /// API key that submitted this job — used for TPM accounting.
     api_key_id: Option<Uuid>,
     notify: Arc<Notify>,
+    /// Gemini tier routing preference: "free" = free-tier only, None = auto (free→paid fallback).
+    gemini_tier: Option<String>,
 }
 
 // ── Use-case implementation ────────────────────────────────────────────────────
@@ -45,6 +49,10 @@ pub struct InferenceUseCaseImpl {
     registry: Arc<dyn LlmBackendRegistry>,
     /// Shared Gemini rate-limit policies (per model). Used by pick_best_backend.
     gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
+    /// Per-backend model selection (paid Gemini only). Used by pick_best_backend.
+    model_selection_repo: Option<Arc<dyn BackendModelSelectionRepository>>,
+    /// Global Ollama model pool — filters backends by model availability.
+    ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     job_repo: Arc<dyn JobRepository>,
     valkey_pool: Option<fred::clients::RedisPool>,
     observability: Option<Arc<dyn ObservabilityPort>>,
@@ -59,6 +67,8 @@ impl InferenceUseCaseImpl {
     pub fn new(
         registry: Arc<dyn LlmBackendRegistry>,
         gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
+        model_selection_repo: Option<Arc<dyn BackendModelSelectionRepository>>,
+        ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
         job_repo: Arc<dyn JobRepository>,
         valkey_pool: Option<fred::clients::RedisPool>,
         observability: Option<Arc<dyn ObservabilityPort>>,
@@ -67,6 +77,8 @@ impl InferenceUseCaseImpl {
         Self {
             registry,
             gemini_policy_repo,
+            model_selection_repo,
+            ollama_model_repo,
             job_repo,
             valkey_pool,
             observability,
@@ -96,12 +108,16 @@ impl InferenceUseCaseImpl {
         let model_manager = self.model_manager.clone();
         let busy_backends = self.busy_backends.clone();
         let gemini_policy_repo = self.gemini_policy_repo.clone();
+        let model_selection_repo = self.model_selection_repo.clone();
+        let ollama_model_repo = self.ollama_model_repo.clone();
 
         tokio::spawn(async move {
             queue_dispatcher_loop(
                 jobs,
                 registry,
                 gemini_policy_repo,
+                model_selection_repo,
+                ollama_model_repo,
                 job_repo,
                 valkey_pool,
                 observability,
@@ -156,6 +172,7 @@ impl InferenceUseCaseImpl {
                     done: false,
                     api_key_id: None,
                     notify: Arc::new(Notify::new()),
+                    gemini_tier: None, // tier preference is lost on restart → auto-routing
                 });
             }
 
@@ -180,9 +197,12 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         api_key_id: Option<Uuid>,
     ) -> Result<JobId> {
         let job_id = JobId::new();
-        let backend = match backend_type {
-            "gemini" => BackendType::Gemini,
-            _ => BackendType::Ollama,
+        // Parse backend string: "gemini-free" routes to free-tier Gemini only;
+        // "gemini" uses auto-routing (free-first, paid-fallback).
+        let (backend, gemini_tier) = match backend_type {
+            "gemini-free" => (BackendType::Gemini, Some("free".to_string())),
+            "gemini" => (BackendType::Gemini, None),
+            _ => (BackendType::Ollama, None),
         };
 
         let job = InferenceJob {
@@ -215,6 +235,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     done: false,
                     api_key_id,
                     notify: Arc::new(Notify::new()),
+                    gemini_tier: gemini_tier.clone(),
                 },
             );
         }
@@ -234,6 +255,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                         self.jobs.clone(),
                         self.registry.clone(),
                         self.gemini_policy_repo.clone(),
+                        self.model_selection_repo.clone(),
+                        self.ollama_model_repo.clone(),
                         self.job_repo.clone(),
                         self.valkey_pool.clone(),
                         self.observability.clone(),
@@ -241,6 +264,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                         self.busy_backends.clone(),
                         uuid,
                         job,
+                        gemini_tier,
                     );
                 }
             }
@@ -250,6 +274,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 self.jobs.clone(),
                 self.registry.clone(),
                 self.gemini_policy_repo.clone(),
+                self.model_selection_repo.clone(),
+                self.ollama_model_repo.clone(),
                 self.job_repo.clone(),
                 None,
                 self.observability.clone(),
@@ -257,6 +283,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 self.busy_backends.clone(),
                 uuid,
                 job,
+                gemini_tier,
             );
         }
 
@@ -265,7 +292,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
     async fn process(&self, job_id: &JobId) -> Result<()> {
         let uuid = job_id.0;
-        let (job, api_key_id) = {
+        let (job, api_key_id, gemini_tier) = {
             let guard = self.jobs.lock().await;
             let entry = guard
                 .get(&uuid)
@@ -278,7 +305,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 return Ok(());
             }
 
-            (entry.job.clone(), entry.api_key_id)
+            (entry.job.clone(), entry.api_key_id, entry.gemini_tier.clone())
         };
         let _ = api_key_id; // used in spawned path; process() ignores it
 
@@ -286,9 +313,12 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         let backend_cfg = match pick_best_backend(
             &*self.registry,
             self.gemini_policy_repo.as_deref(),
+            self.model_selection_repo.as_deref(),
+            self.ollama_model_repo.as_deref(),
             &job.backend,
             job.model_name.as_str(),
             self.valkey_pool.as_ref(),
+            gemini_tier.as_deref(),
         )
         .await
         {
@@ -422,6 +452,8 @@ fn spawn_job_direct(
     jobs: Arc<Mutex<HashMap<Uuid, JobEntry>>>,
     registry: Arc<dyn LlmBackendRegistry>,
     gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
+    model_selection_repo: Option<Arc<dyn BackendModelSelectionRepository>>,
+    ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     job_repo: Arc<dyn JobRepository>,
     valkey_pool: Option<fred::clients::RedisPool>,
     observability: Option<Arc<dyn ObservabilityPort>>,
@@ -429,11 +461,14 @@ fn spawn_job_direct(
     busy_backends: Arc<std::sync::Mutex<HashSet<Uuid>>>,
     uuid: Uuid,
     job: InferenceJob,
+    gemini_tier: Option<String>,
 ) {
     tokio::spawn(async move {
         // Pick a backend from the registry.
         let policy_ref = gemini_policy_repo.as_deref();
-        let backend_cfg = match pick_best_backend(&*registry, policy_ref, &job.backend, job.model_name.as_str(), valkey_pool.as_ref()).await {
+        let selection_ref = model_selection_repo.as_deref();
+        let ollama_ref = ollama_model_repo.as_deref();
+        let backend_cfg = match pick_best_backend(&*registry, policy_ref, selection_ref, ollama_ref, &job.backend, job.model_name.as_str(), valkey_pool.as_ref(), gemini_tier.as_deref()).await {
             Ok(cfg) => cfg,
             Err(e) => {
                 tracing::error!(job_id = %uuid, "no backend available: {e}");
@@ -483,6 +518,8 @@ async fn queue_dispatcher_loop(
     jobs: Arc<Mutex<HashMap<Uuid, JobEntry>>>,
     registry: Arc<dyn LlmBackendRegistry>,
     _gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
+    _model_selection_repo: Option<Arc<dyn BackendModelSelectionRepository>>,
+    _ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     job_repo: Arc<dyn JobRepository>,
     valkey_pool: fred::clients::RedisPool,
     observability: Option<Arc<dyn ObservabilityPort>>,
@@ -518,10 +555,11 @@ async fn queue_dispatcher_loop(
         };
 
         // Retrieve job from in-memory store (fast path) or DB (recovery path).
-        let job = {
+        // Also read gemini_tier: "free" = free-tier only, None = auto-routing.
+        let (job, gemini_tier) = {
             let guard = jobs.lock().await;
             if let Some(entry) = guard.get(&uuid) {
-                entry.job.clone()
+                (entry.job.clone(), entry.gemini_tier.clone())
             } else {
                 drop(guard);
                 let job_id = crate::domain::value_objects::JobId(uuid);
@@ -535,8 +573,9 @@ async fn queue_dispatcher_loop(
                             done: false,
                             api_key_id: None,
                             notify: Arc::new(Notify::new()),
+                            gemini_tier: None,
                         });
-                        j
+                        (j, None)
                     }
                     Ok(None) => {
                         tracing::warn!(%uuid, "queued job not found in DB — skipping");
@@ -554,7 +593,13 @@ async fn queue_dispatcher_loop(
         let backend_cfg = registry.list_all().await.unwrap_or_default();
         let candidates: Vec<_> = backend_cfg
             .into_iter()
-            .filter(|b| b.is_active && b.backend_type == job.backend)
+            .filter(|b| {
+                b.is_active && b.backend_type == job.backend
+                    && match gemini_tier.as_deref() {
+                        Some("free") => b.is_free_tier,
+                        _ => true,
+                    }
+            })
             .collect();
 
         // Collect VRAM availability for each candidate.
@@ -957,7 +1002,7 @@ pub async fn record_tpm(
     }
 
     let minute = chrono::Utc::now().timestamp() / 60;
-    let key = format!("inferq:ratelimit:tpm:{}:{}", api_key_id, minute);
+    let key = format!("veronex:ratelimit:tpm:{}:{}", api_key_id, minute);
 
     let _: i64 = pool.incr_by(&key, tokens as i64).await?;
     let _: bool = pool.expire(&key, 120).await?;

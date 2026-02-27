@@ -4,18 +4,18 @@ extensions:
 
 receivers:
   # Scrape node-exporter instances deployed alongside Ollama servers.
-  # Targets are fetched dynamically from inferq via Prometheus HTTP SD.
-  # Register node-exporter URLs in the inferq admin → Backends page.
+  # Targets are fetched dynamically from veronex via Prometheus HTTP SD.
+  # Register node-exporter URLs in the veronex admin → Backends page.
   prometheus:
     config:
       scrape_configs:
         - job_name: node-exporter
           scrape_interval: 30s
           http_sd_configs:
-            - url: http://inferq:3000/v1/metrics/targets
+            - url: http://veronex:3000/v1/metrics/targets
               refresh_interval: 30s
 
-  # OTLP receiver for application traces (inferq service).
+  # OTLP receiver for application traces (veronex service).
   otlp:
     protocols:
       grpc:
@@ -37,9 +37,9 @@ exporters:
   # Auto-creates otel_metrics_*, otel_traces tables with OTLP-native schema.
   clickhouse:
     endpoint: tcp://clickhouse:9000
-    database: inferq
-    username: inferq
-    password: inferq
+    database: veronex
+    username: veronex
+    password: veronex
     metrics_table_name: otel_metrics
     traces_table_name: otel_traces
     logs_table_name: otel_logs

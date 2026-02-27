@@ -5,26 +5,31 @@ use anyhow::Result;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
-use inferq::application::ports::inbound::inference_use_case::InferenceUseCase;
-use inferq::application::ports::outbound::api_key_repository::ApiKeyRepository;
-use inferq::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
-use inferq::application::ports::outbound::model_manager_port::ModelManagerPort;
-use inferq::application::ports::outbound::observability_port::ObservabilityPort;
-use inferq::application::use_cases::InferenceUseCaseImpl;
-use inferq::domain::entities::ApiKey;
-use inferq::domain::enums::BackendType;
-use inferq::domain::services::api_key_generator::hash_api_key;
-use inferq::infrastructure::inbound::http::router::build_app;
-use inferq::infrastructure::inbound::http::state::AppState;
-use inferq::infrastructure::outbound::health_checker::{check_backend, start_health_checker};
-use inferq::infrastructure::outbound::model_manager::OllamaModelManager;
-use inferq::infrastructure::outbound::observability::ClickHouseObservabilityAdapter;
-use inferq::infrastructure::outbound::persistence::api_key_repository::PostgresApiKeyRepository;
-use inferq::infrastructure::outbound::persistence::backend_registry::PostgresBackendRegistry;
-use inferq::infrastructure::outbound::persistence::database;
-use inferq::infrastructure::outbound::persistence::gemini_policy_repository::PostgresGeminiPolicyRepository;
-use inferq::infrastructure::outbound::persistence::gpu_server_registry::PostgresGpuServerRegistry;
-use inferq::infrastructure::outbound::persistence::job_repository::PostgresJobRepository;
+use veronex::application::ports::inbound::inference_use_case::InferenceUseCase;
+use veronex::application::ports::outbound::api_key_repository::ApiKeyRepository;
+use veronex::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
+use veronex::application::ports::outbound::model_manager_port::ModelManagerPort;
+use veronex::application::ports::outbound::observability_port::ObservabilityPort;
+use veronex::application::use_cases::InferenceUseCaseImpl;
+use veronex::domain::entities::ApiKey;
+use veronex::domain::enums::BackendType;
+use veronex::domain::services::api_key_generator::hash_api_key;
+use veronex::infrastructure::inbound::http::router::build_app;
+use veronex::infrastructure::inbound::http::state::AppState;
+use veronex::infrastructure::outbound::health_checker::{check_backend, start_health_checker};
+use veronex::infrastructure::outbound::model_manager::OllamaModelManager;
+use veronex::infrastructure::outbound::observability::ClickHouseObservabilityAdapter;
+use veronex::infrastructure::outbound::persistence::api_key_repository::PostgresApiKeyRepository;
+use veronex::infrastructure::outbound::persistence::backend_model_selection::PostgresBackendModelSelectionRepository;
+use veronex::infrastructure::outbound::persistence::backend_registry::PostgresBackendRegistry;
+use veronex::infrastructure::outbound::persistence::database;
+use veronex::infrastructure::outbound::persistence::gemini_model_repository::PostgresGeminiModelRepository;
+use veronex::infrastructure::outbound::persistence::gemini_policy_repository::PostgresGeminiPolicyRepository;
+use veronex::infrastructure::outbound::persistence::gemini_sync_config::PostgresGeminiSyncConfigRepository;
+use veronex::infrastructure::outbound::persistence::gpu_server_registry::PostgresGpuServerRegistry;
+use veronex::infrastructure::outbound::persistence::job_repository::PostgresJobRepository;
+use veronex::infrastructure::outbound::persistence::ollama_model_repository::PostgresOllamaModelRepository;
+use veronex::infrastructure::outbound::persistence::ollama_sync_job_repository::PostgresOllamaSyncJobRepository;
 
 // ── Entry point ────────────────────────────────────────────────────
 
@@ -40,16 +45,16 @@ async fn main() -> Result<()> {
 
     // ── Config ─────────────────────────────────────────────────────
     let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://inferq:inferq@localhost:5433/inferq".to_string());
+        .unwrap_or_else(|_| "postgres://veronex:veronex@localhost:5433/veronex".to_string());
 
     let valkey_url = std::env::var("VALKEY_URL").ok();
 
     let clickhouse_url =
         std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
-    let clickhouse_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "inferq".to_string());
+    let clickhouse_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "veronex".to_string());
     let clickhouse_password =
-        std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_else(|_| "inferq".to_string());
-    let clickhouse_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "inferq".to_string());
+        std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_else(|_| "veronex".to_string());
+    let clickhouse_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "veronex".to_string());
     let clickhouse_enabled = std::env::var("CLICKHOUSE_ENABLED")
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
@@ -122,10 +127,20 @@ async fn main() -> Result<()> {
     let job_repo = Arc::new(PostgresJobRepository::new(pg_pool.clone()));
     let backend_registry: Arc<dyn LlmBackendRegistry> =
         Arc::new(PostgresBackendRegistry::new(pg_pool.clone()));
-    let gpu_server_registry: Arc<dyn inferq::application::ports::outbound::gpu_server_registry::GpuServerRegistry> =
+    let gpu_server_registry: Arc<dyn veronex::application::ports::outbound::gpu_server_registry::GpuServerRegistry> =
         Arc::new(PostgresGpuServerRegistry::new(pg_pool.clone()));
-    let gemini_policy_repo: Arc<dyn inferq::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository> =
+    let gemini_policy_repo: Arc<dyn veronex::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository> =
         Arc::new(PostgresGeminiPolicyRepository::new(pg_pool.clone()));
+    let model_selection_repo: Arc<dyn veronex::application::ports::outbound::backend_model_selection::BackendModelSelectionRepository> =
+        Arc::new(PostgresBackendModelSelectionRepository::new(pg_pool.clone()));
+    let gemini_sync_config_repo: Arc<dyn veronex::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository> =
+        Arc::new(PostgresGeminiSyncConfigRepository::new(pg_pool.clone()));
+    let gemini_model_repo: Arc<dyn veronex::application::ports::outbound::gemini_model_repository::GeminiModelRepository> =
+        Arc::new(PostgresGeminiModelRepository::new(pg_pool.clone()));
+    let ollama_model_repo: Arc<dyn veronex::application::ports::outbound::ollama_model_repository::OllamaModelRepository> =
+        Arc::new(PostgresOllamaModelRepository::new(pg_pool.clone()));
+    let ollama_sync_job_repo: Arc<dyn veronex::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository> =
+        Arc::new(PostgresOllamaSyncJobRepository::new(pg_pool.clone()));
 
     // ── Bootstrap admin key ────────────────────────────────────────
     // If BOOTSTRAP_API_KEY is set, create it in the DB if it doesn't exist yet.
@@ -146,6 +161,7 @@ async fn main() -> Result<()> {
                     rate_limit_tpm: 0,
                     expires_at: None,
                     created_at: chrono::Utc::now(),
+                    deleted_at: None,
                 };
                 match api_key_repo.create(&key).await {
                     Ok(()) => tracing::info!("bootstrap admin key created"),
@@ -157,7 +173,7 @@ async fn main() -> Result<()> {
     }
 
     // ── Background backend health checker ──────────────────────────
-    // Also polls inferq-agent metrics (GPU temp/VRAM/RAM) when agent_url is set,
+    // Also polls veronex-agent metrics (GPU temp/VRAM/RAM) when agent_url is set,
     // and caches the result in Valkey for the VRAM-aware dispatcher.
     start_health_checker(backend_registry.clone(), 30, valkey_pool.clone());
 
@@ -169,7 +185,7 @@ async fn main() -> Result<()> {
         let existing = backend_registry.list_all().await.unwrap_or_default();
         let has_ollama = existing.iter().any(|b| matches!(b.backend_type, BackendType::Ollama));
         if !has_ollama {
-            let ollama_backend = inferq::domain::entities::LlmBackend {
+            let ollama_backend = veronex::domain::entities::LlmBackend {
                 id: uuid::Uuid::now_v7(),
                 name: "local-ollama".to_string(),
                 backend_type: BackendType::Ollama,
@@ -181,11 +197,11 @@ async fn main() -> Result<()> {
                 server_id: None,
                 agent_url: None,
                 is_free_tier: false,
-                status: inferq::domain::enums::LlmBackendStatus::Offline,
+                status: veronex::domain::enums::LlmBackendStatus::Offline,
                 registered_at: chrono::Utc::now(),
             };
             let initial_status = check_backend(&http_client, &ollama_backend).await;
-            let ollama_backend = inferq::domain::entities::LlmBackend {
+            let ollama_backend = veronex::domain::entities::LlmBackend {
                 status: initial_status,
                 ..ollama_backend
             };
@@ -199,7 +215,7 @@ async fn main() -> Result<()> {
         if let Some(ref key) = gemini_api_key {
             let has_gemini = existing.iter().any(|b| matches!(b.backend_type, BackendType::Gemini));
             if !has_gemini {
-                let gemini_backend = inferq::domain::entities::LlmBackend {
+                let gemini_backend = veronex::domain::entities::LlmBackend {
                     id: uuid::Uuid::now_v7(),
                     name: "gemini".to_string(),
                     backend_type: BackendType::Gemini,
@@ -211,11 +227,11 @@ async fn main() -> Result<()> {
                     server_id: None,
                     agent_url: None,
                     is_free_tier: false,
-                    status: inferq::domain::enums::LlmBackendStatus::Offline,
+                    status: veronex::domain::enums::LlmBackendStatus::Offline,
                     registered_at: chrono::Utc::now(),
                 };
                 let initial_status = check_backend(&http_client, &gemini_backend).await;
-                let gemini_backend = inferq::domain::entities::LlmBackend {
+                let gemini_backend = veronex::domain::entities::LlmBackend {
                     status: initial_status,
                     ..gemini_backend
                 };
@@ -231,6 +247,8 @@ async fn main() -> Result<()> {
     let use_case_impl = Arc::new(InferenceUseCaseImpl::new(
         backend_registry.clone(), // registry used for VRAM-aware dynamic routing
         Some(gemini_policy_repo.clone()),
+        Some(model_selection_repo.clone()),
+        Some(ollama_model_repo.clone()),
         job_repo,
         valkey_pool.clone(),
         observability,
@@ -253,6 +271,11 @@ async fn main() -> Result<()> {
         backend_registry,
         gpu_server_registry,
         gemini_policy_repo,
+        gemini_sync_config_repo,
+        gemini_model_repo,
+        model_selection_repo,
+        ollama_model_repo,
+        ollama_sync_job_repo,
         valkey_pool,
         clickhouse_client,
         pg_pool,
@@ -262,7 +285,7 @@ async fn main() -> Result<()> {
 
     // ── Server ─────────────────────────────────────────────────────
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    tracing::info!("inferq listening on {addr}");
+    tracing::info!("veronex listening on {addr}");
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 
@@ -295,12 +318,12 @@ fn init_tracing() {
                     .with(otel_layer)
                     .init();
                 // Can't use tracing here — subscriber just initialised.
-                eprintln!("[inferq] OTel OTLP tracing enabled, exporting to {endpoint}");
+                eprintln!("[veronex] OTel OTLP tracing enabled, exporting to {endpoint}");
                 return;
             }
             Err(e) => {
                 eprintln!(
-                    "[inferq] WARN: failed to initialise OTLP tracing (falling back to stdout): {e}"
+                    "[veronex] WARN: failed to initialise OTLP tracing (falling back to stdout): {e}"
                 );
             }
         }
@@ -332,7 +355,7 @@ fn build_otlp_tracer(endpoint: &str) -> anyhow::Result<opentelemetry_sdk::trace:
         .build();
 
     use opentelemetry::trace::TracerProvider as _;
-    let tracer = provider.tracer("inferq");
+    let tracer = provider.tracer("veronex");
 
     // Register as the global tracer provider.
     opentelemetry::global::set_tracer_provider(provider);

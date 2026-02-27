@@ -82,6 +82,20 @@ impl GpuServerRegistry for PostgresGpuServerRegistry {
         }
     }
 
+    async fn update(&self, server: &GpuServer) -> Result<()> {
+        sqlx::query(
+            "UPDATE gpu_servers SET name = $2, node_exporter_url = $3 WHERE id = $1",
+        )
+        .bind(server.id)
+        .bind(&server.name)
+        .bind(&server.node_exporter_url)
+        .execute(&self.pool)
+        .await
+        .context("failed to update gpu server")?;
+
+        Ok(())
+    }
+
     async fn delete(&self, id: Uuid) -> Result<()> {
         sqlx::query("DELETE FROM gpu_servers WHERE id = $1")
             .bind(id)

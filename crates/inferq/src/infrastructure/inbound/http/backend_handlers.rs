@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -22,7 +23,7 @@ use super::state::AppState;
 const MODELS_CACHE_TTL: i64 = 3600;
 
 fn models_cache_key(id: Uuid) -> String {
-    format!("inferq:models:{id}")
+    format!("veronex:models:{id}")
 }
 
 /// Fetch the list of available models directly from the backend (bypasses cache).
@@ -175,6 +176,8 @@ pub struct UpdateBackendRequest {
     pub gpu_index: Option<i16>,
     pub server_id: Option<Uuid>,
     pub is_free_tier: Option<bool>,
+    /// Enable or disable the backend for routing.
+    pub is_active: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,6 +194,8 @@ pub struct BackendSummary {
     pub is_free_tier: bool,
     pub status: String,
     pub registered_at: DateTime<Utc>,
+    /// Masked API key shown in the management UI (e.g. `AIza...x1y2`). Gemini only.
+    pub api_key_masked: Option<String>,
 }
 
 impl From<LlmBackend> for BackendSummary {
@@ -206,6 +211,13 @@ impl From<LlmBackend> for BackendSummary {
             LlmBackendStatus::Degraded => "degraded",
         }
         .to_string();
+        let api_key_masked = b.api_key_encrypted.as_ref().map(|k| {
+            if k.len() <= 8 {
+                "****".to_string()
+            } else {
+                format!("{}...{}", &k[..4], &k[k.len() - 4..])
+            }
+        });
         Self {
             id: b.id,
             name: b.name,
@@ -219,6 +231,7 @@ impl From<LlmBackend> for BackendSummary {
             is_free_tier: b.is_free_tier,
             status,
             registered_at: b.registered_at,
+            api_key_masked,
         }
     }
 }
@@ -471,6 +484,7 @@ pub async fn update_backend(
     backend.gpu_index = req.gpu_index;   // null clears the field
     backend.server_id = req.server_id;  // null clears the field
     if let Some(v) = req.is_free_tier { backend.is_free_tier = v; }
+    if let Some(v) = req.is_active { backend.is_active = v; }
 
     if let Err(e) = registry.update(&backend).await {
         tracing::error!(%id, "update_backend: failed: {e}");
@@ -565,8 +579,7 @@ pub async fn list_backend_models(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let backend = match backend_registry(&state).get(id).await {
-        Ok(Some(b)) => b,
+    match backend_registry(&state).get(id).await {
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
@@ -582,6 +595,7 @@ pub async fn list_backend_models(
             )
                 .into_response();
         }
+        Ok(Some(_)) => {}
     };
 
     let cache_key = models_cache_key(id);
@@ -593,28 +607,50 @@ pub async fn list_backend_models(
         }
     }
 
-    // ── Cache miss: fetch live ───────────────────────────────────────────────────
-    match fetch_models_live(&backend).await {
-        Ok(models) => {
-            if let Some(ref pool) = state.valkey_pool {
-                store_models_cache(pool, &cache_key, &models).await;
-            }
-            (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response()
+    // ── Cache miss: return empty — use POST /v1/backends/{id}/models/sync to populate ──
+    (StatusCode::OK, Json(serde_json::json!({"models": []}))).into_response()
+}
+
+/// `GET /v1/backends/{id}/key` — return the stored (plain-text PoC) API key for a Gemini backend.
+///
+/// Requires admin auth. Returns `{"key": "AIza..."}`.
+pub async fn reveal_backend_key(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let backend = match backend_registry(&state).get(id).await {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "backend not found"})),
+            )
+                .into_response();
         }
         Err(e) => {
-            tracing::error!(%id, "failed to fetch models: {e}");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": e.to_string()})),
+            tracing::error!(%id, "reveal_backend_key: db error: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "database error"})),
             )
-                .into_response()
+                .into_response();
         }
+    };
+
+    match backend.api_key_encrypted {
+        Some(key) => (StatusCode::OK, Json(serde_json::json!({"key": key}))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no api key stored for this backend"})),
+        )
+            .into_response(),
     }
 }
 
 /// `POST /v1/backends/{id}/models/sync` — force-refresh the model list from the backend.
 ///
-/// Ignores the Valkey cache, fetches live, stores the fresh list, and returns it.
+/// For Ollama backends: ignores Valkey cache, fetches live, stores the fresh list.
+/// For Gemini backends: returns 400 — use `POST /v1/gemini/models/sync` instead.
 pub async fn sync_backend_models(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -638,11 +674,26 @@ pub async fn sync_backend_models(
         }
     };
 
+    // Gemini model sync is global — direct the caller to the correct endpoint.
+    if matches!(backend.backend_type, BackendType::Gemini) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Use POST /v1/gemini/models/sync to sync Gemini models globally"
+            })),
+        )
+            .into_response();
+    }
+
     match fetch_models_live(&backend).await {
         Ok(models) => {
             let cache_key = models_cache_key(id);
             if let Some(ref pool) = state.valkey_pool {
                 store_models_cache(pool, &cache_key, &models).await;
+            }
+            // Also persist to the global ollama_models table.
+            if let Err(e) = state.ollama_model_repo.sync_backend_models(id, &models).await {
+                tracing::warn!(%id, "failed to persist ollama models to DB (non-fatal): {e}");
             }
             tracing::info!(%id, count = models.len(), "model list synced");
             (
@@ -656,6 +707,97 @@ pub async fn sync_backend_models(
             (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── Selected-model handlers ────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct SelectedModelDto {
+    model_name: String,
+    is_enabled: bool,
+    synced_at: DateTime<Utc>,
+}
+
+/// `GET /v1/backends/{id}/selected-models` — list global Gemini models with per-backend enabled state.
+///
+/// Merges the global `gemini_models` pool with per-backend selection rows.
+/// Models that have never been toggled default to `is_enabled = false`.
+pub async fn list_selected_models(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    // 1. Global model pool.
+    let global = match state.gemini_model_repo.list().await {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!(%id, "list_selected_models: failed to list global models: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    // 2. Per-backend selections (enabled/disabled overrides).
+    let selections = match state.model_selection_repo.list(id).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(%id, "list_selected_models: failed to list selections: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "database error"})),
+            )
+                .into_response();
+        }
+    };
+    let sel_map: HashMap<String, bool> = selections
+        .into_iter()
+        .map(|s| (s.model_name, s.is_enabled))
+        .collect();
+
+    // 3. Merge: global model → enabled = stored override, default false.
+    let dtos: Vec<SelectedModelDto> = global
+        .into_iter()
+        .map(|m| {
+            let is_enabled = sel_map.get(&m.model_name).copied().unwrap_or(false);
+            SelectedModelDto {
+                model_name: m.model_name,
+                is_enabled,
+                synced_at: m.synced_at,
+            }
+        })
+        .collect();
+
+    (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetModelEnabledRequest {
+    pub is_enabled: bool,
+}
+
+/// `PATCH /v1/backends/{id}/selected-models/{model_name}` — toggle a model's enabled state.
+pub async fn set_model_enabled(
+    State(state): State<AppState>,
+    Path((id, model_name)): Path<(Uuid, String)>,
+    Json(req): Json<SetModelEnabledRequest>,
+) -> impl IntoResponse {
+    match state
+        .model_selection_repo
+        .set_enabled(id, &model_name, req.is_enabled)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            tracing::error!(%id, %model_name, "set_model_enabled: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "database error"})),
             )
                 .into_response()
         }

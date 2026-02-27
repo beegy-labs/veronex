@@ -5,6 +5,11 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[derive(Deserialize)]
+pub struct ToggleKeyRequest {
+    pub is_active: bool,
+}
+
 use crate::domain::entities::ApiKey;
 use crate::domain::services::api_key_generator::generate_api_key;
 
@@ -68,6 +73,7 @@ pub async fn create_key(
         rate_limit_tpm: req.rate_limit_tpm,
         expires_at: req.expires_at,
         created_at: now,
+        deleted_at: None,
     };
 
     state
@@ -117,8 +123,8 @@ pub async fn list_keys(
     Ok(Json(summaries))
 }
 
-/// DELETE /v1/keys/{id} — Revoke an API key.
-pub async fn revoke_key(
+/// DELETE /v1/keys/{id} — Soft-delete an API key (hidden from list, blocked from auth).
+pub async fn delete_key(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
@@ -126,7 +132,24 @@ pub async fn revoke_key(
 
     state
         .api_key_repo
-        .revoke(&uuid)
+        .soft_delete(&uuid)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PATCH /v1/keys/{id} — Toggle is_active (deactivate / reactivate).
+pub async fn toggle_key(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    Json(req): Json<ToggleKeyRequest>,
+) -> Result<StatusCode, StatusCode> {
+    let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    state
+        .api_key_repo
+        .set_active(&uuid, req.is_active)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

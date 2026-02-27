@@ -95,6 +95,59 @@ pub async fn list_gpu_servers(State(state): State<AppState>) -> impl IntoRespons
     }
 }
 
+// ── Update ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateGpuServerRequest {
+    pub name: Option<String>,
+    pub node_exporter_url: Option<String>,
+}
+
+/// `PATCH /v1/servers/{id}`
+pub async fn update_gpu_server(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateGpuServerRequest>,
+) -> impl IntoResponse {
+    let server = match state.gpu_server_registry.get(id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "server not found"})),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!(%id, "update gpu server: db error: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "database error"})),
+            )
+                .into_response();
+        }
+    };
+
+    let updated = GpuServer {
+        id: server.id,
+        name: req.name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or(server.name),
+        node_exporter_url: req.node_exporter_url.map(|u| u.trim().to_string()).map(|u| if u.is_empty() { None } else { Some(u) }).unwrap_or(server.node_exporter_url),
+        registered_at: server.registered_at,
+    };
+
+    if let Err(e) = state.gpu_server_registry.update(&updated).await {
+        tracing::error!(%id, "failed to update gpu server: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "database error"})),
+        )
+            .into_response();
+    }
+
+    tracing::info!(%id, name = %updated.name, "gpu server updated");
+    (StatusCode::OK, Json(GpuServerSummary::from(updated))).into_response()
+}
+
 /// `DELETE /v1/servers/{id}`
 pub async fn delete_gpu_server(
     State(state): State<AppState>,

@@ -1,29 +1,48 @@
-# inferq
+# Veronex
 
-> CDD Tier 1 — Entry Point (≤50 lines) | **Last Updated**: 2026-02-25
+> CDD Tier 1 — Entry Point (≤50 lines) | **Last Updated**: 2026-02-27
 
 ## Project
 
-Queue-based LLM inference server (Rust/Axum) with real-time SSE streaming,
-VRAM-aware multi-GPU routing, and hardware metrics dashboard.
+**Veronex** (Vero+Nexus) — Queue-based LLM inference gateway (Rust/Axum) with
+OpenAI-compatible API, VRAM-aware multi-GPU routing, Gemini free/paid tier management,
+and a Next.js admin dashboard. Crate: `veronex`, dir: `crates/inferq/`.
 
 ## Navigation
 
-| Action          | Read                                |
-| --------------- | ----------------------------------- |
-| Core rules      | `.ai/rules.md`                      |
-| Architecture    | `.ai/architecture.md`               |
-| Git & commits   | `.ai/git-flow.md`                   |
-| All docs        | `docs/llm/README.md`                |
-| Full policies   | `docs/llm/policies/`                |
-| Dev protocol    | `vendor/agentic-dev-protocol/` (submodule: https://github.com/beegy-labs/agentic-dev-protocol) |
+| Action | Read |
+|--------|------|
+| Core rules | `.ai/rules.md` |
+| Architecture | `.ai/architecture.md` |
+| Code patterns (2026) | `docs/llm/policies/patterns.md` |
+| Git & commits | `.ai/git-flow.md` |
+| Full docs index | `docs/llm/README.md` |
 
-## Docs Index (Tier 2 — topic-based)
+## Quick Docs Reference
+
+### Backend (Rust/Axum — `crates/inferq/`)
 
 | Topic | Path |
 |-------|------|
-| Backends (Ollama/Gemini, routing, rate limit rolling) | `docs/llm/backends.md` |
-| Hardware (GPU Server, node-exporter, metrics pipeline) | `docs/llm/hardware.md` |
-| Jobs (lifecycle, token observability, ClickHouse) | `docs/llm/jobs.md` |
-| Infrastructure (docker-compose, OTel, Helm, ports) | `docs/llm/infrastructure.md` |
-| Web (brand, design system, pages) | `docs/llm/web.md` |
+| OpenAI `/v1/chat/completions` | `docs/llm/backend/openai.md` |
+| API Keys + auth + rate limiting | `docs/llm/backend/api_keys.md` |
+| Job lifecycle + queue + API | `docs/llm/backend/jobs.md` |
+| Token observability + analytics | `docs/llm/backend/jobs-analytics.md` |
+| Ollama backends + VRAM routing | `docs/llm/backend/backends-ollama.md` |
+| Ollama global model sync + routing | `docs/llm/backend/backends-ollama-models.md` |
+| Gemini rate limits + tier routing | `docs/llm/backend/backends-gemini.md` |
+| Gemini model sync + selection | `docs/llm/backend/backends-gemini-models.md` |
+| GPU servers + node-exporter | `docs/llm/backend/hardware.md` |
+| Services + env + ports + DB migrations | `docs/llm/backend/infrastructure.md` |
+| OTel + Redpanda + Helm | `docs/llm/backend/infrastructure-otel.md` |
+
+### Frontend (Next.js — `web/`)
+
+| Topic | Path |
+|-------|------|
+| Brand + design tokens + i18n | `docs/llm/frontend/web.md` |
+| Servers page (/servers) | `docs/llm/frontend/web-servers.md` |
+| Providers page (/providers — Ollama + Gemini) | `docs/llm/frontend/web-providers.md` |
+| Jobs / Usage / Performance pages | `docs/llm/frontend/web-jobs.md` |
+| API Keys page | `docs/llm/frontend/web-keys.md` |
+| API Test + API Docs pages | `docs/llm/frontend/web-test.md` |

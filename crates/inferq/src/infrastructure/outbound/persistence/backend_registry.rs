@@ -194,8 +194,9 @@ impl LlmBackendRegistry for PostgresBackendRegistry {
                  gpu_index = $5,
                  server_id = $6,
                  agent_url = $7,
-                 is_free_tier = $8
-             WHERE id = $9",
+                 is_free_tier = $8,
+                 is_active = $9
+             WHERE id = $10",
         )
         .bind(&backend.name)
         .bind(&backend.url)
@@ -205,6 +206,7 @@ impl LlmBackendRegistry for PostgresBackendRegistry {
         .bind(backend.server_id)
         .bind(&backend.agent_url)
         .bind(backend.is_free_tier)
+        .bind(backend.is_active)
         .bind(backend.id)
         .execute(&self.pool)
         .await
