@@ -12,22 +12,23 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import { useTranslation } from '@/i18n'
 
 // ── Status styling ─────────────────────────────────────────────────────────────
 
 const STATUS_EXTRA: Record<string, string> = {
-  completed: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-  failed:    'bg-red-500/15 text-red-400 border-red-500/30',
-  cancelled: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
-  pending:   'bg-amber-500/15 text-amber-400 border-amber-500/30',
-  running:   'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  completed: 'bg-status-success/15 text-status-success-fg border-status-success/30',
+  failed:    'bg-status-error/15 text-status-error-fg border-status-error/30',
+  cancelled: 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30',
+  pending:   'bg-status-warning/15 text-status-warning-fg border-status-warning/30',
+  running:   'bg-status-info/15 text-status-info-fg border-status-info/30',
 }
 
 function StatusBadge({ status }: { status: string }) {
   return (
     <Badge
       variant="outline"
-      className={STATUS_EXTRA[status] ?? 'bg-slate-500/15 text-slate-400 border-slate-500/30'}
+      className={STATUS_EXTRA[status] ?? 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30'}
     >
       {status}
     </Badge>
@@ -68,6 +69,7 @@ function JobDetailModal({
   open: boolean
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const { data, isLoading } = useQuery<JobDetail>({
     queryKey: ['job-detail', jobId],
     queryFn: () => api.jobDetail(jobId!),
@@ -89,64 +91,64 @@ function JobDetailModal({
                 </span>
               </>
             ) : (
-              <span className="text-muted-foreground text-sm">Loading…</span>
+              <span className="text-muted-foreground text-sm">{t('common.loading')}</span>
             )}
           </DialogTitle>
         </DialogHeader>
 
         <div className="overflow-y-auto flex-1">
           {isLoading && (
-            <div className="p-6 text-center text-muted-foreground text-sm">Loading…</div>
+            <div className="p-6 text-center text-muted-foreground text-sm">{t('common.loading')}</div>
           )}
 
           {data && (
             <div className="flex flex-col gap-0 divide-y divide-border">
               {/* Timing row */}
               <div className="px-6 py-3 grid grid-cols-3 gap-x-4 gap-y-1 text-xs">
-                <MetaItem label="Created"   value={formatDate(data.created_at)} />
-                <MetaItem label="Started"   value={data.started_at   ? formatDate(data.started_at)   : '—'} />
-                <MetaItem label="Completed" value={data.completed_at ? formatDate(data.completed_at) : '—'} />
-                <MetaItem label="Latency"   value={formatDuration(data.latency_ms)} />
-                <MetaItem label="TTFT"      value={formatDuration(data.ttft_ms)} />
+                <MetaItem label={t('jobs.createdAt')}   value={formatDate(data.created_at)} />
+                <MetaItem label={t('jobs.startedAt')}   value={data.started_at   ? formatDate(data.started_at)   : '—'} />
+                <MetaItem label={t('jobs.completedAt')} value={data.completed_at ? formatDate(data.completed_at) : '—'} />
+                <MetaItem label={t('jobs.latency')}     value={formatDuration(data.latency_ms)} />
+                <MetaItem label={t('jobs.ttft')}        value={formatDuration(data.ttft_ms)} />
                 <MetaItem
-                  label="TPS"
+                  label={t('jobs.tps')}
                   value={data.tps != null ? `${data.tps.toFixed(1)} tok/s` : '—'}
                 />
                 <MetaItem
-                  label="Tokens"
+                  label={t('jobs.tokens')}
                   value={data.completion_tokens != null ? data.completion_tokens.toLocaleString() : '—'}
                 />
                 {data.api_key_name && (
-                  <MetaItem label="API Key" value={data.api_key_name} accent />
+                  <MetaItem label={t('jobs.apiKey')} value={data.api_key_name} accent />
                 )}
               </div>
 
               {/* Prompt */}
               <TextSection
-                label="Prompt"
+                label={t('jobs.prompt')}
                 text={data.prompt || '(empty)'}
-                labelClass="text-indigo-400"
+                labelClass="text-accent-brand"
               />
 
               {/* Result or error */}
               {data.status === 'failed' ? (
                 <TextSection
-                  label="Error"
-                  text={data.error || '(no error message)'}
-                  labelClass="text-red-400"
-                  textClass="text-red-300/80"
+                  label={t('jobs.error')}
+                  text={data.error || t('jobs.noError')}
+                  labelClass="text-status-error-fg"
+                  textClass="text-status-error-fg/80"
                 />
               ) : (
                 <TextSection
-                  label="Result"
+                  label={t('jobs.result')}
                   text={data.result_text || (
                     data.status === 'completed'
-                      ? '(no result stored)'
+                      ? t('jobs.noResult')
                       : data.status === 'running'
-                        ? '(processing…)'
-                        : '(pending)'
+                        ? t('jobs.processing')
+                        : `(${t('jobs.statuses.pending')})`
                   )}
-                  labelClass="text-emerald-400"
+                  labelClass="text-status-success-fg"
                 />
               )}
             </div>
@@ -194,12 +196,13 @@ function TextSection({
 // ── Job table ──────────────────────────────────────────────────────────────────
 
 export default function JobTable({ jobs }: { jobs: Job[] }) {
+  const { t } = useTranslation()
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   if (jobs.length === 0) {
     return (
       <Card>
-        <div className="p-8 text-center text-muted-foreground">No jobs found.</div>
+        <div className="p-8 text-center text-muted-foreground">{t('jobs.noJobsFound')}</div>
       </Card>
     )
   }
@@ -211,14 +214,14 @@ export default function JobTable({ jobs }: { jobs: Job[] }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>ID</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead>Backend</TableHead>
-                <TableHead>API Key</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="text-right">TTFT</TableHead>
-                <TableHead className="text-right">Latency</TableHead>
+                <TableHead>{t('jobs.id')}</TableHead>
+                <TableHead>{t('jobs.model')}</TableHead>
+                <TableHead>{t('jobs.backend')}</TableHead>
+                <TableHead>{t('jobs.apiKey')}</TableHead>
+                <TableHead>{t('jobs.status')}</TableHead>
+                <TableHead>{t('jobs.createdAt')}</TableHead>
+                <TableHead className="text-right">{t('jobs.ttft')}</TableHead>
+                <TableHead className="text-right">{t('jobs.latency')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

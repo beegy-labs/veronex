@@ -9,4 +9,9 @@
   body {
     @apply bg-background text-foreground;
   }
+  *:focus-visible {
+    outline: 4px solid var(--theme-focus-ring);
+    outline-offset: 4px;
+    border-radius: 2px;
+  }
 }

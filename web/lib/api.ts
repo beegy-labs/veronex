@@ -1,7 +1,7 @@
-import type { ApiKey, Backend, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiRateLimitPolicy, GpuServer, HourlyUsage, Job, JobDetail, NodeMetrics, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest, UpsertGeminiPolicyRequest, UsageAggregate } from './types'
+import type { ApiKey, Backend, BackendSelectedModel, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate } from './types'
 
-const BASE = process.env.NEXT_PUBLIC_INFERQ_API_URL ?? 'http://localhost:3001'
-const KEY  = process.env.NEXT_PUBLIC_INFERQ_ADMIN_KEY ?? ''
+const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
+const KEY  = process.env.NEXT_PUBLIC_VERONEX_ADMIN_KEY ?? ''
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -39,8 +39,14 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  revokeKey: (id: string) =>
+  deleteKey: (id: string) =>
     req<void>(`/v1/keys/${id}`, { method: 'DELETE' }),
+
+  toggleKeyActive: (id: string, is_active: boolean) =>
+    req<void>(`/v1/keys/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_active }),
+    }),
 
   submitInference: (body: { prompt: string; model: string; backend: string }) =>
     req<{ job_id: string }>('/v1/inference', {
@@ -54,6 +60,12 @@ export const api = {
   registerServer: (body: RegisterGpuServerRequest) =>
     req<{ id: string }>('/v1/servers', {
       method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updateServer: (id: string, body: UpdateGpuServerRequest) =>
+    req<GpuServer>(`/v1/servers/${id}`, {
+      method: 'PATCH',
       body: JSON.stringify(body),
     }),
 
@@ -93,6 +105,18 @@ export const api = {
   syncBackendModels: (id: string) =>
     req<{ models: string[]; synced: boolean }>(`/v1/backends/${id}/models/sync`, { method: 'POST' }),
 
+  backendKey: (id: string) =>
+    req<{ key: string }>(`/v1/backends/${id}/key`),
+
+  getSelectedModels: (backendId: string) =>
+    req<{ models: BackendSelectedModel[] }>(`/v1/backends/${backendId}/selected-models`),
+
+  setModelEnabled: (backendId: string, modelName: string, isEnabled: boolean) =>
+    req<void>(`/v1/backends/${backendId}/selected-models/${encodeURIComponent(modelName)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_enabled: isEnabled }),
+    }),
+
   usageAggregate: (hours = 24) =>
     req<UsageAggregate>(`/v1/usage?hours=${hours}`),
 
@@ -110,4 +134,37 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(body),
     }),
+
+  geminiSyncConfig: () =>
+    req<GeminiSyncConfig>('/v1/gemini/sync-config'),
+
+  setGeminiSyncConfig: (api_key: string) =>
+    req<void>('/v1/gemini/sync-config', {
+      method: 'PUT',
+      body: JSON.stringify({ api_key }),
+    }),
+
+  syncGeminiModels: () =>
+    req<{ models: string[]; count: number }>('/v1/gemini/models/sync', { method: 'POST' }),
+
+  syncGeminiStatus: () =>
+    req<GeminiStatusSyncResponse>('/v1/gemini/sync-status', { method: 'POST' }),
+
+  geminiModels: () =>
+    req<{ models: GeminiModel[] }>('/v1/gemini/models'),
+
+  ollamaModels: () =>
+    req<{ models: OllamaModelWithCount[] }>('/v1/ollama/models'),
+
+  syncOllamaModels: () =>
+    req<{ job_id: string; status: string }>('/v1/ollama/models/sync', { method: 'POST' }),
+
+  ollamaSyncStatus: () =>
+    req<OllamaSyncJob>('/v1/ollama/sync/status'),
+
+  ollamaModelBackends: (modelName: string) =>
+    req<{ backends: OllamaBackendForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/backends`),
+
+  ollamaBackendModels: (backendId: string) =>
+    req<{ models: string[] }>(`/v1/ollama/backends/${backendId}/models`),
 }

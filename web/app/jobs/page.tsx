@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import JobTable from '@/components/job-table'
@@ -15,17 +15,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useTranslation } from '@/i18n'
 
 const PAGE_SIZE = 50
-
-const STATUS_OPTIONS = [
-  { value: 'all',       label: 'All statuses' },
-  { value: 'pending',   label: 'Pending' },
-  { value: 'running',   label: 'Running' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'failed',    label: 'Failed' },
-  { value: 'cancelled', label: 'Cancelled' },
-]
 
 // ── Pagination helpers ─────────────────────────────────────────────────────────
 
@@ -48,10 +40,20 @@ function buildPageSlots(current: number, total: number): (number | '…')[] {
 // ── Page component ─────────────────────────────────────────────────────────────
 
 export default function JobsPage() {
+  const { t } = useTranslation()
   const [page, setPage]     = useState(0)
   const [status, setStatus] = useState('all')
   const [search, setSearch] = useState('')
   const [query, setQuery]   = useState('')   // committed search (on Enter)
+
+  const STATUS_OPTIONS = useMemo(() => [
+    { value: 'all',       label: t('jobs.allStatuses') },
+    { value: 'pending',   label: t('jobs.statuses.pending') },
+    { value: 'running',   label: t('jobs.statuses.running') },
+    { value: 'completed', label: t('jobs.statuses.completed') },
+    { value: 'failed',    label: t('jobs.statuses.failed') },
+    { value: 'cancelled', label: t('jobs.statuses.cancelled') },
+  ], [t])
 
   const offset = page * PAGE_SIZE
 
@@ -83,9 +85,9 @@ export default function JobsPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">Jobs</h1>
-          <p className="text-slate-400 mt-1 text-sm">
-            {data ? `${data.total.toLocaleString()} total` : 'Loading…'}
+          <h1 className="text-2xl font-bold tracking-tight">{t('jobs.title')}</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {data ? `${data.total.toLocaleString()} ${t('jobs.totalLabel')}` : t('common.loading')}
           </p>
         </div>
 
@@ -95,7 +97,7 @@ export default function JobsPage() {
             <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <Input
               className="pl-8 pr-8 w-56 h-9 text-sm"
-              placeholder="Search prompt…"
+              placeholder={t('jobs.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
@@ -116,7 +118,7 @@ export default function JobsPage() {
           {/* Status filter */}
           <Select value={status} onValueChange={(val) => { setStatus(val); setPage(0) }}>
             <SelectTrigger className="w-40 h-9">
-              <SelectValue placeholder="All statuses" />
+              <SelectValue placeholder={t('jobs.allStatuses')} />
             </SelectTrigger>
             <SelectContent>
               {STATUS_OPTIONS.map((opt) => (
@@ -130,28 +132,28 @@ export default function JobsPage() {
       {/* Active search badge */}
       {query && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>Searching for</span>
+          <span>{t('jobs.searchingFor')}</span>
           <span className="px-2 py-0.5 rounded bg-primary/15 text-primary font-mono text-xs">
             {query}
           </span>
           <button className="underline text-xs hover:text-foreground" onClick={clearSearch}>
-            clear
+            {t('jobs.clearSearch')}
           </button>
         </div>
       )}
 
       {isLoading && (
         <div className="flex h-48 items-center justify-center text-muted-foreground">
-          Loading jobs…
+          {t('jobs.loadingJobs')}
         </div>
       )}
 
       {error && (
         <Card className="border-destructive/50 bg-destructive/10">
           <CardContent className="p-6">
-            <p className="font-semibold text-destructive">Failed to load jobs</p>
+            <p className="font-semibold text-destructive">{t('jobs.failedJobs')}</p>
             <p className="text-sm mt-1 text-destructive/80">
-              {error instanceof Error ? error.message : 'Unknown error'}
+              {error instanceof Error ? error.message : t('common.unknownError')}
             </p>
           </CardContent>
         </Card>
@@ -165,7 +167,7 @@ export default function JobsPage() {
           {/* Range info */}
           <p className="text-sm text-muted-foreground tabular-nums">
             {data.total === 0
-              ? 'No jobs'
+              ? t('jobs.noJobs')
               : `${firstItem.toLocaleString()}–${lastItem.toLocaleString()} of ${data.total.toLocaleString()}`}
           </p>
 
