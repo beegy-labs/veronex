@@ -1,6 +1,6 @@
 # Core Development Rules
 
-> CDD Tier 1 — Essential rules for AI assistants | **Last Updated**: 2026-02-25
+> CDD Tier 1 — Essential rules for AI assistants | **Last Updated**: 2026-02-27
 
 ## Language Policy
 
@@ -40,13 +40,15 @@ Inbound Adapters → [Ports] → Application Core → [Ports] → Outbound Adapt
 | Business logic in adapters      | Use application layer use cases   |
 | Direct GPU call outside ports   | Use InferenceBackendPort          |
 | Hardcode secrets                | Use environment variables         |
-| Dispatch without queue          | Always RPUSH to Valkey queue      |
+| Dispatch without queue          | Always RPUSH to `veronex:queue:jobs` |
 | Edit `docs/en/` or `docs/kr/`  | Edit `.ai/` or `docs/llm/` only   |
 | Hardcode CSS colors in components | Reference `--theme-*` tokens    |
+| Use `Uuid::new_v4()` or `gen_random_uuid()` for PKs | Use `Uuid::now_v7()` (app) / `uuidv7()` (PG18) |
 
 | ALWAYS                          | Details                           |
 | ------------------------------- | --------------------------------- |
-| Enqueue before GPU work         | Serial processing guaranteed      |
+| Enqueue before GPU work         | `RPUSH veronex:queue:jobs`        |
 | Stream via SSE                  | Real-time token delivery          |
 | Define ports before adapters    | Dependency rule respected         |
 | Use `--theme-*` tokens in CSS   | `tokens.css` is the design SSOT   |
+| Check docs/llm/ before coding   | CDD-first: update docs then code  |
