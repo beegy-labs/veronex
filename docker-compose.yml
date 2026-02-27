@@ -1,17 +1,17 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
-      POSTGRES_DB: inferq
-      POSTGRES_USER: inferq
-      POSTGRES_PASSWORD: inferq
+      POSTGRES_DB: veronex
+      POSTGRES_USER: veronex
+      POSTGRES_PASSWORD: veronex
     ports:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U inferq -d inferq"]
+      test: ["CMD-SHELL", "pg_isready -U veronex -d veronex"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -33,9 +33,9 @@ services:
       - "8123:8123"
       - "9000:9000"
     environment:
-      CLICKHOUSE_DB: inferq
-      CLICKHOUSE_USER: inferq
-      CLICKHOUSE_PASSWORD: inferq
+      CLICKHOUSE_DB: veronex
+      CLICKHOUSE_USER: veronex
+      CLICKHOUSE_PASSWORD: veronex
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     volumes:
       - clickhouse_data:/var/lib/clickhouse
@@ -46,7 +46,7 @@ services:
       timeout: 5s
       retries: 10
 
-  inferq:
+  veronex:
     build:
       context: .
       dockerfile: Dockerfile
@@ -58,16 +58,16 @@ services:
       # exist and the collector will log a single debug message then do nothing.
       - /sys/class/drm:/sys/class/drm:ro
     environment:
-      DATABASE_URL: postgres://inferq:inferq@postgres:5432/inferq
+      DATABASE_URL: postgres://veronex:veronex@postgres:5432/veronex
       VALKEY_URL: redis://valkey:6379
       CLICKHOUSE_URL: http://clickhouse:8123
-      CLICKHOUSE_USER: inferq
-      CLICKHOUSE_PASSWORD: inferq
-      CLICKHOUSE_DB: inferq
+      CLICKHOUSE_USER: veronex
+      CLICKHOUSE_PASSWORD: veronex
+      CLICKHOUSE_DB: veronex
       CLICKHOUSE_ENABLED: "true"
       OLLAMA_URL: http://host.docker.internal:11434
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      BOOTSTRAP_API_KEY: ${BOOTSTRAP_API_KEY:-inferq-bootstrap-admin-key}
+      BOOTSTRAP_API_KEY: ${BOOTSTRAP_API_KEY:-veronex-bootstrap-admin-key}
       RUST_LOG: info
     depends_on:
       postgres:
@@ -118,26 +118,26 @@ services:
         condition: service_healthy
       redpanda:
         condition: service_healthy
-      inferq:
+      veronex:
         condition: service_started
     restart: unless-stopped
 
-  inferq-web:
+  veronex-web:
     build:
       context: ./web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_INFERQ_API_URL: http://localhost:3001
-        NEXT_PUBLIC_INFERQ_ADMIN_KEY: ${BOOTSTRAP_API_KEY:-inferq-bootstrap-admin-key}
+        NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
+        NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${BOOTSTRAP_API_KEY:-veronex-bootstrap-admin-key}
     ports:
       - "3002:3002"
     environment:
       PORT: 3002
       HOSTNAME: "0.0.0.0"
-      NEXT_PUBLIC_INFERQ_API_URL: http://localhost:3001
-      NEXT_PUBLIC_INFERQ_ADMIN_KEY: ${BOOTSTRAP_API_KEY:-inferq-bootstrap-admin-key}
+      NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
+      NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${BOOTSTRAP_API_KEY:-veronex-bootstrap-admin-key}
     depends_on:
-      - inferq
+      - veronex
 
 volumes:
   postgres_data:

@@ -39,11 +39,11 @@ pub async fn rate_limiter(
 
     // ── RPM check ────────────────────────────────────────────────────
     if api_key.rate_limit_rpm > 0 {
-        let key = format!("inferq:ratelimit:rpm:{}", api_key.id);
+        let key = format!("veronex:ratelimit:rpm:{}", api_key.id);
         let now_ms = chrono::Utc::now().timestamp_millis() as f64;
         // Each request gets a unique member so concurrent ms-level requests
         // are all counted separately.
-        let member = uuid::Uuid::new_v4().to_string();
+        let member = uuid::Uuid::now_v7().to_string();
 
         match check_rpm(pool, &key, now_ms, api_key.rate_limit_rpm as u64, &member).await {
             Ok(false) => {
@@ -60,7 +60,7 @@ pub async fn rate_limiter(
     // ── TPM check ────────────────────────────────────────────────────
     if api_key.rate_limit_tpm > 0 {
         let minute = current_minute();
-        let key = format!("inferq:ratelimit:tpm:{}:{}", api_key.id, minute);
+        let key = format!("veronex:ratelimit:tpm:{}:{}", api_key.id, minute);
 
         match check_tpm(pool, &key, api_key.rate_limit_tpm as u64).await {
             Ok(false) => {
@@ -188,10 +188,10 @@ mod tests {
     #[test]
     fn rate_limit_key_format() {
         let id = uuid::Uuid::now_v7();
-        let rpm_key = format!("inferq:ratelimit:rpm:{}", id);
-        let tpm_key = format!("inferq:ratelimit:tpm:{}:{}", id, current_minute());
-        assert!(rpm_key.starts_with("inferq:ratelimit:rpm:"));
-        assert!(tpm_key.starts_with("inferq:ratelimit:tpm:"));
+        let rpm_key = format!("veronex:ratelimit:rpm:{}", id);
+        let tpm_key = format!("veronex:ratelimit:tpm:{}:{}", id, current_minute());
+        assert!(rpm_key.starts_with("veronex:ratelimit:rpm:"));
+        assert!(tpm_key.starts_with("veronex:ratelimit:tpm:"));
         assert!(tpm_key.contains(&id.to_string()));
     }
 
