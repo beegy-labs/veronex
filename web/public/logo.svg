@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 172 44" fill="none">
   <defs>
     <linearGradient id="hg" x1="3.5" y1="5.8" x2="40.5" y2="38.2" gradientUnits="userSpaceOnUse">
-      <stop offset="0%"   stop-color="#4c1d95"/>
-      <stop offset="100%" stop-color="#7c3aed"/>
+      <stop offset="0%"   stop-color="#0d2518"/>
+      <stop offset="100%" stop-color="#16402e"/>
     </linearGradient>
   </defs>
 
@@ -17,6 +17,6 @@
     x="56" y="29"
     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
     font-size="20" font-weight="700" letter-spacing="-0.5"
-    fill="#5b21b6"
+    fill="#16402e"
   >Veronex</text>
 </svg>
