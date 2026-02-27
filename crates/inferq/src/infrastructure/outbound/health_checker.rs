@@ -196,7 +196,12 @@ pub fn start_health_checker(
                 }
             };
 
-            let active: Vec<_> = backends.into_iter().filter(|b| b.is_active).collect();
+            // Only auto-check Ollama backends. Gemini status is updated manually
+            // via POST /v1/gemini/sync-status to avoid unnecessary API quota usage.
+            let active: Vec<_> = backends
+                .into_iter()
+                .filter(|b| b.is_active && matches!(b.backend_type, BackendType::Ollama))
+                .collect();
 
             for backend in active {
                 // 1. Connectivity health check

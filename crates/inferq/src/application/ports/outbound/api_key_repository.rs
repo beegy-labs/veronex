@@ -18,6 +18,12 @@ pub trait ApiKeyRepository: Send + Sync {
 
     /// Revoke (soft-delete) a key by setting is_active = false.
     async fn revoke(&self, key_id: &Uuid) -> Result<()>;
+
+    /// Toggle is_active without hiding the key.
+    async fn set_active(&self, key_id: &Uuid, active: bool) -> Result<()>;
+
+    /// Soft-delete: set deleted_at so the key disappears from list and cannot authenticate.
+    async fn soft_delete(&self, key_id: &Uuid) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -48,14 +54,17 @@ mod tests {
 
         async fn get_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>> {
             let keys = self.keys.lock().await;
-            Ok(keys.iter().find(|k| k.key_hash == key_hash).cloned())
+            Ok(keys
+                .iter()
+                .find(|k| k.key_hash == key_hash && k.deleted_at.is_none())
+                .cloned())
         }
 
         async fn list_by_tenant(&self, tenant_id: &str) -> Result<Vec<ApiKey>> {
             let keys = self.keys.lock().await;
             Ok(keys
                 .iter()
-                .filter(|k| k.tenant_id == tenant_id)
+                .filter(|k| k.tenant_id == tenant_id && k.deleted_at.is_none())
                 .cloned()
                 .collect())
         }
@@ -64,6 +73,22 @@ mod tests {
             let mut keys = self.keys.lock().await;
             if let Some(key) = keys.iter_mut().find(|k| k.id == *key_id) {
                 key.is_active = false;
+            }
+            Ok(())
+        }
+
+        async fn set_active(&self, key_id: &Uuid, active: bool) -> Result<()> {
+            let mut keys = self.keys.lock().await;
+            if let Some(key) = keys.iter_mut().find(|k| k.id == *key_id) {
+                key.is_active = active;
+            }
+            Ok(())
+        }
+
+        async fn soft_delete(&self, key_id: &Uuid) -> Result<()> {
+            let mut keys = self.keys.lock().await;
+            if let Some(key) = keys.iter_mut().find(|k| k.id == *key_id) {
+                key.deleted_at = Some(chrono::Utc::now());
             }
             Ok(())
         }

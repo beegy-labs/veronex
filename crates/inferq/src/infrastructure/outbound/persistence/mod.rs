@@ -1,7 +1,12 @@
 pub mod api_key_repository;
+pub mod backend_model_selection;
+pub mod gemini_model_repository;
 pub mod gemini_policy_repository;
+pub mod gemini_sync_config;
 pub mod backend_registry;
 pub mod database;
 pub mod gpu_server_registry;
 pub mod job_repository;
 pub mod model_repository;
+pub mod ollama_model_repository;
+pub mod ollama_sync_job_repository;

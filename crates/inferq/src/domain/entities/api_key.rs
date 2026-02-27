@@ -18,6 +18,9 @@ pub struct ApiKey {
     pub rate_limit_tpm: i32,
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// Soft-delete timestamp. When set, key is hidden from list and blocked from auth.
+    #[serde(default)]
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 /// Returned once at key creation — contains the plaintext key.
@@ -46,6 +49,7 @@ mod tests {
             rate_limit_tpm: 0,
             expires_at: None,
             created_at: Utc::now(),
+            deleted_at: None,
         }
     }
 

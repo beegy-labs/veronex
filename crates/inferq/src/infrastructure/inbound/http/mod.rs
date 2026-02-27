@@ -1,11 +1,15 @@
 pub mod backend_handlers;
+pub mod docs_handlers;
 pub mod dashboard_handlers;
+pub mod gemini_model_handlers;
 pub mod gemini_policy_handlers;
 pub mod gpu_server_handlers;
 pub mod handlers;
 pub mod key_handlers;
 pub mod metrics_handlers;
 pub mod middleware;
+pub mod ollama_model_handlers;
+pub mod openai_handlers;
 pub mod router;
 pub mod state;
 pub mod usage_handlers;

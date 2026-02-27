@@ -1,0 +1,905 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Veronex API",
+    "description": "Inference gateway API — LLM routing, job tracking, API key management, and cluster observability.",
+    "version": "0.1.0",
+    "contact": {
+      "name": "Veronex",
+      "url": "https://veronex.verobee.com"
+    }
+  },
+  "servers": [
+    { "url": "http://localhost:3001", "description": "Local dev" }
+  ],
+  "security": [{ "ApiKeyAuth": [] }],
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    },
+    "schemas": {
+      "JobStatus": {
+        "type": "string",
+        "enum": ["pending", "running", "completed", "failed", "cancelled"]
+      },
+      "BackendType": {
+        "type": "string",
+        "enum": ["ollama", "gemini"]
+      },
+      "SubmitInferenceRequest": {
+        "type": "object",
+        "required": ["model", "prompt"],
+        "properties": {
+          "model": { "type": "string", "example": "llama3.2:3b" },
+          "prompt": { "type": "string", "example": "Explain hexagonal architecture." },
+          "backend": { "$ref": "#/components/schemas/BackendType" },
+          "stream": { "type": "boolean", "default": false }
+        }
+      },
+      "JobResponse": {
+        "type": "object",
+        "properties": {
+          "job_id": { "type": "string", "format": "uuid" },
+          "status": { "$ref": "#/components/schemas/JobStatus" },
+          "model": { "type": "string" },
+          "backend": { "$ref": "#/components/schemas/BackendType" },
+          "result": { "type": "string", "nullable": true },
+          "error": { "type": "string", "nullable": true },
+          "prompt_tokens": { "type": "integer", "nullable": true },
+          "completion_tokens": { "type": "integer", "nullable": true },
+          "latency_ms": { "type": "integer", "nullable": true },
+          "ttft_ms": { "type": "integer", "nullable": true },
+          "tps": { "type": "number", "nullable": true },
+          "created_at": { "type": "string", "format": "date-time" },
+          "started_at": { "type": "string", "format": "date-time", "nullable": true },
+          "completed_at": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "CreateKeyRequest": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "example": "production-key" },
+          "tenant_id": { "type": "string", "nullable": true },
+          "rate_limit_rpm": { "type": "integer", "default": 0, "description": "0 = unlimited" },
+          "rate_limit_tpm": { "type": "integer", "default": 0, "description": "0 = unlimited" },
+          "expires_at": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "ApiKeyResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "prefix": { "type": "string" },
+          "tenant_id": { "type": "string", "nullable": true },
+          "is_active": { "type": "boolean" },
+          "rate_limit_rpm": { "type": "integer" },
+          "rate_limit_tpm": { "type": "integer" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "expires_at": { "type": "string", "format": "date-time", "nullable": true },
+          "last_used_at": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "CreatedKeyResponse": {
+        "allOf": [
+          { "$ref": "#/components/schemas/ApiKeyResponse" },
+          {
+            "type": "object",
+            "properties": {
+              "key": { "type": "string", "description": "Full key value — shown only once" }
+            }
+          }
+        ]
+      },
+      "RegisterBackendRequest": {
+        "type": "object",
+        "required": ["name", "backend_type", "url"],
+        "properties": {
+          "name": { "type": "string" },
+          "backend_type": { "$ref": "#/components/schemas/BackendType" },
+          "url": { "type": "string", "format": "uri" },
+          "api_key": { "type": "string", "nullable": true },
+          "total_vram_mb": { "type": "integer", "nullable": true },
+          "gpu_index": { "type": "integer", "nullable": true },
+          "server_id": { "type": "string", "format": "uuid", "nullable": true }
+        }
+      },
+      "UpdateBackendRequest": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "url": { "type": "string", "format": "uri", "nullable": true },
+          "api_key": { "type": "string", "nullable": true },
+          "total_vram_mb": { "type": "integer", "nullable": true },
+          "gpu_index": { "type": "integer", "nullable": true },
+          "server_id": { "type": "string", "format": "uuid", "nullable": true }
+        }
+      },
+      "BackendResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "backend_type": { "$ref": "#/components/schemas/BackendType" },
+          "url": { "type": "string" },
+          "is_active": { "type": "boolean" },
+          "total_vram_mb": { "type": "integer", "nullable": true },
+          "gpu_index": { "type": "integer", "nullable": true },
+          "server_id": { "type": "string", "format": "uuid", "nullable": true },
+          "registered_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "RegisterGpuServerRequest": {
+        "type": "object",
+        "required": ["name", "node_exporter_url"],
+        "properties": {
+          "name": { "type": "string", "example": "gpu-node-01" },
+          "node_exporter_url": { "type": "string", "format": "uri", "example": "http://192.168.1.10:9100" }
+        }
+      },
+      "UpdateGpuServerRequest": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "node_exporter_url": { "type": "string", "format": "uri" }
+        }
+      },
+      "GpuServerResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "node_exporter_url": { "type": "string" },
+          "registered_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "GpuMetrics": {
+        "type": "object",
+        "properties": {
+          "card": { "type": "string" },
+          "temp_c": { "type": "number", "nullable": true },
+          "power_w": { "type": "number", "nullable": true },
+          "vram_used_mb": { "type": "integer", "nullable": true },
+          "vram_total_mb": { "type": "integer", "nullable": true },
+          "busy_pct": { "type": "number", "nullable": true }
+        }
+      },
+      "NodeMetrics": {
+        "type": "object",
+        "properties": {
+          "scrape_ok": { "type": "boolean" },
+          "mem_total_mb": { "type": "integer", "nullable": true },
+          "mem_available_mb": { "type": "integer", "nullable": true },
+          "cpu_cores": { "type": "integer", "nullable": true },
+          "gpus": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/GpuMetrics" }
+          }
+        }
+      },
+      "ServerMetricsPoint": {
+        "type": "object",
+        "properties": {
+          "ts": { "type": "string", "format": "date-time" },
+          "mem_total_mb": { "type": "integer" },
+          "mem_avail_mb": { "type": "integer" },
+          "gpu_temp_c": { "type": "number", "nullable": true },
+          "gpu_power_w": { "type": "number", "nullable": true }
+        }
+      },
+      "DashboardStats": {
+        "type": "object",
+        "properties": {
+          "total_keys": { "type": "integer" },
+          "active_keys": { "type": "integer" },
+          "total_jobs": { "type": "integer" },
+          "jobs_24h": { "type": "integer" },
+          "jobs_by_status": {
+            "type": "object",
+            "additionalProperties": { "type": "integer" }
+          }
+        }
+      },
+      "UsageAggregate": {
+        "type": "object",
+        "properties": {
+          "total_requests": { "type": "integer" },
+          "success_requests": { "type": "integer" },
+          "error_requests": { "type": "integer" },
+          "cancelled_requests": { "type": "integer" },
+          "prompt_tokens": { "type": "integer" },
+          "completion_tokens": { "type": "integer" },
+          "total_tokens": { "type": "integer" },
+          "hourly": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "hour": { "type": "string", "format": "date-time" },
+                "requests": { "type": "integer" },
+                "tokens": { "type": "integer" }
+              }
+            }
+          }
+        }
+      },
+      "PerformanceMetrics": {
+        "type": "object",
+        "properties": {
+          "p50_ms": { "type": "number" },
+          "p95_ms": { "type": "number" },
+          "p99_ms": { "type": "number" },
+          "avg_ms": { "type": "number" },
+          "success_rate": { "type": "number" },
+          "total_requests": { "type": "integer" },
+          "total_tokens": { "type": "integer" },
+          "hourly": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "hour": { "type": "string", "format": "date-time" },
+                "avg_latency_ms": { "type": "number" },
+                "requests": { "type": "integer" },
+                "tokens": { "type": "integer" },
+                "errors": { "type": "integer" }
+              }
+            }
+          }
+        }
+      },
+      "GeminiPolicy": {
+        "type": "object",
+        "properties": {
+          "model_name": { "type": "string" },
+          "rpm_limit": { "type": "integer" },
+          "rpd_limit": { "type": "integer" },
+          "on_free_tier": { "type": "boolean" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "UpsertGeminiPolicyRequest": {
+        "type": "object",
+        "properties": {
+          "rpm_limit": { "type": "integer" },
+          "rpd_limit": { "type": "integer" },
+          "on_free_tier": { "type": "boolean" }
+        }
+      },
+      "OpenAIChatRequest": {
+        "type": "object",
+        "required": ["model", "messages"],
+        "properties": {
+          "model": { "type": "string", "example": "llama3.2:3b" },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": { "type": "string", "enum": ["system", "user", "assistant"] },
+                "content": { "type": "string" }
+              }
+            }
+          },
+          "stream": { "type": "boolean", "default": false },
+          "temperature": { "type": "number" },
+          "max_tokens": { "type": "integer" }
+        }
+      },
+      "MetricsTarget": {
+        "type": "object",
+        "properties": {
+          "targets": { "type": "array", "items": { "type": "string" } },
+          "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" }
+        }
+      }
+    }
+  },
+  "tags": [
+    { "name": "inference", "description": "Submit and track LLM inference jobs" },
+    { "name": "openai", "description": "OpenAI-compatible chat completions" },
+    { "name": "keys", "description": "API key management" },
+    { "name": "backends", "description": "LLM backend registration and routing" },
+    { "name": "servers", "description": "GPU server registration and metrics" },
+    { "name": "usage", "description": "Token and request usage analytics" },
+    { "name": "dashboard", "description": "Cluster-wide statistics and job history" },
+    { "name": "gemini", "description": "Gemini rate-limit policy management" },
+    { "name": "system", "description": "Health checks and Prometheus targets" }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["system"],
+        "summary": "Liveness probe",
+        "operationId": "health",
+        "security": [],
+        "responses": {
+          "200": { "description": "Service is alive", "content": { "text/plain": { "schema": { "type": "string", "example": "ok" } } } }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": ["system"],
+        "summary": "Readiness probe",
+        "operationId": "readyz",
+        "security": [],
+        "responses": {
+          "200": { "description": "Service is ready", "content": { "text/plain": { "schema": { "type": "string", "example": "ok" } } } }
+        }
+      }
+    },
+    "/v1/metrics/targets": {
+      "get": {
+        "tags": ["system"],
+        "summary": "Prometheus HTTP SD targets",
+        "description": "Returns node-exporter scrape targets for the OTel Collector. No authentication required.",
+        "operationId": "listMetricsTargets",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "List of Prometheus scrape targets",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/MetricsTarget" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inference": {
+      "post": {
+        "tags": ["inference"],
+        "summary": "Submit inference job",
+        "operationId": "submitInference",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SubmitInferenceRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Job accepted",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobResponse" } } }
+          },
+          "400": { "description": "Bad request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "Unauthorized" },
+          "429": { "description": "Rate limit exceeded" }
+        }
+      }
+    },
+    "/v1/inference/{job_id}/stream": {
+      "get": {
+        "tags": ["inference"],
+        "summary": "Stream inference output (SSE)",
+        "operationId": "streamInference",
+        "parameters": [
+          { "name": "job_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of inference tokens",
+            "content": { "text/event-stream": { "schema": { "type": "string" } } }
+          },
+          "404": { "description": "Job not found" }
+        }
+      }
+    },
+    "/v1/inference/{job_id}/status": {
+      "get": {
+        "tags": ["inference"],
+        "summary": "Get job status",
+        "operationId": "getJobStatus",
+        "parameters": [
+          { "name": "job_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job status",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobResponse" } } }
+          },
+          "404": { "description": "Job not found" }
+        }
+      }
+    },
+    "/v1/inference/{job_id}": {
+      "delete": {
+        "tags": ["inference"],
+        "summary": "Cancel inference job",
+        "operationId": "cancelInference",
+        "parameters": [
+          { "name": "job_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Job cancelled" },
+          "404": { "description": "Job not found" }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "tags": ["openai"],
+        "summary": "OpenAI-compatible chat completions",
+        "description": "Drop-in replacement for OpenAI's /v1/chat/completions. Supports streaming via SSE.",
+        "operationId": "chatCompletions",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/OpenAIChatRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat completion response or SSE stream",
+            "content": {
+              "application/json": { "schema": { "type": "object" } },
+              "text/event-stream": { "schema": { "type": "string" } }
+            }
+          },
+          "401": { "description": "Unauthorized" },
+          "429": { "description": "Rate limit exceeded" }
+        }
+      }
+    },
+    "/v1/keys": {
+      "post": {
+        "tags": ["keys"],
+        "summary": "Create API key",
+        "operationId": "createKey",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/CreateKeyRequest" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Key created — raw key shown once",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreatedKeyResponse" } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "get": {
+        "tags": ["keys"],
+        "summary": "List API keys",
+        "operationId": "listKeys",
+        "responses": {
+          "200": {
+            "description": "List of API keys",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ApiKeyResponse" } }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/keys/{id}": {
+      "delete": {
+        "tags": ["keys"],
+        "summary": "Delete API key",
+        "operationId": "deleteKey",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "204": { "description": "Key deleted" },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Key not found" }
+        }
+      },
+      "patch": {
+        "tags": ["keys"],
+        "summary": "Toggle API key active state",
+        "operationId": "toggleKey",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Key toggled" },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Key not found" }
+        }
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "tags": ["usage"],
+        "summary": "Aggregate usage analytics",
+        "operationId": "aggregateUsage",
+        "parameters": [
+          { "name": "hours", "in": "query", "schema": { "type": "integer", "default": 24 }, "description": "Lookback window in hours" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregate usage data",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UsageAggregate" } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/usage/{key_id}": {
+      "get": {
+        "tags": ["usage"],
+        "summary": "Per-key usage analytics",
+        "operationId": "keyUsage",
+        "parameters": [
+          { "name": "key_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "hours", "in": "query", "schema": { "type": "integer", "default": 24 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-key usage data",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UsageAggregate" } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/usage/{key_id}/jobs": {
+      "get": {
+        "tags": ["usage"],
+        "summary": "Jobs list for an API key",
+        "operationId": "keyUsageJobs",
+        "parameters": [
+          { "name": "key_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Jobs for the key",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/JobResponse" } } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/dashboard/stats": {
+      "get": {
+        "tags": ["dashboard"],
+        "summary": "Cluster-wide statistics",
+        "operationId": "getDashboardStats",
+        "responses": {
+          "200": {
+            "description": "Dashboard stats",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DashboardStats" } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/dashboard/jobs": {
+      "get": {
+        "tags": ["dashboard"],
+        "summary": "Paginated job list",
+        "operationId": "listDashboardJobs",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } },
+          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/JobStatus" } },
+          { "name": "search", "in": "query", "schema": { "type": "string" }, "description": "Prompt text search" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated job list",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "total": { "type": "integer" }, "jobs": { "type": "array", "items": { "$ref": "#/components/schemas/JobResponse" } } } } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/dashboard/jobs/{id}": {
+      "get": {
+        "tags": ["dashboard"],
+        "summary": "Get job detail",
+        "operationId": "getDashboardJob",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job detail",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobResponse" } } }
+          },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Job not found" }
+        }
+      }
+    },
+    "/v1/dashboard/performance": {
+      "get": {
+        "tags": ["dashboard"],
+        "summary": "Performance metrics (latency / throughput)",
+        "operationId": "getPerformance",
+        "parameters": [
+          { "name": "hours", "in": "query", "schema": { "type": "integer", "default": 24 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Performance metrics",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PerformanceMetrics" } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/backends": {
+      "post": {
+        "tags": ["backends"],
+        "summary": "Register LLM backend",
+        "operationId": "registerBackend",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterBackendRequest" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Backend registered",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackendResponse" } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "get": {
+        "tags": ["backends"],
+        "summary": "List LLM backends",
+        "operationId": "listBackends",
+        "responses": {
+          "200": {
+            "description": "List of backends",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/BackendResponse" } } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/backends/{id}": {
+      "delete": {
+        "tags": ["backends"],
+        "summary": "Delete LLM backend",
+        "operationId": "deleteBackend",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "204": { "description": "Backend deleted" },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Not found" }
+        }
+      },
+      "patch": {
+        "tags": ["backends"],
+        "summary": "Update LLM backend",
+        "operationId": "updateBackend",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateBackendRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Backend updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackendResponse" } } } },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/v1/backends/{id}/healthcheck": {
+      "post": {
+        "tags": ["backends"],
+        "summary": "Run backend health check",
+        "operationId": "healthcheckBackend",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Health check result" },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/v1/backends/{id}/models": {
+      "get": {
+        "tags": ["backends"],
+        "summary": "List models available on a backend",
+        "operationId": "listBackendModels",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available models",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "type": "string" } } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/backends/{id}/models/sync": {
+      "post": {
+        "tags": ["backends"],
+        "summary": "Force-refresh model list cache",
+        "operationId": "syncBackendModels",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Cache refreshed" },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/backends/{id}/key": {
+      "get": {
+        "tags": ["backends"],
+        "summary": "Reveal backend API key",
+        "operationId": "revealBackendKey",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decrypted API key",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "api_key": { "type": "string" } } } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/servers": {
+      "post": {
+        "tags": ["servers"],
+        "summary": "Register GPU server",
+        "operationId": "registerGpuServer",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterGpuServerRequest" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Server registered",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GpuServerResponse" } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      },
+      "get": {
+        "tags": ["servers"],
+        "summary": "List GPU servers",
+        "operationId": "listGpuServers",
+        "responses": {
+          "200": {
+            "description": "List of GPU servers",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/GpuServerResponse" } } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/servers/{id}": {
+      "patch": {
+        "tags": ["servers"],
+        "summary": "Update GPU server",
+        "operationId": "updateGpuServer",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateGpuServerRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Server updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GpuServerResponse" } } } },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Not found" }
+        }
+      },
+      "delete": {
+        "tags": ["servers"],
+        "summary": "Delete GPU server",
+        "operationId": "deleteGpuServer",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "204": { "description": "Server deleted" },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/v1/servers/{id}/metrics": {
+      "get": {
+        "tags": ["servers"],
+        "summary": "Live node metrics",
+        "description": "Fetches live metrics from the server's node-exporter endpoint.",
+        "operationId": "getServerMetrics",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live node metrics",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NodeMetrics" } } }
+          },
+          "401": { "description": "Unauthorized" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/v1/servers/{id}/metrics/history": {
+      "get": {
+        "tags": ["servers"],
+        "summary": "Historical metrics from ClickHouse",
+        "operationId": "getServerMetricsHistory",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "hours", "in": "query", "schema": { "type": "integer", "default": 1 }, "description": "Lookback window in hours" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical metrics (1-minute buckets)",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ServerMetricsPoint" } } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/gemini/policies": {
+      "get": {
+        "tags": ["gemini"],
+        "summary": "List Gemini rate-limit policies",
+        "operationId": "listGeminiPolicies",
+        "responses": {
+          "200": {
+            "description": "Gemini policies",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/GeminiPolicy" } } } }
+          },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/v1/gemini/policies/{model_name}": {
+      "put": {
+        "tags": ["gemini"],
+        "summary": "Upsert Gemini rate-limit policy",
+        "operationId": "upsertGeminiPolicy",
+        "parameters": [
+          { "name": "model_name", "in": "path", "required": true, "schema": { "type": "string", "example": "gemini-2.5-flash" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpsertGeminiPolicyRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Policy upserted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GeminiPolicy" } } } },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    }
+  }
+}

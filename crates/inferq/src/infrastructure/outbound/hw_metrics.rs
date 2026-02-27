@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub const HW_METRICS_TTL: i64 = 60;
 
 pub fn hw_metrics_key(backend_id: Uuid) -> String {
-    format!("inferq:hw:{backend_id}")
+    format!("veronex:hw:{backend_id}")
 }
 
 // ── Agent-based metrics (Phase 2) ──────────────────────────────────────────────

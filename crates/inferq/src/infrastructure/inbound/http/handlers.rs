@@ -144,7 +144,9 @@ mod tests {
     use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
     use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
     use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
-    use crate::domain::entities::{ApiKey, LlmBackend};
+    use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
+    use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
+    use crate::domain::entities::{ApiKey, GeminiRateLimitPolicy, GpuServer, LlmBackend};
     use crate::domain::enums::LlmBackendStatus;
     use crate::domain::enums::JobStatus;
     use crate::domain::value_objects::StreamToken;
@@ -225,30 +227,44 @@ mod tests {
         async fn revoke(&self, _key_id: &Uuid) -> Result<()> {
             Ok(())
         }
+        async fn set_active(&self, _key_id: &Uuid, _active: bool) -> Result<()> {
+            Ok(())
+        }
+        async fn soft_delete(&self, _key_id: &Uuid) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct MockBackendRegistry;
 
     #[async_trait]
     impl LlmBackendRegistry for MockBackendRegistry {
-        async fn register(&self, _backend: &LlmBackend) -> Result<()> {
-            Ok(())
-        }
-        async fn list_active(&self) -> Result<Vec<LlmBackend>> {
-            Ok(vec![])
-        }
-        async fn list_all(&self) -> Result<Vec<LlmBackend>> {
-            Ok(vec![])
-        }
-        async fn get(&self, _id: Uuid) -> Result<Option<LlmBackend>> {
-            Ok(None)
-        }
-        async fn update_status(&self, _id: Uuid, _status: LlmBackendStatus) -> Result<()> {
-            Ok(())
-        }
-        async fn deactivate(&self, _id: Uuid) -> Result<()> {
-            Ok(())
-        }
+        async fn register(&self, _backend: &LlmBackend) -> Result<()> { Ok(()) }
+        async fn list_active(&self) -> Result<Vec<LlmBackend>> { Ok(vec![]) }
+        async fn list_all(&self) -> Result<Vec<LlmBackend>> { Ok(vec![]) }
+        async fn get(&self, _id: Uuid) -> Result<Option<LlmBackend>> { Ok(None) }
+        async fn update_status(&self, _id: Uuid, _status: LlmBackendStatus) -> Result<()> { Ok(()) }
+        async fn deactivate(&self, _id: Uuid) -> Result<()> { Ok(()) }
+        async fn update(&self, _backend: &LlmBackend) -> Result<()> { Ok(()) }
+    }
+
+    struct MockGpuServerRegistry;
+
+    #[async_trait]
+    impl GpuServerRegistry for MockGpuServerRegistry {
+        async fn register(&self, _server: GpuServer) -> Result<()> { Ok(()) }
+        async fn list_all(&self) -> Result<Vec<GpuServer>> { Ok(vec![]) }
+        async fn get(&self, _id: Uuid) -> Result<Option<GpuServer>> { Ok(None) }
+        async fn delete(&self, _id: Uuid) -> Result<()> { Ok(()) }
+    }
+
+    struct MockGeminiPolicyRepo;
+
+    #[async_trait]
+    impl GeminiPolicyRepository for MockGeminiPolicyRepo {
+        async fn list_all(&self) -> Result<Vec<GeminiRateLimitPolicy>> { Ok(vec![]) }
+        async fn get_for_model(&self, _model_name: &str) -> Result<Option<GeminiRateLimitPolicy>> { Ok(None) }
+        async fn upsert(&self, _policy: &GeminiRateLimitPolicy) -> Result<()> { Ok(()) }
     }
 
     fn make_app() -> axum::Router {
@@ -271,6 +287,8 @@ mod tests {
             use_case: Arc::new(MockUseCase),
             api_key_repo: Arc::new(MockApiKeyRepo),
             backend_registry: Arc::new(MockBackendRegistry),
+            gpu_server_registry: Arc::new(MockGpuServerRegistry),
+            gemini_policy_repo: Arc::new(MockGeminiPolicyRepo),
             valkey_pool: None,
             clickhouse_client: None,
             pg_pool,

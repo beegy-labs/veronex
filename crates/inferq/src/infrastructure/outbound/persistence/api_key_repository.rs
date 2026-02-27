@@ -45,6 +45,9 @@ fn row_to_api_key(row: &sqlx::postgres::PgRow) -> Result<ApiKey> {
         created_at: row
             .try_get("created_at")
             .context("missing column: created_at")?,
+        deleted_at: row
+            .try_get("deleted_at")
+            .context("missing column: deleted_at")?,
     })
 }
 
@@ -74,8 +77,8 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
 
     async fn get_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>> {
         let row = sqlx::query(
-            "SELECT id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at
-             FROM api_keys WHERE key_hash = $1",
+            "SELECT id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at
+             FROM api_keys WHERE key_hash = $1 AND deleted_at IS NULL",
         )
         .bind(key_hash)
         .fetch_optional(&self.pool)
@@ -90,8 +93,8 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
 
     async fn list_by_tenant(&self, tenant_id: &str) -> Result<Vec<ApiKey>> {
         let rows = sqlx::query(
-            "SELECT id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at
-             FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC",
+            "SELECT id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at
+             FROM api_keys WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC",
         )
         .bind(tenant_id)
         .fetch_all(&self.pool)
@@ -107,6 +110,27 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
             .execute(&self.pool)
             .await
             .context("failed to revoke api key")?;
+
+        Ok(())
+    }
+
+    async fn set_active(&self, key_id: &Uuid, active: bool) -> Result<()> {
+        sqlx::query("UPDATE api_keys SET is_active = $1 WHERE id = $2 AND deleted_at IS NULL")
+            .bind(active)
+            .bind(key_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to set api key active state")?;
+
+        Ok(())
+    }
+
+    async fn soft_delete(&self, key_id: &Uuid) -> Result<()> {
+        sqlx::query("UPDATE api_keys SET deleted_at = NOW() WHERE id = $1")
+            .bind(key_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to soft-delete api key")?;
 
         Ok(())
     }
