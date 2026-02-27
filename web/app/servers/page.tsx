@@ -457,7 +457,7 @@ function ServersTable({
       {allServers.length > 0 && (
         <Card>
           <CardContent className="p-0 overflow-x-auto">
-            <Table>
+            <Table className="min-w-[700px]">
               <TableHeader>
                 <TableRow className="border-b border-border hover:bg-transparent">
                   <TableHead className="w-48 text-muted-foreground font-semibold">{t('backends.servers.name')}</TableHead>

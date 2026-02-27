@@ -272,7 +272,7 @@ export default function KeysPage() {
       {keys && keys.length > 0 && (
         <Card>
           <CardContent className="p-0 overflow-x-auto">
-            <Table>
+            <Table className="min-w-[700px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>{t('keys.name')}</TableHead>

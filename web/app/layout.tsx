@@ -36,7 +36,7 @@ export default function RootLayout({
             <QueryClientProvider client={queryClient}>
               <div className="flex h-full min-h-screen">
                 <Nav />
-                <main className="flex-1 overflow-auto p-8">
+                <main className="flex-1 overflow-auto p-4 pt-16 md:p-8">
                   {children}
                 </main>
               </div>

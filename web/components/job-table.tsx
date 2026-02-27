@@ -211,7 +211,7 @@ export default function JobTable({ jobs }: { jobs: Job[] }) {
     <>
       <Card>
         <div className="overflow-x-auto">
-          <Table>
+          <Table className="min-w-[760px]">
             <TableHeader>
               <TableRow>
                 <TableHead>{t('jobs.id')}</TableHead>

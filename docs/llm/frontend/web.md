@@ -118,6 +118,49 @@ Footer: v0.1.0 · [🌐 EN ▾] · [☀/🌙]
 - Servers: top-level `NavLink` at `/servers` (no sub-items)
 - Providers: `NavGroup` with `id: 'providers'`, `basePath: '/providers'`
 
+### Mobile Responsive Nav (hamburger slide sidebar)
+
+On `< md` breakpoint the sidebar is hidden. A fixed top bar replaces it:
+
+```
+Mobile (closed):
+┌────────────────────────┐
+│ ☰  [hex] Veronex       │  ← fixed top bar, h-12, z-30
+├────────────────────────┤
+│       Content          │  ← pt-16 to clear top bar
+└────────────────────────┘
+
+Mobile (open):
+┌──────────┬─────────────┐
+│ w-72     │ dimmed bg   │  ← aside z-50, backdrop z-40
+│ Sidebar  │             │
+└──────────┴─────────────┘
+```
+
+- Mobile top bar: `md:hidden fixed top-0 left-0 right-0 z-30 h-12 bg-card border-b`
+- Sidebar: `fixed inset-y-0 left-0 z-50 w-72` → `transition-transform` slide in/out
+- Backdrop: `fixed inset-0 z-40 bg-black/50` — click to close
+- Desktop override: `md:static md:z-auto md:translate-x-0` (back to flex child)
+- Auto-close on route change (`useEffect` on `pathname`)
+- `layout.tsx` main: `p-4 pt-16 md:p-8` (clears mobile top bar)
+
+---
+
+## Responsive Tables
+
+All tables use `overflow-x-auto` on the parent `<CardContent>` and a `min-w-[xxx]` on `<Table>` to prevent column collapse on small screens:
+
+| Page / Component | min-w |
+|-----------------|-------|
+| `servers/page.tsx` ServersTable | `min-w-[700px]` |
+| `providers/page.tsx` OllamaTab | `min-w-[800px]` |
+| `providers/page.tsx` GeminiTab | `min-w-[760px]` |
+| `providers/page.tsx` OllamaSyncSection model table | `min-w-[600px]` |
+| `keys/page.tsx` | `min-w-[700px]` |
+| `components/job-table.tsx` | `min-w-[760px]` |
+
+> **Rule**: When adding a new table, always set `overflow-x-auto` on the wrapper and `min-w-[xxx]` on `<Table>` matching the column count (≈100px per column).
+
 ---
 
 ## State Management

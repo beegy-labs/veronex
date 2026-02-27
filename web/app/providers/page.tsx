@@ -1271,7 +1271,7 @@ function GeminiSyncSection() {
         {!tableLoading && hasContent && (
           <Card>
             <CardContent className="p-0 overflow-x-auto">
-              <Table>
+              <Table className="min-w-[600px]">
                 <TableHeader>
                   <TableRow className="border-b border-border hover:bg-transparent">
                     <TableHead className="text-muted-foreground font-semibold">{t('backends.gemini.model')}</TableHead>
@@ -1461,7 +1461,7 @@ function OllamaTab({
       {ollama.length > 0 && (
         <Card>
           <CardContent className="p-0 overflow-x-auto">
-            <Table>
+            <Table className="min-w-[800px]">
               <TableHeader>
                 <TableRow className="border-b border-border hover:bg-transparent">
                   <TableHead className="text-muted-foreground font-semibold">{t('backends.ollama.name')}</TableHead>
@@ -1722,7 +1722,7 @@ function GeminiTab({
         {gemini.length > 0 && (
           <Card>
             <CardContent className="p-0 overflow-x-auto">
-              <Table>
+              <Table className="min-w-[760px]">
                 <TableHeader>
                   <TableRow className="border-b border-border hover:bg-transparent">
                     <TableHead className="text-muted-foreground font-semibold">{t('backends.gemini.name')}</TableHead>

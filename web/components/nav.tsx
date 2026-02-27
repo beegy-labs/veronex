@@ -6,7 +6,7 @@ import { useState, useEffect, Suspense } from 'react'
 import {
   LayoutDashboard, List, Key, FlaskConical, Server,
   BarChart2, Gauge, Sun, Moon, ChevronLeft, Languages,
-  BookOpen, HardDrive, Sparkles, ChevronDown,
+  BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
@@ -144,6 +144,7 @@ function NavContent() {
   const { t } = useTranslation()
 
   const [collapsed, setCollapsed] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
   const [locale, setLocale] = useState<Locale>('en')
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
 
@@ -168,6 +169,9 @@ function NavContent() {
     }
     setOpenGroups(groups)
   }, [])
+
+  // Close mobile nav on route change
+  useEffect(() => { setMobileOpen(false) }, [pathname])
 
   // Auto-open the group containing the active route
   useEffect(() => {
@@ -226,12 +230,44 @@ function NavContent() {
   }
 
   return (
-    <aside
-      className={cn(
-        'flex-shrink-0 bg-card border-r border-border flex flex-col transition-all duration-200',
-        collapsed ? 'w-14' : 'w-56',
+    <>
+      {/* ── Mobile top bar ─────────────────────────────────────────── */}
+      <div className="md:hidden fixed top-0 left-0 right-0 z-30 flex items-center h-12 px-4 bg-card border-b border-border gap-3 flex-shrink-0">
+        <button
+          type="button"
+          onClick={() => setMobileOpen((v) => !v)}
+          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          title="Menu"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <HexLogo className="h-6 w-6 flex-shrink-0" />
+        <span className="text-sm font-semibold tracking-tight">Veronex</span>
+      </div>
+
+      {/* ── Backdrop ───────────────────────────────────────────────── */}
+      {mobileOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-40 bg-black/50"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
       )}
-    >
+
+      {/* ── Sidebar ────────────────────────────────────────────────── */}
+      <aside
+        className={cn(
+          // Base: always flex column, themed
+          'flex flex-col bg-card border-r border-border',
+          // Mobile: fixed overlay, slides in/out from left
+          'fixed inset-y-0 left-0 z-50 w-72',
+          'transition-transform duration-200 ease-in-out',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          // Desktop: back to normal flex child, collapsible width
+          'md:static md:z-auto md:translate-x-0 md:flex-shrink-0',
+          collapsed ? 'md:w-14' : 'md:w-56',
+        )}
+      >
       {/* ── Header ─────────────────────────────────────────────────── */}
       <div className={cn(
         'flex items-center border-b border-border h-[60px] flex-shrink-0',
@@ -396,6 +432,7 @@ function NavContent() {
         </div>
       </div>
     </aside>
+    </>
   )
 }
 
