@@ -43,19 +43,20 @@
 
 ---
 
-## Design Theme — "Verde Signal"
+## Design Theme — "Verde Nexus"
 
-| | Light "Verde Signal" | Dark "Signal Dark" |
+| | Light "Platinum Signal" | Dark "Obsidian Verde" |
 |---|---|---|
-| Page bg | `#f8f9fa` Metallic Pearl | `#09090f` |
-| Card bg | `#ffffff` | `#0c0e17` |
-| Primary | `#16402e` Deep Forest (11.45:1 AAA) | `#a78bfa` violet-400 (7.07:1 AAA) |
-| Text primary | `#1a1c1a` Anthracite Black ~14.5:1 AAA | `#e8ecf5` ~16.8:1 AAA |
-| Text secondary | `#334155` Slate Silver ~10:1 AAA | `#94a3b8` ~7.8:1 AAA |
-| Border | `#e2e8f0` | `#1c2030` |
+| Page bg | `#f2f4f2` Platinum Pearl | `#080a09` Obsidian Deep |
+| Card bg | `#ffffff` Pure White | `#111412` Dark Graphite |
+| Primary | `#0f3325` Deep Ivy (12.71:1 AAA) | `#10b981` Bio-Emerald (7.73:1 AAA) |
+| Text primary | `#141a14` Anthracite ~14.4:1 AAA | `#e2e8e2` Soft Platinum ~14.2:1 AAA |
+| Text secondary | `#334155` Slate Silver ~10:1 AAA | `#94a3b8` Titanium Silver ~7.7:1 AAA |
+| Border | `#e2e8e0` | `#1a2118` |
+| Button fg | `#ffffff` on Deep Ivy | `#041f16` Deep Dark on Bio-Emerald |
 
 WCAG targets: Primary ≥7:1 (AAA), body text AAA, status colors AAA both modes.
-Light logo: `#0d2518 → #16402e` gradient · Dark logo: `#a78bfa → #c4b5fd` (violet, unchanged)
+Light logo: `#091e12 → #0f3325` · Dark logo: `#047857 → #10b981` (emerald gradient)
 Dark status colors: `#34d399` / `#fb7185` / `#fbbf24` / `#60a5fa`
 
 ---

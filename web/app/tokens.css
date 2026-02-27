@@ -1,12 +1,12 @@
 /* ============================================================
    VERONEX DESIGN TOKEN SSOT
-   Concept  : "Verde Signal" — Forest × Slate
-   Brand    : Vero (truth) + Nexus (hub) — verobee.com
-   Themes   : "Signal"  (light) & "Signal Dark"  (dark)
+   Concept  : "Verde Nexus" — Vero (green/truth) × Nexus (hub/connect)
+   Brand    : Veronex — veronex.verobee.com
+   Themes   : "Platinum Signal"  (light) & "Obsidian Verde"  (dark)
 
    Contrast ratios (WCAG 2.1):
-     Primary  : AAA (≥ 7:1)  — light 11.45:1 · dark 7.07:1
-     All text : AA  (≥ 4.5:1) minimum, most tiers AAA
+     Primary  : AAA (≥ 7:1)  — light 12.71:1 · dark 7.73:1 (on page bg)
+     All text : AAA (≥ 7:1) primary tier · AA minimum on all tiers
      Status   : AAA in both modes
 
    4-layer architecture:
@@ -25,13 +25,13 @@
    ------------------------------------------------------------------ */
 
 /* Backgrounds */
-@property --theme-bg-page     { syntax: '<color>'; inherits: true; initial-value: #f8f9fa; }
+@property --theme-bg-page     { syntax: '<color>'; inherits: true; initial-value: #f2f4f2; }
 @property --theme-bg-card     { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
-@property --theme-bg-elevated { syntax: '<color>'; inherits: true; initial-value: #f0f2f7; }
-@property --theme-bg-hover    { syntax: '<color>'; inherits: true; initial-value: #e5e9f2; }
+@property --theme-bg-elevated { syntax: '<color>'; inherits: true; initial-value: #edf0ed; }
+@property --theme-bg-hover    { syntax: '<color>'; inherits: true; initial-value: #e4e8e4; }
 
 /* Text */
-@property --theme-text-primary   { syntax: '<color>'; inherits: true; initial-value: #1a1c1a; }
+@property --theme-text-primary   { syntax: '<color>'; inherits: true; initial-value: #141a14; }
 @property --theme-text-secondary { syntax: '<color>'; inherits: true; initial-value: #334155; }
 @property --theme-text-bright    { syntax: '<color>'; inherits: true; initial-value: #000000; }
 @property --theme-text-dim       { syntax: '<color>'; inherits: true; initial-value: #475569; }
@@ -43,10 +43,10 @@
 @property --theme-border         { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
 
 /* Brand */
-@property --theme-primary            { syntax: '<color>'; inherits: true; initial-value: #16402e; }
+@property --theme-primary            { syntax: '<color>'; inherits: true; initial-value: #0f3325; }
 @property --theme-primary-foreground { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
-@property --theme-ring               { syntax: '<color>'; inherits: true; initial-value: #16402e; }
-@property --theme-focus-ring         { syntax: '<color>'; inherits: true; initial-value: #16402e; }
+@property --theme-ring               { syntax: '<color>'; inherits: true; initial-value: #0f3325; }
+@property --theme-focus-ring         { syntax: '<color>'; inherits: true; initial-value: #0f3325; }
 
 /* Destructive */
 @property --theme-destructive { syntax: '<color>'; inherits: true; initial-value: #9f1239; }
@@ -67,10 +67,10 @@
 /* Accent */
 @property --theme-accent-gpu   { syntax: '<color>'; inherits: true; initial-value: #0e7490; }
 @property --theme-accent-power { syntax: '<color>'; inherits: true; initial-value: #78350f; }
-@property --theme-accent-brand { syntax: '<color>'; inherits: true; initial-value: #16402e; }
+@property --theme-accent-brand { syntax: '<color>'; inherits: true; initial-value: #0f3325; }
 
 /* Chart */
-@property --theme-chart-1 { syntax: '<color>'; inherits: true; initial-value: #2d7a56; }
+@property --theme-chart-1 { syntax: '<color>'; inherits: true; initial-value: #1d6b44; }
 @property --theme-chart-2 { syntax: '<color>'; inherits: true; initial-value: #059669; }
 @property --theme-chart-3 { syntax: '<color>'; inherits: true; initial-value: #0891b2; }
 @property --theme-chart-4 { syntax: '<color>'; inherits: true; initial-value: #e11d48; }
@@ -81,51 +81,51 @@
    ------------------------------------------------------------------ */
 
 :root {
-  /* ── Light palette: "Verde Signal" ───────────────────────────── */
-  /* Backgrounds — Metallic Pearl: minimal grey tint, reduces eye strain */
-  --light-bg-page:      #f8f9fa;   /* Metallic Pearl */
-  --light-bg-card:      #ffffff;
-  --light-bg-elevated:  #f0f2f0;   /* slight green tint matches brand */
-  --light-bg-hover:     #e6ebe8;
+  /* ── Light palette: "Platinum Signal" ────────────────────────── */
+  /* Backgrounds — Platinum Pearl: green-tinted off-white, reduces eye strain */
+  --light-bg-page:      #f2f4f2;   /* Platinum Pearl */
+  --light-bg-card:      #ffffff;   /* Pure White — card independence */
+  --light-bg-elevated:  #edf0ed;   /* gentle green-tint elevated surface */
+  --light-bg-hover:     #e4e8e4;
 
-  /* Text — Anthracite + Slate scale, all AAA on card (#fff) */
-  --light-text-primary:   #1a1c1a;   /* Anthracite Black: ~14.5:1 ✓ AAA */
-  --light-text-secondary: #334155;   /* Slate Silver: ~10:1 ✓ AAA */
-  --light-text-dim:       #475569;   /* ~7.6:1 ✓ AAA */
+  /* Text — Anthracite + Slate Silver, all AAA on card (#fff) */
+  --light-text-primary:   #141a14;   /* Anthracite: ~14.4:1 on Pearl ✓ AAA */
+  --light-text-secondary: #334155;   /* Slate Silver: ~10:1  ✓ AAA */
+  --light-text-dim:       #475569;   /* Metallic Slate: ~7.4:1 ✓ AAA */
   --light-text-faint:     #64748b;   /* ~4.5:1 ✓ AA  */
 
-  /* Border — Slate 200 / 300 */
-  --light-border-subtle:  #e2e8f0;
-  --light-border-default: #cbd5e1;
-  --light-border-strong:  #94a3b8;
+  /* Border — soft green-slate tint */
+  --light-border-subtle:  #e2e8e0;
+  --light-border-default: #cbd5d1;
+  --light-border-strong:  #94a3a0;
 
-  /* Brand — Verde Deep Forest: 11.45:1 on white ✓ AAA */
-  --light-primary:      #16402e;   /* Deep Forest */
-  --light-primary-mid:  #1e5c3a;   /* forest-mid — hover */
-  --light-primary-soft: #2d7a56;   /* forest-soft — charts */
+  /* Brand — Deep Ivy: 12.71:1 on white ✓ AAA */
+  --light-primary:      #0f3325;   /* Deep Ivy */
+  --light-primary-mid:  #164429;   /* ivy-mid — hover */
+  --light-primary-soft: #1d6b44;   /* ivy-soft — charts */
 
-  /* ── Dark palette: "Signal Dark" ─────────────────────────────── */
-  /* Backgrounds — deep blue-slate, easy on eyes in dark environments */
-  --dark-bg-page:      #09090f;
-  --dark-bg-card:      #0c0e17;   /* card slightly lighter than page */
-  --dark-bg-elevated:  #141722;
-  --dark-bg-hover:     #1c2030;
+  /* ── Dark palette: "Obsidian Verde" ──────────────────────────── */
+  /* Backgrounds — deep green-black, night forest atmosphere */
+  --dark-bg-page:      #080a09;   /* Obsidian Deep */
+  --dark-bg-card:      #111412;   /* Dark Graphite */
+  --dark-bg-elevated:  #182019;
+  --dark-bg-hover:     #1e2820;
 
-  /* Text — Slate scale */
-  --dark-text-primary:   #e8ecf5;   /* ~16.8:1 on page  ✓ AAA */
-  --dark-text-secondary: #94a3b8;   /*  ~7.8:1 on page  ✓ AAA */
-  --dark-text-dim:       #64748b;   /*  ~4.2:1 on page  ✓ AA  */
-  --dark-text-faint:     #475569;   /*  ~2.6:1 — decorative only */
+  /* Text — Platinum + Titanium Silver scale */
+  --dark-text-primary:   #e2e8e2;   /* Soft Platinum: ~14.2:1 on page ✓ AAA */
+  --dark-text-secondary: #94a3b8;   /* Titanium Silver: ~7.7:1 ✓ AAA */
+  --dark-text-dim:       #64748b;   /* ~4.1:1 ✓ AA  */
+  --dark-text-faint:     #475569;   /* decorative only */
 
-  /* Border */
-  --dark-border-subtle:  #1c2030;
-  --dark-border-default: #2d3654;
-  --dark-border-strong:  #3d4a6a;
+  /* Border — deep forest-green tint */
+  --dark-border-subtle:  #1a2118;
+  --dark-border-default: #2a3828;
+  --dark-border-strong:  #3d5040;
 
-  /* Brand — Violet-400: 7.07:1 on card (#0c0e17) ✓ AAA */
-  --dark-primary:      #a78bfa;
-  --dark-primary-mid:  #c4b5fd;   /* violet-300 — hover */
-  --dark-primary-soft: #7c3aed;   /* violet-600 — subtle bg */
+  /* Brand — Bio-Emerald: 7.73:1 on page bg (#080a09) ✓ AAA */
+  --dark-primary:      #10b981;   /* Bio-Emerald */
+  --dark-primary-mid:  #34d399;   /* emerald-400 — hover */
+  --dark-primary-soft: #059669;   /* emerald-600 — subtle bg */
 
   /* ── Status: light (all AAA on white) ───────────────────────── */
   --status-l-success:  #065f46;   /* emerald-800  7.67:1 ✓ AAA */
@@ -142,17 +142,17 @@
   --status-d-cancelled:#64748b;   /* slate-500    4.2:1  ✓ AA  */
 
   /* ── Logo gradient ───────────────────────────────────────────── */
-  --palette-logo-light-start: #0d2518;   /* verde-950 — deep shadow */
-  --palette-logo-light-end:   #16402e;   /* verde-800 — Deep Forest  */
-  --palette-logo-dark-start:  #a78bfa;   /* violet-400 (dark mode unchanged) */
-  --palette-logo-dark-end:    #c4b5fd;   /* violet-300 (dark mode unchanged) */
+  --palette-logo-light-start: #091e12;   /* ivy-950 — deepest shadow */
+  --palette-logo-light-end:   #0f3325;   /* Deep Ivy — brand primary */
+  --palette-logo-dark-start:  #047857;   /* emerald-700 — rich depth */
+  --palette-logo-dark-end:    #10b981;   /* Bio-Emerald — brand primary */
 }
 
 /* ------------------------------------------------------------------
    LAYER 2 — Semantic tokens
    ------------------------------------------------------------------ */
 
-/* Light mode (default) — "Verde Signal" */
+/* Light mode (default) — "Platinum Signal" */
 :root,
 [data-theme='light'] {
   --theme-bg-page:     var(--light-bg-page);
@@ -192,7 +192,7 @@
   --theme-accent-brand:  var(--light-primary);
   --theme-surface-code:  var(--light-bg-elevated);
 
-  --theme-chart-1: var(--light-primary-soft);  /* forest-soft #2d7a56 */
+  --theme-chart-1: var(--light-primary-soft);  /* ivy-soft #1d6b44 */
   --theme-chart-2: #059669;                    /* emerald-600 */
   --theme-chart-3: #0891b2;                    /* cyan-600    */
   --theme-chart-4: #e11d48;                    /* rose-600    */
@@ -202,7 +202,7 @@
   --theme-logo-end:   var(--palette-logo-light-end);
 }
 
-/* Dark mode — "Signal Dark" */
+/* Dark mode — "Obsidian Verde" */
 [data-theme='dark'] {
   --theme-bg-page:     var(--dark-bg-page);
   --theme-bg-card:     var(--dark-bg-card);
@@ -220,7 +220,7 @@
   --theme-border:         var(--dark-border-subtle);
 
   --theme-primary:            var(--dark-primary);
-  --theme-primary-foreground: var(--dark-bg-page);
+  --theme-primary-foreground: #041f16;   /* Deep Dark on Bio-Emerald button */
   --theme-ring:               var(--dark-primary);
   --theme-focus-ring:         var(--dark-primary);
 
@@ -241,7 +241,7 @@
   --theme-accent-brand:  var(--dark-primary);
   --theme-surface-code:  var(--dark-bg-elevated);
 
-  --theme-chart-1: var(--dark-primary);    /* violet-400 */
+  --theme-chart-1: var(--dark-primary);    /* Bio-Emerald */
   --theme-chart-2: var(--status-d-success);/* emerald-400 */
   --theme-chart-3: #22d3ee;                /* cyan-400   */
   --theme-chart-4: var(--status-d-error);  /* rose-400   */
