@@ -3,13 +3,14 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { CreateKeyResponse } from '@/lib/types'
+import type { ApiKey, CreateKeyResponse } from '@/lib/types'
 import { Plus, Trash2, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { Switch } from '@/components/ui/switch'
 import {
   Dialog,
   DialogContent,
@@ -25,8 +26,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useTranslation } from '@/i18n'
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
 
   async function handleCopy() {
@@ -36,13 +39,8 @@ function CopyButton({ text }: { text: string }) {
   }
 
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={handleCopy}
-      title="Copy to clipboard"
-    >
-      {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+    <Button variant="ghost" size="icon" onClick={handleCopy} title={t('common.copy')}>
+      {copied ? <Check className="h-4 w-4 text-status-success-fg" /> : <Copy className="h-4 w-4" />}
     </Button>
   )
 }
@@ -54,6 +52,7 @@ function CreateKeyModal({
   onClose: () => void
   onCreated: (resp: CreateKeyResponse) => void
 }) {
+  const { t } = useTranslation()
   const [name, setName] = useState('')
   const [tenantId, setTenantId] = useState('default')
   const [rpm, setRpm] = useState('')
@@ -67,37 +66,31 @@ function CreateKeyModal({
         rate_limit_rpm: rpm ? parseInt(rpm, 10) : undefined,
         rate_limit_tpm: tpm ? parseInt(tpm, 10) : undefined,
       }),
-    onSuccess: (data) => {
-      onCreated(data)
-    },
+    onSuccess: (data) => onCreated(data),
   })
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Create API Key</DialogTitle>
+          <DialogTitle>{t('keys.createTitle')}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="key-name">
-              Name <span className="text-destructive">*</span>
-            </Label>
+            <Label htmlFor="key-name">{t('keys.keyName')} <span className="text-destructive">*</span></Label>
             <Input
               id="key-name"
-              type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. production-key"
+              placeholder={t('keys.keyNamePlaceholder')}
             />
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="key-tenant">Tenant ID</Label>
+            <Label htmlFor="key-tenant">{t('keys.tenantId')}</Label>
             <Input
               id="key-tenant"
-              type="text"
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
               placeholder="default"
@@ -106,23 +99,23 @@ function CreateKeyModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="key-rpm">Rate limit (RPM)</Label>
+              <Label htmlFor="key-rpm">{t('keys.rateLimitRpm')}</Label>
               <Input
                 id="key-rpm"
                 type="number"
                 value={rpm}
                 onChange={(e) => setRpm(e.target.value)}
-                placeholder="0 = unlimited"
+                placeholder={t('keys.rateLimitPlaceholder')}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="key-tpm">Rate limit (TPM)</Label>
+              <Label htmlFor="key-tpm">{t('keys.rateLimitTpm')}</Label>
               <Input
                 id="key-tpm"
                 type="number"
                 value={tpm}
                 onChange={(e) => setTpm(e.target.value)}
-                placeholder="0 = unlimited"
+                placeholder={t('keys.rateLimitPlaceholder')}
               />
             </div>
           </div>
@@ -130,19 +123,14 @@ function CreateKeyModal({
 
         {mutation.error && (
           <p className="text-sm text-destructive">
-            {mutation.error instanceof Error ? mutation.error.message : 'Failed to create key'}
+            {mutation.error instanceof Error ? mutation.error.message : t('common.unknownError')}
           </p>
         )}
 
         <DialogFooter className="gap-3">
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() => mutation.mutate()}
-            disabled={!name.trim() || mutation.isPending}
-          >
-            {mutation.isPending ? 'Creating…' : 'Create Key'}
+          <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
+          <Button onClick={() => mutation.mutate()} disabled={!name.trim() || mutation.isPending}>
+            {mutation.isPending ? t('keys.creating') : t('keys.createKey')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -150,33 +138,58 @@ function CreateKeyModal({
   )
 }
 
-function KeyCreatedModal({
-  resp,
-  onClose,
-}: {
-  resp: CreateKeyResponse
-  onClose: () => void
-}) {
+function KeyCreatedModal({ resp, onClose }: { resp: CreateKeyResponse; onClose: () => void }) {
+  const { t } = useTranslation()
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Key Created</DialogTitle>
+          <DialogTitle>{t('keys.createdTitle')}</DialogTitle>
         </DialogHeader>
 
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-amber-400 text-sm">
-          Save this key now — it will never be shown again.
+        <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-4 text-status-warning-fg text-sm">
+          {t('keys.createdWarning')}
         </div>
 
         <div className="rounded-lg bg-muted p-3 flex items-center gap-2">
-          <code className="flex-1 font-mono text-sm text-emerald-400 break-all">
-            {resp.key}
-          </code>
+          <code className="flex-1 font-mono text-sm text-status-success-fg break-all">{resp.key}</code>
           <CopyButton text={resp.key} />
         </div>
 
         <DialogFooter>
-          <Button onClick={onClose}>Done</Button>
+          <Button onClick={onClose}>{t('common.done')}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function DeleteConfirmModal({
+  keyName,
+  onConfirm,
+  onClose,
+  isPending,
+}: {
+  keyName: string
+  onConfirm: () => void
+  onClose: () => void
+  isPending: boolean
+}) {
+  const { t } = useTranslation()
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{t('keys.deleteTitle')}</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          {t('keys.deleteConfirm', { name: keyName })}
+        </p>
+        <DialogFooter className="gap-3">
+          <Button variant="outline" onClick={onClose} disabled={isPending}>{t('common.cancel')}</Button>
+          <Button variant="destructive" onClick={onConfirm} disabled={isPending}>
+            {isPending ? t('keys.deleting') : t('common.delete')}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -184,9 +197,11 @@ function KeyCreatedModal({
 }
 
 export default function KeysPage() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
   const [createdKey, setCreatedKey] = useState<CreateKeyResponse | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null)
 
   const { data: keys, isLoading, error } = useQuery({
     queryKey: ['keys'],
@@ -194,11 +209,18 @@ export default function KeysPage() {
     refetchInterval: 60_000,
   })
 
-  const revokeMutation = useMutation({
-    mutationFn: (id: string) => api.revokeKey(id),
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.deleteKey(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['keys'] })
+      setDeleteTarget(null)
     },
+  })
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
+      api.toggleKeyActive(id, is_active),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
   })
 
   function handleCreated(resp: CreateKeyResponse) {
@@ -207,39 +229,33 @@ export default function KeysPage() {
     queryClient.invalidateQueries({ queryKey: ['keys'] })
   }
 
-  function handleRevoke(id: string, name: string) {
-    if (confirm(`Revoke key "${name}"? This cannot be undone.`)) {
-      revokeMutation.mutate(id)
-    }
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">API Keys</h1>
-          <p className="text-slate-400 mt-1 text-sm">
-            {keys ? `${keys.length} key${keys.length !== 1 ? 's' : ''}` : 'Loading…'}
+          <h1 className="text-2xl font-bold tracking-tight">{t('keys.title')}</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {keys ? `${keys.length} key${keys.length !== 1 ? 's' : ''}` : t('common.loading')}
           </p>
         </div>
         <Button onClick={() => setShowCreate(true)}>
           <Plus className="h-4 w-4 mr-2" />
-          Create Key
+          {t('keys.createKey')}
         </Button>
       </div>
 
       {isLoading && (
         <div className="flex h-48 items-center justify-center text-muted-foreground">
-          Loading keys…
+          {t('keys.loadingKeys')}
         </div>
       )}
 
       {error && (
         <Card className="border-destructive/50 bg-destructive/10">
           <CardContent className="p-6 text-destructive">
-            <p className="font-semibold">Failed to load keys</p>
+            <p className="font-semibold">{t('keys.failedKeys')}</p>
             <p className="text-sm mt-1 opacity-80">
-              {error instanceof Error ? error.message : 'Unknown error'}
+              {error instanceof Error ? error.message : t('common.unknownError')}
             </p>
           </CardContent>
         </Card>
@@ -248,7 +264,7 @@ export default function KeysPage() {
       {keys && keys.length === 0 && (
         <Card>
           <CardContent className="p-10 text-center text-muted-foreground">
-            No API keys yet. Create one to get started.
+            {t('keys.noKeys')}
           </CardContent>
         </Card>
       )}
@@ -259,18 +275,19 @@ export default function KeysPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Prefix</TableHead>
-                  <TableHead>Tenant</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>RPM / TPM</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{t('keys.name')}</TableHead>
+                  <TableHead>{t('keys.prefix')}</TableHead>
+                  <TableHead>{t('keys.tenant')}</TableHead>
+                  <TableHead>{t('keys.status')}</TableHead>
+                  <TableHead>{t('keys.activeToggle')}</TableHead>
+                  <TableHead>{t('keys.rpmTpm')}</TableHead>
+                  <TableHead>{t('keys.createdAt')}</TableHead>
+                  <TableHead className="text-right">{t('keys.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {keys.map((key) => (
-                  <TableRow key={key.id}>
+                  <TableRow key={key.id} className={!key.is_active ? 'opacity-50' : ''}>
                     <TableCell className="font-medium">{key.name}</TableCell>
                     <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
                     <TableCell className="text-muted-foreground">{key.tenant_id}</TableCell>
@@ -279,12 +296,21 @@ export default function KeysPage() {
                         variant="outline"
                         className={
                           key.is_active
-                            ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                            ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
                             : 'bg-muted text-muted-foreground'
                         }
                       >
-                        {key.is_active ? 'active' : 'revoked'}
+                        {key.is_active ? t('common.active') : t('common.inactive')}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Switch
+                        checked={key.is_active}
+                        onCheckedChange={(checked) =>
+                          toggleMutation.mutate({ id: key.id, is_active: checked })
+                        }
+                        disabled={toggleMutation.isPending}
+                      />
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs tabular-nums">
                       {key.rate_limit_rpm === 0 ? '∞' : key.rate_limit_rpm} /{' '}
@@ -294,17 +320,16 @@ export default function KeysPage() {
                       {new Date(key.created_at).toLocaleDateString()}
                     </TableCell>
                     <TableCell className="text-right">
-                      {key.is_active && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleRevoke(key.id, key.name)}
-                          disabled={revokeMutation.isPending}
-                          title="Revoke key"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setDeleteTarget(key)}
+                        disabled={deleteMutation.isPending}
+                        title={t('keys.deleteKey')}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -315,16 +340,19 @@ export default function KeysPage() {
       )}
 
       {showCreate && (
-        <CreateKeyModal
-          onClose={() => setShowCreate(false)}
-          onCreated={handleCreated}
-        />
+        <CreateKeyModal onClose={() => setShowCreate(false)} onCreated={handleCreated} />
       )}
 
       {createdKey && (
-        <KeyCreatedModal
-          resp={createdKey}
-          onClose={() => setCreatedKey(null)}
+        <KeyCreatedModal resp={createdKey} onClose={() => setCreatedKey(null)} />
+      )}
+
+      {deleteTarget && (
+        <DeleteConfirmModal
+          keyName={deleteTarget.name}
+          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
+          onClose={() => setDeleteTarget(null)}
+          isPending={deleteMutation.isPending}
         />
       )}
     </div>

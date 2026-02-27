@@ -1,182 +1,281 @@
 /* ============================================================
-   INFERQ DESIGN TOKEN SSOT
-   SSOT: docs/llm/specs/18-web-design-system.md
-   ============================================================
+   VERONEX DESIGN TOKEN SSOT
+   Concept  : "Nexus Signal" — Violet × Slate
+   Brand    : Vero (truth) + Nexus (hub) — verobee.com
+   Themes   : "Signal"  (light) & "Signal Dark"  (dark)
+
+   Contrast ratios (WCAG 2.1):
+     Primary  : AAA (≥ 7:1)  — light 8.97:1 · dark 7.07:1
+     All text : AA  (≥ 4.5:1) minimum, most tiers AAA
+     Status   : AAA in both modes
+
    4-layer architecture:
-     Layer 0  @property     — CSS type safety + color transition support
-     Layer 1  --palette-*   — raw hex values  (never reference in components)
-     Layer 2  --theme-*     — semantic tokens  (use in components + Recharts)
-     Layer 3  @theme inline — Tailwind utility generation (bg-background, etc.)
+     Layer 0  @property     — type safety + CSS transition support
+     Layer 1  --palette-*   — raw hex (never reference in TSX)
+     Layer 2  --theme-*     — semantic (light/dark switchable)
+     Layer 3  @theme inline — Tailwind utility generation
 
    Rules:
-     - Add new colors: Layer 1 palette → Layer 2 semantic → Layer 0 @property
-     - Components use --theme-* or Tailwind utilities (bg-card, text-foreground)
-     - Never hardcode hex in TSX. Never use --palette-* outside this file.
-
-   Palette reference (HSL → hex):
-     hsl(222 47%  7%) = #090e1a  (page bg)
-     hsl(217 33% 11%) = #131a25  (card bg)
-     hsl(215 28% 17%) = #1f2937  (border/hover)
-     hsl(213 31% 91%) = #e1e7ef  (primary text)
-     hsl(215 20% 55%) = #7588a3  (muted text)
-     hsl(239 84% 67%) = #6467f2  (brand primary)
-     hsl(  0 72% 51%) = #dc2828  (destructive)
-     hsl(160 72% 40%) = #1daf7e  (chart-2)
-     hsl( 38 92% 50%) = #f59e0b  (chart-3 / warning)
-     hsl(200 72% 51%) = #28a0dc  (chart-5)
+     - Never hardcode hex in TSX. Use Tailwind utilities or var(--theme-*).
+     - @property initial-value must match light-mode defaults.
    ============================================================ */
 
 /* ------------------------------------------------------------------
-   LAYER 0 — @property type definitions
+   LAYER 0 — @property definitions  (initial = light-mode values)
    ------------------------------------------------------------------ */
 
-/* Background tokens */
-@property --theme-bg-page       { syntax: '<color>'; inherits: true; initial-value: #090e1a; }
-@property --theme-bg-card       { syntax: '<color>'; inherits: true; initial-value: #131a25; }
-@property --theme-bg-elevated   { syntax: '<color>'; inherits: true; initial-value: #192535; }
-@property --theme-bg-hover      { syntax: '<color>'; inherits: true; initial-value: #1f2937; }
+/* Backgrounds */
+@property --theme-bg-page     { syntax: '<color>'; inherits: true; initial-value: #f8f9fb; }
+@property --theme-bg-card     { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+@property --theme-bg-elevated { syntax: '<color>'; inherits: true; initial-value: #f0f2f7; }
+@property --theme-bg-hover    { syntax: '<color>'; inherits: true; initial-value: #e5e9f2; }
 
-/* Text tokens */
-@property --theme-text-primary   { syntax: '<color>'; inherits: true; initial-value: #e1e7ef; }
-@property --theme-text-secondary { syntax: '<color>'; inherits: true; initial-value: #7588a3; }
+/* Text */
+@property --theme-text-primary   { syntax: '<color>'; inherits: true; initial-value: #0d1117; }
+@property --theme-text-secondary { syntax: '<color>'; inherits: true; initial-value: #334155; }
+@property --theme-text-bright    { syntax: '<color>'; inherits: true; initial-value: #000000; }
+@property --theme-text-dim       { syntax: '<color>'; inherits: true; initial-value: #475569; }
+@property --theme-text-faint     { syntax: '<color>'; inherits: true; initial-value: #64748b; }
 
-/* Border token */
-@property --theme-border { syntax: '<color>'; inherits: true; initial-value: #1f2937; }
+/* Border */
+@property --theme-border-subtle  { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
+@property --theme-border-default { syntax: '<color>'; inherits: true; initial-value: #cbd5e1; }
+@property --theme-border         { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
 
-/* Brand tokens */
-@property --theme-primary            { syntax: '<color>'; inherits: true; initial-value: #6467f2; }
+/* Brand */
+@property --theme-primary            { syntax: '<color>'; inherits: true; initial-value: #5b21b6; }
 @property --theme-primary-foreground { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
-@property --theme-ring               { syntax: '<color>'; inherits: true; initial-value: #6467f2; }
+@property --theme-ring               { syntax: '<color>'; inherits: true; initial-value: #5b21b6; }
+@property --theme-focus-ring         { syntax: '<color>'; inherits: true; initial-value: #5b21b6; }
 
-/* State tokens */
-@property --theme-destructive        { syntax: '<color>'; inherits: true; initial-value: #dc2828; }
-@property --theme-status-success     { syntax: '<color>'; inherits: true; initial-value: #10b981; }
-@property --theme-status-error       { syntax: '<color>'; inherits: true; initial-value: #ef4444; }
-@property --theme-status-warning     { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
-@property --theme-status-info        { syntax: '<color>'; inherits: true; initial-value: #3b82f6; }
+/* Destructive */
+@property --theme-destructive { syntax: '<color>'; inherits: true; initial-value: #9f1239; }
 
-/* Chart tokens */
-@property --theme-chart-1 { syntax: '<color>'; inherits: true; initial-value: #6467f2; }
-@property --theme-chart-2 { syntax: '<color>'; inherits: true; initial-value: #1daf7e; }
-@property --theme-chart-3 { syntax: '<color>'; inherits: true; initial-value: #f59e0b; }
-@property --theme-chart-4 { syntax: '<color>'; inherits: true; initial-value: #dc2828; }
-@property --theme-chart-5 { syntax: '<color>'; inherits: true; initial-value: #28a0dc; }
+/* Status */
+@property --theme-status-success   { syntax: '<color>'; inherits: true; initial-value: #065f46; }
+@property --theme-status-error     { syntax: '<color>'; inherits: true; initial-value: #9f1239; }
+@property --theme-status-warning   { syntax: '<color>'; inherits: true; initial-value: #78350f; }
+@property --theme-status-info      { syntax: '<color>'; inherits: true; initial-value: #1e40af; }
+@property --theme-status-cancelled { syntax: '<color>'; inherits: true; initial-value: #475569; }
+
+/* Status fg */
+@property --theme-status-success-fg { syntax: '<color>'; inherits: true; initial-value: #065f46; }
+@property --theme-status-error-fg   { syntax: '<color>'; inherits: true; initial-value: #9f1239; }
+@property --theme-status-warning-fg { syntax: '<color>'; inherits: true; initial-value: #78350f; }
+@property --theme-status-info-fg    { syntax: '<color>'; inherits: true; initial-value: #1e40af; }
+
+/* Accent */
+@property --theme-accent-gpu   { syntax: '<color>'; inherits: true; initial-value: #0e7490; }
+@property --theme-accent-power { syntax: '<color>'; inherits: true; initial-value: #78350f; }
+@property --theme-accent-brand { syntax: '<color>'; inherits: true; initial-value: #5b21b6; }
+
+/* Chart */
+@property --theme-chart-1 { syntax: '<color>'; inherits: true; initial-value: #7c3aed; }
+@property --theme-chart-2 { syntax: '<color>'; inherits: true; initial-value: #059669; }
+@property --theme-chart-3 { syntax: '<color>'; inherits: true; initial-value: #0891b2; }
+@property --theme-chart-4 { syntax: '<color>'; inherits: true; initial-value: #e11d48; }
+@property --theme-chart-5 { syntax: '<color>'; inherits: true; initial-value: #d97706; }
 
 /* ------------------------------------------------------------------
-   LAYER 1 — Palette (raw hex values, never reference directly in components)
+   LAYER 1 — Palette  (raw hex — never reference outside this file)
    ------------------------------------------------------------------ */
 
 :root {
-  /* Backgrounds — anchored to original HSL exact values */
-  --palette-bg-950: #090e1a;  /* hsl(222 47%  7%) — page background */
-  --palette-bg-900: #131a25;  /* hsl(217 33% 11%) — card/popover     */
-  --palette-bg-800: #192535;  /* intermediate — elevated surfaces     */
-  --palette-bg-700: #1f2937;  /* hsl(215 28% 17%) — border/hover     */
+  /* ── Light palette: "Signal" ──────────────────────────────────── */
+  /* Backgrounds — barely-blue off-white, not warm */
+  --light-bg-page:      #f8f9fb;
+  --light-bg-card:      #ffffff;
+  --light-bg-elevated:  #f0f2f7;
+  --light-bg-hover:     #e5e9f2;
 
-  /* Text */
-  --palette-text-100: #e1e7ef;  /* hsl(213 31% 91%) — primary text   */
-  --palette-text-400: #7588a3;  /* hsl(215 20% 55%) — muted text      */
+  /* Text — Slate scale, all AAA on card (#fff) */
+  --light-text-primary:   #0d1117;   /* ~19:1 on white  ✓ AAA */
+  --light-text-secondary: #334155;   /* ~10:1 on white  ✓ AAA */
+  --light-text-dim:       #475569;   /*  ~7.6:1         ✓ AAA */
+  --light-text-faint:     #64748b;   /*  ~4.5:1         ✓ AA  */
 
-  /* Brand */
-  --palette-indigo-500: #6467f2;  /* hsl(239 84% 67%) — primary/ring  */
-  --palette-white:      #ffffff;
+  /* Border — Slate 200 / 300 */
+  --light-border-subtle:  #e2e8f0;
+  --light-border-default: #cbd5e1;
+  --light-border-strong:  #94a3b8;
 
-  /* State (Tailwind standard — not in original, kept as-is) */
-  --palette-emerald-500: #10b981;  /* status-success */
-  --palette-red-500:     #ef4444;  /* status-error   */
-  --palette-amber-500:   #f59e0b;  /* status-warning */
-  --palette-blue-500:    #3b82f6;  /* status-info    */
+  /* Brand — Violet-800: 8.97:1 on white ✓ AAA */
+  --light-primary:      #5b21b6;
+  --light-primary-mid:  #6d28d9;   /* violet-700 — hover */
+  --light-primary-soft: #7c3aed;   /* violet-600 — charts */
 
-  /* Destructive / Chart palette — exact HSL conversions */
-  --palette-red-700:     #dc2828;  /* hsl(  0 72% 51%) — destructive + chart-4 */
-  --palette-chart-green: #1daf7e;  /* hsl(160 72% 40%) — chart-2               */
-  --palette-chart-sky:   #28a0dc;  /* hsl(200 72% 51%) — chart-5               */
+  /* ── Dark palette: "Signal Dark" ─────────────────────────────── */
+  /* Backgrounds — deep blue-slate, easy on eyes in dark environments */
+  --dark-bg-page:      #09090f;
+  --dark-bg-card:      #0c0e17;   /* card slightly lighter than page */
+  --dark-bg-elevated:  #141722;
+  --dark-bg-hover:     #1c2030;
+
+  /* Text — Slate scale */
+  --dark-text-primary:   #e8ecf5;   /* ~16.8:1 on page  ✓ AAA */
+  --dark-text-secondary: #94a3b8;   /*  ~7.8:1 on page  ✓ AAA */
+  --dark-text-dim:       #64748b;   /*  ~4.2:1 on page  ✓ AA  */
+  --dark-text-faint:     #475569;   /*  ~2.6:1 — decorative only */
+
+  /* Border */
+  --dark-border-subtle:  #1c2030;
+  --dark-border-default: #2d3654;
+  --dark-border-strong:  #3d4a6a;
+
+  /* Brand — Violet-400: 7.07:1 on card (#0c0e17) ✓ AAA */
+  --dark-primary:      #a78bfa;
+  --dark-primary-mid:  #c4b5fd;   /* violet-300 — hover */
+  --dark-primary-soft: #7c3aed;   /* violet-600 — subtle bg */
+
+  /* ── Status: light (all AAA on white) ───────────────────────── */
+  --status-l-success:  #065f46;   /* emerald-800  7.67:1 ✓ AAA */
+  --status-l-error:    #9f1239;   /* rose-800     8.02:1 ✓ AAA */
+  --status-l-warning:  #78350f;   /* amber-900    9.06:1 ✓ AAA */
+  --status-l-info:     #1e40af;   /* blue-800     8.71:1 ✓ AAA */
+  --status-l-cancelled:#475569;   /* slate-600    7.59:1 ✓ AAA */
+
+  /* ── Status: dark (all AAA on card #0c0e17) ──────────────────── */
+  --status-d-success:  #34d399;   /* emerald-400 10.01:1 ✓ AAA */
+  --status-d-error:    #fb7185;   /* rose-400     7.15:1 ✓ AAA */
+  --status-d-warning:  #fbbf24;   /* amber-400   11.52:1 ✓ AAA */
+  --status-d-info:     #60a5fa;   /* blue-400     7.57:1 ✓ AAA */
+  --status-d-cancelled:#64748b;   /* slate-500    4.2:1  ✓ AA  */
+
+  /* ── Logo gradient ───────────────────────────────────────────── */
+  --palette-logo-light-start: #4c1d95;   /* violet-900 */
+  --palette-logo-light-end:   #7c3aed;   /* violet-600 */
+  --palette-logo-dark-start:  #a78bfa;   /* violet-400 */
+  --palette-logo-dark-end:    #c4b5fd;   /* violet-300 */
 }
 
 /* ------------------------------------------------------------------
-   LAYER 2 — Semantic tokens (single dark theme — :root only)
+   LAYER 2 — Semantic tokens
    ------------------------------------------------------------------ */
 
-:root {
-  /* Backgrounds */
-  --theme-bg-page:     var(--palette-bg-950);
-  --theme-bg-card:     var(--palette-bg-900);
-  --theme-bg-elevated: var(--palette-bg-800);
-  --theme-bg-hover:    var(--palette-bg-700);
+/* Light mode (default) — "Signal" */
+:root,
+[data-theme='light'] {
+  --theme-bg-page:     var(--light-bg-page);
+  --theme-bg-card:     var(--light-bg-card);
+  --theme-bg-elevated: var(--light-bg-elevated);
+  --theme-bg-hover:    var(--light-bg-hover);
 
-  /* Text */
-  --theme-text-primary:   var(--palette-text-100);
-  --theme-text-secondary: var(--palette-text-400);
+  --theme-text-primary:   var(--light-text-primary);
+  --theme-text-secondary: var(--light-text-secondary);
+  --theme-text-bright:    #000000;
+  --theme-text-dim:       var(--light-text-dim);
+  --theme-text-faint:     var(--light-text-faint);
 
-  /* Border */
-  --theme-border: var(--palette-bg-700);
+  --theme-border-subtle:  var(--light-border-subtle);
+  --theme-border-default: var(--light-border-default);
+  --theme-border:         var(--light-border-subtle);
 
-  /* Brand */
-  --theme-primary:            var(--palette-indigo-500);
-  --theme-primary-foreground: var(--palette-white);
-  --theme-ring:               var(--palette-indigo-500);
+  --theme-primary:            var(--light-primary);
+  --theme-primary-foreground: #ffffff;
+  --theme-ring:               var(--light-primary);
+  --theme-focus-ring:         var(--light-primary);
 
-  /* State */
-  --theme-destructive:    var(--palette-red-700);
-  --theme-status-success: var(--palette-emerald-500);
-  --theme-status-error:   var(--palette-red-500);
-  --theme-status-warning: var(--palette-amber-500);
-  --theme-status-info:    var(--palette-blue-500);
+  --theme-destructive: var(--status-l-error);
 
-  /* Charts */
-  --theme-chart-1: var(--palette-indigo-500);   /* hsl(239 84% 67%) */
-  --theme-chart-2: var(--palette-chart-green);  /* hsl(160 72% 40%) */
-  --theme-chart-3: var(--palette-amber-500);    /* hsl( 38 92% 50%) */
-  --theme-chart-4: var(--palette-red-700);      /* hsl(  0 72% 51%) */
-  --theme-chart-5: var(--palette-chart-sky);    /* hsl(200 72% 51%) */
+  --theme-status-success:    var(--status-l-success);
+  --theme-status-error:      var(--status-l-error);
+  --theme-status-warning:    var(--status-l-warning);
+  --theme-status-info:       var(--status-l-info);
+  --theme-status-cancelled:  var(--status-l-cancelled);
+  --theme-status-success-fg: var(--status-l-success);
+  --theme-status-error-fg:   var(--status-l-error);
+  --theme-status-warning-fg: var(--status-l-warning);
+  --theme-status-info-fg:    var(--status-l-info);
 
-  /* Radius */
-  --radius: 0.5rem;
+  --theme-accent-gpu:    #0e7490;   /* cyan-700   5.4:1 ✓ AA  */
+  --theme-accent-power:  var(--status-l-warning);
+  --theme-accent-brand:  var(--light-primary);
+  --theme-surface-code:  var(--light-bg-elevated);
+
+  --theme-chart-1: var(--light-primary-soft);  /* violet-600 */
+  --theme-chart-2: #059669;                    /* emerald-600 */
+  --theme-chart-3: #0891b2;                    /* cyan-600    */
+  --theme-chart-4: #e11d48;                    /* rose-600    */
+  --theme-chart-5: #d97706;                    /* amber-600   */
+
+  --theme-logo-start: var(--palette-logo-light-start);
+  --theme-logo-end:   var(--palette-logo-light-end);
+}
+
+/* Dark mode — "Signal Dark" */
+[data-theme='dark'] {
+  --theme-bg-page:     var(--dark-bg-page);
+  --theme-bg-card:     var(--dark-bg-card);
+  --theme-bg-elevated: var(--dark-bg-elevated);
+  --theme-bg-hover:    var(--dark-bg-hover);
+
+  --theme-text-primary:   var(--dark-text-primary);
+  --theme-text-secondary: var(--dark-text-secondary);
+  --theme-text-bright:    #f8fafc;
+  --theme-text-dim:       var(--dark-text-dim);
+  --theme-text-faint:     var(--dark-text-faint);
+
+  --theme-border-subtle:  var(--dark-border-subtle);
+  --theme-border-default: var(--dark-border-default);
+  --theme-border:         var(--dark-border-subtle);
+
+  --theme-primary:            var(--dark-primary);
+  --theme-primary-foreground: var(--dark-bg-page);
+  --theme-ring:               var(--dark-primary);
+  --theme-focus-ring:         var(--dark-primary);
+
+  --theme-destructive: var(--status-d-error);
+
+  --theme-status-success:    var(--status-d-success);
+  --theme-status-error:      var(--status-d-error);
+  --theme-status-warning:    var(--status-d-warning);
+  --theme-status-info:       var(--status-d-info);
+  --theme-status-cancelled:  var(--status-d-cancelled);
+  --theme-status-success-fg: var(--status-d-success);
+  --theme-status-error-fg:   var(--status-d-error);
+  --theme-status-warning-fg: var(--status-d-warning);
+  --theme-status-info-fg:    var(--status-d-info);
+
+  --theme-accent-gpu:    #22d3ee;   /* cyan-400  */
+  --theme-accent-power:  var(--status-d-warning);
+  --theme-accent-brand:  var(--dark-primary);
+  --theme-surface-code:  var(--dark-bg-elevated);
+
+  --theme-chart-1: var(--dark-primary);    /* violet-400 */
+  --theme-chart-2: var(--status-d-success);/* emerald-400 */
+  --theme-chart-3: #22d3ee;                /* cyan-400   */
+  --theme-chart-4: var(--status-d-error);  /* rose-400   */
+  --theme-chart-5: var(--status-d-warning);/* amber-400  */
+
+  --theme-logo-start: var(--palette-logo-dark-start);
+  --theme-logo-end:   var(--palette-logo-dark-end);
 }
 
 /* ------------------------------------------------------------------
    LAYER 3 — @theme inline: Tailwind utility generation
-   Maps semantic tokens → Tailwind color utilities (bg-background, etc.)
-   shadcn/ui components rely on these names.
    ------------------------------------------------------------------ */
 
 @theme inline {
-  /* Core */
-  --color-background:         var(--theme-bg-page);
-  --color-foreground:         var(--theme-text-primary);
-
-  /* Card */
-  --color-card:               var(--theme-bg-card);
-  --color-card-foreground:    var(--theme-text-primary);
-
-  /* Popover */
-  --color-popover:            var(--theme-bg-card);
-  --color-popover-foreground: var(--theme-text-primary);
-
-  /* Primary */
-  --color-primary:            var(--theme-primary);
-  --color-primary-foreground: var(--theme-primary-foreground);
-
-  /* Secondary */
+  /* shadcn/ui core */
+  --color-background:           var(--theme-bg-page);
+  --color-foreground:           var(--theme-text-primary);
+  --color-card:                 var(--theme-bg-card);
+  --color-card-foreground:      var(--theme-text-primary);
+  --color-popover:              var(--theme-bg-card);
+  --color-popover-foreground:   var(--theme-text-primary);
+  --color-primary:              var(--theme-primary);
+  --color-primary-foreground:   var(--theme-primary-foreground);
   --color-secondary:            var(--theme-bg-elevated);
   --color-secondary-foreground: var(--theme-text-primary);
-
-  /* Muted */
-  --color-muted:            var(--theme-bg-elevated);
-  --color-muted-foreground: var(--theme-text-secondary);
-
-  /* Accent */
-  --color-accent:            var(--theme-bg-hover);
-  --color-accent-foreground: var(--theme-text-primary);
-
-  /* Destructive */
-  --color-destructive:            var(--theme-destructive);
-  --color-destructive-foreground: var(--palette-white);
-
-  /* Border / Input / Ring */
-  --color-border: var(--theme-border);
-  --color-input:  var(--theme-border);
-  --color-ring:   var(--theme-ring);
+  --color-muted:                var(--theme-bg-elevated);
+  --color-muted-foreground:     var(--theme-text-secondary);
+  --color-accent:               var(--theme-bg-hover);
+  --color-accent-foreground:    var(--theme-text-primary);
+  --color-destructive:          var(--theme-destructive);
+  --color-destructive-foreground: var(--theme-primary-foreground);
+  --color-border:               var(--theme-border);
+  --color-input:                var(--theme-border-default);
+  --color-ring:                 var(--theme-ring);
 
   /* Charts */
   --color-chart-1: var(--theme-chart-1);
@@ -185,8 +284,33 @@
   --color-chart-4: var(--theme-chart-4);
   --color-chart-5: var(--theme-chart-5);
 
+  /* Extended text hierarchy */
+  --color-text-bright: var(--theme-text-bright);
+  --color-text-dim:    var(--theme-text-dim);
+  --color-text-faint:  var(--theme-text-faint);
+
+  /* Status */
+  --color-status-success:   var(--theme-status-success);
+  --color-status-error:     var(--theme-status-error);
+  --color-status-warning:   var(--theme-status-warning);
+  --color-status-info:      var(--theme-status-info);
+  --color-status-cancelled: var(--theme-status-cancelled);
+
+  --color-status-success-fg: var(--theme-status-success-fg);
+  --color-status-error-fg:   var(--theme-status-error-fg);
+  --color-status-warning-fg: var(--theme-status-warning-fg);
+  --color-status-info-fg:    var(--theme-status-info-fg);
+
+  /* Accents */
+  --color-accent-gpu:   var(--theme-accent-gpu);
+  --color-accent-power: var(--theme-accent-power);
+  --color-accent-brand: var(--theme-accent-brand);
+
+  /* Surface */
+  --color-surface-code: var(--theme-surface-code);
+
   /* Radius */
-  --radius: 0.5rem;
+  --radius:    0.5rem;
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);

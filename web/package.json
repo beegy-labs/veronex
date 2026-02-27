@@ -17,11 +17,13 @@
     "@tanstack/react-query": "^5.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "i18next": "^25.8.13",
     "lucide-react": "^0.468.0",
     "next": "15.1.0",
     "radix-ui": "^1.4.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-i18next": "^16.5.4",
     "recharts": "^2.13.0",
     "tailwind-merge": "^2.6.1",
     "tw-animate-css": "^1.0.0"

@@ -8,12 +8,21 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, Legend,
 } from 'recharts'
-import { Timer, TrendingUp, CheckCircle, Zap } from 'lucide-react'
+import { Timer, TrendingUp, CheckCircle, Zap, AlertTriangle } from 'lucide-react'
 import StatsCard from '@/components/stats-card'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useTranslation } from '@/i18n'
 
 const HOUR_OPTIONS = [6, 12, 24, 48, 72]
+
+const TOOLTIP_STYLE = {
+  backgroundColor: 'var(--theme-bg-card)',
+  border: '1px solid var(--theme-border)',
+  borderRadius: '8px',
+  color: 'var(--theme-text-primary)',
+  fontSize: '12px',
+}
 
 function ms(n: number) {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}s`
@@ -24,12 +33,19 @@ function pct(n: number) {
   return `${Math.round(n * 100)}%`
 }
 
+function fmt(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
 function fmtHour(iso: string) {
   const d = new Date(iso)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}h`
 }
 
 export default function PerformancePage() {
+  const { t } = useTranslation()
   const [hours, setHours] = useState(24)
 
   const { data, isLoading, error } = useQuery({
@@ -38,42 +54,41 @@ export default function PerformancePage() {
     refetchInterval: 60_000,
   })
 
-  const latencyCardData = data
+  const latencyBoxes = data
     ? [
-        { label: 'Avg', value: ms(data.avg_latency_ms) },
-        { label: 'P50', value: ms(data.p50_latency_ms) },
-        { label: 'P95', value: ms(data.p95_latency_ms) },
-        { label: 'P99', value: ms(data.p99_latency_ms) },
+        { label: t('performance.p50'), value: ms(data.p50_latency_ms) },
+        { label: t('performance.p95'), value: ms(data.p95_latency_ms) },
+        { label: t('performance.p99'), value: ms(data.p99_latency_ms) },
+        { label: t('performance.avgLatency'), value: ms(data.avg_latency_ms) },
       ]
     : []
 
   const chartData = data?.hourly.map((h) => ({
-    hour: fmtHour(h.hour),
+    hour:    fmtHour(h.hour),
     latency: Math.round(h.avg_latency_ms),
-    requests: h.request_count,
+    total:   h.request_count,
     success: h.success_count,
-    tokens: h.total_tokens,
+    errors:  Math.max(0, h.request_count - h.success_count),
+    tokens:  h.total_tokens,
   })) ?? []
 
   const hasData = data && data.total_requests > 0
+  const errorCount = data ? data.total_requests - Math.round(data.success_rate * data.total_requests) : 0
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">Performance</h1>
-          <p className="text-slate-400 mt-1 text-sm">Latency percentiles and throughput</p>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {t('performance.title')}
+          </h1>
+          <p className="text-muted-foreground mt-1 text-sm">{t('performance.description')}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Last</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-muted-foreground">{t('common.last')}</span>
           {HOUR_OPTIONS.map((h) => (
-            <Button
-              key={h}
-              variant={hours === h ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setHours(h)}
-            >
+            <Button key={h} variant={hours === h ? 'default' : 'outline'} size="sm" onClick={() => setHours(h)}>
               {h}h
             </Button>
           ))}
@@ -82,72 +97,79 @@ export default function PerformancePage() {
 
       {/* ClickHouse unavailable */}
       {error && (
-        <Card className="border-amber-500/30 bg-amber-500/10">
+        <Card className="border-status-warning/30 bg-status-warning/10">
           <CardContent className="p-5">
-            <p className="font-semibold text-amber-400">Performance analytics unavailable</p>
-            <p className="text-sm mt-1 text-amber-400/80">
-              ClickHouse is not enabled. Set <code className="font-mono">CLICKHOUSE_ENABLED=true</code> to track latency and throughput.
-            </p>
+            <p className="font-semibold text-status-warning-fg">{t('performance.analyticsUnavailable')}</p>
+            <p className="text-sm mt-1 text-status-warning-fg/80">{t('performance.clickhouseDisabled')}</p>
           </CardContent>
         </Card>
       )}
 
       {isLoading && (
-        <div className="flex h-48 items-center justify-center text-muted-foreground">Loading…</div>
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i}><CardContent className="p-6">
+              <div className="h-3 w-24 rounded bg-muted animate-pulse mb-4" />
+              <div className="h-8 w-16 rounded bg-muted animate-pulse" />
+            </CardContent></Card>
+          ))}
+        </div>
       )}
 
       {!error && !isLoading && !hasData && (
         <Card>
           <CardContent className="p-10 text-center text-muted-foreground">
-            <p className="font-medium">No data yet</p>
-            <p className="text-sm mt-1">Submit inference requests to see performance metrics.</p>
+            <p className="font-medium">{t('performance.noData')}</p>
+            <p className="text-sm mt-1">{t('performance.noDataHint')}</p>
           </CardContent>
         </Card>
       )}
 
       {!error && data && hasData && (
         <>
-          {/* Summary cards */}
+          {/* ── KPI cards ───────────────────────────────────── */}
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
             <StatsCard
-              title="Avg Latency"
+              title={t('performance.avgLatency')}
               value={ms(data.avg_latency_ms)}
-              subtitle={`P50 ${ms(data.p50_latency_ms)}`}
+              subtitle={`${t('performance.p50')} ${ms(data.p50_latency_ms)}`}
               icon={<Timer className="h-5 w-5" />}
             />
             <StatsCard
-              title="P95 / P99"
+              title={t('performance.p9599')}
               value={ms(data.p95_latency_ms)}
-              subtitle={`P99 ${ms(data.p99_latency_ms)}`}
+              subtitle={`${t('performance.p99')} ${ms(data.p99_latency_ms)}`}
               icon={<TrendingUp className="h-5 w-5" />}
             />
             <StatsCard
-              title="Success Rate"
+              title={t('performance.successRate')}
               value={pct(data.success_rate)}
-              subtitle={`${data.total_requests.toLocaleString()} total requests`}
+              subtitle={`${fmt(data.total_requests)} ${t('overview.requests')}`}
               icon={<CheckCircle className="h-5 w-5" />}
             />
             <StatsCard
-              title="Total Tokens"
-              value={data.total_tokens >= 1000 ? `${(data.total_tokens / 1000).toFixed(1)}K` : String(data.total_tokens)}
-              subtitle={`last ${hours}h`}
+              title={t('performance.totalTokens')}
+              value={fmt(data.total_tokens)}
+              subtitle={`${t('common.last')} ${hours}h`}
               icon={<Zap className="h-5 w-5" />}
             />
           </div>
 
-          {/* Latency percentile boxes */}
+          {/* ── Latency percentile boxes ─────────────────────── */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Latency Percentiles</CardTitle>
-              <p className="text-xs text-muted-foreground">Aggregated over the selected time range</p>
+              <CardTitle className="text-base">{t('performance.latencyPercentiles')}</CardTitle>
+              <p className="text-xs text-muted-foreground">{t('performance.aggregatedOver')}</p>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-4 gap-3">
-                {latencyCardData.map(({ label, value }) => (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {latencyBoxes.map(({ label, value }) => (
                   <Card key={label} className="text-center">
                     <CardContent className="p-4">
-                      <p className="text-xs text-muted-foreground font-medium mb-1">{label}</p>
-                      <p className="text-xl font-bold font-mono">{value}</p>
+                      <p className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-2">
+                        {label}
+                      </p>
+                      <p className="text-2xl font-bold font-mono">{value}</p>
                     </CardContent>
                   </Card>
                 ))}
@@ -157,56 +179,74 @@ export default function PerformancePage() {
 
           {chartData.length > 0 && (
             <>
-              {/* Avg latency over time */}
+              {/* ── Avg latency trend ─────────────────────────── */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Avg Latency / Hour</CardTitle>
+                  <CardTitle className="text-base">{t('performance.avgLatencyHour')}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={200}>
                     <LineChart data={chartData}>
-                      <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <XAxis
+                        dataKey="hour"
+                        tick={{ fill: 'var(--theme-text-secondary)', fontSize: 11 }}
+                        axisLine={false} tickLine={false}
+                      />
                       <YAxis
-                        tick={{ fill: '#64748b', fontSize: 11 }}
-                        axisLine={false}
-                        tickLine={false}
-                        width={55}
-                        tickFormatter={(v) => ms(v)}
+                        tick={{ fill: 'var(--theme-text-secondary)', fontSize: 11 }}
+                        axisLine={false} tickLine={false} width={55}
+                        tickFormatter={ms}
                       />
                       <Tooltip
-                        contentStyle={{ backgroundColor: 'var(--theme-bg-card)', border: '1px solid var(--theme-border)', borderRadius: '8px', color: 'var(--theme-text-primary)' }}
-                        cursor={{ stroke: 'rgba(255,255,255,0.08)' }}
-                        formatter={(v: number) => [ms(v), 'Avg latency']}
+                        contentStyle={TOOLTIP_STYLE}
+                        cursor={{ stroke: 'var(--theme-border)' }}
+                        formatter={(v: number) => [ms(v), t('performance.avgLatency')]}
                       />
                       <ReferenceLine
                         y={data.p95_latency_ms}
-                        stroke="#f59e0b"
+                        stroke="var(--theme-status-warning)"
                         strokeDasharray="4 4"
-                        label={{ value: 'P95', position: 'right', fill: '#f59e0b', fontSize: 11 }}
+                        label={{ value: 'P95', position: 'right', fill: 'var(--theme-status-warning)', fontSize: 11 }}
                       />
-                      <Line type="monotone" dataKey="latency" stroke="#6366f1" strokeWidth={2} dot={false} />
+                      <Line
+                        type="monotone" dataKey="latency"
+                        stroke="var(--theme-primary)" strokeWidth={2} dot={false}
+                      />
                     </LineChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
 
-              {/* Throughput (requests / success) */}
+              {/* ── Throughput: total / success / errors ─────────── */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Throughput / Hour</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">{t('performance.throughputHour')}</CardTitle>
+                    {errorCount > 0 && (
+                      <span className="flex items-center gap-1.5 text-xs text-[var(--theme-status-error)]">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        {fmt(errorCount)} {t('performance.errors')}
+                      </span>
+                    )}
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={180}>
+                  <ResponsiveContainer width="100%" height={200}>
                     <BarChart data={chartData} barGap={2}>
-                      <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} width={35} />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: 'var(--theme-bg-card)', border: '1px solid var(--theme-border)', borderRadius: '8px', color: 'var(--theme-text-primary)' }}
-                        cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                      <XAxis
+                        dataKey="hour"
+                        tick={{ fill: 'var(--theme-text-secondary)', fontSize: 11 }}
+                        axisLine={false} tickLine={false}
                       />
-                      <Legend wrapperStyle={{ fontSize: '12px', color: '#94a3b8' }} />
-                      <Bar dataKey="requests" name="Total" fill="#6366f1" radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="success" name="Success" fill="#10b981" radius={[3, 3, 0, 0]} />
+                      <YAxis
+                        tick={{ fill: 'var(--theme-text-secondary)', fontSize: 11 }}
+                        axisLine={false} tickLine={false} width={35}
+                      />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'var(--theme-bg-hover)' }} />
+                      <Legend wrapperStyle={{ fontSize: '12px', color: 'var(--theme-text-secondary)' }} />
+                      <Bar dataKey="total"   name={t('overview.totalReqs')}   fill="var(--theme-primary)"                    radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="success" name={t('overview.successReqs')} fill="var(--theme-status-success)"       radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="errors"  name={t('performance.errors')}   fill="var(--theme-status-error)"         radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>

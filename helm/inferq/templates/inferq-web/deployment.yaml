@@ -30,9 +30,9 @@ spec:
               value: "3002"
             - name: HOSTNAME
               value: "0.0.0.0"
-            - name: NEXT_PUBLIC_INFERQ_API_URL
+            - name: NEXT_PUBLIC_VERONEX_API_URL
               value: {{ .Values.inferqWeb.env.nextPublicInferqApiUrl | quote }}
-            - name: NEXT_PUBLIC_INFERQ_ADMIN_KEY
+            - name: NEXT_PUBLIC_VERONEX_ADMIN_KEY
               value: {{ .Values.inferqWeb.env.nextPublicInferqAdminKey | quote }}
           livenessProbe:
             httpGet:

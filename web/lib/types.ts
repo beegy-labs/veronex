@@ -109,6 +109,11 @@ export interface RegisterGpuServerRequest {
   node_exporter_url?: string
 }
 
+export interface UpdateGpuServerRequest {
+  name?: string
+  node_exporter_url?: string
+}
+
 export interface NodeMetrics {
   scrape_ok: boolean
   mem_total_mb: number
@@ -143,6 +148,8 @@ export interface Backend {
   is_free_tier: boolean
   status: 'online' | 'offline' | 'degraded'
   registered_at: string
+  /** Masked API key shown in the UI (e.g. `AIza...x1y2`). Gemini only. */
+  api_key_masked: string | null
 }
 
 export interface RegisterBackendRequest {
@@ -165,6 +172,19 @@ export interface UpdateBackendRequest {
   gpu_index?: number | null
   server_id?: string | null
   is_free_tier?: boolean
+  is_active?: boolean
+}
+
+export interface GeminiStatusResult {
+  id: string
+  name: string
+  status: 'online' | 'offline' | 'degraded'
+  error: string | null
+}
+
+export interface GeminiStatusSyncResponse {
+  synced_at: string
+  results: GeminiStatusResult[]
 }
 
 /** Per-model Gemini rate-limit policy. model_name="*" = global fallback. */
@@ -195,6 +215,21 @@ export interface ServerMetricsPoint {
   gpu_power_w: number | null
 }
 
+export interface BackendSelectedModel {
+  model_name: string
+  is_enabled: boolean
+  synced_at: string
+}
+
+export interface GeminiSyncConfig {
+  api_key_masked: string | null
+}
+
+export interface GeminiModel {
+  model_name: string
+  synced_at: string
+}
+
 export interface RegisterBackendResponse {
   id: string
   status: string
@@ -206,4 +241,35 @@ export interface CreateKeyResponse {
   key_prefix: string
   tenant_id: string
   created_at: string
+}
+
+export interface OllamaSyncResult {
+  backend_id: string
+  name: string
+  models: string[]
+  error: string | null
+}
+
+export interface OllamaSyncJob {
+  id: string
+  started_at: string
+  completed_at: string | null
+  status: 'running' | 'completed'
+  total_backends: number
+  done_backends: number
+  results: OllamaSyncResult[]
+}
+
+/** Model with count of backends that carry it (from GET /v1/ollama/models). */
+export interface OllamaModelWithCount {
+  model_name: string
+  backend_count: number
+}
+
+/** Backend info returned by GET /v1/ollama/models/:model_name/backends. */
+export interface OllamaBackendForModel {
+  backend_id: string
+  name: string
+  url: string
+  status: string
 }
