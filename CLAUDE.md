@@ -37,7 +37,7 @@
 | Layer          | Tech                              |
 | -------------- | --------------------------------- |
 | **Runtime**    | Rust (Axum 0.8, tokio, Edition 2024) |
-| **DB**         | PostgreSQL 17 (sqlx 0.8)         |
+| **DB**         | PostgreSQL 18 (sqlx 0.8, native uuidv7()) |
 | **Queue**      | Valkey (fred 9, BLPOP/RPUSH)     |
 | **Streaming**  | SSE (Server-Sent Events)         |
 | **Analytics**  | ClickHouse + OTel Collector      |
