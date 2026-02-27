@@ -1,11 +1,11 @@
 /* ============================================================
    VERONEX DESIGN TOKEN SSOT
-   Concept  : "Nexus Signal" — Violet × Slate
+   Concept  : "Verde Signal" — Forest × Slate
    Brand    : Vero (truth) + Nexus (hub) — verobee.com
    Themes   : "Signal"  (light) & "Signal Dark"  (dark)
 
    Contrast ratios (WCAG 2.1):
-     Primary  : AAA (≥ 7:1)  — light 8.97:1 · dark 7.07:1
+     Primary  : AAA (≥ 7:1)  — light 11.45:1 · dark 7.07:1
      All text : AA  (≥ 4.5:1) minimum, most tiers AAA
      Status   : AAA in both modes
 
@@ -25,13 +25,13 @@
    ------------------------------------------------------------------ */
 
 /* Backgrounds */
-@property --theme-bg-page     { syntax: '<color>'; inherits: true; initial-value: #f8f9fb; }
+@property --theme-bg-page     { syntax: '<color>'; inherits: true; initial-value: #f8f9fa; }
 @property --theme-bg-card     { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
 @property --theme-bg-elevated { syntax: '<color>'; inherits: true; initial-value: #f0f2f7; }
 @property --theme-bg-hover    { syntax: '<color>'; inherits: true; initial-value: #e5e9f2; }
 
 /* Text */
-@property --theme-text-primary   { syntax: '<color>'; inherits: true; initial-value: #0d1117; }
+@property --theme-text-primary   { syntax: '<color>'; inherits: true; initial-value: #1a1c1a; }
 @property --theme-text-secondary { syntax: '<color>'; inherits: true; initial-value: #334155; }
 @property --theme-text-bright    { syntax: '<color>'; inherits: true; initial-value: #000000; }
 @property --theme-text-dim       { syntax: '<color>'; inherits: true; initial-value: #475569; }
@@ -43,10 +43,10 @@
 @property --theme-border         { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
 
 /* Brand */
-@property --theme-primary            { syntax: '<color>'; inherits: true; initial-value: #5b21b6; }
+@property --theme-primary            { syntax: '<color>'; inherits: true; initial-value: #16402e; }
 @property --theme-primary-foreground { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
-@property --theme-ring               { syntax: '<color>'; inherits: true; initial-value: #5b21b6; }
-@property --theme-focus-ring         { syntax: '<color>'; inherits: true; initial-value: #5b21b6; }
+@property --theme-ring               { syntax: '<color>'; inherits: true; initial-value: #16402e; }
+@property --theme-focus-ring         { syntax: '<color>'; inherits: true; initial-value: #16402e; }
 
 /* Destructive */
 @property --theme-destructive { syntax: '<color>'; inherits: true; initial-value: #9f1239; }
@@ -67,10 +67,10 @@
 /* Accent */
 @property --theme-accent-gpu   { syntax: '<color>'; inherits: true; initial-value: #0e7490; }
 @property --theme-accent-power { syntax: '<color>'; inherits: true; initial-value: #78350f; }
-@property --theme-accent-brand { syntax: '<color>'; inherits: true; initial-value: #5b21b6; }
+@property --theme-accent-brand { syntax: '<color>'; inherits: true; initial-value: #16402e; }
 
 /* Chart */
-@property --theme-chart-1 { syntax: '<color>'; inherits: true; initial-value: #7c3aed; }
+@property --theme-chart-1 { syntax: '<color>'; inherits: true; initial-value: #2d7a56; }
 @property --theme-chart-2 { syntax: '<color>'; inherits: true; initial-value: #059669; }
 @property --theme-chart-3 { syntax: '<color>'; inherits: true; initial-value: #0891b2; }
 @property --theme-chart-4 { syntax: '<color>'; inherits: true; initial-value: #e11d48; }
@@ -81,28 +81,28 @@
    ------------------------------------------------------------------ */
 
 :root {
-  /* ── Light palette: "Signal" ──────────────────────────────────── */
-  /* Backgrounds — barely-blue off-white, not warm */
-  --light-bg-page:      #f8f9fb;
+  /* ── Light palette: "Verde Signal" ───────────────────────────── */
+  /* Backgrounds — Metallic Pearl: minimal grey tint, reduces eye strain */
+  --light-bg-page:      #f8f9fa;   /* Metallic Pearl */
   --light-bg-card:      #ffffff;
-  --light-bg-elevated:  #f0f2f7;
-  --light-bg-hover:     #e5e9f2;
+  --light-bg-elevated:  #f0f2f0;   /* slight green tint matches brand */
+  --light-bg-hover:     #e6ebe8;
 
-  /* Text — Slate scale, all AAA on card (#fff) */
-  --light-text-primary:   #0d1117;   /* ~19:1 on white  ✓ AAA */
-  --light-text-secondary: #334155;   /* ~10:1 on white  ✓ AAA */
-  --light-text-dim:       #475569;   /*  ~7.6:1         ✓ AAA */
-  --light-text-faint:     #64748b;   /*  ~4.5:1         ✓ AA  */
+  /* Text — Anthracite + Slate scale, all AAA on card (#fff) */
+  --light-text-primary:   #1a1c1a;   /* Anthracite Black: ~14.5:1 ✓ AAA */
+  --light-text-secondary: #334155;   /* Slate Silver: ~10:1 ✓ AAA */
+  --light-text-dim:       #475569;   /* ~7.6:1 ✓ AAA */
+  --light-text-faint:     #64748b;   /* ~4.5:1 ✓ AA  */
 
   /* Border — Slate 200 / 300 */
   --light-border-subtle:  #e2e8f0;
   --light-border-default: #cbd5e1;
   --light-border-strong:  #94a3b8;
 
-  /* Brand — Violet-800: 8.97:1 on white ✓ AAA */
-  --light-primary:      #5b21b6;
-  --light-primary-mid:  #6d28d9;   /* violet-700 — hover */
-  --light-primary-soft: #7c3aed;   /* violet-600 — charts */
+  /* Brand — Verde Deep Forest: 11.45:1 on white ✓ AAA */
+  --light-primary:      #16402e;   /* Deep Forest */
+  --light-primary-mid:  #1e5c3a;   /* forest-mid — hover */
+  --light-primary-soft: #2d7a56;   /* forest-soft — charts */
 
   /* ── Dark palette: "Signal Dark" ─────────────────────────────── */
   /* Backgrounds — deep blue-slate, easy on eyes in dark environments */
@@ -142,17 +142,17 @@
   --status-d-cancelled:#64748b;   /* slate-500    4.2:1  ✓ AA  */
 
   /* ── Logo gradient ───────────────────────────────────────────── */
-  --palette-logo-light-start: #4c1d95;   /* violet-900 */
-  --palette-logo-light-end:   #7c3aed;   /* violet-600 */
-  --palette-logo-dark-start:  #a78bfa;   /* violet-400 */
-  --palette-logo-dark-end:    #c4b5fd;   /* violet-300 */
+  --palette-logo-light-start: #0d2518;   /* verde-950 — deep shadow */
+  --palette-logo-light-end:   #16402e;   /* verde-800 — Deep Forest  */
+  --palette-logo-dark-start:  #a78bfa;   /* violet-400 (dark mode unchanged) */
+  --palette-logo-dark-end:    #c4b5fd;   /* violet-300 (dark mode unchanged) */
 }
 
 /* ------------------------------------------------------------------
    LAYER 2 — Semantic tokens
    ------------------------------------------------------------------ */
 
-/* Light mode (default) — "Signal" */
+/* Light mode (default) — "Verde Signal" */
 :root,
 [data-theme='light'] {
   --theme-bg-page:     var(--light-bg-page);
@@ -192,7 +192,7 @@
   --theme-accent-brand:  var(--light-primary);
   --theme-surface-code:  var(--light-bg-elevated);
 
-  --theme-chart-1: var(--light-primary-soft);  /* violet-600 */
+  --theme-chart-1: var(--light-primary-soft);  /* forest-soft #2d7a56 */
   --theme-chart-2: #059669;                    /* emerald-600 */
   --theme-chart-3: #0891b2;                    /* cyan-600    */
   --theme-chart-4: #e11d48;                    /* rose-600    */

@@ -37,23 +37,25 @@
 - **Name**: Vero (truth/precision) + Nexus (connection hub)
 - **Logo**: `HexLogo` component in `nav.tsx` — flat-top honeycomb hexagon SVG, 32×32 viewBox
 - **Logo CSS vars**: `var(--theme-logo-start)`, `var(--theme-logo-end)`
-- **Favicon**: `web/public/favicon.svg` — violet gradient `#4c1d95 → #7c3aed`
-- **Wordmark**: `web/public/logo.svg` — hex mark + "Veronex" text in `#5b21b6`
+- **Favicon**: `web/public/favicon.svg` — forest gradient `#0d2518 → #16402e`
+- **Wordmark**: `web/public/logo.svg` — hex mark + "Veronex" text in `#16402e`
+- **Dark mode logo**: violet gradient `#a78bfa → #c4b5fd` (unchanged)
 
 ---
 
-## Design Theme — "Nexus Signal"
+## Design Theme — "Verde Signal"
 
-| | Light "Signal" | Dark "Signal Dark" |
+| | Light "Verde Signal" | Dark "Signal Dark" |
 |---|---|---|
-| Page bg | `#f8f9fb` | `#09090f` |
+| Page bg | `#f8f9fa` Metallic Pearl | `#09090f` |
 | Card bg | `#ffffff` | `#0c0e17` |
-| Primary | `#5b21b6` violet-800 (8.97:1 AAA) | `#a78bfa` violet-400 (7.07:1 AAA) |
-| Text primary | `#0d1117` ~19:1 AAA | `#e8ecf5` ~16.8:1 AAA |
-| Text secondary | `#334155` ~10:1 AAA | `#94a3b8` ~7.8:1 AAA |
+| Primary | `#16402e` Deep Forest (11.45:1 AAA) | `#a78bfa` violet-400 (7.07:1 AAA) |
+| Text primary | `#1a1c1a` Anthracite Black ~14.5:1 AAA | `#e8ecf5` ~16.8:1 AAA |
+| Text secondary | `#334155` Slate Silver ~10:1 AAA | `#94a3b8` ~7.8:1 AAA |
 | Border | `#e2e8f0` | `#1c2030` |
 
 WCAG targets: Primary ≥7:1 (AAA), body text AAA, status colors AAA both modes.
+Light logo: `#0d2518 → #16402e` gradient · Dark logo: `#a78bfa → #c4b5fd` (violet, unchanged)
 Dark status colors: `#34d399` / `#fb7185` / `#fbbf24` / `#60a5fa`
 
 ---
@@ -65,10 +67,10 @@ Dark status colors: `#34d399` / `#fb7185` / `#fbbf24` / `#60a5fa`
 @property --theme-primary { syntax: '<color>'; ... }
 
 /* Layer 1: --palette-* raw hex (NEVER use in components) */
---palette-violet-800: #5b21b6;
+--light-primary: #16402e;   /* Deep Forest — 11.45:1 on white ✓ AAA */
 
 /* Layer 2: --theme-* semantic (switches via [data-theme='dark']) */
---theme-primary: var(--palette-violet-800);     /* light */
+--theme-primary: var(--light-primary);          /* light */
 [data-theme='dark'] --theme-primary: ...;        /* dark */
 
 /* Layer 3: @theme inline — Tailwind utility generation */
