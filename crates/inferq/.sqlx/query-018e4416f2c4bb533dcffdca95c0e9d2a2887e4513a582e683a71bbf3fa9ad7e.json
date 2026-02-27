@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO backend_selected_models (backend_id, model_name, is_enabled, added_at)\n                VALUES ($1, $2, true, NOW())\n                ON CONFLICT (backend_id, model_name) DO NOTHING\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "018e4416f2c4bb533dcffdca95c0e9d2a2887e4513a582e683a71bbf3fa9ad7e"
+}

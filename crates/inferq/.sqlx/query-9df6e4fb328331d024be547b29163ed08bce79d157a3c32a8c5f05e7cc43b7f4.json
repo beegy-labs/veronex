@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT model_name, COUNT(backend_id) AS \"backend_count!: i64\"\n            FROM ollama_models\n            GROUP BY model_name\n            ORDER BY model_name ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "backend_count!: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "9df6e4fb328331d024be547b29163ed08bce79d157a3c32a8c5f05e7cc43b7f4"
+}
