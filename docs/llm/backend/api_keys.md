@@ -1,0 +1,156 @@
+# API Keys — Backend: Auth & Rate Limiting
+
+> SSOT | **Last Updated**: 2026-02-27
+
+## Task Guide
+
+| Task | File | What to change |
+|------|------|----------------|
+| Add new API key field | `migrations/` + `domain/entities/api_key.rs` + `persistence/api_key_repository.rs` + `key_handlers.rs` `KeySummary` |
+| Change auth rejection logic | `persistence/api_key_repository.rs` → `get_by_hash()` WHERE clause |
+| Add new rate limit type (e.g. requests/day) | `middleware/rate_limiter.rs` → add new Valkey check before handler |
+| Change RPM window duration | `middleware/rate_limiter.rs` → `ZREMRANGEBYSCORE` window value |
+| Change bootstrap key behavior | `main.rs` → bootstrap key creation block |
+| Add field to CreateKeyRequest | `key_handlers.rs` → `CreateKeyRequest` struct + `create_key()` handler |
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `crates/inferq/src/domain/entities/api_key.rs` | `ApiKey` entity |
+| `crates/inferq/src/application/ports/outbound/api_key_repository.rs` | `ApiKeyRepository` trait |
+| `crates/inferq/src/infrastructure/outbound/persistence/api_key_repository.rs` | `PostgresApiKeyRepository` impl |
+| `crates/inferq/src/infrastructure/inbound/http/key_handlers.rs` | CRUD handlers |
+| `crates/inferq/src/infrastructure/inbound/http/middleware/rate_limiter.rs` | RPM/TPM middleware |
+| `crates/inferq/src/main.rs` | Bootstrap key creation on startup |
+
+---
+
+## Entity
+
+```rust
+// domain/entities/api_key.rs
+pub struct ApiKey {
+    pub id: Uuid,
+    pub key_hash: String,                    // BLAKE2b-256, never stored plaintext
+    pub key_prefix: String,                  // First 12 chars for display
+    pub tenant_id: String,
+    pub name: String,
+    pub is_active: bool,
+    pub rate_limit_rpm: i32,                 // 0 = unlimited
+    pub rate_limit_tpm: i32,                 // 0 = unlimited
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,   // NULL = active, NOT NULL = soft-deleted
+}
+```
+
+## DB Schema
+
+```sql
+CREATE TABLE api_keys (
+    id              UUID         PRIMARY KEY,
+    key_hash        TEXT         NOT NULL UNIQUE, -- BLAKE2b-256
+    key_prefix      VARCHAR(12)  NOT NULL,
+    tenant_id       VARCHAR(255) NOT NULL DEFAULT 'default',
+    name            VARCHAR(255) NOT NULL,
+    is_active       BOOLEAN      NOT NULL DEFAULT true,
+    rate_limit_rpm  INTEGER      NOT NULL DEFAULT 0,
+    rate_limit_tpm  INTEGER      NOT NULL DEFAULT 0,
+    expires_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    deleted_at      TIMESTAMPTZ  -- migration 000021
+);
+-- migrations: 000001 CREATE, 000021 deleted_at (soft-delete)
+```
+
+---
+
+## API Endpoints
+
+```
+POST   /v1/keys        CreateKeyRequest → CreateKeyResponse (plaintext shown once)
+GET    /v1/keys        → Vec<KeySummary> (excludes soft-deleted)
+DELETE /v1/keys/{id}   → 204 (soft-delete: sets deleted_at = NOW())
+PATCH  /v1/keys/{id}   ToggleKeyRequest { is_active: bool } → 204
+```
+
+### Request / Response Structs
+
+```rust
+// key_handlers.rs
+pub struct CreateKeyRequest {
+    pub tenant_id: String,           // default: "default"
+    pub name: String,
+    pub rate_limit_rpm: Option<i32>, // 0 = unlimited
+    pub rate_limit_tpm: Option<i32>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+pub struct CreateKeyResponse {
+    pub id: Uuid,
+    pub key: String,        // Full plaintext — shown ONCE
+    pub key_prefix: String, // "vnx_abc123de…"
+    pub tenant_id: String,
+    pub created_at: String,
+}
+
+pub struct KeySummary {
+    pub id: String,
+    pub key_prefix: String,
+    pub tenant_id: String,
+    pub name: String,
+    pub is_active: bool,
+    pub rate_limit_rpm: i32,
+    pub rate_limit_tpm: i32,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+}
+```
+
+---
+
+## Authentication Flow
+
+Every protected endpoint reads `X-API-Key` header:
+
+```
+1. Extract header value
+2. BLAKE2b-256 hash → lookup WHERE key_hash = ?
+3. Reject if: not found | deleted_at IS NOT NULL | is_active = false | expires_at < now()
+4. Pass ApiKey to handler (id stored in job record as api_key_id)
+```
+
+**Bootstrap key**: `BOOTSTRAP_API_KEY` env var (default: `veronex-bootstrap-admin-key`) —
+auto-created at startup if not found. No rate limits.
+
+---
+
+## Rate Limiting (middleware/rate_limiter.rs)
+
+```
+RPM: Sorted set  veronex:ratelimit:rpm:{key_id}:{minute}
+     ZADD now() uuid; ZCOUNT window=60s → count ≥ rpm_limit → 429
+
+TPM: Counter     veronex:ratelimit:tpm:{key_id}:{minute}
+     INCR; EXPIRE 120s → count + estimated_tokens ≥ tpm_limit → 429
+     TPM incremented AFTER job completes (actual completion_tokens)
+```
+
+Fail-open: Valkey error → skip rate limit check, job proceeds.
+
+---
+
+## Soft-Delete Behavior
+
+- `DELETE /v1/keys/{id}` → sets `deleted_at = NOW()`, row kept
+- Hidden from `GET /v1/keys` (WHERE deleted_at IS NULL)
+- Rejected at auth check
+- Historical jobs preserved: `inference_jobs.api_key_id` → NULL on hard delete (FK ON DELETE SET NULL)
+- ClickHouse `inference_logs.api_key_id` is String (UUID), preserved after soft-delete
+
+---
+
+## Web UI
+
+→ See `docs/llm/frontend/web-keys.md`
