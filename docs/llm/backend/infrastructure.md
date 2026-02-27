@@ -31,7 +31,7 @@
 |---------|-------|-----------|------|
 | postgres | postgres:18-alpine | **5433** | Main DB — PG18, native `uuidv7()` |
 | valkey | valkey/valkey:8-alpine | **6380** | Queue (BLPOP), rate limiting, model cache |
-| clickhouse | clickhouse-server:26.2 | 8123, 9000 | inference_logs, OTel metrics/traces |
+| clickhouse | clickhouse-server:26.1 | 8123, 9000 | inference_logs, OTel metrics/traces |
 | redpanda | redpandadata/redpanda:v24.2.7 | 9092 | Kafka-compatible streaming buffer |
 | veronex | local build | **3001**→3000 | Rust API server (crate: `veronex`) |
 | veronex-web | local build | 3002 | Next.js admin dashboard |
