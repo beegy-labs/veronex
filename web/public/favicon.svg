@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
   <defs>
     <linearGradient id="hg" x1="2.5" y1="4.3" x2="29.5" y2="27.7" gradientUnits="userSpaceOnUse">
-      <stop offset="0%"   stop-color="#0d2518"/>
-      <stop offset="100%" stop-color="#16402e"/>
+      <stop offset="0%"   stop-color="#091e12"/>
+      <stop offset="100%" stop-color="#0f3325"/>
     </linearGradient>
   </defs>
   <!-- flat-top honeycomb cell, r=13.5 -->
