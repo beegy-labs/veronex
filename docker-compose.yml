@@ -40,6 +40,7 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./docker/clickhouse/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./docker/clickhouse/02_kafka.sql:/docker-entrypoint-initdb.d/02_kafka.sql
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
       interval: 10s
