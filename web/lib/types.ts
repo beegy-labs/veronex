@@ -15,11 +15,14 @@ export interface Job {
   model_name: string
   backend: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  source: 'api' | 'test'
   created_at: string
   completed_at: string | null
   latency_ms: number | null
   ttft_ms: number | null
+  prompt_tokens: number | null
   completion_tokens: number | null
+  cached_tokens: number | null
   tps: number | null
   api_key_name: string | null
 }
@@ -29,12 +32,15 @@ export interface JobDetail {
   model_name: string
   backend: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  source: 'api' | 'test'
   created_at: string
   started_at: string | null
   completed_at: string | null
   latency_ms: number | null
   ttft_ms: number | null
+  prompt_tokens: number | null
   completion_tokens: number | null
+  cached_tokens: number | null
   tps: number | null
   api_key_name: string | null
   prompt: string
@@ -82,12 +88,72 @@ export interface PerformanceStats {
   hourly: HourlyThroughput[]
 }
 
+export interface ModelStat {
+  model_name: string
+  request_count: number
+  success_count: number
+  success_rate: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  avg_latency_ms: number
+}
+
+export interface FinishReasonStat {
+  reason: string
+  count: number
+}
+
+export interface AnalyticsStats {
+  avg_tps: number
+  avg_prompt_tokens: number
+  avg_completion_tokens: number
+  models: ModelStat[]
+  finish_reasons: FinishReasonStat[]
+}
+
 export interface HourlyThroughput {
   hour: string
   request_count: number
   success_count: number
   avg_latency_ms: number
   total_tokens: number
+}
+
+export interface BackendBreakdown {
+  backend: string
+  request_count: number
+  success_count: number
+  error_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  success_rate: number
+}
+
+export interface KeyBreakdown {
+  key_id: string
+  key_name: string
+  key_prefix: string
+  request_count: number
+  success_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  success_rate: number
+}
+
+export interface ModelBreakdown {
+  model_name: string
+  backend: string
+  request_count: number
+  call_pct: number
+  prompt_tokens: number
+  completion_tokens: number
+  avg_latency_ms: number
+}
+
+export interface UsageBreakdown {
+  by_backend: BackendBreakdown[]
+  by_key: KeyBreakdown[]
+  by_model: ModelBreakdown[]
 }
 
 export interface CreateKeyRequest {
@@ -118,7 +184,12 @@ export interface NodeMetrics {
   scrape_ok: boolean
   mem_total_mb: number
   mem_available_mb: number
-  cpu_cores: number
+  /** Logical CPUs (hardware threads) */
+  cpu_logical: number
+  /** Physical cores — null when node_cpu_info is not available */
+  cpu_physical: number | null
+  /** Instantaneous CPU usage 0–100 %. null on first scrape (no delta yet) */
+  cpu_usage_pct: number | null
   gpus: GpuNodeMetrics[]
 }
 
@@ -267,6 +338,12 @@ export interface OllamaModelWithCount {
 }
 
 /** Backend info returned by GET /v1/ollama/models/:model_name/backends. */
+export interface RetryParams {
+  prompt: string
+  model: string
+  backend: string
+}
+
 export interface OllamaBackendForModel {
   backend_id: string
   name: string

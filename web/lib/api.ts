@@ -1,4 +1,4 @@
-import type { ApiKey, Backend, BackendSelectedModel, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate } from './types'
+import type { AnalyticsStats, ApiKey, Backend, BackendSelectedModel, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 
 const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
 const KEY  = process.env.NEXT_PUBLIC_VERONEX_ADMIN_KEY ?? ''
@@ -53,6 +53,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  cancelJob: (id: string) =>
+    req<void>(`/v1/inference/${id}`, { method: 'DELETE' }),
 
   servers: () =>
     req<GpuServer[]>('/v1/servers'),
@@ -125,6 +128,12 @@ export const api = {
 
   performance: (hours = 24) =>
     req<PerformanceStats>(`/v1/dashboard/performance?hours=${hours}`),
+
+  analytics: (hours = 24) =>
+    req<AnalyticsStats>(`/v1/dashboard/analytics?hours=${hours}`),
+
+  usageBreakdown: (hours = 24) =>
+    req<UsageBreakdown>(`/v1/usage/breakdown?hours=${hours}`),
 
   geminiPolicies: () =>
     req<GeminiRateLimitPolicy[]>('/v1/gemini/policies'),

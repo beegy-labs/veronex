@@ -1,50 +1,45 @@
 'use client'
 
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import type { RetryParams } from '@/lib/types'
 import JobTable from '@/components/job-table'
+import { ApiTestPanel } from '@/components/api-test-panel'
 import { ChevronLeft, ChevronRight, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useTranslation } from '@/i18n'
 
 const PAGE_SIZE = 50
 
-// ── Pagination helpers ─────────────────────────────────────────────────────────
-
-/** Returns an array of page numbers and '…' ellipsis markers to render. */
 function buildPageSlots(current: number, total: number): (number | '…')[] {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i)
-
   const first = 0
-  const last  = total - 1
-
-  if (current <= 3) {
-    return [0, 1, 2, 3, 4, '…', last]
-  }
-  if (current >= total - 4) {
-    return [first, '…', last - 4, last - 3, last - 2, last - 1, last]
-  }
+  const last = total - 1
+  if (current <= 3) return [0, 1, 2, 3, 4, '…', last]
+  if (current >= total - 4) return [first, '…', last - 4, last - 3, last - 2, last - 1, last]
   return [first, '…', current - 1, current, current + 1, '…', last]
 }
 
-// ── Page component ─────────────────────────────────────────────────────────────
+// ── Reusable jobs section ──────────────────────────────────────────────────────
 
-export default function JobsPage() {
+interface JobsSectionProps {
+  source: 'api' | 'test'
+  onRetry?: (params: RetryParams) => void
+}
+
+function JobsSection({ source, onRetry }: JobsSectionProps) {
   const { t } = useTranslation()
-  const [page, setPage]     = useState(0)
+  const [page, setPage] = useState(0)
   const [status, setStatus] = useState('all')
   const [search, setSearch] = useState('')
-  const [query, setQuery]   = useState('')   // committed search (on Enter)
+  const [query, setQuery] = useState('')
 
   const STATUS_OPTIONS = useMemo(() => [
     { value: 'all',       label: t('jobs.allStatuses') },
@@ -58,45 +53,41 @@ export default function JobsPage() {
   const offset = page * PAGE_SIZE
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['dashboard-jobs', page, status, query],
+    queryKey: ['dashboard-jobs', source, page, status, query],
     queryFn: () => {
       const params = new URLSearchParams({
-        limit:  String(PAGE_SIZE),
+        limit: String(PAGE_SIZE),
         offset: String(offset),
+        source,
       })
       if (status !== 'all') params.set('status', status)
-      if (query.trim())     params.set('q', query.trim())
+      if (query.trim()) params.set('q', query.trim())
       return api.jobs(params.toString())
     },
     refetchInterval: 30_000,
   })
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
-  const firstItem  = data && data.total > 0 ? offset + 1 : 0
-  const lastItem   = data ? Math.min(offset + PAGE_SIZE, data.total) : 0
+  const firstItem = data && data.total > 0 ? offset + 1 : 0
+  const lastItem = data ? Math.min(offset + PAGE_SIZE, data.total) : 0
 
   const commitSearch = useCallback(() => { setQuery(search); setPage(0) }, [search])
-  const clearSearch  = useCallback(() => { setSearch(''); setQuery(''); setPage(0) }, [])
-
+  const clearSearch = useCallback(() => { setSearch(''); setQuery(''); setPage(0) }, [])
   const goTo = (p: number) => setPage(Math.max(0, Math.min(totalPages - 1, p)))
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('jobs.title')}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            {data ? `${data.total.toLocaleString()} ${t('jobs.totalLabel')}` : t('common.loading')}
-          </p>
-        </div>
-
+    <div className="space-y-4">
+      {/* Controls */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <p className="text-sm text-muted-foreground">
+          {data ? `${data.total.toLocaleString()} ${t('jobs.totalLabel')}` : t('common.loading')}
+        </p>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Prompt search */}
+          {/* Search */}
           <div className="relative flex items-center">
             <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <Input
-              className="pl-8 pr-8 w-56 h-9 text-sm"
+              className="pl-8 pr-8 w-52 h-9 text-sm"
               placeholder={t('jobs.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -114,11 +105,10 @@ export default function JobsPage() {
               </button>
             )}
           </div>
-
           {/* Status filter */}
           <Select value={status} onValueChange={(val) => { setStatus(val); setPage(0) }}>
-            <SelectTrigger className="w-40 h-9">
-              <SelectValue placeholder={t('jobs.allStatuses')} />
+            <SelectTrigger className="w-36 h-9">
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {STATUS_OPTIONS.map((opt) => (
@@ -133,9 +123,7 @@ export default function JobsPage() {
       {query && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>{t('jobs.searchingFor')}</span>
-          <span className="px-2 py-0.5 rounded bg-primary/15 text-primary font-mono text-xs">
-            {query}
-          </span>
+          <span className="px-2 py-0.5 rounded bg-primary/15 text-primary font-mono text-xs">{query}</span>
           <button className="underline text-xs hover:text-foreground" onClick={clearSearch}>
             {t('jobs.clearSearch')}
           </button>
@@ -159,65 +147,94 @@ export default function JobsPage() {
         </Card>
       )}
 
-      {data && <JobTable jobs={data.jobs} />}
+      {data && <JobTable jobs={data.jobs} onRetry={onRetry} />}
 
-      {/* Pagination — always visible when data is loaded */}
+      {/* Pagination */}
       {data && (
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          {/* Range info */}
           <p className="text-sm text-muted-foreground tabular-nums">
             {data.total === 0
               ? t('jobs.noJobs')
               : `${firstItem.toLocaleString()}–${lastItem.toLocaleString()} of ${data.total.toLocaleString()}`}
           </p>
-
-          {/* Page buttons */}
           {totalPages > 1 && (
             <div className="flex items-center gap-1">
-              {/* Previous */}
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => goTo(page - 1)}
-                disabled={page === 0}
-              >
+              <Button variant="outline" size="icon" className="h-8 w-8"
+                onClick={() => goTo(page - 1)} disabled={page === 0}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-
-              {/* Page number slots */}
               {buildPageSlots(page, totalPages).map((slot, i) =>
                 slot === '…' ? (
-                  <span key={`ellipsis-${i}`} className="px-1.5 text-muted-foreground text-sm select-none">
-                    …
-                  </span>
+                  <span key={`e-${i}`} className="px-1.5 text-muted-foreground text-sm select-none">…</span>
                 ) : (
-                  <Button
-                    key={slot}
-                    variant={slot === page ? 'default' : 'outline'}
-                    size="icon"
-                    className="h-8 w-8 text-xs"
-                    onClick={() => goTo(slot)}
-                  >
+                  <Button key={slot} variant={slot === page ? 'default' : 'outline'}
+                    size="icon" className="h-8 w-8 text-xs" onClick={() => goTo(slot)}>
                     {slot + 1}
                   </Button>
                 )
               )}
-
-              {/* Next */}
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => goTo(page + 1)}
-                disabled={page >= totalPages - 1}
-              >
+              <Button variant="outline" size="icon" className="h-8 w-8"
+                onClick={() => goTo(page + 1)} disabled={page >= totalPages - 1}>
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
+export default function JobsPage() {
+  const { t } = useTranslation()
+  const testPanelRef = useRef<HTMLDivElement>(null)
+
+  const [activeTab, setActiveTab] = useState<'test' | 'api'>('api')
+  const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
+
+  function handleRetry(params: RetryParams) {
+    setRetryParams(params)
+    setActiveTab('test')
+    setTimeout(() => {
+      testPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 50)
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* ── Page header ───────────────────────────────────────────────────────── */}
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">{t('jobs.title')}</h1>
+        <p className="text-muted-foreground mt-1 text-sm">{t('jobs.description')}</p>
+      </div>
+
+      {/* ── Tabs ──────────────────────────────────────────────────────────────── */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'test' | 'api')}>
+        <TabsList>
+          <TabsTrigger value="api">{t('jobs.apiJobs')}</TabsTrigger>
+          <TabsTrigger value="test">{t('jobs.testRuns')}</TabsTrigger>
+        </TabsList>
+
+        {/* ── API Jobs tab ──────────────────────────────────────────────────── */}
+        <TabsContent value="api" className="mt-6">
+          <JobsSection source="api" onRetry={handleRetry} />
+        </TabsContent>
+
+        {/* ── Test Runs tab ─────────────────────────────────────────────────── */}
+        <TabsContent value="test" className="mt-6 space-y-6">
+          <div ref={testPanelRef}>
+            <ApiTestPanel
+              retryParams={retryParams}
+              onRetryConsumed={() => setRetryParams(null)}
+            />
+          </div>
+          <div className="border-t border-border pt-6">
+            <JobsSection source="test" onRetry={handleRetry} />
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
