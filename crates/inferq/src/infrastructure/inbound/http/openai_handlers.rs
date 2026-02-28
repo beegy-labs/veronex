@@ -9,8 +9,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
+use crate::domain::enums::JobSource;
 use super::state::AppState;
 
 type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
@@ -29,6 +28,8 @@ pub struct ChatCompletionRequest {
     pub messages: Vec<ChatMessage>,
     /// Selects the inferq backend type ("ollama" | "gemini"). Optional.
     pub backend: Option<String>,
+    /// Job source: "test" = test-panel job (lower-priority queue), otherwise api.
+    pub source: Option<String>,
 }
 
 // ── Response chunk types ───────────────────────────────────────────────────────
@@ -89,10 +90,11 @@ pub async fn chat_completions(
 
     let backend_type = req.backend.as_deref().unwrap_or("ollama").to_string();
     let model = req.model.clone();
+    let source = if req.source.as_deref() == Some("test") { JobSource::Test } else { JobSource::Api };
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, &backend_type, Some(api_key.id))
+        .submit(&prompt, &model, &backend_type, Some(api_key.id), source)
         .await
     {
         Ok(id) => id,
@@ -106,7 +108,9 @@ pub async fn chat_completions(
         }
     };
 
-    let chunk_id = format!("chatcmpl-{}", Uuid::now_v7());
+    // Use the actual job_id so the web client can correlate the stream to the job
+    // and call DELETE /v1/inference/{job_id} for mid-stream cancellation.
+    let chunk_id = format!("chatcmpl-{}", job_id.0);
     let created = chrono::Utc::now().timestamp();
     let token_stream = state.use_case.stream(&job_id);
 

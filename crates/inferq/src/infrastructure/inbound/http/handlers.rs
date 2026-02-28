@@ -11,6 +11,7 @@ use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::enums::JobSource;
 use crate::domain::value_objects::JobId;
 
 use super::state::AppState;
@@ -53,7 +54,7 @@ pub async fn submit_inference(
 ) -> Result<Json<SubmitResponse>, StatusCode> {
     let job_id = state
         .use_case
-        .submit(&req.prompt, &req.model, &req.backend, Some(api_key.id))
+        .submit(&req.prompt, &req.model, &req.backend, Some(api_key.id), JobSource::Api)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -121,6 +122,86 @@ pub async fn get_status(
     }))
 }
 
+/// GET /v1/jobs/:job_id/stream — OpenAI-format SSE replay for test reconnect.
+///
+/// Streams a job's tokens in the same OpenAI chunk format as `/v1/chat/completions`.
+/// Completed jobs are replayed from the DB; in-progress jobs stream live tokens.
+pub async fn stream_job_openai(
+    Path(job_id): Path<Uuid>,
+    State(state): State<AppState>,
+    axum::extract::Extension(_api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+) -> impl IntoResponse {
+    #[derive(serde::Serialize)]
+    struct DeltaContent {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+    }
+    #[derive(serde::Serialize)]
+    struct ChunkChoice {
+        index: u32,
+        delta: DeltaContent,
+        finish_reason: Option<&'static str>,
+    }
+    #[derive(serde::Serialize)]
+    struct CompletionChunk {
+        id: String,
+        object: &'static str,
+        created: i64,
+        choices: Vec<ChunkChoice>,
+    }
+
+    let jid = JobId(job_id);
+    let chunk_id = format!("chatcmpl-{}", job_id);
+    let created = chrono::Utc::now().timestamp();
+    let token_stream = state.use_case.stream(&jid);
+
+    let content_stream = token_stream.map(move |result| -> Result<Event, std::convert::Infallible> {
+        match result {
+            Ok(token) if token.is_final => {
+                let stop_chunk = CompletionChunk {
+                    id: chunk_id.clone(),
+                    object: "chat.completion.chunk",
+                    created,
+                    choices: vec![ChunkChoice {
+                        index: 0,
+                        delta: DeltaContent { content: None },
+                        finish_reason: Some("stop"),
+                    }],
+                };
+                Ok(Event::default().data(serde_json::to_string(&stop_chunk).unwrap_or_default()))
+            }
+            Ok(token) => {
+                let chunk = CompletionChunk {
+                    id: chunk_id.clone(),
+                    object: "chat.completion.chunk",
+                    created,
+                    choices: vec![ChunkChoice {
+                        index: 0,
+                        delta: DeltaContent { content: Some(token.value) },
+                        finish_reason: None,
+                    }],
+                };
+                Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
+            }
+            Err(e) => {
+                let err = serde_json::json!({"error": {"message": e.to_string()}});
+                Ok(Event::default().data(serde_json::to_string(&err).unwrap_or_default()))
+            }
+        }
+    });
+
+    let done_stream = futures::stream::once(async {
+        Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"))
+    });
+    let sse_stream: SseStream = Box::pin(content_stream.chain(done_stream));
+
+    (
+        [("X-Accel-Buffering", "no")],
+        axum::response::sse::Sse::new(sse_stream)
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
+    )
+}
+
 /// DELETE /v1/inference/:job_id - Cancel a job.
 pub async fn cancel_inference(
     Path(job_id): Path<String>,
@@ -143,12 +224,16 @@ mod tests {
     use super::*;
     use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
     use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
-    use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
-    use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
+    use crate::application::ports::outbound::backend_model_selection::{BackendModelSelectionRepository, BackendSelectedModel};
+    use crate::application::ports::outbound::gemini_model_repository::{GeminiModel, GeminiModelRepository};
     use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
+    use crate::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
+    use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
+    use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
+    use crate::application::ports::outbound::ollama_model_repository::{OllamaBackendForModel, OllamaModelRepository, OllamaModelWithCount};
+    use crate::application::ports::outbound::ollama_sync_job_repository::{OllamaSyncJob, OllamaSyncJobRepository};
     use crate::domain::entities::{ApiKey, GeminiRateLimitPolicy, GpuServer, LlmBackend};
-    use crate::domain::enums::LlmBackendStatus;
-    use crate::domain::enums::JobStatus;
+    use crate::domain::enums::{JobSource, JobStatus, LlmBackendStatus};
     use crate::domain::value_objects::StreamToken;
     use crate::infrastructure::inbound::http::router;
     use anyhow::Result;
@@ -173,6 +258,7 @@ mod tests {
             _model_name: &str,
             _backend_type: &str,
             _api_key_id: Option<Uuid>,
+            _source: JobSource,
         ) -> Result<JobId> {
             Ok(JobId::new())
         }
@@ -191,12 +277,14 @@ mod tests {
                     is_final: false,
                     prompt_tokens: None,
                     completion_tokens: None,
+                    cached_tokens: None,
                 }),
                 Ok(StreamToken {
                     value: "".to_string(),
                     is_final: true,
                     prompt_tokens: None,
                     completion_tokens: None,
+                    cached_tokens: None,
                 }),
             ];
             Box::pin(futures::stream::iter(tokens))
@@ -255,6 +343,7 @@ mod tests {
         async fn register(&self, _server: GpuServer) -> Result<()> { Ok(()) }
         async fn list_all(&self) -> Result<Vec<GpuServer>> { Ok(vec![]) }
         async fn get(&self, _id: Uuid) -> Result<Option<GpuServer>> { Ok(None) }
+        async fn update(&self, _server: &GpuServer) -> Result<()> { Ok(()) }
         async fn delete(&self, _id: Uuid) -> Result<()> { Ok(()) }
     }
 
@@ -265,6 +354,54 @@ mod tests {
         async fn list_all(&self) -> Result<Vec<GeminiRateLimitPolicy>> { Ok(vec![]) }
         async fn get_for_model(&self, _model_name: &str) -> Result<Option<GeminiRateLimitPolicy>> { Ok(None) }
         async fn upsert(&self, _policy: &GeminiRateLimitPolicy) -> Result<()> { Ok(()) }
+    }
+
+    struct MockGeminiSyncConfigRepo;
+
+    #[async_trait]
+    impl GeminiSyncConfigRepository for MockGeminiSyncConfigRepo {
+        async fn get_api_key(&self) -> Result<Option<String>> { Ok(None) }
+        async fn set_api_key(&self, _api_key: &str) -> Result<()> { Ok(()) }
+    }
+
+    struct MockGeminiModelRepo;
+
+    #[async_trait]
+    impl GeminiModelRepository for MockGeminiModelRepo {
+        async fn sync_models(&self, _model_names: &[String]) -> Result<()> { Ok(()) }
+        async fn list(&self) -> Result<Vec<GeminiModel>> { Ok(vec![]) }
+    }
+
+    struct MockModelSelectionRepo;
+
+    #[async_trait]
+    impl BackendModelSelectionRepository for MockModelSelectionRepo {
+        async fn upsert_models(&self, _backend_id: Uuid, _models: &[String]) -> Result<()> { Ok(()) }
+        async fn list(&self, _backend_id: Uuid) -> Result<Vec<BackendSelectedModel>> { Ok(vec![]) }
+        async fn set_enabled(&self, _backend_id: Uuid, _model_name: &str, _enabled: bool) -> Result<()> { Ok(()) }
+        async fn list_enabled(&self, _backend_id: Uuid) -> Result<Vec<String>> { Ok(vec![]) }
+    }
+
+    struct MockOllamaModelRepo;
+
+    #[async_trait]
+    impl OllamaModelRepository for MockOllamaModelRepo {
+        async fn sync_backend_models(&self, _backend_id: Uuid, _model_names: &[String]) -> Result<()> { Ok(()) }
+        async fn list_all(&self) -> Result<Vec<String>> { Ok(vec![]) }
+        async fn list_with_counts(&self) -> Result<Vec<OllamaModelWithCount>> { Ok(vec![]) }
+        async fn backends_for_model(&self, _model_name: &str) -> Result<Vec<Uuid>> { Ok(vec![]) }
+        async fn backends_info_for_model(&self, _model_name: &str) -> Result<Vec<OllamaBackendForModel>> { Ok(vec![]) }
+        async fn models_for_backend(&self, _backend_id: Uuid) -> Result<Vec<String>> { Ok(vec![]) }
+    }
+
+    struct MockOllamaSyncJobRepo;
+
+    #[async_trait]
+    impl OllamaSyncJobRepository for MockOllamaSyncJobRepo {
+        async fn create(&self, _total_backends: i32) -> Result<Uuid> { Ok(Uuid::now_v7()) }
+        async fn update_progress(&self, _id: Uuid, _result: serde_json::Value) -> Result<()> { Ok(()) }
+        async fn complete(&self, _id: Uuid) -> Result<()> { Ok(()) }
+        async fn get_latest(&self) -> Result<Option<OllamaSyncJob>> { Ok(None) }
     }
 
     fn make_app() -> axum::Router {
@@ -278,6 +415,7 @@ mod tests {
             rate_limit_rpm: 0,
             rate_limit_tpm: 0,
             expires_at: None,
+            deleted_at: None,
             created_at: chrono::Utc::now(),
         };
         let pg_pool = sqlx::postgres::PgPoolOptions::new()
@@ -289,9 +427,15 @@ mod tests {
             backend_registry: Arc::new(MockBackendRegistry),
             gpu_server_registry: Arc::new(MockGpuServerRegistry),
             gemini_policy_repo: Arc::new(MockGeminiPolicyRepo),
+            gemini_sync_config_repo: Arc::new(MockGeminiSyncConfigRepo),
+            gemini_model_repo: Arc::new(MockGeminiModelRepo),
+            model_selection_repo: Arc::new(MockModelSelectionRepo),
+            ollama_model_repo: Arc::new(MockOllamaModelRepo),
+            ollama_sync_job_repo: Arc::new(MockOllamaSyncJobRepo),
             valkey_pool: None,
             clickhouse_client: None,
             pg_pool,
+            cpu_snapshot_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         };
         // Inject a fake ApiKey extension so handlers that extract it work in tests.
         router::build_api_router()

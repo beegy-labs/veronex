@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::enums::{
-    BackendType, FinishReason, JobStatus, LlmBackendStatus, ModelStatus,
+    BackendType, FinishReason, JobSource, JobStatus, LlmBackendStatus, ModelStatus,
 };
 use super::value_objects::{JobId, ModelName, Prompt};
 
@@ -37,10 +37,21 @@ pub struct InferenceJob {
     /// `None` while pending/running or not yet measured.
     #[serde(default)]
     pub ttft_ms: Option<i32>,
-    /// Number of completion tokens generated.
+    /// Number of prompt (input) tokens.
+    /// `None` while pending/running or if not reported by backend.
+    #[serde(default)]
+    pub prompt_tokens: Option<i32>,
+    /// Number of completion (output) tokens generated.
     /// `None` while pending/running.
     #[serde(default)]
     pub completion_tokens: Option<i32>,
+    /// Tokens served from cache (Gemini `cachedContentTokenCount`).
+    /// Always `None` for Ollama (not exposed by API).
+    #[serde(default)]
+    pub cached_tokens: Option<i32>,
+    /// Whether this job came from the test panel or a real API client.
+    #[serde(default)]
+    pub source: JobSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +70,10 @@ pub struct InferenceResult {
     pub job_id: JobId,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
+    /// Tokens served from cache (e.g. Gemini `cachedContentTokenCount`).
+    /// Billed at a lower rate than regular prompt tokens.
+    /// `None` if the backend does not expose this metric (Ollama).
+    pub cached_tokens: Option<u32>,
     pub latency_ms: u32,
     pub ttft_ms: Option<u32>,
     pub tokens: Vec<String>,
@@ -146,7 +161,10 @@ mod tests {
             api_key_id: None,
             latency_ms: None,
             ttft_ms: None,
+            prompt_tokens: None,
             completion_tokens: None,
+            cached_tokens: None,
+            source: JobSource::Api,
         }
     }
 
@@ -185,6 +203,7 @@ mod tests {
             job_id: JobId::new(),
             prompt_tokens: 10,
             completion_tokens: 50,
+            cached_tokens: None,
             latency_ms: 1200,
             ttft_ms: Some(150),
             tokens: vec!["Hello".to_string(), " world".to_string()],
@@ -221,7 +240,10 @@ mod tests {
             api_key_id: None,
             latency_ms: None,
             ttft_ms: None,
+            prompt_tokens: None,
             completion_tokens: None,
+            cached_tokens: None,
+            source: JobSource::Api,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());
@@ -283,6 +305,7 @@ mod tests {
             job_id: JobId::new(),
             prompt_tokens: 5,
             completion_tokens: 20,
+            cached_tokens: None,
             latency_ms: 800,
             ttft_ms: None,
             tokens: vec!["response".to_string()],

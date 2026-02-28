@@ -68,4 +68,7 @@ pub struct StreamToken {
     /// Actual completion token count from the backend's usage metadata.
     /// Only populated on the final token when the backend reports real counts.
     pub completion_tokens: Option<u32>,
+    /// Tokens served from cache (Gemini `cachedContentTokenCount`).
+    /// Only populated on the final token; `None` for Ollama.
+    pub cached_tokens: Option<u32>,
 }
