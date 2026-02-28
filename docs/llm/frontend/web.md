@@ -353,6 +353,270 @@ Infrastructure / provider keys:
 
 ---
 
+## Usage Page (`/usage`)
+
+Token + request consumption analytics with time-range selector.
+
+### Queries (all parallel, ClickHouse graceful degradation)
+
+| Query | refetch | Notes |
+|-------|---------|-------|
+| `api.usageAggregate(hours)` | 60s | aggregate KPIs |
+| `api.analytics(hours)` | 60s | model distribution bar chart |
+| `api.performance(hours)` | 60s, retry:false | global trend via `perf.hourly` |
+| `api.usageBreakdown(hours)` | 60s | provider / key / model breakdown |
+| `api.keys()` | stale 120s | key selector for per-key hourly chart |
+| `api.keyUsage(keyId, hours)` | 60s, enabled when keyId set | per-key hourly tokens/requests |
+
+### Time Range
+
+```ts
+const TIME_OPTIONS = [
+  { label: '24h', hours: 24 },
+  { label: '7d',  hours: 168 },
+  { label: '30d', hours: 720 },
+]
+```
+
+Buttons in header: selected = `variant="default"`, others = `variant="outline"`.
+
+### Layout (top to bottom)
+
+```
+Header + [24h] [7d] [30d] time-range buttons
+
+[ClickHouse unavailable banner — only when error]
+
+KPI row (grid-cols-2 xl:grid-cols-4):
+  [Total Requests] [Total Tokens] [Success %] [Errors / Cancelled]
+  - Errors icon: AlertTriangle (red) when errorRate ≥ 10%, else XCircle
+
+TokenDonut card (prompt vs completion split, hidden when total=0)
+  - Prompt: var(--theme-primary)
+  - Completion: var(--theme-status-info)
+
+Global Trend AreaChart (hidden when no data)
+  - request_count (primary) + total_tokens (info blue)
+  - data: perf.hourly mapped to { hour, requests, tokens }
+
+Model Distribution horizontal BarChart (hidden when empty)
+  - data: analytics.models sorted desc, top 8
+  - Bar fill: var(--theme-primary), radius: [0,4,4,0]
+  - Y-axis: model name (width=150, truncated at 22 chars)
+
+Breakdown Card (hidden when no data):
+  BackendBreakdownSection  — grid-cols-1 sm:grid-cols-2 provider cards
+  KeyBreakdownSection      — DataTable (minWidth=560px)
+  ModelBreakdownSection    — DataTable (minWidth=600px): model+provider+req+call%+latency+tokens
+
+Per-key Hourly card (hidden when no keys):
+  Select dropdown → key selector (first key default)
+  Tokens/Hour AreaChart: prompt (primary) + completion (info blue)
+  Requests/Hour BarChart: requests (primary) + success (success) + errors (error)
+
+AnalyticsSection (ClickHouse only):
+  Analytics KPIs (grid-cols-3): Avg TPS | Avg Prompt Tokens | Avg Completion Tokens
+  Model dist table (xl:col-span-3) + Finish Reason donut (xl:col-span-2)
+```
+
+### Backend / Finish Reason Colors (SSOT in file)
+
+```ts
+const BACKEND_COLORS = { ollama: 'var(--theme-primary)', gemini: 'var(--theme-status-info)' }
+const FINISH_COLORS  = {
+  stop: 'var(--theme-status-success)', length: 'var(--theme-status-warning)',
+  error: 'var(--theme-status-error)', cancelled: 'var(--theme-text-secondary)',
+}
+```
+
+**Rule**: extend these maps when adding new backend types — never hardcode backend names in JSX.
+
+### i18n Keys (usage.*)
+
+`title`, `description`, `totalRequests`, `totalTokens`, `success`, `errors`, `completed`, `cancelled`,
+`noData`, `noDataHint`, `noKeyData`, `noKeysMsg`, `analyticsUnavailable`, `clickhouseDisabled`,
+`analyticsTitle`, `analyticsDesc`, `avgTps`, `avgTpsDesc`, `avgPromptTokens`, `avgCompletionTokens`,
+`tokensPerReq`, `byProvider`, `byKey`, `callShare`, `modelCallRatio`, `providerCol`,
+`modelDistTitle`, `finishReasonTitle`, `hourly`, `tokensPerHour`, `requestsPerHour`,
+`reqCount`, `successRate`, `avgLatency`, `totalTok`, `requests`, `breakdownTitle`, `breakdownDesc`,
+`modelName`
+
+---
+
+## Performance Page (`/performance`)
+
+Latency percentile analysis + hourly trend charts. ClickHouse required.
+
+### Query
+
+`api.performance(hours)` — `refetchInterval: 60_000`
+
+Returns `{ p50, p95, p99, avg_latency_ms, success_rate, total_requests, hourly[] }`.
+
+### Time Range
+
+Same `TIME_OPTIONS` as Usage: `24h / 7d / 30d`.
+
+### Layout
+
+```
+Header + [24h] [7d] [30d] buttons
+
+[ClickHouse unavailable banner]
+[No data state when total_requests = 0]
+
+KPI cards (grid-cols-3 sm:grid-cols-5):
+  [P50] [P95] [P99] [Success Rate] [Error Count]
+
+Latency Percentiles detail card (grid-cols-2 sm:grid-cols-4):
+  P50 | P95 | P99 | Avg — each in a sub-card with centered large mono value
+
+Avg Latency/Hour LineChart:
+  - Y-axis: fmtMsAxis()
+  - ReferenceLine at p95_latency_ms (dashed, warning color, label "P95")
+  - Tooltip: fmtMs()
+
+Throughput/Hour BarChart:
+  - total (primary) + success (success green) + errors (error red)
+  - Header shows error count badge when > 0
+
+Error Rate/Hour LineChart:
+  - dataKey="errorRate" (derived: (total-success)/total*100)
+  - Y-axis domain [0,100], tickFormatter: v => `${v}%`
+  - Tooltip: formatter shows percentage
+  - Line color: var(--theme-status-error)
+```
+
+### Chart Data Derivation
+
+```ts
+const chartData = data?.hourly.map((h) => ({
+  hour:      fmtHour(h.hour),
+  latency:   Math.round(h.avg_latency_ms),
+  total:     h.request_count,
+  success:   h.success_count,
+  errors:    Math.max(0, h.request_count - h.success_count),
+  errorRate: h.request_count > 0
+    ? parseFloat(((h.request_count - h.success_count) / h.request_count * 100).toFixed(1))
+    : 0,
+}))
+```
+
+### i18n Keys (performance.*)
+
+`title`, `description`, `p50`, `p95`, `p99`, `avgLatency`, `successRate`, `errors`,
+`latencyPercentiles`, `aggregatedOver`, `avgLatencyHour`, `throughputHour`,
+`analyticsUnavailable`, `clickhouseDisabled`, `noData`, `noDataHint`,
+`errorRate`, `errorRateTrend`
+
+---
+
+## Jobs Page (`/jobs`)
+
+Paginated job history with search, status filter, and embedded test runner.
+
+### Tabs
+
+| Tab | `source` param | Description |
+|-----|---------------|-------------|
+| "API Jobs" | `source=api` | Jobs from production API keys |
+| "Test Runs" | `source=test` | Jobs triggered via the test panel |
+
+### JobsSection (reusable component)
+
+Props: `{ source: 'api' | 'test', onRetry?: (params: RetryParams) => void }`
+
+Query: `api.jobs(URLSearchParams{ limit, offset, source, status?, q? })` — `refetchInterval: 30_000`
+
+Controls:
+- Search input (Enter = commit, Esc = clear) — queries against model name / prompt
+- Status filter Select: `all | pending | running | completed | failed | cancelled`
+- Pagination: `PAGE_SIZE = 50`, smart page slot renderer (max 7 slots, `…` ellipsis)
+
+### Retry Flow
+
+`JobTable` row has a retry button that calls `onRetry(RetryParams)`.
+`onRetry` in `JobsPage`:
+1. Sets `retryParams` state
+2. Switches active tab to `'test'`
+3. Scrolls to `testPanelRef` (smooth scroll, 50ms delay)
+`ApiTestPanel` receives `retryParams` prop and pre-fills the form.
+
+### JobTable (`web/components/job-table.tsx`)
+
+- `minWidth="760px"` via `DataTable`
+- Columns: Model · Provider · Status · Prompt Tokens · Completion Tokens · Latency · Created · Actions
+- Row click → `JobDetailModal` (detail + prompt preview)
+- Status badge colors: same `STATUS_EXTRA` map as Overview
+- Retry button: appears on `completed` / `failed` rows
+
+### i18n Keys (jobs.*)
+
+`title`, `description`, `apiJobs`, `testRuns`, `allStatuses`, `statuses.*`,
+`totalLabel`, `searchPlaceholder`, `searchingFor`, `clearSearch`,
+`noJobs`, `loadingJobs`, `failedJobs`, `model`, `backend`, `status`, `latency`, `createdAt`
+
+---
+
+## Keys Page (`/keys`)
+
+API key management: create standard / test keys, toggle active, delete.
+
+### Queries
+
+| Query | refetch |
+|-------|---------|
+| `api.keys()` | 60s |
+
+### Mutations
+
+- `api.createKey({ name, tenant_id, rate_limit_rpm?, rate_limit_tpm?, key_type })` → `CreateKeyResponse`
+- `api.deleteKey(id)`
+- `api.toggleKeyActive(id, is_active)`
+
+### Key Types
+
+| `key_type` | UI badge | Use |
+|-----------|----------|-----|
+| `'standard'` | plain text label | Production API access |
+| `'test'` | `FlaskConical` + info-blue badge | Safe testing; counted separately in Overview stats |
+
+### Layout
+
+```
+Header:
+  h1 "API Keys" + subtitle (N keys)
+  Buttons: [Flask Test Key] [+ Create Key]
+
+DataTable (minWidth="700px"):
+  Name | Prefix | Tenant | Type | Status | Toggle | RPM / TPM | Created | Actions
+
+Modals:
+  CreateKeyModal    — name (required) + tenant_id + RPM + TPM + key_type prop
+  KeyCreatedModal   — shows raw key once (copy button), warning banner
+  DeleteConfirmModal — confirm by name
+```
+
+### Type Badge Colors
+
+- `standard`: `<span className="text-xs text-muted-foreground">` (label via `overview.activeKeysLabel`)
+- `test`: `<Badge>` with `bg-status-info/10 text-status-info-fg border-status-info/30`
+
+### Rate Limit Display
+
+`rate_limit_rpm === 0` → `∞`; same for `tpm`.
+
+### i18n Keys (keys.*)
+
+`title`, `name`, `prefix`, `tenant`, `type`, `status`, `activeToggle`, `rpmTpm`, `createdAt`, `actions`,
+`keyName`, `keyNamePlaceholder`, `tenantId`, `rateLimitRpm`, `rateLimitTpm`, `rateLimitPlaceholder`,
+`createKey`, `createTestKey`, `createTitle`, `createTestTitle`, `creating`, `nameTaken`,
+`createdTitle`, `createdWarning`,
+`deleteTitle`, `deleteConfirm`, `deleteKey`, `deleting`,
+`loadingKeys`, `failedKeys`, `noKeys`
+
+---
+
 ## Duration / Latency Formatter — `fmtMs` (SSOT)
 
 Shared in `web/lib/chart-theme.ts`. Use everywhere — never inline ms conversion.
