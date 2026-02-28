@@ -47,10 +47,16 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/v1/keys/{id}", patch(key_handlers::toggle_key))
         // Usage routes
         .route("/v1/usage", get(usage_handlers::aggregate_usage))
+        .route("/v1/usage/breakdown", get(usage_handlers::usage_breakdown))
         .route("/v1/usage/{key_id}", get(usage_handlers::key_usage))
         .route(
             "/v1/usage/{key_id}/jobs",
             get(usage_handlers::key_usage_jobs),
+        )
+        // Analytics route
+        .route(
+            "/v1/dashboard/analytics",
+            get(usage_handlers::get_analytics),
         )
         // Dashboard routes
         .route("/v1/dashboard/stats", get(dashboard_handlers::get_stats))
@@ -91,6 +97,8 @@ pub fn build_api_router() -> Router<AppState> {
         )
         // OpenAI-compatible chat completions endpoint
         .route("/v1/chat/completions", post(openai_handlers::chat_completions))
+        // Job stream replay (test reconnect — OpenAI SSE format)
+        .route("/v1/jobs/{id}/stream", get(handlers::stream_job_openai))
         // GPU server management routes
         .route("/v1/servers", post(gpu_server_handlers::register_gpu_server))
         .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers))
