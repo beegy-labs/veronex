@@ -1,0 +1,120 @@
+{
+  "info": {
+    "description": "LLM 推論ゲートウェイ API — LLM ルーティング、ジョブ追跡、API キー管理、クラスター可観測性。"
+  },
+  "tags": [
+    { "name": "inference",  "description": "LLM 推論ジョブの送信と追跡" },
+    { "name": "openai",     "description": "OpenAI 互換チャット補完" },
+    { "name": "keys",       "description": "API キー管理" },
+    { "name": "backends",   "description": "LLM バックエンドの登録とルーティング" },
+    { "name": "servers",    "description": "GPU サーバーの登録とメトリクス" },
+    { "name": "usage",      "description": "トークンとリクエストの使用量分析" },
+    { "name": "dashboard",  "description": "クラスター全体の統計とジョブ履歴" },
+    { "name": "gemini",     "description": "Gemini レート制限ポリシー管理" },
+    { "name": "system",     "description": "ヘルスチェックと Prometheus ターゲット" }
+  ],
+  "paths": {
+    "/health": {
+      "get": { "summary": "Liveness プローブ" }
+    },
+    "/readyz": {
+      "get": { "summary": "Readiness プローブ" }
+    },
+    "/v1/metrics/targets": {
+      "get": {
+        "summary": "Prometheus HTTP SD ターゲット",
+        "description": "OTel Collector 向けの node-exporter スクレイプターゲットを返します。認証不要。"
+      }
+    },
+    "/v1/inference": {
+      "post": { "summary": "推論ジョブの送信" }
+    },
+    "/v1/inference/{job_id}/stream": {
+      "get": { "summary": "推論出力ストリーム (SSE)" }
+    },
+    "/v1/inference/{job_id}/status": {
+      "get": { "summary": "ジョブステータスの取得" }
+    },
+    "/v1/inference/{job_id}": {
+      "delete": { "summary": "推論ジョブのキャンセル" }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "summary": "OpenAI 互換チャット補完",
+        "description": "OpenAI の /v1/chat/completions のドロップイン代替。SSE によるストリーミング対応。"
+      }
+    },
+    "/v1/keys": {
+      "post": { "summary": "API キーの作成" },
+      "get":  { "summary": "API キー一覧" }
+    },
+    "/v1/keys/{id}": {
+      "delete": { "summary": "API キーの削除" },
+      "patch":  { "summary": "API キーの有効/無効切替" }
+    },
+    "/v1/usage": {
+      "get": { "summary": "使用量集計分析" }
+    },
+    "/v1/usage/{key_id}": {
+      "get": { "summary": "キー別使用量分析" }
+    },
+    "/v1/usage/{key_id}/jobs": {
+      "get": { "summary": "API キー別ジョブ一覧" }
+    },
+    "/v1/dashboard/stats": {
+      "get": { "summary": "クラスター全体の統計" }
+    },
+    "/v1/dashboard/jobs": {
+      "get": { "summary": "ページネーション付きジョブ一覧" }
+    },
+    "/v1/dashboard/jobs/{id}": {
+      "get": { "summary": "ジョブ詳細の取得" }
+    },
+    "/v1/dashboard/performance": {
+      "get": { "summary": "パフォーマンスメトリクス (レイテンシ / スループット)" }
+    },
+    "/v1/backends": {
+      "post": { "summary": "LLM バックエンドの登録" },
+      "get":  { "summary": "LLM バックエンド一覧" }
+    },
+    "/v1/backends/{id}": {
+      "delete": { "summary": "LLM バックエンドの削除" },
+      "patch":  { "summary": "LLM バックエンドの更新" }
+    },
+    "/v1/backends/{id}/healthcheck": {
+      "post": { "summary": "バックエンドヘルスチェックの実行" }
+    },
+    "/v1/backends/{id}/models": {
+      "get": { "summary": "バックエンド利用可能モデル一覧" }
+    },
+    "/v1/backends/{id}/models/sync": {
+      "post": { "summary": "モデル一覧キャッシュの強制更新" }
+    },
+    "/v1/backends/{id}/key": {
+      "get": { "summary": "バックエンド API キーの確認" }
+    },
+    "/v1/servers": {
+      "post": { "summary": "GPU サーバーの登録" },
+      "get":  { "summary": "GPU サーバー一覧" }
+    },
+    "/v1/servers/{id}": {
+      "patch":  { "summary": "GPU サーバーの更新" },
+      "delete": { "summary": "GPU サーバーの削除" }
+    },
+    "/v1/servers/{id}/metrics": {
+      "get": {
+        "summary": "リアルタイムノードメトリクス",
+        "description": "サーバーの node-exporter エンドポイントからリアルタイムメトリクスを取得します。"
+      }
+    },
+    "/v1/servers/{id}/metrics/history": {
+      "get": { "summary": "ClickHouse 履歴メトリクス" }
+    },
+    "/v1/gemini/policies": {
+      "get": { "summary": "Gemini レート制限ポリシー一覧" }
+    },
+    "/v1/gemini/policies/{model_name}": {
+      "put": { "summary": "Gemini レート制限ポリシーの Upsert" }
+    }
+  }
+}

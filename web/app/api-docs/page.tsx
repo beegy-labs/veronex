@@ -1,6 +1,7 @@
 'use client'
 
-import { ExternalLink, FileJson, BookOpen, Layers } from 'lucide-react'
+import Link from 'next/link'
+import { FileJson, BookOpen, Layers, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
@@ -15,17 +16,17 @@ export default function ApiDocsPage() {
   const docs = [
     {
       titleKey: 'apiDocs.swaggerTitle',
-      descKey: 'apiDocs.swaggerDesc',
-      href: `${API_URL}/docs/swagger`,
-      icon: BookOpen,
-      badge: 'Swagger UI',
+      descKey:  'apiDocs.swaggerDesc',
+      href:     '/api-docs/swagger',
+      icon:     BookOpen,
+      badge:    'Swagger UI',
     },
     {
       titleKey: 'apiDocs.redocTitle',
-      descKey: 'apiDocs.redocDesc',
-      href: `${API_URL}/docs/redoc`,
-      icon: Layers,
-      badge: 'ReDoc',
+      descKey:  'apiDocs.redocDesc',
+      href:     '/api-docs/redoc',
+      icon:     Layers,
+      badge:    'ReDoc',
     },
   ]
 
@@ -36,7 +37,7 @@ export default function ApiDocsPage() {
         <p className="text-muted-foreground text-sm mt-1">{t('apiDocs.description')}</p>
       </div>
 
-      {/* Viewer cards */}
+      {/* Viewer cards — internal navigation */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {docs.map(({ titleKey, descKey, href, icon: Icon, badge }) => (
           <Card key={badge} className="flex flex-col">
@@ -51,16 +52,11 @@ export default function ApiDocsPage() {
             </CardHeader>
             <CardContent className="flex-1 flex flex-col gap-4">
               <p className="text-sm text-muted-foreground">{t(descKey)}</p>
-              <Button
-                asChild
-                variant="outline"
-                size="sm"
-                className="mt-auto w-fit"
-              >
-                <a href={href} target="_blank" rel="noopener noreferrer">
+              <Button asChild variant="outline" size="sm" className="mt-auto w-fit">
+                <Link href={href}>
                   {t('apiDocs.openDocs')}
-                  <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
-                </a>
+                  <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                </Link>
               </Button>
             </CardContent>
           </Card>
