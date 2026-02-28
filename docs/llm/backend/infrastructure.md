@@ -1,6 +1,6 @@
 # Infrastructure — Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-02-28 (rev: pg18 + ch26.2 + uuidv7)
+> SSOT | **Last Updated**: 2026-02-28 (rev: Redpanda-first DE pipeline)
 
 ## Task Guide
 
@@ -25,17 +25,32 @@
 
 ---
 
+## Data Pipeline
+
+```
+Rust veronex ──→ Redpanda [inference]    ──→ ClickHouse Kafka Engine → inference_logs (MV)
+OTel Collector ─→ Redpanda [otel-metrics] ──→ ClickHouse Kafka Engine → otel_metrics_gauge (MV)
+               └─→ Redpanda [otel-traces]  ──→ ClickHouse Kafka Engine → otel_traces_raw (MV)
+```
+
+- **Redpanda** = single message bus — Kafka 100% compatible; swap `kafka_broker_list` + `REDPANDA_URL` to migrate
+- **ClickHouse** = read layer only — Kafka Engine pulls from Redpanda, MV writes into MergeTree
+- `docker/clickhouse/init.sql` — target MergeTree tables (must exist before `02_kafka.sql` MVs)
+- `docker/clickhouse/02_kafka.sql` — all Kafka Engine tables + Materialized Views
+
+→ Full pipeline spec: `docs/llm/backend/infrastructure-otel.md`
+
 ## Services
 
 | Service | Image | Host Port | Role |
 |---------|-------|-----------|------|
 | postgres | postgres:18-alpine | **5433** | Main DB — PG18, native `uuidv7()` |
 | valkey | valkey/valkey:8-alpine | **6380** | Queue (BLPOP), rate limiting, model cache |
-| clickhouse | clickhouse-server:26.1 | 8123, 9000 | inference_logs, OTel metrics/traces |
-| redpanda | redpandadata/redpanda:v24.2.7 | 9092 | Kafka-compatible streaming buffer |
+| clickhouse | clickhouse-server:26.1 | 8123, 9000 | Analytics read layer — inference_logs, otel_metrics_gauge |
+| redpanda | redpandadata/redpanda:v24.2.7 | 9092 | Single message bus (Kafka-compatible) |
 | veronex | local build | **3001**→3000 | Rust API server (crate: `veronex`) |
 | veronex-web | local build | 3002 | Next.js admin dashboard |
-| otel-collector | docker/otel/Dockerfile | 4317, 4318, 13133 | Metrics + trace collection |
+| otel-collector | docker/otel/Dockerfile | 4317, 4318, 13133 | Metrics + trace collection → Redpanda |
 
 > Port offsets (+1): 5432→5433, 6379→6380, 3000→3001 (vergate/Gitea conflicts)
 
@@ -55,6 +70,7 @@ CLICKHOUSE_ENABLED=true
 OLLAMA_URL=http://localhost:11434        # legacy default; backends now stored in DB
 GEMINI_API_KEY=<optional legacy>         # per-backend keys stored in DB
 BOOTSTRAP_API_KEY=veronex-bootstrap-admin-key
+REDPANDA_URL=localhost:9092              # broker address for Redpanda observability adapter
 PORT=3000                                # container internal port
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317  # optional
 

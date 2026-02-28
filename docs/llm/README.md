@@ -41,6 +41,7 @@
 | Jobs/Usage/Perf | `frontend/web-jobs.md` | job-table, detail modal, formatDuration, usage charts, performance P50/P99 |
 | API Keys page | `frontend/web-keys.md` | keys/page.tsx, CreateKeyModal, toggle, soft-delete |
 | Test + API Docs | `frontend/web-test.md` | api-test, SSE parsing, /docs/swagger, /docs/redoc |
+| Chart System    | `frontend/web-charts.md` | chart-theme.ts SSOT, DonutChart, Recharts constants, tooltip fix |
 
 ---
 
@@ -69,3 +70,5 @@
 | Add i18n key | `frontend/web.md` (procedure) + relevant `frontend/web-*.md` |
 | Change design token | `frontend/web.md` (token flow) + `policies/patterns.md` (Tailwind v4 rules) |
 | Add Zod schema | `policies/patterns.md` (TypeScript + Zod section) |
+| Add / modify a chart | `frontend/web-charts.md` (SSOT constants + DonutChart props) |
+| Fix chart tooltip text color | `frontend/web-charts.md` (labelStyle / itemStyle requirement) |

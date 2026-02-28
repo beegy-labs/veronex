@@ -1,49 +1,114 @@
-# Web — Jobs, Usage & Performance Pages
+# Web — Jobs Page
 
-> SSOT | **Last Updated**: 2026-02-27
+> SSOT | **Last Updated**: 2026-02-28 (rev: tab layout + key name search)
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add new column to jobs table | `web/components/job-table.tsx` columns + `web/lib/types.ts` `JobSummary` | Add column def + i18n key `jobs.*` |
-| Add new status filter option | `web/components/job-table.tsx` status filter options | Matches `JobStatus` enum on backend |
-| Add new stat card to overview | `web/app/overview/page.tsx` + `infrastructure/inbound/http/handlers.rs` `dashboard_stats()` | Extend SQL query + response struct + card in TSX |
-| Change duration format breakpoints | `web/components/job-table.tsx` `formatDuration()` | Change ms thresholds (`< 1000`, `< 60000`) |
-| Add new chart to performance page | `web/app/performance/page.tsx` + ClickHouse SQL in `handlers.rs` `dashboard_performance()` | Extend `PerformanceStats` struct + add Recharts component |
+| Add new column to jobs table | `web/components/job-table.tsx` columns + `web/lib/types.ts` `Job` | Add column def + i18n key `jobs.*` |
+| Add new status filter option | `web/app/jobs/page.tsx` `STATUS_OPTIONS` in `JobsSection` | Matches `JobStatus` enum on backend |
+| Change pagination page size | `web/app/jobs/page.tsx` → `PAGE_SIZE` constant | |
 | Add new i18n key to jobs | `web/messages/en.json` `jobs.*` → `web/messages/ko.json` → `web/messages/ja.json` | Always add to all 3 locales |
+| Change duration format breakpoints | `web/components/job-table.tsx` `formatDuration()` | Change ms thresholds |
+| Add another tab to the Jobs page | `web/app/jobs/page.tsx` → add `<TabsTrigger>` + `<TabsContent>` + new `<JobsSection source="...">` | Extend `JobsSectionProps.source` type |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `web/app/jobs/page.tsx` | Jobs list page |
+| `web/app/jobs/page.tsx` | Jobs page — tabs with `JobsSection` + `ApiTestPanel` |
 | `web/components/job-table.tsx` | Jobs table + detail modal (fully i18n) |
-| `web/app/overview/page.tsx` | Stats + request trend + jobs-by-status chart |
-| `web/app/usage/page.tsx` | Token consumption charts (ClickHouse) |
-| `web/app/performance/page.tsx` | P50/P95/P99 latency charts (ClickHouse) |
-| `web/lib/api.ts` | `api.jobs()`, `api.jobDetail()`, `api.stats()`, `api.usage()`, `api.performance()` |
-| `web/messages/en.json` | i18n keys under `jobs.*`, `overview.*`, `usage.*`, `performance.*` |
+| `web/lib/types.ts` | `Job`, `JobDetail` types (include `source` field) |
+| `web/lib/api.ts` | `api.jobs()`, `api.jobDetail()` |
+| `web/messages/en.json` | i18n keys under `jobs.*` |
+
+## `source` Field
+
+The `Job` and `JobDetail` types carry `source: 'api' | 'test'`. This field is set by the backend at job creation time based on the Valkey queue used:
+
+| Value | Queue | Meaning |
+|-------|-------|---------|
+| `'api'`  | `veronex:queue:jobs` | Submitted via the OpenAI-compatible API |
+| `'test'` | `veronex:queue:jobs:test` | Submitted via the web Test panel |
+
+The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Overview page recent-jobs mini-table shows all sources without filtering.
 
 ---
 
-## /jobs — Jobs List (job-table.tsx)
+## /jobs — Tab Layout
 
-### Columns
+The Jobs page is split into two tabs managed by `activeTab: 'test' | 'api'` state:
 
 ```
-[Search prompt…]  [Status: All ▼]
+┌─ Page header ─────────────────────────────────────────────────────────┐
+│  Jobs  (subtitle)                                                       │
+├─ [API Jobs] [Test Runs]  ← shadcn/ui Tabs (API Jobs is default)       │
+├───────────────────────────────────────────────────────────────────────┤
+│ Tab: "API Jobs"  (default)                                              │
+│   [search] [status filter]      ← queries ?source=api                  │
+│   <JobTable>   pagination                                               │
+├───────────────────────────────────────────────────────────────────────┤
+│ Tab: "Test Runs"                                                        │
+│   <ApiTestPanel> — submits with source=test                             │
+│   ── border-t ──                                                        │
+│   [search] [status filter]      ← queries ?source=test                  │
+│   <JobTable>   pagination                                               │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
+### `handleRetry` — Cross-Tab Navigation
+
+When the user clicks ▶ Retry on a job in either tab:
+1. `setActiveTab('test')` — switches to the Test Runs tab
+2. `setTimeout(50ms)` → `testPanelRef.current?.scrollIntoView()` — scrolls to ApiTestPanel
+3. `setRetryParams(params)` — pre-fills panel with the job's model + prompt + backend
+
+```tsx
+function handleRetry(params: RetryParams) {
+  setRetryParams(params)
+  setActiveTab('test')
+  setTimeout(() => {
+    testPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, 50)
+}
+```
+
+### `JobsSection` Component (`jobs/page.tsx`)
+
+Reusable component, rendered once per tab (no `title` prop — tabs provide the label):
+
+```tsx
+// Test Runs tab
+<JobsSection source="test" onRetry={handleRetry} />
+
+// API Jobs tab
+<JobsSection source="api" onRetry={handleRetry} />
+```
+
+Each section maintains independent state:
+- `page`, `status`, `search`, `query` — no shared state between tabs
+- Query key: `['dashboard-jobs', source, page, status, query]`
+- API call: `GET /v1/dashboard/jobs?source={source}&limit=50&offset=...&status=...&q=...`
+- `refetchInterval: 30_000`
+- Pagination: `buildPageSlots()` — up to 7 slots with ellipsis, `PAGE_SIZE = 50`
+
+---
+
+## JobTable Columns (`job-table.tsx`)
+
+```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ID      Model    Backend  API Key   Status     Created   TTFT  Latency│
 │ 3a9f…  llama3   gpu-1    dev-key   ✓complete  Feb 25   142ms  1.2s  │
-│ 8b2c…  gemini   cloud    prod-key  ✓complete  Feb 25   380ms  2m 3s │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 - Status filter: all | pending | running | completed | failed | cancelled
-- Prompt search: `q=` parameter → `prompt ILIKE '%{q}%'`
-- Pagination: limit/offset
+- Search (`q=`): case-insensitive substring match on **prompt text OR api key name**
+  - Backend: `j.prompt ILIKE $2 OR k.name ILIKE $2` (LEFT JOIN api_keys)
+  - Placeholder: "Search prompt or key…"
+- Retry button (▶): pre-fills test panel with job's model + prompt + backend (via `onRetry`)
 
 ### Duration Format — `formatDuration(ms)`
 
@@ -53,7 +118,7 @@
 | 1000ms – 60s | `"2.3s"` |
 | ≥ 60s | `"2m 5s"` |
 
-### Job Detail Modal (job-table.tsx)
+### Job Detail Modal
 
 ```
 ┌─ 3a9fbcd… · ✓completed ──────────────────────────────────────────────┐
@@ -76,37 +141,33 @@
 
 ---
 
-## /overview — Dashboard Overview (overview/page.tsx)
+## Types (`web/lib/types.ts`)
 
-Stats cards: total keys, active keys, total jobs, jobs last 24h
-Charts:
-- Request trend (line chart, hourly) — ClickHouse `inference_logs`
-- Jobs by status (bar chart) — Postgres `inference_jobs`
-- Model usage breakdown
+```typescript
+export interface Job {
+  id: string
+  model_name: string
+  backend: string
+  status: string
+  source: 'api' | 'test'
+  created_at: string
+  completed_at?: string
+  latency_ms?: number
+  ttft_ms?: number
+  completion_tokens?: number
+  prompt_tokens?: number
+  cached_tokens?: number
+  tps?: number
+  api_key_name?: string
+}
 
-Query key: `['stats']`
-
----
-
-## /usage — Token Consumption (usage/page.tsx)
-
-- Aggregate: `GET /v1/usage?hours=24` → total tokens, requests by model
-- Per-key: `GET /v1/usage/{key_id}?hours=24` → hourly breakdown
-- Charts: stacked bar (prompt vs completion tokens per hour) — Recharts
-- All colors from `var(--theme-*)` tokens
-
-Query keys: `['usage']`, `['usage', keyId]`
-
----
-
-## /performance — Latency Analytics (performance/page.tsx)
-
-- `GET /v1/dashboard/performance?hours=24`
-- Shows: avg, P50, P95, P99 latency; success rate; total tokens; hourly throughput
-- Charts: line chart (latency percentiles), bar chart (throughput)
-- Use `var(--theme-primary)`, `var(--theme-text-secondary)` for chart colors
-
-Query key: `['performance']`
+export interface JobDetail extends Job {
+  started_at?: string
+  prompt: string
+  result_text?: string
+  error?: string
+}
+```
 
 ---
 
@@ -114,27 +175,13 @@ Query key: `['performance']`
 
 ### jobs.*
 ```json
-"title", "search", "statusFilter", "id", "model", "backend", "apiKey",
-"status", "created", "ttft", "latency", "tps", "tokens",
-"pending", "running", "completed", "failed", "cancelled",
-"detailTitle", "prompt", "result", "started", "completedAt", "error",
-"noJobs", "loadingJobs"
-```
-
-### overview.*
-```json
-"title", "totalKeys", "activeKeys", "totalJobs", "last24h",
-"requestTrend", "jobsByStatus", "modelUsage"
-```
-
-### usage.*
-```json
-"title", "totalTokens", "totalRequests", "promptTokens", "completionTokens",
-"byHour", "byModel", "selectKey"
-```
-
-### performance.*
-```json
-"title", "avgLatency", "p50", "p95", "p99", "successRate",
-"totalTokens", "throughput", "hourly"
+"title", "description",
+"testRuns",              // "Test Runs"  — tab label
+"apiJobs",              // "API Jobs"   — tab label
+"allStatuses", "filterByStatus",
+"searchPlaceholder",    // "Search prompt or key…"  (matches prompt OR key name)
+"searchingFor", "clearSearch",
+"totalLabel", "loadingJobs", "failedJobs", "noJobs",
+"statuses.pending", "statuses.running", "statuses.completed",
+"statuses.failed", "statuses.cancelled"
 ```

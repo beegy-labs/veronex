@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-02-27
+> SSOT | **Last Updated**: 2026-02-28
 > Code patterns and templates → `policies/patterns.md`
 
 ## Overview
@@ -31,7 +31,7 @@ crates/inferq/src/
 │       ├── backend_router.rs   # DynamicBackendRouter (VRAM-aware)
 │       ├── health_checker.rs   # 30s background health checker
 │       ├── model_manager.rs    # OllamaModelManager (LRU eviction)
-│       └── observability/      # ClickHouseObservabilityAdapter
+│       └── observability/      # RedpandaObservabilityAdapter (+ legacy ClickHouseObservabilityAdapter)
 │
 └── main.rs              # Composition root — wires all adapters
 ```
@@ -86,16 +86,20 @@ axum::serve(listener, app).await?;
 ## Multi-Backend Routing
 
 ```
-Client → POST /v1/chat/completions  (OpenAI-compatible)
-      OR POST /v1/inference          (native)
-       → InferenceUseCaseImpl::submit → RPUSH veronex:queue:jobs
-       → queue_dispatcher_loop (BLPOP)
+Client → POST /v1/chat/completions  (OpenAI-compatible, source=api)  → RPUSH veronex:queue:jobs
+      OR POST /v1/chat/completions  (source=test, test panel)        → RPUSH veronex:queue:jobs:test
+       → queue_dispatcher_loop: BLPOP [veronex:queue:jobs, veronex:queue:jobs:test] 5.0
+         (API queue is always checked first — BLPOP key-order priority guarantee)
          → DynamicBackendRouter::dispatch
            → list_active() → VRAM check → pick best backend
            → busy_backends.insert(id)     ← prevents double-dispatch
            → tokio::spawn run_job()
              → OllamaAdapter | GeminiAdapter → SSE tokens
-             → ObservabilityPort::record_inference → ClickHouse
+             → ObservabilityPort::record_inference → Redpanda [inference] → ClickHouse MV
+
+Test reconnect (test panel only):
+  localStorage: { jobId, status:"streaming" }  ← persisted on job submit
+  GET /v1/jobs/{id}/stream → OpenAI SSE replay  ← reconnect on page return
 ```
 
 ## AppState
@@ -116,8 +120,29 @@ pub struct AppState {
     pub valkey_pool:               Option<fred::clients::RedisPool>,
     pub clickhouse_client:         Option<clickhouse::Client>,
     pub pg_pool:                   sqlx::PgPool,
+    pub cpu_snapshot_cache:        Arc<Mutex<HashMap<Uuid, CpuSnapshot>>>,
 }
 ```
+
+## Message Bus — Redpanda / Kafka
+
+All events flow through Redpanda as the single message bus.  ClickHouse is a consumer only (Kafka Engine → Materialized View).
+
+```
+[Before] Rust ──→ ClickHouse (direct INSERT)
+         OTel ──→ ClickHouse (direct) + Redpanda (fan-out)
+
+[After]  Rust ──→ Redpanda [inference]    ──→ ClickHouse (Kafka Engine → MV → inference_logs)
+         OTel ──→ Redpanda [otel-metrics]  ──→ ClickHouse (Kafka Engine → MV → otel_metrics_gauge)
+                  Redpanda [otel-traces]   ──→ ClickHouse (Kafka Engine → MV → otel_traces_raw)
+```
+
+| Principle | Detail |
+|-----------|--------|
+| Redpanda = Kafka 100% compatible | Swap `kafka_broker_list` address in ClickHouse + `REDPANDA_URL` in Rust to migrate to Kafka cluster — zero code changes |
+| docker-compose Redpanda | `--memory=512M --smp=1` — intentional low-resource dev config |
+| ClickHouse is consumer-only | All writes go through Kafka Engine tables; ClickHouse MergeTree tables are the read layer |
+| Observability fail-open | If Redpanda is unreachable at startup, `observability = None` — inference continues unrecorded |
 
 ## Key Design Decisions
 
@@ -147,7 +172,7 @@ pub struct AppState {
 | `GpuServerRegistry` | `PostgresGpuServerRegistry` | Physical server + node-exporter |
 | `JobRepository` | `PostgresJobRepository` | UPSERT on conflict |
 | `ApiKeyRepository` | `PostgresApiKeyRepository` | BLAKE2b hash lookup |
-| `ObservabilityPort` | `ClickHouseObservabilityAdapter` | inference_logs INSERT |
+| `ObservabilityPort` | `RedpandaObservabilityAdapter` | Produces to Redpanda `inference` topic → ClickHouse MV |
 | `ModelManagerPort` | `OllamaModelManager` | LRU eviction, max_loaded=1 |
 | `OllamaModelRepository` | `PostgresOllamaModelRepository` | Global Ollama model pool (model-aware routing) |
 | `OllamaSyncJobRepository` | `PostgresOllamaSyncJobRepository` | Async sync job tracking (JSONB results) |
