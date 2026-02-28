@@ -69,6 +69,7 @@ services:
       OLLAMA_URL: http://host.docker.internal:11434
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       BOOTSTRAP_API_KEY: ${BOOTSTRAP_API_KEY:-veronex-bootstrap-admin-key}
+      REDPANDA_URL: redpanda:9092
       RUST_LOG: info
     depends_on:
       postgres:
@@ -76,6 +77,8 @@ services:
       valkey:
         condition: service_healthy
       clickhouse:
+        condition: service_healthy
+      redpanda:
         condition: service_healthy
 
   redpanda:

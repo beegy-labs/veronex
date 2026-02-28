@@ -26,40 +26,24 @@ receivers:
 processors:
   batch:
     timeout: 5s
-    send_batch_size: 1000
+    send_batch_size: 200
+    send_batch_max_size: 256
 
   memory_limiter:
     check_interval: 1s
     limit_mib: 256
 
 exporters:
-  # ClickHouse exporter — primary write path for dashboard queries.
-  # Auto-creates otel_metrics_*, otel_traces tables with OTLP-native schema.
-  clickhouse:
-    endpoint: tcp://clickhouse:9000
-    database: veronex
-    username: veronex
-    password: veronex
-    metrics_table_name: otel_metrics
-    traces_table_name: otel_traces
-    logs_table_name: otel_logs
-    ttl: 720h   # 30 days
-    create_schema: true
-    timeout: 10s
-    retry_on_failure:
-      enabled: true
-      initial_interval: 5s
-      max_interval: 30s
-      max_elapsed_time: 300s
-
-  # Kafka/Redpanda exporters — streaming buffer layer.
-  # Fan-out alongside ClickHouse; enables stream processing and future scale.
+  # Kafka/Redpanda exporters — Redpanda is the single message bus.
+  # ClickHouse consumes these topics via Kafka Engine → Materialized View.
   # Swap broker address to migrate to Kafka cluster (zero code changes).
   kafka/metrics:
     brokers: [redpanda:9092]
     topic: otel-metrics
     encoding: otlp_json
     timeout: 10s
+    producer:
+      compression: gzip
     retry_on_failure:
       enabled: true
       initial_interval: 5s
@@ -71,6 +55,8 @@ exporters:
     topic: otel-traces
     encoding: otlp_json
     timeout: 10s
+    producer:
+      compression: gzip
     retry_on_failure:
       enabled: true
       initial_interval: 5s
@@ -87,8 +73,8 @@ service:
     metrics:
       receivers: [prometheus]
       processors: [memory_limiter, batch]
-      exporters: [clickhouse, kafka/metrics]
+      exporters: [kafka/metrics]
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [clickhouse, kafka/traces]
+      exporters: [kafka/traces]
