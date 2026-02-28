@@ -1,6 +1,6 @@
 # Web — API Keys Page (/keys)
 
-> SSOT | **Last Updated**: 2026-02-27
+> SSOT | **Last Updated**: 2026-02-28 (rev: unique name constraint + 409 error)
 
 ## Task Guide
 
@@ -45,14 +45,24 @@
 ## CreateKeyModal
 
 Fields:
-- **Name** (required)
+- **Name** (required) — **must be unique per tenant** (case-insensitive, soft-delete aware)
 - **Tenant ID** (default: "default")
 - **Rate Limit RPM** (0 = unlimited)
 - **Rate Limit TPM** (0 = unlimited)
 - **Expires At** (optional date picker)
 
 On success: shows `CreateKeyResponse.key` (plaintext) with warning "Save this key now — it will never be shown again."
-Query invalidation: `['keys']`
+
+**409 Conflict** — if a key with the same name (case-insensitive) already exists in the tenant, the backend returns 409. The modal displays `keys.nameTaken` ("A key with that name already exists") instead of the raw HTTP status.
+
+Error detection pattern:
+```tsx
+mutation.error?.message.startsWith('409')
+  ? t('keys.nameTaken')
+  : mutation.error?.message
+```
+
+Query invalidation on success: `['keys']`
 
 ---
 
@@ -76,5 +86,6 @@ toggleKey:   (id, is_active) => req<void>(`/v1/keys/${id}`, {
 "creating", "createdTitle", "createdWarning",
 "deleteTitle", "deleteConfirm", "deleting",
 "loadingKeys", "failedKeys", "noKeys", "actions", "deleteKey",
+"nameTaken",    // "A key with that name already exists" — shown on 409
 "rpmTpm", "prefix", "tenant", "expiresAt"
 ```

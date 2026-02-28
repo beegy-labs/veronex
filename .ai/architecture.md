@@ -1,6 +1,6 @@
 # Architecture
 
-> Hexagonal Architecture overview | **Last Updated**: 2026-02-27
+> Hexagonal Architecture overview | **Last Updated**: 2026-02-28
 
 ## Structure
 
@@ -46,14 +46,20 @@ infrastructure → application → domain
 
 ```
 Client → POST /v1/chat/completions  (OpenAI-compatible)
-       → InferenceUseCaseImpl::submit()
-       → Valkey RPUSH veronex:queue:jobs
+       → InferenceUseCaseImpl::submit(source: Api|Test)
+       → Valkey RPUSH veronex:queue:jobs        (source=api)
+                   or veronex:queue:jobs:test   (source=test)
        → SSE stream → Client
 
-queue_dispatcher_loop (BLPOP):
+queue_dispatcher_loop (BLPOP [API queue, test queue]):
+  API queue is always polled first (BLPOP key-order guarantee)
   → DynamicBackendRouter::dispatch()
   → OllamaAdapter | GeminiAdapter
-  → ClickHouseObservabilityAdapter (record_inference)
+  → RedpandaObservabilityAdapter (record_inference → Redpanda → ClickHouse)
+
+Test reconnect:
+  GET /v1/jobs/{id}/stream → OpenAI SSE replay (completed or live)
+  Frontend: localStorage veronex:test:tab:{tabKey} → auto-reconnect on mount
 ```
 
 ## AppState (main.rs — Composition Root)

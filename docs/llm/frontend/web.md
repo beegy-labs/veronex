@@ -6,6 +6,7 @@
 
 | Task | File | What to change |
 |------|------|----------------|
+| Add new data table | `web/components/data-table.tsx` (SSOT) | Use `<DataTable minWidth="...">` — never write raw `<Card><CardContent p-0 overflow-x-auto><Table>` |
 | Add new nav link | `web/components/nav.tsx` `navItems` array + `web/messages/en.json` `nav.*` | Add item + i18n key in all 3 locales |
 | Add new color token | `web/app/tokens.css` | Layer 1 (`--palette-*`) → Layer 2 (`--theme-*`) → Layer 0 (`@property`) → Layer 3 (`@theme inline`) |
 | Add new locale | `web/i18n/config.ts` `locales[]` + new `web/messages/{locale}.json` + `language-switcher.tsx` | Copy en.json structure, translate values |
@@ -26,6 +27,9 @@
 | `web/i18n/config.ts` | `locales[]`, `localeLabels{}`, `defaultLocale` |
 | `web/i18n/index.ts` | i18next init |
 | `web/messages/en.json` | Source of truth for all i18n keys |
+| `web/components/data-table.tsx` | `DataTable` + `DataTableEmpty` — SSOT for all data tables |
+| `web/lib/chart-theme.ts` | Recharts style constants SSOT (`TOOLTIP_STYLE`, `AXIS_TICK`, `LEGEND_STYLE`, …) |
+| `web/components/donut-chart.tsx` | Shared `DonutChart` component — always use instead of inline `<PieChart>` |
 | `web/lib/api.ts` | All API client functions |
 | `web/lib/types.ts` | All TypeScript types |
 | `web/package.json` | Next.js 15, Tailwind v4, TanStack Query, shadcn/ui |
@@ -90,7 +94,8 @@ Dark status colors: `#34d399` / `#fb7185` / `#fbbf24` / `#60a5fa`
 | Headings | `text-2xl font-bold tracking-tight` |
 | Status order | Always: pending → running → completed → failed → cancelled |
 | i18n | All user-visible strings via `t('key')` — no hardcoded English |
-| Recharts | `var(--theme-*)` for all fill/stroke/tick |
+| Terminology | See [`docs/llm/policies/terminology.md`](../policies/terminology.md) — SSOT for all term definitions |
+| Recharts | Import from `web/lib/chart-theme.ts` (SSOT) — never define chart constants in page files. See `frontend/web-charts.md` |
 | Focus ring | `4px solid var(--theme-focus-ring)`, offset 4px |
 | Font | System font stack only — no Google Fonts (breaks CJK) |
 
@@ -149,20 +154,60 @@ Mobile (open):
 
 ---
 
-## Responsive Tables
+## Data Tables — `DataTable` Component (SSOT)
 
-All tables use `overflow-x-auto` on the parent `<CardContent>` and a `min-w-[xxx]` on `<Table>` to prevent column collapse on small screens:
+**All data tables in the app use `<DataTable>`** — `web/components/data-table.tsx`.
 
-| Page / Component | min-w |
-|-----------------|-------|
-| `servers/page.tsx` ServersTable | `min-w-[700px]` |
-| `providers/page.tsx` OllamaTab | `min-w-[800px]` |
-| `providers/page.tsx` GeminiTab | `min-w-[760px]` |
-| `providers/page.tsx` OllamaSyncSection model table | `min-w-[600px]` |
-| `keys/page.tsx` | `min-w-[700px]` |
-| `components/job-table.tsx` | `min-w-[760px]` |
+```tsx
+import { DataTable, DataTableEmpty } from '@/components/data-table'
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
-> **Rule**: When adding a new table, always set `overflow-x-auto` on the wrapper and `min-w-[xxx]` on `<Table>` matching the column count (≈100px per column).
+// Standard table
+<DataTable minWidth="700px">
+  <TableHeader>
+    <TableRow>
+      <TableHead>Name</TableHead>
+      <TableHead className="text-right">Actions</TableHead>
+    </TableRow>
+  </TableHeader>
+  <TableBody>...</TableBody>
+</DataTable>
+
+// With pagination footer
+<DataTable minWidth="700px" footer={totalPages > 1 ? <PaginationRow /> : undefined}>
+  ...
+</DataTable>
+
+// Empty state
+<DataTableEmpty>{t('common.noData')}</DataTableEmpty>
+```
+
+### DataTable Props
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `minWidth` | `string` | `'600px'` | Minimum table width before horizontal scroll |
+| `footer` | `ReactNode` | — | Optional footer inside the Card (e.g. pagination) |
+
+### base `table.tsx` padding (SSOT)
+
+`TableHead`: `h-11 px-4`, first cell `pl-6`, last cell `pr-6`
+`TableCell`: `py-3 px-4`, first cell `pl-6`, last cell `pr-6`
+
+**Rule**: never override `pl-*`/`pr-*` on first/last cells — edge padding is the base component's responsibility.
+
+### min-width reference
+
+| Page / Component | minWidth |
+|-----------------|----------|
+| `servers/page.tsx` ServersTable | `700px` |
+| `providers/page.tsx` OllamaTab | `800px` |
+| `providers/page.tsx` GeminiTab backends | `760px` |
+| `providers/page.tsx` GeminiTab policy table | `600px` |
+| `keys/page.tsx` | `700px` |
+| `components/job-table.tsx` | `760px` |
+
+> **Rule**: When adding a new table, use `<DataTable minWidth="...">` — never write `<Card><CardContent className="p-0 overflow-x-auto"><Table className="min-w-...">` directly. All Card + scroll boilerplate lives in `DataTable`.
 
 ---
 
@@ -187,6 +232,109 @@ All tables use `overflow-x-auto` on the parent `<CardContent>` and a `min-w-[xxx
 2. Add to `web/messages/ko.json` (Korean)
 3. Add to `web/messages/ja.json` (Japanese)
 4. Use: `const { t } = useTranslation()` → `t('section.key')`
+
+---
+
+## Overview Page (`/overview`)
+
+Integrated system health dashboard — answers "is the system healthy?" at a glance.
+
+### Data Fetches (all parallel, graceful degradation)
+
+| Query | Source | refetch | Notes |
+|-------|--------|---------|-------|
+| `api.stats()` | PostgreSQL | 30s | |
+| `api.backends()` | PostgreSQL | 30s | |
+| `api.servers()` | PostgreSQL | 60s, retry:false | for power |
+| `useQueries` per server → `api.serverMetrics(id)` | node-exporter | 30s, retry:false | fail-open |
+| `api.performance(24)` | ClickHouse | 60s, retry:false | |
+| `api.usageAggregate(24)` | ClickHouse | 60s, retry:false | |
+| `api.usageBreakdown(24)` | ClickHouse | 60s, retry:false | provider per model |
+| `api.jobs('limit=10')` | PostgreSQL | 30s | |
+
+ClickHouse-dependent values show `"—"` when ClickHouse is offline (graceful degradation).
+
+### Power / Cost Calculation (frontend-only)
+
+```ts
+const ELECTRICITY_RATE = 0.10 // $/kWh — shown in subtitle
+const totalPowerW = sum(server.gpus[].power_w)  // null-safe
+const kwhPerDay   = totalPowerW * 24 / 1000
+const dailyCost   = kwhPerDay * ELECTRICITY_RATE
+const efficiency  = requests24h / kwhPerDay      // req/kWh (null if no power data)
+```
+
+### Layout (7 sections)
+
+```
+Header: h1 "Overview" + subtitle "System health at a glance"
+
+Section 1 — System KPIs (grid-cols-2 sm:grid-cols-3 xl:grid-cols-5)
+  [Providers N/M online] [In Queue N] [24h Requests] [Success %] [P95 Latency]
+  - Providers: status='online' count / total backends
+  - Queue: pending + running from jobs_by_status
+  - P95: fmtMs() — auto-converts to s/m/h when large
+
+Section 2 — Infrastructure (grid-cols-1 sm:grid-cols-3)  ← NEW
+  [GPU Power: X.XX kW] [Est. Daily Cost: $X.XX] [Efficiency: N req/kWh]
+  - No server or power_w=null → "—" + "No server data" subtitle
+  - "at $0.10/kWh" note shown in cost card subtitle
+
+Section 3 — Provider Status + API Keys (grid-cols-1 md:grid-cols-2)
+  Left: "Provider Status" card
+    OllamaIcon row: N online · N degraded · N offline (colored dots)
+    Sparkles row:   N online · N degraded · N offline
+    Footer: "View Providers →" → /providers
+  Right: "API Keys" card
+    Big number: active_keys / total_keys subtitle
+    Footer: "View Keys →" → /keys
+
+Section 4 — Request Trend (full-width Card, AreaChart)
+  Total + Success series from perf.hourly (hidden if empty)
+  Y-axis: tickFormatter=fmt, gradients from --theme-primary / --theme-status-success
+
+Section 5 — Top Models (full-width Card, horizontal BarChart)  ← NEW
+  Data: breakdown.by_model sorted desc by request_count, top 8
+  Bar color: Cell per bar — ollama=var(--theme-primary), gemini=var(--theme-status-info)
+  Y-axis: model_name (width=150, max 22 chars + "…")
+  Tooltip: shows backend name for each bar
+  Legend: "Ollama" (primary color) · "Gemini" (info color)
+  Hidden if no breakdown data
+
+Section 6 — Recent Jobs (full-width Card)
+  Title + "View all jobs →" → /jobs
+  Inline mini table: Model | Provider | Status | Latency | Created (10 rows, no modal)
+  Latency: fmtMsNullable() — auto ms/s/m/h
+
+Section 7 — Summary panels (grid-cols-1 md:grid-cols-2)
+  Left: "Token Summary" — total/prompt/completion tokens (24h) + "View Usage →"
+  Right: "Performance" — P50/P95/P99 grid (fmtMs) + "View Performance →"
+```
+
+### i18n Keys (overview.*)
+
+Base keys: `providerStatus`, `queueDepth`, `recentJobs`, `viewAllJobs`,
+`tokenSummary`, `perfSummary`, `goToProviders`, `goToKeys`, `goToUsage`, `goToPerformance`
+
+Infrastructure keys (added 2026-02-28):
+`infrastructure`, `gpuPower`, `dailyElectricity`, `efficiencyLabel`, `reqPerKwh`,
+`topModels`, `powerNote`, `noServerPower`
+
+---
+
+## Duration / Latency Formatter — `fmtMs` (SSOT)
+
+Shared in `web/lib/chart-theme.ts`. Use everywhere — never inline ms conversion.
+
+| Function | Use case | Example |
+|----------|----------|---------|
+| `fmtMs(n)` | KPI cards, tooltips, table cells | `86360` → `"1m 26s"` |
+| `fmtMsAxis(n)` | Chart Y-axis tick labels (compact) | `86360` → `"1.4m"` |
+| `fmtMsNullable(n)` | Nullable job latency | `null` → `"—"` |
+
+Tiers: `< 1s` → `"Xms"` · `1s–59s` → `"X.Xs"` · `1m–59m` → `"Xm Xs"` · `≥ 1h` → `"Xh Xm"`
+
+**Rule**: All latency display in the app uses these functions. Never write `${n}ms` or `${n/1000}s` directly in TSX.
 
 ---
 

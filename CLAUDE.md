@@ -51,6 +51,7 @@
 | -------------- | ---------------------------------------- |
 | Architecture   | `docs/llm/policies/architecture.md`      |
 | Git Flow       | `docs/llm/policies/git-flow.md`          |
+| Terminology    | `docs/llm/policies/terminology.md`       |
 
 ---
 

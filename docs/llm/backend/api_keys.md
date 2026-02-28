@@ -1,6 +1,6 @@
 # API Keys — Backend: Auth & Rate Limiting
 
-> SSOT | **Last Updated**: 2026-02-27
+> SSOT | **Last Updated**: 2026-02-28 (rev: unique name constraint migration 000032)
 
 ## Task Guide
 
@@ -61,8 +61,15 @@ CREATE TABLE api_keys (
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
     deleted_at      TIMESTAMPTZ  -- migration 000021
 );
--- migrations: 000001 CREATE, 000021 deleted_at (soft-delete)
+
+-- Unique name per tenant (case-insensitive, soft-delete aware)
+-- Deleted keys free their name for reuse
+CREATE UNIQUE INDEX uq_api_keys_tenant_name
+    ON api_keys (tenant_id, lower(name))
+    WHERE deleted_at IS NULL;  -- migration 000032
 ```
+
+- migrations: 000001 CREATE, 000021 deleted_at (soft-delete), 000032 unique name index
 
 ---
 
@@ -70,6 +77,7 @@ CREATE TABLE api_keys (
 
 ```
 POST   /v1/keys        CreateKeyRequest → CreateKeyResponse (plaintext shown once)
+                       → 409 if name already exists for tenant (uq_api_keys_tenant_name)
 GET    /v1/keys        → Vec<KeySummary> (excludes soft-deleted)
 DELETE /v1/keys/{id}   → 204 (soft-delete: sets deleted_at = NOW())
 PATCH  /v1/keys/{id}   ToggleKeyRequest { is_active: bool } → 204
