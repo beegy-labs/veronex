@@ -76,6 +76,8 @@ pub struct JobsQuery {
     pub status: Option<String>,
     /// Full-text search on prompt (case-insensitive substring match).
     pub q: Option<String>,
+    /// Filter by job source: "api" or "test". Omit for all sources.
+    pub source: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -99,11 +101,14 @@ pub struct JobSummary {
     pub model_name: String,
     pub backend: String,
     pub status: String,
+    pub source: String,
     pub created_at: String,
     pub completed_at: Option<String>,
     pub latency_ms: Option<i64>,
     pub ttft_ms: Option<i64>,
+    pub prompt_tokens: Option<i64>,
     pub completion_tokens: Option<i64>,
+    pub cached_tokens: Option<i64>,
     /// Tokens per second (generation only, excluding TTFT).
     pub tps: Option<f64>,
     pub api_key_name: Option<String>,
@@ -190,12 +195,15 @@ pub struct JobDetail {
     pub model_name: String,
     pub backend: String,
     pub status: String,
+    pub source: String,
     pub created_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     pub latency_ms: Option<i64>,
     pub ttft_ms: Option<i64>,
+    pub prompt_tokens: Option<i64>,
     pub completion_tokens: Option<i64>,
+    pub cached_tokens: Option<i64>,
     pub tps: Option<f64>,
     pub api_key_name: Option<String>,
     pub prompt: String,
@@ -212,9 +220,9 @@ pub async fn get_job_detail(
     let pool = &state.pg_pool;
 
     let row = sqlx::query(
-        "SELECT j.id, j.model_name, j.backend, j.status,
+        "SELECT j.id, j.model_name, j.backend, j.status, j.source,
                 j.created_at, j.started_at, j.completed_at,
-                j.latency_ms, j.ttft_ms, j.completion_tokens,
+                j.latency_ms, j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
                 j.prompt, j.result_text, j.error,
                 k.name AS api_key_name
          FROM inference_jobs j
@@ -231,6 +239,7 @@ pub async fn get_job_detail(
     let model_name: String = row.try_get("model_name").unwrap_or_default();
     let backend: String = row.try_get("backend").unwrap_or_default();
     let status: String = row.try_get("status").unwrap_or_default();
+    let source: String = row.try_get("source").unwrap_or_else(|_| "api".to_string());
     let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at").unwrap_or_default();
     let started_at: Option<chrono::DateTime<chrono::Utc>> =
         row.try_get("started_at").unwrap_or(None);
@@ -238,7 +247,9 @@ pub async fn get_job_detail(
         row.try_get("completed_at").unwrap_or(None);
     let latency_ms: Option<i32> = row.try_get("latency_ms").unwrap_or(None);
     let ttft_ms: Option<i32> = row.try_get("ttft_ms").unwrap_or(None);
+    let prompt_tokens: Option<i32> = row.try_get("prompt_tokens").unwrap_or(None);
     let completion_tokens: Option<i32> = row.try_get("completion_tokens").unwrap_or(None);
+    let cached_tokens: Option<i32> = row.try_get("cached_tokens").unwrap_or(None);
     let api_key_name: Option<String> = row.try_get("api_key_name").unwrap_or(None);
     let prompt: String = row.try_get("prompt").unwrap_or_default();
     let result_text: Option<String> = row.try_get("result_text").unwrap_or(None);
@@ -251,12 +262,15 @@ pub async fn get_job_detail(
         model_name,
         backend,
         status,
+        source,
         created_at: created_at.to_rfc3339(),
         started_at: started_at.map(|dt| dt.to_rfc3339()),
         completed_at: completed_at.map(|dt| dt.to_rfc3339()),
         latency_ms: latency_ms.map(|v| v as i64),
         ttft_ms: ttft_ms.map(|v| v as i64),
+        prompt_tokens: prompt_tokens.map(|v| v as i64),
         completion_tokens: completion_tokens.map(|v| v as i64),
+        cached_tokens: cached_tokens.map(|v| v as i64),
         tps,
         api_key_name,
         prompt,
@@ -265,11 +279,12 @@ pub async fn get_job_detail(
     }))
 }
 
-/// GET /v1/dashboard/jobs — Paginated job list with optional status filter and prompt search.
+/// GET /v1/dashboard/jobs — Paginated job list with optional status/source filters and search.
 ///
 /// Query params:
 ///   `status`  — filter by job status (pending/running/completed/failed/cancelled)
-///   `q`       — case-insensitive substring match on prompt text
+///   `source`  — filter by job source: "api" or "test"
+///   `q`       — case-insensitive substring match on prompt text OR api key name
 ///   `limit`   — page size (default 50)
 ///   `offset`  — pagination offset
 pub async fn list_jobs(
@@ -279,119 +294,53 @@ pub async fn list_jobs(
     use sqlx::Row;
     let pool = &state.pg_pool;
 
-    // Build WHERE clauses dynamically.
-    // We always LEFT JOIN api_keys so the key name is available.
     let status_filter = params.status.as_deref().filter(|s| !s.is_empty());
-    let search = params.q.as_deref().filter(|s| !s.is_empty());
+    let source_filter = params.source.as_deref().filter(|s| !s.is_empty());
+    let search_like = params
+        .q
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{}%", s));
 
-    // Total count
-    let total: i64 = match (status_filter, search) {
-        (Some(st), Some(q)) => {
-            let like = format!("%{}%", q);
-            sqlx::query(
-                "SELECT COUNT(*) AS cnt FROM inference_jobs
-                 WHERE status = $1 AND prompt ILIKE $2",
-            )
-            .bind(st)
-            .bind(&like)
-            .fetch_one(pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .try_get("cnt")
-            .unwrap_or(0)
-        }
-        (Some(st), None) => {
-            sqlx::query(
-                "SELECT COUNT(*) AS cnt FROM inference_jobs WHERE status = $1",
-            )
-            .bind(st)
-            .fetch_one(pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .try_get("cnt")
-            .unwrap_or(0)
-        }
-        (None, Some(q)) => {
-            let like = format!("%{}%", q);
-            sqlx::query(
-                "SELECT COUNT(*) AS cnt FROM inference_jobs WHERE prompt ILIKE $1",
-            )
-            .bind(&like)
-            .fetch_one(pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .try_get("cnt")
-            .unwrap_or(0)
-        }
-        (None, None) => {
-            sqlx::query("SELECT COUNT(*) AS cnt FROM inference_jobs")
-                .fetch_one(pool)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                .try_get("cnt")
-                .unwrap_or(0)
-        }
-    };
+    // Single parameterised query — NULL means "no filter".
+    // $2 matches prompt text OR api key name (case-insensitive).
+    let total: i64 = sqlx::query(
+        "SELECT COUNT(*) AS cnt
+         FROM inference_jobs j
+         LEFT JOIN api_keys k ON k.id = j.api_key_id
+         WHERE ($1::TEXT IS NULL OR j.status = $1)
+           AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
+           AND ($3::TEXT IS NULL OR j.source = $3)",
+    )
+    .bind(status_filter)
+    .bind(search_like.as_deref())
+    .bind(source_filter)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .try_get("cnt")
+    .unwrap_or(0);
 
-    // Common SELECT with api_key name join.
-    // Use stored latency_ms (set by run_job on completion) for accurate inference timing.
-    let select = "SELECT j.id, j.model_name, j.backend, j.status,
-                         j.created_at, j.completed_at, j.latency_ms,
-                         j.ttft_ms, j.completion_tokens, k.name AS api_key_name
-                  FROM inference_jobs j
-                  LEFT JOIN api_keys k ON k.id = j.api_key_id";
-
-    let rows = match (status_filter, search) {
-        (Some(st), Some(q)) => {
-            let like = format!("%{}%", q);
-            sqlx::query(&format!(
-                "{select} WHERE j.status = $1 AND j.prompt ILIKE $2
-                 ORDER BY j.created_at DESC LIMIT $3 OFFSET $4"
-            ))
-            .bind(st)
-            .bind(&like)
-            .bind(params.limit)
-            .bind(params.offset)
-            .fetch_all(pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        }
-        (Some(st), None) => {
-            sqlx::query(&format!(
-                "{select} WHERE j.status = $1
-                 ORDER BY j.created_at DESC LIMIT $2 OFFSET $3"
-            ))
-            .bind(st)
-            .bind(params.limit)
-            .bind(params.offset)
-            .fetch_all(pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        }
-        (None, Some(q)) => {
-            let like = format!("%{}%", q);
-            sqlx::query(&format!(
-                "{select} WHERE j.prompt ILIKE $1
-                 ORDER BY j.created_at DESC LIMIT $2 OFFSET $3"
-            ))
-            .bind(&like)
-            .bind(params.limit)
-            .bind(params.offset)
-            .fetch_all(pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        }
-        (None, None) => {
-            sqlx::query(&format!(
-                "{select} ORDER BY j.created_at DESC LIMIT $1 OFFSET $2"
-            ))
-            .bind(params.limit)
-            .bind(params.offset)
-            .fetch_all(pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        }
-    };
+    let rows = sqlx::query(
+        "SELECT j.id, j.model_name, j.backend, j.status, j.source,
+                j.created_at, j.completed_at, j.latency_ms,
+                j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
+                k.name AS api_key_name
+         FROM inference_jobs j
+         LEFT JOIN api_keys k ON k.id = j.api_key_id
+         WHERE ($1::TEXT IS NULL OR j.status = $1)
+           AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
+           AND ($3::TEXT IS NULL OR j.source = $3)
+         ORDER BY j.created_at DESC LIMIT $4 OFFSET $5",
+    )
+    .bind(status_filter)
+    .bind(search_like.as_deref())
+    .bind(source_filter)
+    .bind(params.limit)
+    .bind(params.offset)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let jobs: Vec<JobSummary> = rows
         .iter()
@@ -400,17 +349,17 @@ pub async fn list_jobs(
             let model_name: String = row.try_get("model_name").unwrap_or_default();
             let backend: String = row.try_get("backend").unwrap_or_default();
             let status: String = row.try_get("status").unwrap_or_default();
+            let source: String = row.try_get("source").unwrap_or_else(|_| "api".to_string());
             let created_at: chrono::DateTime<chrono::Utc> =
                 row.try_get("created_at").unwrap_or_default();
             let completed_at: Option<chrono::DateTime<chrono::Utc>> =
                 row.try_get("completed_at").unwrap_or(None);
             let latency_ms: Option<i32> = row.try_get("latency_ms").unwrap_or(None);
             let ttft_ms: Option<i32> = row.try_get("ttft_ms").unwrap_or(None);
+            let prompt_tokens: Option<i32> = row.try_get("prompt_tokens").unwrap_or(None);
             let completion_tokens: Option<i32> = row.try_get("completion_tokens").unwrap_or(None);
+            let cached_tokens: Option<i32> = row.try_get("cached_tokens").unwrap_or(None);
             let api_key_name: Option<String> = row.try_get("api_key_name").unwrap_or(None);
-
-            // TPS = completion_tokens / generation_ms * 1000
-            // generation_ms = latency_ms - ttft_ms (exclude prefill time)
             let tps = compute_tps(latency_ms, ttft_ms, completion_tokens);
 
             JobSummary {
@@ -418,11 +367,14 @@ pub async fn list_jobs(
                 model_name,
                 backend,
                 status,
+                source,
                 created_at: created_at.to_rfc3339(),
                 completed_at: completed_at.map(|dt| dt.to_rfc3339()),
                 latency_ms: latency_ms.map(|v| v as i64),
                 ttft_ms: ttft_ms.map(|v| v as i64),
+                prompt_tokens: prompt_tokens.map(|v| v as i64),
                 completion_tokens: completion_tokens.map(|v| v as i64),
+                cached_tokens: cached_tokens.map(|v| v as i64),
                 tps,
                 api_key_name,
             }
@@ -525,6 +477,7 @@ mod tests {
         assert_eq!(q.limit, 50);
         assert_eq!(q.offset, 0);
         assert!(q.status.is_none());
+        assert!(q.source.is_none());
     }
 
     #[test]
@@ -564,11 +517,14 @@ mod tests {
             model_name: "llama3.2".to_string(),
             backend: "ollama".to_string(),
             status: "completed".to_string(),
+            source: "api".to_string(),
             created_at: "2026-02-22T12:00:00Z".to_string(),
             completed_at: Some("2026-02-22T12:00:01.2Z".to_string()),
             latency_ms: Some(1200),
             ttft_ms: Some(150),
+            prompt_tokens: Some(20),
             completion_tokens: Some(50),
+            cached_tokens: None,
             tps: Some(44.4),
             api_key_name: Some("dev-key".to_string()),
         };
