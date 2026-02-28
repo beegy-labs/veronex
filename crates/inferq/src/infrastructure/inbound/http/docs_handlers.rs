@@ -1,14 +1,58 @@
+use axum::extract::Query;
 use axum::http::header;
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Response};
+use serde::Deserialize;
+use serde_json::Value;
 
 const SPEC: &str = include_str!("openapi.json");
+const OVERLAY_KO: &str = include_str!("openapi.overlay.ko.json");
+const OVERLAY_JA: &str = include_str!("openapi.overlay.ja.json");
 
-/// GET /docs/openapi.json — serve the embedded OpenAPI spec.
-pub async fn openapi_json() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "application/json")], SPEC)
+#[derive(Deserialize)]
+pub struct LangQuery {
+    lang: Option<String>,
 }
 
-/// GET /docs/swagger — Swagger UI (CDN).
+/// Recursively merge `overlay` into `base`.
+/// - Objects: overlay keys are merged (deep).
+/// - Arrays / scalars: overlay value replaces base.
+fn merge_json(base: &mut Value, overlay: &Value) {
+    match (base, overlay) {
+        (Value::Object(base_map), Value::Object(overlay_map)) => {
+            for (key, val) in overlay_map {
+                let base_val = base_map.entry(key.clone()).or_insert(Value::Null);
+                merge_json(base_val, val);
+            }
+        }
+        (base, overlay) => {
+            *base = overlay.clone();
+        }
+    }
+}
+
+/// GET /docs/openapi.json?lang=ko|ja|en — serve the embedded OpenAPI spec,
+/// optionally merged with a locale overlay.
+pub async fn openapi_json(Query(q): Query<LangQuery>) -> Response {
+    let overlay_src = match q.lang.as_deref() {
+        Some("ko") => Some(OVERLAY_KO),
+        Some("ja") => Some(OVERLAY_JA),
+        _ => None,
+    };
+
+    match overlay_src {
+        Some(overlay_str) => {
+            let mut spec: Value = serde_json::from_str(SPEC).unwrap_or(Value::Null);
+            if let Ok(overlay) = serde_json::from_str::<Value>(overlay_str) {
+                merge_json(&mut spec, &overlay);
+            }
+            let body = serde_json::to_string(&spec).unwrap_or_default();
+            ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+        None => ([(header::CONTENT_TYPE, "application/json")], SPEC).into_response(),
+    }
+}
+
+/// GET /docs/swagger — Swagger UI (CDN). Lang param forwarded to spec URL.
 pub async fn swagger_ui() -> impl IntoResponse {
     Html(r#"<!DOCTYPE html>
 <html lang="en">
