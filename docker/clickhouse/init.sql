@@ -54,6 +54,48 @@ FROM (
     GROUP BY hour, api_key_id, tenant_id
 );
 
+-- ── OTel metrics gauge (consumed from Redpanda via Kafka Engine in 02_kafka.sql) ──
+-- Created here explicitly because OTel Collector no longer auto-creates tables.
+
+CREATE TABLE IF NOT EXISTS otel_metrics_gauge (
+    ResourceAttributes      Map(LowCardinality(String), String),
+    ResourceSchemaUrl       String,
+    ScopeName               LowCardinality(String),
+    ScopeVersion            String,
+    ScopeAttributes         Map(LowCardinality(String), String),
+    ScopeDroppedAttrCount   UInt32,
+    ScopeSchemaUrl          String,
+    ServiceName             LowCardinality(String),
+    MetricName              LowCardinality(String),
+    MetricDescription       String,
+    MetricUnit              String,
+    Attributes              Map(LowCardinality(String), String),
+    StartTimeUnix           DateTime64(9),
+    TimeUnix                DateTime64(9),
+    Value                   Float64,
+    Flags                   UInt32,
+    Exemplars Nested (
+        FilteredAttributes  Map(LowCardinality(String), String),
+        TimeUnix            DateTime64(9),
+        Value               Float64,
+        SpanId              String,
+        TraceId             String
+    )
+) ENGINE = MergeTree()
+PARTITION BY toDate(TimeUnix)
+ORDER BY (MetricName, TimeUnix)
+TTL toDate(TimeUnix) + INTERVAL 30 DAY;
+
+-- ── OTel traces raw (consumed from Redpanda via Kafka Engine in 02_kafka.sql) ──
+
+CREATE TABLE IF NOT EXISTS otel_traces_raw (
+    received_at DateTime64(3) DEFAULT now64(3),
+    payload     String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(received_at)
+ORDER BY received_at
+TTL toDate(received_at) + INTERVAL 30 DAY;
+
 -- ── node-exporter curated metrics (dashboard queries) ────────────────────────
 
 CREATE TABLE IF NOT EXISTS node_metrics (

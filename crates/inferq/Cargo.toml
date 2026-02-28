@@ -40,6 +40,9 @@ tracing-opentelemetry = "0.28"
 # ClickHouse
 clickhouse = { version = "0.13", features = ["time"] }
 
+# Kafka / Redpanda (pure Rust, no C deps)
+rskafka = "0.5"
+
 # Config
 config = "0.14"
 

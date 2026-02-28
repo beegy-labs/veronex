@@ -18,7 +18,7 @@ use veronex::infrastructure::inbound::http::router::build_app;
 use veronex::infrastructure::inbound::http::state::AppState;
 use veronex::infrastructure::outbound::health_checker::{check_backend, start_health_checker};
 use veronex::infrastructure::outbound::model_manager::OllamaModelManager;
-use veronex::infrastructure::outbound::observability::ClickHouseObservabilityAdapter;
+use veronex::infrastructure::outbound::observability::RedpandaObservabilityAdapter;
 use veronex::infrastructure::outbound::persistence::api_key_repository::PostgresApiKeyRepository;
 use veronex::infrastructure::outbound::persistence::backend_model_selection::PostgresBackendModelSelectionRepository;
 use veronex::infrastructure::outbound::persistence::backend_registry::PostgresBackendRegistry;
@@ -64,6 +64,9 @@ async fn main() -> Result<()> {
 
     let gemini_api_key = std::env::var("GEMINI_API_KEY").ok();
 
+    let redpanda_url = std::env::var("REDPANDA_URL")
+        .unwrap_or_else(|_| "localhost:9092".to_string());
+
     let bootstrap_api_key = std::env::var("BOOTSTRAP_API_KEY").ok();
 
     let port: u16 = std::env::var("PORT")
@@ -107,13 +110,20 @@ async fn main() -> Result<()> {
         None
     };
 
-    // ── Observability adapter (optional) ──────────────────────────
+    // ── Observability adapter (Redpanda) ───────────────────────────
+    // Inference events are produced to the 'inference' topic.
+    // ClickHouse consumes via Kafka Engine → inference_logs MV.
+    // Fail-open: if Redpanda is unavailable, observability is disabled.
     let observability: Option<Arc<dyn ObservabilityPort>> =
-        if let Some(client) = clickhouse_client.clone() {
-            tracing::info!("clickhouse observability adapter enabled");
-            Some(Arc::new(ClickHouseObservabilityAdapter::new(client)))
-        } else {
-            None
+        match RedpandaObservabilityAdapter::new(vec![redpanda_url.clone()]).await {
+            Ok(adapter) => {
+                tracing::info!("redpanda observability adapter enabled (broker: {redpanda_url})");
+                Some(Arc::new(adapter))
+            }
+            Err(e) => {
+                tracing::warn!("redpanda observability adapter failed — inference events will not be recorded (non-fatal): {e}");
+                None
+            }
         };
 
     // ── Model manager (Ollama LRU eviction) ────────────────────────
@@ -279,6 +289,7 @@ async fn main() -> Result<()> {
         valkey_pool,
         clickhouse_client,
         pg_pool,
+        cpu_snapshot_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     let app = build_app(state);
