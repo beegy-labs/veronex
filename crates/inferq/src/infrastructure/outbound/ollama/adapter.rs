@@ -69,6 +69,7 @@ impl InferenceBackendPort for OllamaAdapter {
             job_id: job.id.clone(),
             prompt_tokens: resp.prompt_eval_count.unwrap_or(0),
             completion_tokens: resp.eval_count.unwrap_or(0),
+            cached_tokens: None, // Ollama does not expose KV cache hit counts
             latency_ms,
             ttft_ms: None,
             tokens: vec![resp.response],
@@ -120,11 +121,19 @@ impl InferenceBackendPort for OllamaAdapter {
                     let chunk: GenerateResponse = serde_json::from_str(&line)
                         .map_err(|e| anyhow::anyhow!("failed to parse Ollama response: {e}: {line}"))?;
 
+                    // On the final chunk Ollama reports token counts.
+                    let (prompt_tokens, completion_tokens) = if chunk.done {
+                        (chunk.prompt_eval_count, chunk.eval_count)
+                    } else {
+                        (None, None)
+                    };
+
                     yield StreamToken {
                         value: chunk.response,
                         is_final: chunk.done,
-                        prompt_tokens: None,
-                        completion_tokens: None,
+                        prompt_tokens,
+                        completion_tokens,
+                        cached_tokens: None,
                     };
 
                     if chunk.done {

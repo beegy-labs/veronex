@@ -85,6 +85,11 @@ struct UsageMetadata {
     prompt_token_count: Option<u32>,
     #[serde(rename = "candidatesTokenCount")]
     candidates_token_count: Option<u32>,
+    /// Tokens served from a cached context (Context Caching API).
+    /// Non-zero only when a `cachedContent` is referenced in the request.
+    /// Billed at ~25% of the normal input token rate.
+    #[serde(rename = "cachedContentTokenCount")]
+    cached_content_token_count: Option<u32>,
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -110,11 +115,12 @@ fn is_done(candidates: &[Candidate]) -> bool {
         .is_some_and(|r| !r.is_empty())
 }
 
-fn extract_usage(resp: &GenerateResponse) -> (Option<u32>, Option<u32>) {
+fn extract_usage(resp: &GenerateResponse) -> (Option<u32>, Option<u32>, Option<u32>) {
     let usage = resp.usage_metadata.as_ref();
     let prompt = usage.and_then(|u| u.prompt_token_count);
     let completion = usage.and_then(|u| u.candidates_token_count);
-    (prompt, completion)
+    let cached = usage.and_then(|u| u.cached_content_token_count).filter(|&v| v > 0);
+    (prompt, completion, cached)
 }
 
 fn map_finish_reason(candidates: &[Candidate]) -> FinishReason {
@@ -156,19 +162,13 @@ impl InferenceBackendPort for GeminiAdapter {
         let latency_ms = start.elapsed().as_millis() as u32;
         let text = extract_text(&resp.candidates);
         let finish_reason = map_finish_reason(&resp.candidates);
+        let (prompt_tokens, completion_tokens, cached_tokens) = extract_usage(&resp);
 
         Ok(InferenceResult {
             job_id: job.id.clone(),
-            prompt_tokens: resp
-                .usage_metadata
-                .as_ref()
-                .and_then(|u| u.prompt_token_count)
-                .unwrap_or(0),
-            completion_tokens: resp
-                .usage_metadata
-                .as_ref()
-                .and_then(|u| u.candidates_token_count)
-                .unwrap_or(0),
+            prompt_tokens: prompt_tokens.unwrap_or(0),
+            completion_tokens: completion_tokens.unwrap_or(0),
+            cached_tokens,
             latency_ms,
             ttft_ms: None,
             tokens: vec![text],
@@ -240,13 +240,13 @@ impl InferenceBackendPort for GeminiAdapter {
                     let text = extract_text(&parsed.candidates);
                     let done = is_done(&parsed.candidates);
 
-                    let (prompt_tokens, completion_tokens) = if done {
+                    let (prompt_tokens, completion_tokens, cached_tokens) = if done {
                         extract_usage(&parsed)
                     } else {
-                        (None, None)
+                        (None, None, None)
                     };
 
-                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens };
+                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens, cached_tokens };
 
                     if done {
                         return;
@@ -264,8 +264,8 @@ impl InferenceBackendPort for GeminiAdapter {
                 if !s.is_empty() {
                     if let Ok(parsed) = serde_json::from_str::<GenerateResponse>(s) {
                         let text = extract_text(&parsed.candidates);
-                        let (prompt_tokens, completion_tokens) = extract_usage(&parsed);
-                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens };
+                        let (prompt_tokens, completion_tokens, cached_tokens) = extract_usage(&parsed);
+                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens };
                         return;
                     }
                 }
@@ -274,7 +274,7 @@ impl InferenceBackendPort for GeminiAdapter {
             // Stream ended without a finishReason event — emit empty done marker
             // so run_job marks the job as completed and the SSE client receives
             // a 'done' event.
-            yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None };
+            yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None };
         })
     }
 }

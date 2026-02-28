@@ -19,13 +19,16 @@ use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::{InferenceEvent, ObservabilityPort};
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::InferenceJob;
-use crate::domain::enums::{BackendType, FinishReason, JobStatus};
+use crate::domain::enums::{BackendType, FinishReason, JobSource, JobStatus};
 use crate::domain::value_objects::{JobId, ModelName, Prompt, StreamToken};
 use crate::infrastructure::outbound::backend_router::{get_ollama_available_vram_mb, increment_gemini_counters, make_adapter, pick_best_backend};
 
-// ── Queue key ──────────────────────────────────────────────────────────────────
+// ── Queue keys ─────────────────────────────────────────────────────────────────
 
-const QUEUE_KEY: &str = "veronex:queue:jobs";
+/// API-client jobs — always polled first by BLPOP key ordering.
+const QUEUE_KEY_API: &str = "veronex:queue:jobs";
+/// Test-panel jobs — lower priority (polled second).
+const QUEUE_KEY_TEST: &str = "veronex:queue:jobs:test";
 
 // ── In-memory job store ────────────────────────────────────────────────────────
 
@@ -37,6 +40,8 @@ struct JobEntry {
     /// API key that submitted this job — used for TPM accounting.
     api_key_id: Option<Uuid>,
     notify: Arc<Notify>,
+    /// Fired by cancel() to interrupt the Ollama token stream immediately.
+    cancel_notify: Arc<Notify>,
     /// Gemini tier routing preference: "free" = free-tier only, None = auto (free→paid fallback).
     gemini_tier: Option<String>,
 }
@@ -172,11 +177,13 @@ impl InferenceUseCaseImpl {
                     done: false,
                     api_key_id: None,
                     notify: Arc::new(Notify::new()),
+                    cancel_notify: Arc::new(Notify::new()),
                     gemini_tier: None, // tier preference is lost on restart → auto-routing
                 });
             }
 
-            if let Err(e) = pool.rpush::<i64, _, _>(QUEUE_KEY, uuid.to_string()).await {
+            let queue_key = if job.source == JobSource::Test { QUEUE_KEY_TEST } else { QUEUE_KEY_API };
+            if let Err(e) = pool.rpush::<i64, _, _>(queue_key, uuid.to_string()).await {
                 tracing::warn!(%uuid, "failed to re-enqueue recovered job: {e}");
             } else {
                 tracing::info!(%uuid, "recovered job re-enqueued");
@@ -195,6 +202,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         model_name: &str,
         backend_type: &str,
         api_key_id: Option<Uuid>,
+        source: JobSource,
     ) -> Result<JobId> {
         let job_id = JobId::new();
         // Parse backend string: "gemini-free" routes to free-tier Gemini only;
@@ -219,7 +227,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             api_key_id,
             latency_ms: None,
             ttft_ms: None,
+            prompt_tokens: None,
             completion_tokens: None,
+            cached_tokens: None,
+            source,
         };
 
         self.job_repo.save(&job).await?;
@@ -235,6 +246,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     done: false,
                     api_key_id,
                     notify: Arc::new(Notify::new()),
+                    cancel_notify: Arc::new(Notify::new()),
                     gemini_tier: gemini_tier.clone(),
                 },
             );
@@ -244,8 +256,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
         if let Some(ref pool) = self.valkey_pool {
             // Persistent queue: RPUSH job UUID — dispatcher picks it up.
+            // Test jobs go to a separate lower-priority queue.
             use fred::prelude::*;
-            match pool.rpush::<i64, _, _>(QUEUE_KEY, uuid.to_string()).await {
+            let queue_key = if source == JobSource::Test { QUEUE_KEY_TEST } else { QUEUE_KEY_API };
+            match pool.rpush::<i64, _, _>(queue_key, uuid.to_string()).await {
                 Ok(_) => {
                     tracing::debug!(%uuid, "job enqueued to Valkey queue");
                 }
@@ -361,10 +375,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     Some(job) if job.status == JobStatus::Completed => {
                         if let Some(text) = job.result_text {
                             if !text.is_empty() {
-                                yield StreamToken { value: text, is_final: false, prompt_tokens: None, completion_tokens: None };
+                                yield StreamToken { value: text, is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None };
                             }
                         }
-                        yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None };
+                        yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None };
                         return;
                     }
                     Some(job) if job.status == JobStatus::Failed => {
@@ -437,6 +451,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 entry.status = JobStatus::Cancelled;
                 entry.done = true;
                 entry.notify.notify_one();
+                // Wake up run_job's tokio::select! so the Ollama stream is dropped immediately.
+                entry.cancel_notify.notify_one();
             }
         }
         self.job_repo
@@ -528,12 +544,16 @@ async fn queue_dispatcher_loop(
 ) {
     use fred::prelude::*;
 
-    tracing::info!("queue dispatcher loop started, waiting for jobs on {QUEUE_KEY}");
+    tracing::info!(
+        "queue dispatcher loop started, waiting for jobs on {QUEUE_KEY_API} and {QUEUE_KEY_TEST}"
+    );
 
     loop {
         // BLPOP blocks for up to 5 s; returns None on timeout.
+        // API queue is listed first → polled with priority over the test queue.
+        let queue_keys: Vec<String> = vec![QUEUE_KEY_API.to_string(), QUEUE_KEY_TEST.to_string()];
         let result: Result<Option<(String, String)>, _> =
-            valkey_pool.blpop(QUEUE_KEY, 5.0).await;
+            valkey_pool.blpop(queue_keys, 5.0).await;
 
         let payload = match result {
             Ok(None) => continue,
@@ -573,6 +593,7 @@ async fn queue_dispatcher_loop(
                             done: false,
                             api_key_id: None,
                             notify: Arc::new(Notify::new()),
+                            cancel_notify: Arc::new(Notify::new()),
                             gemini_tier: None,
                         });
                         (j, None)
@@ -670,10 +691,11 @@ async fn queue_dispatcher_loop(
                 });
             }
             None => {
-                // No backend available → put job back at front of queue and wait.
+                // No backend available → put job back at front of its original queue and wait.
                 tracing::debug!(%uuid, "no available backend, re-queuing");
+                let requeue_key = if job.source == JobSource::Test { QUEUE_KEY_TEST } else { QUEUE_KEY_API };
                 if let Err(e) = valkey_pool
-                    .lpush::<i64, _, _>(QUEUE_KEY, uuid.to_string())
+                    .lpush::<i64, _, _>(requeue_key, uuid.to_string())
                     .await
                 {
                     tracing::error!(%uuid, "failed to re-queue job: {e}");
@@ -740,6 +762,14 @@ async fn run_job(
     }
 
     // ── Stream tokens ────────────────────────────────────────────────
+    // Clone cancel_notify before entering the loop so we can select! on it
+    // without holding the jobs lock across an await.
+    let cancel_notify = {
+        let guard = jobs.lock().await;
+        guard.get(&uuid).map(|e| e.cancel_notify.clone())
+    }
+    .unwrap_or_else(|| Arc::new(Notify::new()));
+
     let mut token_stream = backend.stream_tokens(&job);
     let mut token_count: u64 = 0;
     let mut accumulated_text = String::new();
@@ -747,10 +777,29 @@ async fn run_job(
     // Set when the final StreamToken carries real counts; None = fall back to token_count.
     let mut actual_prompt_tokens: Option<u32> = None;
     let mut actual_completion_tokens: Option<u32> = None;
+    let mut actual_cached_tokens: Option<u32> = None;
     // Time to first token (ms from started_at to first non-final non-empty token).
     let mut ttft_ms_value: Option<i32> = None;
 
-    while let Some(result) = token_stream.next().await {
+    loop {
+        // biased: cancel branch is checked first so cancellation fires immediately
+        // without waiting for the next token from Ollama.  Dropping token_stream
+        // closes the TCP connection, which sends a broken-pipe to Ollama and stops
+        // its generation loop.
+        let result = tokio::select! {
+            biased;
+            _ = cancel_notify.notified() => {
+                tracing::info!(%uuid, "job cancelled — dropping Ollama stream");
+                return Ok(());
+            }
+            item = token_stream.next() => item,
+        };
+
+        let result = match result {
+            Some(r) => r,
+            None => break,
+        };
+
         let mut guard = jobs.lock().await;
         let entry = match guard.get_mut(&uuid) {
             Some(e) => e,
@@ -769,6 +818,7 @@ async fn run_job(
                 if token.prompt_tokens.is_some() || token.completion_tokens.is_some() {
                     actual_prompt_tokens = token.prompt_tokens;
                     actual_completion_tokens = token.completion_tokens;
+                    actual_cached_tokens = token.cached_tokens;
                 }
                 // Record TTFT on the first non-empty, non-final token.
                 if ttft_ms_value.is_none() && !token.is_final && !token.value.is_empty() {
@@ -783,8 +833,8 @@ async fn run_job(
                 // followed by a separate done marker so the SSE handler never
                 // discards text that arrives on the same chunk as is_final=true.
                 if token.is_final && !token.value.is_empty() {
-                    entry.tokens.push(StreamToken { value: token.value, is_final: false, prompt_tokens: None, completion_tokens: None });
-                    entry.tokens.push(StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None });
+                    entry.tokens.push(StreamToken { value: token.value, is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None });
+                    entry.tokens.push(StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None });
                 } else {
                     entry.tokens.push(token);
                 }
@@ -880,7 +930,9 @@ async fn run_job(
             result_text: result_text.clone(),
             latency_ms: Some(stored_latency_ms),
             ttft_ms: ttft_ms_value,
+            prompt_tokens: actual_prompt_tokens.map(|v| v as i32),
             completion_tokens: stored_completion_tokens,
+            cached_tokens: actual_cached_tokens.map(|v| v as i32),
             ..job.clone()
         })
         .await
