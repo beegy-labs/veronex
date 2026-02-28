@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use uuid::Uuid;
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
 use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
@@ -10,6 +13,7 @@ use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository;
+use crate::infrastructure::outbound::hw_metrics::CpuSnapshot;
 
 /// Shared application state passed to all HTTP handlers via Axum's State extractor.
 #[derive(Clone)]
@@ -27,4 +31,7 @@ pub struct AppState {
     pub valkey_pool: Option<fred::clients::RedisPool>,
     pub clickhouse_client: Option<clickhouse::Client>,
     pub pg_pool: sqlx::PgPool,
+    /// Per-server CPU counter snapshots for delta-based usage calculation.
+    /// Keyed by GpuServer ID; updated on every metrics scrape.
+    pub cpu_snapshot_cache: Arc<Mutex<HashMap<Uuid, CpuSnapshot>>>,
 }

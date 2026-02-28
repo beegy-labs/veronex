@@ -80,7 +80,7 @@ pub async fn list_gemini_policies(State(state): State<AppState>) -> impl IntoRes
 /// a model-specific row.
 ///
 /// Example:
-/// ```
+/// ```text
 /// PUT /v1/gemini/policies/gemini-2.5-flash
 /// { "rpm_limit": 10, "rpd_limit": 250 }
 /// ```

@@ -202,8 +202,18 @@ pub async fn get_server_metrics(
             .into_response();
     };
 
-    match hw_metrics::fetch_node_metrics(&ne_url).await {
-        Ok(metrics) => (StatusCode::OK, Json(metrics)).into_response(),
+    let prev_snapshot = state
+        .cpu_snapshot_cache
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned();
+
+    match hw_metrics::fetch_node_metrics(&ne_url, prev_snapshot.as_ref()).await {
+        Ok((metrics, snapshot)) => {
+            state.cpu_snapshot_cache.lock().unwrap().insert(id, snapshot);
+            (StatusCode::OK, Json(metrics)).into_response()
+        }
         Err(e) => {
             tracing::warn!(%id, "failed to fetch node metrics from {ne_url}: {e}");
             (StatusCode::OK, Json(hw_metrics::NodeMetrics::default())).into_response()

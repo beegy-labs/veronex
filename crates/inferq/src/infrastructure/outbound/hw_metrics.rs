@@ -74,6 +74,16 @@ pub async fn store_hw_metrics(
 
 // ── Node-exporter live fetch ───────────────────────────────────────────────────
 
+/// Raw CPU counter snapshot used for delta-based usage calculation.
+/// Two consecutive snapshots are needed to compute instantaneous CPU %.
+#[derive(Debug, Clone)]
+pub struct CpuSnapshot {
+    /// Sum of idle seconds across all CPUs.
+    pub idle: f64,
+    /// Sum of all mode seconds across all CPUs.
+    pub total: f64,
+}
+
 /// Hardware metrics scraped live from a node-exporter `/metrics` endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NodeMetrics {
@@ -81,8 +91,13 @@ pub struct NodeMetrics {
     pub scrape_ok: bool,
     pub mem_total_mb: u64,
     pub mem_available_mb: u64,
-    /// Number of logical CPU cores detected.
-    pub cpu_cores: u32,
+    /// Number of logical CPUs (hardware threads) — from node_cpu_seconds_total.
+    pub cpu_logical: u32,
+    /// Number of physical cores — from node_cpu_info (core × package pairs).
+    /// `None` when node_cpu_info is not exported by node-exporter.
+    pub cpu_physical: Option<u32>,
+    /// Instantaneous CPU usage 0–100 %. `None` on the first scrape (no delta yet).
+    pub cpu_usage_pct: Option<f64>,
     /// Per-GPU metrics (empty when no DRM/hwmon GPU data is available).
     pub gpus: Vec<GpuNodeMetrics>,
 }
@@ -108,7 +123,10 @@ pub struct GpuNodeMetrics {
 /// Returns `NodeMetrics { scrape_ok: false, .. }` on network / parse errors
 /// rather than propagating an error, so callers can return a graceful "not
 /// reachable" response without treating connectivity issues as server errors.
-pub async fn fetch_node_metrics(node_exporter_url: &str) -> Result<NodeMetrics> {
+pub async fn fetch_node_metrics(
+    node_exporter_url: &str,
+    prev_snapshot: Option<&CpuSnapshot>,
+) -> Result<(NodeMetrics, CpuSnapshot)> {
     let url = format!("{}/metrics", node_exporter_url.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
@@ -116,7 +134,18 @@ pub async fn fetch_node_metrics(node_exporter_url: &str) -> Result<NodeMetrics> 
         .build()?;
 
     let text = client.get(&url).send().await?.text().await?;
-    Ok(parse_prometheus_metrics(&text))
+    let (mut metrics, snapshot) = parse_prometheus_metrics(&text);
+
+    if let Some(prev) = prev_snapshot {
+        let delta_idle = (snapshot.idle - prev.idle).max(0.0);
+        let delta_total = (snapshot.total - prev.total).max(0.0);
+        if delta_total > 0.0 {
+            metrics.cpu_usage_pct =
+                Some(((1.0 - delta_idle / delta_total) * 100.0).clamp(0.0, 100.0));
+        }
+    }
+
+    Ok((metrics, snapshot))
 }
 
 // ── Prometheus text format parser ──────────────────────────────────────────────
@@ -129,12 +158,20 @@ fn get_label<'a>(metric_part: &'a str, key: &str) -> Option<&'a str> {
     Some(&metric_part[start..end])
 }
 
-fn parse_prometheus_metrics(text: &str) -> NodeMetrics {
+fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
     use std::collections::{HashMap, HashSet};
 
     let mut mem_total_bytes: f64 = 0.0;
     let mut mem_available_bytes: f64 = 0.0;
+    // Logical CPUs from node_cpu_seconds_total (always available).
     let mut cpu_set: HashSet<String> = HashSet::new();
+    // Physical core count from node_cpu_info (core:package pairs).
+    let mut cpu_physical_set: HashSet<String> = HashSet::new();
+    // Tracks whether node_cpu_info was present at all.
+    let mut cpu_info_seen = false;
+    // CPU usage delta tracking: sum idle and total seconds across all CPUs.
+    let mut cpu_idle_sum: f64 = 0.0;
+    let mut cpu_total_sum: f64 = 0.0;
 
     // DRM metrics keyed by card name ("card0", "card1", …)
     let mut drm_busy: HashMap<String, f64> = HashMap::new();
@@ -182,6 +219,23 @@ fn parse_prometheus_metrics(text: &str) -> NodeMetrics {
             "node_cpu_seconds_total" => {
                 if let Some(cpu) = get_label(metric_part, "cpu") {
                     cpu_set.insert(cpu.to_string());
+                }
+                cpu_total_sum += value;
+                if get_label(metric_part, "mode") == Some("idle") {
+                    cpu_idle_sum += value;
+                }
+            }
+
+            // node_cpu_info{cpu="0",core="0",package="0",...} 1
+            // Available when node-exporter is run with --collector.cpu.info.
+            // `core:package` pairs = physical cores; `cpu` = logical threads.
+            "node_cpu_info" => {
+                cpu_info_seen = true;
+                if let (Some(core), Some(package)) = (
+                    get_label(metric_part, "core"),
+                    get_label(metric_part, "package"),
+                ) {
+                    cpu_physical_set.insert(format!("{core}:{package}"));
                 }
             }
 
@@ -299,11 +353,24 @@ fn parse_prometheus_metrics(text: &str) -> NodeMetrics {
         vec![]
     };
 
-    NodeMetrics {
+    let metrics = NodeMetrics {
         scrape_ok: true,
         mem_total_mb: (mem_total_bytes / 1_048_576.0) as u64,
         mem_available_mb: (mem_available_bytes / 1_048_576.0) as u64,
-        cpu_cores: cpu_set.len() as u32,
+        cpu_logical: cpu_set.len() as u32,
+        cpu_physical: if cpu_info_seen && !cpu_physical_set.is_empty() {
+            Some(cpu_physical_set.len() as u32)
+        } else {
+            None
+        },
+        cpu_usage_pct: None, // filled in by caller after delta computation
         gpus,
-    }
+    };
+
+    let snapshot = CpuSnapshot {
+        idle: cpu_idle_sum,
+        total: cpu_total_sum,
+    };
+
+    (metrics, snapshot)
 }

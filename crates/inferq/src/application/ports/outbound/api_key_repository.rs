@@ -105,6 +105,7 @@ mod tests {
             rate_limit_rpm: 0,
             rate_limit_tpm: 0,
             expires_at: None,
+            deleted_at: None,
             created_at: Utc::now(),
         }
     }
