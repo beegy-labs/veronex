@@ -8,6 +8,8 @@ export interface ApiKey {
   rate_limit_tpm: number
   created_at: string
   expires_at: string | null
+  /** `"standard"` (production) or `"test"` (dev/testing) */
+  key_type: string
 }
 
 export interface Job {
@@ -50,7 +52,10 @@ export interface JobDetail {
 
 export interface DashboardStats {
   total_keys: number
+  /** Active standard (non-test) keys */
   active_keys: number
+  /** Active test keys */
+  test_keys: number
   total_jobs: number
   jobs_last_24h: number
   jobs_by_status: Record<string, number>
@@ -161,6 +166,8 @@ export interface CreateKeyRequest {
   tenant_id: string
   rate_limit_rpm?: number
   rate_limit_tpm?: number
+  /** `"standard"` (default) or `"test"` */
+  key_type?: string
 }
 
 export interface GpuServer {

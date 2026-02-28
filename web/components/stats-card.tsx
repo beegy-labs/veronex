@@ -5,11 +5,13 @@ interface StatsCardProps {
   title: string
   value: string | number
   subtitle?: string
+  /** Overrides `subtitle` when set — allows rich ReactNode content. */
+  subtitleNode?: ReactNode
   icon?: ReactNode
   className?: string
 }
 
-export default function StatsCard({ title, value, subtitle, icon, className }: StatsCardProps) {
+export default function StatsCard({ title, value, subtitle, subtitleNode, icon, className }: StatsCardProps) {
   return (
     <Card className={className}>
       <CardContent className="p-5">
@@ -18,7 +20,10 @@ export default function StatsCard({ title, value, subtitle, icon, className }: S
           {icon && <span className="text-muted-foreground">{icon}</span>}
         </div>
         <p className="text-3xl font-bold tabular-nums">{String(value)}</p>
-        {subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>}
+        {subtitleNode
+          ? <div className="mt-1 text-xs">{subtitleNode}</div>
+          : subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+        }
       </CardContent>
     </Card>
   )

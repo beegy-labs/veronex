@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { ApiKey, CreateKeyResponse } from '@/lib/types'
-import { Plus, Trash2, Copy, Check } from 'lucide-react'
+import { Plus, FlaskConical, Trash2, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -48,9 +48,11 @@ function CopyButton({ text }: { text: string }) {
 function CreateKeyModal({
   onClose,
   onCreated,
+  keyType = 'standard',
 }: {
   onClose: () => void
   onCreated: (resp: CreateKeyResponse) => void
+  keyType?: string
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
@@ -65,15 +67,21 @@ function CreateKeyModal({
         tenant_id: tenantId.trim(),
         rate_limit_rpm: rpm ? parseInt(rpm, 10) : undefined,
         rate_limit_tpm: tpm ? parseInt(tpm, 10) : undefined,
+        key_type: keyType,
       }),
     onSuccess: (data) => onCreated(data),
   })
+
+  const isTest = keyType === 'test'
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{t('keys.createTitle')}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {isTest && <FlaskConical className="h-4 w-4 text-status-info-fg" />}
+            {isTest ? t('keys.createTestTitle') : t('keys.createTitle')}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -203,7 +211,7 @@ function DeleteConfirmModal({
 export default function KeysPage() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [showCreate, setShowCreate] = useState(false)
+  const [showCreate, setShowCreate] = useState<'standard' | 'test' | null>(null)
   const [createdKey, setCreatedKey] = useState<CreateKeyResponse | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null)
 
@@ -228,7 +236,7 @@ export default function KeysPage() {
   })
 
   function handleCreated(resp: CreateKeyResponse) {
-    setShowCreate(false)
+    setShowCreate(null)
     setCreatedKey(resp)
     queryClient.invalidateQueries({ queryKey: ['keys'] })
   }
@@ -242,10 +250,16 @@ export default function KeysPage() {
             {keys ? `${keys.length} key${keys.length !== 1 ? 's' : ''}` : t('common.loading')}
           </p>
         </div>
-        <Button onClick={() => setShowCreate(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          {t('keys.createKey')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setShowCreate('test')}>
+            <FlaskConical className="h-4 w-4 mr-2" />
+            {t('keys.createTestKey')}
+          </Button>
+          <Button onClick={() => setShowCreate('standard')}>
+            <Plus className="h-4 w-4 mr-2" />
+            {t('keys.createKey')}
+          </Button>
+        </div>
       </div>
 
       {isLoading && (
@@ -276,6 +290,7 @@ export default function KeysPage() {
               <TableHead>{t('keys.name')}</TableHead>
               <TableHead>{t('keys.prefix')}</TableHead>
               <TableHead>{t('keys.tenant')}</TableHead>
+              <TableHead>{t('keys.type')}</TableHead>
               <TableHead>{t('keys.status')}</TableHead>
               <TableHead>{t('keys.activeToggle')}</TableHead>
               <TableHead>{t('keys.rpmTpm')}</TableHead>
@@ -289,6 +304,16 @@ export default function KeysPage() {
                 <TableCell className="font-medium">{key.name}</TableCell>
                 <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
                 <TableCell className="text-muted-foreground">{key.tenant_id}</TableCell>
+                <TableCell>
+                  {key.key_type === 'test' ? (
+                    <Badge variant="outline" className="bg-status-info/10 text-status-info-fg border-status-info/30 gap-1">
+                      <FlaskConical className="h-3 w-3" />
+                      {t('overview.testKeys')}
+                    </Badge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{t('overview.activeKeysLabel')}</span>
+                  )}
+                </TableCell>
                 <TableCell>
                   <Badge
                     variant="outline"
@@ -336,7 +361,11 @@ export default function KeysPage() {
       )}
 
       {showCreate && (
-        <CreateKeyModal onClose={() => setShowCreate(false)} onCreated={handleCreated} />
+        <CreateKeyModal
+          onClose={() => setShowCreate(null)}
+          onCreated={handleCreated}
+          keyType={showCreate}
+        />
       )}
 
       {createdKey && (

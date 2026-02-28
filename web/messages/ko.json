@@ -83,12 +83,18 @@
     "goToPerformance": "성능 보기",
     "infrastructure": "인프라",
     "gpuPower": "GPU 전력",
-    "dailyElectricity": "예상 일일 전기세",
-    "efficiencyLabel": "효율",
-    "reqPerKwh": "요청/kWh",
+    "gpuServers": "GPU 서버",
+    "weeklyPower": "주간 전력",
+    "monthlyPower": "월간 전력",
+    "prevWeek": "전주 대비",
+    "prevMonth": "전월 대비",
     "topModels": "주요 모델",
-    "powerNote": "$0.10/kWh 기준",
-    "noServerPower": "서버 데이터 없음"
+    "noServerPower": "서버 데이터 없음",
+    "localProviders": "로컬",
+    "apiProviders": "API 서비스",
+    "totalReqsSubtitle": "요청",
+    "testKeys": "테스트 키",
+    "activeKeysLabel": "활성"
   },
   "jobs": {
     "title": "작업",
@@ -169,7 +175,10 @@
     "deleteKey": "키 삭제",
     "loadingKeys": "키 로딩 중…",
     "failedKeys": "키 로드 실패",
-    "nameTaken": "동일한 이름의 키가 이미 존재합니다"
+    "nameTaken": "동일한 이름의 키가 이미 존재합니다",
+    "createTestKey": "테스트 키 생성",
+    "createTestTitle": "테스트 API 키 생성",
+    "type": "유형"
   },
   "backends": {
     "title": "프로바이더",

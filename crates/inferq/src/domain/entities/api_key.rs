@@ -21,6 +21,13 @@ pub struct ApiKey {
     /// Soft-delete timestamp. When set, key is hidden from list and blocked from auth.
     #[serde(default)]
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Key category: `"standard"` (production) or `"test"` (dev/testing).
+    #[serde(default = "default_key_type")]
+    pub key_type: String,
+}
+
+fn default_key_type() -> String {
+    "standard".to_string()
 }
 
 /// Returned once at key creation — contains the plaintext key.
@@ -50,6 +57,7 @@ mod tests {
             expires_at: None,
             created_at: Utc::now(),
             deleted_at: None,
+            key_type: "standard".to_string(),
         }
     }
 
