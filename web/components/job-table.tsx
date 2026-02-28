@@ -1,18 +1,21 @@
 'use client'
 
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import type { Job, JobDetail } from '@/lib/types'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import type { Job, JobDetail, RetryParams } from '@/lib/types'
 import { api } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
-import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { RotateCcw, X, Loader2 } from 'lucide-react'
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
+import { DataTable, DataTableEmpty } from '@/components/data-table'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { useTranslation } from '@/i18n'
+import { fmtMsNullable } from '@/lib/chart-theme'
 
 // ── Status styling ─────────────────────────────────────────────────────────────
 
@@ -48,15 +51,8 @@ function formatDate(iso: string) {
   })
 }
 
-/** Smart duration: 842ms → "842ms", 2340ms → "2.3s", 125000ms → "2m 5s" */
-function formatDuration(ms: number | null): string {
-  if (ms == null) return '—'
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  const m = Math.floor(ms / 60_000)
-  const s = Math.round((ms % 60_000) / 1000)
-  return s > 0 ? `${m}m ${s}s` : `${m}m`
-}
+// fmtMsNullable imported from chart-theme — handles ms/s/m/h tiers
+const formatDuration = fmtMsNullable
 
 // ── Job detail modal ───────────────────────────────────────────────────────────
 
@@ -64,17 +60,29 @@ function JobDetailModal({
   jobId,
   open,
   onClose,
+  onRetry,
 }: {
   jobId: string | null
   open: boolean
   onClose: () => void
+  onRetry?: (params: RetryParams) => void
 }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
+
   const { data, isLoading } = useQuery<JobDetail>({
     queryKey: ['job-detail', jobId],
     queryFn: () => api.jobDetail(jobId!),
     enabled: !!jobId && open,
     staleTime: 30_000,
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: () => api.cancelJob(jobId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['job-detail', jobId] })
+    },
   })
 
   return (
@@ -115,9 +123,25 @@ function JobDetailModal({
                   value={data.tps != null ? `${data.tps.toFixed(1)} tok/s` : '—'}
                 />
                 <MetaItem
-                  label={t('jobs.tokens')}
+                  label={t('jobs.promptTokens')}
+                  value={data.prompt_tokens != null ? data.prompt_tokens.toLocaleString() : '—'}
+                />
+                <MetaItem
+                  label={t('jobs.completionTokens')}
                   value={data.completion_tokens != null ? data.completion_tokens.toLocaleString() : '—'}
                 />
+                {data.cached_tokens != null && data.cached_tokens > 0 && (
+                  <MetaItem
+                    label={t('jobs.cachedTokens')}
+                    value={data.cached_tokens.toLocaleString()}
+                  />
+                )}
+                {(data.prompt_tokens != null && data.completion_tokens != null) && (
+                  <MetaItem
+                    label={t('jobs.totalTokens')}
+                    value={(data.prompt_tokens + data.completion_tokens).toLocaleString()}
+                  />
+                )}
                 {data.api_key_name && (
                   <MetaItem label={t('jobs.apiKey')} value={data.api_key_name} accent />
                 )}
@@ -154,6 +178,39 @@ function JobDetailModal({
             </div>
           )}
         </div>
+
+        {/* Action footer */}
+        {data && (
+          <div className="shrink-0 border-t border-border px-6 py-3 flex items-center justify-between gap-2 flex-wrap">
+            {/* Retry in Test — re-runs job in the test panel above the table */}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                onRetry?.({ prompt: data.prompt, model: data.model_name, backend: data.backend })
+                onClose()
+              }}
+            >
+              <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+              {t('jobs.retryInTest')}
+            </Button>
+
+            {/* Cancel — only for pending / running jobs */}
+            {(data.status === 'pending' || data.status === 'running') && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-destructive border-destructive/40 hover:bg-destructive/10"
+                onClick={() => cancelMutation.mutate()}
+                disabled={cancelMutation.isPending}
+              >
+                {cancelMutation.isPending
+                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />{t('jobs.cancelling')}</>
+                  : <><X className="h-3.5 w-3.5 mr-1.5" />{t('jobs.cancelJob')}</>}
+              </Button>
+            )}
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )
@@ -195,71 +252,70 @@ function TextSection({
 
 // ── Job table ──────────────────────────────────────────────────────────────────
 
-export default function JobTable({ jobs }: { jobs: Job[] }) {
+export default function JobTable({
+  jobs,
+  onRetry,
+}: {
+  jobs: Job[]
+  onRetry?: (params: RetryParams) => void
+}) {
   const { t } = useTranslation()
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   if (jobs.length === 0) {
-    return (
-      <Card>
-        <div className="p-8 text-center text-muted-foreground">{t('jobs.noJobsFound')}</div>
-      </Card>
-    )
+    return <DataTableEmpty>{t('jobs.noJobsFound')}</DataTableEmpty>
   }
 
   return (
     <>
-      <Card>
-        <div className="overflow-x-auto">
-          <Table className="min-w-[760px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('jobs.id')}</TableHead>
-                <TableHead>{t('jobs.model')}</TableHead>
-                <TableHead>{t('jobs.backend')}</TableHead>
-                <TableHead>{t('jobs.apiKey')}</TableHead>
-                <TableHead>{t('jobs.status')}</TableHead>
-                <TableHead>{t('jobs.createdAt')}</TableHead>
-                <TableHead className="text-right">{t('jobs.ttft')}</TableHead>
-                <TableHead className="text-right">{t('jobs.latency')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {jobs.map((job) => (
-                <TableRow
-                  key={job.id}
-                  className="cursor-pointer hover:bg-accent/50"
-                  onClick={() => setSelectedId(job.id)}
-                >
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    <span title={job.id}>{truncateId(job.id)}</span>
-                  </TableCell>
-                  <TableCell>{job.model_name}</TableCell>
-                  <TableCell className="text-muted-foreground">{job.backend}</TableCell>
-                  <TableCell className="text-xs text-primary/80">
-                    {job.api_key_name ?? <span className="text-muted-foreground">—</span>}
-                  </TableCell>
-                  <TableCell><StatusBadge status={job.status} /></TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {formatDate(job.created_at)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground text-xs">
-                    {formatDuration(job.ttft_ms)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {formatDuration(job.latency_ms)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      </Card>
+      <DataTable minWidth="760px">
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t('jobs.id')}</TableHead>
+            <TableHead>{t('jobs.model')}</TableHead>
+            <TableHead>{t('jobs.backend')}</TableHead>
+            <TableHead>{t('jobs.apiKey')}</TableHead>
+            <TableHead>{t('jobs.status')}</TableHead>
+            <TableHead>{t('jobs.createdAt')}</TableHead>
+            <TableHead className="text-right">{t('jobs.ttft')}</TableHead>
+            <TableHead className="text-right">{t('jobs.latency')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {jobs.map((job) => (
+            <TableRow
+              key={job.id}
+              className="cursor-pointer hover:bg-accent/50"
+              onClick={() => setSelectedId(job.id)}
+            >
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                <span title={job.id}>{truncateId(job.id)}</span>
+              </TableCell>
+              <TableCell>{job.model_name}</TableCell>
+              <TableCell className="text-muted-foreground">{job.backend}</TableCell>
+              <TableCell className="text-xs text-primary/80">
+                {job.api_key_name ?? <span className="text-muted-foreground">—</span>}
+              </TableCell>
+              <TableCell><StatusBadge status={job.status} /></TableCell>
+              <TableCell className="text-xs text-muted-foreground">
+                {formatDate(job.created_at)}
+              </TableCell>
+              <TableCell className="text-right tabular-nums text-muted-foreground text-xs">
+                {formatDuration(job.ttft_ms)}
+              </TableCell>
+              <TableCell className="text-right tabular-nums text-muted-foreground">
+                {formatDuration(job.latency_ms)}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </DataTable>
 
       <JobDetailModal
         jobId={selectedId}
         open={!!selectedId}
         onClose={() => setSelectedId(null)}
+        onRetry={onRetry}
       />
     </>
   )

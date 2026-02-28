@@ -5,7 +5,9 @@ import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { Backend, BackendSelectedModel, GeminiModel, GeminiRateLimitPolicy, GeminiStatusResult, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, RegisterBackendRequest, UpdateBackendRequest } from '@/lib/types'
-import { Plus, Trash2, RefreshCw, RotateCcw, Server, Key, Wifi, WifiOff, AlertCircle, Thermometer, Zap, Pencil, MemoryStick, ShieldCheck, Eye, EyeOff, ListFilter, Search, Cpu, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Trash2, RefreshCw, RotateCcw, Server, Key, Wifi, WifiOff, AlertCircle, Pencil, ShieldCheck, Eye, EyeOff, ListFilter, Search, BarChart2, Cpu, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ServerMetricsCompact } from '@/components/server-metrics-cell'
+import { ServerHistoryModal } from '@/components/server-history-modal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -20,13 +22,13 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { DataTable } from '@/components/data-table'
 import {
   Select,
   SelectContent,
@@ -43,8 +45,8 @@ function extractHost(url: string): string {
 }
 
 function fmtMb(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
-  return `${mb} MB`
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GiB`
+  return `${mb} MiB`
 }
 
 function fmtDate(iso: string): string {
@@ -72,51 +74,6 @@ function StatusBadge({ status }: { status: Backend['status'] }) {
   )
 }
 
-// ── Compact inline metrics for Ollama server cells ─────────────────────────────
-
-function OllamaServerMetrics({ serverId, gpuIndex }: { serverId: string; gpuIndex: number | null }) {
-  const { t } = useTranslation()
-  const { data, isError } = useQuery<NodeMetrics>({
-    queryKey: ['server-metrics', serverId],
-    queryFn: () => api.serverMetrics(serverId),
-    refetchInterval: 30_000,
-    retry: false,
-  })
-
-  if (isError || (data && !data.scrape_ok)) {
-    return <span className="text-[10px] text-status-error-fg italic">{t('backends.servers.unreachable')}</span>
-  }
-  if (!data) return null
-
-  const memUsed = data.mem_total_mb - data.mem_available_mb
-  const gpu = data.gpus[gpuIndex ?? 0] ?? null
-  const tempCls = gpu?.temp_c != null && gpu.temp_c >= 85
-    ? 'text-status-error-fg'
-    : gpu?.temp_c != null && gpu.temp_c >= 70
-    ? 'text-status-warn-fg'
-    : 'text-muted-foreground'
-
-  return (
-    <div className="mt-1.5 pt-1.5 border-t border-border/40 flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
-      <span className="flex items-center gap-1">
-        <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase">MEM</span>
-        <span className="tabular-nums font-mono text-[11px] text-text-dim">
-          {fmtMb(memUsed)}<span className="text-muted-foreground/40">/{fmtMb(data.mem_total_mb)}</span>
-        </span>
-      </span>
-      {gpu?.temp_c != null && (
-        <span className={`flex items-center gap-0.5 text-[11px] tabular-nums ${tempCls}`}>
-          <Thermometer className="h-3 w-3 shrink-0" />{gpu.temp_c.toFixed(0)}°C
-        </span>
-      )}
-      {gpu?.power_w != null && (
-        <span className="flex items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground">
-          <Zap className="h-3 w-3 shrink-0 text-accent-power" />{gpu.power_w.toFixed(0)}W
-        </span>
-      )}
-    </div>
-  )
-}
 
 // ── VRAM input with MiB / GiB toggle ──────────────────────────────────────────
 
@@ -169,6 +126,7 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
     staleTime: 30_000,
   })
   const gpuCards = serverMetrics?.gpus ?? []
+  const serverMemTotalMb = serverMetrics?.mem_total_mb ?? null
   const queryClient = useQueryClient()
 
   const mutation = useMutation({
@@ -191,7 +149,11 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{t('backends.editBackendTitle')}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {backend.backend_type === 'ollama'
+              ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('backends.ollama.editTitle')}</>
+              : <><Key className="h-4 w-4 text-accent-gpu" /> {t('backends.gemini.editTitle')}</>}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -249,7 +211,14 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
               </div>
 
               <div className="space-y-1.5">
-                <Label>{t('backends.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span></Label>
+                <div className="flex items-center justify-between">
+                  <Label>{t('backends.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span></Label>
+                  {serverMemTotalMb != null && serverMemTotalMb > 0 && (
+                    <span className="text-[11px] text-muted-foreground tabular-nums">
+                      {t('backends.ollama.serverRam')}: <span className="font-semibold text-text-dim">{fmtMb(serverMemTotalMb)}</span>
+                    </span>
+                  )}
+                </div>
                 <VramInput valueMb={vram} onChange={setVram} />
               </div>
             </>
@@ -321,6 +290,7 @@ function RegisterModal({
     staleTime: 30_000,
   })
   const gpuCards = serverMetrics?.gpus ?? []
+  const serverMemTotalMb = serverMetrics?.mem_total_mb ?? null
   const queryClient = useQueryClient()
 
   const mutation = useMutation({
@@ -415,7 +385,14 @@ function RegisterModal({
               </div>
 
               <div className="space-y-1.5">
-                <Label>{t('backends.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span></Label>
+                <div className="flex items-center justify-between">
+                  <Label>{t('backends.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span></Label>
+                  {serverMemTotalMb != null && serverMemTotalMb > 0 && (
+                    <span className="text-[11px] text-muted-foreground tabular-nums">
+                      {t('backends.ollama.serverRam')}: <span className="font-semibold text-text-dim">{fmtMb(serverMemTotalMb)}</span>
+                    </span>
+                  )}
+                </div>
                 <VramInput valueMb={vram} onChange={setVram} />
               </div>
             </>
@@ -1269,70 +1246,66 @@ function GeminiSyncSection() {
         )}
 
         {!tableLoading && hasContent && (
-          <Card>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table className="min-w-[600px]">
-                <TableHeader>
-                  <TableRow className="border-b border-border hover:bg-transparent">
-                    <TableHead className="text-muted-foreground font-semibold">{t('backends.gemini.model')}</TableHead>
-                    <TableHead className="text-muted-foreground font-semibold w-36">{t('backends.gemini.onFreeTier')}</TableHead>
-                    <TableHead className="text-muted-foreground font-semibold w-24 text-right">{t('backends.gemini.rpm')}</TableHead>
-                    <TableHead className="text-muted-foreground font-semibold w-24 text-right">{t('backends.gemini.rpd')}</TableHead>
-                    <TableHead className="text-muted-foreground font-semibold w-40">{t('backends.gemini.lastUpdated')}</TableHead>
-                    <TableHead className="text-right text-muted-foreground font-semibold w-20">{t('common.edit')}</TableHead>
+          <DataTable minWidth="600px">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>{t('backends.gemini.model')}</TableHead>
+                <TableHead className="w-36">{t('backends.gemini.onFreeTier')}</TableHead>
+                <TableHead className="w-24 text-right">{t('backends.gemini.rpm')}</TableHead>
+                <TableHead className="w-24 text-right">{t('backends.gemini.rpd')}</TableHead>
+                <TableHead className="w-40">{t('backends.gemini.lastUpdated')}</TableHead>
+                <TableHead className="text-right w-20">{t('common.edit')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {syncedRows.map((m) => {
+                const specific = policyMap.get(m.model_name)
+                const isInherited = !specific
+                const displayPolicy = specific ?? globalDefault
+                return (
+                  <TableRow key={m.model_name} className={isInherited ? 'opacity-60' : ''}>
+                    <TableCell>
+                      <span className="font-mono text-sm text-text-bright">{m.model_name}</span>
+                    </TableCell>
+                    <TableCell>
+                      {isInherited ? (
+                        <span className="text-xs text-muted-foreground italic">{t('backends.gemini.globalDefault')}</span>
+                      ) : displayPolicy?.available_on_free_tier ? (
+                        <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
+                          {t('backends.gemini.enabled')}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-surface-code text-muted-foreground/70 border-border text-[10px] px-1.5 py-0">
+                          {t('backends.gemini.paidOnly')}
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums font-mono text-sm">
+                      {displayPolicy && displayPolicy.rpm_limit > 0
+                        ? <span className={isInherited ? 'text-text-faint' : ''}>{displayPolicy.rpm_limit}</span>
+                        : <span className="text-text-faint">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums font-mono text-sm">
+                      {displayPolicy && displayPolicy.rpd_limit > 0
+                        ? <span className={isInherited ? 'text-text-faint' : ''}>{displayPolicy.rpd_limit}</span>
+                        : <span className="text-text-faint">—</span>}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {specific?.updated_at ? fmtDate(specific.updated_at) : <span className="text-text-faint">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="ghost" size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-status-info-fg hover:bg-status-info/10"
+                        onClick={() => setEditingPolicy(makeEditablePolicy(m.model_name))}
+                        title={t('backends.gemini.editPolicyTitle')}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {syncedRows.map((m) => {
-                    const specific = policyMap.get(m.model_name)
-                    const isInherited = !specific
-                    const displayPolicy = specific ?? globalDefault
-                    return (
-                      <TableRow key={m.model_name} className={isInherited ? 'opacity-60' : ''}>
-                        <TableCell className="py-3">
-                          <span className="font-mono text-sm text-text-bright">{m.model_name}</span>
-                        </TableCell>
-                        <TableCell className="py-3">
-                          {isInherited ? (
-                            <span className="text-xs text-muted-foreground italic">{t('backends.gemini.globalDefault')}</span>
-                          ) : displayPolicy?.available_on_free_tier ? (
-                            <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
-                              {t('backends.gemini.enabled')}
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="bg-surface-code text-muted-foreground/70 border-border text-[10px] px-1.5 py-0">
-                              {t('backends.gemini.paidOnly')}
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="py-3 text-right tabular-nums font-mono text-sm">
-                          {displayPolicy && displayPolicy.rpm_limit > 0
-                            ? <span className={isInherited ? 'text-text-faint' : ''}>{displayPolicy.rpm_limit}</span>
-                            : <span className="text-text-faint">—</span>}
-                        </TableCell>
-                        <TableCell className="py-3 text-right tabular-nums font-mono text-sm">
-                          {displayPolicy && displayPolicy.rpd_limit > 0
-                            ? <span className={isInherited ? 'text-text-faint' : ''}>{displayPolicy.rpd_limit}</span>
-                            : <span className="text-text-faint">—</span>}
-                        </TableCell>
-                        <TableCell className="py-3 text-xs text-muted-foreground">
-                          {specific?.updated_at ? fmtDate(specific.updated_at) : <span className="text-text-faint">—</span>}
-                        </TableCell>
-                        <TableCell className="py-3 text-right">
-                          <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-status-info-fg hover:bg-status-info/10"
-                            onClick={() => setEditingPolicy(makeEditablePolicy(m.model_name))}
-                            title={t('backends.gemini.editPolicyTitle')}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+                )
+              })}
+            </TableBody>
+          </DataTable>
         )}
       </div>
 
@@ -1384,6 +1357,7 @@ function OllamaTab({
   const offlineCount  = ollama.filter((b) => b.status === 'offline').length
   const degradedCount = ollama.filter((b) => b.status === 'degraded').length
   const [viewModelsBackend, setViewModelsBackend] = useState<Backend | null>(null)
+  const [historyServer, setHistoryServer] = useState<GpuServer | null>(null)
   const [page, setPage] = useState(1)
   const totalPages = Math.max(1, Math.ceil(ollama.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
@@ -1459,31 +1433,50 @@ function OllamaTab({
       )}
 
       {ollama.length > 0 && (
-        <Card>
-          <CardContent className="p-0 overflow-x-auto">
-            <Table className="min-w-[800px]">
-              <TableHeader>
-                <TableRow className="border-b border-border hover:bg-transparent">
-                  <TableHead className="text-muted-foreground font-semibold">{t('backends.ollama.name')}</TableHead>
-                  <TableHead className="text-muted-foreground font-semibold">{t('backends.ollama.server')}</TableHead>
-                  <TableHead className="text-muted-foreground font-semibold w-28">{t('backends.ollama.status')}</TableHead>
-                  <TableHead className="text-muted-foreground font-semibold w-32">{t('backends.servers.registeredAt')}</TableHead>
-                  <TableHead className="text-right text-muted-foreground font-semibold w-36">{t('keys.actions')}</TableHead>
-                </TableRow>
-              </TableHeader>
+        <DataTable
+          minWidth="800px"
+          footer={totalPages > 1 ? (
+            <div className="flex items-center justify-between px-6 py-2">
+              <span className="text-xs text-muted-foreground">
+                {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, ollama.length)} / {ollama.length}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button variant="outline" size="icon" className="h-7 w-7"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1}>
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span className="text-xs text-muted-foreground px-1">{safePage} / {totalPages}</span>
+                <Button variant="outline" size="icon" className="h-7 w-7"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages}>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          ) : undefined}
+        >
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>{t('backends.ollama.name')}</TableHead>
+              <TableHead>{t('backends.ollama.server')}</TableHead>
+              <TableHead className="min-w-52">{t('backends.servers.liveMetrics')}</TableHead>
+              <TableHead className="w-28">{t('backends.ollama.status')}</TableHead>
+              <TableHead className="w-32">{t('backends.servers.registeredAt')}</TableHead>
+              <TableHead className="text-right w-44">{t('keys.actions')}</TableHead>
+            </TableRow>
+          </TableHeader>
               <TableBody>
                 {pageItems.map((b) => {
                   const linkedServer = b.server_id ? serverMap.get(b.server_id) : null
                   return (
-                    <TableRow key={b.id} className="align-top">
-                      <TableCell className="pt-4 pb-4">
+                    <TableRow key={b.id}>
+                      <TableCell>
                         <div className="font-semibold text-text-bright mb-1">{b.name}</div>
                         {b.url && (
                           <span className="font-mono text-xs text-muted-foreground/70">{extractHost(b.url)}</span>
                         )}
                       </TableCell>
 
-                      <TableCell className="pt-4 pb-4">
+                      <TableCell>
                         <div className="space-y-1 text-xs">
                           {linkedServer ? (
                             <div className="flex items-center gap-1.5 text-text-dim">
@@ -1510,31 +1503,43 @@ function OllamaTab({
                               <span className="text-text-faint italic">{t('backends.servers.notConfigured')}</span>
                             )}
                           </div>
-                          {linkedServer && (
-                            <OllamaServerMetrics serverId={linkedServer.id} gpuIndex={b.gpu_index} />
-                          )}
                         </div>
                       </TableCell>
 
-                      <TableCell className="pt-4 pb-4">
+                      <TableCell>
+                        {linkedServer
+                          ? <ServerMetricsCompact serverId={linkedServer.id} gpuIndex={b.gpu_index} />
+                          : <span className="text-xs text-text-faint italic">—</span>
+                        }
+                      </TableCell>
+
+                      <TableCell>
                         <StatusBadge status={b.status} />
                       </TableCell>
 
-                      <TableCell className="pt-4 pb-4 text-xs text-muted-foreground whitespace-nowrap">
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                         {fmtDate(b.registered_at)}
                       </TableCell>
 
-                      <TableCell className="pt-3 pb-4 text-right">
+                      <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
+                          {linkedServer && (
+                            <Button variant="ghost" size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                              onClick={() => setHistoryServer(linkedServer)}
+                              title={t('backends.servers.history')}>
+                              <BarChart2 className="h-4 w-4" />
+                            </Button>
+                          )}
                           <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-text-bright"
+                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
                             onClick={() => onHealthcheck(b.id)}
                             disabled={healthcheckIsPending}
                             title={t('backends.runHealthcheck')}>
                             <RefreshCw className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-text-bright"
+                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
                             onClick={() => onSyncModels(b.id)}
                             disabled={syncModelsPending && syncModelsVars === b.id}
                             title={t('backends.syncModelList')}>
@@ -1550,8 +1555,8 @@ function OllamaTab({
                             <ListFilter className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-status-info-fg hover:bg-status-info/10"
-                            onClick={() => onEdit(b)} title={t('backends.editBackend')}>
+                            className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                            onClick={() => onEdit(b)} title={t('backends.ollama.editTitle')}>
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="icon"
@@ -1566,27 +1571,7 @@ function OllamaTab({
                   )
                 })}
               </TableBody>
-            </Table>
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between px-4 py-2 border-t border-border">
-                <span className="text-xs text-muted-foreground">
-                  {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, ollama.length)} / {ollama.length}
-                </span>
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="icon" className="h-7 w-7"
-                    onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1}>
-                    <ChevronLeft className="h-3.5 w-3.5" />
-                  </Button>
-                  <span className="text-xs text-muted-foreground px-1">{safePage} / {totalPages}</span>
-                  <Button variant="outline" size="icon" className="h-7 w-7"
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages}>
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        </DataTable>
       )}
 
       <OllamaSyncSection />
@@ -1596,6 +1581,9 @@ function OllamaTab({
           backend={viewModelsBackend}
           onClose={() => setViewModelsBackend(null)}
         />
+      )}
+      {historyServer && (
+        <ServerHistoryModal server={historyServer} onClose={() => setHistoryServer(null)} />
       )}
     </div>
   )
@@ -1720,108 +1708,106 @@ function GeminiTab({
         )}
 
         {gemini.length > 0 && (
-          <Card>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table className="min-w-[760px]">
-                <TableHeader>
-                  <TableRow className="border-b border-border hover:bg-transparent">
-                    <TableHead className="text-muted-foreground font-semibold">{t('backends.gemini.name')}</TableHead>
-                    <TableHead className="text-muted-foreground font-semibold">{t('backends.gemini.apiKey')}</TableHead>
-                    <TableHead className="text-muted-foreground font-semibold w-24">{t('backends.gemini.freeTier')}</TableHead>
-                    <TableHead className="text-muted-foreground font-semibold w-24">{t('backends.gemini.activeToggle')}</TableHead>
-                    <TableHead className="text-muted-foreground font-semibold w-28">{t('backends.gemini.status')}</TableHead>
-                    <TableHead className="text-muted-foreground font-semibold w-32">{t('backends.servers.registeredAt')}</TableHead>
-                    <TableHead className="text-right text-muted-foreground font-semibold w-28">{t('keys.actions')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {geminiPageItems.map((b) => (
-                    <TableRow key={b.id} className={`align-top ${!b.is_active ? 'opacity-50' : ''}`}>
-                      <TableCell className="pt-4 pb-4">
-                        <div className="font-semibold text-text-bright">{b.name}</div>
-                      </TableCell>
-                      <TableCell className="pt-4 pb-4">
-                        <ApiKeyCell backendId={b.id} masked={b.api_key_masked} />
-                      </TableCell>
-                      <TableCell className="pt-4 pb-4">
-                        {b.is_free_tier ? (
-                          <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
-                            {t('backends.gemini.freeTier')}
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-1.5 py-0">
-                            {t('backends.gemini.paid')}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="pt-4 pb-4">
-                        <Switch
-                          checked={b.is_active}
-                          onCheckedChange={() => onToggleActive(b)}
-                          disabled={toggleActivePending}
-                          title={b.is_active ? t('backends.disableBackend') : t('backends.enableBackend')}
-                        />
-                      </TableCell>
-                      <TableCell className="pt-4 pb-4">
-                        <StatusBadge status={b.status} />
-                      </TableCell>
-                      <TableCell className="pt-4 pb-4 text-xs text-muted-foreground whitespace-nowrap">
-                        {fmtDate(b.registered_at)}
-                      </TableCell>
-                      <TableCell className="pt-3 pb-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-text-bright"
-                            onClick={() => onHealthcheck(b.id)}
-                            disabled={healthcheckIsPending}
-                            title={t('backends.runHealthcheck')}>
-                            <RefreshCw className="h-4 w-4" />
-                          </Button>
-                          {!b.is_free_tier && (
-                            <Button variant="ghost" size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
-                              onClick={() => setModelSelectionBackend(b)}
-                              title={t('backends.gemini.modelSelection')}>
-                              <ListFilter className="h-4 w-4" />
-                            </Button>
-                          )}
-                          <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-status-info-fg hover:bg-status-info/10"
-                            onClick={() => onEdit(b)} title={t('backends.editBackend')}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
-                            onClick={() => onDelete(b.id, b.name)}
-                            disabled={deleteIsPending} title={t('backends.removeBackend')}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              {geminiTotalPages > 1 && (
-                <div className="flex items-center justify-between px-4 py-2 border-t border-border">
-                  <span className="text-xs text-muted-foreground">
-                    {geminiPageStart + 1}–{Math.min(geminiPageStart + PAGE_SIZE, gemini.length)} / {gemini.length}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <Button variant="outline" size="icon" className="h-7 w-7"
-                      onClick={() => setGeminiPage((p) => Math.max(1, p - 1))} disabled={geminiSafePage <= 1}>
-                      <ChevronLeft className="h-3.5 w-3.5" />
-                    </Button>
-                    <span className="text-xs text-muted-foreground px-1">{geminiSafePage} / {geminiTotalPages}</span>
-                    <Button variant="outline" size="icon" className="h-7 w-7"
-                      onClick={() => setGeminiPage((p) => Math.min(geminiTotalPages, p + 1))} disabled={geminiSafePage >= geminiTotalPages}>
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
+          <DataTable
+            minWidth="760px"
+            footer={geminiTotalPages > 1 ? (
+              <div className="flex items-center justify-between px-6 py-2">
+                <span className="text-xs text-muted-foreground">
+                  {geminiPageStart + 1}–{Math.min(geminiPageStart + PAGE_SIZE, gemini.length)} / {gemini.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button variant="outline" size="icon" className="h-7 w-7"
+                    onClick={() => setGeminiPage((p) => Math.max(1, p - 1))} disabled={geminiSafePage <= 1}>
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className="text-xs text-muted-foreground px-1">{geminiSafePage} / {geminiTotalPages}</span>
+                  <Button variant="outline" size="icon" className="h-7 w-7"
+                    onClick={() => setGeminiPage((p) => Math.min(geminiTotalPages, p + 1))} disabled={geminiSafePage >= geminiTotalPages}>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
-              )}
-            </CardContent>
-          </Card>
+              </div>
+            ) : undefined}
+          >
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>{t('backends.gemini.name')}</TableHead>
+                <TableHead>{t('backends.gemini.apiKey')}</TableHead>
+                <TableHead className="w-24">{t('backends.gemini.freeTier')}</TableHead>
+                <TableHead className="w-24">{t('backends.gemini.activeToggle')}</TableHead>
+                <TableHead className="w-28">{t('backends.gemini.status')}</TableHead>
+                <TableHead className="w-32">{t('backends.servers.registeredAt')}</TableHead>
+                <TableHead className="text-right w-28">{t('keys.actions')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {geminiPageItems.map((b) => (
+                <TableRow key={b.id} className={!b.is_active ? 'opacity-50' : ''}>
+                  <TableCell>
+                    <div className="font-semibold text-text-bright">{b.name}</div>
+                  </TableCell>
+                  <TableCell>
+                    <ApiKeyCell backendId={b.id} masked={b.api_key_masked} />
+                  </TableCell>
+                  <TableCell>
+                    {b.is_free_tier ? (
+                      <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
+                        {t('backends.gemini.freeTier')}
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-1.5 py-0">
+                        {t('backends.gemini.paid')}
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Switch
+                      checked={b.is_active}
+                      onCheckedChange={() => onToggleActive(b)}
+                      disabled={toggleActivePending}
+                      title={b.is_active ? t('backends.disableBackend') : t('backends.enableBackend')}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <StatusBadge status={b.status} />
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                    {fmtDate(b.registered_at)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button variant="ghost" size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-text-bright"
+                        onClick={() => onHealthcheck(b.id)}
+                        disabled={healthcheckIsPending}
+                        title={t('backends.runHealthcheck')}>
+                        <RefreshCw className="h-4 w-4" />
+                      </Button>
+                      {!b.is_free_tier && (
+                        <Button variant="ghost" size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                          onClick={() => setModelSelectionBackend(b)}
+                          title={t('backends.gemini.modelSelection')}>
+                          <ListFilter className="h-4 w-4" />
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                        onClick={() => onEdit(b)} title={t('backends.gemini.editTitle')}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                        onClick={() => onDelete(b.id, b.name)}
+                        disabled={deleteIsPending} title={t('backends.removeBackend')}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
         )}
       </div>
 

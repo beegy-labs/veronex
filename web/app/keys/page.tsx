@@ -19,13 +19,13 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { DataTable, DataTableEmpty } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
 
 function CopyButton({ text }: { text: string }) {
@@ -123,7 +123,11 @@ function CreateKeyModal({
 
         {mutation.error && (
           <p className="text-sm text-destructive">
-            {mutation.error instanceof Error ? mutation.error.message : t('common.unknownError')}
+            {mutation.error instanceof Error && mutation.error.message.startsWith('409')
+              ? t('keys.nameTaken')
+              : mutation.error instanceof Error
+                ? mutation.error.message
+                : t('common.unknownError')}
           </p>
         )}
 
@@ -262,81 +266,73 @@ export default function KeysPage() {
       )}
 
       {keys && keys.length === 0 && (
-        <Card>
-          <CardContent className="p-10 text-center text-muted-foreground">
-            {t('keys.noKeys')}
-          </CardContent>
-        </Card>
+        <DataTableEmpty>{t('keys.noKeys')}</DataTableEmpty>
       )}
 
       {keys && keys.length > 0 && (
-        <Card>
-          <CardContent className="p-0 overflow-x-auto">
-            <Table className="min-w-[700px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('keys.name')}</TableHead>
-                  <TableHead>{t('keys.prefix')}</TableHead>
-                  <TableHead>{t('keys.tenant')}</TableHead>
-                  <TableHead>{t('keys.status')}</TableHead>
-                  <TableHead>{t('keys.activeToggle')}</TableHead>
-                  <TableHead>{t('keys.rpmTpm')}</TableHead>
-                  <TableHead>{t('keys.createdAt')}</TableHead>
-                  <TableHead className="text-right">{t('keys.actions')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {keys.map((key) => (
-                  <TableRow key={key.id} className={!key.is_active ? 'opacity-50' : ''}>
-                    <TableCell className="font-medium">{key.name}</TableCell>
-                    <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
-                    <TableCell className="text-muted-foreground">{key.tenant_id}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          key.is_active
-                            ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
-                            : 'bg-muted text-muted-foreground'
-                        }
-                      >
-                        {key.is_active ? t('common.active') : t('common.inactive')}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Switch
-                        checked={key.is_active}
-                        onCheckedChange={(checked) =>
-                          toggleMutation.mutate({ id: key.id, is_active: checked })
-                        }
-                        disabled={toggleMutation.isPending}
-                      />
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs tabular-nums">
-                      {key.rate_limit_rpm === 0 ? '∞' : key.rate_limit_rpm} /{' '}
-                      {key.rate_limit_tpm === 0 ? '∞' : key.rate_limit_tpm}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
-                      {new Date(key.created_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setDeleteTarget(key)}
-                        disabled={deleteMutation.isPending}
-                        title={t('keys.deleteKey')}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <DataTable minWidth="700px">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('keys.name')}</TableHead>
+              <TableHead>{t('keys.prefix')}</TableHead>
+              <TableHead>{t('keys.tenant')}</TableHead>
+              <TableHead>{t('keys.status')}</TableHead>
+              <TableHead>{t('keys.activeToggle')}</TableHead>
+              <TableHead>{t('keys.rpmTpm')}</TableHead>
+              <TableHead>{t('keys.createdAt')}</TableHead>
+              <TableHead className="text-right">{t('keys.actions')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {keys.map((key) => (
+              <TableRow key={key.id} className={!key.is_active ? 'opacity-50' : ''}>
+                <TableCell className="font-medium">{key.name}</TableCell>
+                <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
+                <TableCell className="text-muted-foreground">{key.tenant_id}</TableCell>
+                <TableCell>
+                  <Badge
+                    variant="outline"
+                    className={
+                      key.is_active
+                        ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
+                        : 'bg-muted text-muted-foreground'
+                    }
+                  >
+                    {key.is_active ? t('common.active') : t('common.inactive')}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <Switch
+                    checked={key.is_active}
+                    onCheckedChange={(checked) =>
+                      toggleMutation.mutate({ id: key.id, is_active: checked })
+                    }
+                    disabled={toggleMutation.isPending}
+                  />
+                </TableCell>
+                <TableCell className="text-muted-foreground text-xs tabular-nums">
+                  {key.rate_limit_rpm === 0 ? '∞' : key.rate_limit_rpm} /{' '}
+                  {key.rate_limit_tpm === 0 ? '∞' : key.rate_limit_tpm}
+                </TableCell>
+                <TableCell className="text-muted-foreground text-xs">
+                  {new Date(key.created_at).toLocaleDateString()}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setDeleteTarget(key)}
+                    disabled={deleteMutation.isPending}
+                    title={t('keys.deleteKey')}
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </DataTable>
       )}
 
       {showCreate && (

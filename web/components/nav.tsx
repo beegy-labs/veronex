@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { useState, useEffect, Suspense } from 'react'
 import {
-  LayoutDashboard, List, Key, FlaskConical, Server,
+  LayoutDashboard, List, Key, Server,
   BarChart2, Gauge, Sun, Moon, ChevronLeft, Languages,
   BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
 } from 'lucide-react'
@@ -74,7 +74,6 @@ const navItems: NavItem[] = [
   },
   { type: 'link', href: '/usage',       labelKey: 'nav.usage',       icon: BarChart2 },
   { type: 'link', href: '/performance', labelKey: 'nav.performance', icon: Gauge },
-  { type: 'link', href: '/api-test',    labelKey: 'nav.test',        icon: FlaskConical },
   { type: 'link', href: '/api-docs',    labelKey: 'nav.apiDocs',     icon: BookOpen },
 ]
 
