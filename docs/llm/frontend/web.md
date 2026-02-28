@@ -1,6 +1,6 @@
 # Web — Brand, Design System & Architecture
 
-> SSOT | **Last Updated**: 2026-02-28
+> SSOT | **Last Updated**: 2026-02-28 (provider taxonomy, power comparison, test API keys)
 
 ## Task Guide
 
@@ -243,10 +243,11 @@ Integrated system health dashboard — answers "is the system healthy?" at a gla
 
 | Query | Source | refetch | Notes |
 |-------|--------|---------|-------|
-| `api.stats()` | PostgreSQL | 30s | |
+| `api.stats()` | PostgreSQL | 30s | includes `test_keys` count |
 | `api.backends()` | PostgreSQL | 30s | |
-| `api.servers()` | PostgreSQL | 60s, retry:false | for power |
-| `useQueries` per server → `api.serverMetrics(id)` | node-exporter | 30s, retry:false | fail-open |
+| `api.servers()` | PostgreSQL | 60s, retry:false | |
+| `useQueries` per server → `api.serverMetrics(id)` | node-exporter | 30s, retry:false | live W |
+| `useQueries` per server → `api.serverMetricsHistory(id, 1440)` | ClickHouse | stale 5m, retry:false | 60-day kWh history |
 | `api.performance(24)` | ClickHouse | 60s, retry:false | |
 | `api.usageAggregate(24)` | ClickHouse | 60s, retry:false | |
 | `api.usageBreakdown(24)` | ClickHouse | 60s, retry:false | provider per model |
@@ -254,15 +255,48 @@ Integrated system health dashboard — answers "is the system healthy?" at a gla
 
 ClickHouse-dependent values show `"—"` when ClickHouse is offline (graceful degradation).
 
-### Power / Cost Calculation (frontend-only)
+### Power Calculation (frontend-only)
 
 ```ts
-const ELECTRICITY_RATE = 0.10 // $/kWh — shown in subtitle
-const totalPowerW = sum(server.gpus[].power_w)  // null-safe
-const kwhPerDay   = totalPowerW * 24 / 1000
-const dailyCost   = kwhPerDay * ELECTRICITY_RATE
-const efficiency  = requests24h / kwhPerDay      // req/kWh (null if no power data)
+// Live watt sum across all servers
+const totalPowerW = serverMetricQueries.reduce((sum, q) =>
+  sum + q.data?.gpus.reduce((gs, g) => gs + (g.power_w ?? 0), 0), 0)
+
+// Actual kWh from history — hours=1440 returns 60-min buckets → 1 point = 1 kWh/kW
+function sumKwhInWindow(fromHoursAgo: number, toHoursAgo: number): number {
+  const now     = Date.now()
+  const startMs = now - fromHoursAgo * 3_600_000
+  const endMs   = now - toHoursAgo   * 3_600_000
+  // sum gpu_power_w / 1000 for all points within [startMs, endMs)
+}
+
+// fromHoursAgo MUST be > toHoursAgo (older bound first)
+const kwhThisWeek  = sumKwhInWindow(168, 0)    // or projected from live W if no history
+const kwhLastWeek  = sumKwhInWindow(336, 168)
+const weekDelta    = kwhThisWeek - kwhLastWeek  // positive = more than last week (warning)
+
+const kwhThisMonth = sumKwhInWindow(720, 0)
+const kwhLastMonth = sumKwhInWindow(1440, 720)
+const monthDelta   = kwhThisMonth - kwhLastMonth
 ```
+
+### Provider Taxonomy
+
+Backends are grouped into two **generic categories** (future-proof):
+
+| Category | i18n key | Icon | `backend_type` values | Examples |
+|----------|----------|------|----------------------|---------|
+| **Local** | `overview.localProviders` | `Server` | `['ollama']` | Ollama, vLLM, LocalAI |
+| **API Services** | `overview.apiProviders` | `Globe` | `['gemini']` | Gemini, OpenAI, Anthropic |
+
+```ts
+const LOCAL_TYPES = ['ollama'] as const   // extend when adding self-hosted backends
+const API_TYPES   = ['gemini'] as const   // extend when adding cloud API backends
+const localBs = backends?.filter(b => LOCAL_TYPES.includes(b.backend_type)) ?? []
+const apiBs   = backends?.filter(b => API_TYPES.includes(b.backend_type))   ?? []
+```
+
+**Rule**: Never hard-code "Ollama" or "Gemini" labels in Overview. Use `localProviders`/`apiProviders` i18n keys.
 
 ### Layout (7 sections)
 
@@ -271,44 +305,40 @@ Header: h1 "Overview" + subtitle "System health at a glance"
 
 Section 1 — System KPIs (grid-cols-2 sm:grid-cols-3 xl:grid-cols-5)
   [Providers N/M online] [In Queue N] [24h Requests] [Success %] [P95 Latency]
-  - Providers: status='online' count / total backends
-  - Queue: pending + running from jobs_by_status
-  - P95: fmtMs() — auto-converts to s/m/h when large
+  - Providers: online count / total backends
+  - P95: fmtMs() — auto-converts to s/m/h
 
-Section 2 — Infrastructure (grid-cols-1 sm:grid-cols-3)  ← NEW
-  [GPU Power: X.XX kW] [Est. Daily Cost: $X.XX] [Efficiency: N req/kWh]
-  - No server or power_w=null → "—" + "No server data" subtitle
-  - "at $0.10/kWh" note shown in cost card subtitle
+Section 2 — Infrastructure (grid-cols-2 sm:grid-cols-4)
+  [GPU Servers: N registered, N live]
+  [GPU Power: X.XX kW]
+  [Weekly kWh: X.X kWh | ±delta vs prev week]   ← actual history, colored delta
+  [Monthly kWh: X.X kWh | ±delta vs prev month]  ← actual history, colored delta
+  - delta > 0 (higher consumption): text-status-warning-fg
+  - delta < 0 (lower consumption):  text-status-success-fg
+  - No history: shows live-W projection, static "prev week/month" label
 
 Section 3 — Provider Status + API Keys (grid-cols-1 md:grid-cols-2)
   Left: "Provider Status" card
-    OllamaIcon row: N online · N degraded · N offline (colored dots)
-    Sparkles row:   N online · N degraded · N offline
+    Server icon · "Local" row:        N online · N degraded · N offline
+    Globe icon  · "API Services" row: N online · N degraded · N offline
     Footer: "View Providers →" → /providers
   Right: "API Keys" card
-    Big number: active_keys / total_keys subtitle
+    active_keys (standard) · test_keys (shown when > 0, blue)
     Footer: "View Keys →" → /keys
 
-Section 4 — Request Trend (full-width Card, AreaChart)
-  Total + Success series from perf.hourly (hidden if empty)
-  Y-axis: tickFormatter=fmt, gradients from --theme-primary / --theme-status-success
+Section 4 — Request Trend (full-width AreaChart)
+  Total + Success from perf.hourly; hidden if empty
 
-Section 5 — Top Models (full-width Card, horizontal BarChart)  ← NEW
+Section 5 — Top Models (full-width horizontal BarChart)
   Data: breakdown.by_model sorted desc by request_count, top 8
-  Bar color: Cell per bar — ollama=var(--theme-primary), gemini=var(--theme-status-info)
-  Y-axis: model_name (width=150, max 22 chars + "…")
-  Tooltip: shows backend name for each bar
-  Legend: "Ollama" (primary color) · "Gemini" (info color)
-  Hidden if no breakdown data
+  Bar: Cell per bar — Local=var(--theme-primary), API=var(--theme-status-info)
+  Y-axis: model_name (width=154, max 22 chars + "…")
+  Tooltip: shows backend name
 
 Section 6 — Recent Jobs (full-width Card)
-  Title + "View all jobs →" → /jobs
-  Inline mini table: Model | Provider | Status | Latency | Created (10 rows, no modal)
-  Latency: fmtMsNullable() — auto ms/s/m/h
+  Mini table: Model | Provider | Status | Latency | Created (10 rows)
 
-Section 7 — Summary panels (grid-cols-1 md:grid-cols-2)
-  Left: "Token Summary" — total/prompt/completion tokens (24h) + "View Usage →"
-  Right: "Performance" — P50/P95/P99 grid (fmtMs) + "View Performance →"
+Section 7 — Token Summary + Performance (grid-cols-1 md:grid-cols-2)
 ```
 
 ### i18n Keys (overview.*)
@@ -316,9 +346,10 @@ Section 7 — Summary panels (grid-cols-1 md:grid-cols-2)
 Base keys: `providerStatus`, `queueDepth`, `recentJobs`, `viewAllJobs`,
 `tokenSummary`, `perfSummary`, `goToProviders`, `goToKeys`, `goToUsage`, `goToPerformance`
 
-Infrastructure keys (added 2026-02-28):
-`infrastructure`, `gpuPower`, `dailyElectricity`, `efficiencyLabel`, `reqPerKwh`,
-`topModels`, `powerNote`, `noServerPower`
+Infrastructure / provider keys:
+`infrastructure`, `gpuPower`, `gpuServers`, `weeklyPower`, `monthlyPower`,
+`prevWeek`, `prevMonth`, `topModels`, `noServerPower`,
+`localProviders`, `apiProviders`, `testKeys`, `activeKeysLabel`
 
 ---
 

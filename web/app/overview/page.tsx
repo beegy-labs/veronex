@@ -232,14 +232,14 @@ export default function OverviewPage() {
 
   const hasHistory = serverHistoryQueries.some(q => (q.data?.length ?? 0) > 0)
 
-  // Weekly: 0–168 h vs 168–336 h
-  const kwhThisWeek  = hasHistory ? sumKwhInWindow(0,   168) : totalPowerW * 24 * 7  / 1000
-  const kwhLastWeek  = hasHistory ? sumKwhInWindow(168, 336) : null
+  // Weekly: 0–168 h vs 168–336 h  (older bound first → fromHoursAgo > toHoursAgo)
+  const kwhThisWeek  = hasHistory ? sumKwhInWindow(168, 0)   : totalPowerW * 24 * 7  / 1000
+  const kwhLastWeek  = hasHistory ? sumKwhInWindow(336, 168) : null
   const weekDelta    = kwhLastWeek != null ? kwhThisWeek - kwhLastWeek : null
 
   // Monthly: 0–720 h vs 720–1440 h
-  const kwhThisMonth  = hasHistory ? sumKwhInWindow(0,   720) : totalPowerW * 24 * 30 / 1000
-  const kwhLastMonth  = hasHistory ? sumKwhInWindow(720, 1440) : null
+  const kwhThisMonth  = hasHistory ? sumKwhInWindow(720, 0)    : totalPowerW * 24 * 30 / 1000
+  const kwhLastMonth  = hasHistory ? sumKwhInWindow(1440, 720) : null
   const monthDelta    = kwhLastMonth != null ? kwhThisMonth - kwhLastMonth : null
 
   /* ── derived: charts ───────────────────────────────────── */
