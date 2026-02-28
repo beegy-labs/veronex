@@ -80,7 +80,15 @@ pub async fn create_key(
         .api_key_repo
         .create(&api_key)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| {
+            // Unique constraint violation → name already taken
+            let msg = e.to_string();
+            if msg.contains("uq_api_keys_tenant_name") || msg.contains("unique") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
 
     Ok(Json(CreateKeyResponse {
         id,
