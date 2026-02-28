@@ -89,7 +89,10 @@ fn default_limit() -> i64 {
 #[derive(Serialize)]
 pub struct DashboardStats {
     pub total_keys: i64,
+    /// Active standard (non-test) keys.
     pub active_keys: i64,
+    /// Active test keys.
+    pub test_keys: i64,
     pub total_jobs: i64,
     pub jobs_last_24h: i64,
     pub jobs_by_status: HashMap<String, i64>,
@@ -131,8 +134,9 @@ pub async fn get_stats(
     // Key counts
     let key_row = sqlx::query(
         "SELECT
-            COUNT(*) AS total_keys,
-            COUNT(*) FILTER (WHERE is_active = true) AS active_keys
+            COUNT(*) FILTER (WHERE deleted_at IS NULL) AS total_keys,
+            COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'standard') AS active_keys,
+            COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'test') AS test_keys
          FROM api_keys",
     )
     .fetch_one(pool)
@@ -142,6 +146,7 @@ pub async fn get_stats(
     use sqlx::Row;
     let total_keys: i64 = key_row.try_get("total_keys").unwrap_or(0);
     let active_keys: i64 = key_row.try_get("active_keys").unwrap_or(0);
+    let test_keys: i64 = key_row.try_get("test_keys").unwrap_or(0);
 
     // Job counts
     let job_row = sqlx::query(
@@ -181,6 +186,7 @@ pub async fn get_stats(
     Ok(Json(DashboardStats {
         total_keys,
         active_keys,
+        test_keys,
         total_jobs,
         jobs_last_24h,
         jobs_by_status,
@@ -498,6 +504,7 @@ mod tests {
         let stats = DashboardStats {
             total_keys: 10,
             active_keys: 8,
+            test_keys: 2,
             total_jobs: 105,
             jobs_last_24h: 20,
             jobs_by_status,

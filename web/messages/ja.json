@@ -83,12 +83,18 @@
     "goToPerformance": "パフォーマンスを表示",
     "infrastructure": "インフラ",
     "gpuPower": "GPU電力",
-    "dailyElectricity": "推定日次電気代",
-    "efficiencyLabel": "効率",
-    "reqPerKwh": "リクエスト/kWh",
+    "gpuServers": "GPUサーバー",
+    "weeklyPower": "週次電力",
+    "monthlyPower": "月次電力",
+    "prevWeek": "先週比",
+    "prevMonth": "先月比",
     "topModels": "主要モデル",
-    "powerNote": "$0.10/kWh 換算",
-    "noServerPower": "サーバーデータなし"
+    "noServerPower": "サーバーデータなし",
+    "localProviders": "ローカル",
+    "apiProviders": "APIサービス",
+    "totalReqsSubtitle": "リクエスト",
+    "testKeys": "テストキー",
+    "activeKeysLabel": "アクティブ"
   },
   "jobs": {
     "title": "ジョブ",
@@ -169,7 +175,10 @@
     "deleteKey": "キーを削除",
     "loadingKeys": "キーを読み込み中…",
     "failedKeys": "キーの読み込みに失敗",
-    "nameTaken": "同じ名前のキーが既に存在します"
+    "nameTaken": "同じ名前のキーが既に存在します",
+    "createTestKey": "テストキー作成",
+    "createTestTitle": "テストAPIキー作成",
+    "type": "タイプ"
   },
   "backends": {
     "title": "プロバイダー",

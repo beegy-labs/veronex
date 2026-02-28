@@ -83,12 +83,18 @@
     "goToPerformance": "View Performance",
     "infrastructure": "Infrastructure",
     "gpuPower": "GPU Power",
-    "dailyElectricity": "Est. Daily Cost",
-    "efficiencyLabel": "Efficiency",
-    "reqPerKwh": "req/kWh",
+    "gpuServers": "GPU Servers",
+    "weeklyPower": "Weekly Power",
+    "monthlyPower": "Monthly Power",
+    "prevWeek": "prev week",
+    "prevMonth": "prev month",
     "topModels": "Top Models",
-    "powerNote": "at $0.10/kWh",
-    "noServerPower": "No server data"
+    "noServerPower": "No server data",
+    "localProviders": "Local",
+    "apiProviders": "API Services",
+    "totalReqsSubtitle": "requests",
+    "testKeys": "Test Keys",
+    "activeKeysLabel": "Active"
   },
   "jobs": {
     "title": "Jobs",
@@ -169,7 +175,10 @@
     "deleteKey": "Delete key",
     "loadingKeys": "Loading keys…",
     "failedKeys": "Failed to load keys",
-    "nameTaken": "A key with that name already exists"
+    "nameTaken": "A key with that name already exists",
+    "createTestKey": "Create Test Key",
+    "createTestTitle": "Create Test API Key",
+    "type": "Type"
   },
   "backends": {
     "title": "Providers",

@@ -26,6 +26,13 @@ pub struct CreateKeyRequest {
     #[serde(default)]
     pub rate_limit_tpm: i32,
     pub expires_at: Option<chrono::DateTime<Utc>>,
+    /// `"standard"` (default) or `"test"`.
+    #[serde(default = "default_key_type")]
+    pub key_type: String,
+}
+
+fn default_key_type() -> String {
+    "standard".to_string()
 }
 
 #[derive(Serialize)]
@@ -48,6 +55,7 @@ pub struct KeySummary {
     pub rate_limit_tpm: i32,
     pub expires_at: Option<chrono::DateTime<Utc>>,
     pub created_at: chrono::DateTime<Utc>,
+    pub key_type: String,
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
@@ -74,6 +82,7 @@ pub async fn create_key(
         expires_at: req.expires_at,
         created_at: now,
         deleted_at: None,
+        key_type: req.key_type,
     };
 
     state
@@ -125,6 +134,7 @@ pub async fn list_keys(
             rate_limit_tpm: k.rate_limit_tpm,
             expires_at: k.expires_at,
             created_at: k.created_at,
+            key_type: k.key_type,
         })
         .collect();
 

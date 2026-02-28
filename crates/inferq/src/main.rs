@@ -172,6 +172,7 @@ async fn main() -> Result<()> {
                     expires_at: None,
                     created_at: chrono::Utc::now(),
                     deleted_at: None,
+                    key_type: "standard".to_string(),
                 };
                 match api_key_repo.create(&key).await {
                     Ok(()) => tracing::info!("bootstrap admin key created"),

@@ -7,7 +7,7 @@ import type { Backend, Job, ModelBreakdown } from '@/lib/types'
 import StatsCard from '@/components/stats-card'
 import {
   Activity, CheckCircle, Zap, Sparkles, ArrowRight, ListFilter,
-  Cpu, DollarSign, BarChart2,
+  Cpu, Server, Globe, HardDrive,
 } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, Cell,
@@ -21,20 +21,6 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useTranslation } from '@/i18n'
-
-/* ─── OllamaIcon (inline) ─────────────────────────────────── */
-function OllamaIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor"
-      xmlns="http://www.w3.org/2000/svg" aria-label="Ollama">
-      <path d="M7.5 1.5 C7 1.5 6.5 2 6.5 2.5 L6.5 5 C6.5 5.5 7 6 7.5 6 L9 6 C9.5 6 10 5.5 10 5 L10 2.5 C10 2 9.5 1.5 9 1.5 Z" />
-      <path d="M15 1.5 C14.5 1.5 14 2 14 2.5 L14 5 C14 5.5 14.5 6 15 6 L16.5 6 C17 6 17.5 5.5 17.5 5 L17.5 2.5 C17.5 2 17 1.5 16.5 1.5 Z" />
-      <ellipse cx="12" cy="9" rx="5.5" ry="4.5" />
-      <path d="M9.5 13 L9.5 16 C9.5 16.5 10 17 10.5 17 L13.5 17 C14 17 14.5 16.5 14.5 16 L14.5 13 Z" />
-      <rect x="6.5" y="16.5" width="11" height="6" rx="3" />
-    </svg>
-  )
-}
 
 /* ─── helpers ─────────────────────────────────────────────── */
 function fmt(n: number) {
@@ -69,8 +55,6 @@ const STATUS_EXTRA: Record<string, string> = {
   pending:   'bg-status-warning/15 text-status-warning-fg border-status-warning/30',
   running:   'bg-status-info/15 text-status-info-fg border-status-info/30',
 }
-
-const ELECTRICITY_RATE = 0.10 // $/kWh
 
 /* ─── skeleton ────────────────────────────────────────────── */
 function StatSkeleton() {
@@ -164,6 +148,17 @@ export default function OverviewPage() {
     })),
   })
 
+  // Per-server 60-day power history for weekly/monthly comparison
+  // hours=1440 → 60-min buckets → each point = power_w × 1h = Wh ÷ 1000 = kWh
+  const serverHistoryQueries = useQueries({
+    queries: (servers ?? []).map(s => ({
+      queryKey: ['server-history-power', s.id],
+      queryFn: () => api.serverMetricsHistory(s.id, 1440),
+      staleTime: 5 * 60_000,
+      retry: false,
+    })),
+  })
+
   // ClickHouse-backed — graceful degradation when offline
   const { data: perf } = useQuery({
     queryKey: ['performance', 24],
@@ -193,9 +188,12 @@ export default function OverviewPage() {
   })
 
   /* ── derived: providers ────────────────────────────────── */
-  const ollamaBs  = backends?.filter(b => b.backend_type === 'ollama') ?? []
-  const geminiBs  = backends?.filter(b => b.backend_type === 'gemini') ?? []
-  const onlineAll = [...ollamaBs, ...geminiBs].filter(b => b.status === 'online').length
+  // Generic categories — "local" = self-hosted inference servers, "api" = cloud API services
+  const LOCAL_TYPES = ['ollama'] as const
+  const API_TYPES   = ['gemini'] as const
+  const localBs   = backends?.filter(b => (LOCAL_TYPES as readonly string[]).includes(b.backend_type)) ?? []
+  const apiBs     = backends?.filter(b => (API_TYPES   as readonly string[]).includes(b.backend_type)) ?? []
+  const onlineAll = backends?.filter(b => b.status === 'online').length ?? 0
   const totalProv = backends?.length ?? 0
 
   const queueDepth =
@@ -204,17 +202,45 @@ export default function OverviewPage() {
 
   const requests24h = perf?.total_requests ?? stats?.jobs_last_24h
 
-  /* ── derived: power & cost ─────────────────────────────── */
+  /* ── derived: power (live) ─────────────────────────────── */
+  const liveServerCount = serverMetricQueries.filter(q => q.data?.scrape_ok).length
   const totalPowerW = serverMetricQueries.reduce((sum, q) => {
     if (!q.data?.scrape_ok) return sum
     return sum + q.data.gpus.reduce((gs, g) => gs + (g.power_w ?? 0), 0)
   }, 0)
-  const hasPowerData = totalPowerW > 0
-  const kwhPerDay   = totalPowerW * 24 / 1000
-  const dailyCost   = kwhPerDay * ELECTRICITY_RATE
-  const efficiency  = kwhPerDay > 0 && (requests24h ?? 0) > 0
-    ? Math.round((requests24h ?? 0) / kwhPerDay)
-    : null
+  const hasPowerData      = totalPowerW > 0
+  const registeredServers = servers?.length ?? 0
+
+  // Compute actual kWh from history data for a given time window.
+  // With hours=1440 the backend returns 60-min buckets → 1 point = 1 kWh per watt.
+  function sumKwhInWindow(fromHoursAgo: number, toHoursAgo: number): number {
+    const now      = Date.now()
+    const startMs  = now - fromHoursAgo * 3_600_000
+    const endMs    = now - toHoursAgo   * 3_600_000
+    let   total    = 0
+    for (const q of serverHistoryQueries) {
+      for (const p of q.data ?? []) {
+        if (p.gpu_power_w == null) continue
+        const ts = new Date(p.ts).getTime()
+        if (ts >= startMs && ts < endMs) {
+          total += p.gpu_power_w / 1000 // W × 1 h ÷ 1000 = kWh
+        }
+      }
+    }
+    return total
+  }
+
+  const hasHistory = serverHistoryQueries.some(q => (q.data?.length ?? 0) > 0)
+
+  // Weekly: 0–168 h vs 168–336 h
+  const kwhThisWeek  = hasHistory ? sumKwhInWindow(0,   168) : totalPowerW * 24 * 7  / 1000
+  const kwhLastWeek  = hasHistory ? sumKwhInWindow(168, 336) : null
+  const weekDelta    = kwhLastWeek != null ? kwhThisWeek - kwhLastWeek : null
+
+  // Monthly: 0–720 h vs 720–1440 h
+  const kwhThisMonth  = hasHistory ? sumKwhInWindow(0,   720) : totalPowerW * 24 * 30 / 1000
+  const kwhLastMonth  = hasHistory ? sumKwhInWindow(720, 1440) : null
+  const monthDelta    = kwhLastMonth != null ? kwhThisMonth - kwhLastMonth : null
 
   /* ── derived: charts ───────────────────────────────────── */
   const trendData = perf?.hourly.map((h) => ({
@@ -303,31 +329,65 @@ export default function OverviewPage() {
         )}
       </div>
 
-      {/* ── Section 2: Infrastructure (power / cost / efficiency) ── */}
+      {/* ── Section 2: Infrastructure (servers / power / energy) ── */}
       <div>
         <h2 className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground mb-3">
           {t('overview.infrastructure')}
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <StatsCard
+            title={t('overview.gpuServers')}
+            value={registeredServers}
+            subtitle={liveServerCount > 0
+              ? `${liveServerCount} live`
+              : t('overview.noServerPower')}
+            icon={<HardDrive className="h-5 w-5" />}
+          />
           <StatsCard
             title={t('overview.gpuPower')}
             value={hasPowerData ? `${(totalPowerW / 1000).toFixed(2)} kW` : '—'}
-            subtitle={hasPowerData
-              ? `${(servers?.length ?? 0)} server${(servers?.length ?? 0) !== 1 ? 's' : ''}`
-              : t('overview.noServerPower')}
+            subtitle={hasPowerData ? `${totalPowerW.toFixed(0)} W` : t('overview.noServerPower')}
             icon={<Cpu className="h-5 w-5" />}
           />
           <StatsCard
-            title={t('overview.dailyElectricity')}
-            value={hasPowerData ? `$${dailyCost.toFixed(2)}` : '—'}
-            subtitle={hasPowerData ? t('overview.powerNote') : t('overview.noServerPower')}
-            icon={<DollarSign className="h-5 w-5" />}
+            title={t('overview.weeklyPower')}
+            value={(hasPowerData || hasHistory) ? `${kwhThisWeek.toFixed(1)} kWh` : '—'}
+            icon={<Zap className="h-5 w-5" />}
+            subtitleNode={weekDelta != null ? (
+              <span className={
+                weekDelta > 0
+                  ? 'text-status-warning-fg'
+                  : weekDelta < 0
+                    ? 'text-status-success-fg'
+                    : 'text-muted-foreground'
+              }>
+                {weekDelta > 0 ? '+' : ''}{weekDelta.toFixed(1)} kWh {t('overview.prevWeek')}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">
+                {hasHistory ? t('overview.prevWeek') : t('overview.noServerPower')}
+              </span>
+            )}
           />
           <StatsCard
-            title={t('overview.efficiencyLabel')}
-            value={efficiency != null ? `${fmt(efficiency)}` : '—'}
-            subtitle={efficiency != null ? t('overview.reqPerKwh') : t('overview.noServerPower')}
-            icon={<BarChart2 className="h-5 w-5" />}
+            title={t('overview.monthlyPower')}
+            value={(hasPowerData || hasHistory) ? `${kwhThisMonth.toFixed(1)} kWh` : '—'}
+            icon={<Zap className="h-5 w-5" />}
+            subtitleNode={monthDelta != null ? (
+              <span className={
+                monthDelta > 0
+                  ? 'text-status-warning-fg'
+                  : monthDelta < 0
+                    ? 'text-status-success-fg'
+                    : 'text-muted-foreground'
+              }>
+                {monthDelta > 0 ? '+' : ''}{monthDelta.toFixed(1)} kWh {t('overview.prevMonth')}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">
+                {hasHistory ? t('overview.prevMonth') : t('overview.noServerPower')}
+              </span>
+            )}
           />
         </div>
       </div>
@@ -342,14 +402,14 @@ export default function OverviewPage() {
           <CardContent className="pt-0">
             <div className="divide-y divide-border">
               <ProviderRow
-                icon={<OllamaIcon className="h-4 w-4" />}
-                label="Ollama"
-                backends={ollamaBs}
+                icon={<Server className="h-4 w-4" />}
+                label={t('overview.localProviders')}
+                backends={localBs}
               />
               <ProviderRow
-                icon={<Sparkles className="h-4 w-4" />}
-                label="Gemini"
-                backends={geminiBs}
+                icon={<Globe className="h-4 w-4" />}
+                label={t('overview.apiProviders')}
+                backends={apiBs}
               />
             </div>
             <div className="mt-3 pt-2 border-t border-border">
@@ -373,9 +433,22 @@ export default function OverviewPage() {
               <div className="h-12 rounded bg-muted animate-pulse" />
             ) : stats ? (
               <>
-                <p className="text-3xl font-bold tabular-nums">{stats.active_keys}</p>
+                <div className="flex items-baseline gap-3">
+                  <div>
+                    <p className="text-3xl font-bold tabular-nums">{stats.active_keys}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{t('overview.activeKeysLabel')}</p>
+                  </div>
+                  {stats.test_keys > 0 && (
+                    <div className="border-l border-border pl-3">
+                      <p className="text-xl font-bold tabular-nums text-status-info-fg">
+                        {stats.test_keys}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{t('overview.testKeys')}</p>
+                    </div>
+                  )}
+                </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {t('overview.activeKeys')} · {t('overview.totalKeysSubtitle', { count: stats.total_keys })}
+                  {t('overview.totalKeysSubtitle', { count: stats.total_keys })}
                 </p>
               </>
             ) : null}

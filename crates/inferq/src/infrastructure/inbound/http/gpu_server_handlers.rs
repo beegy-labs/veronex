@@ -260,8 +260,12 @@ pub struct ServerMetricsPoint {
 
 /// `GET /v1/servers/{id}/metrics/history?hours=N`
 ///
-/// Returns 1-minute bucketed hardware metrics from ClickHouse for the given
-/// server. `hours` defaults to 1 (max 168 = 1 week).
+/// Returns time-bucketed hardware metrics from ClickHouse for the given server.
+/// Bucket granularity adapts to the requested range:
+/// - ≤ 24 h  → 1-minute buckets
+/// - ≤ 168 h → 5-minute buckets
+/// - > 168 h → 60-minute buckets
+/// `hours` defaults to 1 (max 1440 = 60 days).
 /// Returns 503 when ClickHouse is not configured.
 pub async fn get_server_metrics_history(
     State(state): State<AppState>,
@@ -276,8 +280,17 @@ pub async fn get_server_metrics_history(
             .into_response();
     };
 
-    let hours = params.hours.unwrap_or(1).max(1).min(168);
+    let hours = params.hours.unwrap_or(1).max(1).min(1440);
     let server_id = id.to_string();
+
+    // Adaptive bucket granularity to keep data volumes manageable.
+    let bucket_interval = if hours <= 24 {
+        "1 MINUTE"
+    } else if hours <= 168 {
+        "5 MINUTE"
+    } else {
+        "60 MINUTE"
+    };
 
     // Step 1: find the amdgpu hwmon chip label for this server so we can
     // filter temperature and power rows correctly.
@@ -301,27 +314,29 @@ pub async fn get_server_metrics_history(
         .map(|r| r.chip)
         .unwrap_or_default();
 
-    // Step 2: 1-minute pivot query.
+    // Step 2: pivot query with adaptive bucket size.
     // avgIf returns 0.0 when no rows match the condition; we convert to None below.
+    let query_str = format!(
+        "SELECT
+            toStartOfInterval(TimeUnix, INTERVAL {bucket_interval}) AS ts,
+            toFloat64(maxIf(Value, MetricName = 'node_memory_MemTotal_bytes') / 1048576.0) AS mem_total_mb,
+            toFloat64(avgIf(Value, MetricName = 'node_memory_MemAvailable_bytes') / 1048576.0) AS mem_avail_mb,
+            avgIf(Value,
+                MetricName = 'node_hwmon_temp_celsius'
+                AND Attributes['chip'] = ?
+                AND Attributes['sensor'] = 'temp1') AS gpu_temp_c,
+            avgIf(Value,
+                MetricName IN ('node_hwmon_power_average_watt', 'node_hwmon_power_average_watts')
+                AND Attributes['chip'] = ?) AS gpu_power_w
+        FROM otel_metrics_gauge
+        WHERE Attributes['server_id'] = ?
+          AND TimeUnix >= now() - INTERVAL ? HOUR
+        GROUP BY ts
+        ORDER BY ts"
+    );
+
     let rows = match client
-        .query(
-            "SELECT
-                toStartOfInterval(TimeUnix, INTERVAL 1 MINUTE) AS ts,
-                toFloat64(maxIf(Value, MetricName = 'node_memory_MemTotal_bytes') / 1048576.0) AS mem_total_mb,
-                toFloat64(avgIf(Value, MetricName = 'node_memory_MemAvailable_bytes') / 1048576.0) AS mem_avail_mb,
-                avgIf(Value,
-                    MetricName = 'node_hwmon_temp_celsius'
-                    AND Attributes['chip'] = ?
-                    AND Attributes['sensor'] = 'temp1') AS gpu_temp_c,
-                avgIf(Value,
-                    MetricName IN ('node_hwmon_power_average_watt', 'node_hwmon_power_average_watts')
-                    AND Attributes['chip'] = ?) AS gpu_power_w
-            FROM otel_metrics_gauge
-            WHERE Attributes['server_id'] = ?
-              AND TimeUnix >= now() - INTERVAL ? HOUR
-            GROUP BY ts
-            ORDER BY ts",
-        )
+        .query(&query_str)
         .bind(&gpu_chip)
         .bind(&gpu_chip)
         .bind(&server_id)
