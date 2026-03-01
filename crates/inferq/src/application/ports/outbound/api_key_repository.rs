@@ -107,6 +107,8 @@ mod tests {
             expires_at: None,
             deleted_at: None,
             created_at: Utc::now(),
+            key_type: "standard".to_string(),
+            tier: "paid".to_string(),
         }
     }
 

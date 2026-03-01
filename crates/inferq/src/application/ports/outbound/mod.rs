@@ -1,4 +1,9 @@
+pub mod account_repository;
+pub mod capacity_settings_repository;
+pub mod model_capacity_repository;
+pub mod analytics_repository;
 pub mod api_key_repository;
+pub mod audit_port;
 pub mod backend_model_selection;
 pub mod gemini_model_repository;
 pub mod gemini_policy_repository;
@@ -13,4 +18,5 @@ pub mod observability_port;
 pub mod ollama_model_repository;
 pub mod ollama_sync_job_repository;
 pub mod queue_port;
+pub mod session_repository;
 pub mod stream_port;
