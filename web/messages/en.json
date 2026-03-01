@@ -167,6 +167,7 @@
     "totalTokens": "Total tokens",
     "tps": "TPS",
     "apiKey": "API Key",
+    "endpoint": "Endpoint",
     "prompt": "Prompt",
     "result": "Result",
     "error": "Error",

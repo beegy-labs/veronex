@@ -237,6 +237,7 @@ async fn ollama_chat_proxy(
             JobSource::Api,
             ApiFormat::OpenaiCompat,
             Some(messages),
+            Some("/v1/chat/completions".to_string()),
         )
         .await
     {
@@ -337,7 +338,7 @@ async fn legacy_queue_chat(
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, &backend_type, Some(api_key.id), None, JobSource::Api, ApiFormat::OpenaiCompat, None)
+        .submit(&prompt, &model, &backend_type, Some(api_key.id), None, JobSource::Api, ApiFormat::OpenaiCompat, None, Some("/v1/chat/completions".to_string()))
         .await
     {
         Ok(id) => id,

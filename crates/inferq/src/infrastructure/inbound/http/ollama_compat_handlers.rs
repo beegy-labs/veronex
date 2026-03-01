@@ -113,6 +113,7 @@ pub async fn generate(
             JobSource::Api,
             ApiFormat::OllamaNative,
             None,
+            Some("/api/generate".to_string()),
         )
         .await
     {
@@ -207,6 +208,7 @@ pub async fn chat(
             JobSource::Api,
             ApiFormat::OllamaNative,
             Some(messages),
+            Some("/api/chat".to_string()),
         )
         .await
     {

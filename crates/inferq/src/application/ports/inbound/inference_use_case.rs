@@ -28,6 +28,7 @@ pub trait InferenceUseCase: Send + Sync {
         source: JobSource,
         api_format: ApiFormat,
         messages: Option<serde_json::Value>,
+        request_path: Option<String>,
     ) -> Result<JobId>;
 
     /// Process a job synchronously (used by the queue worker).

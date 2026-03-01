@@ -167,6 +167,7 @@
     "totalTokens": "合計トークン",
     "tps": "TPS",
     "apiKey": "APIキー",
+    "endpoint": "エンドポイント",
     "prompt": "プロンプト",
     "result": "結果",
     "error": "エラー",

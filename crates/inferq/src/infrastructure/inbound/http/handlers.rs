@@ -54,7 +54,7 @@ pub async fn submit_inference(
 ) -> Result<Json<SubmitResponse>, StatusCode> {
     let job_id = state
         .use_case
-        .submit(&req.prompt, &req.model, &req.backend, Some(api_key.id), None, JobSource::Api, ApiFormat::VeronexNative, None)
+        .submit(&req.prompt, &req.model, &req.backend, Some(api_key.id), None, JobSource::Api, ApiFormat::VeronexNative, None, Some("/v1/inference".to_string()))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -264,6 +264,7 @@ mod tests {
             _source: JobSource,
             _api_format: ApiFormat,
             _messages: Option<serde_json::Value>,
+            _request_path: Option<String>,
         ) -> Result<JobId> {
             Ok(JobId::new())
         }

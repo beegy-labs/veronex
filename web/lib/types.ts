@@ -29,6 +29,8 @@ export interface Job {
   api_key_name: string | null
   /** For test run jobs: the account name of who ran it. */
   account_name: string | null
+  /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
+  request_path: string | null
 }
 
 export interface JobDetail {
@@ -52,6 +54,8 @@ export interface JobDetail {
   prompt: string
   result_text: string | null
   error: string | null
+  /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
+  request_path: string | null
 }
 
 export interface DashboardStats {

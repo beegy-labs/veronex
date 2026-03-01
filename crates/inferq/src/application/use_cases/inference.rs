@@ -221,6 +221,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         source: JobSource,
         api_format: ApiFormat,
         messages: Option<serde_json::Value>,
+        request_path: Option<String>,
     ) -> Result<JobId> {
         let job_id = JobId::new();
         // Parse backend string: "gemini-free" routes to free-tier Gemini only;
@@ -253,6 +254,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             backend_id: None,
             api_format,
             messages,
+            request_path,
         };
 
         self.job_repo.save(&job).await?;

@@ -61,6 +61,8 @@ pub struct JobSummary {
     pub api_key_name: Option<String>,
     /// For test run jobs: the account that submitted the job.
     pub account_name: Option<String>,
+    /// HTTP path of the inbound request, e.g. "/v1/chat/completions".
+    pub request_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -179,6 +181,8 @@ pub struct JobDetail {
     pub prompt: String,
     pub result_text: Option<String>,
     pub error: Option<String>,
+    /// HTTP path of the inbound request, e.g. "/v1/chat/completions".
+    pub request_path: Option<String>,
 }
 
 /// GET /v1/dashboard/jobs/{id} — Full job detail.
@@ -193,7 +197,7 @@ pub async fn get_job_detail(
         "SELECT j.id, j.model_name, j.backend, j.status, j.source,
                 j.created_at, j.started_at, j.completed_at,
                 j.latency_ms, j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
-                j.prompt, j.result_text, j.error,
+                j.prompt, j.result_text, j.error, j.request_path,
                 k.name AS api_key_name,
                 a.name AS account_name
          FROM inference_jobs j
@@ -227,6 +231,7 @@ pub async fn get_job_detail(
     let prompt: String = row.try_get("prompt").unwrap_or_default();
     let result_text: Option<String> = row.try_get("result_text").unwrap_or(None);
     let error: Option<String> = row.try_get("error").unwrap_or(None);
+    let request_path: Option<String> = row.try_get("request_path").unwrap_or(None);
 
     let tps = compute_tps(latency_ms, ttft_ms, completion_tokens);
 
@@ -250,6 +255,7 @@ pub async fn get_job_detail(
         prompt,
         result_text,
         error,
+        request_path,
     }))
 }
 
@@ -290,6 +296,7 @@ pub async fn list_jobs(
         "SELECT j.id, j.model_name, j.backend, j.status, j.source,
                 j.created_at, j.completed_at, j.latency_ms,
                 j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
+                j.request_path,
                 k.name AS api_key_name,
                 a.name AS account_name
          FROM inference_jobs j
@@ -328,6 +335,7 @@ pub async fn list_jobs(
             let cached_tokens: Option<i32> = row.try_get("cached_tokens").unwrap_or(None);
             let api_key_name: Option<String> = row.try_get("api_key_name").unwrap_or(None);
             let account_name: Option<String> = row.try_get("account_name").unwrap_or(None);
+            let request_path: Option<String> = row.try_get("request_path").unwrap_or(None);
             let tps = compute_tps(latency_ms, ttft_ms, completion_tokens);
 
             JobSummary {
@@ -346,6 +354,7 @@ pub async fn list_jobs(
                 tps,
                 api_key_name,
                 account_name,
+                request_path,
             }
         })
         .collect();

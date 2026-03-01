@@ -74,6 +74,11 @@ pub struct InferenceJob {
     /// Not persisted to DB — stored only in the in-memory DashMap during dispatch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messages: Option<serde_json::Value>,
+    /// The HTTP path of the inbound request that created this job.
+    /// e.g. "/v1/chat/completions", "/api/chat", "/v1beta/models/gemini-2.0-flash:generateContent"
+    /// Not set for jobs recovered on startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,6 +196,7 @@ mod tests {
             backend_id: None,
             api_format: ApiFormat::OpenaiCompat,
             messages: None,
+            request_path: None,
         }
     }
 
@@ -274,6 +280,7 @@ mod tests {
             backend_id: None,
             api_format: ApiFormat::OpenaiCompat,
             messages: None,
+            request_path: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());

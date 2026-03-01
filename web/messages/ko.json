@@ -167,6 +167,7 @@
     "totalTokens": "전체 토큰",
     "tps": "TPS",
     "apiKey": "API 키",
+    "endpoint": "엔드포인트",
     "prompt": "프롬프트",
     "result": "결과",
     "error": "오류",
