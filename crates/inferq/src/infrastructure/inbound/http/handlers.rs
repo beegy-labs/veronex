@@ -11,7 +11,7 @@ use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::enums::JobSource;
+use crate::domain::enums::{ApiFormat, JobSource};
 use crate::domain::value_objects::JobId;
 
 use super::state::AppState;
@@ -54,7 +54,7 @@ pub async fn submit_inference(
 ) -> Result<Json<SubmitResponse>, StatusCode> {
     let job_id = state
         .use_case
-        .submit(&req.prompt, &req.model, &req.backend, Some(api_key.id), JobSource::Api)
+        .submit(&req.prompt, &req.model, &req.backend, Some(api_key.id), None, JobSource::Api, ApiFormat::VeronexNative, None)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -223,6 +223,7 @@ pub async fn cancel_inference(
 mod tests {
     use super::*;
     use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
+    use crate::application::ports::outbound::account_repository::AccountRepository;
     use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
     use crate::application::ports::outbound::backend_model_selection::{BackendModelSelectionRepository, BackendSelectedModel};
     use crate::application::ports::outbound::gemini_model_repository::{GeminiModel, GeminiModelRepository};
@@ -232,7 +233,8 @@ mod tests {
     use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
     use crate::application::ports::outbound::ollama_model_repository::{OllamaBackendForModel, OllamaModelRepository, OllamaModelWithCount};
     use crate::application::ports::outbound::ollama_sync_job_repository::{OllamaSyncJob, OllamaSyncJobRepository};
-    use crate::domain::entities::{ApiKey, GeminiRateLimitPolicy, GpuServer, LlmBackend};
+    use crate::application::ports::outbound::session_repository::SessionRepository;
+    use crate::domain::entities::{Account, ApiKey, GeminiRateLimitPolicy, GpuServer, LlmBackend, Session};
     use crate::domain::enums::{JobSource, JobStatus, LlmBackendStatus};
     use crate::domain::value_objects::StreamToken;
     use crate::infrastructure::inbound::http::router;
@@ -258,7 +260,10 @@ mod tests {
             _model_name: &str,
             _backend_type: &str,
             _api_key_id: Option<Uuid>,
+            _account_id: Option<Uuid>,
             _source: JobSource,
+            _api_format: ApiFormat,
+            _messages: Option<serde_json::Value>,
         ) -> Result<JobId> {
             Ok(JobId::new())
         }
@@ -404,6 +409,56 @@ mod tests {
         async fn get_latest(&self) -> Result<Option<OllamaSyncJob>> { Ok(None) }
     }
 
+    struct MockAccountRepo;
+
+    #[async_trait]
+    impl AccountRepository for MockAccountRepo {
+        async fn create(&self, _account: &Account) -> Result<()> { Ok(()) }
+        async fn get_by_id(&self, _id: &Uuid) -> Result<Option<Account>> { Ok(None) }
+        async fn get_by_username(&self, _username: &str) -> Result<Option<Account>> { Ok(None) }
+        async fn list_all(&self) -> Result<Vec<Account>> { Ok(vec![]) }
+        async fn update(&self, _account: &Account) -> Result<()> { Ok(()) }
+        async fn soft_delete(&self, _id: &Uuid) -> Result<()> { Ok(()) }
+        async fn set_active(&self, _id: &Uuid, _is_active: bool) -> Result<()> { Ok(()) }
+        async fn update_last_login(&self, _id: &Uuid) -> Result<()> { Ok(()) }
+        async fn set_password_hash(&self, _id: &Uuid, _hash: &str) -> Result<()> { Ok(()) }
+    }
+
+    struct MockCapacityRepo;
+
+    #[async_trait]
+    impl crate::application::ports::outbound::model_capacity_repository::ModelCapacityRepository for MockCapacityRepo {
+        async fn upsert(&self, _: &crate::application::ports::outbound::model_capacity_repository::ModelCapacityEntry) -> Result<()> { Ok(()) }
+        async fn get(&self, _: uuid::Uuid, _: &str) -> Result<Option<crate::application::ports::outbound::model_capacity_repository::ModelCapacityEntry>> { Ok(None) }
+        async fn list_all(&self) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelCapacityEntry>> { Ok(vec![]) }
+        async fn compute_throughput_stats(&self, _: uuid::Uuid, _: &str, _: u32) -> Result<Option<crate::application::ports::outbound::model_capacity_repository::ThroughputStats>> { Ok(None) }
+    }
+
+    struct MockCapacitySettingsRepo;
+
+    #[async_trait]
+    impl crate::application::ports::outbound::capacity_settings_repository::CapacitySettingsRepository for MockCapacitySettingsRepo {
+        async fn get(&self) -> Result<crate::application::ports::outbound::capacity_settings_repository::CapacitySettings> {
+            Ok(crate::application::ports::outbound::capacity_settings_repository::CapacitySettings::default())
+        }
+        async fn update_settings(&self, _: Option<&str>, _: Option<bool>, _: Option<i32>) -> Result<crate::application::ports::outbound::capacity_settings_repository::CapacitySettings> {
+            Ok(crate::application::ports::outbound::capacity_settings_repository::CapacitySettings::default())
+        }
+        async fn record_run(&self, _: &str) -> Result<()> { Ok(()) }
+    }
+
+    struct MockSessionRepo;
+
+    #[async_trait]
+    impl SessionRepository for MockSessionRepo {
+        async fn create(&self, _session: &Session) -> Result<()> { Ok(()) }
+        async fn list_active(&self, _account_id: &Uuid) -> Result<Vec<Session>> { Ok(vec![]) }
+        async fn get_by_refresh_hash(&self, _hash: &str) -> Result<Option<Session>> { Ok(None) }
+        async fn revoke(&self, _session_id: &Uuid) -> Result<()> { Ok(()) }
+        async fn revoke_all_for_account(&self, _account_id: &Uuid) -> Result<()> { Ok(()) }
+        async fn update_last_used(&self, _jti: &Uuid) -> Result<()> { Ok(()) }
+    }
+
     fn make_app() -> axum::Router {
         let fake_key = ApiKey {
             id: Uuid::now_v7(),
@@ -417,6 +472,8 @@ mod tests {
             expires_at: None,
             deleted_at: None,
             created_at: chrono::Utc::now(),
+            key_type: "standard".to_string(),
+            tier: "paid".to_string(),
         };
         let pg_pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://test:test@localhost/test")
@@ -424,6 +481,9 @@ mod tests {
         let state = AppState {
             use_case: Arc::new(MockUseCase),
             api_key_repo: Arc::new(MockApiKeyRepo),
+            account_repo: Arc::new(MockAccountRepo),
+            audit_port: None,
+            jwt_secret: "test-secret".to_string(),
             backend_registry: Arc::new(MockBackendRegistry),
             gpu_server_registry: Arc::new(MockGpuServerRegistry),
             gemini_policy_repo: Arc::new(MockGeminiPolicyRepo),
@@ -433,9 +493,16 @@ mod tests {
             ollama_model_repo: Arc::new(MockOllamaModelRepo),
             ollama_sync_job_repo: Arc::new(MockOllamaSyncJobRepo),
             valkey_pool: None,
-            clickhouse_client: None,
+            analytics_repo: None,
+            session_repo: Arc::new(MockSessionRepo),
             pg_pool,
-            cpu_snapshot_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            cpu_snapshot_cache: Arc::new(dashmap::DashMap::new()),
+            slot_map: Arc::new(crate::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap::new()),
+            thermal: Arc::new(crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap::new(60)),
+            capacity_repo: Arc::new(MockCapacityRepo),
+            capacity_settings_repo: Arc::new(MockCapacitySettingsRepo),
+            capacity_manual_trigger: Arc::new(tokio::sync::Notify::new()),
+            analyzer_url: String::new(),
         };
         // Inject a fake ApiKey extension so handlers that extract it work in tests.
         router::build_api_router()

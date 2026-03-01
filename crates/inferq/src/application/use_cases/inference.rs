@@ -1,12 +1,13 @@
-use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use dashmap::DashMap;
 use futures::Stream;
 use futures::StreamExt as _;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
@@ -19,9 +20,11 @@ use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::{InferenceEvent, ObservabilityPort};
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::InferenceJob;
-use crate::domain::enums::{BackendType, FinishReason, JobSource, JobStatus};
+use crate::domain::enums::{ApiFormat, BackendType, FinishReason, JobSource, JobStatus};
 use crate::domain::value_objects::{JobId, ModelName, Prompt, StreamToken};
 use crate::infrastructure::outbound::backend_router::{get_ollama_available_vram_mb, increment_gemini_counters, make_adapter, pick_best_backend};
+use crate::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap;
+use crate::infrastructure::outbound::capacity::thermal::{ThermalThrottleMap, ThrottleLevel};
 
 // ── Queue keys ─────────────────────────────────────────────────────────────────
 
@@ -62,10 +65,13 @@ pub struct InferenceUseCaseImpl {
     valkey_pool: Option<fred::clients::RedisPool>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
-    jobs: Arc<Mutex<HashMap<Uuid, JobEntry>>>,
-    /// Tracks which backend IDs are currently processing a job.
-    /// Prevents double-dispatching to the same backend before VRAM state updates.
-    busy_backends: Arc<std::sync::Mutex<HashSet<Uuid>>>,
+    /// DashMap: 64 independent shard RwLocks — different UUIDs never contend.
+    jobs: Arc<DashMap<Uuid, JobEntry>>,
+    /// Dynamic concurrency control — VRAM-aware semaphores per (backend, model).
+    /// Updated by the capacity analyzer every 5 minutes; replaces busy_backends.
+    slot_map: Arc<ConcurrencySlotMap>,
+    /// Thermal throttle state — updated by health_checker every 30 s.
+    thermal: Arc<ThermalThrottleMap>,
 }
 
 impl InferenceUseCaseImpl {
@@ -78,6 +84,8 @@ impl InferenceUseCaseImpl {
         valkey_pool: Option<fred::clients::RedisPool>,
         observability: Option<Arc<dyn ObservabilityPort>>,
         model_manager: Option<Arc<dyn ModelManagerPort>>,
+        slot_map: Arc<ConcurrencySlotMap>,
+        thermal: Arc<ThermalThrottleMap>,
     ) -> Self {
         Self {
             registry,
@@ -88,8 +96,9 @@ impl InferenceUseCaseImpl {
             valkey_pool,
             observability,
             model_manager,
-            jobs: Arc::new(Mutex::new(HashMap::new())),
-            busy_backends: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            jobs: Arc::new(DashMap::new()),
+            slot_map,
+            thermal,
         }
     }
 
@@ -100,9 +109,14 @@ impl InferenceUseCaseImpl {
     /// Each physical GPU (Ollama server) processes one job at a time; multiple GPUs
     /// run in parallel. If no backend has capacity, the job is re-queued and the
     /// dispatcher backs off briefly.
-    pub fn start_queue_worker(&self) {
+    pub fn start_queue_worker(
+        &self,
+        shutdown: CancellationToken,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        use futures::FutureExt as _;
+
         let Some(ref pool) = self.valkey_pool else {
-            return;
+            return futures::future::ready(()).boxed();
         };
 
         let jobs = self.jobs.clone();
@@ -111,12 +125,15 @@ impl InferenceUseCaseImpl {
         let valkey_pool = pool.clone();
         let observability = self.observability.clone();
         let model_manager = self.model_manager.clone();
-        let busy_backends = self.busy_backends.clone();
+        let slot_map = self.slot_map.clone();
+        let thermal = self.thermal.clone();
         let gemini_policy_repo = self.gemini_policy_repo.clone();
         let model_selection_repo = self.model_selection_repo.clone();
         let ollama_model_repo = self.ollama_model_repo.clone();
 
-        tokio::spawn(async move {
+        tracing::info!("multi-backend queue dispatcher started (VRAM-aware routing)");
+
+        async move {
             queue_dispatcher_loop(
                 jobs,
                 registry,
@@ -127,12 +144,13 @@ impl InferenceUseCaseImpl {
                 valkey_pool,
                 observability,
                 model_manager,
-                busy_backends,
+                slot_map,
+                thermal,
+                shutdown,
             )
             .await;
-        });
-
-        tracing::info!("multi-backend queue dispatcher started (VRAM-aware routing)");
+        }
+        .boxed()
     }
 
     /// Re-enqueue jobs that were Pending or Running when the server last stopped.
@@ -168,19 +186,16 @@ impl InferenceUseCaseImpl {
                 job.started_at = None;
             }
 
-            {
-                let mut guard = self.jobs.lock().await;
-                guard.entry(uuid).or_insert_with(|| JobEntry {
-                    job: job.clone(),
-                    status: job.status,
-                    tokens: Vec::new(),
-                    done: false,
-                    api_key_id: None,
-                    notify: Arc::new(Notify::new()),
-                    cancel_notify: Arc::new(Notify::new()),
-                    gemini_tier: None, // tier preference is lost on restart → auto-routing
-                });
-            }
+            self.jobs.entry(uuid).or_insert_with(|| JobEntry {
+                job: job.clone(),
+                status: job.status,
+                tokens: Vec::with_capacity(256),
+                done: false,
+                api_key_id: None,
+                notify: Arc::new(Notify::new()),
+                cancel_notify: Arc::new(Notify::new()),
+                gemini_tier: None, // tier preference is lost on restart → auto-routing
+            });
 
             let queue_key = if job.source == JobSource::Test { QUEUE_KEY_TEST } else { QUEUE_KEY_API };
             if let Err(e) = pool.rpush::<i64, _, _>(queue_key, uuid.to_string()).await {
@@ -202,7 +217,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         model_name: &str,
         backend_type: &str,
         api_key_id: Option<Uuid>,
+        account_id: Option<Uuid>,
         source: JobSource,
+        api_format: ApiFormat,
+        messages: Option<serde_json::Value>,
     ) -> Result<JobId> {
         let job_id = JobId::new();
         // Parse backend string: "gemini-free" routes to free-tier Gemini only;
@@ -225,32 +243,33 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             error: None,
             result_text: None,
             api_key_id,
+            account_id,
             latency_ms: None,
             ttft_ms: None,
             prompt_tokens: None,
             completion_tokens: None,
             cached_tokens: None,
             source,
+            backend_id: None,
+            api_format,
+            messages,
         };
 
         self.job_repo.save(&job).await?;
 
-        {
-            let mut guard = self.jobs.lock().await;
-            guard.insert(
-                job_id.0,
-                JobEntry {
-                    job: job.clone(),
-                    status: JobStatus::Pending,
-                    tokens: Vec::new(),
-                    done: false,
-                    api_key_id,
-                    notify: Arc::new(Notify::new()),
-                    cancel_notify: Arc::new(Notify::new()),
-                    gemini_tier: gemini_tier.clone(),
-                },
-            );
-        }
+        self.jobs.insert(
+            job_id.0,
+            JobEntry {
+                job: job.clone(),
+                status: JobStatus::Pending,
+                tokens: Vec::with_capacity(256),
+                done: false,
+                api_key_id,
+                notify: Arc::new(Notify::new()),
+                cancel_notify: Arc::new(Notify::new()),
+                gemini_tier: gemini_tier.clone(),
+            },
+        );
 
         let uuid = job_id.0;
 
@@ -275,7 +294,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                         self.valkey_pool.clone(),
                         self.observability.clone(),
                         self.model_manager.clone(),
-                        self.busy_backends.clone(),
+                        self.slot_map.clone(),
+                        self.thermal.clone(),
                         uuid,
                         job,
                         gemini_tier,
@@ -294,7 +314,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 None,
                 self.observability.clone(),
                 self.model_manager.clone(),
-                self.busy_backends.clone(),
+                self.slot_map.clone(),
+                self.thermal.clone(),
                 uuid,
                 job,
                 gemini_tier,
@@ -307,8 +328,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
     async fn process(&self, job_id: &JobId) -> Result<()> {
         let uuid = job_id.0;
         let (job, api_key_id, gemini_tier) = {
-            let guard = self.jobs.lock().await;
-            let entry = guard
+            let entry = self.jobs
                 .get(&uuid)
                 .ok_or_else(|| anyhow::anyhow!("job not found: {uuid}"))?;
 
@@ -320,6 +340,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             }
 
             (entry.job.clone(), entry.api_key_id, entry.gemini_tier.clone())
+            // Ref dropped here — before any await
         };
         let _ = api_key_id; // used in spawned path; process() ignores it
 
@@ -365,7 +386,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
         Box::pin(async_stream::try_stream! {
             // Fast-path: job is in the in-memory store (same process run).
-            let in_memory = jobs.lock().await.contains_key(&uuid);
+            let in_memory = jobs.contains_key(&uuid);
 
             if !in_memory {
                 // DB fallback: replay stored result for completed jobs that were
@@ -402,8 +423,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             let mut idx: usize = 0;
             loop {
                 let (new_tokens, done, notify) = {
-                    let guard = jobs.lock().await;
-                    let entry = guard
+                    let entry = jobs
                         .get(&uuid)
                         .ok_or_else(|| anyhow::anyhow!("job entry disappeared: {uuid}"))?;
 
@@ -411,6 +431,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     let done = entry.done;
                     let notify = entry.notify.clone();
                     (new_tokens, done, notify)
+                    // Ref dropped here — before yield/await
                 };
 
                 for token in new_tokens {
@@ -429,11 +450,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
     async fn get_status(&self, job_id: &JobId) -> Result<JobStatus> {
         // Fast path: in-memory.
-        {
-            let guard = self.jobs.lock().await;
-            if let Some(entry) = guard.get(&job_id.0) {
-                return Ok(entry.status);
-            }
+        if let Some(entry) = self.jobs.get(&job_id.0) {
+            return Ok(entry.status);
         }
         // Fallback: database (jobs from a previous server run).
         let job = self
@@ -445,19 +463,32 @@ impl InferenceUseCase for InferenceUseCaseImpl {
     }
 
     async fn cancel(&self, job_id: &JobId) -> Result<()> {
-        {
-            let mut guard = self.jobs.lock().await;
-            if let Some(entry) = guard.get_mut(&job_id.0) {
+        let is_already_final = if let Some(mut entry) = self.jobs.get_mut(&job_id.0) {
+            // Don't override a job that has already reached a terminal state.
+            // This prevents a tab-close cleanup from flipping a completed job
+            // to cancelled after the stream has naturally finished.
+            if entry.status == JobStatus::Completed || entry.status == JobStatus::Failed {
+                true
+            } else {
                 entry.status = JobStatus::Cancelled;
                 entry.done = true;
-                entry.notify.notify_one();
-                // Wake up run_job's tokio::select! so the Ollama stream is dropped immediately.
-                entry.cancel_notify.notify_one();
+                let notify = entry.notify.clone();
+                let cancel_notify = entry.cancel_notify.clone();
+                drop(entry); // drop RefMut before calling notify
+                notify.notify_one();
+                // Wake up run_job's tokio::select! so the stream is dropped immediately.
+                cancel_notify.notify_one();
+                false
             }
+        } else {
+            false
+        };
+
+        if !is_already_final {
+            self.job_repo
+                .update_status(job_id, JobStatus::Cancelled)
+                .await?;
         }
-        self.job_repo
-            .update_status(job_id, JobStatus::Cancelled)
-            .await?;
         Ok(())
     }
 }
@@ -465,7 +496,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 // ── Direct spawn helper (no-Valkey dev mode) ──────────────────────────────────
 
 fn spawn_job_direct(
-    jobs: Arc<Mutex<HashMap<Uuid, JobEntry>>>,
+    jobs: Arc<DashMap<Uuid, JobEntry>>,
     registry: Arc<dyn LlmBackendRegistry>,
     gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
     model_selection_repo: Option<Arc<dyn BackendModelSelectionRepository>>,
@@ -474,17 +505,21 @@ fn spawn_job_direct(
     valkey_pool: Option<fred::clients::RedisPool>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
-    busy_backends: Arc<std::sync::Mutex<HashSet<Uuid>>>,
+    slot_map: Arc<ConcurrencySlotMap>,
+    thermal: Arc<ThermalThrottleMap>,
     uuid: Uuid,
     job: InferenceJob,
     gemini_tier: Option<String>,
 ) {
     tokio::spawn(async move {
-        // Pick a backend from the registry.
         let policy_ref = gemini_policy_repo.as_deref();
         let selection_ref = model_selection_repo.as_deref();
         let ollama_ref = ollama_model_repo.as_deref();
-        let backend_cfg = match pick_best_backend(&*registry, policy_ref, selection_ref, ollama_ref, &job.backend, job.model_name.as_str(), valkey_pool.as_ref(), gemini_tier.as_deref()).await {
+        let backend_cfg = match pick_best_backend(
+            &*registry, policy_ref, selection_ref, ollama_ref,
+            &job.backend, job.model_name.as_str(),
+            valkey_pool.as_ref(), gemini_tier.as_deref(),
+        ).await {
             Ok(cfg) => cfg,
             Err(e) => {
                 tracing::error!(job_id = %uuid, "no backend available: {e}");
@@ -493,7 +528,23 @@ fn spawn_job_direct(
         };
         let backend_id = backend_cfg.id;
         let backend_is_free_tier = backend_cfg.is_free_tier;
-        busy_backends.lock().unwrap().insert(backend_id);
+
+        // Respect thermal limits even in direct mode
+        match thermal.get(backend_id) {
+            ThrottleLevel::Hard => {
+                tracing::warn!(job_id = %uuid, %backend_id, "direct spawn skipped — hard throttle");
+                return;
+            }
+            ThrottleLevel::Soft => {
+                if slot_map.active_slots(backend_id, job.model_name.as_str()) > 0 {
+                    tracing::debug!(job_id = %uuid, "direct spawn skipped — soft throttle, already busy");
+                    return;
+                }
+            }
+            ThrottleLevel::Normal => {}
+        }
+
+        let permit = slot_map.try_acquire(backend_id, job.model_name.as_str());
         let adapter = make_adapter(&backend_cfg);
 
         if let Err(e) = run_job(
@@ -512,7 +563,7 @@ fn spawn_job_direct(
         {
             tracing::error!(job_id = %uuid, "inference job failed: {e}");
         }
-        busy_backends.lock().unwrap().remove(&backend_id);
+        drop(permit); // RAII: slot auto-released
     });
 }
 
@@ -531,7 +582,7 @@ fn spawn_job_direct(
 /// at a time (max_jobs = 1 per physical GPU).
 #[allow(clippy::too_many_arguments)]
 async fn queue_dispatcher_loop(
-    jobs: Arc<Mutex<HashMap<Uuid, JobEntry>>>,
+    jobs: Arc<DashMap<Uuid, JobEntry>>,
     registry: Arc<dyn LlmBackendRegistry>,
     _gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
     _model_selection_repo: Option<Arc<dyn BackendModelSelectionRepository>>,
@@ -540,7 +591,9 @@ async fn queue_dispatcher_loop(
     valkey_pool: fred::clients::RedisPool,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
-    busy_backends: Arc<std::sync::Mutex<HashSet<Uuid>>>,
+    slot_map: Arc<ConcurrencySlotMap>,
+    thermal: Arc<ThermalThrottleMap>,
+    shutdown: CancellationToken,
 ) {
     use fred::prelude::*;
 
@@ -552,8 +605,11 @@ async fn queue_dispatcher_loop(
         // BLPOP blocks for up to 5 s; returns None on timeout.
         // API queue is listed first → polled with priority over the test queue.
         let queue_keys: Vec<String> = vec![QUEUE_KEY_API.to_string(), QUEUE_KEY_TEST.to_string()];
-        let result: Result<Option<(String, String)>, _> =
-            valkey_pool.blpop(queue_keys, 5.0).await;
+        let result: Result<Option<(String, String)>, _> = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            r = valkey_pool.blpop(queue_keys, 5.0) => r,
+        };
 
         let payload = match result {
             Ok(None) => continue,
@@ -576,36 +632,33 @@ async fn queue_dispatcher_loop(
 
         // Retrieve job from in-memory store (fast path) or DB (recovery path).
         // Also read gemini_tier: "free" = free-tier only, None = auto-routing.
-        let (job, gemini_tier) = {
-            let guard = jobs.lock().await;
-            if let Some(entry) = guard.get(&uuid) {
-                (entry.job.clone(), entry.gemini_tier.clone())
-            } else {
-                drop(guard);
-                let job_id = crate::domain::value_objects::JobId(uuid);
-                match job_repo.get(&job_id).await {
-                    Ok(Some(j)) => {
-                        let mut guard = jobs.lock().await;
-                        guard.entry(uuid).or_insert_with(|| JobEntry {
-                            job: j.clone(),
-                            status: j.status,
-                            tokens: Vec::new(),
-                            done: false,
-                            api_key_id: None,
-                            notify: Arc::new(Notify::new()),
-                            cancel_notify: Arc::new(Notify::new()),
-                            gemini_tier: None,
-                        });
-                        (j, None)
-                    }
-                    Ok(None) => {
-                        tracing::warn!(%uuid, "queued job not found in DB — skipping");
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::error!(%uuid, "failed to load job from DB: {e}");
-                        continue;
-                    }
+        // Ref is held only in this block and dropped before the await below.
+        let (job, gemini_tier) = if let Some(entry) = jobs.get(&uuid) {
+            (entry.job.clone(), entry.gemini_tier.clone())
+            // Ref dropped here
+        } else {
+            let job_id = crate::domain::value_objects::JobId(uuid);
+            match job_repo.get(&job_id).await {
+                Ok(Some(j)) => {
+                    jobs.entry(uuid).or_insert_with(|| JobEntry {
+                        job: j.clone(),
+                        status: j.status,
+                        tokens: Vec::with_capacity(256),
+                        done: false,
+                        api_key_id: None,
+                        notify: Arc::new(Notify::new()),
+                        cancel_notify: Arc::new(Notify::new()),
+                        gemini_tier: None,
+                    });
+                    (j, None)
+                }
+                Ok(None) => {
+                    tracing::warn!(%uuid, "queued job not found in DB — skipping");
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!(%uuid, "failed to load job from DB: {e}");
+                    continue;
                 }
             }
         };
@@ -637,20 +690,30 @@ async fn queue_dispatcher_loop(
         // Sort by most available VRAM descending.
         availability.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // Atomically claim the best non-busy backend.
-        let claimed = {
-            let mut busy = busy_backends.lock().unwrap();
-            availability
-                .into_iter()
-                .find(|(b, avail)| !busy.contains(&b.id) && *avail > 0)
-                .map(|(b, _)| {
-                    busy.insert(b.id);
-                    b
-                })
-        };
+        // Claim a slot on the best available backend (VRAM-sorted, thermal-filtered).
+        let claimed = availability
+            .into_iter()
+            .filter(|(_b, avail)| *avail > 0)
+            .find_map(|(backend, _)| {
+                // Thermal gate
+                match thermal.get(backend.id) {
+                    ThrottleLevel::Hard => return None,
+                    ThrottleLevel::Soft => {
+                        // Soft throttle: allow only if no active slots (cap=1 effect)
+                        if slot_map.active_slots(backend.id, job.model_name.as_str()) > 0 {
+                            return None;
+                        }
+                    }
+                    ThrottleLevel::Normal => {}
+                }
+                // Non-blocking semaphore acquire
+                slot_map
+                    .try_acquire(backend.id, job.model_name.as_str())
+                    .map(|permit| (backend, permit))
+            });
 
         match claimed {
-            Some(backend_cfg) => {
+            Some((backend_cfg, permit)) => {
                 let backend_id = backend_cfg.id;
                 let backend_is_free_tier = backend_cfg.is_free_tier;
                 let adapter = make_adapter(&backend_cfg);
@@ -667,9 +730,9 @@ async fn queue_dispatcher_loop(
                 let valkey_c = valkey_pool.clone();
                 let obs_c = observability.clone();
                 let mm_c = model_manager.clone();
-                let busy_c = busy_backends.clone();
 
                 tokio::spawn(async move {
+                    let _permit = permit; // RAII: dropped when task finishes
                     if let Err(e) = run_job(
                         jobs_c,
                         adapter,
@@ -686,8 +749,7 @@ async fn queue_dispatcher_loop(
                     {
                         tracing::error!(%uuid, %backend_id, "inference job failed: {e}");
                     }
-                    busy_c.lock().unwrap().remove(&backend_id);
-                    tracing::debug!(%backend_id, "backend released");
+                    tracing::debug!(%backend_id, "slot released");
                 });
             }
             None => {
@@ -704,20 +766,22 @@ async fn queue_dispatcher_loop(
             }
         }
     }
+
+    tracing::info!("queue dispatcher stopped");
 }
 
 // ── Background job runner ──────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
 async fn run_job(
-    jobs: Arc<Mutex<HashMap<Uuid, JobEntry>>>,
+    jobs: Arc<DashMap<Uuid, JobEntry>>,
     backend: Arc<dyn InferenceBackendPort>,
     job_repo: Arc<dyn JobRepository>,
     valkey_pool: Option<fred::clients::RedisPool>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
     uuid: Uuid,
-    job: InferenceJob,
+    mut job: InferenceJob,
     backend_id: Option<Uuid>,
     // True when the selected backend is a Google free-tier project.
     // RPM/RPD counters are only incremented for free-tier backends —
@@ -735,40 +799,34 @@ async fn run_job(
 
     // ── Running ──────────────────────────────────────────────────────
     let started_at = chrono::Utc::now();
-    let api_key_id = {
-        let mut guard = jobs.lock().await;
-        if let Some(entry) = guard.get_mut(&uuid) {
-            if entry.status == JobStatus::Cancelled {
-                return Ok(());
-            }
-            entry.status = JobStatus::Running;
-            entry.job.status = JobStatus::Running;
-            entry.job.started_at = Some(started_at);
-            entry.api_key_id
-        } else {
-            None
+    let api_key_id = if let Some(mut entry) = jobs.get_mut(&uuid) {
+        if entry.status == JobStatus::Cancelled {
+            return Ok(());
         }
+        entry.status = JobStatus::Running;
+        entry.job.status = JobStatus::Running;
+        entry.job.started_at = Some(started_at);
+        entry.api_key_id
+        // RefMut dropped here — before the await below
+    } else {
+        None
     };
 
-    if let Err(e) = job_repo
-        .save(&InferenceJob {
-            status: JobStatus::Running,
-            started_at: Some(started_at),
-            ..job.clone()
-        })
-        .await
-    {
+    job.status = JobStatus::Running;
+    job.started_at = Some(started_at);
+    job.backend_id = backend_id;
+    if let Err(e) = job_repo.save(&job).await {
         tracing::warn!(job_id = %uuid, "failed to persist running state: {e}");
     }
 
     // ── Stream tokens ────────────────────────────────────────────────
     // Clone cancel_notify before entering the loop so we can select! on it
     // without holding the jobs lock across an await.
-    let cancel_notify = {
-        let guard = jobs.lock().await;
-        guard.get(&uuid).map(|e| e.cancel_notify.clone())
-    }
-    .unwrap_or_else(|| Arc::new(Notify::new()));
+    let cancel_notify = jobs
+        .get(&uuid)
+        .map(|e| e.cancel_notify.clone())
+        .unwrap_or_else(|| Arc::new(Notify::new()));
+    // Ref dropped here
 
     let mut token_stream = backend.stream_tokens(&job);
     let mut token_count: u64 = 0;
@@ -800,8 +858,7 @@ async fn run_job(
             None => break,
         };
 
-        let mut guard = jobs.lock().await;
-        let entry = match guard.get_mut(&uuid) {
+        let mut entry = match jobs.get_mut(&uuid) {
             Some(e) => e,
             None => break,
         };
@@ -838,7 +895,9 @@ async fn run_job(
                 } else {
                     entry.tokens.push(token);
                 }
-                entry.notify.notify_one();
+                let notify = entry.notify.clone();
+                drop(entry); // drop RefMut before notify_one (not strictly required, but safe)
+                notify.notify_one();
             }
             Err(e) => {
                 let error_msg = e.to_string();
@@ -846,18 +905,13 @@ async fn run_job(
                 entry.job.status = JobStatus::Failed;
                 entry.job.error = Some(error_msg.clone());
                 entry.done = true;
-                entry.notify.notify_one();
-                drop(guard);
+                let notify = entry.notify.clone();
+                drop(entry); // drop RefMut before await
+                notify.notify_one();
 
-                if let Err(db_err) = job_repo
-                    .save(&InferenceJob {
-                        status: JobStatus::Failed,
-                        error: Some(error_msg.clone()),
-                        started_at: Some(started_at),
-                        ..job.clone()
-                    })
-                    .await
-                {
+                job.status = JobStatus::Failed;
+                job.error = Some(error_msg.clone());
+                if let Err(db_err) = job_repo.save(&job).await {
                     tracing::warn!(job_id = %uuid, "failed to persist failed state: {db_err}");
                 }
 
@@ -889,22 +943,21 @@ async fn run_job(
 
     // ── Completed ────────────────────────────────────────────────────
     let completed_at = chrono::Utc::now();
-    let final_status = {
-        let mut guard = jobs.lock().await;
-        if let Some(entry) = guard.get_mut(&uuid) {
-            if entry.status != JobStatus::Cancelled {
-                entry.status = JobStatus::Completed;
-                entry.job.status = JobStatus::Completed;
-                entry.job.completed_at = Some(completed_at);
-                entry.done = true;
-                entry.notify.notify_one();
-                JobStatus::Completed
-            } else {
-                JobStatus::Cancelled
-            }
-        } else {
+    let final_status = if let Some(mut entry) = jobs.get_mut(&uuid) {
+        if entry.status != JobStatus::Cancelled {
+            entry.status = JobStatus::Completed;
+            entry.job.status = JobStatus::Completed;
+            entry.job.completed_at = Some(completed_at);
+            entry.done = true;
+            let notify = entry.notify.clone();
+            drop(entry); // drop RefMut before notify_one
+            notify.notify_one();
             JobStatus::Completed
+        } else {
+            JobStatus::Cancelled
         }
+    } else {
+        JobStatus::Completed
     };
 
     let result_text = if accumulated_text.is_empty() {
@@ -922,21 +975,16 @@ async fn run_job(
         .map(|v| v as i32)
         .or_else(|| if token_count > 0 { Some(token_count as i32) } else { None });
 
-    if let Err(e) = job_repo
-        .save(&InferenceJob {
-            status: JobStatus::Completed,
-            started_at: Some(started_at),
-            completed_at: Some(completed_at),
-            result_text: result_text.clone(),
-            latency_ms: Some(stored_latency_ms),
-            ttft_ms: ttft_ms_value,
-            prompt_tokens: actual_prompt_tokens.map(|v| v as i32),
-            completion_tokens: stored_completion_tokens,
-            cached_tokens: actual_cached_tokens.map(|v| v as i32),
-            ..job.clone()
-        })
-        .await
-    {
+    // Mutate job fields directly for the final save — avoids cloning all 16+ fields.
+    job.status = JobStatus::Completed;
+    job.completed_at = Some(completed_at);
+    job.result_text = result_text.clone();
+    job.latency_ms = Some(stored_latency_ms);
+    job.ttft_ms = ttft_ms_value;
+    job.prompt_tokens = actual_prompt_tokens.map(|v| v as i32);
+    job.completion_tokens = stored_completion_tokens;
+    job.cached_tokens = actual_cached_tokens.map(|v| v as i32);
+    if let Err(e) = job_repo.save(&job).await {
         tracing::warn!(job_id = %uuid, "failed to persist completed state: {e}");
     }
 
@@ -1040,7 +1088,7 @@ async fn emit_inference_event(
 
 /// Increment the per-minute token counter for an API key.
 ///
-/// Key pattern: `inferq:ratelimit:tpm:{key_id}:{minute}`
+/// Key pattern: `veronex:ratelimit:tpm:{key_id}:{minute}`
 /// TTL is set to 2 minutes so stale keys are cleaned up automatically.
 pub async fn record_tpm(
     pool: &fred::clients::RedisPool,
