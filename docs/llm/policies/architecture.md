@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-02-28
+> SSOT | **Last Updated**: 2026-03-02 (rev: RBAC, capacity control, thermal throttle, analytics service)
 > Code patterns and templates → `policies/patterns.md`
 
 ## Overview
@@ -29,9 +29,11 @@ crates/inferq/src/
 │       ├── ollama/      # OllamaAdapter
 │       ├── gemini/      # GeminiAdapter
 │       ├── backend_router.rs   # DynamicBackendRouter (VRAM-aware)
-│       ├── health_checker.rs   # 30s background health checker
+│       ├── health_checker.rs   # 30s background health checker (+ thermal throttle update)
 │       ├── model_manager.rs    # OllamaModelManager (LRU eviction)
-│       └── observability/      # RedpandaObservabilityAdapter (+ legacy ClickHouseObservabilityAdapter)
+│       ├── observability/      # HttpObservabilityAdapter + HttpAuditAdapter (fail-open → veronex-analytics)
+│       ├── analytics/          # HttpAnalyticsClient (GET from veronex-analytics)
+│       └── capacity/           # ConcurrencySlotMap, ThermalThrottleMap, CapacityAnalyzer (5-min loop)
 │
 └── main.rs              # Composition root — wires all adapters
 ```
@@ -74,8 +76,15 @@ let pg_pool = database::connect(&database_url).await?;
 
 let api_key_repo: Arc<dyn ApiKeyRepository> =
     Arc::new(PostgresApiKeyRepository::new(pg_pool.clone()));
-let backend_registry: Arc<dyn LlmBackendRegistry> =
-    Arc::new(PostgresBackendRegistry::new(pg_pool.clone()));
+
+// Decorator pattern: CachingBackendRegistry wraps PostgresBackendRegistry
+// list_all() is called on every job dequeue — 5s TTL avoids repeated DB hits
+let backend_registry: Arc<dyn LlmBackendRegistry> = Arc::new(
+    CachingBackendRegistry::new(
+        Arc::new(PostgresBackendRegistry::new(pg_pool.clone())),
+        Duration::from_secs(5),
+    )
+);
 // ... repeat for every port
 
 let state = AppState { use_case, api_key_repo, backend_registry, /* ... */ };
@@ -86,20 +95,30 @@ axum::serve(listener, app).await?;
 ## Multi-Backend Routing
 
 ```
-Client → POST /v1/chat/completions  (OpenAI-compatible, source=api)  → RPUSH veronex:queue:jobs
-      OR POST /v1/chat/completions  (source=test, test panel)        → RPUSH veronex:queue:jobs:test
+Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → RPUSH veronex:queue:jobs
+      OR POST /v1/test/completions  (Bearer JWT, source=Test)  → RPUSH veronex:queue:jobs:test
        → queue_dispatcher_loop: BLPOP [veronex:queue:jobs, veronex:queue:jobs:test] 5.0
-         (API queue is always checked first — BLPOP key-order priority guarantee)
+         (API queue always polled first — BLPOP key-order priority guarantee)
          → DynamicBackendRouter::dispatch
            → list_active() → VRAM check → pick best backend
-           → busy_backends.insert(id)     ← prevents double-dispatch
-           → tokio::spawn run_job()
+           → thermal.get(backend_id) → skip if Hard; cap if Soft+active>0
+           → slot_map.try_acquire(backend_id, model)  ← OwnedSemaphorePermit (RAII)
+           → tokio::spawn run_job(permit)
              → OllamaAdapter | GeminiAdapter → SSE tokens
-             → ObservabilityPort::record_inference → Redpanda [inference] → ClickHouse MV
+             → permit dropped (auto) → slot released
+             → ObservabilityPort::record_inference → HttpObservabilityAdapter
+               → POST /internal/ingest/inference (veronex-analytics)
+               → OTel LogRecord → OTel Collector → Redpanda → ClickHouse
 
-Test reconnect (test panel only):
-  localStorage: { jobId, status:"streaming" }  ← persisted on job submit
-  GET /v1/jobs/{id}/stream → OpenAI SSE replay  ← reconnect on page return
+Reconnect:
+  GET /v1/jobs/{id}/stream      (X-API-Key)  → SSE replay
+  GET /v1/test/jobs/{id}/stream (Bearer JWT) → SSE replay
+
+Background loops:
+  health_checker (30s): backend online/offline + thermal.update(temp_c)
+  run_capacity_analysis_loop (30s tick, checks DB batch_interval_secs):
+    → Ollama /api/ps + /api/show → compute KV cache → qwen2.5:3b recommendation
+    → slot_map.update_capacity() + model_capacity upsert
 ```
 
 ## AppState
@@ -107,8 +126,11 @@ Test reconnect (test panel only):
 ```rust
 // infrastructure/inbound/http/state.rs
 pub struct AppState {
+    // Inference core
     pub use_case:                  Arc<dyn InferenceUseCase>,
+    pub job_repo:                  Arc<dyn JobRepository>,
     pub api_key_repo:              Arc<dyn ApiKeyRepository>,
+    // Backend routing
     pub backend_registry:          Arc<dyn LlmBackendRegistry>,
     pub gpu_server_registry:       Arc<dyn GpuServerRegistry>,
     pub ollama_model_repo:         Arc<dyn OllamaModelRepository>,
@@ -117,10 +139,25 @@ pub struct AppState {
     pub gemini_sync_config_repo:   Arc<dyn GeminiSyncConfigRepository>,
     pub gemini_model_repo:         Arc<dyn GeminiModelRepository>,
     pub model_selection_repo:      Arc<dyn BackendModelSelectionRepository>,
+    // Auth / RBAC
+    pub account_repo:              Arc<dyn AccountRepository>,
+    pub session_repo:              Arc<dyn SessionRepository>,
+    pub jwt_secret:                String,
+    // Observability + analytics (all fail-open)
+    pub audit_port:                Arc<dyn AuditPort>,
+    pub observability:             Arc<dyn ObservabilityPort>,
+    pub analytics_repo:            Arc<dyn AnalyticsRepository>,
+    // Dynamic concurrency + thermal throttle
+    pub slot_map:                  Arc<ConcurrencySlotMap>,
+    pub thermal:                   Arc<ThermalThrottleMap>,
+    pub capacity_repo:             Arc<dyn ModelCapacityRepository>,
+    pub capacity_settings_repo:    Arc<dyn CapacitySettingsRepository>,
+    pub capacity_manual_trigger:   Arc<tokio::sync::Notify>,
+    pub analyzer_url:              String,
+    // Infrastructure
+    pub cpu_snapshot_cache:        Arc<DashMap<Uuid, CpuSnapshot>>, // GPU snapshot per server (DashMap; no lock)
     pub valkey_pool:               Option<fred::clients::RedisPool>,
-    pub clickhouse_client:         Option<clickhouse::Client>,
     pub pg_pool:                   sqlx::PgPool,
-    pub cpu_snapshot_cache:        Arc<Mutex<HashMap<Uuid, CpuSnapshot>>>,
 }
 ```
 
@@ -168,11 +205,17 @@ All events flow through Redpanda as the single message bus.  ClickHouse is a con
 | Port | Adapter | Notes |
 |------|---------|-------|
 | `InferenceBackendPort` | `OllamaAdapter`, `GeminiAdapter` | SSE streaming |
-| `LlmBackendRegistry` | `PostgresBackendRegistry` | CRUD + health + update |
+| `LlmBackendRegistry` | `PostgresBackendRegistry` (DB) + `CachingBackendRegistry` (5s TTL decorator, used in production) | CRUD + health + update |
 | `GpuServerRegistry` | `PostgresGpuServerRegistry` | Physical server + node-exporter |
 | `JobRepository` | `PostgresJobRepository` | UPSERT on conflict |
 | `ApiKeyRepository` | `PostgresApiKeyRepository` | BLAKE2b hash lookup |
-| `ObservabilityPort` | `RedpandaObservabilityAdapter` | Produces to Redpanda `inference` topic → ClickHouse MV |
+| `ObservabilityPort` | `HttpObservabilityAdapter` | POST /internal/ingest/inference → veronex-analytics (fail-open) |
+| `AuditPort` | `HttpAuditAdapter` | POST /internal/ingest/audit → veronex-analytics (fail-open) |
+| `AnalyticsRepository` | `HttpAnalyticsClient` | GET /internal/* from veronex-analytics |
+| `AccountRepository` | `PostgresAccountRepository` | Argon2id password, soft-delete, RBAC |
+| `SessionRepository` | `PostgresSessionRepository` | jti + refresh_token_hash (BLAKE2b), rolling sessions |
+| `ModelCapacityRepository` | `PostgresModelCapacityRepository` | VRAM/KV stats, slot recommendation, PERCENTILE_CONT throughput |
+| `CapacitySettingsRepository` | `PostgresCapacitySettingsRepository` | Capacity analyzer config singleton (id=1) |
 | `ModelManagerPort` | `OllamaModelManager` | LRU eviction, max_loaded=1 |
 | `OllamaModelRepository` | `PostgresOllamaModelRepository` | Global Ollama model pool (model-aware routing) |
 | `OllamaSyncJobRepository` | `PostgresOllamaSyncJobRepository` | Async sync job tracking (JSONB results) |

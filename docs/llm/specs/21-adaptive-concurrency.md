@@ -1,8 +1,28 @@
 # Spec 21 — Adaptive Concurrency: N-slot Auto-allocation for Local LLM
 
-> **Status**: Roadmap — not yet implemented
+> **Status**: ⚠️ Superseded — implemented differently; see `docs/llm/backend/capacity.md`
 > **Scope**: Ollama (local GPU/CPU) backends only. Gemini is cloud-managed, unaffected.
-> Last updated: 2026-02-26
+> Last updated: 2026-02-26 (archived 2026-03-02)
+
+## ⚠️ Implementation Note (2026-03-02)
+
+This spec was a roadmap. The feature was implemented on branch `feat/api-key-usage` with several
+design differences from this spec. **Refer to `docs/llm/backend/capacity.md` for the authoritative SSOT.**
+
+Key divergences from this spec:
+
+| This spec | Actual implementation |
+|-----------|----------------------|
+| `DashMap<Uuid, (usize, usize)>` load counter | `DashMap<(Uuid, String), (Arc<Semaphore>, u32)>` per (backend, model) |
+| `CapacityOracle` trait | `ConcurrencySlotMap` (infrastructure struct, no port trait) |
+| VRAM memory snapshot at TTFT | `/api/show` arch params + KV cache formula (2 × layers × kv_heads × head_dim × 2) |
+| ClickHouse history as primary source | `inference_jobs` PostgreSQL throughput aggregation (`PERCENTILE_CONT`) |
+| `model_memory_profiles` table | `model_capacity` table (broader: includes KV arch params, LLM analysis) |
+| Phase-based rollout | Delivered as single feature: slot_map + thermal + capacity_analyzer + settings API |
+| No thermal throttle | `ThermalThrottleMap`: 85°C soft / 92°C hard / 78°C hysteresis + 60s cooldown |
+| No LLM advisor | `qwen2.5:3b` background advisor (5-min loop, fail-open) |
+
+---
 
 ---
 

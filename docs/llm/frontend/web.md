@@ -1,6 +1,6 @@
 # Web — Brand, Design System & Architecture
 
-> SSOT | **Last Updated**: 2026-02-28 (provider taxonomy, power comparison, test API keys)
+> SSOT | **Last Updated**: 2026-03-01 (network flow 3-phase enqueue/dispatch/response; 4-column Queue topology; live feed latestByJob live status updates; cancelled bee color; yellow enqueue bees)
 
 ## Task Guide
 
@@ -9,21 +9,25 @@
 | Add new data table | `web/components/data-table.tsx` (SSOT) | Use `<DataTable minWidth="...">` — never write raw `<Card><CardContent p-0 overflow-x-auto><Table>` |
 | Add new nav link | `web/components/nav.tsx` `navItems` array + `web/messages/en.json` `nav.*` | Add item + i18n key in all 3 locales |
 | Add new color token | `web/app/tokens.css` | Layer 1 (`--palette-*`) → Layer 2 (`--theme-*`) → Layer 0 (`@property`) → Layer 3 (`@theme inline`) |
-| Add new locale | `web/i18n/config.ts` `locales[]` + new `web/messages/{locale}.json` + `language-switcher.tsx` | Copy en.json structure, translate values |
+| Add new locale | `web/i18n/config.ts` `locales[]` + new `web/messages/{locale}.json` | Copy en.json structure, translate values; add locale→timezone default in `timezone-provider.tsx` `localeDefault()` |
 | Add new provider backend type | See "Adding a New Provider" section below | 5-step process: nav → page → i18n → Rust adapter → docs |
 | Change nav collapsed localStorage key | `web/components/nav.tsx` `localStorage('nav-collapsed')` | Change key string (clears all users' preferences) |
 | Change theme colors | `web/app/tokens.css` Layer 2 `--theme-*` values | Only edit `--theme-*` variables, never hardcode hex in TSX |
+| Add a new flow visualization panel | `web/app/overview/components/` | Create panel component + update `network-flow-tab.tsx`; follow CSS Motion Path bee pattern |
+| Display a new date/time field | `web/lib/date.ts` + component | Import `fmtDatetime`/`fmtDatetimeShort`/`fmtDateOnly`; call `useTimezone()` in component |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `web/app/tokens.css` | Design token SSOT (4-layer architecture) |
-| `web/app/globals.css` | Tailwind v4 entry + focus ring |
-| `web/app/layout.tsx` | `ThemeProvider` + `I18nProvider` + `QueryClientProvider` |
+| `web/app/globals.css` | Tailwind v4 entry + focus ring + `@keyframes bee-fly` + `.bee-particle` |
+| `web/app/layout.tsx` | `ThemeProvider` + `I18nProvider` + `TimezoneProvider` + `QueryClientProvider` |
 | `web/components/nav.tsx` | Collapsible sidebar + `HexLogo` SVG |
 | `web/components/theme-provider.tsx` | `data-theme` switcher, `localStorage('hg-theme')` |
 | `web/components/i18n-provider.tsx` | react-i18next wrapper |
+| `web/components/timezone-provider.tsx` | `TimezoneProvider` + `useTimezone()` hook; cookie `veronex-tz` |
+| `web/lib/date.ts` | Centralized date formatters (`fmtDatetime`, `fmtDatetimeShort`, `fmtDateOnly`, `fmtHourLabel`) |
 | `web/i18n/config.ts` | `locales[]`, `localeLabels{}`, `defaultLocale` |
 | `web/i18n/index.ts` | i18next init |
 | `web/messages/en.json` | Source of truth for all i18n keys |
@@ -32,6 +36,7 @@
 | `web/components/donut-chart.tsx` | Shared `DonutChart` component — always use instead of inline `<PieChart>` |
 | `web/lib/api.ts` | All API client functions |
 | `web/lib/types.ts` | All TypeScript types |
+| `web/hooks/use-inference-stream.ts` | `useInferenceStream` — 5 s polling → `FlowEvent[]` for network flow visualization |
 | `web/package.json` | Next.js 15, Tailwind v4, TanStack Query, shadcn/ui |
 
 ---
@@ -104,27 +109,43 @@ Dark status colors: `#34d399` / `#fb7185` / `#fbbf24` / `#60a5fa`
 ## Nav Sidebar (nav.tsx)
 
 ```
-Overview          → /overview
+▼ Monitor         ← collapsible group (LayoutDashboard), id='overview', default OPEN
+  ├── Dashboard   → /overview         (LayoutDashboard icon)
+  ├── Network Flow→ /flow             (Workflow icon)
+  ├── Usage       → /usage            (BarChart2 icon)
+  └── Performance → /performance      (Gauge icon)
 Jobs              → /jobs
 API Keys          → /keys
 Servers           → /servers           ← standalone link (HardDrive icon)
 ▼ Providers       ← collapsible group (Server icon)
   ├── Ollama      → /providers?s=ollama
   └── Gemini      → /providers?s=gemini
-Usage             → /usage
-Performance       → /performance
-Test              → /api-test
-API Docs          → /api-docs
 
-Footer: v0.1.0 · [🌐 EN ▾] · [☀/🌙]
+Footer (always visible):
+  API Docs        → /api-docs          ← BookOpen icon, below auth links
+  [Accounts]      → /accounts          ← JWT only
+  [Audit Log]     → /audit             ← JWT + super role only
+  username · logout
+  v0.1.0 · [⚙️ Settings] · [☀/🌙]
 ```
+
+**Settings gear (⚙️ `Settings2` icon)**: opens a Dialog with two rows:
+- **Language row**: `🌐` + "Language" label + Select (en / ko / ja)
+- **Timezone row**: `🕐` + "Timezone" label + Select (11 presets + "Custom…")
+  - Selecting "Custom…" reveals an inline IANA input within the same dialog (no nested modal)
+  - Save/Cancel buttons; Enter key also saves; validation via `isValidTimezone()`
+
+Language and timezone selectors were moved out of the footer bar and into this dialog to prevent overflow in the narrow sidebar. The footer bar now only shows: version text | ⚙️ icon | 🌙/☀️ icon.
 
 - Width: `w-56` expanded / `w-14` collapsed; `transition-all duration-200`
 - Collapse state: `localStorage('nav-collapsed')`
-- Group state: `localStorage('nav-group-{id}')`, auto-open on active route
+- Group state: `localStorage('nav-group-{id}')`, default open for `id: 'overview'`; auto-open on active child route
 - `NavContent` (uses `useSearchParams`) wrapped in `<Suspense>` in outer `Nav`
-- Servers: top-level `NavLink` at `/servers` (no sub-items)
+- `NavGroupChild.section` optional: if set → `?s=` query param matching; if absent → `pathname === child.href`
+- `isGroupActive()` checks all children via `isChildActive()` (not `basePath.startsWith`)
+- Servers: top-level `NavLink` at `/servers` (not grouped with Providers)
 - Providers: `NavGroup` with `id: 'providers'`, `basePath: '/providers'`
+- Monitor: `NavGroup` with `id: 'overview'`, `labelKey: 'nav.monitor'`, `basePath: '/overview'`; children at `/overview`, `/flow`, `/usage`, `/performance`
 
 ### Mobile Responsive Nav (hamburger slide sidebar)
 
@@ -224,6 +245,7 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/compon
 ## i18n
 
 - 3 locales: `en` (default), `ko`, `ja`
+- Labels: `en: 'English'`, `ko: '한국어'`, `ja: '日本語'`
 - Detection: `localStorage('hg-lang')` → `navigator.language` → `'en'`
 
 ### Adding i18n Keys
@@ -235,52 +257,167 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/compon
 
 ---
 
-## Overview Page (`/overview`)
+## Timezone
+
+Timezone is stored in cookie `veronex-tz` (1-year expiry, `SameSite=Lax`).
+
+### Supported Timezones (IANA)
+
+Preset timezones appear in the **Settings dialog** (⚙️ gear in nav footer). Users can also enter any IANA identifier via "Custom…" (shown inline within the same dialog).
+
+| Value | i18n key | Label (en) | Offset |
+|-------|----------|------------|--------|
+| `UTC` | `common.utc` | UTC | UTC+0 |
+| `America/New_York` | `common.eastern` | Eastern (ET) | UTC-5/-4 |
+| `America/Chicago` | `common.central` | Central (CT) | UTC-6/-5 |
+| `America/Denver` | `common.mountain` | Mountain (MT) | UTC-7/-6 |
+| `America/Los_Angeles` | `common.pacific` | Pacific (PT) | UTC-8/-7 |
+| `Europe/London` | `common.london` | London (GMT) | UTC+0/+1 |
+| `Africa/Johannesburg` | `common.johannesburg` | South Africa (SAST) | UTC+2 |
+| `Asia/Seoul` | `common.kst` | Korea (KST) | UTC+9 |
+| `Asia/Tokyo` | `common.jst` | Japan (JST) | UTC+9 |
+| `Australia/Sydney` | `common.sydney` | Sydney (AEST) | UTC+10/+11 |
+| `Pacific/Auckland` | `common.auckland` | Auckland (NZST) | UTC+12/+13 |
+| _(any IANA)_ | `common.custom` | Custom… | — |
+
+**Custom timezone**: Selecting "Custom…" in the timezone Select reveals an inline IANA input within the Settings dialog (no nested modal). The user enters any IANA timezone string (e.g. `America/Sao_Paulo`), saves with Enter or the Save button. Validated via `isValidTimezone()` (Intl.DateTimeFormat). The `Timezone` type is `PresetTimezone | (string & {})` — accepts any valid IANA string. The cookie stores the raw IANA string; on reload, `readCookie()` validates with `isValidTimezone()` before accepting.
+
+### Locale → Default Timezone
+
+When `veronex-tz` cookie is absent, `TimezoneProvider` picks a default from locale:
+
+| Locale | Default |
+|--------|---------|
+| `ko` | `Asia/Seoul` |
+| `ja` | `Asia/Tokyo` |
+| `en` (or any) | `America/New_York` |
+
+Changing language in the nav calls `resetToLocaleDefault(locale)` → only takes effect if no explicit cookie. User-selected timezone is sticky.
+
+### Date Formatter SSOT (`web/lib/date.ts`)
+
+All date display goes through these functions — **never call `toLocaleString()` or `toLocaleDateString()` directly**:
+
+```ts
+import { useTimezone } from '@/components/timezone-provider'
+import { fmtDatetime, fmtDatetimeShort, fmtDateOnly, fmtHourLabel } from '@/lib/date'
+
+// In component:
+const { tz } = useTimezone()
+
+fmtDatetime(iso, tz)        // "Mar 1, 12:34:56" — job detail, audit
+fmtDatetimeShort(iso, tz)   // "Mar 1, 12:34"    — dashboard recent jobs
+fmtDateOnly(iso, tz)        // "Mar 1, 2026"     — API keys, registered_at
+fmtHourLabel(iso, tz)       // "3/1 14h"         — hourly chart x-axis
+```
+
+Backend always returns ISO 8601 UTC strings. All timezone conversion is client-side only.
+
+### Backend UTC Guarantee
+
+All PostgreSQL columns use `TIMESTAMPTZ` → stored and returned as UTC. sqlx deserializes to `DateTime<Utc>` → serialized to ISO 8601 with `Z` suffix. No timezone info on the server.
+
+---
+
+## Dashboard Page (`/overview`)
 
 Integrated system health dashboard — answers "is the system healthy?" at a glance.
+No tabs — renders `DashboardTab` directly.
 
-### Data Fetches (all parallel, graceful degradation)
+### Component Files
+
+| File | Role |
+|------|------|
+| `web/app/overview/page.tsx` | Data fetching (11 queries) + renders `DashboardTab` |
+| `web/app/overview/components/dashboard-tab.tsx` | All 8 KPI/chart sections |
+
+---
+
+## Network Flow Page (`/flow`)
+
+Real-time inference traffic visualization. Shows `ProviderFlowPanel` + `LiveFeed`.
+
+### Component Files
+
+| File | Role |
+|------|------|
+| `web/app/flow/page.tsx` | Data fetching (backends + servers only) + renders `NetworkFlowTab` |
+| `web/app/overview/components/network-flow-tab.tsx` | Composes ProviderFlowPanel + LiveFeed |
+| `web/app/overview/components/provider-flow-panel.tsx` | SVG topology: Veronex API → Ollama → GPU servers / Gemini |
+| `web/app/overview/components/live-feed.tsx` | Scrollable real-time event list |
+
+---
+
+### Dashboard Tab
+
+All 8 sections are in `dashboard-tab.tsx`. `page.tsx` passes data as props.
+
+#### Data Fetches (all parallel, graceful degradation)
 
 | Query | Source | refetch | Notes |
 |-------|--------|---------|-------|
 | `api.stats()` | PostgreSQL | 30s | includes `test_keys` count |
 | `api.backends()` | PostgreSQL | 30s | |
 | `api.servers()` | PostgreSQL | 60s, retry:false | |
-| `useQueries` per server → `api.serverMetrics(id)` | node-exporter | 30s, retry:false | live W |
+| `useQueries` per server → `api.serverMetrics(id)` | node-exporter | 30s, retry:false | live W, scrape_ok |
 | `useQueries` per server → `api.serverMetricsHistory(id, 1440)` | ClickHouse | stale 5m, retry:false | 60-day kWh history |
-| `api.performance(24)` | ClickHouse | 60s, retry:false | |
+| `api.performance(24)` | ClickHouse | 60s, retry:false | P50/P95/P99 + hourly |
+| `api.performance(168)` | ClickHouse | 5min, retry:false | 7-day perf (`perf7d`) |
+| `api.performance(720)` | ClickHouse | 10min, retry:false | 30-day perf (`perf30d`) |
 | `api.usageAggregate(24)` | ClickHouse | 60s, retry:false | |
 | `api.usageBreakdown(24)` | ClickHouse | 60s, retry:false | provider per model |
 | `api.jobs('limit=10')` | PostgreSQL | 30s | |
 
 ClickHouse-dependent values show `"—"` when ClickHouse is offline (graceful degradation).
 
-### Power Calculation (frontend-only)
+#### Server Health (client-side derived)
 
 ```ts
-// Live watt sum across all servers
-const totalPowerW = serverMetricQueries.reduce((sum, q) =>
-  sum + q.data?.gpus.reduce((gs, g) => gs + (g.power_w ?? 0), 0), 0)
-
-// Actual kWh from history — hours=1440 returns 60-min buckets → 1 point = 1 kWh/kW
-function sumKwhInWindow(fromHoursAgo: number, toHoursAgo: number): number {
-  const now     = Date.now()
-  const startMs = now - fromHoursAgo * 3_600_000
-  const endMs   = now - toHoursAgo   * 3_600_000
-  // sum gpu_power_w / 1000 for all points within [startMs, endMs)
-}
-
-// fromHoursAgo MUST be > toHoursAgo (older bound first)
-const kwhThisWeek  = sumKwhInWindow(168, 0)    // or projected from live W if no history
-const kwhLastWeek  = sumKwhInWindow(336, 168)
-const weekDelta    = kwhThisWeek - kwhLastWeek  // positive = more than last week (warning)
-
-const kwhThisMonth = sumKwhInWindow(720, 0)
-const kwhLastMonth = sumKwhInWindow(1440, 720)
-const monthDelta   = kwhThisMonth - kwhLastMonth
+const serverStatus = servers.map((s, i) => {
+  const m = serverMetricQueries[i]?.data
+  const connected = m?.scrape_ok === true
+  const maxTemp = connected ? max(m.gpus[*].temp_c) : null
+  const thermal = maxTemp == null ? 'unknown'
+    : maxTemp >= 90 ? 'critical' : maxTemp >= 80 ? 'warning' : 'normal'
+  return { id, name, connected, maxTemp, thermal }
+})
 ```
 
-### Provider Taxonomy
+`ThermalLevel`: `'normal' | 'warning' | 'critical' | 'unknown'`
+
+- `connected` = `scrape_ok === true` from `NodeMetrics`
+- `maxTemp` = `reduce(max, gpus[*].temp_c)` — works for 1-GPU APU (AMD AI 395+) and multi-GPU NVIDIA equally
+- Server Health card always shows ALL registered servers (not just hot ones)
+- Thermal Alert banner is separate, shown only when ≥1 server is ≥80°C
+- **Status counts** (header row, shown only when servers > 0):
+  - Connection: `connectedCount` (always shown) + `unreachableCount` (shown only when > 0)
+  - Thermal: `normalCount` (always shown) + `warningCount` / `criticalCount` (shown only when > 0)
+  - Derived from `serverStatus[]` in the component — no extra API call
+
+#### Power Calculation (frontend-only)
+
+```ts
+// Actual kWh from history — hours=1440 returns 60-min buckets → 1 point = 1 kWh/kW
+function sumKwhInRange(startMs: number, endMs: number): number
+function sumKwhInWindow(fromHoursAgo: number, toHoursAgo: number): number
+// fromHoursAgo MUST be > toHoursAgo (older bound first)
+
+// History span — to show "N days of data" when accumulating
+const historySpanD = (maxTs - minTs) / 86_400_000
+
+// Daily Power: today midnight → now vs same weekday last week (full day)
+const kwhToday     = sumKwhInRange(midnight, now)
+const kwhSameDay7d = sumKwhInRange(midnight - 7d, midnight - 6d)
+const dailyDelta   = kwhSameDay7d > 0 ? kwhToday - kwhSameDay7d : null
+
+const kwhThisWeek  = sumKwhInWindow(168, 0)
+const kwhLastWeek  = sumKwhInWindow(336, 168)
+const weekDelta    = kwhLastWeek > 0 ? kwhThisWeek - kwhLastWeek : null
+```
+
+**Power history accumulation**: When `historySpanD < 7` (weekly) or `< 30` (monthly), show `t('overview.daysData', { n })` as subtitle instead of delta — explains "0.0 kWh" during early history collection. This is normal on new deployments.
+
+#### Provider Taxonomy
 
 Backends are grouped into two **generic categories** (future-proof):
 
@@ -289,67 +426,327 @@ Backends are grouped into two **generic categories** (future-proof):
 | **Local** | `overview.localProviders` | `Server` | `['ollama']` | Ollama, vLLM, LocalAI |
 | **API Services** | `overview.apiProviders` | `Globe` | `['gemini']` | Gemini, OpenAI, Anthropic |
 
-```ts
-const LOCAL_TYPES = ['ollama'] as const   // extend when adding self-hosted backends
-const API_TYPES   = ['gemini'] as const   // extend when adding cloud API backends
-const localBs = backends?.filter(b => LOCAL_TYPES.includes(b.backend_type)) ?? []
-const apiBs   = backends?.filter(b => API_TYPES.includes(b.backend_type))   ?? []
-```
-
 **Rule**: Never hard-code "Ollama" or "Gemini" labels in Overview. Use `localProviders`/`apiProviders` i18n keys.
 
-### Layout (7 sections)
+#### Thermal Alert (conditional banner — between Section 1 and Section 2)
+
+Shown only when ≥1 registered GPU server reports GPU temp ≥ 80°C.
 
 ```
-Header: h1 "Overview" + subtitle "System health at a glance"
+Thresholds:
+  temp < 80°C  → hidden (no DOM element)
+  80–89°C      → WARNING: amber border/bg (border-status-warning/40 bg-status-warning/5)
+  ≥ 90°C       → CRITICAL: red border/bg (border-status-error/40 bg-status-error/5)
+  Banner border switches to red if ANY server is critical.
 
-Section 1 — System KPIs (grid-cols-2 sm:grid-cols-3 xl:grid-cols-5)
-  [Providers N/M online] [In Queue N] [24h Requests] [Success %] [P95 Latency]
-  - Providers: online count / total backends
-  - P95: fmtMs() — auto-converts to s/m/h
+Layout:
+  [🌡 Thermal Alert — N server(s) need attention]      [Check Servers →]
+  [🌡 gpu-node-1  95°C  Critical]  [🌡 gpu-node-2  83°C  Warning]
+```
 
-Section 2 — Infrastructure (grid-cols-2 sm:grid-cols-4)
-  [GPU Servers: N registered, N live]
-  [GPU Power: X.XX kW]
-  [Weekly kWh: X.X kWh | ±delta vs prev week]   ← actual history, colored delta
-  [Monthly kWh: X.X kWh | ±delta vs prev month]  ← actual history, colored delta
-  - delta > 0 (higher consumption): text-status-warning-fg
-  - delta < 0 (lower consumption):  text-status-success-fg
-  - No history: shows live-W projection, static "prev week/month" label
+i18n keys: `overview.thermalAlert`, `overview.thermalAlertDesc`, `overview.tempCritical`, `overview.tempWarning`, `overview.checkServers`.
 
-Section 3 — Provider Status + API Keys (grid-cols-1 md:grid-cols-2)
-  Left: "Provider Status" card
-    Server icon · "Local" row:        N online · N degraded · N offline
-    Globe icon  · "API Services" row: N online · N degraded · N offline
-    Footer: "View Providers →" → /providers
-  Right: "API Keys" card
-    active_keys (standard) · test_keys (shown when > 0, blue)
-    Footer: "View Keys →" → /keys
+#### Layout (8 sections)
 
-Section 4 — Request Trend (full-width AreaChart)
-  Total + Success from perf.hourly; hidden if empty
+```
+Section 1 — System KPIs (grid-cols-1 sm:grid-cols-3)
+  [Provider Status N/M online] [Waiting — pending jobs] [Running — active jobs]
 
-Section 5 — Top Models (full-width horizontal BarChart)
-  Data: breakdown.by_model sorted desc by request_count, top 8
+[Thermal Alert — conditional amber/red banner — only when ≥1 server ≥80°C]
+
+Section 2 — Infrastructure (grid-cols-1 md:grid-cols-3)
+  ┌──────────────────────────┐  ┌──────────────────────────────────────────────┐
+  │ Server Health  (3)        │  │ Daily Power    Weekly Power    Monthly Power │
+  │ 🟢 2 Connected  🔴 1 ✗   │  │ (StatsCard)    (StatsCard)     (StatsCard)   │
+  │ ✓ 2 Normal  ⚠ 1 Warning  │  │ 0.02 kWh       0.1 kWh         0.3 kWh      │
+  │ ─────────────────────    │  │ vs same day    N days data      N days data   │
+  │ server-name               │  └──────────────────────────────────────────────┘
+  │   Connected  Normal      │
+  │ server-2                  │
+  │   Unreachable  —         │
+  └──────────────────────────┘
+  Server Health card header: title + (total) + status count row (Connected/Unreachable + Normal/Warning/Critical)
+  Per-server list below: name | ConnectionDot | ThermalBadge — unchanged
+  Power cards show "N.N days of data" subtitle when historySpanD < 7 (weekly) or < 30 (monthly)
+
+Section 3 — Workload + Latency Monitor (grid-cols-1 md:grid-cols-2)
+  ┌─────────────────────────┐  ┌─────────────────────────┐
+  │ Requests & Success      │  │ Latency                 │
+  │          Daily  Weekly  Monthly │          Daily  Weekly  Monthly │
+  │ Requests  1.2K   8.4K   32.1K  │ P50      450ms  480ms  510ms   │
+  │ Success   99%    98%    97%    │ P95      1.2s   1.3s   1.4s    │
+  │                                │ P99      2.1s   2.3s   2.5s    │
+  └─────────────────────────┘  │ [mini sparkline — 24h avg/hr]  │
+                                └─────────────────────────────────┘
+  Row-based tables: metric rows × time-period columns (Daily/Weekly/Monthly)
+  Success rate color: ≥99% green, ≥95% amber, <95% red
+  Latency color: P50 warn≥1s/err≥3s; P95 warn≥2s/err≥5s; P99 warn≥5s/err≥10s
+
+Section 4 — Provider Status + API Keys (grid-cols-1 md:grid-cols-2)
+
+Section 5 — Request Trend (full-width AreaChart, hidden if empty)
+
+Section 6 — Top Models (full-width horizontal BarChart, top 8)
   Bar: Cell per bar — Local=var(--theme-primary), API=var(--theme-status-info)
-  Y-axis: model_name (width=154, max 22 chars + "…")
-  Tooltip: shows backend name
 
-Section 6 — Recent Jobs (full-width Card)
-  Mini table: Model | Provider | Status | Latency | Created (10 rows)
+Section 7 — Recent Jobs (full-width mini table, 10 rows)
 
-Section 7 — Token Summary + Performance (grid-cols-1 md:grid-cols-2)
+Section 8 — Token Summary (full-width)
 ```
 
-### i18n Keys (overview.*)
+#### Status Indicator Rules (2026 Best Practices)
 
-Base keys: `providerStatus`, `queueDepth`, `recentJobs`, `viewAllJobs`,
+Follow Carbon Design System 3-element rule: **color + icon + text** (never color alone — WCAG 1.4.1).
+
+| Status | Component | Color class | Icon | Text |
+|--------|-----------|-------------|------|------|
+| Connected | `ConnectionDot` | `text-status-success-fg` | filled dot | `overview.connected` |
+| Unreachable | `ConnectionDot` | `text-status-error-fg` | filled dot | `overview.unreachable` |
+| Normal (<80°C) | `ThermalBadge` | `text-status-success-fg` | `CheckCircle2` | `overview.tempNormal` |
+| Warning (80–89°C) | `ThermalBadge` | `text-status-warning-fg` | `AlertTriangle` | `overview.tempWarning` |
+| Critical (≥90°C) | `ThermalBadge` | `text-status-error-fg` | `XCircle` | `overview.tempCritical` |
+
+i18n keys: `overview.serverHealth`, `overview.connected`, `overview.unreachable`, `overview.tempNormal`, `overview.tempWarning`, `overview.tempCritical`, `overview.noServers`, `overview.daysData`.
+
+---
+
+### Network Flow Page (`/flow`) — Detail
+
+Real-time **3-phase bidirectional** visualization of the inference pipeline — 4-column topology.
+Data source: `useInferenceStream` hook (`web/hooks/use-inference-stream.ts`).
+Page fetches only `backends` + `servers` (no heavy analytics queries).
+
+#### Layout
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  Provider Flow                                                          │
+│                                                                         │
+│  [Veronex API] ──🟡──→ [Queue] ──🔵──→ [Ollama] ──🔵──→ [gpu-srv-1]  │
+│                                  ·····←🟢·····           ←🟢──         │
+│                          ──🔵──→ [Gemini]         ──🔵──→ [gpu-srv-2]  │
+│                           ·····←🟢·····             ←🟢──              │
+│                                                                         │
+│  N req/5m below each provider node                                      │
+└────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│  Live Feed  ● live · 5s                                                 │
+│  ● llama3 → Ollama → gpu-1   completed  423ms   just now              │
+│  ● qwen3:8b → Ollama          running    —       5s ago               │
+│  ● gemini-pro → Gemini        pending    —       10s ago              │
+└────────────────────────────────────────────────────────────────────────┘
+```
+Status updates live: pending → running → completed/failed/cancelled (latencyMs filled on completion)
+
+Legend: 🟡 enqueue (amber) · 🔵 dispatch (blue) · 🟢 response (green/red, dimmed) · ····· bypass arc
+
+#### Bee phases and routing
+
+Three phases per inference job, matching the real Valkey queue pipeline:
+
+| Phase | Direction | Trigger | Status | Visual |
+|-------|-----------|---------|--------|--------|
+| `enqueue` | API → Queue | New job in Valkey queue | `pending` | Full opacity, yellow (`#facc15`) |
+| `dispatch` | Queue → Provider [→ Server] | `pending → running` | `running` | Full opacity, blue |
+| `response` | Server → Provider → API | Job reaches terminal state | `completed\|failed\|cancelled` | Dimmed (`cc` bg, `28` glow) |
+
+Response arcs **bypass the Queue** — inferences don't re-queue on return.
+
+**Ollama + GPU server**:
+- Enqueue:  1 bee API→Queue
+- Dispatch: hop 1 Queue→Ollama (delay 0 ms) + hop 2 Ollama→Server (delay 700 ms)
+- Response: hop 1 Server→Ollama (delay 0 ms) + hop 2 Ollama→API arc (delay 700 ms, bypasses Queue)
+
+**Ollama, no GPU server linked**:
+- Enqueue:  API→Queue
+- Dispatch: Queue→Ollama only
+- Response: Ollama→API bypass arc only
+
+**Gemini** (no GPU column):
+- Enqueue:  API→Queue
+- Dispatch: Queue→Gemini
+- Response: Gemini→API bypass arc
+
+**Init (first mount)**:
+- `pending` jobs → emit `enqueue` (still waiting in queue)
+- `running` jobs → emit `dispatch` (currently being processed)
+- Completed/failed jobs → no init event
+
+**First-time seen (missed earlier state)**:
+- Seen as `running` → emit `dispatch` only (enqueue already happened)
+- Seen as `completed|failed|cancelled` → emit `response` only
+
+#### useInferenceStream (`web/hooks/use-inference-stream.ts`)
+
+Polls `GET /v1/dashboard/jobs?limit=50` every **5 s** (`refetchIntervalInBackground: false`).
+
+```ts
+export interface FlowEvent {
+  id: string           // jobId + phase + spawn timestamp (unique)
+  jobId: string
+  provider: 'ollama' | 'gemini' | string
+  backendName: string
+  serverName: string | null  // null for Gemini or unlinked Ollama
+  model: string
+  status: Job['status']
+  latencyMs: number | null
+  ts: number           // ms when detected
+  /**
+   * enqueue  = job placed in Valkey queue (API → Queue)
+   * dispatch = job dequeued, sent to Provider/Server (pending → running)
+   * response = inference complete, result returned (running → completed|failed)
+   */
+  phase: 'enqueue' | 'dispatch' | 'response'
+}
+```
+
+**Subsequent polls** (transition rules):
+- `statusMap` miss, status `pending` → `enqueue` event
+- `statusMap` miss, status `running` → `dispatch` event (missed enqueue)
+- `statusMap` miss, status `completed|failed|cancelled` → `response` event (missed pipeline)
+- `pending → running` transition → `dispatch` event
+- `pending|running → completed|failed|cancelled` transition → `response` event
+- Any other change → update `statusMap` only, no event
+
+Rolling list capped at **50 events** (newest first).
+
+#### Bee Particle Animation
+
+**Engine**: CSS Motion Path (`offset-path: path(...)`) + `@keyframes bee-fly` in `globals.css`.
+Not SVG SMIL — CSS is GPU-composited, SMIL is not (2026 best practice).
+
+```css
+/* globals.css */
+@keyframes bee-fly {
+  0%   { offset-distance: 0%;   opacity: 0; }
+  6%   {                        opacity: 1; }
+  88%  {                        opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+.bee-particle {
+  position: absolute;
+  width: 10px; height: 10px; border-radius: 50%;
+  will-change: offset-distance, opacity;   /* GPU layer promotion */
+  animation: bee-fly 1400ms linear forwards;
+  offset-anchor: 50% 50%;
+}
+```
+
+**Coordinate system**: Fixed `450 × 260` logical space.
+A `ResizeObserver` measures the container width and applies `transform: scale(w/450)`
+to the bee overlay div, so `offset-path` coordinates always match `viewBox="0 0 450 260"`.
+
+**State**: `useReducer(beeReducer, [])` — `SPAWN` adds bees, `EXPIRE` removes them.
+Cleanup: `onAnimationEnd` → `EXPIRE` dispatch — no `setTimeout` leaks.
+Max concurrent bees: **30** (`.slice(-MAX_BEES)` in reducer).
+
+**Sequential hop stagger**: `BEE_STAGGER_MS = 700` (half of 1400 ms duration).
+Hop 2 of each leg sets `animationDelay: 700ms` so bees appear to flow segment-by-segment.
+
+**Bee color**:
+- `enqueue` phase: always `#facc15` (yellow-400) — hardcoded `ENQUEUE_COLOR` constant
+- Other phases: `statusColor(e.status)`:
+
+| Status | Color |
+|--------|-------|
+| `pending` | `var(--theme-status-warning)` — amber |
+| `running` | `var(--theme-status-info)` — blue (dispatch bees) |
+| `completed` | `var(--theme-status-success)` — green (response bees) |
+| `failed` | `var(--theme-status-error)` — red (response bees) |
+| `cancelled` | `var(--theme-status-cancelled)` — slate/gray (response bees) |
+
+Response bees: `backgroundColor: color + 'cc'`, `boxShadow: color + '28'` (dimmed).
+`statusDotColor()` in `live-feed.tsx` follows the same mapping.
+
+#### Provider Flow Panel — SVG Topology (450 × 260)
+
+4-column layout. Response arcs from Provider bypass Queue (arc above/below Queue node).
+
+```
+Column    Node          cx    cy    w    h    stroke
+──────────────────────────────────────────────────────────────────────
+Col 1     Veronex API   56    140   96   36   var(--theme-primary)
+Col 2     Queue(Valkey) 172   140   72   36   var(--theme-border)
+Col 3     Ollama        288   80    96   36   nodeStroke(localBs)
+Col 3     Gemini        288   200   96   36   nodeStroke(apiBs)
+Col 4     GPU server i  404   *     72   28   info (active) / border
+
+nodeStroke: online→success | degraded→warning | offline→error | empty→border
+GPU server cy: serverNodeY(i, total) = 80 - (total-1)/2*30 + i*30
+  max 5 servers, GPU_SPACING=30, centered around OLLAMA_CY=80
+
+Bee paths — enqueue (API → Queue):
+  API → Queue:         M 104,140 C 114,140 126,140 136,140
+
+Bee paths — dispatch (Queue → Provider [→ Server]):
+  Queue → Ollama:      M 208,140 C 224,140 224,80  240,80
+  Queue → Gemini:      M 208,140 C 224,140 224,200 240,200
+  Ollama → GPU(cy):    M 336,80  C 360,80  360,{cy} 368,{cy}
+
+Bee paths — response (Provider → API, bypass Queue):
+  Ollama → API (above Queue): M 240,80  C 196,45  148,45  104,140
+  Gemini → API (below Queue): M 240,200 C 196,235 148,235 104,140
+  GPU(cy) → Ollama:    M 368,{cy} C 360,{cy} 360,80 336,80
+
+Guide lines:
+  Dispatch paths:  strokeDasharray='5 4', strokeWidth=1.5 (prominent)
+  Response bypass: strokeDasharray='3 6', strokeWidth=1, opacity=0.5 (faint arc hint)
+```
+
+Active GPU server: info-blue stroke + filled dot (top-right of node)
+  when server has `dispatch`-phase events in last 5 m.
+If >5 linked servers: "+N more" text below last server node.
+Below each provider: `overview.reqLast5m` count (`enqueue`-phase events in last 5 m).
+
+#### Live Feed
+
+Scrollable table (`max-h-64`), newest event first.
+Shows **`enqueue`-phase events only** (job arrivals) — dispatch/response are animation-only.
+Columns: status dot · model (mono) · provider [→ server] · status · latency · time ago.
+Empty state: `overview.waitingRequests`.
+Header pulse dot when events exist: `● live · 5s`.
+
+**Live status updates**: The displayed status is NOT frozen at 'pending' (enqueue time).
+A `latestByJob` map is computed from ALL events (newest-first → first match per jobId = latest state).
+- On `dispatch` event: row updates to `running` (blue dot)
+- On `response` event: row updates to `completed`/`failed`/`cancelled` + latencyMs populated
+- Source: `useMemo` over `events` prop (all phases); O(n) scan, updates every 5s poll
+
+#### i18n Keys (overview.* — Network Flow Page)
+
+| Key | en |
+|-----|----|
+| `networkFlow` | Network Flow |
+| `networkFlowDesc` | Real-time inference traffic visualization |
+| `providerFlow` | Provider Flow |
+| `liveFeed` | Live Feed |
+| `waitingRequests` | Waiting for requests... |
+| `reqLast5m` | `{{count}}` req / 5m |
+
+---
+
+### All i18n Keys (overview.*)
+
+Base: `providerStatus`, `queueDepth`, `recentJobs`, `viewAllJobs`,
 `tokenSummary`, `perfSummary`, `goToProviders`, `goToKeys`, `goToUsage`, `goToPerformance`
 
-Infrastructure / provider keys:
-`infrastructure`, `gpuPower`, `gpuServers`, `weeklyPower`, `monthlyPower`,
-`prevWeek`, `prevMonth`, `topModels`, `noServerPower`,
-`localProviders`, `apiProviders`, `testKeys`, `activeKeysLabel`
+Infrastructure / provider: `infrastructure`, `gpuPower`, `gpuServers`, `weeklyPower`, `monthlyPower`,
+`prevWeek`, `prevMonth`, `topModels`, `noServerPower`, `localProviders`, `apiProviders`,
+`testKeys`, `activeKeysLabel`
+
+Network flow: `networkFlow`, `networkFlowDesc`, `providerFlow`, `liveFeed`, `waitingRequests`, `reqLast5m`
+
+### i18n Keys (nav.*)
+
+`overview` (unused label), `monitor`, `dashboard`, `flow`, `jobs`, `keys`, `usage`, `performance`,
+`servers`, `providers`, `ollama`, `gemini`, `accounts`, `audit`, `apiDocs`
+
+### i18n Keys (common.* — settings dialog)
+
+**Timezone**: `timezone`, `utc`, `eastern`, `central`, `mountain`, `pacific`, `london`, `johannesburg`, `kst`, `jst`, `sydney`, `auckland`, `custom`, `customTimezone`, `customTimezonePlaceholder`, `customTimezoneHint`, `customTimezoneInvalid`
+
+**Settings / language**: `settings`, `language`
 
 ---
 

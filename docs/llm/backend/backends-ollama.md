@@ -1,6 +1,6 @@
 # Backends — Ollama: Registration, Routing & Health
 
-> SSOT | **Last Updated**: 2026-02-27
+> SSOT | **Last Updated**: 2026-03-02 (rev: CachingBackendRegistry — 5s TTL cache wrapping PostgresBackendRegistry)
 
 ## Task Guide
 
@@ -10,8 +10,10 @@
 | Change VRAM dispatch algorithm | `infrastructure/outbound/backend_router.rs` → `dispatch()` function |
 | Change health check logic | `infrastructure/outbound/health_checker.rs` → `check_backend()` |
 | Add new model management endpoint | `backend_handlers.rs` + `router.rs` |
-| Change how busy_backends works | `backend_router.rs` → `busy_backends: Arc<Mutex<HashSet<Uuid>>>` |
+| Change concurrency slot allocation | `infrastructure/outbound/capacity/slot_map.rs` → `ConcurrencySlotMap::update_capacity()` |
+| Change thermal throttle thresholds | `infrastructure/outbound/capacity/thermal.rs` → `ThermalThrottleMap::update()` |
 | Add new LlmBackend DB column | `migrations/` new file + `domain/entities/llm_backend.rs` + `persistence/backend_registry.rs` |
+| Change backend list cache TTL | `persistence/caching_backend_registry.rs` → `CachingBackendRegistry::new()` TTL arg in `main.rs` |
 
 ## Key Files
 
@@ -19,7 +21,8 @@
 |------|---------|
 | `crates/inferq/src/domain/entities/llm_backend.rs` | `LlmBackend` entity |
 | `crates/inferq/src/application/ports/outbound/` | `LlmBackendRegistry` trait |
-| `crates/inferq/src/infrastructure/outbound/persistence/backend_registry.rs` | `PostgresBackendRegistry` |
+| `crates/inferq/src/infrastructure/outbound/persistence/backend_registry.rs` | `PostgresBackendRegistry` (DB adapter) |
+| `crates/inferq/src/infrastructure/outbound/persistence/caching_backend_registry.rs` | `CachingBackendRegistry` (5s TTL cache decorator) |
 | `crates/inferq/src/infrastructure/outbound/ollama/adapter.rs` | `OllamaAdapter` (streaming) |
 | `crates/inferq/src/infrastructure/outbound/backend_router.rs` | `DynamicBackendRouter` + `queue_dispatcher_loop` |
 | `crates/inferq/src/infrastructure/outbound/health_checker.rs` | 30s background health checker |
@@ -137,20 +140,60 @@ SQL for PATCH: `COALESCE($3, api_key_encrypted)` preserves existing key when `ap
 
 ---
 
-## VRAM-Aware Routing (backend_router.rs)
+## Backend Registry Caching
+
+`queue_dispatcher_loop` calls `list_all()` on every job dequeue. Under high throughput this becomes hundreds of Postgres queries/second.
+
+`CachingBackendRegistry` wraps `PostgresBackendRegistry` with a 5-second TTL in-memory cache:
+
+```rust
+// persistence/caching_backend_registry.rs
+pub struct CachingBackendRegistry {
+    inner: Arc<dyn LlmBackendRegistry>,
+    cache: tokio::sync::RwLock<Option<(Vec<LlmBackend>, Instant)>>,
+    ttl:   Duration,   // default: 5s
+}
+```
+
+- **`list_all()`**: shared read lock fast path → return cached if fresh; write lock + DB query on miss.
+  Double-checked locking prevents thundering herd on simultaneous cache misses.
+- **Mutating methods** (`register`, `update_status`, `update`, `deactivate`): forward to inner + invalidate cache.
+- **Read-only methods** (`list_active`, `get`): forward directly (called infrequently, no cache needed).
+
+Wired in `main.rs`:
+```rust
+let backend_registry: Arc<dyn LlmBackendRegistry> = Arc::new(
+    CachingBackendRegistry::new(
+        Arc::new(PostgresBackendRegistry::new(pg_pool.clone())),
+        Duration::from_secs(5),
+    )
+);
+```
+
+---
+
+## VRAM-Aware Routing + Dynamic Concurrency
 
 ```
-queue_dispatcher_loop (BLPOP veronex:queue:jobs):
-  1. list_active() → all active backends
-  2. Ollama: GET /api/ps → available VRAM = total - used
-  3. busy_backends: Arc<Mutex<HashSet<Uuid>>> → exclude in-flight
-  4. Best candidate claimed → busy_backends.insert(id)
-  5. tokio::spawn run_job() → on finish: busy_backends.remove(id)
-  6. No backend free → LPUSH back, sleep 2s
+queue_dispatcher_loop (BLPOP [veronex:queue:jobs, veronex:queue:jobs:test]):
+  1. list_active() → all active backends; VRAM check → sort by available VRAM
+  2. For each candidate backend:
+     a. thermal.get(backend_id) → skip if Hard; skip if Soft+active_slots>0
+     b. slot_map.try_acquire(backend_id, model_name) → OwnedSemaphorePermit (non-blocking)
+     c. If acquired → tokio::spawn run_job(permit)
+        permit.drop() on task exit → slot auto-released (RAII)
+  3. No slot acquired → LPUSH back to queue, sleep 2s
 
 VRAM rules:
   total_vram_mb == 0 → always dispatchable (unlimited)
   total_vram_mb > 0  → prefer backend with most available VRAM
+
+Concurrency slots (ConcurrencySlotMap):
+  Default: 1 slot per (backend, model) until capacity analyzer runs
+  Updated every ~5 min by capacity analyzer using Ollama /api/ps + /api/show + throughput stats
+  Range: 1–8 slots; updated atomically (Semaphore replacement; in-flight permits unaffected)
+
+→ Full concurrency + thermal spec: `docs/llm/backend/capacity.md`
 ```
 
 ---
@@ -161,6 +204,100 @@ VRAM rules:
 - Ollama: `GET /api/tags` → Online | Offline
 - Gemini: `POST /v1beta/models/gemini-2.0-flash:generateContent` (minimal prompt)
 - Status change → `UPDATE llm_backends SET status = ?`
+- After hw_metrics load: `thermal.update(backend_id, temp_c)` → Normal/Soft/Hard
+  - Sets/removes `veronex:throttle:{backend_id}` in Valkey (TTL 90s) for external observability
+
+---
+
+---
+
+## OllamaAdapter — Streaming Protocol (`ollama/adapter.rs`)
+
+`stream_tokens()` dispatches based on `job.messages`:
+
+```rust
+fn stream_tokens(&self, job: &InferenceJob) -> Pin<Box<dyn Stream<...>>> {
+    if let Some(messages) = &job.messages {
+        return self.stream_chat(job.model_name.as_str(), messages.clone());
+    }
+    self.stream_generate(job.model_name.as_str(), job.prompt.as_str())
+}
+```
+
+| Condition | Endpoint | Used by |
+|-----------|----------|---------|
+| `job.messages = None` | `POST /api/generate` | `POST /v1/inference` (VeronexNative) |
+| `job.messages = Some(...)` | `POST /api/chat` | All compat handlers (OpenAI, Ollama, Gemini) |
+
+### `/api/generate` — single prompt
+
+```json
+{ "model": "qwen3:8b", "prompt": "...", "stream": true, "think": false }
+```
+
+```rust
+struct GenerateResponse {
+    response: String,
+    done: bool,
+    done_reason: Option<String>,   // "stop" | "load" | "length"
+    prompt_eval_count: Option<u32>,
+    eval_count: Option<u32>,
+}
+```
+
+### `/api/chat` — multi-turn messages
+
+```json
+{
+  "model": "qwen3:8b",
+  "messages": [
+    {"role": "system", "content": "..."},
+    {"role": "user",   "content": "..."},
+    {"role": "assistant", "content": "..."},
+    {"role": "user",   "content": "..."}
+  ],
+  "stream": true,
+  "think": false
+}
+```
+
+```rust
+struct ChatChunk {
+    message: Option<ChatChunkMessage>,  // { content: Option<String> }
+    done: bool,
+    done_reason: Option<String>,
+    prompt_eval_count: Option<u32>,
+    eval_count: Option<u32>,
+}
+```
+
+### `think: false`
+
+Disables extended thinking (qwen3 and similar). Without it, thinking tokens
+(`<think>…</think>`) inflate `eval_count` and appear in the token stream.
+Non-thinking models silently ignore the field.
+
+### `done_reason: "load"` handling
+
+When Ollama first loads a model into VRAM it emits an intermediate chunk with `done_reason: "load"`.
+Both `stream_generate()` and `stream_chat()` skip these chunks and keep reading.
+Without this fix, the stream terminates prematurely with empty output.
+
+### Token Count Accuracy
+
+| Scenario | `eval_count` value |
+|----------|--------------------|
+| `think: false` (all models) | visible output tokens only ✓ |
+| `think: true` (qwen3 default) | thinking + output tokens (inflated ✗) |
+
+### Format conversion (compat handlers → Ollama messages)
+
+| Entry route | Converter | Notes |
+|-------------|-----------|-------|
+| `POST /v1/chat/completions` | `ChatMessage::into_ollama_value()` | OpenAI `tool_calls[].arguments` (JSON string) → Ollama (JSON object) |
+| `POST /api/chat` | passthrough (already Ollama format) | — |
+| `POST /v1beta/models/*` | `contents_to_ollama()` | Gemini `role: "model"` → `"assistant"`, `functionCall`/`functionResponse` mapped |
+| `POST /v1/test/*` | passthrough or extract prompt | Test Run handlers pass simple messages or None |
 
 ---
 

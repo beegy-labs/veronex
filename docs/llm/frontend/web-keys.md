@@ -1,6 +1,6 @@
 # Web — API Keys Page (/keys)
 
-> SSOT | **Last Updated**: 2026-02-28 (rev: unique name constraint + 409 error)
+> SSOT | **Last Updated**: 2026-03-02 (rev: name is non-unique label; UUIDv7 id is unique identifier; nameTaken removed)
 
 ## Task Guide
 
@@ -25,44 +25,45 @@
 ## Page Layout
 
 ```
-[+ Create Key]
+Title: "API Keys"  Subtitle: "N keys"                              [+ Create Key]
 
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ Name        Prefix         Tenant    Active  RPM/TPM   Created   Actions     │
-│ prod-key    vnx_abc123de…  default   ●       10/1000   Feb 26    [●][🗑]     │
-│ dev-key     vnx_xyz987fe…  default   ○       0/0       Feb 25    [●][🗑]     │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────┐
+│ Name        Prefix         Tenant    Status   Toggle  RPM/TPM  Tier   Created … │
+│ prod-key    vnx_abc123de…  default   ● Active ◉       10/1000  Paid   Feb 26  🗑 │
+│ dev-key     vnx_xyz987fe…  default   ● Active ◉       ∞/∞      Free   Mar  1  🗑 │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Create button** → opens `CreateKeyModal`
-- **Toggle active** (`●/○`) → Switch → `PATCH /v1/keys/{id}` `{ is_active: bool }`
-- **Delete** (`🗑`) → confirm dialog → `DELETE /v1/keys/{id}` (soft-delete)
-  - Confirm message: "Historical usage data is preserved."
-- Soft-deleted keys disappear from list immediately (optimistic update)
+- Single flat `DataTable` — no Standard/Test sections
+- **[+ Create Key]** → `setShowCreate(true)` → `CreateKeyModal`
+- Test keys (`key_type = 'test'`) are excluded server-side by `GET /v1/keys`; never shown here
+- **Tier badge**: `'paid'` = info-colored filled badge; `'free'` = muted outlined badge
+- **Toggle active** → Switch → `PATCH /v1/keys/{id}` `{ is_active: bool }`
+- **Delete** (`🗑`) → `DeleteConfirmModal` → `DELETE /v1/keys/{id}` (soft-delete)
+- Inactive rows: `opacity-50`
+- Empty table → `DataTableEmpty` placeholder text
 
 ---
 
 ## CreateKeyModal
 
 Fields:
-- **Name** (required) — **must be unique per tenant** (case-insensitive, soft-delete aware)
+- **Name** (required) — display label only; **duplicates are allowed** (unique identifier is UUIDv7 `id`)
 - **Tenant ID** (default: "default")
 - **Rate Limit RPM** (0 = unlimited)
 - **Rate Limit TPM** (0 = unlimited)
-- **Expires At** (optional date picker)
+- **Tier** — Select: `Paid` (default) | `Free`
 
-On success: shows `CreateKeyResponse.key` (plaintext) with warning "Save this key now — it will never be shown again."
+On success → `KeyCreatedModal`: shows `CreateKeyResponse.key` plaintext with warning banner.
+Query invalidation on success: `['keys']`.
 
-**409 Conflict** — if a key with the same name (case-insensitive) already exists in the tenant, the backend returns 409. The modal displays `keys.nameTaken` ("A key with that name already exists") instead of the raw HTTP status.
+## State
 
-Error detection pattern:
-```tsx
-mutation.error?.message.startsWith('409')
-  ? t('keys.nameTaken')
-  : mutation.error?.message
+```ts
+const [showCreate, setShowCreate] = useState(false)
 ```
 
-Query invalidation on success: `['keys']`
+`false` = no modal · `true` = create key modal open
 
 ---
 
@@ -81,11 +82,14 @@ toggleKey:   (id, is_active) => req<void>(`/v1/keys/${id}`, {
 ## i18n Keys (messages/en.json → `keys.*`)
 
 ```json
-"createKey", "createTitle", "keyName", "keyNamePlaceholder",
+"title",
+"keysCount",            // "{count} keys" — page subtitle
+"createKey", "createTitle",
+"keyName", "keyNamePlaceholder",
 "tenantId", "rateLimitRpm", "rateLimitTpm", "rateLimitPlaceholder",
+"tier", "tierFree", "tierPaid",
 "creating", "createdTitle", "createdWarning",
 "deleteTitle", "deleteConfirm", "deleting",
-"loadingKeys", "failedKeys", "noKeys", "actions", "deleteKey",
-"nameTaken",    // "A key with that name already exists" — shown on 409
-"rpmTpm", "prefix", "tenant", "expiresAt"
+"loadingKeys", "failedKeys", "actions", "deleteKey",
+"rpmTpm", "prefix", "tenant", "name", "status", "activeToggle", "createdAt"
 ```
