@@ -262,6 +262,13 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
                     drm_vram_used.insert(card.to_string(), value);
                 }
             }
+            // node-exporter ≥0.16 uses "vram_size_bytes"; older versions "vram_total_bytes".
+            // Accept both; "total" overwrites "size" if both appear.
+            "node_drm_memory_vram_size_bytes" => {
+                if let Some(card) = get_label(metric_part, "card") {
+                    drm_vram_total.entry(card.to_string()).or_insert(value);
+                }
+            }
             "node_drm_memory_vram_total_bytes" => {
                 if let Some(card) = get_label(metric_part, "card") {
                     drm_vram_total.insert(card.to_string(), value);
@@ -315,11 +322,13 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
     let gpus: Vec<GpuNodeMetrics> = if !drm_cards.is_empty() {
         drm_cards
             .iter()
-            .map(|card| {
-                // Correlate DRM card index with amdgpu hwmon chip by position.
-                let card_idx: usize =
-                    card.trim_start_matches("card").parse().unwrap_or(0);
-                let chip = chips_sorted.get(card_idx);
+            .enumerate()
+            .map(|(card_position, card)| {
+                // Correlate by sorted position, not by the number in the card name.
+                // AMD APUs (e.g. AI 395+) expose as "card1" while there is only one
+                // amdgpu hwmon chip at chips_sorted[0]; using the parsed card_idx
+                // would give chips_sorted[1] = None and lose temp/power data.
+                let chip = chips_sorted.get(card_position);
 
                 GpuNodeMetrics {
                     card: card.clone(),
