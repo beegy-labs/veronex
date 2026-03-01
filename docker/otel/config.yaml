@@ -63,6 +63,19 @@ exporters:
       max_interval: 30s
       max_elapsed_time: 300s
 
+  kafka/logs:
+    brokers: [redpanda:9092]
+    topic: otel-logs
+    encoding: otlp_json
+    timeout: 10s
+    producer:
+      compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
   # Debug logging (disable in production).
   debug:
     verbosity: basic
@@ -78,3 +91,7 @@ service:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [kafka/traces]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [kafka/logs]

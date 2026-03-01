@@ -1,3 +1,5 @@
+name: veronex
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -40,7 +42,6 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./docker/clickhouse/init.sql:/docker-entrypoint-initdb.d/01_init.sql
-      - ./docker/clickhouse/02_kafka.sql:/docker-entrypoint-initdb.d/02_kafka.sql
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
       interval: 10s
@@ -61,25 +62,39 @@ services:
     environment:
       DATABASE_URL: postgres://veronex:veronex@postgres:5432/veronex
       VALKEY_URL: redis://valkey:6379
-      CLICKHOUSE_URL: http://clickhouse:8123
-      CLICKHOUSE_USER: veronex
-      CLICKHOUSE_PASSWORD: veronex
-      CLICKHOUSE_DB: veronex
-      CLICKHOUSE_ENABLED: "true"
       OLLAMA_URL: http://host.docker.internal:11434
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      BOOTSTRAP_API_KEY: ${BOOTSTRAP_API_KEY:-veronex-bootstrap-admin-key}
-      REDPANDA_URL: redpanda:9092
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      ANALYTICS_URL: http://veronex-analytics:3003
+      ANALYTICS_SECRET: ${ANALYTICS_SECRET:-veronex-analytics-internal-secret}
       RUST_LOG: info
     depends_on:
       postgres:
         condition: service_healthy
       valkey:
         condition: service_healthy
+
+  veronex-analytics:
+    build:
+      context: .
+      dockerfile: crates/veronex-analytics/Dockerfile
+    expose:
+      - "3003"
+    environment:
+      PORT: "3003"
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: veronex
+      CLICKHOUSE_PASSWORD: veronex
+      CLICKHOUSE_DB: veronex
+      OTEL_HTTP_ENDPOINT: http://otel-collector:4318
+      ANALYTICS_SECRET: ${ANALYTICS_SECRET:-veronex-analytics-internal-secret}
+      RUST_LOG: info
+    depends_on:
       clickhouse:
         condition: service_healthy
-      redpanda:
+      otel-collector:
         condition: service_healthy
+    restart: unless-stopped
 
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
@@ -132,14 +147,12 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
-        NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${BOOTSTRAP_API_KEY:-veronex-bootstrap-admin-key}
     ports:
       - "3002:3002"
     environment:
       PORT: 3002
       HOSTNAME: "0.0.0.0"
       NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
-      NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${BOOTSTRAP_API_KEY:-veronex-bootstrap-admin-key}
     depends_on:
       - veronex
 
