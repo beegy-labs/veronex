@@ -24,10 +24,17 @@ pub struct ApiKey {
     /// Key category: `"standard"` (production) or `"test"` (dev/testing).
     #[serde(default = "default_key_type")]
     pub key_type: String,
+    /// Billing tier: `"free"` or `"paid"` (default).
+    #[serde(default = "default_tier")]
+    pub tier: String,
 }
 
 fn default_key_type() -> String {
     "standard".to_string()
+}
+
+fn default_tier() -> String {
+    "paid".to_string()
 }
 
 /// Returned once at key creation — contains the plaintext key.
@@ -58,6 +65,7 @@ mod tests {
             created_at: Utc::now(),
             deleted_at: None,
             key_type: "standard".to_string(),
+            tier: "paid".to_string(),
         }
     }
 
