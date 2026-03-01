@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/inferq",
+    "crates/inferq-agent",
+    "crates/veronex-analytics",
+]
+resolver = "2"
