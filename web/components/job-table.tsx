@@ -144,6 +144,9 @@ function JobDetailModal({
                 {data.account_name && (
                   <MetaItem label={t('test.runner')} value={data.account_name} accent />
                 )}
+                {data.request_path && (
+                  <MetaItem label={t('jobs.endpoint')} value={data.request_path} />
+                )}
               </div>
 
               {/* Prompt */}
@@ -275,6 +278,7 @@ export default function JobTable({
             <TableHead>{t('jobs.model')}</TableHead>
             <TableHead>{t('jobs.backend')}</TableHead>
             <TableHead>{t('jobs.apiKey')}</TableHead>
+            <TableHead>{t('jobs.endpoint')}</TableHead>
             <TableHead>{t('jobs.status')}</TableHead>
             <TableHead>{t('jobs.createdAt')}</TableHead>
             <TableHead className="text-right">{t('jobs.ttft')}</TableHead>
@@ -297,6 +301,9 @@ export default function JobTable({
                 {job.source === 'test'
                   ? (job.account_name ?? <span className="text-muted-foreground">—</span>)
                   : (job.api_key_name ?? <span className="text-muted-foreground">—</span>)}
+              </TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground max-w-[160px] truncate" title={job.request_path ?? undefined}>
+                {job.request_path ?? <span className="opacity-40">—</span>}
               </TableCell>
               <TableCell><StatusBadge status={job.status} /></TableCell>
               <TableCell className="text-xs text-muted-foreground">

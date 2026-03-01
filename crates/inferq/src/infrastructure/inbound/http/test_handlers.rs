@@ -111,7 +111,7 @@ pub async fn test_completions(
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, &backend_type, None, account_id, JobSource::Test, ApiFormat::OpenaiCompat, None)
+        .submit(&prompt, &model, &backend_type, None, account_id, JobSource::Test, ApiFormat::OpenaiCompat, None, Some("/v1/test/completions".to_string()))
         .await
     {
         Ok(id) => id,
@@ -291,7 +291,7 @@ pub async fn test_ollama_chat(
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, "ollama", None, Some(claims.sub), JobSource::Test, ApiFormat::OllamaNative, None)
+        .submit(&prompt, &model, "ollama", None, Some(claims.sub), JobSource::Test, ApiFormat::OllamaNative, None, Some("/v1/test/api/chat".to_string()))
         .await
     {
         Ok(id) => id,
@@ -329,7 +329,7 @@ pub async fn test_ollama_generate(
 
     let job_id = match state
         .use_case
-        .submit(&req.prompt, &model, "ollama", None, Some(claims.sub), JobSource::Test, ApiFormat::OllamaNative, None)
+        .submit(&req.prompt, &model, "ollama", None, Some(claims.sub), JobSource::Test, ApiFormat::OllamaNative, None, Some("/v1/test/api/generate".to_string()))
         .await
     {
         Ok(id) => id,
@@ -499,7 +499,7 @@ pub async fn test_gemini_request(
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, "ollama", None, Some(claims.sub), JobSource::Test, ApiFormat::GeminiNative, None)
+        .submit(&prompt, &model, "ollama", None, Some(claims.sub), JobSource::Test, ApiFormat::GeminiNative, None, Some("/v1/test/v1beta/models".to_string()))
         .await
     {
         Ok(id) => id,

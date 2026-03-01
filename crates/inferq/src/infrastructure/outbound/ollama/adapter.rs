@@ -65,6 +65,12 @@ struct ChatChunk {
 struct ChatChunkMessage {
     #[serde(default)]
     content: Option<String>,
+    /// Tool call responses from function-calling models (e.g. qwen3-coder).
+    /// When the model responds with a tool call instead of text, `content` is None
+    /// and the call details are here.  We serialise them as JSON so they are stored
+    /// in result_text and visible in the dashboard instead of being silently dropped.
+    #[serde(default)]
+    tool_calls: Option<serde_json::Value>,
 }
 
 #[async_trait]
@@ -253,12 +259,20 @@ impl OllamaAdapter {
                         (None, None)
                     };
 
-                    let content = chunk
-                        .message
-                        .as_ref()
-                        .and_then(|m| m.content.as_deref())
-                        .unwrap_or("")
-                        .to_string();
+                    // Prefer text content; fall back to serialised tool_calls JSON
+                    // so function-calling models (e.g. qwen3-coder) don't produce
+                    // silent empty responses.
+                    let content = match chunk.message.as_ref() {
+                        Some(m) if m.content.as_deref().is_some_and(|c| !c.is_empty()) => {
+                            m.content.clone().unwrap_or_default()
+                        }
+                        Some(m) if m.tool_calls.is_some() => {
+                            serde_json::to_string(m.tool_calls.as_ref().unwrap())
+                                .unwrap_or_default()
+                        }
+                        Some(m) => m.content.clone().unwrap_or_default(),
+                        None => String::new(),
+                    };
 
                     yield StreamToken {
                         value: content,

@@ -221,6 +221,7 @@ async fn stream_generate(
             JobSource::Api,
             ApiFormat::GeminiNative,
             Some(messages_json),
+            Some(format!("/v1beta/models/{}:streamGenerateContent", model)),
         )
         .await
     {
@@ -317,6 +318,7 @@ async fn generate_content(
             JobSource::Api,
             ApiFormat::GeminiNative,
             Some(messages_json),
+            Some(format!("/v1beta/models/{}:generateContent", model)),
         )
         .await
     {

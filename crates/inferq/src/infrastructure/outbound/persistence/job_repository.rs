@@ -128,6 +128,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
     let source_str: String = row.try_get("source").unwrap_or_else(|_| "api".to_string());
     let api_format_str: String = row.try_get("api_format").unwrap_or_else(|_| "openai_compat".to_string());
     let backend_id: Option<Uuid> = row.try_get("backend_id").unwrap_or(None);
+    let request_path: Option<String> = row.try_get("request_path").unwrap_or(None);
 
     Ok(InferenceJob {
         id: JobId(id),
@@ -151,6 +152,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         backend_id,
         api_format: str_to_api_format(&api_format_str),
         messages: None,
+        request_path,
     })
 }
 
@@ -166,8 +168,8 @@ impl JobRepository for PostgresJobRepository {
     async fn save(&self, job: &InferenceJob) -> Result<()> {
         sqlx::query(
             "INSERT INTO inference_jobs
-                 (id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                 (id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
              ON CONFLICT (id) DO UPDATE SET
                  status            = EXCLUDED.status,
                  error             = EXCLUDED.error,
@@ -201,6 +203,7 @@ impl JobRepository for PostgresJobRepository {
         .bind(source_to_str(job.source))
         .bind(job.backend_id)
         .bind(api_format_to_str(job.api_format))
+        .bind(&job.request_path)
         .execute(&self.pool)
         .await
         .context("failed to save inference job")?;
@@ -210,7 +213,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn get(&self, job_id: &JobId) -> Result<Option<InferenceJob>> {
         let row = sqlx::query(
-            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format
+            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path
              FROM inference_jobs
              WHERE id = $1",
         )
@@ -238,7 +241,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn list_pending(&self) -> Result<Vec<InferenceJob>> {
         let rows = sqlx::query(
-            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format
+            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path
              FROM inference_jobs
              WHERE status IN ('pending', 'running')
              ORDER BY created_at ASC",
