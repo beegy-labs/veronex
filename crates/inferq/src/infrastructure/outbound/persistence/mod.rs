@@ -1,3 +1,7 @@
+pub mod account_repository;
+pub mod caching_backend_registry;
+pub mod capacity_settings_repository;
+pub mod model_capacity_repository;
 pub mod api_key_repository;
 pub mod backend_model_selection;
 pub mod gemini_model_repository;
@@ -10,3 +14,4 @@ pub mod job_repository;
 pub mod model_repository;
 pub mod ollama_model_repository;
 pub mod ollama_sync_job_repository;
+pub mod session_repository;

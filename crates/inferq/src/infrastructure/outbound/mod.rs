@@ -1,3 +1,5 @@
+pub mod analytics;
+pub mod capacity;
 pub mod backend_router;
 pub mod gemini;
 pub mod health_checker;

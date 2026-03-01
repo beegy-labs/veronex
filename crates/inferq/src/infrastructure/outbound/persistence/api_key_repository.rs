@@ -52,6 +52,10 @@ fn row_to_api_key(row: &sqlx::postgres::PgRow) -> Result<ApiKey> {
             .try_get::<Option<String>, _>("key_type")
             .unwrap_or(None)
             .unwrap_or_else(|| "standard".to_string()),
+        tier: row
+            .try_get::<Option<String>, _>("tier")
+            .unwrap_or(None)
+            .unwrap_or_else(|| "paid".to_string()),
     })
 }
 
@@ -59,8 +63,8 @@ fn row_to_api_key(row: &sqlx::postgres::PgRow) -> Result<ApiKey> {
 impl ApiKeyRepository for PostgresApiKeyRepository {
     async fn create(&self, key: &ApiKey) -> Result<()> {
         sqlx::query(
-            "INSERT INTO api_keys (id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, key_type)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            "INSERT INTO api_keys (id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, key_type, tier)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(key.id)
         .bind(&key.key_hash)
@@ -73,6 +77,7 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
         .bind(key.expires_at)
         .bind(key.created_at)
         .bind(&key.key_type)
+        .bind(&key.tier)
         .execute(&self.pool)
         .await
         .context("failed to create api key")?;
@@ -82,7 +87,7 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
 
     async fn get_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>> {
         let row = sqlx::query(
-            "SELECT id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at, key_type
+            "SELECT id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at, key_type, tier
              FROM api_keys WHERE key_hash = $1 AND deleted_at IS NULL",
         )
         .bind(key_hash)
@@ -98,7 +103,7 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
 
     async fn list_by_tenant(&self, tenant_id: &str) -> Result<Vec<ApiKey>> {
         let rows = sqlx::query(
-            "SELECT id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at, key_type
+            "SELECT id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at, key_type, tier
              FROM api_keys WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC",
         )
         .bind(tenant_id)
