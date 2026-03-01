@@ -1,3 +1,9 @@
+pub mod account;
+pub use account::Account;
+
+pub mod session;
+pub use session::Session;
+
 pub mod api_key;
 pub use api_key::*;
 
@@ -6,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::enums::{
-    BackendType, FinishReason, JobSource, JobStatus, LlmBackendStatus, ModelStatus,
+    ApiFormat, BackendType, FinishReason, JobSource, JobStatus, LlmBackendStatus, ModelStatus,
 };
 use super::value_objects::{JobId, ModelName, Prompt};
 
@@ -26,9 +32,12 @@ pub struct InferenceJob {
     /// in-memory only).
     #[serde(default)]
     pub result_text: Option<String>,
-    /// The API key that submitted this job. `None` for internally-created jobs.
+    /// The API key that submitted this job. `None` for Test Run jobs.
     #[serde(default)]
     pub api_key_id: Option<Uuid>,
+    /// The account that submitted this job via Test Run (JWT). `None` for API key jobs.
+    #[serde(default)]
+    pub account_id: Option<Uuid>,
     /// Inference execution latency in ms (started_at → completed_at).
     /// `None` while the job is pending/running.
     #[serde(default)]
@@ -52,6 +61,19 @@ pub struct InferenceJob {
     /// Whether this job came from the test panel or a real API client.
     #[serde(default)]
     pub source: JobSource,
+    /// The specific backend instance (Ollama server) that processed this job.
+    /// `None` until dispatched. Set by the queue dispatcher before running.
+    #[serde(default)]
+    pub backend_id: Option<Uuid>,
+    /// Which API format the inbound request arrived via (route-based discriminator).
+    #[serde(default)]
+    pub api_format: ApiFormat,
+    /// Multi-turn chat messages in Ollama `/api/chat` format.
+    ///
+    /// When Some, the OllamaAdapter uses `/api/chat` instead of `/api/generate`.
+    /// Not persisted to DB — stored only in the in-memory DashMap during dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,12 +181,16 @@ mod tests {
             error: None,
             result_text: None,
             api_key_id: None,
+            account_id: None,
             latency_ms: None,
             ttft_ms: None,
             prompt_tokens: None,
             completion_tokens: None,
             cached_tokens: None,
             source: JobSource::Api,
+            backend_id: None,
+            api_format: ApiFormat::OpenaiCompat,
+            messages: None,
         }
     }
 
@@ -238,12 +264,16 @@ mod tests {
             error: Some("timeout".to_string()),
             result_text: None,
             api_key_id: None,
+            account_id: None,
             latency_ms: None,
             ttft_ms: None,
             prompt_tokens: None,
             completion_tokens: None,
             cached_tokens: None,
             source: JobSource::Api,
+            backend_id: None,
+            api_format: ApiFormat::OpenaiCompat,
+            messages: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());
