@@ -6,7 +6,7 @@ use futures::Stream;
 
 use uuid::Uuid;
 
-use crate::domain::enums::{JobSource, JobStatus};
+use crate::domain::enums::{ApiFormat, JobSource, JobStatus};
 use crate::domain::value_objects::{JobId, StreamToken};
 
 /// Inbound port for inference operations.
@@ -24,7 +24,10 @@ pub trait InferenceUseCase: Send + Sync {
         model_name: &str,
         backend_type: &str,
         api_key_id: Option<Uuid>,
+        account_id: Option<Uuid>,
         source: JobSource,
+        api_format: ApiFormat,
+        messages: Option<serde_json::Value>,
     ) -> Result<JobId>;
 
     /// Process a job synchronously (used by the queue worker).
