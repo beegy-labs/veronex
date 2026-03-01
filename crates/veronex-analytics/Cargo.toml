@@ -1,0 +1,28 @@
+[package]
+name = "veronex-analytics"
+version = "0.1.0"
+edition = "2024"
+description = "Internal analytics service — OTel log ingestion + ClickHouse read path"
+
+[dependencies]
+# HTTP / Async
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ClickHouse (read path)
+clickhouse = { version = "0.13", features = ["time"] }
+
+# Misc
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+time = { version = "0.3", features = ["formatting"] }
+thiserror = "2"
