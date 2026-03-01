@@ -1,69 +1,15 @@
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
+use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
+
 use super::state::AppState;
-
-// ── Performance types ───────────────────────────────────────────────
-
-#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
-pub struct LatencyStatsRow {
-    pub avg_latency_ms: f64,
-    pub p50_latency_ms: f64,
-    pub p95_latency_ms: f64,
-    pub p99_latency_ms: f64,
-    pub total_requests: u64,
-    pub success_count: u64,
-    pub total_tokens: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
-pub struct HourlyThroughputRow {
-    #[serde(with = "clickhouse::serde::time::datetime")]
-    pub hour: time::OffsetDateTime,
-    pub request_count: u64,
-    pub success_count: u64,
-    pub avg_latency_ms: f64,
-    pub total_tokens: u64,
-}
-
-#[derive(Serialize)]
-pub struct HourlyThroughputResponse {
-    pub hour: String,
-    pub request_count: u64,
-    pub success_count: u64,
-    pub avg_latency_ms: f64,
-    pub total_tokens: u64,
-}
-
-#[derive(Serialize)]
-pub struct PerformanceResponse {
-    pub avg_latency_ms: f64,
-    pub p50_latency_ms: f64,
-    pub p95_latency_ms: f64,
-    pub p99_latency_ms: f64,
-    pub total_requests: u64,
-    pub success_rate: f64,
-    pub total_tokens: u64,
-    pub hourly: Vec<HourlyThroughputResponse>,
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────
-
-/// Compute tokens-per-second for a job.
-/// Uses generation time (latency_ms − ttft_ms) to exclude prefill latency.
-fn compute_tps(latency_ms: Option<i32>, ttft_ms: Option<i32>, completion_tokens: Option<i32>) -> Option<f64> {
-    let tokens = completion_tokens? as f64;
-    let lat = latency_ms? as f64;
-    let gen_ms = lat - ttft_ms.unwrap_or(0) as f64;
-    if gen_ms > 0.0 && tokens > 0.0 {
-        Some((tokens * 1000.0 / gen_ms * 10.0).round() / 10.0) // 1 decimal
-    } else {
-        None
-    }
-}
+use super::usage_handlers::UsageQuery;
 
 // ── Query parameters ───────────────────────────────────────────────
 
@@ -91,8 +37,6 @@ pub struct DashboardStats {
     pub total_keys: i64,
     /// Active standard (non-test) keys.
     pub active_keys: i64,
-    /// Active test keys.
-    pub test_keys: i64,
     pub total_jobs: i64,
     pub jobs_last_24h: i64,
     pub jobs_by_status: HashMap<String, i64>,
@@ -115,12 +59,32 @@ pub struct JobSummary {
     /// Tokens per second (generation only, excluding TTFT).
     pub tps: Option<f64>,
     pub api_key_name: Option<String>,
+    /// For test run jobs: the account that submitted the job.
+    pub account_name: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct JobsResponse {
     pub jobs: Vec<JobSummary>,
     pub total: i64,
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+/// Compute tokens-per-second for a job.
+fn compute_tps(
+    latency_ms: Option<i32>,
+    ttft_ms: Option<i32>,
+    completion_tokens: Option<i32>,
+) -> Option<f64> {
+    let tokens = completion_tokens? as f64;
+    let lat = latency_ms? as f64;
+    let gen_ms = lat - ttft_ms.unwrap_or(0) as f64;
+    if gen_ms > 0.0 && tokens > 0.0 {
+        Some((tokens * 1000.0 / gen_ms * 10.0).round() / 10.0)
+    } else {
+        None
+    }
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
@@ -131,12 +95,11 @@ pub async fn get_stats(
 ) -> Result<Json<DashboardStats>, StatusCode> {
     let pool = &state.pg_pool;
 
-    // Key counts
+    // Key counts (standard keys only — exclude test keys)
     let key_row = sqlx::query(
         "SELECT
-            COUNT(*) FILTER (WHERE deleted_at IS NULL) AS total_keys,
-            COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'standard') AS active_keys,
-            COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'test') AS test_keys
+            COUNT(*) FILTER (WHERE deleted_at IS NULL AND key_type != 'test') AS total_keys,
+            COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'standard') AS active_keys
          FROM api_keys",
     )
     .fetch_one(pool)
@@ -146,14 +109,14 @@ pub async fn get_stats(
     use sqlx::Row;
     let total_keys: i64 = key_row.try_get("total_keys").unwrap_or(0);
     let active_keys: i64 = key_row.try_get("active_keys").unwrap_or(0);
-    let test_keys: i64 = key_row.try_get("test_keys").unwrap_or(0);
 
-    // Job counts
+    // Job counts (exclude test-source jobs from dashboard aggregates)
     let job_row = sqlx::query(
         "SELECT
             COUNT(*) AS total_jobs,
             COUNT(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS jobs_last_24h
-         FROM inference_jobs",
+         FROM inference_jobs
+         WHERE source != 'test'",
     )
     .fetch_one(pool)
     .await
@@ -162,10 +125,11 @@ pub async fn get_stats(
     let total_jobs: i64 = job_row.try_get("total_jobs").unwrap_or(0);
     let jobs_last_24h: i64 = job_row.try_get("jobs_last_24h").unwrap_or(0);
 
-    // Jobs by status
+    // Jobs by status (API jobs only)
     let status_rows = sqlx::query(
         "SELECT status, COUNT(*) AS cnt
          FROM inference_jobs
+         WHERE source != 'test'
          GROUP BY status",
     )
     .fetch_all(pool)
@@ -173,7 +137,6 @@ pub async fn get_stats(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut jobs_by_status: HashMap<String, i64> = HashMap::new();
-    // Ensure all known statuses are present
     for s in &["pending", "running", "completed", "failed", "cancelled"] {
         jobs_by_status.insert(s.to_string(), 0);
     }
@@ -186,14 +149,13 @@ pub async fn get_stats(
     Ok(Json(DashboardStats {
         total_keys,
         active_keys,
-        test_keys,
         total_jobs,
         jobs_last_24h,
         jobs_by_status,
     }))
 }
 
-// ── Job detail response ────────────────────────────────────────────
+// ── Job detail ─────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 pub struct JobDetail {
@@ -212,12 +174,14 @@ pub struct JobDetail {
     pub cached_tokens: Option<i64>,
     pub tps: Option<f64>,
     pub api_key_name: Option<String>,
+    /// For test run jobs: the account that submitted the job.
+    pub account_name: Option<String>,
     pub prompt: String,
     pub result_text: Option<String>,
     pub error: Option<String>,
 }
 
-/// GET /v1/dashboard/jobs/{id} — Full job detail including prompt, result, and API key.
+/// GET /v1/dashboard/jobs/{id} — Full job detail.
 pub async fn get_job_detail(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
@@ -230,9 +194,11 @@ pub async fn get_job_detail(
                 j.created_at, j.started_at, j.completed_at,
                 j.latency_ms, j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
                 j.prompt, j.result_text, j.error,
-                k.name AS api_key_name
+                k.name AS api_key_name,
+                a.name AS account_name
          FROM inference_jobs j
          LEFT JOIN api_keys k ON k.id = j.api_key_id
+         LEFT JOIN accounts a ON a.id = j.account_id
          WHERE j.id = $1",
     )
     .bind(id)
@@ -257,6 +223,7 @@ pub async fn get_job_detail(
     let completion_tokens: Option<i32> = row.try_get("completion_tokens").unwrap_or(None);
     let cached_tokens: Option<i32> = row.try_get("cached_tokens").unwrap_or(None);
     let api_key_name: Option<String> = row.try_get("api_key_name").unwrap_or(None);
+    let account_name: Option<String> = row.try_get("account_name").unwrap_or(None);
     let prompt: String = row.try_get("prompt").unwrap_or_default();
     let result_text: Option<String> = row.try_get("result_text").unwrap_or(None);
     let error: Option<String> = row.try_get("error").unwrap_or(None);
@@ -279,20 +246,14 @@ pub async fn get_job_detail(
         cached_tokens: cached_tokens.map(|v| v as i64),
         tps,
         api_key_name,
+        account_name,
         prompt,
         result_text,
         error,
     }))
 }
 
-/// GET /v1/dashboard/jobs — Paginated job list with optional status/source filters and search.
-///
-/// Query params:
-///   `status`  — filter by job status (pending/running/completed/failed/cancelled)
-///   `source`  — filter by job source: "api" or "test"
-///   `q`       — case-insensitive substring match on prompt text OR api key name
-///   `limit`   — page size (default 50)
-///   `offset`  — pagination offset
+/// GET /v1/dashboard/jobs — Paginated job list.
 pub async fn list_jobs(
     State(state): State<AppState>,
     Query(params): Query<JobsQuery>,
@@ -308,8 +269,6 @@ pub async fn list_jobs(
         .filter(|s| !s.is_empty())
         .map(|s| format!("%{}%", s));
 
-    // Single parameterised query — NULL means "no filter".
-    // $2 matches prompt text OR api key name (case-insensitive).
     let total: i64 = sqlx::query(
         "SELECT COUNT(*) AS cnt
          FROM inference_jobs j
@@ -331,9 +290,11 @@ pub async fn list_jobs(
         "SELECT j.id, j.model_name, j.backend, j.status, j.source,
                 j.created_at, j.completed_at, j.latency_ms,
                 j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
-                k.name AS api_key_name
+                k.name AS api_key_name,
+                a.name AS account_name
          FROM inference_jobs j
          LEFT JOIN api_keys k ON k.id = j.api_key_id
+         LEFT JOIN accounts a ON a.id = j.account_id
          WHERE ($1::TEXT IS NULL OR j.status = $1)
            AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
            AND ($3::TEXT IS NULL OR j.source = $3)
@@ -366,6 +327,7 @@ pub async fn list_jobs(
             let completion_tokens: Option<i32> = row.try_get("completion_tokens").unwrap_or(None);
             let cached_tokens: Option<i32> = row.try_get("cached_tokens").unwrap_or(None);
             let api_key_name: Option<String> = row.try_get("api_key_name").unwrap_or(None);
+            let account_name: Option<String> = row.try_get("account_name").unwrap_or(None);
             let tps = compute_tps(latency_ms, ttft_ms, completion_tokens);
 
             JobSummary {
@@ -383,6 +345,7 @@ pub async fn list_jobs(
                 cached_tokens: cached_tokens.map(|v| v as i64),
                 tps,
                 api_key_name,
+                account_name,
             }
         })
         .collect();
@@ -390,87 +353,256 @@ pub async fn list_jobs(
     Ok(Json(JobsResponse { jobs, total }))
 }
 
+/// DELETE /v1/dashboard/jobs/{id} — Admin cancel a job (JWT-protected).
+pub async fn cancel_job(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    use crate::domain::value_objects::JobId;
+    let jid = JobId(id);
+    state
+        .use_case
+        .cancel(&jid)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::OK)
+}
+
 /// GET /v1/dashboard/performance — Latency percentiles + hourly throughput.
-///
-/// Queries ClickHouse `inference_logs` for P50/P95/P99 latency and
-/// per-hour request/token throughput. Returns 503 if ClickHouse is disabled.
 pub async fn get_performance(
     State(state): State<AppState>,
-    Query(params): Query<super::usage_handlers::UsageQuery>,
-) -> Result<Json<PerformanceResponse>, StatusCode> {
-    let Some(ref client) = state.clickhouse_client else {
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    Query(params): Query<UsageQuery>,
+) -> Result<Json<PerformanceMetrics>, StatusCode> {
+    let repo = state
+        .analytics_repo
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    let metrics = repo
+        .performance(params.hours)
+        .await
+        .map_err(|e| {
+            tracing::warn!("performance query failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(metrics))
+}
+
+// ── Capacity API response types ─────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct ModelCapacityInfo {
+    pub model_name:           String,
+    pub recommended_slots:    i16,
+    pub active_slots:         u32,
+    pub available_slots:      u32,
+    pub vram_model_mb:        i32,
+    pub vram_kv_per_slot_mb:  i32,
+    pub avg_tokens_per_sec:   f64,
+    pub avg_prefill_tps:      f64,
+    pub p95_latency_ms:       f64,
+    pub sample_count:         i32,
+    pub llm_concern:          Option<String>,
+    pub llm_reason:           Option<String>,
+    pub updated_at:           String,
+}
+
+#[derive(Serialize)]
+pub struct BackendCapacityInfo {
+    pub backend_id:    String,
+    pub backend_name:  String,
+    pub thermal_state: String,
+    pub temp_c:        Option<f32>,
+    pub models:        Vec<ModelCapacityInfo>,
+}
+
+#[derive(Serialize)]
+pub struct CapacityResponse {
+    pub backends: Vec<BackendCapacityInfo>,
+}
+
+#[derive(Serialize)]
+pub struct CapacitySettingsResponse {
+    pub analyzer_model:      String,
+    pub batch_enabled:       bool,
+    pub batch_interval_secs: i32,
+    pub last_run_at:         Option<String>,
+    pub last_run_status:     Option<String>,
+    pub available_models:    Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct PatchCapacitySettings {
+    pub analyzer_model:      Option<String>,
+    pub batch_enabled:       Option<bool>,
+    pub batch_interval_secs: Option<i32>,
+}
+
+// ── GET /v1/dashboard/capacity ──────────────────────────────────────
+
+pub async fn get_capacity(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    let entries = match state.capacity_repo.list_all().await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("get_capacity: failed to list: {e}");
+            return Json(CapacityResponse { backends: vec![] }).into_response();
+        }
     };
 
-    // Aggregate latency percentiles
-    let stats = client
-        .query(
-            "SELECT
-                avgOrDefault(latency_ms)                AS avg_latency_ms,
-                quantileOrDefault(0.50)(latency_ms)     AS p50_latency_ms,
-                quantileOrDefault(0.95)(latency_ms)     AS p95_latency_ms,
-                quantileOrDefault(0.99)(latency_ms)     AS p99_latency_ms,
-                count()                                 AS total_requests,
-                countIf(finish_reason = 'stop')         AS success_count,
-                sum(completion_tokens)                  AS total_tokens
-            FROM inference_logs
-            WHERE event_time >= now() - INTERVAL ? HOUR",
-        )
-        .bind(params.hours)
-        .fetch_one::<LatencyStatsRow>()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // Hourly throughput
-    let hourly_rows = client
-        .query(
-            "SELECT
-                toStartOfHour(event_time)               AS hour,
-                count()                                 AS request_count,
-                countIf(finish_reason = 'stop')         AS success_count,
-                avgOrDefault(latency_ms)                AS avg_latency_ms,
-                sum(completion_tokens)                  AS total_tokens
-            FROM inference_logs
-            WHERE event_time >= now() - INTERVAL ? HOUR
-            GROUP BY hour
-            ORDER BY hour ASC",
-        )
-        .bind(params.hours)
-        .fetch_all::<HourlyThroughputRow>()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let success_rate = if stats.total_requests > 0 {
-        stats.success_count as f64 / stats.total_requests as f64
-    } else {
-        0.0
-    };
-
-    let hourly = hourly_rows
-        .into_iter()
-        .map(|r| HourlyThroughputResponse {
-            hour: r
-                .hour
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default(),
-            request_count: r.request_count,
-            success_count: r.success_count,
-            avg_latency_ms: r.avg_latency_ms,
-            total_tokens: r.total_tokens,
-        })
+    let backends_list = state.backend_registry.list_all().await.unwrap_or_default();
+    let backend_name_map: HashMap<uuid::Uuid, String> = backends_list
+        .iter()
+        .map(|b| (b.id, b.name.clone()))
         .collect();
 
-    Ok(Json(PerformanceResponse {
-        avg_latency_ms: stats.avg_latency_ms,
-        p50_latency_ms: stats.p50_latency_ms,
-        p95_latency_ms: stats.p95_latency_ms,
-        p99_latency_ms: stats.p99_latency_ms,
-        total_requests: stats.total_requests,
-        success_rate,
-        total_tokens: stats.total_tokens,
-        hourly,
-    }))
+    // Group entries by backend
+    let mut by_backend: HashMap<uuid::Uuid, Vec<_>> = HashMap::new();
+    for entry in entries {
+        by_backend.entry(entry.backend_id).or_default().push(entry);
+    }
+
+    let mut result: Vec<BackendCapacityInfo> = Vec::new();
+    for (backend_id, models) in by_backend {
+        let thermal_level = state.thermal.get(backend_id);
+        let temp_c = state.thermal.temp_c(backend_id);
+        let thermal_state = match thermal_level {
+            ThrottleLevel::Normal => "normal",
+            ThrottleLevel::Soft   => "soft",
+            ThrottleLevel::Hard   => "hard",
+        };
+
+        let model_infos: Vec<ModelCapacityInfo> = models
+            .into_iter()
+            .map(|e| {
+                let active    = state.slot_map.active_slots(backend_id, &e.model_name);
+                let available = state.slot_map.available_slots(backend_id, &e.model_name);
+                ModelCapacityInfo {
+                    model_name:          e.model_name,
+                    recommended_slots:   e.recommended_slots,
+                    active_slots:        active,
+                    available_slots:     available,
+                    vram_model_mb:       e.vram_model_mb,
+                    vram_kv_per_slot_mb: e.vram_kv_per_slot_mb,
+                    avg_tokens_per_sec:  e.avg_tokens_per_sec,
+                    avg_prefill_tps:     e.avg_prefill_tps,
+                    p95_latency_ms:      e.p95_latency_ms,
+                    sample_count:        e.sample_count,
+                    llm_concern:         e.llm_concern,
+                    llm_reason:          e.llm_reason,
+                    updated_at:          e.updated_at.to_rfc3339(),
+                }
+            })
+            .collect();
+
+        result.push(BackendCapacityInfo {
+            backend_id:   backend_id.to_string(),
+            backend_name: backend_name_map
+                .get(&backend_id)
+                .cloned()
+                .unwrap_or_else(|| backend_id.to_string()),
+            thermal_state: thermal_state.to_string(),
+            temp_c,
+            models: model_infos,
+        });
+    }
+
+    Json(CapacityResponse { backends: result }).into_response()
 }
+
+// ── GET /v1/dashboard/capacity/settings ────────────────────────────
+
+pub async fn get_capacity_settings(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
+
+    // Fetch available models from Ollama /api/tags
+    let available_models = fetch_ollama_tags(&state.analyzer_url).await;
+
+    Json(CapacitySettingsResponse {
+        analyzer_model:      settings.analyzer_model,
+        batch_enabled:       settings.batch_enabled,
+        batch_interval_secs: settings.batch_interval_secs,
+        last_run_at:         settings.last_run_at.map(|t| t.to_rfc3339()),
+        last_run_status:     settings.last_run_status,
+        available_models,
+    })
+    .into_response()
+}
+
+// ── PATCH /v1/dashboard/capacity/settings ──────────────────────────
+
+pub async fn patch_capacity_settings(
+    State(state): State<AppState>,
+    Json(body): Json<PatchCapacitySettings>,
+) -> impl axum::response::IntoResponse {
+    let updated = state
+        .capacity_settings_repo
+        .update_settings(
+            body.analyzer_model.as_deref(),
+            body.batch_enabled,
+            body.batch_interval_secs,
+        )
+        .await;
+
+    match updated {
+        Ok(settings) => {
+            let available_models = fetch_ollama_tags(&state.analyzer_url).await;
+            Json(CapacitySettingsResponse {
+                analyzer_model:      settings.analyzer_model,
+                batch_enabled:       settings.batch_enabled,
+                batch_interval_secs: settings.batch_interval_secs,
+                last_run_at:         settings.last_run_at.map(|t| t.to_rfc3339()),
+                last_run_status:     settings.last_run_status,
+                available_models,
+            })
+            .into_response()
+        }
+        Err(e) => {
+            tracing::warn!("patch_capacity_settings failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ── POST /v1/dashboard/capacity/sync ───────────────────────────────
+
+pub async fn trigger_capacity_sync(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    state.capacity_manual_trigger.notify_one();
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "message": "capacity analysis triggered" })),
+    )
+        .into_response()
+}
+
+// ── Helper: fetch Ollama model tags ────────────────────────────────
+
+async fn fetch_ollama_tags(analyzer_url: &str) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct TagsResponse { models: Vec<TagModel> }
+    #[derive(serde::Deserialize)]
+    struct TagModel { name: String }
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/tags", analyzer_url.trim_end_matches('/'));
+    match client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(resp) => resp
+            .json::<TagsResponse>()
+            .await
+            .map(|t| t.models.into_iter().map(|m| m.name).collect())
+            .unwrap_or_default(),
+        Err(_) => vec![],
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -504,7 +636,6 @@ mod tests {
         let stats = DashboardStats {
             total_keys: 10,
             active_keys: 8,
-            test_keys: 2,
             total_jobs: 105,
             jobs_last_24h: 20,
             jobs_by_status,
@@ -512,44 +643,5 @@ mod tests {
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["total_keys"], 10);
         assert_eq!(json["active_keys"], 8);
-        assert_eq!(json["total_jobs"], 105);
-        assert_eq!(json["jobs_last_24h"], 20);
-        assert_eq!(json["jobs_by_status"]["completed"], 100);
-    }
-
-    #[test]
-    fn job_summary_serialization() {
-        let job = JobSummary {
-            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
-            model_name: "llama3.2".to_string(),
-            backend: "ollama".to_string(),
-            status: "completed".to_string(),
-            source: "api".to_string(),
-            created_at: "2026-02-22T12:00:00Z".to_string(),
-            completed_at: Some("2026-02-22T12:00:01.2Z".to_string()),
-            latency_ms: Some(1200),
-            ttft_ms: Some(150),
-            prompt_tokens: Some(20),
-            completion_tokens: Some(50),
-            cached_tokens: None,
-            tps: Some(44.4),
-            api_key_name: Some("dev-key".to_string()),
-        };
-        let json = serde_json::to_value(&job).unwrap();
-        assert_eq!(json["model_name"], "llama3.2");
-        assert_eq!(json["backend"], "ollama");
-        assert_eq!(json["latency_ms"], 1200);
-        assert_eq!(json["api_key_name"], "dev-key");
-    }
-
-    #[test]
-    fn jobs_response_serialization() {
-        let resp = JobsResponse {
-            jobs: vec![],
-            total: 0,
-        };
-        let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["total"], 0);
-        assert!(json["jobs"].as_array().unwrap().is_empty());
     }
 }

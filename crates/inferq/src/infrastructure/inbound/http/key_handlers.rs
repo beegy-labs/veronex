@@ -26,13 +26,13 @@ pub struct CreateKeyRequest {
     #[serde(default)]
     pub rate_limit_tpm: i32,
     pub expires_at: Option<chrono::DateTime<Utc>>,
-    /// `"standard"` (default) or `"test"`.
-    #[serde(default = "default_key_type")]
-    pub key_type: String,
+    /// Billing tier: `"free"` or `"paid"` (default).
+    #[serde(default = "default_tier")]
+    pub tier: String,
 }
 
-fn default_key_type() -> String {
-    "standard".to_string()
+fn default_tier() -> String {
+    "paid".to_string()
 }
 
 #[derive(Serialize)]
@@ -55,7 +55,8 @@ pub struct KeySummary {
     pub rate_limit_tpm: i32,
     pub expires_at: Option<chrono::DateTime<Utc>>,
     pub created_at: chrono::DateTime<Utc>,
-    pub key_type: String,
+    /// Billing tier: `"free"` or `"paid"`.
+    pub tier: String,
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
@@ -82,22 +83,15 @@ pub async fn create_key(
         expires_at: req.expires_at,
         created_at: now,
         deleted_at: None,
-        key_type: req.key_type,
+        key_type: "standard".to_string(),
+        tier: req.tier,
     };
 
     state
         .api_key_repo
         .create(&api_key)
         .await
-        .map_err(|e| {
-            // Unique constraint violation → name already taken
-            let msg = e.to_string();
-            if msg.contains("uq_api_keys_tenant_name") || msg.contains("unique") {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        })?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(CreateKeyResponse {
         id,
@@ -124,6 +118,7 @@ pub async fn list_keys(
 
     let summaries: Vec<KeySummary> = keys
         .into_iter()
+        .filter(|k| k.key_type != "test")
         .map(|k| KeySummary {
             id: k.id,
             key_prefix: k.key_prefix,
@@ -134,7 +129,7 @@ pub async fn list_keys(
             rate_limit_tpm: k.rate_limit_tpm,
             expires_at: k.expires_at,
             created_at: k.created_at,
-            key_type: k.key_type,
+            tier: k.tier,
         })
         .collect();
 
@@ -234,6 +229,7 @@ mod tests {
             rate_limit_tpm: 0,
             expires_at: None,
             created_at: Utc::now(),
+            tier: "paid".to_string(),
         };
         let json = serde_json::to_value(&summary).unwrap();
         assert!(json.get("id").is_some());
