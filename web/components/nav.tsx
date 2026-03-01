@@ -5,8 +5,9 @@ import { usePathname, useSearchParams } from 'next/navigation'
 import { useState, useEffect, Suspense } from 'react'
 import {
   LayoutDashboard, List, Key, Server,
-  BarChart2, Gauge, Sun, Moon, ChevronLeft, Languages,
+  BarChart2, Gauge, Sun, Moon, ChevronLeft, Languages, Clock,
   BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
+  Users, Shield, LogOut, Workflow, Settings2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
@@ -20,6 +21,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { getAuthUser, clearTokens } from '@/lib/auth'
+import { useTimezone, type Timezone, PRESET_TIMEZONES, isValidTimezone } from '@/components/timezone-provider'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -39,7 +51,7 @@ type NavGroupChild = {
   href: string
   labelKey: string
   icon: React.ComponentType<{ className?: string }>
-  section: string
+  section?: string  // if set: matched via ?s= query param; otherwise: pathname === href
 }
 
 type NavGroup = {
@@ -57,10 +69,22 @@ type NavItem = NavLink | NavGroup
 // Add new providers here — sub-items appear automatically in the sidebar.
 
 const navItems: NavItem[] = [
-  { type: 'link', href: '/overview',    labelKey: 'nav.overview',    icon: LayoutDashboard },
-  { type: 'link', href: '/jobs',        labelKey: 'nav.jobs',        icon: List },
-  { type: 'link', href: '/keys',        labelKey: 'nav.keys',        icon: Key },
-  { type: 'link', href: '/servers',     labelKey: 'nav.servers',     icon: HardDrive },
+  {
+    type: 'group',
+    id: 'overview',
+    labelKey: 'nav.monitor',
+    icon: LayoutDashboard,
+    basePath: '/overview',
+    children: [
+      { href: '/overview',     labelKey: 'nav.dashboard',   icon: LayoutDashboard },
+      { href: '/flow',         labelKey: 'nav.flow',        icon: Workflow },
+      { href: '/usage',        labelKey: 'nav.usage',       icon: BarChart2 },
+      { href: '/performance',  labelKey: 'nav.performance', icon: Gauge },
+    ],
+  },
+  { type: 'link', href: '/jobs',    labelKey: 'nav.jobs',    icon: List },
+  { type: 'link', href: '/keys',    labelKey: 'nav.keys',    icon: Key },
+  { type: 'link', href: '/servers', labelKey: 'nav.servers', icon: HardDrive },
   {
     type: 'group',
     id: 'providers',
@@ -72,9 +96,6 @@ const navItems: NavItem[] = [
       { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini' },
     ],
   },
-  { type: 'link', href: '/usage',       labelKey: 'nav.usage',       icon: BarChart2 },
-  { type: 'link', href: '/performance', labelKey: 'nav.performance', icon: Gauge },
-  { type: 'link', href: '/api-docs',    labelKey: 'nav.apiDocs',     icon: BookOpen },
 ]
 
 // ── Logo ───────────────────────────────────────────────────────────────────────
@@ -141,14 +162,26 @@ function NavContent() {
   const searchParams = useSearchParams()
   const { theme, toggleTheme } = useTheme()
   const { t } = useTranslation()
+  const { tz, setTz, resetToLocaleDefault } = useTimezone()
 
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [locale, setLocale] = useState<Locale>('en')
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+  const [authUser, setAuthUser] = useState<{ username: string; role: string } | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [showCustomTzInline, setShowCustomTzInline] = useState(false)
+  const [customTzInput, setCustomTzInput] = useState('')
+  const [customTzError, setCustomTzError] = useState(false)
+
+  const isPresetTz = PRESET_TIMEZONES.includes(tz as typeof PRESET_TIMEZONES[number])
+  const tzSelectValue = isPresetTz ? tz : '__custom__'
 
   // Restore persisted state on mount
   useEffect(() => {
+    const user = getAuthUser()
+    setAuthUser(user)
+
     const savedCollapsed = localStorage.getItem(NAV_COLLAPSED_KEY)
     if (savedCollapsed === 'true') setCollapsed(true)
 
@@ -163,7 +196,9 @@ function NavContent() {
     for (const item of navItems) {
       if (item.type === 'group') {
         const saved = localStorage.getItem(groupStorageKey(item.id))
-        groups[item.id] = saved !== null ? saved === 'true' : false
+        // overview group defaults to open; others default to closed
+        const defaultOpen = item.id === 'overview'
+        groups[item.id] = saved !== null ? saved === 'true' : defaultOpen
       }
     }
     setOpenGroups(groups)
@@ -175,7 +210,13 @@ function NavContent() {
   // Auto-open the group containing the active route
   useEffect(() => {
     for (const item of navItems) {
-      if (item.type === 'group' && pathname.startsWith(item.basePath)) {
+      if (item.type !== 'group') continue
+      const isActive = item.children.some((child) =>
+        child.section
+          ? pathname === item.basePath && (searchParams.get('s') ?? 'ollama') === child.section
+          : pathname === child.href,
+      )
+      if (isActive) {
         setOpenGroups((prev) => {
           if (prev[item.id]) return prev
           const next = { ...prev, [item.id]: true }
@@ -184,7 +225,7 @@ function NavContent() {
         })
       }
     }
-  }, [pathname])
+  }, [pathname, searchParams])
 
   function toggleCollapsed() {
     setCollapsed((v) => {
@@ -216,16 +257,20 @@ function NavContent() {
     setLocale(next)
     localStorage.setItem(localStorageKey, next)
     i18n.changeLanguage(next)
+    // Auto-set timezone from locale if user hasn't explicitly chosen one
+    resetToLocaleDefault(next)
   }
 
-  function isSubActive(section: string, basePath: string): boolean {
-    if (pathname !== basePath) return false
-    const current = searchParams.get('s') ?? 'ollama'
-    return current === section
+  function isChildActive(child: NavGroupChild, basePath: string): boolean {
+    if (child.section) {
+      if (pathname !== basePath) return false
+      return (searchParams.get('s') ?? 'ollama') === child.section
+    }
+    return pathname === child.href
   }
 
   function isGroupActive(item: NavGroup): boolean {
-    return pathname.startsWith(item.basePath)
+    return item.children.some((child) => isChildActive(child, item.basePath))
   }
 
   return (
@@ -369,7 +414,7 @@ function NavContent() {
               {!collapsed && groupOpen && (
                 <div className="mt-0.5 ml-3 pl-3 border-l border-border space-y-0.5">
                   {item.children.map((child) => {
-                    const active = isSubActive(child.section, item.basePath)
+                    const active = isChildActive(child, item.basePath)
                     return (
                       <Link
                         key={child.href}
@@ -395,30 +440,84 @@ function NavContent() {
 
       {/* ── Footer ─────────────────────────────────────────────────── */}
       <div className="border-t border-border py-3 px-2 space-y-2">
+        {/* Auth user + JWT-protected links */}
+        {authUser && !collapsed && (
+          <div className="px-1 space-y-0.5">
+            <Link
+              href="/accounts"
+              className={cn(
+                'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                pathname.startsWith('/accounts')
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              )}
+            >
+              <Users className="h-4 w-4 flex-shrink-0" />
+              {t('accounts.title')}
+            </Link>
+            {authUser.role === 'super' && (
+              <Link
+                href="/audit"
+                className={cn(
+                  'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                  pathname.startsWith('/audit')
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                )}
+              >
+                <Shield className="h-4 w-4 flex-shrink-0" />
+                {t('audit.title')}
+              </Link>
+            )}
+            <div className="flex items-center justify-between px-3 py-1">
+              <span className="text-xs text-muted-foreground truncate">{authUser.username}</span>
+              <button
+                type="button"
+                title="Sign out"
+                onClick={() => { clearTokens(); window.location.href = '/login' }}
+                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* API Docs — always visible */}
+        <div className="px-1">
+          <Link
+            href="/api-docs"
+            title={collapsed ? t('nav.apiDocs') : undefined}
+            className={cn(
+              'flex items-center rounded-md text-sm font-medium transition-colors',
+              collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-3 px-3 py-2',
+              pathname.startsWith('/api-docs')
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+            )}
+          >
+            <BookOpen className="h-4 w-4 flex-shrink-0" />
+            {!collapsed && t('nav.apiDocs')}
+          </Link>
+        </div>
+
+        {/* Footer: version | settings gear | theme toggle */}
         <div className={cn(
           'flex items-center gap-1 px-1',
-          collapsed ? 'justify-center' : 'justify-between',
+          collapsed ? 'justify-center flex-col gap-0.5' : 'justify-between',
         )}>
           {!collapsed && (
             <p className="text-xs text-muted-foreground shrink-0">v0.1.0</p>
           )}
 
-          <Select value={locale} onValueChange={(v) => changeLocale(v as Locale)}>
-            <SelectTrigger
-              className="h-7 gap-1 border-0 bg-transparent px-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-accent focus:ring-0 focus:ring-offset-0 w-auto min-w-0"
-              title="Language"
-            >
-              <Languages className="h-3.5 w-3.5 shrink-0" />
-              {!collapsed && <SelectValue />}
-            </SelectTrigger>
-            <SelectContent side="top" align="start">
-              {locales.map((loc) => (
-                <SelectItem key={loc} value={loc} className="text-xs">
-                  {localeLabels[loc]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <button
+            type="button"
+            onClick={() => { setShowSettings(true); setShowCustomTzInline(false) }}
+            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+            title={t('common.settings')}
+          >
+            <Settings2 className="h-4 w-4" />
+          </button>
 
           <button
             type="button"
@@ -429,6 +528,132 @@ function NavContent() {
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
         </div>
+
+        {/* Settings dialog — language + timezone */}
+        {showSettings && (
+          <Dialog open onOpenChange={(open) => {
+            if (!open) { setShowSettings(false); setShowCustomTzInline(false); setCustomTzError(false) }
+          }}>
+            <DialogContent className="max-w-xs">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Settings2 className="h-4 w-4 text-primary" />
+                  {t('common.settings')}
+                </DialogTitle>
+              </DialogHeader>
+
+              <div className="space-y-4 pt-1">
+                {/* Language row */}
+                <div className="flex items-center gap-3">
+                  <Languages className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="text-sm text-muted-foreground flex-1">{t('common.language')}</span>
+                  <Select value={locale} onValueChange={(v) => changeLocale(v as Locale)}>
+                    <SelectTrigger className="h-8 w-36 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {locales.map((loc) => (
+                        <SelectItem key={loc} value={loc} className="text-xs">
+                          {localeLabels[loc]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Timezone row */}
+                <div className="flex items-center gap-3">
+                  <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="text-sm text-muted-foreground flex-1">{t('common.timezone')}</span>
+                  <Select
+                    value={tzSelectValue}
+                    onValueChange={(v) => {
+                      if (v === '__custom__') {
+                        setCustomTzInput(isPresetTz ? '' : tz)
+                        setCustomTzError(false)
+                        setShowCustomTzInline(true)
+                      } else {
+                        setTz(v as Timezone)
+                        setShowCustomTzInline(false)
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-36 text-xs">
+                      {isPresetTz
+                        ? <SelectValue />
+                        : <span className="truncate">{tz.split('/').pop()}</span>
+                      }
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="UTC" className="text-xs">{t('common.utc')}</SelectItem>
+                      <SelectItem value="America/New_York" className="text-xs">{t('common.eastern')}</SelectItem>
+                      <SelectItem value="America/Chicago" className="text-xs">{t('common.central')}</SelectItem>
+                      <SelectItem value="America/Denver" className="text-xs">{t('common.mountain')}</SelectItem>
+                      <SelectItem value="America/Los_Angeles" className="text-xs">{t('common.pacific')}</SelectItem>
+                      <SelectItem value="Europe/London" className="text-xs">{t('common.london')}</SelectItem>
+                      <SelectItem value="Africa/Johannesburg" className="text-xs">{t('common.johannesburg')}</SelectItem>
+                      <SelectItem value="Asia/Seoul" className="text-xs">{t('common.kst')}</SelectItem>
+                      <SelectItem value="Asia/Tokyo" className="text-xs">{t('common.jst')}</SelectItem>
+                      <SelectItem value="Australia/Sydney" className="text-xs">{t('common.sydney')}</SelectItem>
+                      <SelectItem value="Pacific/Auckland" className="text-xs">{t('common.auckland')}</SelectItem>
+                      <SelectItem value="__custom__" className="text-xs">{t('common.custom')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Custom IANA input — shown inline when "Custom…" is selected */}
+                {showCustomTzInline && (
+                  <div className="pl-7 space-y-2">
+                    <Input
+                      value={customTzInput}
+                      onChange={(e) => { setCustomTzInput(e.target.value); setCustomTzError(false) }}
+                      placeholder={t('common.customTimezonePlaceholder')}
+                      className="font-mono text-xs h-8"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          if (isValidTimezone(customTzInput.trim())) {
+                            setTz(customTzInput.trim() as Timezone)
+                            setShowCustomTzInline(false)
+                          } else {
+                            setCustomTzError(true)
+                          }
+                        }
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground">{t('common.customTimezoneHint')}</p>
+                    {customTzError && (
+                      <p className="text-xs text-destructive">{t('common.customTimezoneInvalid')}</p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs flex-1"
+                        onClick={() => { setShowCustomTzInline(false); setCustomTzError(false) }}
+                      >
+                        {t('common.cancel')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs flex-1"
+                        onClick={() => {
+                          if (isValidTimezone(customTzInput.trim())) {
+                            setTz(customTzInput.trim() as Timezone)
+                            setShowCustomTzInline(false)
+                          } else {
+                            setCustomTzError(true)
+                          }
+                        }}
+                      >
+                        {t('common.save')}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
     </aside>
     </>

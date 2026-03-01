@@ -3,9 +3,10 @@
 import { useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { backendsQuery, serversQuery, serverMetricsQuery, selectedModelsQuery, ollamaModelsQuery, ollamaSyncStatusQuery, geminiPoliciesQuery, geminiModelsQuery, geminiSyncConfigQuery, capacityQuery, capacitySettingsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
-import type { Backend, BackendSelectedModel, GeminiModel, GeminiRateLimitPolicy, GeminiStatusResult, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, RegisterBackendRequest, UpdateBackendRequest } from '@/lib/types'
-import { Plus, Trash2, RefreshCw, RotateCcw, Server, Key, Wifi, WifiOff, AlertCircle, Pencil, ShieldCheck, Eye, EyeOff, ListFilter, Search, BarChart2, Cpu, ChevronLeft, ChevronRight } from 'lucide-react'
+import type { Backend, BackendCapacityInfo, BackendSelectedModel, CapacitySettings, GeminiModel, GeminiRateLimitPolicy, GeminiStatusResult, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, ModelCapacityInfo, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, RegisterBackendRequest, UpdateBackendRequest } from '@/lib/types'
+import { Activity, AlertTriangle, Plus, Trash2, RefreshCw, RotateCcw, Server, Key, Wifi, WifiOff, AlertCircle, Pencil, ShieldCheck, Eye, EyeOff, ListFilter, Search, BarChart2, Cpu, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ServerMetricsCompact } from '@/components/server-metrics-cell'
 import { ServerHistoryModal } from '@/components/server-history-modal'
 import { Button } from '@/components/ui/button'
@@ -37,6 +38,18 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
+import { useTimezone } from '@/components/timezone-provider'
+import { fmtDateOnly, fmtDatetimeShort } from '@/lib/date'
+
+// ── SSOT: Gemini query keys ────────────────────────────────────────────────────
+// Single source of truth for all Gemini-related React Query keys.
+// All invalidations must go through refreshGeminiData() in GeminiSyncSection.
+const GEMINI_QUERY_KEYS = {
+  syncConfig:     ['gemini-sync-config'],
+  models:         ['gemini-models'],
+  policies:       ['gemini-policies'],
+  selectedModels: ['selected-models'], // prefix — matches all ['selected-models', backendId]
+} as const
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -49,9 +62,6 @@ function fmtMb(mb: number): string {
   return `${mb} MiB`
 }
 
-function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-}
 
 // ── Status badge ───────────────────────────────────────────────────────────────
 
@@ -119,11 +129,9 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
   const [serverId, setServerId] = useState<string>(backend.server_id ?? 'none')
   const [isFreeTier, setIsFreeTier] = useState(backend.is_free_tier)
 
-  const { data: serverMetrics } = useQuery<NodeMetrics>({
-    queryKey: ['server-metrics', serverId],
-    queryFn: () => api.serverMetrics(serverId),
+  const { data: serverMetrics } = useQuery({
+    ...serverMetricsQuery(serverId),
     enabled: serverId !== 'none',
-    staleTime: 30_000,
   })
   const gpuCards = serverMetrics?.gpus ?? []
   const serverMemTotalMb = serverMetrics?.mem_total_mb ?? null
@@ -283,11 +291,9 @@ function RegisterModal({
   const [serverId, setServerId] = useState<string>('none')
   const [isFreeTier, setIsFreeTier] = useState(false)
 
-  const { data: serverMetrics } = useQuery<NodeMetrics>({
-    queryKey: ['server-metrics', serverId],
-    queryFn: () => api.serverMetrics(serverId),
+  const { data: serverMetrics } = useQuery({
+    ...serverMetricsQuery(serverId),
     enabled: serverId !== 'none',
-    staleTime: 30_000,
   })
   const gpuCards = serverMetrics?.gpus ?? []
   const serverMemTotalMb = serverMetrics?.mem_total_mb ?? null
@@ -562,11 +568,7 @@ function ModelSelectionModal({ backend, onClose }: { backend: Backend; onClose: 
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
-  const { data, isLoading } = useQuery<{ models: BackendSelectedModel[] }>({
-    queryKey: ['selected-models', backend.id],
-    queryFn: () => api.getSelectedModels(backend.id),
-    staleTime: 0,
-  })
+  const { data, isLoading } = useQuery(selectedModelsQuery(backend.id))
 
   const toggleMutation = useMutation({
     mutationFn: ({ modelName, isEnabled }: { modelName: string; isEnabled: boolean }) =>
@@ -590,7 +592,7 @@ function ModelSelectionModal({ backend, onClose }: { backend: Backend; onClose: 
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['selected-models', backend.id] })
+      queryClient.invalidateQueries({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, backend.id] })
     },
   })
 
@@ -666,7 +668,7 @@ function SetSyncKeyModal({ current, onClose }: { current: string | null; onClose
   const mutation = useMutation({
     mutationFn: () => api.setGeminiSyncConfig(apiKey.trim()),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['gemini-sync-config'] })
+      queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.syncConfig })
       onClose()
     },
   })
@@ -929,21 +931,15 @@ function OllamaSyncSection() {
   const [search, setSearch] = useState('')
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
 
-  const { data: syncJob } = useQuery<OllamaSyncJob>({
-    queryKey: ['ollama-sync-status'],
-    queryFn: () => api.ollamaSyncStatus(),
+  const { data: syncJob } = useQuery({
+    ...ollamaSyncStatusQuery,
     refetchInterval: (query) => {
       const data = query.state.data as OllamaSyncJob | undefined
       return data?.status === 'running' ? 2000 : false
     },
-    retry: false,
   })
 
-  const { data: ollamaModelsData } = useQuery<{ models: OllamaModelWithCount[] }>({
-    queryKey: ['ollama-models'],
-    queryFn: () => api.ollamaModels(),
-    staleTime: 30_000,
-  })
+  const { data: ollamaModelsData } = useQuery(ollamaModelsQuery)
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncOllamaModels(),
@@ -1037,6 +1033,284 @@ function OllamaSyncSection() {
   )
 }
 
+// ── Ollama Capacity Section ────────────────────────────────────────────────────
+
+function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
+  const { t } = useTranslation()
+  if (state === 'hard') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-error/15 text-status-error-fg border border-status-error/30">
+      <AlertTriangle className="h-2.5 w-2.5" />{t('backends.capacity.thermal.hard')}
+    </span>
+  )
+  if (state === 'soft') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-warn/15 text-status-warn-fg border border-status-warn/30">
+      <AlertTriangle className="h-2.5 w-2.5" />{t('backends.capacity.thermal.soft')}
+    </span>
+  )
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-success/10 text-status-success-fg border border-status-success/30">
+      <span className="h-1.5 w-1.5 rounded-full bg-status-success" />{t('backends.capacity.thermal.normal')}
+    </span>
+  )
+}
+
+function fmtMbShort(mb: number) {
+  if (mb === 0) return '—'
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
+  return `${mb} MB`
+}
+
+function OllamaCapacitySection() {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+
+  const { data: capacityData, isLoading: capacityLoading } = useQuery(capacityQuery)
+  const { data: settings } = useQuery(capacitySettingsQuery)
+
+  const [analyzerModel, setAnalyzerModel] = useState<string>('')
+  const [batchEnabled, setBatchEnabled] = useState<boolean>(true)
+  const [intervalSecs, setIntervalSecs] = useState<string>('')
+
+  // Sync local form state when settings load
+  const settingsKey = settings?.analyzer_model ?? ''
+  const [initialized, setInitialized] = useState(false)
+  if (settings && !initialized) {
+    setAnalyzerModel(settings.analyzer_model)
+    setBatchEnabled(settings.batch_enabled)
+    setIntervalSecs(String(settings.batch_interval_secs))
+    setInitialized(true)
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: (body: PatchCapacitySettings) => api.patchCapacitySettings(body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['capacity-settings'] })
+    },
+  })
+
+  const syncMutation = useMutation({
+    mutationFn: () => api.triggerCapacitySync(),
+    onSuccess: () => {
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['capacity'] })
+        queryClient.invalidateQueries({ queryKey: ['capacity-settings'] })
+      }, 3000)
+    },
+  })
+
+  const handleSave = () => {
+    const body: PatchCapacitySettings = {
+      analyzer_model: analyzerModel || undefined,
+      batch_enabled: batchEnabled,
+      batch_interval_secs: intervalSecs ? Number(intervalSecs) : undefined,
+    }
+    saveMutation.mutate(body)
+  }
+
+  const backends = capacityData?.backends ?? []
+  const lastRunAt = settings?.last_run_at
+  const lastRunStatus = settings?.last_run_status
+  const availableModels = settings?.available_models ?? []
+
+  function fmtRelativeTime(iso: string | null) {
+    if (!iso) return t('backends.capacity.never')
+    const diff = Date.now() - new Date(iso).getTime()
+    const mins = Math.floor(diff / 60_000)
+    if (mins < 1) return '< 1 min ago'
+    if (mins < 60) return `${mins} min ago`
+    return `${Math.floor(mins / 60)}h ago`
+  }
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-base font-semibold text-text-bright flex items-center gap-2">
+        <Activity className="h-4 w-4 text-accent-gpu" />
+        {t('backends.capacity.title')}
+      </h2>
+
+      {/* Settings card */}
+      <Card>
+        <CardContent className="p-4 space-y-4">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-sm font-medium text-text-bright">{t('backends.capacity.settings')}</p>
+            <div className="flex items-center gap-2">
+              {lastRunAt && (
+                <span className="text-xs text-muted-foreground">
+                  {t('backends.capacity.lastRun')}: {fmtRelativeTime(lastRunAt)}
+                  {lastRunStatus && (
+                    <span className={`ml-1.5 font-medium ${lastRunStatus === 'ok' ? 'text-status-success-fg' : 'text-status-error-fg'}`}>
+                      · {lastRunStatus === 'ok' ? t('backends.capacity.statusOk') : t('backends.capacity.statusError')}
+                    </span>
+                  )}
+                </span>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => syncMutation.mutate()}
+                disabled={syncMutation.isPending}
+                className="gap-1.5 shrink-0"
+              >
+                <RefreshCw className={syncMutation.isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+                {syncMutation.isPending ? t('backends.capacity.syncing') : t('backends.capacity.syncNow')}
+              </Button>
+              {syncMutation.isSuccess && !syncMutation.isPending && (
+                <span className="text-xs text-status-success-fg">✓ {t('backends.capacity.triggered')}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-end gap-3 flex-wrap">
+            <div className="space-y-1 min-w-44">
+              <Label className="text-xs text-muted-foreground">{t('backends.capacity.analyzerModel')}</Label>
+              <Select value={analyzerModel} onValueChange={setAnalyzerModel}>
+                <SelectTrigger className="h-8 text-sm">
+                  <SelectValue placeholder={analyzerModel || '—'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableModels.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">{t('backends.capacity.interval')}</Label>
+              <Input
+                type="number"
+                min={60}
+                className="h-8 text-sm w-24"
+                value={intervalSecs}
+                onChange={(e) => setIntervalSecs(e.target.value)}
+                disabled={!batchEnabled}
+              />
+            </div>
+
+            <div className="flex items-center gap-2 pb-0.5">
+              <Switch
+                id="cap-auto"
+                checked={batchEnabled}
+                onCheckedChange={setBatchEnabled}
+              />
+              <Label htmlFor="cap-auto" className="text-sm cursor-pointer">
+                {t('backends.capacity.autoAnalysis')}
+              </Label>
+            </div>
+
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={saveMutation.isPending}
+              className="pb-0.5"
+            >
+              {saveMutation.isPending ? t('backends.capacity.saving') : t('common.save')}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Capacity table */}
+      {capacityLoading && (
+        <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>
+      )}
+
+      {!capacityLoading && backends.length === 0 && (
+        <Card className="border-dashed">
+          <CardContent className="p-6 text-center text-sm text-muted-foreground">
+            <Activity className="h-8 w-8 mx-auto mb-2 opacity-25" />
+            {t('backends.capacity.noData')}
+          </CardContent>
+        </Card>
+      )}
+
+      {backends.map((backend) => (
+        <Card key={backend.backend_id}>
+          <CardContent className="p-0">
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
+              <Server className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-sm font-semibold text-text-bright">{backend.backend_name}</span>
+              <ThermalBadge state={backend.thermal_state} />
+              {backend.temp_c !== null && (
+                <span className="text-xs text-muted-foreground ml-1">{backend.temp_c.toFixed(1)}°C</span>
+              )}
+            </div>
+
+            {backend.models.length === 0 ? (
+              <p className="px-4 py-4 text-xs text-muted-foreground italic">{t('backends.capacity.noData')}</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/30">
+                      <th className="px-4 py-2 text-left font-medium text-muted-foreground">Model</th>
+                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('backends.capacity.recommended')}</th>
+                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('backends.capacity.slots')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('backends.capacity.vramModel')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('backends.capacity.kvPerSlot')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('backends.capacity.avgTps')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('backends.capacity.p95')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {backend.models.map((m) => (
+                      <>
+                        <tr key={m.model_name} className="hover:bg-muted/20 transition-colors">
+                          <td className="px-4 py-2.5">
+                            <span className="font-mono font-medium text-text-bright">{m.model_name}</span>
+                            {m.sample_count > 0 && (
+                              <span className="ml-2 text-[10px] text-muted-foreground/70">
+                                {t('backends.capacity.sampleCount', { n: m.sample_count })}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary font-bold text-xs">
+                              {m.recommended_slots}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 text-center text-muted-foreground tabular-nums">
+                            {m.active_slots}/{m.recommended_slots}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                            {fmtMbShort(m.vram_model_mb)}
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                            {fmtMbShort(m.vram_kv_per_slot_mb)}
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
+                            {m.avg_tokens_per_sec > 0 ? m.avg_tokens_per_sec.toFixed(1) : '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
+                            {m.p95_latency_ms > 0 ? `${Math.round(m.p95_latency_ms)}ms` : '—'}
+                          </td>
+                        </tr>
+                        {m.llm_concern && (
+                          <tr key={`${m.model_name}-concern`} className="bg-status-warn/5">
+                            <td colSpan={7} className="px-4 py-1.5">
+                              <span className="text-[10px] font-semibold text-status-warn-fg uppercase tracking-wide mr-2">
+                                {t('backends.capacity.concern')}
+                              </span>
+                              <span className="text-xs text-muted-foreground">{m.llm_concern}</span>
+                              {m.llm_reason && (
+                                <span className="text-xs text-muted-foreground/70 ml-1">— {m.llm_reason}</span>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
 // ── Gemini Status Sync Section ─────────────────────────────────────────────────
 
 function statusDotCls(s: string) {
@@ -1124,36 +1398,35 @@ function GeminiStatusSyncSection() {
 
 function GeminiSyncSection() {
   const { t } = useTranslation()
+  const { tz } = useTimezone()
   const queryClient = useQueryClient()
   const [showSetKey, setShowSetKey] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState<GeminiRateLimitPolicy | null>(null)
 
-  const { data: syncConfig } = useQuery<GeminiSyncConfig>({
-    queryKey: ['gemini-sync-config'],
-    queryFn: () => api.geminiSyncConfig(),
-    staleTime: 30_000,
-  })
+  // SSOT: all Gemini data refresh in one place — used by sync button and refresh button
+  function refreshGeminiData() {
+    queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.models })
+    queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.policies })
+    // Also refresh per-backend model selections so ModelSelectionModal picks up new models
+    queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.selectedModels })
+  }
 
-  const { data: modelsData, isLoading: modelsLoading } = useQuery<{ models: GeminiModel[] }>({
-    queryKey: ['gemini-models'],
-    queryFn: () => api.geminiModels(),
-    staleTime: 30_000,
-  })
+  const { data: syncConfig } = useQuery(geminiSyncConfigQuery)
 
-  const { data: policies, isLoading: policiesLoading } = useQuery({
-    queryKey: ['gemini-policies'],
-    queryFn: () => api.geminiPolicies(),
-    staleTime: 30_000,
-  })
+  const { data: modelsData, isLoading: modelsLoading, isFetching: modelsFetching } = useQuery(geminiModelsQuery)
+
+  const { data: policies, isLoading: policiesLoading, isFetching: policiesFetching } = useQuery(geminiPoliciesQuery)
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncGeminiModels(),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['gemini-models'] }) },
+    onSuccess: () => refreshGeminiData(),
   })
+
+  const isRefreshing = (modelsFetching || policiesFetching) && !syncMutation.isPending
 
   const models = modelsData?.models ?? []
   const lastSynced = models.length > 0
-    ? new Date(models[0].synced_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    ? fmtDatetimeShort(models[0].synced_at, tz)
     : null
 
   const policyMap = new Map<string, GeminiRateLimitPolicy>((policies ?? []).map(p => [p.model_name, p]))
@@ -1200,12 +1473,18 @@ function GeminiSyncSection() {
             </Button>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <Button size="sm" onClick={() => syncMutation.mutate()}
               disabled={syncMutation.isPending || !syncConfig?.api_key_masked}
               className="gap-1.5">
               <RotateCcw className={syncMutation.isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
               {syncMutation.isPending ? t('common.syncing') : t('backends.gemini.syncNow')}
+            </Button>
+            <Button size="sm" variant="outline" onClick={refreshGeminiData}
+              disabled={isRefreshing || syncMutation.isPending}
+              className="gap-1.5">
+              <RefreshCw className={isRefreshing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+              {t('common.refresh')}
             </Button>
             {lastSynced && (
               <span className="text-xs text-muted-foreground">
@@ -1291,7 +1570,7 @@ function GeminiSyncSection() {
                         : <span className="text-text-faint">—</span>}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {specific?.updated_at ? fmtDate(specific.updated_at) : <span className="text-text-faint">—</span>}
+                      {specific?.updated_at ? fmtDateOnly(specific.updated_at, tz) : <span className="text-text-faint">—</span>}
                     </TableCell>
                     <TableCell className="text-right">
                       <Button variant="ghost" size="icon"
@@ -1351,6 +1630,7 @@ function OllamaTab({
   deleteIsPending: boolean
 }) {
   const { t } = useTranslation()
+  const { tz } = useTimezone()
   const ollama = backends?.filter((b) => b.backend_type === 'ollama') ?? []
   const serverMap = new Map(servers.map((s) => [s.id, s]))
   const onlineCount   = ollama.filter((b) => b.status === 'online').length
@@ -1518,7 +1798,7 @@ function OllamaTab({
                       </TableCell>
 
                       <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                        {fmtDate(b.registered_at)}
+                        {fmtDateOnly(b.registered_at, tz)}
                       </TableCell>
 
                       <TableCell className="text-right">
@@ -1576,6 +1856,8 @@ function OllamaTab({
 
       <OllamaSyncSection />
 
+      <OllamaCapacitySection />
+
       {viewModelsBackend && (
         <OllamaBackendModelsModal
           backend={viewModelsBackend}
@@ -1617,6 +1899,7 @@ function GeminiTab({
   deleteIsPending: boolean
 }) {
   const { t } = useTranslation()
+  const { tz } = useTimezone()
   const gemini = backends?.filter((b) => b.backend_type === 'gemini') ?? []
   const onlineCount   = gemini.filter((b) => b.status === 'online').length
   const activeCount   = gemini.filter((b) => b.is_active).length
@@ -1772,7 +2055,7 @@ function GeminiTab({
                     <StatusBadge status={b.status} />
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                    {fmtDate(b.registered_at)}
+                    {fmtDateOnly(b.registered_at, tz)}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
@@ -1835,17 +2118,9 @@ function ProvidersContent({ section }: { section: string }) {
   const [editingBackend, setEditingBackend] = useState<Backend | null>(null)
 
   // Servers needed for RegisterModal/EditModal dropdowns
-  const { data: servers } = useQuery({
-    queryKey: ['servers'],
-    queryFn: () => api.servers(),
-    staleTime: 60_000,
-  })
+  const { data: servers } = useQuery(serversQuery)
 
-  const { data: backends, isLoading: backendsLoading, error: backendsError } = useQuery({
-    queryKey: ['backends'],
-    queryFn: () => api.backends(),
-    refetchInterval: 30_000,
-  })
+  const { data: backends, isLoading: backendsLoading, error: backendsError } = useQuery(backendsQuery)
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteBackend(id),

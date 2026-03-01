@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { performanceQuery } from '@/lib/queries'
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -47,11 +47,7 @@ export default function PerformancePage() {
   const { t } = useTranslation()
   const [hours, setHours] = useState(24)
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['performance', hours],
-    queryFn: () => api.performance(hours),
-    refetchInterval: 60_000,
-  })
+  const { data, isLoading, error } = useQuery(performanceQuery(hours))
 
   const chartData = data?.hourly.map((h) => ({
     hour:      fmtHour(h.hour),

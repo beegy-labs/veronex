@@ -8,8 +8,8 @@ export interface ApiKey {
   rate_limit_tpm: number
   created_at: string
   expires_at: string | null
-  /** `"standard"` (production) or `"test"` (dev/testing) */
-  key_type: string
+  /** Billing tier: `"free"` or `"paid"` */
+  tier: 'free' | 'paid'
 }
 
 export interface Job {
@@ -27,6 +27,8 @@ export interface Job {
   cached_tokens: number | null
   tps: number | null
   api_key_name: string | null
+  /** For test run jobs: the account name of who ran it. */
+  account_name: string | null
 }
 
 export interface JobDetail {
@@ -45,6 +47,8 @@ export interface JobDetail {
   cached_tokens: number | null
   tps: number | null
   api_key_name: string | null
+  /** For test run jobs: the account name of who ran it. */
+  account_name: string | null
   prompt: string
   result_text: string | null
   error: string | null
@@ -54,8 +58,6 @@ export interface DashboardStats {
   total_keys: number
   /** Active standard (non-test) keys */
   active_keys: number
-  /** Active test keys */
-  test_keys: number
   total_jobs: number
   jobs_last_24h: number
   jobs_by_status: Record<string, number>
@@ -166,8 +168,8 @@ export interface CreateKeyRequest {
   tenant_id: string
   rate_limit_rpm?: number
   rate_limit_tpm?: number
-  /** `"standard"` (default) or `"test"` */
-  key_type?: string
+  /** Billing tier: `"free"` or `"paid"` (default) */
+  tier?: 'free' | 'paid'
 }
 
 export interface GpuServer {
@@ -356,4 +358,111 @@ export interface OllamaBackendForModel {
   name: string
   url: string
   status: string
+}
+
+export interface Account {
+  id: string
+  username: string
+  name: string
+  email: string | null
+  role: 'super' | 'admin'
+  department: string | null
+  position: string | null
+  is_active: boolean
+  last_login_at: string | null
+  created_at: string
+}
+
+export interface CreateAccountRequest {
+  username: string
+  password: string
+  name: string
+  email?: string
+  role?: string
+  department?: string
+  position?: string
+}
+
+export interface CreateAccountResponse {
+  id: string
+  username: string
+  role: string
+  test_api_key: string
+  created_at: string
+}
+
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
+export interface LoginResponse {
+  access_token: string
+  token_type: string
+  account_id: string
+  username: string
+  role: string
+  refresh_token: string
+}
+
+export interface SessionRecord {
+  id: string
+  ip_address: string | null
+  created_at: string
+  last_used_at: string | null
+  expires_at: string
+}
+
+export interface ModelCapacityInfo {
+  model_name: string
+  recommended_slots: number
+  active_slots: number
+  available_slots: number
+  vram_model_mb: number
+  vram_kv_per_slot_mb: number
+  avg_tokens_per_sec: number
+  p95_latency_ms: number
+  sample_count: number
+  llm_concern: string | null
+  llm_reason: string | null
+  updated_at: string
+}
+
+export interface BackendCapacityInfo {
+  backend_id: string
+  backend_name: string
+  thermal_state: 'normal' | 'soft' | 'hard'
+  temp_c: number | null
+  models: ModelCapacityInfo[]
+}
+
+export interface CapacityResponse {
+  backends: BackendCapacityInfo[]
+}
+
+export interface CapacitySettings {
+  analyzer_model: string
+  batch_enabled: boolean
+  batch_interval_secs: number
+  last_run_at: string | null
+  last_run_status: string | null
+  available_models: string[]
+}
+
+export interface PatchCapacitySettings {
+  analyzer_model?: string
+  batch_enabled?: boolean
+  batch_interval_secs?: number
+}
+
+export interface AuditEvent {
+  event_time: string
+  account_id: string
+  account_name: string
+  action: string
+  resource_type: string
+  resource_id: string
+  resource_name: string
+  ip_address: string
+  details: string
 }

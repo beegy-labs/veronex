@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { serversQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { GpuServer, RegisterGpuServerRequest, UpdateGpuServerRequest } from '@/lib/types'
 import {
@@ -31,12 +32,8 @@ import {
 } from '@/components/ui/table'
 import { DataTable } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
-
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-}
+import { useTimezone } from '@/components/timezone-provider'
+import { fmtDateOnly } from '@/lib/date'
 
 // ── Live metrics cell ──────────────────────────────────────────────────────────
 
@@ -187,6 +184,7 @@ function ServersTable({
   deleteIsPending: boolean
 }) {
   const { t } = useTranslation()
+  const { tz } = useTimezone()
   const [page, setPage] = useState(1)
   const allServers = servers ?? []
   const configuredCount = allServers.filter((s) => !!s.node_exporter_url).length
@@ -293,7 +291,7 @@ function ServersTable({
                   }
                 </TableCell>
                 <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
-                  {fmtDate(s.registered_at)}
+                  {fmtDateOnly(s.registered_at, tz)}
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-1">
@@ -334,11 +332,7 @@ export default function ServersPage() {
   const [editingServer, setEditingServer] = useState<GpuServer | null>(null)
   const [historyServer, setHistoryServer] = useState<GpuServer | null>(null)
 
-  const { data: servers, isLoading } = useQuery({
-    queryKey: ['servers'],
-    queryFn: () => api.servers(),
-    refetchInterval: 30_000,
-  })
+  const { data: servers, isLoading } = useQuery(serversQuery)
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteServer(id),
