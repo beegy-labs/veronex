@@ -617,6 +617,235 @@ Modals:
 
 ---
 
+## Servers Page (`/servers`)
+
+GPU server registration and live metrics management.
+
+### Query & Mutations
+
+| Operation | API | Notes |
+|-----------|-----|-------|
+| `api.servers()` | GET | refetchInterval: 30s |
+| `api.registerServer({ name, node_exporter_url? })` | POST | invalidates `['servers']` |
+| `api.updateServer(id, { name?, node_exporter_url? })` | PATCH | invalidates `['servers']` |
+| `api.deleteServer(id)` | DELETE | `window.confirm()` before firing |
+
+### Layout
+
+```
+Header: h1 "GPU Servers" + subtitle
+
+ServersTable:
+  Status pill bar + [+ Register Server] button
+    Pill 1: HardDrive icon · N registered
+    Pill 2: green · N with metrics (node_exporter_url configured)
+    Pill 3: muted · N without exporter
+
+  DataTable (minWidth="700px", PAGE_SIZE=10, pagination in footer):
+    Name | node_exporter_url (mono code span) | Live Metrics | Registered | Actions
+
+  Actions per row (3 icon buttons):
+    BarChart2  → opens ServerHistoryModal   (accent-gpu hover)
+    Pencil     → opens EditServerModal      (primary hover)
+    Trash2     → confirm() → deleteMutation (error hover)
+
+Modals:
+  RegisterServerModal — name (required) + node_exporter_url (optional)
+  EditServerModal     — pre-filled with current values
+  ServerHistoryModal  — ClickHouse history charts (see below)
+```
+
+### ServerMetricsCell (`web/components/server-metrics-cell.tsx`)
+
+Two exported variants, both use query key `['server-metrics', serverId]`:
+
+| Component | Used in | Layout |
+|-----------|---------|--------|
+| `ServerMetricsCell` | Servers page table | Full multi-line: MEM / CPU / GPU rows |
+| `ServerMetricsCompact` | OllamaTab backend row | Inline flex row: MEM % · CPU % · Temp · Power |
+
+Both: `refetchInterval: 30_000, retry: false`
+
+**Color thresholds (shared logic):**
+- MEM%: `≥90%` → error-fg · `≥75%` → warning-fg
+- CPU%: `≥90%` → error-fg · `≥70%` (Compact) / `≥75%` (Full) → warning-fg
+- GPU temp: `≥85°C` → error-fg · `≥70°C` (Compact only) → warn-fg
+
+When `scrape_ok = false`: shows `WifiOff` badge + `RefreshCw` retry button (Full variant).
+
+### ServerHistoryModal (`web/components/server-history-modal.tsx`)
+
+Query: `api.serverMetricsHistory(server.id, hours)` — staleTime: 0 (always fresh on open)
+
+Time range tabs: `[1h] [3h] [6h] [24h]` (HIST_HOUR_OPTIONS constant)
+
+Charts (only shown when data exists):
+1. **Mem Used %** — LineChart, Y [0–100], color `var(--theme-status-info)`
+2. **GPU Temp °C** — LineChart, `connectNulls`, color `var(--theme-status-error)` (hidden if no GPU data)
+3. **GPU Power W** — LineChart, `connectNulls`, color `var(--theme-accent-power)` (hidden if no GPU data)
+
+Sync button (RefreshCw) in header — re-fetches current range.
+
+### i18n Keys (backends.servers.*)
+
+`title`, `description`, `registered`, `withMetrics`, `noExporter`, `registerServer`,
+`registerTitle`, `editTitle`, `name`, `nodeExporterUrl`, `nodeExporterOptional`,
+`nodeExporterUrlPlaceholder`, `nodeExporterHint`,
+`liveMetrics`, `registeredAt`, `history`, `unreachable`,
+`loadingServers`, `noServers`, `noServersHint`, `notConfigured`
+
+Also referenced: `backends.clickhouseHistory`, `backends.noClickhouseData`, `backends.checkOtel`,
+`backends.memUsedPct`, `backends.gpuTempC`, `backends.gpuPowerW`
+
+---
+
+## Providers Page (`/providers`)
+
+Backend management for all inference providers. Routing: `/providers?s=ollama` (default) / `?s=gemini`.
+
+`useSearchParams()` is in `NavContent` (inner component wrapped in `<Suspense>`).
+
+### Shared Queries (fetched at page level, passed as props to tabs)
+
+| Query key | Fetches | refetch |
+|-----------|---------|---------|
+| `['backends']` | `api.backends()` | 30s |
+| `['servers']` | `api.servers()` | 60s |
+
+### Shared Mutations (wired at page level, passed as props)
+
+| Mutation | API call |
+|----------|----------|
+| Register | `api.registerBackend(body)` |
+| Healthcheck | `api.healthcheckBackend(id)` |
+| Delete | `api.removeBackend(id)` |
+| Sync models (Ollama) | `api.syncBackendModels(id)` |
+| Toggle active (Gemini) | `api.toggleBackendActive(id, is_active)` |
+
+### Shared Components
+
+**`StatusBadge`** — `online` (success green) / `degraded` (warning amber) / `offline` (muted)
+
+**`VramInput`** — inline MiB/GiB unit toggle; converts to MB internally; used in Register & Edit modals.
+
+**`EditModal`** — shared for both Ollama and Gemini. Adapts fields by `backend.backend_type`:
+- Ollama: name + URL + GPU Server Select + GPU Index (dynamic from live metrics) + VRAM (VramInput)
+- Gemini: name + API Key (password, empty = keep existing) + `is_free_tier` Switch
+
+**`RegisterModal`** — same dual-mode as EditModal, prop `initialType: 'ollama' | 'gemini'`.
+
+**`ApiKeyCell`** — reveal/hide toggle; on reveal calls `api.backendKey(id)` (enabled: false, fetch on demand).
+
+---
+
+### OllamaTab (`?s=ollama`)
+
+#### Status pills
+
+```
+[Server icon · N registered] [● N online] [● N degraded] [● N offline]
+```
+
+#### OllamaTab Table (`minWidth="800px"`, PAGE_SIZE=10)
+
+| Column | Content |
+|--------|---------|
+| Name | `b.name` (bold) + hostname from `b.url` (mono, dim) |
+| Server | `linkedServer.name` if linked, else italic "no server linked" |
+| Live Metrics | `ServerMetricsCompact` (MEM/CPU/Temp/Power inline) — only if server linked |
+| Status | `StatusBadge` |
+| Registered | `toLocaleDateString` |
+| Actions | Healthcheck (Wifi) · Model list (⊞) · History (BarChart2) · Edit (Pencil) · Delete (Trash2) |
+
+#### OllamaSyncSection
+
+- **Sync All** button → `POST /v1/ollama/models/sync` — shows progress `done/total` while running
+- Polling: `refetchInterval` switches to 2000ms when `syncJob.status === 'running'`, else `false`
+- Model grid: searchable list of `OllamaModelWithCount` — click model → `OllamaModelBackendsModal`
+
+#### OllamaBackendModelsModal
+Shows models registered on a specific backend (from DB). Searchable badges, staleTime: 30s.
+
+#### OllamaModelBackendsModal
+Shows all backends that have a given model. Searchable + paginated (PAGE_SIZE=8). Status dot per row.
+
+---
+
+### GeminiTab (`?s=gemini`)
+
+#### Status pills (4 types)
+
+```
+[Key icon · N registered] [shield · N active] [● N online] [● N degraded] [● N offline]
+```
+
+#### GeminiTab Table (`minWidth="760px"`, PAGE_SIZE=10)
+
+| Column | Content |
+|--------|---------|
+| Name | `b.name` bold |
+| API Key | `ApiKeyCell` — masked prefix, reveal/hide button |
+| Free Tier | badge when `is_free_tier` |
+| Status | `StatusBadge` |
+| Active | `Switch` → `toggleBackendActive` |
+| Registered | date |
+| Actions | Healthcheck · Model selection (ListFilter) · Edit · Delete |
+
+#### ModelSelectionModal (Gemini)
+- Fetches `api.getSelectedModels(backend.id)` → list of `BackendSelectedModel`
+- Each row: `model_name` + Switch (`is_enabled`)
+- Uses optimistic mutation (`onMutate` + `onError` rollback)
+- Source: global `gemini_models` pool + `backend_selected_models` overrides
+
+---
+
+### GeminiSyncSection
+
+Global model pool management. Three sub-queries:
+
+| Query key | Fetches |
+|-----------|---------|
+| `['gemini-sync-config']` | masked global sync API key |
+| `['gemini-models']` | global model list from `gemini_models` table |
+| `['gemini-policies']` | rate limit policies array |
+
+**Sync Key**: set/edit via `SetSyncKeyModal` → `api.setGeminiSyncConfig(key)`.
+**Sync Now**: `api.syncGeminiModels()` → populates `gemini_models`.
+**Rate Limit Policies table** (`minWidth="600px"`):
+- Columns: Model · Free Tier · RPM · RPD · Updated · Edit
+- `policyMap.get('*')` = global default; per-model rows show `opacity-60` when inherited
+- `EditPolicyModal`: `available_on_free_tier` Switch + RPM/RPD inputs (shown only when free tier enabled)
+
+### GeminiStatusSyncSection
+
+Point-in-time healthcheck for all Gemini backends. Single mutation `api.syncGeminiStatus()`.
+Results: status dot + name + status label + error message per backend.
+
+---
+
+### i18n Keys
+
+`backends.ollama.*`: `name`, `registerBackend`, `registerTitle`, `editTitle`, `server`, `status`,
+`ollamaUrl`, `gpuServer`, `gpuServerHint`, `gpuIndex`, `maxVram`, `serverRam`, `noneOption`,
+`noServerLinked`, `noBackends`, `noBackendsHint`, `loadingBackends`, `failedBackends`,
+`ollamaSyncSection`, `ollamaSyncAll`, `ollamaSyncing`, `ollamaSyncDone`, `ollamaNoSync`,
+`ollamaAvailableModels`, `ollamaSearchModels`, `noModelsMatch`, `noBackendModels`,
+`noBackendsSynced`, `noServersMatch`, `serversWithModel`, `searchServers`,
+`modelsCount`, `ollamaBackendModelsModal`
+
+`backends.gemini.*`: `title`, `registerBackend`, `registerTitle`, `editTitle`, `apiKey`, `apiKeyHint`,
+`keepExistingKey`, `freeTier`, `freeTierDesc`, `freeTierRouting`, `paidOnlyRouting`,
+`model`, `modelSelection`, `modelSelectionDesc`, `noGlobalModels`, `modelsCount`,
+`globalDefault`, `globalModels`, `syncSection`, `syncSectionDesc`, `syncKey`, `syncKeyHint`,
+`noSyncKey`, `setSyncKey`, `syncNow`, `lastSynced`,
+`rateLimitPolicies`, `rateLimitDesc`, `globalFallbackHint`, `editPolicyTitle`,
+`onFreeTier`, `rpm`, `rpd`, `lastUpdated`, `availableOnFreeTier`, `enabled`, `paidOnly`,
+`freeLimitsHint`, `failedToSave`,
+`statusSyncSection`, `statusSyncDesc`, `syncStatus`, `syncingStatus`, `statusSyncDone`, `noStatusResults`,
+`onlineCount`, `registerBackend`, `loadingBackends`, `failedBackends`
+
+---
+
 ## Duration / Latency Formatter — `fmtMs` (SSOT)
 
 Shared in `web/lib/chart-theme.ts`. Use everywhere — never inline ms conversion.
