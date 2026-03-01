@@ -25,10 +25,22 @@ pub async fn api_key_auth(
         return Ok(next.run(req).await);
     }
 
-    let raw_key = req
-        .headers()
+    // Accept X-API-Key, Authorization: Bearer (OpenAI-compatible), or x-goog-api-key (Gemini CLI).
+    let headers = req.headers();
+    let raw_key = headers
         .get("X-API-Key")
         .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get("Authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        })
+        .or_else(|| {
+            headers
+                .get("x-goog-api-key")
+                .and_then(|v| v.to_str().ok())
+        })
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
     let mut hasher = Blake2b256::new();
