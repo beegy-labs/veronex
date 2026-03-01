@@ -8,9 +8,8 @@ use serde_json::json;
 use crate::domain::entities::ApiKey;
 use crate::infrastructure::inbound::http::state::AppState;
 
-/// 1-minute sliding window for RPM; TTL is 2× the window + 10 s buffer.
+/// 1-minute sliding window for RPM.
 const RPM_WINDOW_MS: f64 = 60_000.0;
-const RPM_TTL_SECS: i64 = 130;
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
 
@@ -108,10 +107,23 @@ fn rate_limit_response(limit_type: &str, limit: u64, retry_after: u64) -> Respon
 
 // ── RPM: sliding-window sorted set ────────────────────────────────────────────
 
+/// Lua script: atomic 1-RTT sliding-window rate-limit check.
+///
+/// Removes expired entries, records the current request, refreshes the TTL,
+/// and returns the new window count — all in a single round-trip.
+/// KEYS[1] = sorted-set key
+/// ARGV[1] = window_start_ms  ARGV[2] = now_ms (score)  ARGV[3] = member
+const RATE_LIMIT_SCRIPT: &str = r#"
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
+redis.call('EXPIRE', KEYS[1], 62)
+return redis.call('ZCARD', KEYS[1])
+"#;
+
 /// Check and record one request in the RPM sliding window.
 ///
-/// Strategy: peek count BEFORE adding so rejected requests do not consume a
-/// slot and future requests are not unfairly penalised.
+/// Single atomic Lua eval replaces the previous 4-command round-trip sequence.
+/// Returns `true` when the request is within the limit.
 async fn check_rpm(
     pool: &fred::clients::RedisPool,
     key: &str,
@@ -119,28 +131,25 @@ async fn check_rpm(
     limit: u64,
     member: &str,
 ) -> anyhow::Result<bool> {
-    use fred::prelude::*;
+    use fred::interfaces::LuaInterface as _;
 
     let window_start = now_ms - RPM_WINDOW_MS;
 
-    // Remove entries that have fallen outside the window.
-    let _: u64 = pool
-        .zremrangebyscore(key, f64::NEG_INFINITY, window_start)
+    // pool.next() returns Arc<RedisClient> which implements LuaInterface.
+    let count: u64 = pool
+        .next()
+        .eval(
+            RATE_LIMIT_SCRIPT,
+            vec![key.to_string()],
+            vec![
+                window_start.to_string(),
+                now_ms.to_string(),
+                member.to_string(),
+            ],
+        )
         .await?;
 
-    // Peek current count without adding the new entry yet.
-    let count: u64 = pool.zcard(key).await?;
-    if count >= limit {
-        return Ok(false);
-    }
-
-    // Under the limit: record this request and refresh the TTL.
-    let _: u64 = pool
-        .zadd(key, None, None, false, false, (now_ms, member))
-        .await?;
-    let _: bool = pool.expire(key, RPM_TTL_SECS).await?;
-
-    Ok(true)
+    Ok(count <= limit)
 }
 
 // ── TPM: per-minute counter ────────────────────────────────────────────────────
@@ -181,6 +190,8 @@ mod tests {
             expires_at: None,
             deleted_at: None,
             created_at: chrono::Utc::now(),
+            key_type: "standard".to_string(),
+            tier: "paid".to_string(),
         };
         assert_eq!(key.rate_limit_rpm, 0);
         assert_eq!(key.rate_limit_tpm, 0);
