@@ -1,5 +1,5 @@
-pub mod clickhouse_adapter;
-pub mod redpanda_adapter;
+pub mod http_audit_adapter;
+pub mod http_observability_adapter;
 
-pub use clickhouse_adapter::ClickHouseObservabilityAdapter;
-pub use redpanda_adapter::RedpandaObservabilityAdapter;
+pub use http_audit_adapter::HttpAuditAdapter;
+pub use http_observability_adapter::HttpObservabilityAdapter;
