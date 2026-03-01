@@ -21,8 +21,18 @@ services:
   valkey:
     image: valkey/valkey:8-alpine
     platform: linux/amd64
+    command:
+      - valkey-server
+      - --save
+      - "60 1"
+      - --appendonly
+      - "yes"
+      - --databases
+      - "16"
     ports:
       - "6380:6379"
+    volumes:
+      - valkey_data:/data
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
@@ -61,13 +71,18 @@ services:
       - /sys/class/drm:/sys/class/drm:ro
     environment:
       DATABASE_URL: postgres://veronex:veronex@postgres:5432/veronex
-      VALKEY_URL: redis://valkey:6379
+      # DB index /0 — must match the queue/rate-limit keys in veronex
+      VALKEY_URL: redis://valkey:6379/0
       OLLAMA_URL: http://host.docker.internal:11434
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       ANALYTICS_URL: http://veronex-analytics:3003
       ANALYTICS_SECRET: ${ANALYTICS_SECRET:-veronex-analytics-internal-secret}
       RUST_LOG: info
+      # OTel distributed tracing — optional, uncomment to enable.
+      # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      # Capacity analyzer Ollama URL — defaults to OLLAMA_URL when unset.
+      # CAPACITY_ANALYZER_OLLAMA_URL: http://host.docker.internal:11434
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,8 +121,12 @@ services:
       - --overprovisioned
       - --kafka-addr=PLAINTEXT://0.0.0.0:9092
       - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --set
+      - redpanda.data_directory=/var/lib/redpanda/data
     ports:
       - "9092:9092"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster info || exit 1"]
       interval: 15s
@@ -147,15 +166,19 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
+        NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${NEXT_PUBLIC_VERONEX_ADMIN_KEY:-veronex-bootstrap-admin-key}
     ports:
       - "3002:3002"
     environment:
       PORT: 3002
       HOSTNAME: "0.0.0.0"
       NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
+      NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${NEXT_PUBLIC_VERONEX_ADMIN_KEY:-veronex-bootstrap-admin-key}
     depends_on:
       - veronex
 
 volumes:
   postgres_data:
+  valkey_data:
   clickhouse_data:
+  redpanda_data:
