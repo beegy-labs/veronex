@@ -1,10 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
 use crate::domain::entities::LlmBackend;
 use crate::domain::enums::{BackendType, LlmBackendStatus};
-use crate::infrastructure::outbound::hw_metrics::{store_hw_metrics, HwMetrics};
+use crate::infrastructure::outbound::capacity::thermal::{ThermalThrottleMap, ThrottleLevel};
+use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, HwMetrics};
 
 // ── Agent response DTOs ────────────────────────────────────────────────────────
 
@@ -171,59 +174,122 @@ async fn poll_agent_metrics(
 
 // ── Background task ────────────────────────────────────────────────────────────
 
-/// Spawn a background task that checks all registered backends every `interval_secs`
+/// Background loop that checks all registered backends every `interval_secs`
 /// seconds: updates online/offline status and (when `agent_url` is set) polls hardware
 /// metrics and stores them in Valkey for the dispatcher.
-pub fn start_health_checker(
-    registry: Arc<dyn LlmBackendRegistry>,
+///
+/// Also updates the `ThermalThrottleMap` on every cycle so the dispatcher can
+/// respect soft/hard thermal limits without any additional network calls.
+///
+/// Exits cleanly when `shutdown` is cancelled.
+pub async fn run_health_checker_loop(
+    registry:    Arc<dyn LlmBackendRegistry>,
     interval_secs: u64,
     valkey_pool: Option<fred::clients::RedisPool>,
+    thermal:     Arc<ThermalThrottleMap>,
+    shutdown:    CancellationToken,
 ) {
-    tokio::spawn(async move {
-        let client = reqwest::Client::new();
-        let interval = Duration::from_secs(interval_secs);
+    let client = reqwest::Client::new();
+    let interval = Duration::from_secs(interval_secs);
 
-        tracing::info!("backend health checker started (interval={}s)", interval_secs);
+    tracing::info!("backend health checker started (interval={}s)", interval_secs);
 
-        loop {
-            tokio::time::sleep(interval).await;
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            _ = tokio::time::sleep(interval) => {}
+        }
 
-            let backends = match registry.list_all().await {
-                Ok(b) => b,
-                Err(e) => {
-                    tracing::error!("health checker: failed to list backends: {e}");
-                    continue;
+        let backends = match registry.list_all().await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!("health checker: failed to list backends: {e}");
+                continue;
+            }
+        };
+
+        // Only auto-check Ollama backends. Gemini status is updated manually
+        // via POST /v1/gemini/sync-status to avoid unnecessary API quota usage.
+        let active: Vec<_> = backends
+            .into_iter()
+            .filter(|b| b.is_active && matches!(b.backend_type, BackendType::Ollama))
+            .collect();
+
+        for backend in active {
+            // 1. Connectivity health check
+            let new_status = check_backend(&client, &backend).await;
+            if new_status != backend.status {
+                tracing::info!(
+                    backend_id = %backend.id,
+                    name = %backend.name,
+                    old = ?backend.status,
+                    new = ?new_status,
+                    "backend status changed"
+                );
+                if let Err(e) = registry.update_status(backend.id, new_status).await {
+                    tracing::warn!(backend_id = %backend.id, "failed to update status: {e}");
                 }
-            };
+            }
 
-            // Only auto-check Ollama backends. Gemini status is updated manually
-            // via POST /v1/gemini/sync-status to avoid unnecessary API quota usage.
-            let active: Vec<_> = backends
-                .into_iter()
-                .filter(|b| b.is_active && matches!(b.backend_type, BackendType::Ollama))
-                .collect();
+            // 2. Hardware metrics (only when agent_url is configured)
+            if let Some(ref pool) = valkey_pool {
+                poll_agent_metrics(&client, &backend, pool).await;
 
-            for backend in active {
-                // 1. Connectivity health check
-                let new_status = check_backend(&client, &backend).await;
-                if new_status != backend.status {
-                    tracing::info!(
-                        backend_id = %backend.id,
-                        name = %backend.name,
-                        old = ?backend.status,
-                        new = ?new_status,
-                        "backend status changed"
-                    );
-                    if let Err(e) = registry.update_status(backend.id, new_status).await {
-                        tracing::warn!(backend_id = %backend.id, "failed to update status: {e}");
+                // 3. Thermal throttle update from cached hw_metrics
+                if let Some(hw) = load_hw_metrics(pool, backend.id).await {
+                    let prev  = thermal.get(backend.id);
+                    let level = thermal.update(backend.id, hw.temp_c);
+
+                    if level != prev {
+                        match &level {
+                            ThrottleLevel::Hard => {
+                                tracing::warn!(
+                                    backend = %backend.name,
+                                    temp    = hw.temp_c,
+                                    cooldown_secs = 60,
+                                    "HARD THROTTLE: dispatch suspended, cooldown active"
+                                );
+                                use fred::prelude::*;
+                                let _: () = pool
+                                    .set(
+                                        &format!("veronex:throttle:{}", backend.id),
+                                        "hard",
+                                        Some(Expiration::EX(90)),
+                                        None,
+                                        false,
+                                    )
+                                    .await
+                                    .unwrap_or(());
+                            }
+                            ThrottleLevel::Soft => {
+                                tracing::warn!(
+                                    backend = %backend.name,
+                                    temp    = hw.temp_c,
+                                    "SOFT THROTTLE: capped to 1 slot"
+                                );
+                            }
+                            ThrottleLevel::Normal => {
+                                tracing::info!(
+                                    backend = %backend.name,
+                                    temp    = hw.temp_c,
+                                    "throttle lifted — normal ops"
+                                );
+                                use fred::prelude::*;
+                                let _: () = pool
+                                    .del::<(), _>(&format!(
+                                        "veronex:throttle:{}",
+                                        backend.id
+                                    ))
+                                    .await
+                                    .unwrap_or(());
+                            }
+                        }
                     }
-                }
-
-                // 2. Hardware metrics (only when agent_url is configured)
-                if let Some(ref pool) = valkey_pool {
-                    poll_agent_metrics(&client, &backend, pool).await;
                 }
             }
         }
-    });
+    }
+
+    tracing::info!("backend health checker stopped");
 }
