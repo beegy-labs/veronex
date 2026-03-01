@@ -1,6 +1,6 @@
 # Core Development Rules
 
-> CDD Tier 1 — Essential rules for AI assistants | **Last Updated**: 2026-02-27
+> CDD Tier 1 — Essential rules for AI assistants | **Last Updated**: 2026-03-02
 
 ## Language Policy
 
@@ -17,14 +17,14 @@
 
 **Never edit `docs/en/` or `docs/kr/` directly.**
 
-`docs/llm/` 구조: `policies/` (architecture, git-flow) + topic docs (backends, hardware, jobs, infrastructure, web)
+`docs/llm/` structure: `policies/` (architecture, git-flow) + topic docs (backends, hardware, jobs, infrastructure, web)
 
 ## Agentic Dev Protocol
 
 `vendor/agentic-dev-protocol/` (git submodule)
 → https://github.com/beegy-labs/agentic-dev-protocol
 
-개발 프로세스·워크플로우 정책의 upstream SSOT. inferq 전용 규칙은 `.ai/`와 `docs/llm/policies/`에서 관리.
+Upstream SSOT for dev process and workflow policies. Veronex-specific rules are managed in `.ai/` and `docs/llm/policies/`.
 
 ## Architecture: Hexagonal
 
@@ -52,3 +52,5 @@ Inbound Adapters → [Ports] → Application Core → [Ports] → Outbound Adapt
 | Define ports before adapters    | Dependency rule respected         |
 | Use `--theme-*` tokens in CSS   | `tokens.css` is the design SSOT   |
 | Check docs/llm/ before coding   | CDD-first: update docs then code  |
+| Use `onSettled` for TQ invalidation | Runs on error too (not `onSuccess`) |
+| New background loop → accept `CancellationToken` | Enables graceful shutdown via `JoinSet` |

@@ -1,6 +1,6 @@
 # Web — API Test Panel
 
-> SSOT | **Last Updated**: 2026-02-28
+> SSOT | **Last Updated**: 2026-03-01 (rev: single JWT-only mode; sequential numbered run tabs; no localStorage reconnect)
 
 ## Task Guide
 
@@ -10,14 +10,14 @@
 | Change SSE chunk parsing | `web/components/api-test-panel.tsx` `consumeStream()` SSE parsing block | Modify `line.slice(6)` / `JSON.parse` logic |
 | Add new API doc link | `web/app/api-docs/page.tsx` + `web/messages/en.json` `apiDocs.*` | Add card + i18n keys in all 3 locales |
 | Update OpenAPI spec | `crates/inferq/src/infrastructure/inbound/http/openapi.json` | Embedded via `include_str!` — edit JSON directly, rebuild Rust binary |
-| Change localStorage key format | `web/components/api-test-panel.tsx` `lsKey` constant | Format: `veronex:test:tab:{tabKey}` |
+| Change max concurrent runs | `web/components/api-test-panel.tsx` `MAX_RUNS` constant | Default: 10 (oldest run auto-removed) |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `web/components/api-test-panel.tsx` | Multi-tab SSE test panel component |
-| `web/app/jobs/page.tsx` | Embeds `<ApiTestPanel>` + handles retry |
+| `web/components/api-test-panel.tsx` | Multi-run SSE test panel component |
+| `web/app/jobs/page.tsx` | Embeds `<ApiTestPanel>` above job sections |
 | `web/lib/api.ts` | `api.backends()`, `api.ollamaModels()`, `api.geminiModels()`, `api.geminiPolicies()` |
 | `web/messages/en.json` | i18n keys under `test.*`, `apiDocs.*` |
 
@@ -25,27 +25,67 @@
 
 ## ApiTestPanel Component
 
-Embedded in `/jobs` page above the job sections. Manages multiple test tabs.
+Embedded in `/jobs` page above the job sections. JWT-only — always uses the logged-in account's token.
 
-### Multi-Tab Structure
+### Layout
 
 ```
 ┌─ Test Panel ───────────────────────────────────────────────────────────┐
-│ [Tab 1] [Tab 2] [+]                                                     │
+│ [Backend ▼]  [Model ▼]                                                  │
+│ ┌─────────────────────────────────────────────────────────────────┐    │
+│ │ Prompt...                                               [▶ Run]  │    │
+│ └─────────────────────────────────────────────────────────────────┘    │
+│ Running as: admin                                                        │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Backend: [ollama ▼]   Model: [llama3.2 ▼]                             │
-│ Prompt: _______________________________________________                 │
-│ [Send]  [Clear]                                                         │
-│                                                                         │
-│ ┌─ Output ──────────────────────────────────────────────────────────┐  │
-│ │ Streaming tokens appear here...▊                                   │  │
-│ └────────────────────────────────────────────────────────────────────┘  │
+│ [#1 ✓] [#2 ⟳] [#3 ✗]                                                  │
+│ ┌──────────────────────────────────────────────────────────────────┐   │
+│ │ (response output for selected run tab)                            │   │
+│ └──────────────────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-- Each tab is a `TestSession` component with its own state.
-- Tab IDs are integers starting at 1, assigned on creation (`nextId` ref).
-- Each tab gets a unique `tabKey` prop (= `tab.id`) for localStorage isolation.
+- Input area (backend selector + model selector + prompt textarea + Run button) at **top**
+- Results area (tab strip + output) at **bottom**, separated by a divider
+- No mode switcher, no API key input, no manual "+" tab button
+
+### Run State Model
+
+```tsx
+interface Run {
+  id: number          // sequential: 1, 2, 3…
+  prompt: string      // snapshot at time of submission
+  model: string
+  backend: string
+  status: 'idle' | 'streaming' | 'done' | 'error'
+  tokens: string[]
+  errorMsg: string
+}
+```
+
+### Run Lifecycle
+
+Each click of **Run**:
+1. Creates a new `Run` with the next sequential id (`nextIdRef++`)
+2. Appends to `runs` via `dispatch({ type: 'ADD', run })`
+3. Sets `activeRunId` to the new run's id
+4. Streams into that run's slot via `consumeStream()` (updates via functional `setRuns` / `dispatch`)
+5. Reader stored in `readersRef: Map<runId, ReadableStreamDefaultReader>` for per-run cancellation
+
+Tab strip behaviors:
+- Tab dot colors: streaming = info, done = success, error = destructive
+- Clicking a tab → `setActiveRunId(id)`
+- Close (×) button → cancels reader if streaming, dispatches `REMOVE`
+- Max 10 runs: oldest auto-removed when limit exceeded
+
+### Auth & Endpoint
+
+| Auth | Endpoint | Source | account_id |
+|------|----------|--------|-----------|
+| `Authorization: Bearer {JWT}` | `POST /v1/test/completions` | `test` | `claims.sub` |
+
+- No API key required
+- Jobs tracked with `account_id = claims.sub`, `api_key_id = NULL`
+- Excluded from API usage/performance metrics (dashboard job counts filter `source != 'test'`)
 
 ### Backend Selection
 
@@ -60,67 +100,14 @@ Embedded in `/jobs` page above the job sections. Manages multiple test tabs.
 
 ---
 
-## source=test Tagging
+## Test Run Endpoint
 
-All test panel submissions send `"source": "test"` in the request body:
+`POST /v1/test/completions` — JWT Bearer authentication:
+- `api_key_id = NULL`, `account_id = claims.sub`, `source = 'test'`
+- No rate limiting applied
+- Places job in low-priority `veronex:queue:jobs:test` queue
 
-```typescript
-// api-test-panel.tsx — doSubmit()
-body: JSON.stringify({
-  model,
-  messages: [{ role: 'user', content: prompt }],
-  stream: true,
-  source: 'test',    // ← routes to veronex:queue:jobs:test
-})
-```
-
-This places the job into the low-priority test queue (polled after the API queue by BLPOP).
-
----
-
-## localStorage Reconnect (Test Sessions)
-
-When a test job starts, its `job_id` is persisted in `localStorage` so the stream can be recovered if the user navigates away.
-
-### Key Format
-
-```
-veronex:test:tab:{tabKey}
-```
-
-Where `tabKey` = `tab.id` (integer, starts at 1 per session). On page reload, the first tab gets ID 1 and will find `veronex:test:tab:1` from the previous session.
-
-### Lifecycle
-
-```
-doSubmit() receives first SSE chunk with chunk.id (job_id)
-  → localStorage.setItem(lsKey, JSON.stringify({ jobId: chunk.id }))
-
-Page unmount / refresh / navigate away...
-
-TestSession mounts (useEffect):
-  → localStorage.getItem(lsKey)
-  → if jobId found → reconnectStream(jobId)
-
-reconnectStream(savedJobId):
-  → GET /v1/jobs/{savedJobId}/stream  (auth via NEXT_PUBLIC_VERONEX_ADMIN_KEY)
-  → consumes OpenAI SSE format: data: {choices...} → data: [DONE]
-  → re-uses consumeStream() helper (same parsing as live stream)
-
-handleReset():
-  → localStorage.removeItem(lsKey)
-  → clears output + status
-```
-
-### Reconnect Endpoint
-
-```
-GET /v1/jobs/{id}/stream
-    Header: X-API-Key: <admin key>
-    → OpenAI-format SSE
-    → For completed jobs: replays result_text as single chunk + [DONE]
-    → For in-progress jobs: attaches to live token stream
-```
+`GET /v1/test/jobs/{id}/stream` — JWT Bearer SSE for reconnecting to in-progress streams
 
 ---
 
@@ -133,18 +120,11 @@ const text = line.startsWith('data: ') ? line.slice(6) : line.slice(5)
 if (text === '[DONE]') { /* stream complete */ return }
 const chunk = JSON.parse(text)
 
-// Save job_id for reconnect (first chunk only)
-if (!jobId && chunk.id) {
-  jobId = chunk.id
-  localStorage.setItem(lsKey, JSON.stringify({ jobId }))
-}
-
 const content = chunk.choices?.[0]?.delta?.content ?? ''
 ```
 
 - Output rendered with `whitespace-pre-wrap` — preserves newlines and spaces.
 - Streaming cursor (blinking `▊`) shown while `status === 'streaming'`.
-- `consumeStream()` is shared between `doSubmit()` (live) and `reconnectStream()` (replay).
 
 ---
 
@@ -205,9 +185,10 @@ ReDoc UI chrome labels come from i18n keys under `apiDocs.redoc*`:
 
 ### test.*
 ```json
-"title", "backend", "model", "prompt", "send", "clear",
-"streaming", "done", "error", "selectBackend", "selectModel",
-"noModels", "ollamaTestNoModels"
+"title", "backend", "model", "prompt", "send", "run", "stop", "reset", "runAgain",
+"streaming", "done", "error", "output", "complete", "errorTitle",
+"selectBackend", "selectModel", "noModels", "ollamaTestNoModels",
+"runningAs"
 ```
 
 ### apiDocs.*

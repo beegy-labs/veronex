@@ -1,6 +1,6 @@
 # Jobs — Lifecycle, Queue & API
 
-> SSOT | **Last Updated**: 2026-02-28
+> SSOT | **Last Updated**: 2026-03-02 (rev: run_job moved to inference.rs; in-memory job store uses DashMap)
 
 ## Task Guide
 
@@ -11,7 +11,7 @@
 | Change job status flow | `domain/enums.rs` → `JobStatus` + all `match` arms in `use_cases/inference.rs` | |
 | Add new DB column to inference_jobs | `migrations/` + `domain/entities/mod.rs` + `persistence/job_repository.rs` `save()` | |
 | Change queue keys or BLPOP timeout | `application/use_cases/inference.rs` → `QUEUE_KEY_API` / `QUEUE_KEY_TEST` constants + `queue_dispatcher_loop()` | |
-| Change how tokens are counted | `infrastructure/outbound/backend_router.rs` → `run_job()` token processing block | |
+| Change how tokens are counted | `application/use_cases/inference.rs` → `run_job()` token processing block (streaming loop) | |
 | Add new dashboard stat | `dashboard_handlers.rs` → `dashboard_stats()` SQL query | |
 | Add SSE replay for a job | `handlers.rs` → `stream_job_openai()` — already implemented for reconnect use-case | |
 
@@ -23,7 +23,7 @@
 | `crates/inferq/src/domain/enums.rs` | `JobStatus`, `BackendType`, `JobSource` |
 | `crates/inferq/src/application/use_cases/inference.rs` | `InferenceUseCaseImpl` (submit, stream, dispatch loop) |
 | `crates/inferq/src/infrastructure/outbound/persistence/job_repository.rs` | `PostgresJobRepository` (UPSERT) |
-| `crates/inferq/src/infrastructure/outbound/backend_router.rs` | `DynamicBackendRouter` + `run_job()` |
+| `crates/inferq/src/infrastructure/outbound/backend_router.rs` | `DynamicBackendRouter` (dispatch/routing only) |
 | `crates/inferq/src/infrastructure/inbound/http/dashboard_handlers.rs` | Dashboard job list / detail handlers |
 | `crates/inferq/src/infrastructure/inbound/http/handlers.rs` | Native inference handlers + `stream_job_openai` |
 
@@ -35,23 +35,51 @@ Jobs carry a `source` field that records their origin:
 
 | Value | Meaning |
 |-------|---------|
-| `api` | Submitted by an API client via `POST /v1/chat/completions` or `POST /v1/inference` |
-| `test` | Submitted from the dashboard test panel (`source: "test"` in request body) |
+| `api` | Submitted by any API key route (`/v1/chat/completions`, `/api/chat`, `/api/generate`, `/v1beta/models/*`, `/v1/inference`) |
+| `test` | Submitted from the dashboard Test Run panel (`/v1/test/*` routes, Bearer JWT, no rate limit) |
 
 - The `source` field is **immutable** — set at creation, never updated on UPSERT.
 - Default value in DB: `'api'` (backward-compatible with older rows).
 
 ---
 
+## API Format (`ApiFormat`)
+
+`api_format` records which API wire format the request arrived via (route-based discriminator):
+
+| Value | Routes |
+|-------|--------|
+| `OpenaiCompat` | `POST /v1/chat/completions`, `POST /v1/test/completions` |
+| `OllamaNative` | `POST /api/generate`, `POST /api/chat`, `POST /v1/test/api/generate`, `POST /v1/test/api/chat` |
+| `GeminiNative` | `POST /v1beta/models/*`, `POST /v1/test/v1beta/models/*` |
+| `VeronexNative`| `POST /v1/inference` |
+
+- Stored in DB (`api_format` column, migration 000041).
+- Enables per-format analytics and usage tracking.
+
+---
+
 ## Dual-Queue Architecture
 
+Every inference route goes through the Valkey queue (no direct-to-backend path):
+
 ```
-POST /v1/chat/completions (source=api)  ──▶ veronex:queue:jobs          (API queue)
-POST /v1/chat/completions (source=test) ──▶ veronex:queue:jobs:test     (test queue)
+── API routes (source=Api) ────────────────────────────────────────────────────────
+POST /v1/chat/completions           ──▶ veronex:queue:jobs
+POST /v1/inference                  ──▶ veronex:queue:jobs
+POST /api/generate                  ──▶ veronex:queue:jobs
+POST /api/chat                      ──▶ veronex:queue:jobs
+POST /v1beta/models/*:*Content      ──▶ veronex:queue:jobs
+
+── Test Run routes (source=Test) ──────────────────────────────────────────────────
+POST /v1/test/completions           ──▶ veronex:queue:jobs:test
+POST /v1/test/api/chat              ──▶ veronex:queue:jobs:test
+POST /v1/test/api/generate          ──▶ veronex:queue:jobs:test
+POST /v1/test/v1beta/models/*       ──▶ veronex:queue:jobs:test
 
 queue_dispatcher_loop:
   BLPOP [veronex:queue:jobs, veronex:queue:jobs:test] 5.0
-         ↑ API queue is always polled first (Redis BLPOP key-order guarantee)
+         ↑ API queue polled first (Redis BLPOP key-order guarantee)
 ```
 
 Constants in `application/use_cases/inference.rs`:
@@ -69,18 +97,20 @@ const QUEUE_KEY_TEST: &str = "veronex:queue:jobs:test";
 ## Job Lifecycle
 
 ```
-Client → POST /v1/chat/completions (or /v1/inference)
-  → InferenceUseCaseImpl::submit(source)
-  → InferenceJob created (status=Pending, api_key_id set, source set)
-  → Valkey RPUSH veronex:queue:jobs  (or :test)
-  → SSE stream (OpenAI) or { job_id } (native)
+Client → any inference route
+  → InferenceUseCaseImpl::submit(prompt, model, backend_type, api_key_id?, account_id?,
+                                  source, api_format, messages?)
+  → InferenceJob created (status=Pending)
+  → Valkey RPUSH → queue
+  → SSE/NDJSON stream (format per handler)
 
-queue_dispatcher_loop (BLPOP API queue first, then test queue):
-  → DynamicBackendRouter::dispatch()
-  → run_job() (started_at recorded)
-  → OllamaAdapter | GeminiAdapter → SSE tokens
-  → Completed: status=Completed, completed_at, latency_ms, ttft_ms, completion_tokens, result_text saved
-  → ObservabilityPort::record_inference() → Redpanda → ClickHouse inference_logs
+queue_dispatcher_loop (BLPOP API queue first):
+  → thermal + slot check
+  → run_job(): OllamaAdapter.stream_tokens()
+      messages.is_some() → POST /api/chat  (multi-turn)
+      messages.is_none() → POST /api/generate  (single prompt)
+  → Completed: status, latency_ms, ttft_ms, tokens, result_text saved
+  → ObservabilityPort → veronex-analytics → OTel → Redpanda → ClickHouse
 ```
 
 ---
@@ -94,11 +124,15 @@ pub struct InferenceJob {
     pub model_name: String,
     pub backend: BackendType,              // Ollama | Gemini
     pub status: JobStatus,                 // Pending | Running | Completed | Failed | Cancelled
-    pub source: JobSource,                 // Api | Test  ← NEW (migration 000031)
+    pub source: JobSource,                 // Api | Test  (migration 000031)
     pub prompt: String,
     pub result_text: Option<String>,
     pub error: Option<String>,
     pub api_key_id: Option<Uuid>,          // FK → api_keys (ON DELETE SET NULL)
+    pub account_id: Option<Uuid>,          // FK → accounts (Test Run jobs; migration 000037)
+    pub backend_id: Option<Uuid>,          // FK → llm_backends (set at dispatch, not submit; migration 000039)
+    pub api_format: ApiFormat,             // route discriminator (migration 000041)
+    pub messages: Option<serde_json::Value>, // multi-turn context — in-memory DashMap only, NOT persisted to DB
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>, // pure inference start (excludes queue wait)
     pub completed_at: Option<DateTime<Utc>>,
@@ -109,6 +143,9 @@ pub struct InferenceJob {
     pub cached_tokens: Option<i32>,        // migration 000030
 }
 ```
+
+> **`messages`**: held in the in-memory `DashMap<Uuid, JobEntry>` only — never written to `inference_jobs` table.
+> **`backend_id`**: set by `queue_dispatcher_loop` when the job is dispatched to a backend — `NULL` at submit time.
 
 > `latency_ms` = pure inference time (excludes queue wait)
 > `created_at - started_at` = queue wait time
@@ -127,6 +164,9 @@ CREATE TABLE inference_jobs (
     result_text       TEXT,
     error             TEXT,
     api_key_id        UUID REFERENCES api_keys(id) ON DELETE SET NULL,
+    account_id        UUID REFERENCES accounts(id),          -- migration 000037 (Test Run jobs)
+    backend_id        UUID REFERENCES llm_backends(id),      -- migration 000039 (set at dispatch)
+    api_format        TEXT NOT NULL DEFAULT 'openai_compat', -- migration 000041
     created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
     started_at        TIMESTAMPTZ,
     completed_at      TIMESTAMPTZ,
@@ -138,7 +178,8 @@ CREATE TABLE inference_jobs (
 );
 -- migrations: 000002 CREATE, 000004 result_text, 000014 api_key_id,
 --             000015 latency_ms, 000020 ttft_ms+completion_tokens,
---             000029 prompt_tokens, 000030 cached_tokens, 000031 source
+--             000029 prompt_tokens, 000030 cached_tokens, 000031 source,
+--             000037 account_id, 000039 backend_id, 000041 api_format
 CREATE INDEX idx_inference_jobs_source ON inference_jobs(source);
 ```
 
@@ -153,6 +194,43 @@ save()        // UPSERT ON CONFLICT(id) DO UPDATE (status, result_text, error, t
 get_status()  // in-memory map first, DB fallback
 stream()      // token buffer + tokio::Notify (no polling, no broadcast channel)
 ```
+
+### In-Memory Job Store (`InferenceUseCaseImpl`)
+
+The live token buffer and job status are held in `Arc<DashMap<Uuid, JobEntry>>` (not Postgres):
+
+```rust
+// application/use_cases/inference.rs
+struct JobEntry {
+    tokens: Vec<InferenceToken>,   // Vec::with_capacity(256) — avoids repeated realloc
+    notify: Arc<Notify>,           // wakes stream() consumers on new token
+    cancel_notify: Arc<Notify>,    // wakes run_job() cancel branch
+    status: JobStatus,
+    done: bool,
+}
+```
+
+**DashMap rule**: `Ref`/`RefMut` guards must be **dropped before any `.await`**.
+Clone what you need from the guard, then drop it:
+
+```rust
+// ✅ Correct — drop RefMut before notify call
+let notify = {
+    let mut entry = self.jobs.get_mut(&id)?;
+    entry.tokens.push(token);
+    entry.notify.clone()
+};                          // RefMut dropped here
+notify.notify_one();        // .await would be safe here
+
+// ❌ Wrong — holding RefMut across .await → deadlock risk
+let mut entry = self.jobs.get_mut(&id)?;
+entry.tokens.push(token);
+entry.notify.notify_one();
+some_future.await;          // RefMut still alive — blocks shard
+```
+
+`PostgresJobRepository.save()` persists final state to DB only on completion/failure;
+intermediate tokens live only in the DashMap until the stream closes.
 
 ---
 
@@ -208,6 +286,61 @@ pub struct JobSummary {
 
 pub struct JobDetail { /* all JobSummary fields + started_at, prompt, result_text, error */ }
 ```
+
+---
+
+---
+
+## Cancellation
+
+### API
+
+```
+DELETE /v1/dashboard/jobs/{id}   ← primary (JWT-protected, dashboard use)
+DELETE /v1/inference/{job_id}    ← legacy alias (also wired)
+    → 200 OK  (idempotent — no-op if already terminal: Completed or Failed)
+```
+
+Auth: JWT Bearer (`Authorization: Bearer <token>`) for dashboard endpoint.
+API key (`X-API-Key`) is **not** accepted for cancel — dashboard-only operation.
+
+### Backend Guard (`InferenceUseCaseImpl::cancel()`)
+
+`cancel()` is a **no-op** when the job is already in a terminal state:
+
+```rust
+// application/use_cases/inference.rs
+if entry.status == JobStatus::Completed || entry.status == JobStatus::Failed {
+    return Ok(()); // don't override — DB untouched
+}
+```
+
+This prevents a race where the SSE consumer (e.g. browser tab close / page
+navigate) calls `DELETE` after the job has already finished, which would flip
+the status from `completed` → `cancelled`.
+
+When the job IS still active (`pending` or `running`):
+1. In-memory: `entry.status = Cancelled`, `entry.done = true`, both `notify`s fired
+2. `run_job` select! `biased` cancel branch fires immediately — drops the stream
+3. Dropping the stream closes the TCP connection to Ollama (broken-pipe → Ollama stops)
+4. DB: `UPDATE inference_jobs SET status = 'cancelled'`
+
+**Pending job cancel** (job in queue, not yet dispatched):
+- Job dequeued by `DynamicBackendRouter` but status already `Cancelled` → `run_job` cancel branch fires before inference starts
+
+### Frontend Contract (`api-test-panel.tsx`)
+
+- `jobIdRef.current` is cleared to `null` when `[DONE]` is received (natural completion).
+- The unmount cleanup only calls `cancelJob()` when `jobIdRef.current` is non-null.
+- So: closing a tab **after** the stream completes never triggers a cancel request.
+
+### Network Flow Visualization
+
+`cancelled` is treated as a terminal state identical to `completed`/`failed`:
+- `pending|running → cancelled` transition → emits `response` FlowEvent
+- Cancelled response bee color: `var(--theme-status-cancelled)` — slate/gray, dimmed (`cc` opacity)
+- Cancel button in job detail modal: shown for `pending` and `running` jobs only
+  (file: `web/components/job-table.tsx`)
 
 ---
 

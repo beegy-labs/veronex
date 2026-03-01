@@ -1,6 +1,6 @@
 # Code Patterns — 2026 Reference
 
-> SSOT | **Last Updated**: 2026-02-27
+> SSOT | **Last Updated**: 2026-03-02 (rev: DashMap concurrent map pattern; Lua eval atomic Valkey ops)
 > Rust Edition 2024 · Axum 0.8 · sqlx 0.8 · Next.js 15 · React 19 · TanStack Query v5
 
 ---
@@ -159,6 +159,231 @@ tokio::spawn(async move { run_job(state, job_id).await }.instrument(span));
 
 ---
 
+## Rust: Concurrent Maps — DashMap (not `Mutex<HashMap>`)
+
+Use `dashmap::DashMap` for any map shared across async tasks.
+`dashmap = "6"` is already in `Cargo.toml`.
+
+```rust
+// ✅ DashMap — 64 shards, different keys never contend
+use dashmap::DashMap;
+let jobs: Arc<DashMap<Uuid, JobEntry>> = Arc::new(DashMap::new());
+
+// Insert — no lock, no await
+jobs.insert(id, entry);
+
+// Read — returns Ref<'_, K, V>, must be dropped before .await
+let value = jobs.get(&id).map(|r| r.clone());  // clone what you need
+
+// Mutate — RefMut must be dropped before .await or notify calls
+let notify = {
+    let mut entry = jobs.get_mut(&id).ok_or(NotFound)?;
+    entry.tokens.push(token);
+    entry.notify.clone()                        // clone before drop
+};                                              // RefMut dropped here ← critical
+notify.notify_one();
+```
+
+**Rule**: never hold a `Ref`/`RefMut` across an `.await` point or a `yield` — it locks the shard.
+
+```rust
+// ❌ Wrong — RefMut alive across notify (which internally .awaits on Notify::notified)
+let mut entry = jobs.get_mut(&id)?;
+entry.tokens.push(token);
+entry.notify.notify_one();
+some_async_fn().await;   // shard still locked
+```
+
+`std::sync::Mutex<HashMap>` serialises all concurrent accesses on a single lock — avoid it
+for maps used in async hot paths. DashMap shards by key hash, so independent keys never block.
+
+---
+
+## Rust: Atomic Valkey/Redis Ops — Lua Eval
+
+Multi-step Valkey operations (read-modify-write) must be atomic to avoid races.
+Use a single `EVAL` instead of multiple round-trips.
+
+`fred = "9"` requires feature `i-scripts` for `LuaInterface`:
+
+```toml
+# Cargo.toml
+fred = { version = "9", features = ["serde-json", "i-scripts"] }
+```
+
+```rust
+use fred::interfaces::LuaInterface as _;
+
+// Sliding-window RPM check: 4 commands → 1 atomic round-trip
+const RATE_LIMIT_SCRIPT: &str = r#"
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
+redis.call('EXPIRE', KEYS[1], 62)
+return redis.call('ZCARD', KEYS[1])
+"#;
+
+// pool.next() → Arc<RedisClient> which implements LuaInterface
+let count: u64 = pool
+    .next()
+    .eval(
+        RATE_LIMIT_SCRIPT,
+        vec![key.to_string()],
+        vec![window_start.to_string(), now_ms.to_string(), member.to_string()],
+    )
+    .await?;
+```
+
+- `pool.next()` round-robins across pool clients; it does **not** pin to a slot.
+- Lua scripts run atomically on the Valkey server — no interleaved commands from other clients.
+- Fail-open pattern: wrap in `match` and log on error, let the request through.
+
+---
+
+## Rust: Background Tasks — JoinSet + CancellationToken
+
+> Full research: `research/backend/rust-axum.md` (Background Tasks section)
+
+### Current State (this codebase)
+
+Three background loops are launched as fire-and-forget `tokio::spawn`:
+
+```rust
+// main.rs — current pattern (no graceful shutdown)
+start_health_checker(registry.clone(), 30, valkey_pool.clone(), thermal.clone());
+tokio::spawn(run_capacity_analysis_loop(...));
+use_case_impl.start_queue_worker();   // spawns internally
+axum::serve(listener, app).await?;   // process dies on SIGTERM/Ctrl+C
+```
+
+**Problem:** On SIGTERM, tokio drops the runtime immediately. Background tasks cannot flush in-flight state, drain the queue, or release locks.
+
+### 2026 Best Practice — `JoinSet` + `CancellationToken`
+
+`JoinSet` (tokio 1.17+, already in `tokio = "full"`) scopes spawned tasks.
+`CancellationToken` (requires adding `tokio-util`) propagates shutdown signals.
+
+```rust
+// Cargo.toml — add:
+// tokio-util = { version = "0.7", features = ["rt"] }
+
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let shutdown = CancellationToken::new();
+    let mut tasks = JoinSet::new();
+
+    // Pass child tokens — cancel() on parent propagates to all children
+    tasks.spawn(run_health_checker_loop(
+        registry.clone(), 30, valkey_pool.clone(), thermal.clone(),
+        shutdown.child_token(),
+    ));
+    tasks.spawn(run_capacity_analysis_loop(
+        ..., shutdown.child_token(),
+    ));
+    tasks.spawn(run_queue_dispatcher_loop(
+        ..., shutdown.child_token(),
+    ));
+
+    // Axum graceful shutdown — waits for in-flight requests to drain
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.clone().cancelled_owned())
+        .await?;
+
+    // Signal all background tasks to stop
+    shutdown.cancel();
+
+    // Wait for all loops to exit cleanly
+    while let Some(res) = tasks.join_next().await {
+        if let Err(e) = res { tracing::warn!("background task panicked: {e}"); }
+    }
+    Ok(())
+}
+```
+
+### Loop Signature Convention
+
+Each background loop accepts a `CancellationToken` and uses `select!` to exit cleanly:
+
+```rust
+pub async fn run_health_checker_loop(
+    registry: Arc<dyn LlmBackendRegistry>,
+    interval_secs: u64,
+    valkey_pool: Option<RedisPool>,
+    thermal: Arc<ThermalThrottleMap>,
+    shutdown: CancellationToken,          // ← added parameter
+) {
+    let interval = Duration::from_secs(interval_secs);
+    tracing::info!("health checker started");
+
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => {
+                tracing::info!("health checker shutting down");
+                break;
+            }
+            _ = tokio::time::sleep(interval) => {
+                // run health check cycle...
+            }
+        }
+    }
+}
+```
+
+### BLPOP Loop (queue dispatcher) — select! pattern
+
+BLPOP with a timeout is already cancellation-friendly:
+
+```rust
+loop {
+    tokio::select! {
+        _ = shutdown.cancelled() => { break; }
+        result = blpop(&pool, &["queue:jobs", "queue:test"], 5.0) => {
+            // process job...
+        }
+    }
+}
+```
+
+### Migration Plan (Phase 4)
+
+1. Add `tokio-util = { version = "0.7", features = ["rt"] }` to `Cargo.toml`
+2. Refactor `start_health_checker` → `run_health_checker_loop(shutdown: CancellationToken)`
+3. Add `shutdown: CancellationToken` parameter to `run_capacity_analysis_loop`
+4. Refactor `start_queue_worker` / `queue_dispatcher_loop` → accept `CancellationToken`
+5. Update `main.rs`: `JoinSet` + `axum::serve(...).with_graceful_shutdown(...)`
+
+---
+
+## Rust: sqlx — Pool Configuration for Production
+
+```rust
+// database.rs — production-ready pool options
+use sqlx::postgres::PgPoolOptions;
+
+pub async fn connect(url: &str) -> Result<PgPool> {
+    PgPoolOptions::new()
+        .max_connections(10)                           // default: 10
+        .min_connections(2)                            // keep 2 warm connections
+        .acquire_timeout(Duration::from_secs(5))       // fail fast on pool exhaustion
+        .idle_timeout(Duration::from_secs(600))        // release idle after 10m
+        .max_lifetime(Duration::from_secs(1800))       // recycle connections every 30m
+        .connect(url)
+        .await
+        .context("failed to connect to postgres")
+}
+```
+
+**Current codebase:** `database::connect()` uses default pool options. Explicit settings prevent connection pool exhaustion under load.
+
+On shutdown:
+```rust
+pg_pool.close().await;  // drain pool gracefully before process exits
+```
+
+---
+
 ## Rust: Adding a New Port + Adapter
 
 Strict order to respect hexagonal dependency rule:
@@ -179,29 +404,66 @@ Strict order to respect hexagonal dependency rule:
 
 ## Frontend: TanStack Query v5
 
+> Full research: `research/frontend/tanstack-query.md`
+
+### `queryOptions()` Factory — SSOT Pattern (2026)
+
+Define query configuration **once** in `web/lib/queries/` and reuse across components:
+
 ```typescript
-// Read — include all fetch dependencies in queryKey
-const { data, isPending } = useQuery({
-  queryKey: ['backends'],
-  queryFn: () => api.backends(),
-  staleTime: 30_000,          // reuse cache for 30s before background refetch
+// web/lib/queries/dashboard.ts
+import { queryOptions } from '@tanstack/react-query'
+import { api } from '@/lib/api'
+
+export const dashboardStatsQuery = queryOptions({
+  queryKey: ['dashboard', 'stats'],
+  queryFn: () => api.stats(),
+  staleTime: 30_000,
+  retry: false,
 })
 
-// Conditional fetch — only when prerequisites are met
+export const jobsQuery = (params?: string) => queryOptions({
+  queryKey: ['dashboard', 'jobs', params],
+  queryFn: () => api.jobs(params),
+  staleTime: 4_900,
+  refetchInterval: 5_000,
+  refetchIntervalInBackground: false,
+})
+```
+
+```typescript
+// In a page component — use the factory
+const { data } = useQuery(dashboardStatsQuery)
+const { data: jobs } = useQuery(jobsQuery('status=completed'))
+```
+
+Benefits: single place to change staleTime/retry, type-safe key sharing, reuse in `prefetchQuery`.
+
+### Inline `useQuery` (fallback for one-off, modal-only fetches)
+
+```typescript
+// Conditional fetch — only when prerequisites are met (modal, etc.)
 const { data } = useQuery({
   queryKey: ['job-detail', jobId],
   queryFn: () => api.jobDetail(jobId!),
   enabled: !!jobId && open,   // fetch only when modal is open
 })
+```
 
-// Mutation — always invalidate related query on success
+### Mutation — use `onSettled` for cache invalidation
+
+```typescript
+// CORRECT — onSettled runs on both success and error
 const mutation = useMutation({
   mutationFn: (id: string) => api.deleteBackend(id),
-  onSuccess: () => queryClient.invalidateQueries({ queryKey: ['backends'] }),
+  onSettled: () => queryClient.invalidateQueries({ queryKey: ['backends'] }),
   onError: (e: Error) => console.error(e.message),
 })
 mutation.mutate(id)            // fire-and-forget
 await mutation.mutateAsync(id) // await inside async handler
+
+// WRONG — onSuccess skips invalidation on error (stale UI)
+onSuccess: () => queryClient.invalidateQueries(...)
 ```
 
 ---
@@ -291,12 +553,13 @@ const STATUS_COLOR: Record<JobStatus, string> = {
 ## Frontend: Adding a New Page
 
 ```
-1. web/lib/types.ts               ← add TypeScript types (+ Zod schema)
-2. web/lib/api.ts                 ← add API functions using req<T>()
-3. web/app/new-page/page.tsx      ← 'use client' + useQuery + UI
-4. web/components/nav.tsx         ← add navItems entry
-5. web/messages/en.json           ← add i18n keys (source of truth)
-6. web/messages/ko.json           ← Korean translation
-7. web/messages/ja.json           ← Japanese translation
-8. docs/llm/frontend/web-*.md     ← update CDD doc
+1. web/lib/types.ts               ← add TypeScript types (+ Zod schema if untrusted data)
+2. web/lib/api.ts                 ← add API functions to the api object
+3. web/lib/queries/domain.ts      ← add queryOptions factory (SSOT for queryKey + staleTime)
+4. web/app/new-page/page.tsx      ← 'use client' + useQuery(domainQuery) + UI
+5. web/components/nav.tsx         ← add navItems entry
+6. web/messages/en.json           ← add i18n keys (source of truth)
+7. web/messages/ko.json           ← Korean translation
+8. web/messages/ja.json           ← Japanese translation
+9. docs/llm/frontend/web-*.md     ← update CDD doc
 ```

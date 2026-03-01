@@ -1,6 +1,6 @@
 # docs/llm — SSOT Index
 
-> Tier 2 CDD documents (LLM-facing, editable) | **Last Updated**: 2026-02-28 (rev: split backends → providers + servers; pg18; uuidv7)
+> Tier 2 CDD documents (LLM-facing, editable) | **Last Updated**: 2026-03-02 (rev: auth/RBAC/JWT, capacity control, thermal throttle, capacity web UI)
 
 ## Policies
 
@@ -18,7 +18,7 @@
 | Document | Path | Keywords |
 |----------|------|---------|
 | OpenAI API | `backend/openai.md` | /v1/chat/completions, SSE, backend field, curl, Python SDK |
-| API Keys (backend) | `backend/api_keys.md` | ApiKey, BLAKE2b, auth flow, RPM, TPM, rate_limiter.rs |
+| API Keys (backend) | `backend/api_keys.md` | ApiKey, BLAKE2b, UUIDv7 id, non-unique name, auth flow, RPM, TPM, rate_limiter.rs |
 | Jobs (lifecycle) | `backend/jobs.md` | InferenceJob, queue, BLPOP, latency, TTFT, JobSummary |
 | Jobs (analytics) | `backend/jobs-analytics.md` | StreamToken, usageMetadata, ClickHouse, inference_logs, run_job |
 | Ollama backends | `backend/backends-ollama.md` | LlmBackend, VRAM routing, DynamicBackendRouter, health_checker |
@@ -28,6 +28,8 @@
 | Hardware | `backend/hardware.md` | GpuServer, node-exporter, hw_metrics, AMD APU, ClickHouse history |
 | Infrastructure | `backend/infrastructure.md` | docker-compose, ports, env vars, Valkey keys, DB migrations |
 | OTel pipeline | `backend/infrastructure-otel.md` | OTel Collector, Redpanda, ClickHouse Kafka Engine, Helm |
+| Authentication | `backend/auth.md` | JWT HS256, accounts, sessions, RBAC, setup flow, audit trail, password reset |
+| Capacity Control | `backend/capacity.md` | ConcurrencySlotMap, ThermalThrottleMap, capacity analyzer, model_capacity, qwen2.5:3b |
 
 ---
 
@@ -37,7 +39,7 @@
 |----------|------|---------|
 | Design system | `frontend/web.md` | brand, tokens.css, Tailwind v4, i18n, nav sidebar, theme |
 | Servers page | `frontend/web-servers.md` | /servers, ServersTable, ServerMetricsCell, ServerHistoryModal, RegisterServerModal, EditServerModal |
-| Providers page | `frontend/web-providers.md` | /providers, OllamaTab, OllamaSyncSection, GeminiTab, GeminiStatusSyncSection, GeminiSyncSection, ModelSelectionModal |
+| Providers page | `frontend/web-providers.md` | /providers, OllamaTab, OllamaSyncSection, OllamaCapacitySection, GeminiTab, GeminiStatusSyncSection, GeminiSyncSection, ModelSelectionModal, ConcurrencyControl |
 | Jobs/Usage/Perf | `frontend/web-jobs.md` | job-table, detail modal, formatDuration, usage charts, performance P50/P99 |
 | API Keys page | `frontend/web-keys.md` | keys/page.tsx, CreateKeyModal, toggle, soft-delete |
 | Test + API Docs | `frontend/web-test.md` | api-test, SSE parsing, /docs/swagger, /docs/redoc |
@@ -45,11 +47,33 @@
 
 ---
 
-## Design System Spec
+## Research — 2026 Best Practices (`research/`)
 
-| Document | Path |
-|----------|------|
-| Design CI/BI | `specs/20-design-ci-bi.md` |
+> Web-searched + implementation-verified findings. Status: ✅ verified | 🔬 research-only | 📋 to-research
+
+| Document | Path | Topics | Status |
+|----------|------|--------|--------|
+| Index | `research/index.md` | Master index, quick reference | — |
+| CSS Animations | `research/frontend/css-animations.md` | CSS Motion Path, offset-path vs SMIL, particle systems | ✅ |
+| React Patterns | `research/frontend/react.md` | useReducer, ResizeObserver, onAnimationEnd, useMemo rules | ✅ |
+| Data Fetching | `research/frontend/data-fetching.md` | TanStack Query v5, polling, background refetch | ✅ |
+| Next.js 15 | `research/frontend/nextjs.md` | App Router, 'use client' rationale, Server Actions, PPR, Suspense | ✅ |
+| Tailwind v4 | `research/frontend/tailwind.md` | CSS-first config, 4-layer tokens, @utility, container queries | ✅ |
+| TanStack Query | `research/frontend/tanstack-query.md` | queryOptions factory, lib/queries/ SSOT, invalidation, optimistic updates | ✅ |
+| Rust / Axum | `research/backend/rust-axum.md` | Axum 0.8 breaking changes, AppState, SSE, sqlx | ✅ |
+| API Design | `research/backend/api-design.md` | URL conventions, OpenAPI 3.1, rate limit headers, pagination strategy | ✅ |
+| Observability | `research/infrastructure/observability.md` | OTel pipeline, Redpanda, ClickHouse Kafka Engine | ✅ |
+| Database | `research/infrastructure/database.md` | PG18 uuidv7, sqlx, ClickHouse query patterns | ✅ |
+| Auth & Sessions | `research/security/auth.md` | JWT jti, rolling refresh, BLAKE2b, Valkey revocation | ✅ |
+
+---
+
+## Specs
+
+| Document | Path | Status |
+|----------|------|--------|
+| Design CI/BI | `specs/20-design-ci-bi.md` | Active |
+| Adaptive Concurrency | `specs/21-adaptive-concurrency.md` | ⚠️ Superseded → see `backend/capacity.md` |
 
 ---
 
@@ -72,3 +96,20 @@
 | Add Zod schema | `policies/patterns.md` (TypeScript + Zod section) |
 | Add / modify a chart | `frontend/web-charts.md` (SSOT constants + DonutChart props) |
 | Fix chart tooltip text color | `frontend/web-charts.md` (labelStyle / itemStyle requirement) |
+| Implement animation / particles | `research/frontend/css-animations.md` |
+| Choose polling strategy | `research/frontend/data-fetching.md` |
+| TanStack Query queryOptions / invalidation | `research/frontend/tanstack-query.md` |
+| Tailwind token / custom utility | `research/frontend/tailwind.md` |
+| Next.js page architecture decision | `research/frontend/nextjs.md` |
+| API endpoint design / OpenAPI 3.1 | `research/backend/api-design.md` |
+| Complex React state (reducers) | `research/frontend/react.md` |
+| Background task / graceful shutdown | `research/backend/rust-axum.md` (Background Tasks section) + `policies/patterns.md` |
+| Axum route / middleware | `research/backend/rust-axum.md` |
+| OTel pipeline change | `research/infrastructure/observability.md` |
+| Auth / JWT / session | `research/security/auth.md` + `backend/auth.md` |
+| Account management (RBAC) | `backend/auth.md` (account + session endpoints) |
+| Submit test inference (JWT, no API key) | `backend/auth.md` (Test Run Endpoints section) |
+| Add new test route format | `test_handlers.rs` + `router.rs` `build_test_router()` |
+| Dynamic concurrency / thermal throttle | `backend/capacity.md` |
+| Capacity analysis / slot recommendation | `backend/capacity.md` |
+| Modify capacity control web UI | `frontend/web-providers.md` (OllamaCapacitySection) + `backend/capacity.md` |

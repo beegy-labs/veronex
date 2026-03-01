@@ -1,11 +1,14 @@
 # Web — Providers Page (/providers)
 
-> SSOT | **Last Updated**: 2026-02-28
+> SSOT | **Last Updated**: 2026-03-02
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
+| Add new Gemini query key | `web/app/providers/page.tsx` `GEMINI_QUERY_KEYS` constant | Add key → use in query + add to `refreshGeminiData()` |
+| Change capacity analyzer model options | `web/app/providers/page.tsx` `OllamaCapacitySection` — `<select>` maps `available_models` | Models come from `GET /v1/dashboard/capacity/settings` `available_models` (Ollama /api/tags) |
+| Change capacity refresh interval | `web/app/providers/page.tsx` `OllamaCapacitySection` — `useQuery` capacity query | Default: no auto-refetch (manual Sync Now) |
 | Add action button to Ollama backend row | `web/app/providers/page.tsx` `OllamaTab` row actions | Same pattern as existing actions |
 | Add action button to Gemini paid backend row | `web/app/providers/page.tsx` `GeminiTab` Gemini API Keys Table | Paid vs free tier conditional (`!backend.is_free_tier`) |
 | Add field to RegisterOllamaModal | `web/app/providers/page.tsx` modal form state + `web/lib/api.ts` `registerBackend()` | Add field → pass to `api.registerBackend(body)` |
@@ -21,8 +24,8 @@
 | File | Purpose |
 |------|---------|
 | `web/app/providers/page.tsx` | All 2 tabs + all modals (OllamaTab, GeminiTab) |
-| `web/lib/api.ts` | `api.servers()`, `api.backends()`, `api.ollamaModels()`, `api.syncOllamaModels()`, `api.ollamaSyncStatus()`, `api.geminiModels()`, `api.syncGeminiStatus()`, etc. |
-| `web/lib/types.ts` | `LlmBackend`, `GpuServer`, `OllamaSyncJob`, `GeminiRateLimitPolicy`, `GeminiModel`, `BackendSelectedModel`, `GeminiStatusSyncResponse` |
+| `web/lib/api.ts` | `api.servers()`, `api.backends()`, `api.ollamaModels()`, `api.syncOllamaModels()`, `api.ollamaSyncStatus()`, `api.geminiModels()`, `api.syncGeminiStatus()`, `api.capacity()`, `api.capacitySettings()`, `api.patchCapacitySettings()`, `api.triggerCapacitySync()` |
+| `web/lib/types.ts` | `LlmBackend`, `GpuServer`, `OllamaSyncJob`, `GeminiRateLimitPolicy`, `GeminiModel`, `BackendSelectedModel`, `GeminiStatusSyncResponse`, `CapacityResponse`, `BackendCapacityInfo`, `ModelCapacityInfo`, `CapacitySettings`, `PatchCapacitySettings` |
 | `web/messages/en.json` | i18n keys under `backends.*` |
 
 ---
@@ -78,6 +81,13 @@ http://host:11434    GPU 0  VRAM 32 GB
 
                  [← 1 / 2 →]   ← pagination controls
 ```
+
+**OllamaTab renders (in order)**:
+1. Status pills + Register button
+2. Backend table with pagination
+3. `<OllamaSyncSection />` — global model sync
+4. `<OllamaCapacitySection />` — concurrency control (see below)
+5. Modals: `OllamaBackendModelsModal`, `ServerHistoryModal`
 
 Actions: [↻ Healthcheck] [🔄 Sync Models] [⊞ Models (`ListFilter`)] [✏️ Edit] [🗑 Delete]
 
@@ -162,6 +172,65 @@ Opened by clicking a model row in OllamaSyncSection.
 - Search filters by name OR url (host portion)
 - Status dot + badge: green=online, amber=degraded, red=offline
 
+### OllamaCapacitySection — Concurrency Control
+
+Defined as `OllamaCapacitySection` component (no props). Placed after `<OllamaSyncSection />` in OllamaTab.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ ⚡ Concurrency Control                                               │
+│   VRAM-aware slot allocation for local Ollama inference             │
+│                                                                      │
+│ ┌── Analyzer Settings ───────────────────────────────────────────┐  │
+│ │ Analyzer Model [qwen2.5:3b ▾]  Auto Analysis [●──]             │  │
+│ │ Interval (s)   [300       ]    Last run: Mar 2 12:34  ✓ ok     │  │
+│ │ [Save]                         [Sync Now ↻]                    │  │
+│ └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  ollama-rtx4090  🌡 Normal  72°C                                    │
+│  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  │
+│  Model         Slots  Active  VRAM(model)  KV/slot  TPS  P95       │
+│  llama3.2:3b    3      1/3    2.0 GB       56 MB    48   4.3s      │
+│  qwen2.5:7b     2      0/2    4.5 GB       112 MB   —    —         │
+│  [!] High VRAM pressure at current temperature — reduce slots       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Queries**:
+```typescript
+useQuery({ queryKey: ['capacity'], queryFn: api.capacity })         // GET /v1/dashboard/capacity
+useQuery({ queryKey: ['capacity-settings'], queryFn: api.capacitySettings })  // GET /v1/dashboard/capacity/settings
+```
+
+**Mutations**:
+```typescript
+useMutation({ mutationFn: api.patchCapacitySettings })  // PATCH /v1/dashboard/capacity/settings
+useMutation({ mutationFn: api.triggerCapacitySync })    // POST  /v1/dashboard/capacity/sync
+```
+
+**Settings card behaviour**:
+- `analyzerModel` — `<select>` populated from `settings.available_models` (Ollama /api/tags)
+- `batchEnabled` — Switch; when off, auto-analysis loop is paused (manual sync still works)
+- `intervalSecs` — number input (min: 60, step: 30); next loop cycle picks up new value
+- **Save**: `PATCH /v1/dashboard/capacity/settings` → invalidates `['capacity-settings']`
+- **Sync Now**: `POST /v1/dashboard/capacity/sync` → toast "Analysis triggered" → invalidates `['capacity', 'capacity-settings']` after 3s delay (analysis runs async on server)
+
+**Capacity table** (per backend → per loaded model):
+- `ThermalBadge`: `normal` = green pill / `soft` = amber "Soft Throttle" / `hard` = red "Hard Throttle"
+- `temp_c` shown alongside badge when non-null
+- `recommended_slots` shown as bold circle badge (`⬤ N`)
+- `active_slots / recommended_slots` format
+- VRAM and KV/slot use `fmtMbShort(mb)` helper: `>= 1024` → `N.N GB`, else `N MB`
+- `avg_tokens_per_sec`, `p95_latency_ms` shown as `—` when `sample_count === 0`
+- When `llm_concern` is not null: extra row with yellow background showing concern + reason text
+- Empty state card with "Sync Now" hint when `capacity.backends` is empty
+
+**Helpers**:
+```typescript
+function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' })  // colored pill
+function fmtMbShort(mb: number): string  // >= 1024 → "N.N GB", else "N MB"
+```
+
 ---
 
 ## GeminiTab — Three Sections
@@ -213,16 +282,51 @@ Placed between the Gemini API Keys Table and GeminiSyncSection.
 
 Defined as separate component `GeminiSyncSection` inside `GeminiTab`.
 
-**State** (inside GeminiSyncSection):
-```typescript
-const [editingPolicy, setEditingPolicy] = useState<GeminiRateLimitPolicy | null>(null)
+#### SSOT: `GEMINI_QUERY_KEYS`
 
-const { data: modelsData } = useQuery({ queryKey: ['gemini-models'], queryFn: api.geminiModels })
-const { data: policies }   = useQuery({ queryKey: ['gemini-policies'], queryFn: api.geminiPolicies })
-const { data: syncConfig } = useQuery({ queryKey: ['gemini-sync-config'], queryFn: api.geminiSyncConfig })
+Module-level constant — **all** Gemini query key references must use this:
+
+```typescript
+const GEMINI_QUERY_KEYS = {
+  syncConfig:     ['gemini-sync-config'],
+  models:         ['gemini-models'],
+  policies:       ['gemini-policies'],
+  selectedModels: ['selected-models'], // prefix — matches all ['selected-models', backendId]
+} as const
 ```
 
-**Sync Controls Card**: Admin API Key (masked) + Edit button → `SetSyncKeyModal` + Sync Now → `POST /v1/gemini/models/sync`
+`refreshGeminiData()` is the single refresh function inside `GeminiSyncSection`:
+```typescript
+function refreshGeminiData() {
+  queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.models })
+  queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.policies })
+  queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.selectedModels })
+}
+```
+Both the **Sync Now** button (`syncMutation.onSuccess`) and the **Refresh** button call this.
+When sync completes, `['selected-models', *]` is also invalidated so `ModelSelectionModal`
+picks up newly synced models automatically.
+
+**State** (inside GeminiSyncSection):
+```typescript
+const { data: modelsData, isFetching: modelsFetching } = useQuery({
+  queryKey: GEMINI_QUERY_KEYS.models, queryFn: api.geminiModels })
+const { data: policies, isFetching: policiesFetching } = useQuery({
+  queryKey: GEMINI_QUERY_KEYS.policies, queryFn: api.geminiPolicies })
+const { data: syncConfig } = useQuery({
+  queryKey: GEMINI_QUERY_KEYS.syncConfig, queryFn: api.geminiSyncConfig })
+const isRefreshing = (modelsFetching || policiesFetching) && !syncMutation.isPending
+```
+
+**Sync Controls Card**: Admin API Key (masked) + Edit → `SetSyncKeyModal`
+
+```
+[Sync Now ↻]   [↻ Refresh]   Last synced: Mar 1 08:49   ✓ 12 global models
+```
+
+- **Sync Now**: calls `POST /v1/gemini/models/sync` → Gemini API → DB → `refreshGeminiData()`
+- **Refresh**: calls `refreshGeminiData()` only (DB re-read, no Gemini API call)
+- Refresh button shows spinner (`animate-spin`) when `isRefreshing`
 
 **Rate Limit Table** (per-model policies only — no global `*` default row):
 
@@ -249,7 +353,7 @@ Model: gemini-2.5-flash
 [Cancel] [Save] → api.upsertGeminiPolicy(model_name, request)
 ```
 
-**SetSyncKeyModal**: password input → `PUT /v1/gemini/sync-config`. Invalidates `['gemini-sync-config']`.
+**SetSyncKeyModal**: password input → `PUT /v1/gemini/sync-config`. Invalidates `GEMINI_QUERY_KEYS.syncConfig`.
 
 ### 4. ModelSelectionModal (paid backends)
 
@@ -259,7 +363,8 @@ Opened by `ListFilter` button on paid backend rows.
 - Toggle → `PATCH /v1/backends/{id}/selected-models/{model_name}` `{ is_enabled: bool }`
 - Optimistic update: switch flips immediately, reverts on error
 - Empty state: "No global models. Set an admin key and click Sync Now."
-- `useQuery({ queryKey: ['selected-models', backendId] })`
+- `useQuery({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, backendId] })`
+- Auto-refreshed when `refreshGeminiData()` is called (prefix invalidation)
 
 ---
 
@@ -275,5 +380,13 @@ Opened by `ListFilter` button on paid backend rows.
 "gemini.statusSyncSection", "gemini.statusSyncDesc", "gemini.syncStatus",
 "gemini.syncingStatus", "gemini.statusSyncDone", "gemini.noStatusResults",
 "syncSection", "syncKey", "setSyncKey", "syncNow", "lastSynced",
-"globalModels", "noGlobalModels", "modelSelection", "noModels"
+"globalModels", "noGlobalModels", "modelSelection", "noModels",
+"capacity.title", "capacity.desc", "capacity.syncNow", "capacity.syncing",
+"capacity.triggered", "capacity.settings", "capacity.analyzerModel",
+"capacity.autoAnalysis", "capacity.interval", "capacity.saving",
+"capacity.lastRun", "capacity.never", "capacity.statusOk", "capacity.statusError",
+"capacity.noData", "capacity.slots", "capacity.recommended",
+"capacity.vramModel", "capacity.kvPerSlot", "capacity.avgTps", "capacity.p95",
+"capacity.sampleCount", "capacity.thermal.normal", "capacity.thermal.soft",
+"capacity.thermal.hard", "capacity.concern", "capacity.reason"
 ```

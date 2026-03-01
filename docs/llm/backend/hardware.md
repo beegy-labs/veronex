@@ -1,6 +1,6 @@
 # Hardware — GPU Server & Metrics
 
-> SSOT | **Last Updated**: 2026-02-27
+> SSOT | **Last Updated**: 2026-03-01 (rev: history max 168h → 1440h, adaptive buckets)
 
 ## Task Guide
 
@@ -78,8 +78,8 @@ GET    /v1/servers/{id}/metrics
        → NodeMetrics
 
 GET    /v1/servers/{id}/metrics/history?hours=N
-       N: default 1, max 168; 503 = ClickHouse not configured
-       → Vec<ServerMetricsPoint>  (1-minute buckets from otel_metrics_gauge)
+       N: default 1, max 1440 (60 days); 503 = ClickHouse not configured
+       → Vec<ServerMetricsPoint>  (adaptive buckets from otel_metrics_gauge)
 
 GET    /v1/metrics/targets
        Prometheus HTTP SD — no auth required, OTel Collector only
@@ -150,11 +150,22 @@ Identify via `node_hwmon_chip_names{chip_name="amdgpu"}`. Two-step query in `hw_
 
 ---
 
+## History Bucket Sizes (adaptive)
+
+| `hours` range | Bucket | Max points |
+|--------------|--------|-----------|
+| ≤ 24h | 1 MINUTE | 1 440 |
+| ≤ 168h (7d) | 5 MINUTE | 2 016 |
+| > 168h (up to 1440h / 60d) | 60 MINUTE | 1 440 |
+
+Controlled by `let bucket_interval` in `gpu_server_handlers.rs` → passed into the SQL format string.
+
 ## ClickHouse History Query
 
 ```sql
 -- Two-step: first find amdgpu chip label, then:
-SELECT toStartOfInterval(TimeUnix, INTERVAL 1 MINUTE) AS ts,
+-- bucket_interval = "1 MINUTE" | "5 MINUTE" | "60 MINUTE" (selected by hours range)
+SELECT toStartOfInterval(TimeUnix, INTERVAL {bucket_interval}) AS ts,
        maxIf(Value, MetricName='node_memory_MemTotal_bytes') / 1048576      AS mem_total_mb,
        avgIf(Value, MetricName='node_memory_MemAvailable_bytes') / 1048576  AS mem_avail_mb,
        avgIf(Value, MetricName='node_hwmon_temp_celsius'
