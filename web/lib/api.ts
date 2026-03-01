@@ -1,16 +1,13 @@
-import type { AnalyticsStats, ApiKey, Backend, BackendSelectedModel, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AnalyticsStats, ApiKey, AuditEvent, Backend, BackendSelectedModel, CapacityResponse, CapacitySettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LoginRequest, LoginResponse, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import { apiClient } from './api-client'
 
 const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
-const KEY  = process.env.NEXT_PUBLIC_VERONEX_ADMIN_KEY ?? ''
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+/** Plain fetch for public routes (setup, auth) — no auth header. */
+async function fetchPublic<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: {
-      'X-API-Key': KEY,
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
@@ -19,161 +16,210 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // ── Dashboard (JWT-protected) ─────────────────────────────────────────────
   stats: () =>
-    req<DashboardStats>('/v1/dashboard/stats'),
+    apiClient.get<DashboardStats>('/v1/dashboard/stats'),
 
   jobs: (params?: string) =>
-    req<{ jobs: Job[]; total: number }>(
+    apiClient.get<{ jobs: Job[]; total: number }>(
       `/v1/dashboard/jobs${params ? '?' + params : ''}`,
     ),
 
   jobDetail: (id: string) =>
-    req<JobDetail>(`/v1/dashboard/jobs/${id}`),
-
-  keys: () =>
-    req<ApiKey[]>('/v1/keys'),
-
-  createKey: (body: CreateKeyRequest) =>
-    req<CreateKeyResponse>('/v1/keys', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  deleteKey: (id: string) =>
-    req<void>(`/v1/keys/${id}`, { method: 'DELETE' }),
-
-  toggleKeyActive: (id: string, is_active: boolean) =>
-    req<void>(`/v1/keys/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ is_active }),
-    }),
-
-  submitInference: (body: { prompt: string; model: string; backend: string }) =>
-    req<{ job_id: string }>('/v1/inference', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
+    apiClient.get<JobDetail>(`/v1/dashboard/jobs/${id}`),
 
   cancelJob: (id: string) =>
-    req<void>(`/v1/inference/${id}`, { method: 'DELETE' }),
-
-  servers: () =>
-    req<GpuServer[]>('/v1/servers'),
-
-  registerServer: (body: RegisterGpuServerRequest) =>
-    req<{ id: string }>('/v1/servers', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  updateServer: (id: string, body: UpdateGpuServerRequest) =>
-    req<GpuServer>(`/v1/servers/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    }),
-
-  deleteServer: (id: string) =>
-    req<void>(`/v1/servers/${id}`, { method: 'DELETE' }),
-
-  serverMetrics: (id: string) =>
-    req<NodeMetrics>(`/v1/servers/${id}/metrics`),
-
-  serverMetricsHistory: (id: string, hours = 1) =>
-    req<ServerMetricsPoint[]>(`/v1/servers/${id}/metrics/history?hours=${hours}`),
-
-  backends: () =>
-    req<Backend[]>('/v1/backends'),
-
-  registerBackend: (body: RegisterBackendRequest) =>
-    req<RegisterBackendResponse>('/v1/backends', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  deleteBackend: (id: string) =>
-    req<void>(`/v1/backends/${id}`, { method: 'DELETE' }),
-
-  updateBackend: (id: string, body: UpdateBackendRequest) =>
-    req<Backend>(`/v1/backends/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    }),
-
-  healthcheckBackend: (id: string) =>
-    req<{ id: string; status: string }>(`/v1/backends/${id}/healthcheck`, { method: 'POST' }),
-
-  backendModels: (id: string) =>
-    req<{ models: string[] }>(`/v1/backends/${id}/models`),
-
-  syncBackendModels: (id: string) =>
-    req<{ models: string[]; synced: boolean }>(`/v1/backends/${id}/models/sync`, { method: 'POST' }),
-
-  backendKey: (id: string) =>
-    req<{ key: string }>(`/v1/backends/${id}/key`),
-
-  getSelectedModels: (backendId: string) =>
-    req<{ models: BackendSelectedModel[] }>(`/v1/backends/${backendId}/selected-models`),
-
-  setModelEnabled: (backendId: string, modelName: string, isEnabled: boolean) =>
-    req<void>(`/v1/backends/${backendId}/selected-models/${encodeURIComponent(modelName)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ is_enabled: isEnabled }),
-    }),
-
-  usageAggregate: (hours = 24) =>
-    req<UsageAggregate>(`/v1/usage?hours=${hours}`),
-
-  keyUsage: (keyId: string, hours = 24) =>
-    req<HourlyUsage[]>(`/v1/usage/${keyId}?hours=${hours}`),
+    apiClient.delete<void>(`/v1/dashboard/jobs/${id}`),
 
   performance: (hours = 24) =>
-    req<PerformanceStats>(`/v1/dashboard/performance?hours=${hours}`),
+    apiClient.get<PerformanceStats>(`/v1/dashboard/performance?hours=${hours}`),
 
   analytics: (hours = 24) =>
-    req<AnalyticsStats>(`/v1/dashboard/analytics?hours=${hours}`),
+    apiClient.get<AnalyticsStats>(`/v1/dashboard/analytics?hours=${hours}`),
+
+  // ── Capacity (JWT-protected) ──────────────────────────────────────────────
+  capacity: () =>
+    apiClient.get<CapacityResponse>('/v1/dashboard/capacity'),
+
+  capacitySettings: () =>
+    apiClient.get<CapacitySettings>('/v1/dashboard/capacity/settings'),
+
+  patchCapacitySettings: (body: PatchCapacitySettings) =>
+    apiClient.patch<CapacitySettings>('/v1/dashboard/capacity/settings', body),
+
+  triggerCapacitySync: () =>
+    apiClient.post<{ message: string }>('/v1/dashboard/capacity/sync', {}),
+
+  // ── Key management (JWT-protected) ────────────────────────────────────────
+  keys: () =>
+    apiClient.get<ApiKey[]>('/v1/keys'),
+
+  createKey: (body: CreateKeyRequest) =>
+    apiClient.post<CreateKeyResponse>('/v1/keys', body),
+
+  deleteKey: (id: string) =>
+    apiClient.delete<void>(`/v1/keys/${id}`),
+
+  toggleKeyActive: (id: string, is_active: boolean) =>
+    apiClient.patch<void>(`/v1/keys/${id}`, { is_active }),
+
+  // ── Usage (JWT-protected) ─────────────────────────────────────────────────
+  usageAggregate: (hours = 24) =>
+    apiClient.get<UsageAggregate>(`/v1/usage?hours=${hours}`),
+
+  keyUsage: (keyId: string, hours = 24) =>
+    apiClient.get<HourlyUsage[]>(`/v1/usage/${keyId}?hours=${hours}`),
 
   usageBreakdown: (hours = 24) =>
-    req<UsageBreakdown>(`/v1/usage/breakdown?hours=${hours}`),
+    apiClient.get<UsageBreakdown>(`/v1/usage/breakdown?hours=${hours}`),
 
+  // ── GPU servers (JWT-protected) ───────────────────────────────────────────
+  servers: () =>
+    apiClient.get<GpuServer[]>('/v1/servers'),
+
+  registerServer: (body: RegisterGpuServerRequest) =>
+    apiClient.post<{ id: string }>('/v1/servers', body),
+
+  updateServer: (id: string, body: UpdateGpuServerRequest) =>
+    apiClient.patch<GpuServer>(`/v1/servers/${id}`, body),
+
+  deleteServer: (id: string) =>
+    apiClient.delete<void>(`/v1/servers/${id}`),
+
+  serverMetrics: (id: string) =>
+    apiClient.get<NodeMetrics>(`/v1/servers/${id}/metrics`),
+
+  serverMetricsHistory: (id: string, hours = 1) =>
+    apiClient.get<ServerMetricsPoint[]>(`/v1/servers/${id}/metrics/history?hours=${hours}`),
+
+  // ── Backends (JWT-protected) ──────────────────────────────────────────────
+  backends: () =>
+    apiClient.get<Backend[]>('/v1/backends'),
+
+  registerBackend: (body: RegisterBackendRequest) =>
+    apiClient.post<RegisterBackendResponse>('/v1/backends', body),
+
+  deleteBackend: (id: string) =>
+    apiClient.delete<void>(`/v1/backends/${id}`),
+
+  updateBackend: (id: string, body: UpdateBackendRequest) =>
+    apiClient.patch<Backend>(`/v1/backends/${id}`, body),
+
+  healthcheckBackend: (id: string) =>
+    apiClient.post<{ id: string; status: string }>(`/v1/backends/${id}/healthcheck`),
+
+  backendModels: (id: string) =>
+    apiClient.get<{ models: string[] }>(`/v1/backends/${id}/models`),
+
+  syncBackendModels: (id: string) =>
+    apiClient.post<{ models: string[]; synced: boolean }>(`/v1/backends/${id}/models/sync`),
+
+  backendKey: (id: string) =>
+    apiClient.get<{ key: string }>(`/v1/backends/${id}/key`),
+
+  getSelectedModels: (backendId: string) =>
+    apiClient.get<{ models: BackendSelectedModel[] }>(`/v1/backends/${backendId}/selected-models`),
+
+  setModelEnabled: (backendId: string, modelName: string, isEnabled: boolean) =>
+    apiClient.patch<void>(`/v1/backends/${backendId}/selected-models/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
+
+  // ── Gemini (JWT-protected) ────────────────────────────────────────────────
   geminiPolicies: () =>
-    req<GeminiRateLimitPolicy[]>('/v1/gemini/policies'),
+    apiClient.get<GeminiRateLimitPolicy[]>('/v1/gemini/policies'),
 
   upsertGeminiPolicy: (modelName: string, body: UpsertGeminiPolicyRequest) =>
-    req<GeminiRateLimitPolicy>(`/v1/gemini/policies/${encodeURIComponent(modelName)}`, {
-      method: 'PUT',
+    apiClient.put<GeminiRateLimitPolicy>(`/v1/gemini/policies/${encodeURIComponent(modelName)}`, body),
+
+  geminiSyncConfig: () =>
+    apiClient.get<GeminiSyncConfig>('/v1/gemini/sync-config'),
+
+  setGeminiSyncConfig: (api_key: string) =>
+    apiClient.put<void>('/v1/gemini/sync-config', { api_key }),
+
+  syncGeminiModels: () =>
+    apiClient.post<{ models: string[]; count: number }>('/v1/gemini/models/sync'),
+
+  syncGeminiStatus: () =>
+    apiClient.post<GeminiStatusSyncResponse>('/v1/gemini/sync-status'),
+
+  geminiModels: () =>
+    apiClient.get<{ models: GeminiModel[] }>('/v1/gemini/models'),
+
+  // ── Ollama (JWT-protected) ────────────────────────────────────────────────
+  ollamaModels: () =>
+    apiClient.get<{ models: OllamaModelWithCount[] }>('/v1/ollama/models'),
+
+  syncOllamaModels: () =>
+    apiClient.post<{ job_id: string; status: string }>('/v1/ollama/models/sync'),
+
+  ollamaSyncStatus: () =>
+    apiClient.get<OllamaSyncJob>('/v1/ollama/sync/status'),
+
+  ollamaModelBackends: (modelName: string) =>
+    apiClient.get<{ backends: OllamaBackendForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/backends`),
+
+  ollamaBackendModels: (backendId: string) =>
+    apiClient.get<{ models: string[] }>(`/v1/ollama/backends/${backendId}/models`),
+
+  // ── Setup (public — no auth, first-run only) ──────────────────────────────
+  setupStatus: () =>
+    fetchPublic<{ needs_setup: boolean }>('/v1/setup/status'),
+
+  setup: (body: { username: string; password: string }) =>
+    fetchPublic<LoginResponse>('/v1/setup', {
+      method: 'POST',
       body: JSON.stringify(body),
     }),
 
-  geminiSyncConfig: () =>
-    req<GeminiSyncConfig>('/v1/gemini/sync-config'),
-
-  setGeminiSyncConfig: (api_key: string) =>
-    req<void>('/v1/gemini/sync-config', {
-      method: 'PUT',
-      body: JSON.stringify({ api_key }),
+  // ── Auth (public) ─────────────────────────────────────────────────────────
+  login: (body: LoginRequest) =>
+    fetchPublic<LoginResponse>('/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
 
-  syncGeminiModels: () =>
-    req<{ models: string[]; count: number }>('/v1/gemini/models/sync', { method: 'POST' }),
+  logout: (refresh_token: string) =>
+    fetchPublic<void>('/v1/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ refresh_token }),
+    }),
 
-  syncGeminiStatus: () =>
-    req<GeminiStatusSyncResponse>('/v1/gemini/sync-status', { method: 'POST' }),
+  // ── Accounts (JWT-protected) ──────────────────────────────────────────────
+  accounts: () =>
+    apiClient.get<Account[]>('/v1/accounts'),
 
-  geminiModels: () =>
-    req<{ models: GeminiModel[] }>('/v1/gemini/models'),
+  createAccount: (body: CreateAccountRequest) =>
+    apiClient.post<CreateAccountResponse>('/v1/accounts', body),
 
-  ollamaModels: () =>
-    req<{ models: OllamaModelWithCount[] }>('/v1/ollama/models'),
+  updateAccount: (id: string, body: Partial<Pick<Account, 'name' | 'email' | 'department' | 'position'>>) =>
+    apiClient.patch<void>(`/v1/accounts/${id}`, body),
 
-  syncOllamaModels: () =>
-    req<{ job_id: string; status: string }>('/v1/ollama/models/sync', { method: 'POST' }),
+  deleteAccount: (id: string) =>
+    apiClient.delete<void>(`/v1/accounts/${id}`),
 
-  ollamaSyncStatus: () =>
-    req<OllamaSyncJob>('/v1/ollama/sync/status'),
+  setAccountActive: (id: string, is_active: boolean) =>
+    apiClient.patch<void>(`/v1/accounts/${id}/active`, { is_active }),
 
-  ollamaModelBackends: (modelName: string) =>
-    req<{ backends: OllamaBackendForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/backends`),
+  createResetLink: (id: string) =>
+    apiClient.post<{ token: string }>(`/v1/accounts/${id}/reset-link`),
 
-  ollamaBackendModels: (backendId: string) =>
-    req<{ models: string[] }>(`/v1/ollama/backends/${backendId}/models`),
+  accountSessions: (id: string) =>
+    apiClient.get<SessionRecord[]>(`/v1/accounts/${id}/sessions`),
+
+  revokeSession: (sessionId: string) =>
+    apiClient.delete<void>(`/v1/sessions/${sessionId}`),
+
+  revokeAllSessions: (accountId: string) =>
+    apiClient.delete<void>(`/v1/accounts/${accountId}/sessions`),
+
+  // ── Audit (JWT-protected) ─────────────────────────────────────────────────
+  auditEvents: (params?: { limit?: number; offset?: number; action?: string; resource_type?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.offset) qs.set('offset', String(params.offset))
+    if (params?.action) qs.set('action', params.action)
+    if (params?.resource_type) qs.set('resource_type', params.resource_type)
+    const q = qs.toString()
+    return apiClient.get<AuditEvent[]>(`/v1/audit${q ? '?' + q : ''}`)
+  },
 }

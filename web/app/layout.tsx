@@ -2,10 +2,55 @@
 
 import './globals.css'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import Nav from '@/components/nav'
 import { I18nProvider } from '@/components/i18n-provider'
 import { ThemeProvider } from '@/components/theme-provider'
+import { isLoggedIn } from '@/lib/auth'
+import { api } from '@/lib/api'
+import { TimezoneProvider } from '@/components/timezone-provider'
+
+function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
+  const router = useRouter()
+  const isLoginPage = pathname === '/login'
+  const isSetupPage = pathname === '/setup'
+
+  useEffect(() => {
+    api.setupStatus().then(({ needs_setup }) => {
+      if (needs_setup) {
+        // Setup not complete — only /setup is allowed
+        if (!isSetupPage) router.replace('/setup')
+      } else {
+        // Setup complete — /setup must not be accessible
+        if (isSetupPage) {
+          router.replace(isLoggedIn() ? '/' : '/login')
+        } else if (!isLoginPage && !isLoggedIn()) {
+          router.replace('/login')
+        }
+      }
+    }).catch(() => {
+      // API unreachable — fall back to auth check (don't redirect to setup)
+      if (!isSetupPage && !isLoginPage && !isLoggedIn()) {
+        router.replace('/login')
+      }
+    })
+  }, [isLoginPage, isSetupPage, router])
+
+  if (isLoginPage || isSetupPage) {
+    return <>{children}</>
+  }
+
+  return (
+    <div className="flex h-full min-h-screen">
+      <Nav />
+      <main className="flex-1 overflow-auto p-4 pt-16 md:p-8">
+        {children}
+      </main>
+    </div>
+  )
+}
 
 export default function RootLayout({
   children,
@@ -33,14 +78,11 @@ export default function RootLayout({
       <body className="h-full bg-background text-foreground">
         <ThemeProvider>
           <I18nProvider>
-            <QueryClientProvider client={queryClient}>
-              <div className="flex h-full min-h-screen">
-                <Nav />
-                <main className="flex-1 overflow-auto p-4 pt-16 md:p-8">
-                  {children}
-                </main>
-              </div>
-            </QueryClientProvider>
+            <TimezoneProvider>
+              <QueryClientProvider client={queryClient}>
+                <AppShell>{children}</AppShell>
+              </QueryClientProvider>
+            </TimezoneProvider>
           </I18nProvider>
         </ThemeProvider>
       </body>

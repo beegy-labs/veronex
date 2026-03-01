@@ -2,15 +2,19 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { keysQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, CreateKeyResponse } from '@/lib/types'
-import { Plus, FlaskConical, Trash2, Copy, Check } from 'lucide-react'
+import { Plus, Trash2, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
 import {
   Dialog,
   DialogContent,
@@ -27,6 +31,8 @@ import {
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
+import { useTimezone } from '@/components/timezone-provider'
+import { fmtDateOnly } from '@/lib/date'
 
 function CopyButton({ text }: { text: string }) {
   const { t } = useTranslation()
@@ -48,17 +54,16 @@ function CopyButton({ text }: { text: string }) {
 function CreateKeyModal({
   onClose,
   onCreated,
-  keyType = 'standard',
 }: {
   onClose: () => void
   onCreated: (resp: CreateKeyResponse) => void
-  keyType?: string
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
   const [tenantId, setTenantId] = useState('default')
   const [rpm, setRpm] = useState('')
   const [tpm, setTpm] = useState('')
+  const [tier, setTier] = useState<'free' | 'paid'>('paid')
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -67,21 +72,16 @@ function CreateKeyModal({
         tenant_id: tenantId.trim(),
         rate_limit_rpm: rpm ? parseInt(rpm, 10) : undefined,
         rate_limit_tpm: tpm ? parseInt(tpm, 10) : undefined,
-        key_type: keyType,
+        tier,
       }),
     onSuccess: (data) => onCreated(data),
   })
-
-  const isTest = keyType === 'test'
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            {isTest && <FlaskConical className="h-4 w-4 text-status-info-fg" />}
-            {isTest ? t('keys.createTestTitle') : t('keys.createTitle')}
-          </DialogTitle>
+          <DialogTitle>{t('keys.createTitle')}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -103,6 +103,19 @@ function CreateKeyModal({
               onChange={(e) => setTenantId(e.target.value)}
               placeholder="default"
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="key-tier">{t('keys.tier')}</Label>
+            <Select value={tier} onValueChange={(v) => setTier(v as 'free' | 'paid')}>
+              <SelectTrigger id="key-tier">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="paid">{t('keys.tierPaid')}</SelectItem>
+                <SelectItem value="free">{t('keys.tierFree')}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -131,11 +144,7 @@ function CreateKeyModal({
 
         {mutation.error && (
           <p className="text-sm text-destructive">
-            {mutation.error instanceof Error && mutation.error.message.startsWith('409')
-              ? t('keys.nameTaken')
-              : mutation.error instanceof Error
-                ? mutation.error.message
-                : t('common.unknownError')}
+            {mutation.error instanceof Error ? mutation.error.message : t('common.unknownError')}
           </p>
         )}
 
@@ -210,16 +219,13 @@ function DeleteConfirmModal({
 
 export default function KeysPage() {
   const { t } = useTranslation()
+  const { tz } = useTimezone()
   const queryClient = useQueryClient()
-  const [showCreate, setShowCreate] = useState<'standard' | 'test' | null>(null)
+  const [showCreate, setShowCreate] = useState(false)
   const [createdKey, setCreatedKey] = useState<CreateKeyResponse | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null)
 
-  const { data: keys, isLoading, error } = useQuery({
-    queryKey: ['keys'],
-    queryFn: () => api.keys(),
-    refetchInterval: 60_000,
-  })
+  const { data: keys, isLoading, error } = useQuery(keysQuery)
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteKey(id),
@@ -236,30 +242,26 @@ export default function KeysPage() {
   })
 
   function handleCreated(resp: CreateKeyResponse) {
-    setShowCreate(null)
+    setShowCreate(false)
     setCreatedKey(resp)
     queryClient.invalidateQueries({ queryKey: ['keys'] })
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t('keys.title')}</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            {keys ? `${keys.length} key${keys.length !== 1 ? 's' : ''}` : t('common.loading')}
+            {keys
+              ? t('keys.keysCount', { count: keys.length })
+              : t('common.loading')}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setShowCreate('test')}>
-            <FlaskConical className="h-4 w-4 mr-2" />
-            {t('keys.createTestKey')}
-          </Button>
-          <Button onClick={() => setShowCreate('standard')}>
-            <Plus className="h-4 w-4 mr-2" />
-            {t('keys.createKey')}
-          </Button>
-        </div>
+        <Button onClick={() => setShowCreate(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          {t('keys.createKey')}
+        </Button>
       </div>
 
       {isLoading && (
@@ -279,92 +281,93 @@ export default function KeysPage() {
         </Card>
       )}
 
-      {keys && keys.length === 0 && (
-        <DataTableEmpty>{t('keys.noKeys')}</DataTableEmpty>
-      )}
-
-      {keys && keys.length > 0 && (
-        <DataTable minWidth="700px">
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t('keys.name')}</TableHead>
-              <TableHead>{t('keys.prefix')}</TableHead>
-              <TableHead>{t('keys.tenant')}</TableHead>
-              <TableHead>{t('keys.type')}</TableHead>
-              <TableHead>{t('keys.status')}</TableHead>
-              <TableHead>{t('keys.activeToggle')}</TableHead>
-              <TableHead>{t('keys.rpmTpm')}</TableHead>
-              <TableHead>{t('keys.createdAt')}</TableHead>
-              <TableHead className="text-right">{t('keys.actions')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {keys.map((key) => (
-              <TableRow key={key.id} className={!key.is_active ? 'opacity-50' : ''}>
-                <TableCell className="font-medium">{key.name}</TableCell>
-                <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
-                <TableCell className="text-muted-foreground">{key.tenant_id}</TableCell>
-                <TableCell>
-                  {key.key_type === 'test' ? (
-                    <Badge variant="outline" className="bg-status-info/10 text-status-info-fg border-status-info/30 gap-1">
-                      <FlaskConical className="h-3 w-3" />
-                      {t('overview.testKeys')}
-                    </Badge>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">{t('overview.activeKeysLabel')}</span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Badge
-                    variant="outline"
-                    className={
-                      key.is_active
-                        ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
-                        : 'bg-muted text-muted-foreground'
-                    }
-                  >
-                    {key.is_active ? t('common.active') : t('common.inactive')}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <Switch
-                    checked={key.is_active}
-                    onCheckedChange={(checked) =>
-                      toggleMutation.mutate({ id: key.id, is_active: checked })
-                    }
-                    disabled={toggleMutation.isPending}
-                  />
-                </TableCell>
-                <TableCell className="text-muted-foreground text-xs tabular-nums">
-                  {key.rate_limit_rpm === 0 ? '∞' : key.rate_limit_rpm} /{' '}
-                  {key.rate_limit_tpm === 0 ? '∞' : key.rate_limit_tpm}
-                </TableCell>
-                <TableCell className="text-muted-foreground text-xs">
-                  {new Date(key.created_at).toLocaleDateString()}
-                </TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setDeleteTarget(key)}
-                    disabled={deleteMutation.isPending}
-                    title={t('keys.deleteKey')}
-                    className="text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </DataTable>
+      {keys && (
+        keys.length === 0
+          ? <DataTableEmpty>{t('keys.noKeys')}</DataTableEmpty>
+          : (
+            <DataTable minWidth="720px">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('keys.name')}</TableHead>
+                  <TableHead>{t('keys.prefix')}</TableHead>
+                  <TableHead>{t('keys.tenant')}</TableHead>
+                  <TableHead>{t('keys.tier')}</TableHead>
+                  <TableHead>{t('keys.status')}</TableHead>
+                  <TableHead>{t('keys.activeToggle')}</TableHead>
+                  <TableHead>{t('keys.rpmTpm')}</TableHead>
+                  <TableHead>{t('keys.createdAt')}</TableHead>
+                  <TableHead className="text-right">{t('keys.actions')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {keys.map((key) => (
+                  <TableRow key={key.id} className={!key.is_active ? 'opacity-50' : ''}>
+                    <TableCell className="font-medium">{key.name}</TableCell>
+                    <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
+                    <TableCell className="text-muted-foreground">{key.tenant_id}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={
+                          key.tier === 'free'
+                            ? 'text-muted-foreground border-border'
+                            : 'bg-status-info/10 text-status-info-fg border-status-info/30'
+                        }
+                      >
+                        {key.tier === 'free' ? t('keys.tierFree') : t('keys.tierPaid')}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={
+                          key.is_active
+                            ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
+                            : 'bg-muted text-muted-foreground'
+                        }
+                      >
+                        {key.is_active ? t('common.active') : t('common.inactive')}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Switch
+                        checked={key.is_active}
+                        onCheckedChange={(checked) =>
+                          toggleMutation.mutate({ id: key.id, is_active: checked })
+                        }
+                        disabled={toggleMutation.isPending}
+                      />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs tabular-nums">
+                      {key.rate_limit_rpm === 0 ? '∞' : key.rate_limit_rpm} /{' '}
+                      {key.rate_limit_tpm === 0 ? '∞' : key.rate_limit_tpm}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {fmtDateOnly(key.created_at, tz)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setDeleteTarget(key)}
+                        disabled={deleteMutation.isPending}
+                        title={t('keys.deleteKey')}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </DataTable>
+          )
       )}
 
       {showCreate && (
         <CreateKeyModal
-          onClose={() => setShowCreate(null)}
+          onClose={() => setShowCreate(false)}
           onCreated={handleCreated}
-          keyType={showCreate}
         />
       )}
 

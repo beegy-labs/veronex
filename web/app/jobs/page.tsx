@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { dashboardJobsQuery } from '@/lib/queries'
 import type { RetryParams } from '@/lib/types'
 import JobTable from '@/components/job-table'
 import { ApiTestPanel } from '@/components/api-test-panel'
@@ -52,20 +52,9 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 
   const offset = page * PAGE_SIZE
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['dashboard-jobs', source, page, status, query],
-    queryFn: () => {
-      const params = new URLSearchParams({
-        limit: String(PAGE_SIZE),
-        offset: String(offset),
-        source,
-      })
-      if (status !== 'all') params.set('status', status)
-      if (query.trim()) params.set('q', query.trim())
-      return api.jobs(params.toString())
-    },
-    refetchInterval: 30_000,
-  })
+  const { data, isLoading, error } = useQuery(
+    dashboardJobsQuery({ source, page, status, query, pageSize: PAGE_SIZE }),
+  )
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
   const firstItem = data && data.total > 0 ? offset + 1 : 0

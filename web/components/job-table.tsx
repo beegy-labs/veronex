@@ -16,6 +16,8 @@ import {
 } from '@/components/ui/dialog'
 import { useTranslation } from '@/i18n'
 import { fmtMsNullable } from '@/lib/chart-theme'
+import { useTimezone } from '@/components/timezone-provider'
+import { fmtDatetime } from '@/lib/date'
 
 // ── Status styling ─────────────────────────────────────────────────────────────
 
@@ -44,13 +46,6 @@ function truncateId(id: string) {
   return id.slice(0, 8) + '…'
 }
 
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleString(undefined, {
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  })
-}
-
 // fmtMsNullable imported from chart-theme — handles ms/s/m/h tiers
 const formatDuration = fmtMsNullable
 
@@ -68,6 +63,7 @@ function JobDetailModal({
   onRetry?: (params: RetryParams) => void
 }) {
   const { t } = useTranslation()
+  const { tz } = useTimezone()
   const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery<JobDetail>({
@@ -113,9 +109,9 @@ function JobDetailModal({
             <div className="flex flex-col gap-0 divide-y divide-border">
               {/* Timing row */}
               <div className="px-6 py-3 grid grid-cols-3 gap-x-4 gap-y-1 text-xs">
-                <MetaItem label={t('jobs.createdAt')}   value={formatDate(data.created_at)} />
-                <MetaItem label={t('jobs.startedAt')}   value={data.started_at   ? formatDate(data.started_at)   : '—'} />
-                <MetaItem label={t('jobs.completedAt')} value={data.completed_at ? formatDate(data.completed_at) : '—'} />
+                <MetaItem label={t('jobs.createdAt')}   value={fmtDatetime(data.created_at, tz)} />
+                <MetaItem label={t('jobs.startedAt')}   value={data.started_at   ? fmtDatetime(data.started_at, tz)   : '—'} />
+                <MetaItem label={t('jobs.completedAt')} value={data.completed_at ? fmtDatetime(data.completed_at, tz) : '—'} />
                 <MetaItem label={t('jobs.latency')}     value={formatDuration(data.latency_ms)} />
                 <MetaItem label={t('jobs.ttft')}        value={formatDuration(data.ttft_ms)} />
                 <MetaItem
@@ -144,6 +140,9 @@ function JobDetailModal({
                 )}
                 {data.api_key_name && (
                   <MetaItem label={t('jobs.apiKey')} value={data.api_key_name} accent />
+                )}
+                {data.account_name && (
+                  <MetaItem label={t('test.runner')} value={data.account_name} accent />
                 )}
               </div>
 
@@ -260,6 +259,7 @@ export default function JobTable({
   onRetry?: (params: RetryParams) => void
 }) {
   const { t } = useTranslation()
+  const { tz } = useTimezone()
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   if (jobs.length === 0) {
@@ -294,11 +294,13 @@ export default function JobTable({
               <TableCell>{job.model_name}</TableCell>
               <TableCell className="text-muted-foreground">{job.backend}</TableCell>
               <TableCell className="text-xs text-primary/80">
-                {job.api_key_name ?? <span className="text-muted-foreground">—</span>}
+                {job.source === 'test'
+                  ? (job.account_name ?? <span className="text-muted-foreground">—</span>)
+                  : (job.api_key_name ?? <span className="text-muted-foreground">—</span>)}
               </TableCell>
               <TableCell><StatusBadge status={job.status} /></TableCell>
               <TableCell className="text-xs text-muted-foreground">
-                {formatDate(job.created_at)}
+                {fmtDatetime(job.created_at, tz)}
               </TableCell>
               <TableCell className="text-right tabular-nums text-muted-foreground text-xs">
                 {formatDuration(job.ttft_ms)}

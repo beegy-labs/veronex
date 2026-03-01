@@ -9,9 +9,11 @@ interface StatsCardProps {
   subtitleNode?: ReactNode
   icon?: ReactNode
   className?: string
+  /** Optional Tailwind color class applied to the value text. */
+  valueClassName?: string
 }
 
-export default function StatsCard({ title, value, subtitle, subtitleNode, icon, className }: StatsCardProps) {
+export default function StatsCard({ title, value, subtitle, subtitleNode, icon, className, valueClassName }: StatsCardProps) {
   return (
     <Card className={className}>
       <CardContent className="p-5">
@@ -19,7 +21,7 @@ export default function StatsCard({ title, value, subtitle, subtitleNode, icon, 
           <p className="text-sm font-medium text-muted-foreground">{title}</p>
           {icon && <span className="text-muted-foreground">{icon}</span>}
         </div>
-        <p className="text-3xl font-bold tabular-nums">{String(value)}</p>
+        <p className={`text-3xl font-bold tabular-nums ${valueClassName ?? ''}`}>{String(value)}</p>
         {subtitleNode
           ? <div className="mt-1 text-xs">{subtitleNode}</div>
           : subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>

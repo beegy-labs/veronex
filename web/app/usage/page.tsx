@@ -2,7 +2,10 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import {
+  usageAggregateQuery, analyticsQuery, performanceQuery,
+  usageBreakdownQuery, keysQuery, keyUsageQuery,
+} from '@/lib/queries'
 import type { AnalyticsStats, UsageBreakdown } from '@/lib/types'
 import {
   AreaChart, Area, BarChart, Bar,
@@ -414,46 +417,16 @@ export default function UsagePage() {
   const { t } = useTranslation()
   const [hours, setHours] = useState(24)
 
-  const { data: agg, isLoading: aggLoading, error: aggError } = useQuery({
-    queryKey: ['usage-aggregate', hours],
-    queryFn: () => api.usageAggregate(hours),
-    refetchInterval: 60_000,
-  })
-
-  const { data: analytics } = useQuery({
-    queryKey: ['analytics', hours],
-    queryFn: () => api.analytics(hours),
-    refetchInterval: 60_000,
-  })
-
-  const { data: perf } = useQuery({
-    queryKey: ['performance', hours],
-    queryFn: () => api.performance(hours),
-    refetchInterval: 60_000,
-    retry: false,
-  })
-
-  const { data: breakdown } = useQuery({
-    queryKey: ['usage-breakdown', hours],
-    queryFn: () => api.usageBreakdown(hours),
-    refetchInterval: 60_000,
-  })
-
-  const { data: keys } = useQuery({
-    queryKey: ['keys'],
-    queryFn: () => api.keys(),
-    staleTime: 120_000,
-  })
+  const { data: agg, isLoading: aggLoading, error: aggError } = useQuery(usageAggregateQuery(hours))
+  const { data: analytics } = useQuery(analyticsQuery(hours))
+  const { data: perf } = useQuery(performanceQuery(hours))
+  const { data: breakdown } = useQuery(usageBreakdownQuery(hours))
+  const { data: keys } = useQuery(keysQuery)
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const activeKeyId = selectedKey ?? keys?.[0]?.id ?? null
 
-  const { data: hourly, isLoading: hourlyLoading } = useQuery({
-    queryKey: ['key-usage', activeKeyId, hours],
-    queryFn: () => api.keyUsage(activeKeyId!, hours),
-    enabled: !!activeKeyId,
-    refetchInterval: 60_000,
-  })
+  const { data: hourly, isLoading: hourlyLoading } = useQuery(keyUsageQuery(activeKeyId, hours))
 
   const chartData = hourly?.map((h) => ({
     hour:     fmtHour(h.hour),

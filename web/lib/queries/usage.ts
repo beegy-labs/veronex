@@ -1,0 +1,47 @@
+import { queryOptions } from '@tanstack/react-query'
+import { api } from '@/lib/api'
+
+// ── Usage aggregate (total requests, tokens, etc.) ────────────────────────────
+
+export const usageAggregateQuery = (hours: number) => queryOptions({
+  queryKey: ['usage-aggregate', hours] as const,
+  queryFn: () => api.usageAggregate(hours),
+  staleTime: 59_000,
+  refetchInterval: 60_000,
+  refetchIntervalInBackground: false,
+  retry: false,
+})
+
+// ── Usage breakdown (by backend / key / model) ────────────────────────────────
+
+export const usageBreakdownQuery = (hours: number) => queryOptions({
+  queryKey: ['usage-breakdown', hours] as const,
+  queryFn: () => api.usageBreakdown(hours),
+  staleTime: 59_000,
+  refetchInterval: 60_000,
+  refetchIntervalInBackground: false,
+  retry: false,
+})
+
+// ── Analytics stats (TPS, models, finish reasons) ─────────────────────────────
+
+export const analyticsQuery = (hours: number) => queryOptions({
+  queryKey: ['analytics', hours] as const,
+  queryFn: () => api.analytics(hours),
+  staleTime: 59_000,
+  refetchInterval: 60_000,
+  refetchIntervalInBackground: false,
+  retry: false,
+})
+
+// ── Per-key usage ─────────────────────────────────────────────────────────────
+
+export const keyUsageQuery = (keyId: string | null, hours: number) => queryOptions({
+  queryKey: ['key-usage', keyId, hours] as const,
+  queryFn: () => api.keyUsage(keyId!, hours),
+  enabled: !!keyId,
+  staleTime: 59_000,
+  refetchInterval: 60_000,
+  refetchIntervalInBackground: false,
+  retry: false,
+})
