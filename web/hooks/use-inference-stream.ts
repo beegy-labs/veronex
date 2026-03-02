@@ -1,8 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { getAccessToken } from '@/lib/auth'
-import type { Backend } from '@/lib/types'
 
 const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
 
@@ -11,7 +10,6 @@ export interface FlowEvent {
   id: string
   jobId: string
   provider: 'ollama' | 'gemini' | string
-  backendName: string
   model: string
   status: string
   latencyMs: number | null
@@ -30,7 +28,7 @@ interface RawJobStatusEvent {
   id: string
   status: string
   model_name: string
-  backend: string
+  provider_type: string
   latency_ms: number | null
 }
 
@@ -45,17 +43,8 @@ interface RawJobStatusEvent {
  *
  * Returns a rolling list of the 50 most recent events (newest first).
  */
-export function useInferenceStream(backends: Backend[]): FlowEvent[] {
+export function useInferenceStream(): FlowEvent[] {
   const [events, setEvents] = useState<FlowEvent[]>([])
-
-  /** backend name → provider type */
-  const backendTypeMap = useMemo(
-    () => new Map(backends.map(b => [b.name, b.backend_type as 'ollama' | 'gemini'])),
-    [backends],
-  )
-
-  const backendTypeMapRef = useRef(backendTypeMap)
-  useEffect(() => { backendTypeMapRef.current = backendTypeMap }, [backendTypeMap])
 
   useEffect(() => {
     let active = true
@@ -102,14 +91,12 @@ export function useInferenceStream(backends: Backend[]): FlowEvent[] {
                       ? 'dispatch'
                       : 'response'
 
-                const provider =
-                  backendTypeMapRef.current.get(raw.backend) ?? 'ollama'
+                const provider = raw.provider_type
 
                 const event: FlowEvent = {
                   id: `${raw.id}-${raw.status}-${Date.now()}`,
                   jobId: raw.id,
                   provider,
-                  backendName: raw.backend,
                   model: raw.model_name,
                   status: raw.status,
                   latencyMs: raw.latency_ms,
@@ -148,7 +135,7 @@ export function useInferenceStream(backends: Backend[]): FlowEvent[] {
       ctrl?.abort()
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, []) // connect once on mount; backendTypeMapRef stays current via ref
+  }, []) // connect once on mount
 
   return events
 }

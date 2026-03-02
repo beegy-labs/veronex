@@ -114,8 +114,8 @@ function HexLogo({ className }: { className?: string }) {
     >
       <defs>
         <linearGradient id="hex-grad" x1="2.5" y1="4.3" x2="29.5" y2="27.7" gradientUnits="userSpaceOnUse">
-          <stop offset="0%"   stopColor="var(--theme-logo-start)" />
-          <stop offset="100%" stopColor="var(--theme-logo-end)" />
+          <stop offset="0%"   style={{ stopColor: 'var(--theme-logo-start)' }} />
+          <stop offset="100%" style={{ stopColor: 'var(--theme-logo-end)' }} />
         </linearGradient>
       </defs>
       <polygon

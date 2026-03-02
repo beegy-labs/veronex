@@ -137,10 +137,10 @@ export function KeyUsageModal({
                   </TableHeader>
                   <TableBody>
                     {models.map((m) => (
-                      <TableRow key={`${m.model_name}-${m.backend}`}>
+                      <TableRow key={`${m.model_name}-${m.provider_type}`}>
                         <TableCell className="font-mono text-xs">{m.model_name}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="text-[10px] capitalize">{m.backend}</Badge>
+                          <Badge variant="outline" className="text-[10px] capitalize">{m.provider_type}</Badge>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{fmtCompact(m.request_count)}</TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground">

@@ -41,7 +41,7 @@ function pct(n: number) {
 function ModelLatencySection({
   models,
 }: {
-  models: { model_name: string; backend: string; request_count: number; avg_latency_ms: number; success_rate?: number }[]
+  models: { model_name: string; provider_type: string; request_count: number; avg_latency_ms: number; success_rate?: number }[]
 }) {
   const { t } = useTranslation()
   if (models.length === 0) return null
@@ -79,11 +79,11 @@ function ModelLatencySection({
             </TableHeader>
             <TableBody>
               {models.map((m, i) => (
-                <TableRow key={`${m.model_name}-${m.backend}-${i}`}>
+                <TableRow key={`${m.model_name}-${m.provider_type}-${i}`}>
                   <TableCell className="font-mono font-medium text-sm">{m.model_name}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs ${BACKEND_BADGE[m.backend] ?? ''}`}>
-                      {m.backend}
+                    <Badge variant="outline" className={`text-xs ${BACKEND_BADGE[m.provider_type] ?? ''}`}>
+                      {m.provider_type}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{fmtCompact(m.request_count)}</TableCell>
@@ -246,7 +246,7 @@ export default function PerformancePage() {
       .filter((m) => m.avg_latency_ms > 0)
       .map((m) => ({
         model_name:    m.model_name,
-        backend:       m.backend,
+        provider_type: m.provider_type,
         request_count: m.request_count,
         avg_latency_ms: m.avg_latency_ms,
         success_rate:  analyticsMap.get(m.model_name)?.success_rate ?? undefined,

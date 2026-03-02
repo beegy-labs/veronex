@@ -300,7 +300,7 @@ export function DashboardTab({
   })) ?? []
 
   const modelBarData: (ModelBreakdown & { label: string })[] = (breakdown?.by_model ?? [])
-    .filter(m => geminiEnabled || m.backend !== 'gemini')
+    .filter(m => geminiEnabled || m.provider_type !== 'gemini')
     .slice()
     .sort((a, b) => b.request_count - a.request_count)
     .slice(0, 8)
@@ -726,12 +726,12 @@ export function DashboardTab({
                   contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL}
                   formatter={(v, _name, props: { payload?: ModelBreakdown }) => [
                     `${fmtCompact(Number(v))} ${t('usage.reqCount')}`,
-                    props.payload?.backend ?? '',
+                    props.payload?.provider_type ?? '',
                   ] as [string, string]}
                 />
                 <Bar dataKey="request_count" radius={[0, 4, 4, 0]}>
                   {modelBarData.map((m, i) => (
-                    <Cell key={i} fill={m.backend === 'gemini' ? 'var(--theme-status-info)' : 'var(--theme-primary)'} />
+                    <Cell key={i} fill={m.provider_type === 'gemini' ? 'var(--theme-status-info)' : 'var(--theme-primary)'} />
                   ))}
                 </Bar>
               </BarChart>
@@ -768,7 +768,7 @@ export function DashboardTab({
                 {recentJobs.map((job) => (
                   <tr key={job.id} className="border-b border-border last:border-0">
                     <td className="py-3 px-4 pl-6 font-mono text-xs max-w-[180px] truncate">{job.model_name}</td>
-                    <td className="py-3 px-4 text-xs text-muted-foreground max-w-[120px] truncate">{job.backend}</td>
+                    <td className="py-3 px-4 text-xs text-muted-foreground max-w-[120px] truncate">{job.provider_type}</td>
                     <td className="py-3 px-4">
                       <Badge variant="outline" className={`text-xs ${STATUS_EXTRA[job.status] ?? 'bg-muted/20 text-muted-foreground border-muted/30'}`}>
                         {job.status}

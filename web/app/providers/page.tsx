@@ -810,7 +810,7 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
         {!isLoading && pageItems.length > 0 && (
           <div className="space-y-2">
             {pageItems.map((b) => (
-              <div key={b.backend_id} className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
+              <div key={b.provider_id} className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
                 <span className={statusDot(b.status)} />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-text-bright truncate">{b.name}</p>
@@ -1003,7 +1003,7 @@ function OllamaSyncSection() {
             </Button>
             {syncJob?.status === 'running' && (
               <span className="text-xs text-muted-foreground">
-                {syncJob.done_backends}/{syncJob.total_backends}
+                {syncJob.done_providers}/{syncJob.total_providers}
               </span>
             )}
             {syncJob?.status === 'completed' && !syncMutation.isPending && (
@@ -1048,7 +1048,7 @@ function OllamaSyncSection() {
                     <span className="font-mono text-sm text-text-bright flex-1 truncate">{m.model_name}</span>
                     <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0 gap-1">
                       <Server className="h-2.5 w-2.5" />
-                      {m.backend_count}
+                      {m.provider_count}
                     </Badge>
                   </button>
                 ))}
@@ -1139,7 +1139,7 @@ function OllamaCapacitySection() {
     saveMutation.mutate(body)
   }
 
-  const backends = capacityData?.backends ?? []
+  const backends = capacityData?.providers ?? []
   const lastRunAt = settings?.last_run_at
   const lastRunStatus = settings?.last_run_status
   const availableModels = settings?.available_models ?? []
@@ -1257,11 +1257,11 @@ function OllamaCapacitySection() {
       )}
 
       {backends.map((backend) => (
-        <Card key={backend.backend_id}>
+        <Card key={backend.provider_id}>
           <CardContent className="p-0">
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
               <Server className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              <span className="text-sm font-semibold text-text-bright">{backend.backend_name}</span>
+              <span className="text-sm font-semibold text-text-bright">{backend.provider_name}</span>
               <ThermalBadge state={backend.thermal_state} />
               {backend.temp_c !== null && (
                 <span className="text-xs text-muted-foreground ml-1">{backend.temp_c.toFixed(1)}°C</span>
