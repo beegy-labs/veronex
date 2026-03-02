@@ -21,9 +21,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { getAuthUser, clearTokens } from '@/lib/auth'
+import { getAuthUser } from '@/lib/auth'
+import { redirectToLogin } from '@/lib/auth-guard'
 import { api } from '@/lib/api'
-import type { LabSettings } from '@/lib/types'
+import { useLabSettings } from '@/components/lab-settings-provider'
 import { Switch } from '@/components/ui/switch'
 import { useTimezone, type Timezone, PRESET_TIMEZONES, isValidTimezone } from '@/components/timezone-provider'
 import { Input } from '@/components/ui/input'
@@ -172,11 +173,11 @@ function NavContent() {
   const [locale, setLocale] = useState<Locale>('en')
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
   const [authUser, setAuthUser] = useState<{ username: string; role: string } | null>(null)
+  const { labSettings, refetch: refetchLabSettings } = useLabSettings()
   const [showSettings, setShowSettings] = useState(false)
   const [showCustomTzInline, setShowCustomTzInline] = useState(false)
   const [customTzInput, setCustomTzInput] = useState('')
   const [customTzError, setCustomTzError] = useState(false)
-  const [labSettings, setLabSettings] = useState<LabSettings | null>(null)
   const [labLoading, setLabLoading] = useState(false)
 
   const isPresetTz = PRESET_TIMEZONES.includes(tz as typeof PRESET_TIMEZONES[number])
@@ -208,12 +209,6 @@ function NavContent() {
     }
     setOpenGroups(groups)
   }, [])
-
-  // Load lab settings when Settings dialog opens
-  useEffect(() => {
-    if (!showSettings) return
-    api.labSettings().then(setLabSettings).catch(() => {})
-  }, [showSettings])
 
   // Close mobile nav on route change
   useEffect(() => { setMobileOpen(false) }, [pathname])
@@ -355,7 +350,18 @@ function NavContent() {
 
       {/* ── Nav links ──────────────────────────────────────────────── */}
       <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
-        {navItems.map((item) => {
+        {navItems
+          .map(item =>
+            item.type === 'group' && item.id === 'providers'
+              ? {
+                  ...item,
+                  children: item.children.filter(c =>
+                    c.section !== 'gemini' || (labSettings?.gemini_function_calling ?? false)
+                  ),
+                }
+              : item
+          )
+          .map((item) => {
           if (item.type === 'link') {
             const active = pathname.startsWith(item.href)
             return (
@@ -485,7 +491,7 @@ function NavContent() {
               <button
                 type="button"
                 title="Sign out"
-                onClick={() => { clearTokens(); window.location.href = '/login' }}
+                onClick={() => redirectToLogin()}
                 className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
               >
                 <LogOut className="h-3.5 w-3.5" />
@@ -636,8 +642,8 @@ function NavContent() {
                         onCheckedChange={async (checked) => {
                           setLabLoading(true)
                           try {
-                            const updated = await api.patchLabSettings({ gemini_function_calling: checked })
-                            setLabSettings(updated)
+                            await api.patchLabSettings({ gemini_function_calling: checked })
+                            await refetchLabSettings()
                           } catch {
                             // keep previous state on error
                           } finally {

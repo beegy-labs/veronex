@@ -25,8 +25,10 @@ use veronex::infrastructure::inbound::http::router::build_app;
 use veronex::infrastructure::inbound::http::state::AppState;
 use veronex::infrastructure::outbound::analytics::HttpAnalyticsClient;
 use veronex::infrastructure::outbound::capacity::analyzer::run_capacity_analysis_loop;
+use veronex::infrastructure::outbound::session_grouping::run_session_grouping_loop;
 use veronex::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap;
 use veronex::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
+use veronex::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use veronex::infrastructure::outbound::health_checker::{check_backend, run_health_checker_loop};
 use veronex::infrastructure::outbound::model_manager::OllamaModelManager;
 use veronex::infrastructure::outbound::observability::{HttpAuditAdapter, HttpObservabilityAdapter};
@@ -46,6 +48,8 @@ use veronex::infrastructure::outbound::persistence::model_capacity_repository::P
 use veronex::infrastructure::outbound::persistence::ollama_model_repository::PostgresOllamaModelRepository;
 use veronex::infrastructure::outbound::persistence::ollama_sync_job_repository::PostgresOllamaSyncJobRepository;
 use veronex::infrastructure::outbound::persistence::session_repository::PostgresSessionRepository;
+use veronex::application::ports::outbound::message_store::MessageStore;
+use veronex::infrastructure::outbound::s3::message_store::S3MessageStore;
 
 // ── Entry point ────────────────────────────────────────────────────
 
@@ -130,6 +134,42 @@ async fn main() -> Result<()> {
             tracing::warn!("ANALYTICS_URL not set — usage/performance/audit queries disabled");
             None
         };
+
+    // ── S3 / MinIO message store ───────────────────────────────────
+    let s3_endpoint = std::env::var("S3_ENDPOINT").ok();
+    let message_store: Option<Arc<dyn MessageStore>> = if let Some(ref endpoint) = s3_endpoint {
+        let access_key = std::env::var("S3_ACCESS_KEY")
+            .unwrap_or_else(|_| "veronex".to_string());
+        let secret_key = std::env::var("S3_SECRET_KEY")
+            .unwrap_or_else(|_| "veronex123".to_string());
+        let bucket = std::env::var("S3_BUCKET")
+            .unwrap_or_else(|_| "veronex-messages".to_string());
+        let region = std::env::var("S3_REGION")
+            .unwrap_or_else(|_| "us-east-1".to_string());
+
+        use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+        let creds = Credentials::new(&access_key, &secret_key, None, None, "veronex");
+        let s3_config = aws_sdk_s3::Config::builder()
+            .endpoint_url(endpoint)
+            .region(Region::new(region))
+            .credentials_provider(creds)
+            .force_path_style(true) // required for MinIO path-style access
+            .behavior_version(BehaviorVersion::latest())
+            .build();
+        let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
+        let store = S3MessageStore::new(s3_client, &bucket);
+
+        // Ensure bucket exists (idempotent — safe to call on every startup)
+        if let Err(e) = store.ensure_bucket().await {
+            tracing::warn!("S3 bucket init failed (non-fatal): {e}");
+        }
+
+        tracing::info!("S3 message store enabled (endpoint={endpoint}, bucket={bucket})");
+        Some(Arc::new(store))
+    } else {
+        tracing::warn!("S3_ENDPOINT not set — conversation contexts stored in PostgreSQL only");
+        None
+    };
 
     // ── Model manager ──────────────────────────────────────────────
     let model_manager: Option<Arc<dyn ModelManagerPort>> =
@@ -226,8 +266,9 @@ async fn main() -> Result<()> {
         Arc::new(PostgresModelCapacityRepository::new(pg_pool.clone()));
     let capacity_settings_repo: Arc<dyn CapacitySettingsRepository> =
         Arc::new(PostgresCapacitySettingsRepository::new(pg_pool.clone()));
-    let slot_map   = Arc::new(ConcurrencySlotMap::new());
-    let thermal    = Arc::new(ThermalThrottleMap::new(60)); // 60s cooldown
+    let slot_map        = Arc::new(ConcurrencySlotMap::new());
+    let thermal         = Arc::new(ThermalThrottleMap::new(60)); // 60s cooldown
+    let circuit_breaker = Arc::new(CircuitBreakerMap::new());
     let capacity_manual_trigger = Arc::new(tokio::sync::Notify::new());
 
     // ── Shutdown token + task set ───────────────────────────────────
@@ -323,6 +364,20 @@ async fn main() -> Result<()> {
     ));
     tracing::info!("capacity analysis loop started (analyzer: {analyzer_url})");
 
+    // ── Session grouping loop (daily background) ────────────────────
+    // Groups inference_jobs into conversations via messages_prefix_hash chaining.
+    // No LLM, no race conditions — runs on completed job history once per day.
+    let session_grouping_interval_secs: u64 = std::env::var("SESSION_GROUPING_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(86_400); // 24h default
+    tasks.spawn(run_session_grouping_loop(
+        Arc::new(pg_pool.clone()),
+        Duration::from_secs(session_grouping_interval_secs),
+        shutdown.child_token(),
+    ));
+    tracing::info!("session grouping loop started (interval={session_grouping_interval_secs}s)");
+
     let (job_event_tx, _) = tokio::sync::broadcast::channel::<JobStatusEvent>(256);
     let job_event_tx = Arc::new(job_event_tx);
 
@@ -337,7 +392,9 @@ async fn main() -> Result<()> {
         model_manager,
         slot_map.clone(),
         thermal.clone(),
+        circuit_breaker.clone(),
         (*job_event_tx).clone(),
+        message_store.clone(),
     ));
 
     if let Err(e) = use_case_impl.recover_pending_jobs().await {
@@ -374,6 +431,8 @@ async fn main() -> Result<()> {
         analyzer_url,
         job_event_tx,
         lab_settings_repo,
+        circuit_breaker,
+        message_store,
     };
 
     let app = build_app(state);

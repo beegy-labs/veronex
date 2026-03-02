@@ -199,6 +199,11 @@
     "noError": "(no error message)",
     "noResult": "(no result stored)",
     "processing": "(processing…)",
+    "toolCalls": "Tool Calls",
+    "agentToolCall": "The model responded with a tool call — no text output was generated.",
+    "conversationTurns": "Conversation turns",
+    "conversationHistory": "Conversation History",
+    "estimatedCost": "Est. Cost",
     "cancelJob": "Cancel Job",
     "cancelling": "Cancelling…",
     "retryInTest": "Retry in Test",
@@ -481,7 +486,9 @@
     "byProvider": "By Provider",
     "modelCallRatio": "Model Call Ratio",
     "providerCol": "Provider",
-    "callShare": "Call share"
+    "callShare": "Call share",
+    "estimatedCost": "Est. Cost",
+    "totalCost": "Total Cost"
   },
   "performance": {
     "title": "Performance",
@@ -565,7 +572,9 @@
     "username": "Username",
     "password": "Password",
     "signingIn": "Signing in…",
-    "invalidCredentials": "Invalid username or password"
+    "invalidCredentials": "Invalid username or password",
+    "rememberUsername": "Remember username",
+    "loginDescription": "Enter your credentials to access Veronex"
   },
   "setup": {
     "title": "Welcome to Veronex",

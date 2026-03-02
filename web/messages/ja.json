@@ -199,6 +199,11 @@
     "noError": "(エラーメッセージなし)",
     "noResult": "(結果が保存されていません)",
     "processing": "(処理中…)",
+    "toolCalls": "ツール呼び出し",
+    "agentToolCall": "モデルがツール呼び出しで応答しました — テキスト出力は生成されていません。",
+    "conversationTurns": "会話ターン数",
+    "conversationHistory": "会話履歴",
+    "estimatedCost": "推定コスト",
     "cancelJob": "ジョブをキャンセル",
     "cancelling": "キャンセル中…",
     "retryInTest": "テストで再実行",
@@ -481,7 +486,9 @@
     "byProvider": "プロバイダー別",
     "modelCallRatio": "モデル呼び出し比率",
     "providerCol": "プロバイダー",
-    "callShare": "呼び出し比率"
+    "callShare": "呼び出し比率",
+    "estimatedCost": "推定コスト",
+    "totalCost": "合計コスト"
   },
   "performance": {
     "title": "パフォーマンス",
@@ -565,7 +572,9 @@
     "username": "ユーザー名",
     "password": "パスワード",
     "signingIn": "サインイン中…",
-    "invalidCredentials": "ユーザー名またはパスワードが正しくありません"
+    "invalidCredentials": "ユーザー名またはパスワードが正しくありません",
+    "rememberUsername": "ユーザー名を保存",
+    "loginDescription": "Veronexにアクセスするには認証情報を入力してください"
   },
   "setup": {
     "title": "Veronexへようこそ",

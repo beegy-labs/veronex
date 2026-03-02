@@ -199,6 +199,11 @@
     "noError": "(오류 메시지 없음)",
     "noResult": "(저장된 결과 없음)",
     "processing": "(처리 중…)",
+    "toolCalls": "도구 호출",
+    "agentToolCall": "모델이 도구 호출로 응답했습니다 — 텍스트 출력이 생성되지 않았습니다.",
+    "conversationTurns": "대화 턴",
+    "conversationHistory": "대화 내역",
+    "estimatedCost": "예상 비용",
     "cancelJob": "작업 중단",
     "cancelling": "중단 중…",
     "retryInTest": "테스트에서 재시도",
@@ -481,7 +486,9 @@
     "byProvider": "공급자별",
     "modelCallRatio": "모델 호출 비율",
     "providerCol": "공급자",
-    "callShare": "호출 비율"
+    "callShare": "호출 비율",
+    "estimatedCost": "예상 비용",
+    "totalCost": "총 비용"
   },
   "performance": {
     "title": "성능",
@@ -565,7 +572,9 @@
     "username": "사용자명",
     "password": "비밀번호",
     "signingIn": "로그인 중…",
-    "invalidCredentials": "잘못된 사용자명 또는 비밀번호"
+    "invalidCredentials": "잘못된 사용자명 또는 비밀번호",
+    "rememberUsername": "계정 저장하기",
+    "loginDescription": "Veronex에 접근하려면 자격증명을 입력하세요"
   },
   "setup": {
     "title": "Veronex에 오신 것을 환영합니다",

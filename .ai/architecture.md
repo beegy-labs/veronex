@@ -1,6 +1,6 @@
 # Architecture
 
-> Hexagonal Architecture overview | **Last Updated**: 2026-03-02 (rev: submit() sig tools/request_path/conversation_id; queue depth endpoint added)
+> Hexagonal Architecture overview | **Last Updated**: 2026-03-02 (rev2: MessageStore port + S3MessageStore adapter; message_store in AppState)
 
 ## Structure
 
@@ -50,6 +50,7 @@ infrastructure → application → domain
 | `ModelCapacityRepository`         | Outbound  | PostgresModelCapacityRepository           |
 | `CapacitySettingsRepository`      | Outbound  | PostgresCapacitySettingsRepository        |
 | `LabSettingsRepository`           | Outbound  | PostgresLabSettingsRepository (lab feature flags) |
+| `MessageStore`                    | Outbound  | S3MessageStore (MinIO/AWS S3) — `messages/{job_id}.json` |
 | `QueuePort`                       | Outbound  | Valkey (BLPOP/RPUSH via fred 10)          |
 | `StreamPort`                      | Outbound  | In-memory buffer + tokio Notify           |
 
@@ -115,10 +116,12 @@ Job source/format tracking:
   API Key Test: api_key_id = key.id, account_id = NULL, source = Api
   Test Run:     api_key_id = NULL,   account_id = claims.sub, source = Test
   api_format:   set per route (OpenaiCompat | OllamaNative | GeminiNative | VeronexNative)
-  conversation_id: from X-Conversation-ID header — groups all turns of one agent session
-  messages_json:   FULL input context (system + file contents + history) — persisted JSONB (migration 000045)
+  conversation_id: X-Conversation-ID header (realtime) OR batch-assigned by session_grouping_loop (daily)
+  messages_hash:        Blake2b-256 of full messages array — set at save time (migration 000048)
+  messages_prefix_hash: Blake2b-256 of messages[0..-1] — "" for first turn; used by grouping loop
+  messages_json:   FULL input context — S3 PRIMARY (messages/{job_id}.json); DB NULL for new jobs; DB fallback for legacy jobs
   tool_calls_json: model-returned tool calls — persisted JSONB (migration 000043)
-  messages:        Some(json) → routes to /api/chat; persisted as messages_json in DB
+  messages:        Some(json) → routes to /api/chat; uploaded to S3 in submit(); cleared from in-memory job after stream_tokens()
 ```
 
 ## AppState (main.rs — Composition Root)
@@ -142,6 +145,7 @@ All state injected via `Arc<dyn Trait>` into Axum `State<AppState>`:
 - `capacity_manual_trigger: Arc<Notify>` — instant analysis trigger
 - `analyzer_url: String` — Ollama URL for capacity LLM (CAPACITY_ANALYZER_OLLAMA_URL)
 - `lab_settings_repo: Arc<dyn LabSettingsRepository>` — experimental feature flags (SSOT: `docs/llm/backend/lab_features.md`)
+- `message_store: Option<Arc<dyn MessageStore>>` — S3MessageStore (None when S3_ENDPOINT unset)
 
 ## Background Loops
 
@@ -150,6 +154,7 @@ All state injected via `Arc<dyn Trait>` into Axum `State<AppState>`:
 | `health_checker` | 30 s | Backend online/offline + thermal update |
 | `run_capacity_analysis_loop` | 30 s tick (runs per DB interval) | KV cache calc + LLM slot recommendation |
 | `queue_dispatcher_loop` | BLPOP 5s | VRAM-sorted job dispatch + slot acquire |
+| `run_session_grouping_loop` | 24 h (`SESSION_GROUPING_INTERVAL_SECS`) | Batch-assign `conversation_id` via `messages_prefix_hash` chaining — no LLM |
 
 ## Dynamic Concurrency (feat: api-key-usage)
 
