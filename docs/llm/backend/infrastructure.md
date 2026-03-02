@@ -1,26 +1,27 @@
 # Infrastructure — Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-03-02 (rev3: MinIO/S3 message store — mandatory S3_ENDPOINT; MessageStore port; AppState: message_store)
+> SSOT | **Last Updated**: 2026-03-03 (rev4: CORS_ALLOWED_ORIGINS env var; Helm chart at deploy/helm/veronex/)
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
 | Add new service | `docker-compose.yml` | New service block |
-| Add new env var | `crates/inferq/src/main.rs` + `docker-compose.yml` + `.env.example` | Read in `main()`, set in compose `environment:`, document here |
+| Add new env var | `crates/veronex/src/main.rs` + `docker-compose.yml` + `.env.example` | Read in `main()`, set in compose `environment:`, document here |
 | Add new Valkey key pattern | `infrastructure.rs` (this file) + relevant handler | Add to Valkey Key Patterns table, use `veronex:` prefix |
-| Add new DB migration | `crates/inferq/migrations/` new `.sql` file | Name: `{next_number}_description.sql`; add row to migration list in this file |
-| Add new repo to AppState | `infrastructure/inbound/http/state.rs` + `crates/inferq/src/main.rs` | Add `Arc<dyn Trait>` field to `AppState`, init in `main()` composition root |
+| Add new DB migration | `crates/veronex/migrations/` new `.sql` file | Update `0000000001_init.sql` or add a new sequential migration file |
+| Add new repo to AppState | `infrastructure/inbound/http/state.rs` + `crates/veronex/src/main.rs` | Add `Arc<dyn Trait>` field to `AppState`, init in `main()` composition root |
 | Change host port mapping | `docker-compose.yml` `ports:` + update memory/docs | Remember offset convention: +1 from standard (5432→5433, 6379→6380) |
+| Add Helm values | `deploy/helm/veronex/values.yaml` | Add under the relevant service block; update env var in deployment template |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `docker-compose.yml` | Local dev all-in-one |
-| `crates/inferq/src/main.rs` | Composition root (all adapters wired) |
-| `crates/inferq/src/infrastructure/inbound/http/state.rs` | `AppState` struct |
-| `crates/inferq/migrations/` | All DB migrations |
+| `crates/veronex/src/main.rs` | Composition root (all adapters wired) |
+| `crates/veronex/src/infrastructure/inbound/http/state.rs` | `AppState` struct |
+| `crates/veronex/migrations/` | All DB migrations |
 | `docker/clickhouse/schema.sql` | ClickHouse schema (with `__RETENTION_*__` placeholders) |
 | `docker/clickhouse/init.sh` | Substitutes retention env vars and applies schema |
 
@@ -77,6 +78,10 @@ JWT_SECRET=change-me-in-production       # HS256 key — MUST change in producti
 # BOOTSTRAP_SUPER_USER=<username>        # optional: pre-seed super account (CI/automated)
 # BOOTSTRAP_SUPER_PASS=<password>        # optional: omit to use first-run setup flow
 
+# CORS
+CORS_ALLOWED_ORIGINS=*                   # "*" = allow any origin (default, local dev)
+                                         # production: "https://app.example.com,https://admin.example.com"
+
 # S3 / MinIO — conversation context storage (MANDATORY)
 S3_ENDPOINT=http://localhost:9010       # docker: http://minio:9000
 S3_ACCESS_KEY=veronex
@@ -121,70 +126,43 @@ veronex:queue:jobs                              # inference job queue — standa
 veronex:queue:jobs:test                         # inference job queue — test run requests (BLPOP polled third)
 veronex:ratelimit:rpm:{key_id}:{minute}         # API key RPM sorted set
 veronex:ratelimit:tpm:{key_id}:{minute}         # API key TPM counter
-veronex:gemini:rpm:{backend_id}:{model}:{min}   # Gemini per-backend RPM
-veronex:gemini:rpd:{backend_id}:{model}:{date}  # Gemini per-backend RPD
-veronex:gemini:models:{backend_id}              # Gemini model list cache (TTL 1h)
-veronex:revoked:{jti}                           # JWT revocation blocklist (TTL = remaining token lifetime)
-veronex:pwreset:{raw_token}                     # password-reset one-time token (TTL 24h)
-veronex:throttle:{backend_id}                   # thermal Hard throttle flag (TTL 90s, set by health_checker)
-veronex:hw:{backend_id}                         # hw_metrics JSON (temp_c, vram_used_mb, etc., TTL ~60s)
+veronex:gemini:rpm:{provider_id}:{model}:{min}   # Gemini per-provider RPM
+veronex:gemini:rpd:{provider_id}:{model}:{date}  # Gemini per-provider RPD
+veronex:gemini:models:{provider_id}              # Gemini model list cache (TTL 1h)
+veronex:revoked:{jti}                            # JWT revocation blocklist (TTL = remaining token lifetime)
+veronex:pwreset:{raw_token}                      # password-reset one-time token (TTL 24h)
+veronex:throttle:{provider_id}                   # thermal Hard throttle flag (TTL 90s, set by health_checker)
+veronex:hw:{provider_id}                         # hw_metrics JSON (temp_c, vram_used_mb, etc., TTL ~60s)
 ```
 
 > Concurrency slots are **in-process** `Arc<Semaphore>` in `ConcurrencySlotMap` (NOT Valkey).
 
 ---
 
-## DB Migrations (crates/inferq/migrations/)
+## DB Migrations (crates/veronex/migrations/)
 
-| Migration | Description |
-|-----------|-------------|
-| 000001 | api_keys CREATE |
-| 000002 | inference_jobs CREATE |
-| 000003 | llm_backends CREATE |
-| 000004 | jobs: add result_text |
-| 000005 | backends: add agent_url |
-| 000006 | backends: add gpu_index |
-| 000007 | backends: add total_ram_mb (legacy) |
-| 000008 | backends: add node_exporter_url (moved to gpu_servers) |
-| 000009 | gpu_servers CREATE |
-| 000010 | backends: add server_id FK |
-| 000011 | backends: drop node_exporter_url + total_ram_mb |
-| 000012 | gpu_servers: drop host |
-| 000013 | gpu_servers: drop total_ram_mb |
-| 000014 | jobs: add api_key_id FK |
-| 000015 | jobs: add latency_ms |
-| 000016 | backends: add is_free_tier, rpm_limit, rpd_limit (rpm/rpd removed in 018) |
-| 000017 | gemini_rate_limit_policies CREATE + seed |
-| 000018 | backends: drop rpm_limit, rpd_limit |
-| 000019 | policies: add available_on_free_tier |
-| 000020 | jobs: add ttft_ms, completion_tokens |
-| 000021 | api_keys: add deleted_at (soft-delete) |
-| 000022 | backend_selected_models CREATE |
-| 000023 | gemini_sync_config CREATE |
-| 000024 | gemini_models CREATE |
-| 000025 | gemini_rate_limit_policies: update free-tier limits to 2026-02 values |
-| 000026 | ollama_models CREATE (PK: model_name + backend_id, FK → llm_backends) |
-| 000027 | ollama_sync_jobs CREATE (async background sync tracking) |
-| 000028 | SET DEFAULT uuidv7() on all UUID PKs (PG18 native; replaces gen_random_uuid()) |
-| 000029 | jobs: add prompt_tokens |
-| 000030 | jobs: add cached_tokens |
-| 000031 | jobs: add source (api \| test) |
-| 000032 | api_keys: unique (tenant_id, name) constraint |
-| 000033 | api_keys: add key_type (standard \| test) |
-| 000034 | accounts CREATE (RBAC: super \| admin, soft-delete, Argon2id password_hash) |
-| 000035 | api_keys: add account_id FK + is_test_key + unique partial index |
-| 000036 | account_sessions CREATE (jti, refresh_token_hash BLAKE2b, rolling sessions) |
-| 000037 | inference_jobs: add account_id FK (test run tracking) |
-| 000038 | api_keys: add tier column |
-| 000039 | model_capacity CREATE (PK: backend_id+model_name); inference_jobs: add backend_id FK; capacity_settings singleton (id=1) |
-| 000040 | api_keys: drop `uq_api_keys_tenant_name` — name is a non-unique label; UUIDv7 `id` is the unique identifier |
-| 000041 | inference_jobs: add `api_format` TEXT (openai_compat \| ollama_native \| gemini_native \| veronex_native) |
-| 000042 | inference_jobs: add `request_path` TEXT — full matched route path (e.g. `/v1/chat/completions`) |
-| 000043 | inference_jobs: add `conversation_id` TEXT + `tool_calls_json` JSONB; GIN + btree indexes |
-| 000044 | lab_settings CREATE — singleton (id=1), `gemini_function_calling` BOOLEAN (default false) |
-| 000045 | inference_jobs: add `messages_json` JSONB — full LLM input context for training data |
-| 000046 | inference_jobs: add `queue_time_ms` INTEGER + `cancelled_at` TIMESTAMPTZ |
-| 000047 | model_pricing CREATE — `(provider, model_name)` PK; Gemini 2026-03 seed rows; Ollama = no rows (always $0.00) |
+Single init migration: `0000000001_init.sql` — creates all tables in one schema file.
+
+Key tables included:
+
+| Table | Description |
+|-------|-------------|
+| `api_keys` | Bearer tokens with RPM/TPM rate limits and per-key usage tracking |
+| `inference_jobs` | Job lifecycle records: `provider_type`, `provider_id`, `messages_json`, etc. |
+| `llm_providers` | Provider config records (Ollama/Gemini): `provider_type`, VRAM, server FK |
+| `gpu_servers` | GPU hardware nodes with `node_exporter_url` |
+| `gemini_rate_limit_policies` | Per-model RPM/RPD limits + `available_on_free_tier` flag |
+| `provider_selected_models` | Per-provider model enable/disable toggles (`PRIMARY KEY (provider_id, model_name)`) |
+| `gemini_sync_config` | Singleton admin API key for Gemini model sync |
+| `gemini_models` | Global Gemini model pool (synced via admin key) |
+| `ollama_models` | Per-provider model list (`PRIMARY KEY (model_name, provider_id)`) |
+| `ollama_sync_jobs` | Async global sync tracking: `total_providers`, `done_providers` |
+| `accounts` | RBAC accounts (super \| admin, Argon2id password_hash) |
+| `account_sessions` | JWT sessions: `jti`, `refresh_token_hash` (BLAKE2b), rolling sessions |
+| `model_capacity` | VRAM + throughput per `(provider_id, model_name)` |
+| `capacity_settings` | Singleton (id=1): analyzer model, batch interval |
+| `lab_settings` | Singleton (id=1): `gemini_function_calling` BOOLEAN |
+| `model_pricing` | `(provider, model_name)` PK; Gemini 2026-03 seed rows; Ollama = no rows (always $0.00) |
 
 ---
 
@@ -211,15 +189,15 @@ pub struct AppState {
     pub use_case:                  Arc<dyn InferenceUseCase>,
     pub job_repo:                  Arc<dyn JobRepository>,
     pub api_key_repo:              Arc<dyn ApiKeyRepository>,
-    // Backend routing
-    pub backend_registry:          Arc<dyn LlmBackendRegistry>,
+    // Provider routing
+    pub provider_registry:         Arc<dyn LlmProviderRegistry>,
     pub gpu_server_registry:       Arc<dyn GpuServerRegistry>,
     pub ollama_model_repo:         Arc<dyn OllamaModelRepository>,
     pub ollama_sync_job_repo:      Arc<dyn OllamaSyncJobRepository>,
     pub gemini_policy_repo:        Arc<dyn GeminiPolicyRepository>,
     pub gemini_sync_config_repo:   Arc<dyn GeminiSyncConfigRepository>,
     pub gemini_model_repo:         Arc<dyn GeminiModelRepository>,
-    pub model_selection_repo:      Arc<dyn BackendModelSelectionRepository>,
+    pub model_selection_repo:      Arc<dyn ProviderModelSelectionRepository>,
     // Auth / RBAC
     pub account_repo:              Arc<dyn AccountRepository>,
     pub session_repo:              Arc<dyn SessionRepository>,
@@ -269,3 +247,72 @@ ALTER TABLE node_metrics MODIFY TTL toDate(ts) + INTERVAL 14 DAY;
 ```
 
 → See `docs/llm/backend/infrastructure-otel.md` for OTel pipeline details.
+
+---
+
+## Helm Deployment
+
+Chart location: `deploy/helm/veronex/`
+
+### First-time setup
+
+```bash
+# 1. Add required Helm repos
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo add redpanda https://charts.redpanda.com
+helm repo update
+
+# 2. Fetch subchart dependencies
+helm dependency update deploy/helm/veronex/
+
+# 3. Install (all subcharts enabled by default)
+helm install veronex deploy/helm/veronex/ \
+  --set veronex.jwt.secret="$(openssl rand -hex 32)" \
+  --set veronex.cors.allowedOrigins="https://app.example.com"
+```
+
+### Subchart enable/disable
+
+Each infrastructure component can be disabled and replaced with an external service:
+
+```bash
+# Use external PostgreSQL (e.g. RDS)
+helm install veronex deploy/helm/veronex/ \
+  --set postgresql.enabled=false \
+  --set externalPostgresql.host=my-rds.example.com \
+  --set externalPostgresql.username=veronex \
+  --set externalPostgresql.password=secret \
+  --set externalPostgresql.database=veronex
+
+# Use external Valkey/Redis
+  --set valkey.enabled=false \
+  --set externalValkey.host=my-redis.example.com
+
+# Use external MinIO / S3
+  --set minio.enabled=false \
+  --set externalMinio.endpoint=https://s3.amazonaws.com \
+  --set externalMinio.accessKey=AKID... \
+  --set externalMinio.secretKey=secret \
+  --set externalMinio.bucket=my-veronex-bucket \
+  --set externalMinio.region=us-east-1
+```
+
+### Ingress (optional)
+
+```bash
+helm install veronex deploy/helm/veronex/ \
+  --set ingress.enabled=true \
+  --set ingress.host=veronex.example.com \
+  --set ingress.tls.enabled=true \
+  --set ingress.tls.secretName=veronex-tls
+```
+
+### Subchart versions (Chart.yaml)
+
+| Subchart | Repo | Condition key |
+|----------|------|---------------|
+| `postgresql` | bitnami | `postgresql.enabled` |
+| `valkey` | bitnami | `valkey.enabled` |
+| `clickhouse` | bitnami | `clickhouse.enabled` |
+| `minio` | bitnami | `minio.enabled` |
+| `redpanda` | charts.redpanda.com | `redpanda.enabled` |

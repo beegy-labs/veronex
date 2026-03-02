@@ -17,22 +17,22 @@
 
 | File | Purpose |
 |------|---------|
-| `crates/inferq/src/domain/entities/gpu_server.rs` | `GpuServer` entity |
-| `crates/inferq/src/application/ports/outbound/gpu_server_registry.rs` | `GpuServerRegistry` trait |
-| `crates/inferq/src/infrastructure/outbound/persistence/gpu_server_registry.rs` | Postgres impl |
-| `crates/inferq/src/infrastructure/outbound/hw_metrics.rs` | `fetch_node_metrics()` — node-exporter parsing |
-| `crates/inferq/src/infrastructure/inbound/http/gpu_server_handlers.rs` | GPU server CRUD + metrics handlers |
+| `crates/veronex/src/domain/entities/gpu_server.rs` | `GpuServer` entity |
+| `crates/veronex/src/application/ports/outbound/gpu_server_registry.rs` | `GpuServerRegistry` trait |
+| `crates/veronex/src/infrastructure/outbound/persistence/gpu_server_registry.rs` | Postgres impl |
+| `crates/veronex/src/infrastructure/outbound/hw_metrics.rs` | `fetch_node_metrics()` — node-exporter parsing |
+| `crates/veronex/src/infrastructure/inbound/http/gpu_server_handlers.rs` | GPU server CRUD + metrics handlers |
 
 ---
 
 ## Design Rationale
 
-One physical server may run multiple Ollama backends (one per GPU). To avoid scraping
-node-exporter multiple times per host, `GpuServer` is a separate entity from `LlmBackend`.
+One physical server may run multiple Ollama providers (one per GPU). To avoid scraping
+node-exporter multiple times per host, `GpuServer` is a separate entity from `LlmProvider`.
 
 ```
 gpu_servers   (1 physical host = 1 node-exporter)
-llm_backends  (1 Ollama process = 1 GPU)
+llm_providers (1 Ollama process = 1 GPU)
   └── server_id → gpu_servers (nullable; Gemini = NULL)
 ```
 

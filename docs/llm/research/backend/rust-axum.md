@@ -1,7 +1,7 @@
 # Rust / Axum — 2026 Research
 
 > **Last Researched**: 2026-03-02 | **Source**: Axum 0.8 docs + web search + verified in production
-> **Status**: ✅ Verified — used throughout `crates/inferq/src/`
+> **Status**: ✅ Verified — used throughout `crates/veronex/src/`
 > **Deps**: fred 10 (`Pool` type, `pool.init().await?`), reqwest 0.13
 
 ---
@@ -312,4 +312,4 @@ sqlx::query!(
 - Axum graceful shutdown: https://docs.rs/axum/latest/axum/serve/struct.Serve.html#method.with_graceful_shutdown
 - sqlx docs: https://docs.rs/sqlx
 - Web search: tokio JoinSet graceful shutdown 2026, tokio-util CancellationToken patterns
-- Verified: `crates/inferq/src/infrastructure/inbound/http/`, `crates/inferq/src/main.rs`
+- Verified: `crates/veronex/src/infrastructure/inbound/http/`, `crates/veronex/src/main.rs`

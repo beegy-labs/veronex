@@ -188,5 +188,5 @@ Cursor pagination is not needed yet — `OFFSET` on a 10k-row table with `create
 
 ## Sources
 
-- Verified: `crates/inferq/src/infrastructure/inbound/http/`
+- Verified: `crates/veronex/src/infrastructure/inbound/http/`
 - Web search: OpenAPI 3.1 best practices 2026, rate limit headers RFC, cursor pagination

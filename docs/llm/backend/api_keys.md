@@ -18,12 +18,12 @@
 
 | File | Purpose |
 |------|---------|
-| `crates/inferq/src/domain/entities/api_key.rs` | `ApiKey` entity |
-| `crates/inferq/src/application/ports/outbound/api_key_repository.rs` | `ApiKeyRepository` trait |
-| `crates/inferq/src/infrastructure/outbound/persistence/api_key_repository.rs` | `PostgresApiKeyRepository` impl |
-| `crates/inferq/src/infrastructure/inbound/http/key_handlers.rs` | CRUD handlers |
-| `crates/inferq/src/infrastructure/inbound/http/middleware/rate_limiter.rs` | RPM/TPM middleware |
-| `crates/inferq/src/main.rs` | Bootstrap key creation on startup |
+| `crates/veronex/src/domain/entities/api_key.rs` | `ApiKey` entity |
+| `crates/veronex/src/application/ports/outbound/api_key_repository.rs` | `ApiKeyRepository` trait |
+| `crates/veronex/src/infrastructure/outbound/persistence/api_key_repository.rs` | `PostgresApiKeyRepository` impl |
+| `crates/veronex/src/infrastructure/inbound/http/key_handlers.rs` | CRUD handlers |
+| `crates/veronex/src/infrastructure/inbound/http/middleware/rate_limiter.rs` | RPM/TPM middleware |
+| `crates/veronex/src/main.rs` | Bootstrap key creation on startup |
 
 ---
 

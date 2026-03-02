@@ -1301,7 +1301,7 @@ Shows all backends that have a given model. Searchable + paginated (PAGE_SIZE=8)
 - Fetches `api.getSelectedModels(backend.id)` → list of `BackendSelectedModel`
 - Each row: `model_name` + Switch (`is_enabled`)
 - Uses optimistic mutation (`onMutate` + `onError` rollback)
-- Source: global `gemini_models` pool + `backend_selected_models` overrides
+- Source: global `gemini_models` pool + `provider_selected_models` overrides
 
 ---
 
@@ -1373,6 +1373,6 @@ Tiers: `< 1s` → `"Xms"` · `1s–59s` → `"X.Xs"` · `1m–59m` → `"Xm Xs"`
 1. Add entry to `navItems[].children` in `nav.tsx` (under `providers` group)
 2. Add `section === 'openai'` branch in `providers/page.tsx` → new `<OpenAITab>`
 3. Add i18n key `nav.openai` + tab strings to all 3 message files
-4. Extend `BackendType` enum in Rust + add adapter in `infrastructure/outbound/`
+4. Extend `ProviderType` enum in Rust + add adapter in `infrastructure/outbound/`
 5. Update `docs/llm/backend/backends-ollama.md` + `docs/llm/backend/openai.md`
 6. Create `docs/llm/frontend/web-providers.md` section for the new tab

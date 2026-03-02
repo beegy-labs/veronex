@@ -1,6 +1,6 @@
 # Jobs — Lifecycle, Queue & API
 
-> SSOT | **Last Updated**: 2026-03-02 (rev3: session grouping — messages_hash + messages_prefix_hash + daily background loop)
+> SSOT | **Last Updated**: 2026-03-03 (rev3: session grouping — messages_hash + messages_prefix_hash + daily background loop)
 
 ## Task Guide
 
@@ -21,14 +21,14 @@
 
 | File | Purpose |
 |------|---------|
-| `crates/inferq/src/domain/entities/mod.rs` | `InferenceJob` entity |
-| `crates/inferq/src/domain/enums.rs` | `JobStatus`, `BackendType`, `JobSource` |
-| `crates/inferq/src/application/use_cases/inference.rs` | `InferenceUseCaseImpl` (submit, stream, dispatch loop) |
-| `crates/inferq/src/infrastructure/outbound/persistence/job_repository.rs` | `PostgresJobRepository` (UPSERT) |
-| `crates/inferq/src/infrastructure/outbound/backend_router.rs` | `DynamicBackendRouter` (dispatch/routing only) |
-| `crates/inferq/src/infrastructure/inbound/http/dashboard_handlers.rs` | Dashboard job list / detail handlers + `job_events_sse` |
-| `crates/inferq/src/infrastructure/inbound/http/handlers.rs` | Native inference handlers + `stream_job_openai` |
-| `crates/inferq/src/domain/value_objects.rs` | `JobStatusEvent` — real-time event struct |
+| `crates/veronex/src/domain/entities/mod.rs` | `InferenceJob` entity |
+| `crates/veronex/src/domain/enums.rs` | `JobStatus`, `ProviderType`, `JobSource` |
+| `crates/veronex/src/application/use_cases/inference.rs` | `InferenceUseCaseImpl` (submit, stream, dispatch loop) |
+| `crates/veronex/src/infrastructure/outbound/persistence/job_repository.rs` | `PostgresJobRepository` (UPSERT) |
+| `crates/veronex/src/infrastructure/outbound/provider_router.rs` | `DynamicProviderRouter` (dispatch/routing only) |
+| `crates/veronex/src/infrastructure/inbound/http/dashboard_handlers.rs` | Dashboard job list / detail handlers + `job_events_sse` |
+| `crates/veronex/src/infrastructure/inbound/http/handlers.rs` | Native inference handlers + `stream_job_openai` |
+| `crates/veronex/src/domain/value_objects.rs` | `JobStatusEvent` — real-time event struct |
 
 ---
 
@@ -57,14 +57,14 @@ Jobs carry a `source` field that records their origin:
 | `GeminiNative` | `POST /v1beta/models/*`, `POST /v1/test/v1beta/models/*` |
 | `VeronexNative`| `POST /v1/inference` |
 
-- Stored in DB (`api_format` column, migration 000041).
+- Stored in DB (`api_format` column).
 - Enables per-format analytics and usage tracking.
 
 ---
 
 ## Tiered-Queue Architecture
 
-Every inference route goes through the Valkey queue — **no direct-to-backend path exists**.
+Every inference route goes through the Valkey queue — **no direct-to-provider path exists**.
 Three queues in strict priority order (BLPOP polls left-to-right):
 
 ```
@@ -101,7 +101,7 @@ const QUEUE_KEY_TEST:     &str = "veronex:queue:jobs:test";    // source=Test
 
 - `submit()` selects queue by `key_tier` (for Api source) or `source=Test`.
 - `recover_pending_jobs()` re-enqueues to the correct queue on startup.
-- On no-backend-available: job is LPUSH-ed back to its original queue (preserving priority).
+- On no-provider-available: job is LPUSH-ed back to its original queue (preserving priority).
 
 ---
 
@@ -109,7 +109,7 @@ const QUEUE_KEY_TEST:     &str = "veronex:queue:jobs:test";    // source=Test
 
 ```
 Client → any inference route
-  → InferenceUseCaseImpl::submit(prompt, model, backend_type, api_key_id?, account_id?,
+  → InferenceUseCaseImpl::submit(prompt, model, provider_type, api_key_id?, account_id?,
                                   source, api_format, messages?, tools?,
                                   request_path?, conversation_id?)
   → InferenceJob created (status=Pending)
@@ -134,37 +134,37 @@ queue_dispatcher_loop (BLPOP API queue first):
 pub struct InferenceJob {
     pub id: Uuid,
     pub model_name: String,
-    pub backend: BackendType,              // Ollama | Gemini
-    pub status: JobStatus,                 // Pending | Running | Completed | Failed | Cancelled
-    pub source: JobSource,                 // Api | Test  (migration 000031)
-    pub prompt: String,                    // display prompt (short, last user message)
+    pub provider_type: ProviderType,           // Ollama | Gemini
+    pub status: JobStatus,                     // Pending | Running | Completed | Failed | Cancelled
+    pub source: JobSource,                     // Api | Test
+    pub prompt: String,                        // display prompt (short, last user message)
     pub result_text: Option<String>,
     pub error: Option<String>,
-    pub api_key_id: Option<Uuid>,          // FK → api_keys (ON DELETE SET NULL)
-    pub account_id: Option<Uuid>,          // FK → accounts (Test Run jobs; migration 000037)
-    pub backend_id: Option<Uuid>,          // FK → llm_backends (set at dispatch; migration 000039)
-    pub api_format: ApiFormat,             // route discriminator (migration 000041)
-    pub request_path: Option<String>,      // e.g. "/v1/chat/completions" (migration 000042)
-    pub conversation_id: Option<String>,   // X-Conversation-ID header — agent session grouping (migration 000043)
-    pub tool_calls_json: Option<serde_json::Value>, // model-returned tool calls JSONB (migration 000043)
-    pub messages: Option<serde_json::Value>, // FULL input context — persisted as messages_json JSONB (migration 000045)
-    pub tools: Option<serde_json::Value>,  // tool definitions — in-memory only during dispatch (not persisted)
+    pub api_key_id: Option<Uuid>,              // FK → api_keys (ON DELETE SET NULL)
+    pub account_id: Option<Uuid>,              // FK → accounts (Test Run jobs)
+    pub provider_id: Option<Uuid>,             // FK → llm_providers (set at dispatch)
+    pub api_format: ApiFormat,                 // route discriminator
+    pub request_path: Option<String>,          // e.g. "/v1/chat/completions"
+    pub conversation_id: Option<String>,       // X-Conversation-ID header — agent session grouping
+    pub tool_calls_json: Option<serde_json::Value>, // model-returned tool calls JSONB
+    pub messages: Option<serde_json::Value>,   // FULL input context — persisted as messages_json JSONB
+    pub tools: Option<serde_json::Value>,      // tool definitions — in-memory only during dispatch (not persisted)
     pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>, // pure inference start (excludes queue wait)
+    pub started_at: Option<DateTime<Utc>>,     // pure inference start (excludes queue wait)
     pub completed_at: Option<DateTime<Utc>>,
-    pub cancelled_at: Option<DateTime<Utc>>, // set by cancel(); None for non-cancelled jobs
-    pub latency_ms: Option<i32>,           // started_at → completed_at
-    pub ttft_ms: Option<i32>,              // Time To First Token
-    pub queue_time_ms: Option<i32>,        // created_at → started_at (queue wait duration)
+    pub cancelled_at: Option<DateTime<Utc>>,   // set by cancel(); None for non-cancelled jobs
+    pub latency_ms: Option<i32>,               // started_at → completed_at
+    pub ttft_ms: Option<i32>,                  // Time To First Token
+    pub queue_time_ms: Option<i32>,            // created_at → started_at (queue wait duration)
     pub completion_tokens: Option<i32>,
-    pub prompt_tokens: Option<i32>,        // migration 000029
-    pub cached_tokens: Option<i32>,        // migration 000030
+    pub prompt_tokens: Option<i32>,
+    pub cached_tokens: Option<i32>,
 }
 ```
 
 > **`messages`** (→ `messages_json` in DB): the **complete LLM input context** — system prompt, prior conversation turns (user/assistant/tool), current user message, and any file contents injected by the coding agent. Can reach 100–500 KB for agentic sessions. Used as ground-truth training input.
-> **`tools`**: forwarded in-memory to the backend during dispatch; never written to DB.
-> **`backend_id`**: set by `queue_dispatcher_loop` at dispatch time — `NULL` at submit time.
+> **`tools`**: forwarded in-memory to the provider during dispatch; never written to DB.
+> **`provider_id`**: set by `queue_dispatcher_loop` at dispatch time — `NULL` at submit time.
 > **`conversation_id`**: set from the `X-Conversation-ID` header; groups all turns of one agent session.
 
 > `latency_ms` = pure inference time (`started_at` → `completed_at`, excludes queue wait)
@@ -178,20 +178,20 @@ pub struct InferenceJob {
 CREATE TABLE inference_jobs (
     id                UUID         PRIMARY KEY,
     model_name        VARCHAR(255) NOT NULL,
-    backend           VARCHAR(50)  NOT NULL,
+    provider_type     VARCHAR(50)  NOT NULL,
     status            VARCHAR(20)  NOT NULL DEFAULT 'pending',
-    source            VARCHAR(8)   NOT NULL DEFAULT 'api',   -- migration 000031
+    source            VARCHAR(8)   NOT NULL DEFAULT 'api',
     prompt            TEXT         NOT NULL DEFAULT '',       -- display prompt (short)
     result_text       TEXT,
     error             TEXT,
     api_key_id        UUID REFERENCES api_keys(id) ON DELETE SET NULL,
-    account_id        UUID REFERENCES accounts(id),          -- migration 000037 (Test Run jobs)
-    backend_id        UUID REFERENCES llm_backends(id),      -- migration 000039 (set at dispatch)
-    api_format        TEXT NOT NULL DEFAULT 'openai_compat', -- migration 000041
-    request_path      TEXT,                                  -- migration 000042 ("/v1/chat/completions" etc.)
-    conversation_id      TEXT,                                  -- migration 000043 (X-Conversation-ID or batch-assigned)
-    tool_calls_json      JSONB,                                 -- migration 000043 (model tool calls)
-    messages_json        JSONB,                                 -- migration 000045 (FULL input context)
+    account_id        UUID REFERENCES accounts(id),          -- Test Run jobs
+    provider_id       UUID REFERENCES llm_providers(id),     -- set at dispatch
+    api_format        TEXT NOT NULL DEFAULT 'openai_compat',
+    request_path      TEXT,                                  -- "/v1/chat/completions" etc.
+    conversation_id      TEXT,                                  -- X-Conversation-ID or batch-assigned
+    tool_calls_json      JSONB,                                 -- model tool calls
+    messages_json        JSONB,                                 -- FULL input context
     created_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
     started_at           TIMESTAMPTZ,
     completed_at         TIMESTAMPTZ,
@@ -200,25 +200,19 @@ CREATE TABLE inference_jobs (
     latency_ms           INTEGER,
     ttft_ms              INTEGER,
     completion_tokens    INTEGER,
-    prompt_tokens        INTEGER,    -- migration 000029
-    cached_tokens        INTEGER,    -- migration 000030
-    messages_hash        TEXT,       -- migration 000048 (Blake2b-256 of full messages array)
-    messages_prefix_hash TEXT        -- migration 000048 (Blake2b-256 of messages[0..-1], "" for first turn)
+    prompt_tokens        INTEGER,
+    cached_tokens        INTEGER,
+    messages_hash        TEXT,       -- Blake2b-256 of full messages array
+    messages_prefix_hash TEXT        -- Blake2b-256 of messages[0..-1], "" for first turn
 );
--- migrations: 000002 CREATE, 000004 result_text, 000014 api_key_id,
---             000015 latency_ms, 000020 ttft_ms+completion_tokens,
---             000029 prompt_tokens, 000030 cached_tokens, 000031 source,
---             000037 account_id, 000039 backend_id, 000041 api_format,
---             000042 request_path, 000043 conversation_id+tool_calls_json,
---             000044 (lab_settings — separate table), 000045 messages_json,
---             000046 queue_time_ms + cancelled_at, 000048 messages_hash + messages_prefix_hash
+-- single init migration: 0000000001_init.sql
 CREATE INDEX idx_inference_jobs_source         ON inference_jobs(source);
 CREATE INDEX idx_inference_jobs_conversation_id ON inference_jobs(conversation_id)
     WHERE conversation_id IS NOT NULL;
 CREATE INDEX idx_inference_jobs_tool_calls      ON inference_jobs USING GIN (tool_calls_json)
     WHERE tool_calls_json IS NOT NULL;
-CREATE INDEX idx_inference_jobs_backend_capacity
-    ON inference_jobs(backend_id, model_name, created_at DESC)
+CREATE INDEX idx_inference_jobs_provider_capacity
+    ON inference_jobs(provider_id, model_name, created_at DESC)
     WHERE status = 'Completed';
 CREATE INDEX idx_inference_jobs_messages_hash
     ON inference_jobs(api_key_id, messages_hash)
@@ -381,7 +375,7 @@ GET /v1/dashboard/jobs/stream
     Authorization: Bearer <JWT>
     → SSE stream (persistent connection)
     → event: job_status
-    → data: {"id":"<uuid>","status":"pending|running|completed|failed|cancelled","model_name":"...","backend":"...","latency_ms":null|N}
+    → data: {"id":"<uuid>","status":"pending|running|completed|failed|cancelled","model_name":"...","provider_type":"...","latency_ms":null|N}
 ```
 
 Fires one SSE event per job status transition. Backed by a `tokio::sync::broadcast::channel(256)` in `InferenceUseCaseImpl`:
@@ -395,9 +389,9 @@ Client: `web/hooks/use-inference-stream.ts` — `fetch()`-based SSE reader with 
 ```rust
 pub struct JobStatusEvent {
     pub id: String,
-    pub status: String,       // "pending" | "running" | "completed" | "failed" | "cancelled"
+    pub status: String,        // "pending" | "running" | "completed" | "failed" | "cancelled"
     pub model_name: String,
-    pub backend: String,      // backend name (e.g. "local-ollama")
+    pub provider_type: String, // provider type (e.g. "ollama" | "gemini")
     pub latency_ms: Option<i32>,
 }
 ```
@@ -420,7 +414,7 @@ Used by the test panel to reconnect to an in-progress or completed stream after 
 pub struct JobSummary {
     pub id: String,
     pub model_name: String,
-    pub backend: String,
+    pub provider_type: String,
     pub status: String,
     pub source: String,               // "api" | "test"
     pub created_at: String,
@@ -460,7 +454,7 @@ pub struct JobDetail {
 
 Token costs are computed at query time via a LATERAL JOIN against the `model_pricing` table — no cost is stored in `inference_jobs` itself.
 
-### `model_pricing` Table (migration 000047)
+### `model_pricing` Table
 
 ```sql
 CREATE TABLE model_pricing (
@@ -473,7 +467,7 @@ CREATE TABLE model_pricing (
 );
 ```
 
-- Ollama: **no rows** — `CASE WHEN backend = 'ollama' THEN 0.0` always applies.
+- Ollama: **no rows** — `CASE WHEN provider_type = 'ollama' THEN 0.0` always applies.
 - Gemini: exact model rows + `'*'` wildcard fallback (seeded with 2026-03 Google AI pricing).
 
 ### LATERAL JOIN Pattern
@@ -482,7 +476,7 @@ CREATE TABLE model_pricing (
 LEFT JOIN LATERAL (
     SELECT input_per_1m, output_per_1m
     FROM model_pricing
-    WHERE provider = j.backend
+    WHERE provider = j.provider_type
       AND (model_name = j.model_name OR model_name = '*')
     ORDER BY CASE WHEN model_name = j.model_name THEN 0 ELSE 1 END
     LIMIT 1
@@ -492,7 +486,7 @@ LEFT JOIN LATERAL (
 Cost expression used in `JobDetail`, `JobSummary`, `UsageBreakdownResponse`:
 ```sql
 CASE
-    WHEN j.backend = 'ollama' THEN 0.0
+    WHEN j.provider_type = 'ollama' THEN 0.0
     WHEN pricing.input_per_1m IS NOT NULL
          AND j.prompt_tokens IS NOT NULL
          AND j.completion_tokens IS NOT NULL THEN
@@ -505,10 +499,10 @@ END AS estimated_cost_usd
 ### Usage Breakdown Cost Aggregation
 
 `GET /v1/usage/breakdown` → `UsageBreakdownResponse`:
-- `by_backend[*].estimated_cost_usd` — total cost for that provider in the window
+- `by_provider[*].estimated_cost_usd` — total cost for that provider in the window
 - `by_key[*].estimated_cost_usd` — total cost per API key
-- `by_model[*].estimated_cost_usd` — total cost per model+backend combination
-- `total_cost_usd` — sum of all backend costs (for the breakdown card header KPI)
+- `by_model[*].estimated_cost_usd` — total cost per model+provider combination
+- `total_cost_usd` — sum of all provider costs (for the breakdown card header KPI)
 
 ---
 
@@ -525,7 +519,7 @@ DELETE /v1/inference/{job_id}    ← legacy alias (also wired)
 Auth: JWT Bearer (`Authorization: Bearer <token>`) for dashboard endpoint.
 API key (`X-API-Key`) is **not** accepted for cancel — dashboard-only operation.
 
-### Backend Guard (`InferenceUseCaseImpl::cancel()`)
+### Provider Guard (`InferenceUseCaseImpl::cancel()`)
 
 `cancel()` is a **no-op** when the job is already in a terminal state:
 

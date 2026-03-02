@@ -94,7 +94,7 @@ AppState field: `lab_settings_repo: Arc<dyn LabSettingsRepository>`
 ## API
 
 Both endpoints are JWT Bearer–only (dashboard router — not accessible via API key).
-Handler: `crates/inferq/src/infrastructure/inbound/http/dashboard_handlers.rs`
+Handler: `crates/veronex/src/infrastructure/inbound/http/dashboard_handlers.rs`
 (`get_lab_settings` / `patch_lab_settings`)
 
 ### `GET /v1/dashboard/lab`

@@ -1,11 +1,11 @@
 # Architecture
 
-> Hexagonal Architecture overview | **Last Updated**: 2026-03-02
+> Hexagonal Architecture overview | **Last Updated**: 2026-03-03
 
 ## Structure
 
 ```
-crates/inferq/src/
+crates/veronex/src/
 ├── domain/          # Entities, value objects, enums (no deps)
 ├── application/     # Use cases + ports (traits)
 │   ├── ports/
@@ -31,7 +31,7 @@ infrastructure → application → domain
 | ------------------------------ | --------- | ------------------------------------ |
 | `InferenceUseCase`             | Inbound   | HTTP handlers (inference + OpenAI)   |
 | `InferenceBackendPort`         | Outbound  | OllamaAdapter / GeminiAdapter        |
-| `LlmBackendRegistry`           | Outbound  | PostgresBackendRegistry + CachingBackendRegistry (5s TTL decorator) |
+| `LlmProviderRegistry`          | Outbound  | PostgresProviderRegistry + CachingProviderRegistry (5s TTL decorator) |
 | `GpuServerRegistry`            | Outbound  | PostgresGpuServerRegistry            |
 | `JobRepository`                | Outbound  | PostgresJobRepository                |
 | `ApiKeyRepository`             | Outbound  | PostgresApiKeyRepository             |
@@ -44,7 +44,7 @@ infrastructure → application → domain
 | `GeminiPolicyRepository`       | Outbound  | PostgresGeminiPolicyRepository       |
 | `GeminiSyncConfigRepository`   | Outbound  | PostgresGeminiSyncConfigRepository   |
 | `GeminiModelRepository`        | Outbound  | PostgresGeminiModelRepository        |
-| `BackendModelSelectionRepository` | Outbound | PostgresBackendModelSelectionRepository |
+| `ProviderModelSelectionRepository` | Outbound | PostgresProviderModelSelectionRepository |
 | `OllamaModelRepository`           | Outbound  | PostgresOllamaModelRepository             |
 | `OllamaSyncJobRepository`         | Outbound  | PostgresOllamaSyncJobRepository           |
 | `ModelCapacityRepository`         | Outbound  | PostgresModelCapacityRepository           |
@@ -57,11 +57,12 @@ infrastructure → application → domain
 ## HTTP Auth Layers
 
 ```
-Public         /v1/setup/*, /v1/auth/*                no middleware
-API Key Auth   /v1/chat/*, /v1/inference/*             api_key_auth + rate_limiter
-JWT Bearer     /v1/accounts/*, /v1/audit               jwt_auth middleware → RequireSuper extractor
-JWT Bearer     /v1/test/*                              jwt_auth (no rate limit, account_id tracking)
-API Key Auth   /v1/dashboard/*, /v1/servers/*, /v1/usage/*, /v1/keys/*  api_key_auth (admin key)
+Public         /v1/setup/*, /v1/auth/*                                         no middleware
+API Key Auth   /v1/chat/*, /v1/inference/*, /api/*, /v1beta/*                  api_key_auth + rate_limiter
+JWT Bearer     /v1/accounts/*, /v1/sessions/*, /v1/audit                       jwt_auth → RequireSuper extractor
+JWT Bearer     /v1/test/*                                                       jwt_auth (no rate limit, account_id tracking)
+JWT Bearer     /v1/keys/*, /v1/usage/*, /v1/dashboard/*, /v1/backends/*,
+               /v1/servers/*, /v1/gemini/*, /v1/ollama/*                       jwt_auth (admin operations)
 ```
 
 Dashboard admin endpoints:
@@ -95,7 +96,7 @@ POST /v1/test/api/generate          → test_handlers  (ApiFormat::OllamaNative)
 POST /v1/test/v1beta/models/{*}     → test_handlers  (ApiFormat::GeminiNative)
 
 ── Common path (all routes) ──────────────────────────────────────────────────────────
-InferenceUseCaseImpl::submit(prompt, model, backend_type, api_key_id?, account_id?,
+InferenceUseCaseImpl::submit(prompt, model, provider_type, api_key_id?, account_id?,
                               source, api_format, messages?, tools?,
                               request_path?, conversation_id?)
   → Valkey RPUSH veronex:queue:jobs:paid   (source=Api, tier=paid)
@@ -134,7 +135,7 @@ Job source/format tracking:
 ## AppState (main.rs — Composition Root)
 
 All state injected via `Arc<dyn Trait>` into Axum `State<AppState>`:
-- `use_case`, `job_repo`, `api_key_repo`, `backend_registry`, `gpu_server_registry`
+- `use_case`, `job_repo`, `api_key_repo`, `provider_registry`, `gpu_server_registry`
 - `ollama_model_repo`, `ollama_sync_job_repo`
 - `gemini_policy_repo`, `gemini_sync_config_repo`, `gemini_model_repo`
 - `model_selection_repo`, `pg_pool`
@@ -167,7 +168,7 @@ All state injected via `Arc<dyn Trait>` into Axum `State<AppState>`:
 
 ## Dynamic Concurrency
 
-`ConcurrencySlotMap` → `(backend_id, model_name) → Semaphore(N)` where N = `OLLAMA_NUM_PARALLEL` (default 1)
+`ConcurrencySlotMap` → `(provider_id, model_name) → Semaphore(N)` where N = `OLLAMA_NUM_PARALLEL` (default 1)
 - Capacity analyzer updates N every 5 min via `/api/ps` VRAM + `/api/show` KV cache formula
 - Thermal throttle gates dispatch: Normal < 78°C / Soft ≥ 85°C / Hard ≥ 92°C
 - RAII permit drop auto-releases slot for next job

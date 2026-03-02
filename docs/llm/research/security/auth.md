@@ -1,7 +1,7 @@
 # Authentication & Sessions — 2026 Research
 
 > **Last Researched**: 2026-03-01 | **Source**: JWT best practices + verified in production
-> **Status**: ✅ Verified — used in `crates/inferq/src/infrastructure/inbound/http/middleware/`
+> **Status**: ✅ Verified — used in `crates/veronex/src/infrastructure/inbound/http/middleware/`
 
 ---
 
@@ -128,5 +128,5 @@ Never mix them — separate middleware layers.
 
 - OWASP JWT cheat sheet: https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html
 - RFC 7519 (JWT), RFC 7617 (Bearer)
-- Verified: `crates/inferq/src/infrastructure/inbound/http/middleware/jwt_auth.rs`
-- Verified: `crates/inferq/src/infrastructure/outbound/persistence/session_repository.rs`
+- Verified: `crates/veronex/src/infrastructure/inbound/http/middleware/jwt_auth.rs`
+- Verified: `crates/veronex/src/infrastructure/outbound/persistence/session_repository.rs`

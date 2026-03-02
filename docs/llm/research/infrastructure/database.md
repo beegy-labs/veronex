@@ -39,7 +39,7 @@ server_id: Option<Uuid>   // NULL = no server linked
 ## Migrations (sqlx migrate)
 
 ```
-crates/inferq/migrations/
+crates/veronex/migrations/
   20260101000001_initial.sql
   20260228000033_api_key_type.sql
   20260228000034_accounts.sql
@@ -89,4 +89,4 @@ ORDER BY bucket
 
 - PostgreSQL 18 release notes
 - ClickHouse docs: https://clickhouse.com/docs
-- Verified: `crates/inferq/migrations/`, `crates/veronex-analytics/`
+- Verified: `crates/veronex/migrations/`, `crates/veronex-analytics/`
