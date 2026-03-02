@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-veronex
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.api.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.veronex.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "veronex.api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        {{- include "veronex.api.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: veronex
+          image: "{{ .Values.veronex.image.repository }}:{{ .Values.veronex.image.tag }}"
+          imagePullPolicy: {{ .Values.veronex.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.veronex.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          env:
+            - name: PORT
+              value: "{{ .Values.veronex.service.port }}"
+            - name: DATABASE_URL
+              value: {{ include "veronex.postgresUrl" . | quote }}
+            - name: VALKEY_URL
+              value: {{ include "veronex.valkeyUrl" . | quote }}
+            - name: ANALYTICS_URL
+              value: "http://{{ .Release.Name }}-veronex-analytics:{{ .Values.veronexAnalytics.service.port }}"
+            - name: ANALYTICS_SECRET
+              value: {{ .Values.veronex.analytics.secret | quote }}
+            - name: S3_ENDPOINT
+              value: {{ include "veronex.s3Endpoint" . | quote }}
+            - name: S3_ACCESS_KEY
+              value: {{ include "veronex.s3AccessKey" . | quote }}
+            - name: S3_SECRET_KEY
+              value: {{ include "veronex.s3SecretKey" . | quote }}
+            - name: S3_BUCKET
+              value: {{ include "veronex.s3Bucket" . | quote }}
+            - name: S3_REGION
+              value: {{ include "veronex.s3Region" . | quote }}
+            - name: JWT_SECRET
+              value: {{ .Values.veronex.jwt.secret | quote }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ .Values.veronex.cors.allowedOrigins | quote }}
+            - name: OLLAMA_URL
+              value: {{ .Values.veronex.ollama.url | quote }}
+            - name: BOOTSTRAP_API_KEY
+              value: {{ .Values.veronex.bootstrapAdminKey | quote }}
+            {{- if .Values.veronex.bootstrapSuperUser }}
+            - name: BOOTSTRAP_SUPER_USER
+              value: {{ .Values.veronex.bootstrapSuperUser | quote }}
+            {{- end }}
+            {{- if .Values.veronex.bootstrapSuperPass }}
+            - name: BOOTSTRAP_SUPER_PASS
+              value: {{ .Values.veronex.bootstrapSuperPass | quote }}
+            {{- end }}
+            {{- if .Values.veronex.geminiApiKey }}
+            - name: GEMINI_API_KEY
+              value: {{ .Values.veronex.geminiApiKey | quote }}
+            {{- end }}
+            {{- if .Values.otelCollector.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://{{ .Release.Name }}-otel-collector:4317"
+            {{- else if .Values.veronex.otel.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.veronex.otel.endpoint | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.veronex.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}

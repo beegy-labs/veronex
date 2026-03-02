@@ -15,7 +15,7 @@ on:
 
 env:
   REGISTRY: gitea.girok.dev
-  IMAGE_NAME: beegy-labs/inferq
+  IMAGE_NAME: beegy-labs/veronex
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -102,7 +102,7 @@ jobs:
           TAG="${{ steps.meta.outputs.tag }}"
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: token ${GITEA_TOKEN}" \
-            "${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/inferq/${TAG}")
+            "${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex/${TAG}")
           if [ "$RESPONSE" = "200" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "✅ Image ${TAG} already exists, skipping build"
@@ -138,9 +138,9 @@ jobs:
         run: |
           cd gitops && git pull --rebase
           case "${{ github.ref_name }}" in
-            main)    FILE="clusters/home/values/inferq-prod.yaml";    ENV="production" ;;
-            develop) FILE="clusters/home/values/inferq-dev.yaml";     ENV="development" ;;
-            *)       FILE="clusters/home/values/inferq-dev.yaml";     ENV="development" ;;
+            main)    FILE="clusters/home/values/veronex-prod.yaml";    ENV="production" ;;
+            develop) FILE="clusters/home/values/veronex-dev.yaml";     ENV="development" ;;
+            *)       FILE="clusters/home/values/veronex-dev.yaml";     ENV="development" ;;
           esac
           awk -v newtag="${{ needs.build.outputs.tag }}" '
             /^image:/ { in_image=1 }
@@ -151,7 +151,7 @@ jobs:
           git config user.name "GitHub Actions Bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ${FILE}
-          git diff --staged --quiet || git commit -m "chore(${ENV}): update inferq to ${{ needs.build.outputs.tag }}"
+          git diff --staged --quiet || git commit -m "chore(${ENV}): update veronex to ${{ needs.build.outputs.tag }}"
           for i in 1 2 3; do git push && break || { sleep 3; git pull --rebase; }; done
 
       - name: Cleanup old images
@@ -163,6 +163,6 @@ jobs:
             develop) P="develop-" ;;
             *)       P="develop-" ;;
           esac
-          curl -s -H "Authorization: token ${GITEA_TOKEN}" "https://gitea.girok.dev/api/v1/packages/beegy-labs/container/inferq" | \
+          curl -s -H "Authorization: token ${GITEA_TOKEN}" "https://gitea.girok.dev/api/v1/packages/beegy-labs/container/veronex" | \
             jq -r ".[] | select(.version | startswith(\"${P}\")) | \"\(.created_at)|\(.version)\"" | sort -r | tail -n +11 | \
-            while IFS='|' read -r _ v; do curl -sX DELETE -H "Authorization: token ${GITEA_TOKEN}" "https://gitea.girok.dev/api/v1/packages/beegy-labs/container/inferq/${v}"; done
+            while IFS='|' read -r _ v; do curl -sX DELETE -H "Authorization: token ${GITEA_TOKEN}" "https://gitea.girok.dev/api/v1/packages/beegy-labs/container/veronex/${v}"; done
