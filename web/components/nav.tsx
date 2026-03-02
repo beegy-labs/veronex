@@ -85,17 +85,7 @@ const navItems: NavItem[] = [
       { href: '/performance',  labelKey: 'nav.performance', icon: Gauge },
     ],
   },
-  {
-    type: 'group',
-    id: 'jobs',
-    labelKey: 'nav.jobs',
-    icon: List,
-    basePath: '/jobs',
-    children: [
-      { href: '/jobs',  labelKey: 'nav.jobs',  icon: List },
-      { href: '/flow',  labelKey: 'nav.flow',  icon: Workflow },
-    ],
-  },
+  { type: 'link', href: '/jobs', labelKey: 'nav.jobs', icon: List },
   { type: 'link', href: '/keys',    labelKey: 'nav.keys',    icon: Key },
   { type: 'link', href: '/servers', labelKey: 'nav.servers', icon: HardDrive },
   {
