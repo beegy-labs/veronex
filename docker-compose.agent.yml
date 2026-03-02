@@ -1,9 +1,9 @@
-# inferq-agent — deploy this on each machine running Ollama.
+# veronex-agent — deploy this on each machine running Ollama.
 #
 # Usage (on the Ollama server):
 #   OLLAMA_URL=http://localhost:11434 docker compose -f docker-compose.agent.yml up -d
 #
-# Then in the inferq admin, register the backend with:
+# Then in the veronex admin, register the backend with:
 #   Ollama URL:  http://<this-server-ip>:11434
 #   Agent URL:   http://<this-server-ip>:9091
 #
@@ -12,11 +12,11 @@
 #   GET /health       → {"status":"ok"}
 
 services:
-  inferq-agent:
+  veronex-agent:
     build:
       context: .
       dockerfile: docker/agent/Dockerfile
-    image: ghcr.io/beegy/inferq-agent:latest
+    image: ghcr.io/beegy/veronex-agent:latest
     ports:
       - "9091:9091"
     volumes:

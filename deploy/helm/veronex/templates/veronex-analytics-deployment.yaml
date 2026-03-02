@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-veronex-analytics
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.analytics.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.veronexAnalytics.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "veronex.analytics.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        {{- include "veronex.analytics.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: veronex-analytics
+          image: "{{ .Values.veronexAnalytics.image.repository }}:{{ .Values.veronexAnalytics.image.tag }}"
+          imagePullPolicy: {{ .Values.veronexAnalytics.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.veronexAnalytics.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          env:
+            - name: PORT
+              value: "{{ .Values.veronexAnalytics.service.port }}"
+            - name: ANALYTICS_SECRET
+              value: {{ .Values.veronex.analytics.secret | quote }}
+            - name: CLICKHOUSE_URL
+              value: {{ include "veronex.clickhouseUrl" . | quote }}
+            - name: CLICKHOUSE_USER
+              value: {{ include "veronex.clickhouseUser" . | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              value: {{ include "veronex.clickhousePassword" . | quote }}
+            - name: CLICKHOUSE_DB
+              value: {{ include "veronex.clickhouseDb" . | quote }}
+            - name: OTEL_HTTP_ENDPOINT
+              value: {{ include "veronex.otelHttpEndpoint" . | quote }}
+            {{- range $k, $v := .Values.veronexAnalytics.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}

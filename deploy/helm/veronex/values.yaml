@@ -1,0 +1,146 @@
+# ── App images ─────────────────────────────────────────────────────────────────
+
+veronex:
+  image:
+    repository: ghcr.io/veronex/veronex
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  # CORS: "*" → allow any origin; comma-separated list to restrict (production)
+  cors:
+    allowedOrigins: "*"
+
+  jwt:
+    secret: "change-me-in-production"
+
+  ollama:
+    url: "http://ollama:11434"
+
+  analytics:
+    secret: "veronex-analytics-internal-secret"
+
+  bootstrapAdminKey: "veronex-bootstrap-admin-key"
+  bootstrapSuperUser: ""
+  bootstrapSuperPass: ""
+  geminiApiKey: ""
+
+  otel:
+    # Set to OTel Collector gRPC endpoint if otelCollector.enabled=false but using external
+    endpoint: ""
+
+  service:
+    type: ClusterIP
+    port: 3000
+
+  # Extra environment variables (key: value)
+  env: {}
+
+veronexAnalytics:
+  image:
+    repository: ghcr.io/veronex/veronex-analytics
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 3003
+
+  env: {}
+
+veronexWeb:
+  image:
+    repository: ghcr.io/veronex/veronex-web
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 3000
+
+  env: {}
+
+# ── Subcharts — enable/disable each independently ──────────────────────────────
+# When a subchart is disabled, set the corresponding external* values.
+
+postgresql:
+  enabled: true
+  auth:
+    username: veronex
+    password: veronex
+    database: veronex
+
+externalPostgresql:
+  host: ""
+  port: 5432
+  username: ""
+  password: ""
+  database: ""
+
+valkey:
+  enabled: true
+  auth:
+    enabled: false
+
+externalValkey:
+  host: ""
+  port: 6379
+
+clickhouse:
+  enabled: true
+  auth:
+    username: veronex
+    password: veronex
+    database: veronex
+
+externalClickhouse:
+  host: ""
+  port: 8123
+  username: ""
+  password: ""
+  database: ""
+
+minio:
+  enabled: true
+  auth:
+    rootUser: veronex
+    rootPassword: veronex123
+  defaultBuckets: "veronex-messages"
+
+externalMinio:
+  endpoint: ""
+  accessKey: ""
+  secretKey: ""
+  bucket: "veronex-messages"
+  region: "us-east-1"
+
+redpanda:
+  enabled: true
+
+externalRedpanda:
+  # Comma-separated broker list, e.g. "kafka.example.com:9092"
+  brokers: ""
+
+# ── OTel Collector (optional) ──────────────────────────────────────────────────
+
+otelCollector:
+  enabled: true
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.123.0"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+
+# ── Ingress (optional) ─────────────────────────────────────────────────────────
+
+ingress:
+  enabled: false
+  className: nginx
+  host: veronex.example.com
+  tls:
+    enabled: false
+    secretName: ""

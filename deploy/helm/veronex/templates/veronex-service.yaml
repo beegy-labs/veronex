@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-veronex
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.api.selectorLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.veronex.service.type }}
+  selector:
+    {{- include "veronex.api.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.veronex.service.port }}
+      targetPort: http
+      protocol: TCP
