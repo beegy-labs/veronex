@@ -880,9 +880,22 @@ pub async fn trigger_session_grouping(
     State(state): State<AppState>,
     Json(body): Json<TriggerGroupingRequest>,
 ) -> impl IntoResponse {
+    // Prevent concurrent runs — return 409 if already in progress.
+    let permit = match state.session_grouping_lock.clone().try_acquire_owned() {
+        Ok(p)  => p,
+        Err(_) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "message": "session grouping already in progress" })),
+            )
+                .into_response();
+        }
+    };
+
     let pg_pool = state.pg_pool.clone();
     let cutoff  = body.before_date;
     tokio::spawn(async move {
+        let _permit = permit; // held until the task completes
         match group_sessions_before(&pg_pool, cutoff).await {
             Ok(n)  => tracing::info!(grouped = n, cutoff = ?cutoff, "manual session grouping complete"),
             Err(e) => tracing::warn!("manual session grouping failed: {e}"),

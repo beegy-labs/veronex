@@ -9,6 +9,7 @@ use crate::domain::value_objects::JobStatusEvent;
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
 use crate::application::ports::outbound::account_repository::AccountRepository;
+use crate::application::ports::outbound::message_store::MessageStore;
 use crate::application::ports::outbound::analytics_repository::AnalyticsRepository;
 use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
 use crate::application::ports::outbound::audit_port::AuditPort;
@@ -26,6 +27,7 @@ use crate::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJ
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap;
 use crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
+use crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use crate::infrastructure::outbound::hw_metrics::CpuSnapshot;
 
 /// Shared application state passed to all HTTP handlers via Axum's State extractor.
@@ -71,4 +73,12 @@ pub struct AppState {
     pub job_event_tx: Arc<broadcast::Sender<JobStatusEvent>>,
     /// Lab (experimental) feature flags — singleton row in DB.
     pub lab_settings_repo: Arc<dyn LabSettingsRepository>,
+    /// Per-backend circuit breaker — isolates failing backends automatically.
+    pub circuit_breaker: Arc<CircuitBreakerMap>,
+    /// S3-compatible object store for conversation contexts (messages_json).
+    /// `None` when S3_ENDPOINT is not configured (messages stay in PostgreSQL).
+    pub message_store: Option<Arc<dyn MessageStore>>,
+    /// Mutex (1-permit semaphore) that prevents concurrent session grouping runs.
+    /// Held for the duration of each run — manual trigger returns 409 if locked.
+    pub session_grouping_lock: Arc<tokio::sync::Semaphore>,
 }

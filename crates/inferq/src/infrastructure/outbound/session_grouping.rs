@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use chrono::NaiveDate;
 use sqlx::{PgPool, Row};
+use tokio::sync::Semaphore;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -30,6 +31,7 @@ use uuid::Uuid;
 
 pub async fn run_session_grouping_loop(
     pg_pool:  Arc<PgPool>,
+    lock:     Arc<Semaphore>,
     interval: Duration,
     shutdown: CancellationToken,
 ) {
@@ -45,11 +47,21 @@ pub async fn run_session_grouping_loop(
             }
         }
 
+        // Skip if a manual trigger is already running.
+        let permit = match lock.clone().try_acquire_owned() {
+            Ok(p)  => p,
+            Err(_) => {
+                tracing::debug!("session grouping: skipped — already running");
+                continue;
+            }
+        };
+
         match group_sessions_before(&pg_pool, None).await {
             Ok(n) if n > 0 => tracing::info!(grouped = n, "session grouping complete"),
             Ok(_)          => tracing::debug!("session grouping: nothing to group"),
             Err(e)         => tracing::warn!("session grouping failed: {e}"),
         }
+        drop(permit);
     }
 }
 

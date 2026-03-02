@@ -371,8 +371,10 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(86_400); // 24h default
+    let session_grouping_lock = Arc::new(tokio::sync::Semaphore::new(1));
     tasks.spawn(run_session_grouping_loop(
         Arc::new(pg_pool.clone()),
+        session_grouping_lock.clone(),
         Duration::from_secs(session_grouping_interval_secs),
         shutdown.child_token(),
     ));
@@ -433,6 +435,7 @@ async fn main() -> Result<()> {
         lab_settings_repo,
         circuit_breaker,
         message_store,
+        session_grouping_lock,
     };
 
     let app = build_app(state);

@@ -49,8 +49,13 @@ function GroupSessionsPanel() {
     try {
       await api.triggerSessionGrouping(date)
       setMessage({ type: 'success', text: t('jobs.groupingSuccess') })
-    } catch {
-      setMessage({ type: 'error', text: t('jobs.groupingError') })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : ''
+      if (msg.startsWith('409')) {
+        setMessage({ type: 'error', text: t('jobs.groupingAlreadyRunning') })
+      } else {
+        setMessage({ type: 'error', text: t('jobs.groupingError') })
+      }
     } finally {
       setLoading(false)
     }
