@@ -396,6 +396,7 @@ pub async fn run_capacity_analysis_loop(
     valkey_pool:         Option<fred::clients::Pool>,
     analyzer_url:        String,
     manual_trigger:      Arc<Notify>,
+    analysis_lock:       Arc<tokio::sync::Semaphore>,
     base_tick:           Duration,
     shutdown:            CancellationToken,
     ollama_num_parallel: u32,
@@ -430,6 +431,10 @@ pub async fn run_capacity_analysis_loop(
             }
         }
 
+        // Acquire the analysis lock — prevents concurrent runs (e.g. rapid POST /sync spam).
+        // `acquire_owned` never fails on a non-closed semaphore, so unwrap is safe here.
+        let _permit = analysis_lock.clone().acquire_owned().await.unwrap();
+
         // Run analysis for all active Ollama backends
         let backends = registry.list_all().await.unwrap_or_default();
         let ollama_backends: Vec<_> = backends
@@ -463,6 +468,7 @@ pub async fn run_capacity_analysis_loop(
 
         let status = if any_error { "partial" } else { "ok" };
         settings_repo.record_run(status).await.ok();
+        // `_permit` dropped here — releases the lock
     }
 
     tracing::info!("capacity analysis loop stopped");

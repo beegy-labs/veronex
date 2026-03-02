@@ -15,21 +15,17 @@ import {
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
   AXIS_TICK, LEGEND_STYLE, CURSOR_FILL,
-  fmtMs, fmtMsNullable,
+  fmtMs, fmtMsNullable, fmtCompact,
 } from '@/lib/chart-theme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtHourLabel, fmtDatetimeShort } from '@/lib/date'
+import { useLabSettings } from '@/components/lab-settings-provider'
 
 /* ─── helpers ─────────────────────────────────────────────── */
-function fmt(n: number) {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
-
+// fmtCompact / fmtMs / fmtMsNullable imported from chart-theme
 const fmtDuration = fmtMsNullable
 
 function countByStatus(backends: Backend[], status: string) {
@@ -206,14 +202,19 @@ export function DashboardTab({
 }: Props) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
+  const { labSettings } = useLabSettings()
+  const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   /* ── derived: providers ─────────────────────────────────── */
   const LOCAL_TYPES = ['ollama'] as const
-  const API_TYPES   = ['gemini'] as const
-  const localBs   = backends?.filter(b => (LOCAL_TYPES as readonly string[]).includes(b.backend_type)) ?? []
-  const apiBs     = backends?.filter(b => (API_TYPES   as readonly string[]).includes(b.backend_type)) ?? []
-  const onlineAll = backends?.filter(b => b.status === 'online').length ?? 0
-  const totalProv = backends?.length ?? 0
+  const localBs = backends?.filter(b => (LOCAL_TYPES as readonly string[]).includes(b.backend_type)) ?? []
+  const apiBs   = geminiEnabled
+    ? (backends?.filter(b => b.backend_type === 'gemini') ?? [])
+    : []
+  // visibleBs = only backends that are currently shown (respects lab flags)
+  const visibleBs = [...localBs, ...apiBs]
+  const onlineAll = visibleBs.filter(b => b.status === 'online').length
+  const totalProv = visibleBs.length
 
   /* ── derived: server health (all servers) ───────────────── */
   const serverStatus = (servers ?? []).map((s, i) => {
@@ -299,6 +300,7 @@ export function DashboardTab({
   })) ?? []
 
   const modelBarData: (ModelBreakdown & { label: string })[] = (breakdown?.by_model ?? [])
+    .filter(m => geminiEnabled || m.backend !== 'gemini')
     .slice()
     .sort((a, b) => b.request_count - a.request_count)
     .slice(0, 8)
@@ -533,9 +535,9 @@ export function DashboardTab({
               <tbody className="divide-y divide-border">
                 <tr>
                   <td className="py-3 text-xs text-muted-foreground">{t('overview.requests')}</td>
-                  <td className="py-3 text-right font-bold tabular-nums">{perf    ? fmt(perf.total_requests)    : '—'}</td>
-                  <td className="py-3 text-right font-bold tabular-nums">{perf7d  ? fmt(perf7d.total_requests)  : '—'}</td>
-                  <td className="py-3 text-right font-bold tabular-nums">{perf30d ? fmt(perf30d.total_requests) : '—'}</td>
+                  <td className="py-3 text-right font-bold tabular-nums">{perf    ? fmtCompact(perf.total_requests)    : '—'}</td>
+                  <td className="py-3 text-right font-bold tabular-nums">{perf7d  ? fmtCompact(perf7d.total_requests)  : '—'}</td>
+                  <td className="py-3 text-right font-bold tabular-nums">{perf30d ? fmtCompact(perf30d.total_requests) : '—'}</td>
                 </tr>
                 <tr>
                   <td className="py-3 text-xs text-muted-foreground">{t('performance.successRate')}</td>
@@ -617,7 +619,9 @@ export function DashboardTab({
           <CardContent className="pt-0">
             <div className="divide-y divide-border">
               <ProviderRow icon={<Server className="h-4 w-4" />} label={t('overview.localProviders')} backends={localBs} />
-              <ProviderRow icon={<Globe className="h-4 w-4" />}  label={t('overview.apiProviders')}   backends={apiBs} />
+              {geminiEnabled && (
+                <ProviderRow icon={<Globe className="h-4 w-4" />} label={t('overview.apiProviders')} backends={apiBs} />
+              )}
             </div>
             <div className="mt-3 pt-2 border-t border-border">
               <Link href="/providers" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
@@ -700,17 +704,19 @@ export function DashboardTab({
                   <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: 'var(--theme-primary)' }} />
                   Ollama
                 </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: 'var(--theme-status-info)' }} />
-                  Gemini
-                </span>
+                {geminiEnabled && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: 'var(--theme-status-info)' }} />
+                    Gemini
+                  </span>
+                )}
               </div>
             </div>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={Math.max(160, modelBarData.length * 36)}>
               <BarChart data={modelBarData} layout="vertical" margin={{ left: 8, right: 16 }}>
-                <XAxis type="number" tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={fmt} />
+                <XAxis type="number" tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={fmtCompact} />
                 <YAxis
                   type="category" dataKey="label" width={154}
                   tick={{ ...AXIS_TICK, fontSize: 10 }}
@@ -719,7 +725,7 @@ export function DashboardTab({
                 <Tooltip
                   contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL}
                   formatter={(v, _name, props: { payload?: ModelBreakdown }) => [
-                    `${fmt(Number(v))} ${t('usage.reqCount')}`,
+                    `${fmtCompact(Number(v))} ${t('usage.reqCount')}`,
                     props.payload?.backend ?? '',
                   ] as [string, string]}
                 />
@@ -788,11 +794,11 @@ export function DashboardTab({
           {usage ? (
             <>
               <p className="text-3xl font-bold tabular-nums flex items-baseline gap-1">
-                {fmt(usage.total_tokens)}
+                {fmtCompact(usage.total_tokens)}
                 <span className="text-sm font-normal text-muted-foreground">tokens</span>
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('usage.promptTokens')} {fmt(usage.prompt_tokens)} · {t('usage.completionTokens')} {fmt(usage.completion_tokens)}
+                {t('usage.promptTokens')} {fmtCompact(usage.prompt_tokens)} · {t('usage.completionTokens')} {fmtCompact(usage.completion_tokens)}
               </p>
             </>
           ) : (

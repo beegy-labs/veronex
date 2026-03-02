@@ -1,6 +1,6 @@
 # docs/llm — SSOT Index
 
-> Tier 2 CDD documents (LLM-facing, editable) | **Last Updated**: 2026-03-02 (rev: dep upgrades — fred 10, reqwest 0.13, Next.js 16, recharts 3, Valkey 9, Redpanda v25.3, OTel 0.146; migrations 41-45)
+> Tier 2 CDD documents (LLM-facing, editable) | **Last Updated**: 2026-03-02 (rev5: web-usage, web-performance as separate docs; web-jobs row cleaned up)
 
 ## Policies
 
@@ -9,7 +9,7 @@
 | Architecture | `policies/architecture.md` | hexagonal, ports, adapters, layers, AppState, dependency rule |
 | Code Patterns | `policies/patterns.md` | AppError, thiserror, sqlx query_as!, async-trait, tracing, useOptimistic, Zod, Tailwind v4 |
 | Git Flow | `policies/git-flow.md` | branch, commit, squash, merge, conventional |
-| CDD | `policies/cdd.md` | doc structure, line limits, RAG, splits |
+| CDD | `.ai/README.md` + `.ai/rules.md` | doc structure, line limits, RAG, splits |
 
 ---
 
@@ -27,9 +27,11 @@
 | Gemini model sync | `backend/backends-gemini-models.md` | gemini_sync_config, gemini_models, backend_selected_models, UPSERT |
 | Hardware | `backend/hardware.md` | GpuServer, node-exporter, hw_metrics, AMD APU, ClickHouse history |
 | Infrastructure | `backend/infrastructure.md` | docker-compose, ports, env vars, Valkey keys, DB migrations |
-| OTel pipeline | `backend/infrastructure-otel.md` | OTel Collector, Redpanda, ClickHouse Kafka Engine, Helm |
+| OTel pipeline | `backend/infrastructure-otel.md` | OTel Collector, Redpanda, ClickHouse Kafka Engine, data retention |
 | Authentication | `backend/auth.md` | JWT HS256, accounts, sessions, RBAC, setup flow, audit trail, password reset |
 | Capacity Control | `backend/capacity.md` | ConcurrencySlotMap, ThermalThrottleMap, capacity analyzer, model_capacity, qwen2.5:3b |
+| Lab Features | `backend/lab_features.md` | gemini_function_calling, LabSettingsProvider, LabSettingsRepository, feature visibility gating |
+| Model Pricing | `backend/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, Ollama $0.00, provider wildcard row |
 
 ---
 
@@ -37,13 +39,18 @@
 
 | Document | Path | Keywords |
 |----------|------|---------|
-| Design system | `frontend/web.md` | brand, tokens.css, Tailwind v4, i18n, nav sidebar, theme |
+| Design system | `frontend/web.md` | brand, tokens.css, Tailwind v4, i18n, nav sidebar, theme, LabSettingsProvider |
 | Servers page | `frontend/web-servers.md` | /servers, ServersTable, ServerMetricsCell, ServerHistoryModal, RegisterServerModal, EditServerModal |
 | Providers page | `frontend/web-providers.md` | /providers, OllamaTab, OllamaSyncSection, OllamaCapacitySection, GeminiTab, GeminiStatusSyncSection, GeminiSyncSection, ModelSelectionModal, ConcurrencyControl |
-| Jobs/Usage/Perf | `frontend/web-jobs.md` | job-table, detail modal, formatDuration, usage charts, performance P50/P99 |
+| Jobs page | `frontend/web-jobs.md` | job-table, detail modal, formatDuration, GroupSessionsPanel, NetworkFlowTab |
+| Usage page | `frontend/web-usage.md` | UsagePage, 4-tab layout, usageBreakdownQuery, per-key hourly, model latency |
+| Performance page | `frontend/web-performance.md` | PerformancePage, P50/P95/P99, model latency table, key performance, TPS trend |
 | API Keys page | `frontend/web-keys.md` | keys/page.tsx, CreateKeyModal, toggle, soft-delete |
 | Test + API Docs | `frontend/web-test.md` | api-test, SSE parsing, /docs/swagger, /docs/redoc |
 | Chart System    | `frontend/web-charts.md` | chart-theme.ts SSOT, DonutChart, Recharts constants, tooltip fix |
+| Accounts page   | `frontend/web-accounts.md` | /accounts, user CRUD, role assignment, session management, AccountSessionsModal |
+| Audit trail page | `frontend/web-audit.md` | /audit, super role, AuditTable, action filter, actor column |
+| Setup wizard    | `frontend/web-setup.md` | /setup, bootstrap flow, first-run, admin account creation |
 
 ---
 
@@ -76,6 +83,8 @@
 | Add new Port + Adapter | `policies/patterns.md` (Port+Adapter order) + `policies/architecture.md` |
 | Error handling | `policies/patterns.md` (AppError pattern) |
 | Modify job tracking | `backend/jobs.md` + `backend/jobs-analytics.md` |
+| Token cost measurement / pricing | `backend/model-pricing.md` — `model_pricing` table, LATERAL join, `estimated_cost_usd` field |
+| Add pricing for a new provider | `backend/model-pricing.md` (Adding a New Provider section) + `migrations/` INSERT |
 | Gemini rate limits | `backend/backends-gemini.md` |
 | Ollama model sync / routing | `backend/backends-ollama-models.md` |
 | Gemini model sync | `backend/backends-gemini-models.md` |
@@ -97,13 +106,22 @@
 | Background task / graceful shutdown | `research/backend/rust-axum.md` (Background Tasks section) + `policies/patterns.md` |
 | Axum route / middleware | `research/backend/rust-axum.md` |
 | OTel pipeline change | `research/infrastructure/observability.md` |
+| Change ClickHouse data retention | `backend/infrastructure-otel.md` (Data Retention section) — set env var before first run, or ALTER TABLE on existing volume |
 | Auth / JWT / session | `research/security/auth.md` + `backend/auth.md` |
-| Account management (RBAC) | `backend/auth.md` (account + session endpoints) |
+| Account management (RBAC) | `backend/auth.md` (account + session endpoints) + `frontend/web-accounts.md` |
+| Accounts / audit web UI | `frontend/web-accounts.md` + `frontend/web-audit.md` |
+| Setup / bootstrap wizard | `frontend/web-setup.md` |
 | Submit test inference (JWT, no API key) | `backend/auth.md` (Test Run Endpoints section) |
 | Add new test route format | `test_handlers.rs` + `router.rs` `build_test_router()` |
 | Dynamic concurrency / thermal throttle | `backend/capacity.md` |
 | Capacity analysis / slot recommendation | `backend/capacity.md` |
 | Modify capacity control web UI | `frontend/web-providers.md` (OllamaCapacitySection) + `backend/capacity.md` |
-| Network flow SSE stream | `backend/jobs.md` (Real-Time Job Status Stream section) + `frontend/web.md` (useInferenceStream) |
-| Network flow visualization | `frontend/web.md` (Network Flow Page — Detail; ArgoCD-style ProviderFlowPanel topology) |
+| Add new lab feature flag | `backend/lab_features.md` (step-by-step guide) |
+| Gate UI on lab feature | `backend/lab_features.md` (Frontend SSOT Architecture) — use `useLabSettings()` hook |
+| Toggle Gemini integration on/off | Settings dialog (⚙️) → Lab Features → toggle; see `backend/lab_features.md` |
+| Network flow visualization (/flow) | `frontend/web.md` (Network Flow Page section) + `frontend/web-jobs.md` (NetworkFlowTab in Jobs 3rd tab) |
+| Session grouping (manual trigger) | `backend/jobs.md` (Session Grouping section) + `frontend/web-jobs.md` (GroupSessionsPanel) |
+| Per-key model breakdown | `frontend/web-keys.md` (KeyUsageModal section) + `backend/api_keys.md` |
 | Queue depth (waiting jobs) | `backend/jobs.md` (Queue Depth section) — `GET /v1/dashboard/queue/depth`; 3-key LLEN; `queueDepthQuery` polls 3 s |
+| Modify usage page / tabs | `frontend/web-usage.md` — 4-tab layout (overview / by-key / by-model / by-provider) |
+| Modify performance page | `frontend/web-performance.md` — KPI cards, model latency, key performance, TPS trend |

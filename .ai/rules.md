@@ -54,3 +54,6 @@ Inbound Adapters → [Ports] → Application Core → [Ports] → Outbound Adapt
 | Check docs/llm/ before coding   | CDD-first: update docs then code  |
 | Use `onSettled` for TQ invalidation | Runs on error too (not `onSuccess`) |
 | New background loop → accept `CancellationToken` | Enables graceful shutdown via `JoinSet` |
+| Gate Gemini (and any lab feature) UI via `useLabSettings()` | Never read lab settings in local component state — use the context SSOT |
+| Always display `estimated_cost_usd` when showing job or usage data | Never hide the field; Ollama backends always show $0.00 — see `docs/llm/backend/model-pricing.md` |
+| Never substitute a missing pricing row with silence | Show `$0.00` for Ollama, `—` / null for other providers without a pricing entry |

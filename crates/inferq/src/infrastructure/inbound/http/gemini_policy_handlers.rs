@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -6,9 +6,28 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::application::ports::outbound::audit_port::AuditEvent;
 use crate::domain::entities::GeminiRateLimitPolicy;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 
 use super::state::AppState;
+
+async fn emit_audit(state: &AppState, actor: &Claims, action: &str, resource_id: &str, resource_name: &str, details: &str) {
+    if let Some(ref port) = state.audit_port {
+        port.record(AuditEvent {
+            event_time: Utc::now(),
+            account_id: actor.sub,
+            account_name: actor.sub.to_string(),
+            action: action.to_string(),
+            resource_type: "gemini_backend".to_string(),
+            resource_id: resource_id.to_string(),
+            resource_name: resource_name.to_string(),
+            ip_address: None,
+            details: Some(details.to_string()),
+        })
+        .await;
+    }
+}
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
 
@@ -85,6 +104,7 @@ pub async fn list_gemini_policies(State(state): State<AppState>) -> impl IntoRes
 /// { "rpm_limit": 10, "rpd_limit": 250 }
 /// ```
 pub async fn upsert_gemini_policy(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Path(model_name): Path<String>,
     Json(req): Json<UpsertGeminiPolicyRequest>,
@@ -106,6 +126,9 @@ pub async fn upsert_gemini_policy(
                 rpd = req.rpd_limit,
                 "gemini policy upserted"
             );
+            emit_audit(&state, &claims, "update", &model_name, &format!("gemini_policy:{model_name}"),
+                &format!("Gemini rate-limit policy for '{}' upserted: rpm={}, rpd={}, free_tier={}",
+                    model_name, req.rpm_limit, req.rpd_limit, req.available_on_free_tier)).await;
             (StatusCode::OK, Json(GeminiPolicySummary::from(policy))).into_response()
         }
         Err(e) => {

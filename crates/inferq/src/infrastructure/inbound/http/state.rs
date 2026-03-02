@@ -81,4 +81,7 @@ pub struct AppState {
     /// Mutex (1-permit semaphore) that prevents concurrent session grouping runs.
     /// Held for the duration of each run — manual trigger returns 409 if locked.
     pub session_grouping_lock: Arc<tokio::sync::Semaphore>,
+    /// Mutex (1-permit semaphore) that prevents concurrent capacity analysis runs.
+    /// Held for the duration of each run — POST /sync returns 409 if locked.
+    pub capacity_analysis_lock: Arc<tokio::sync::Semaphore>,
 }

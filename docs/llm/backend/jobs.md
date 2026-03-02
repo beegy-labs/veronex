@@ -277,6 +277,23 @@ ORDER BY conversation_id, created_at;
 - 첫 턴(`messages_prefix_hash = ""`): 새 `conversation_id` (UUIDv7) 생성
 - `SESSION_GROUPING_INTERVAL_SECS` 환경변수로 주기 조정 (기본: 86400s = 24h)
 - Race condition 없음 — 완료된 job 이력 기반, LLM 호출 없음
+- **날짜 커트오프**: `created_at < DATE_TRUNC('day', NOW())` — 오늘 진행 중인 대화는 건드리지 않음
+- **동시 실행 방지**: `session_grouping_lock: Arc<Semaphore(1)>` (AppState) — 배치/수동 트리거 모두 공유
+- **일주일+ 이전 데이터도 묶음** — 시간 상한선 없음; LIMIT 10000으로 매일 점진 처리
+
+**수동 즉시 실행** (`POST /v1/dashboard/session-grouping/trigger`, JWT Bearer):
+```json
+// Request (optional before_date — 생략 시 오늘 자정 기준)
+{ "before_date": "2026-03-01" }
+
+// 202 Accepted — 백그라운드 실행, 즉시 반환
+{ "message": "session grouping triggered" }
+
+// 409 Conflict — 이미 실행 중
+{ "message": "session grouping already in progress" }
+```
+
+**공개 함수**: `group_sessions_before(pg_pool, cutoff: Option<NaiveDate>)` — 핸들러와 배치 루프 모두 호출
 
 ---
 

@@ -1,6 +1,6 @@
 # API Keys — Backend: Auth & Rate Limiting
 
-> SSOT | **Last Updated**: 2026-03-02 (rev: RPM rate limiter uses atomic Lua eval — 1 RTT instead of 4)
+> SSOT | **Last Updated**: 2026-03-02 (rev2: DashboardStats SQL scoped to tenant_id='default' — prevents cross-tenant count inflation)
 
 ## Task Guide
 
@@ -99,7 +99,7 @@ DELETE /v1/keys/{id}   → 204 (soft-delete: sets deleted_at = NOW())
 PATCH  /v1/keys/{id}   ToggleKeyRequest { is_active: bool } → 204
 ```
 
-`GET /v1/keys` filters out test keys (`key_type = 'test'`) server-side — these are account-owned internal keys and are never listed.
+`GET /v1/keys` filters out test keys (`key_type = 'test'`) server-side and is scoped to `tenant_id = 'default'` via `list_by_tenant("default")`. These scopes must match the `DashboardStats` SQL.
 
 ### Request / Response Structs
 
@@ -143,17 +143,19 @@ pub struct KeySummary {
 ```rust
 // dashboard_handlers.rs
 pub struct DashboardStats {
-    pub total_keys: i64,   // key_type != 'test' AND deleted_at IS NULL
-    pub active_keys: i64,  // key_type != 'test' AND is_active AND deleted_at IS NULL
+    pub total_keys: i64,   // key_type != 'test' AND deleted_at IS NULL AND tenant_id = 'default'
+    pub active_keys: i64,  // key_type = 'standard' AND is_active AND deleted_at IS NULL AND tenant_id = 'default'
     // ...
 }
 ```
 
 SQL:
 ```sql
-COUNT(*) FILTER (WHERE deleted_at IS NULL AND key_type != 'test')              AS total_keys,
-COUNT(*) FILTER (WHERE is_active AND deleted_at IS NULL AND key_type != 'test') AS active_keys
+COUNT(*) FILTER (WHERE deleted_at IS NULL AND key_type != 'test' AND tenant_id = 'default')              AS total_keys,
+COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'standard' AND tenant_id = 'default') AS active_keys
 ```
+
+> **Tenant scope**: Dashboard query is explicitly scoped to `tenant_id = 'default'` to match what `GET /v1/keys` returns (`list_by_tenant("default")`). Without this filter, keys created with any other tenant ID (e.g. from tests or the example payload) inflate the count.
 
 Job count queries also exclude test-source jobs:
 ```sql

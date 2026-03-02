@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS otel_metrics_gauge (
 ) ENGINE = MergeTree()
 PARTITION BY toDate(TimeUnix)
 ORDER BY (MetricName, TimeUnix)
-TTL toDate(TimeUnix) + INTERVAL 30 DAY;
+TTL toDate(TimeUnix) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
 
 -- OTel traces raw — populated by Kafka Engine MV below
 CREATE TABLE IF NOT EXISTS otel_traces_raw (
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS otel_traces_raw (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(received_at)
 ORDER BY received_at
-TTL toDate(received_at) + INTERVAL 30 DAY;
+TTL toDate(received_at) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
 
 -- OTel logs — unified event store for inference + audit events.
 -- Distinguish via LogAttributes['event.name']:
@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS otel_logs (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(Timestamp)
 ORDER BY (ServiceName, Timestamp)
-TTL toDate(Timestamp) + INTERVAL 90 DAY;
+TTL toDate(Timestamp) + INTERVAL __RETENTION_ANALYTICS_DAYS__ DAY;
 
 -- Audit events (DEPRECATED — superseded by otel_logs)
 CREATE TABLE IF NOT EXISTS audit_events (
@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(event_time)
 ORDER BY (event_time, resource_type, resource_id)
-TTL toDate(event_time) + INTERVAL 1 YEAR;
+TTL toDate(event_time) + INTERVAL __RETENTION_AUDIT_DAYS__ DAY;
 
 -- node-exporter curated metrics (dashboard queries)
 CREATE TABLE IF NOT EXISTS node_metrics (
@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS node_metrics (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(ts)
 ORDER BY (instance, gpu_index, ts)
-TTL toDate(ts) + INTERVAL 30 DAY;
+TTL toDate(ts) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
 
 -- ── Kafka Engine tables + Materialized Views ───────────────────────────────────
 -- Pipeline:

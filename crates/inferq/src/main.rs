@@ -270,6 +270,7 @@ async fn main() -> Result<()> {
     let thermal         = Arc::new(ThermalThrottleMap::new(60)); // 60s cooldown
     let circuit_breaker = Arc::new(CircuitBreakerMap::new());
     let capacity_manual_trigger = Arc::new(tokio::sync::Notify::new());
+    let capacity_analysis_lock  = Arc::new(tokio::sync::Semaphore::new(1));
 
     // ── Shutdown token + task set ───────────────────────────────────
     let shutdown = CancellationToken::new();
@@ -358,6 +359,7 @@ async fn main() -> Result<()> {
         valkey_pool.clone(),
         analyzer_url.clone(),
         capacity_manual_trigger.clone(),
+        capacity_analysis_lock.clone(),
         Duration::from_secs(30), // base tick (checks DB settings each tick)
         shutdown.child_token(),
         ollama_num_parallel,
@@ -436,6 +438,7 @@ async fn main() -> Result<()> {
         circuit_breaker,
         message_store,
         session_grouping_lock,
+        capacity_analysis_lock,
     };
 
     let app = build_app(state);

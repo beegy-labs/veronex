@@ -123,6 +123,7 @@ PATCH /v1/dashboard/capacity/settings
 
 POST /v1/dashboard/capacity/sync
      → 202 {message: "capacity analysis triggered"}
+     → 409 {message: "capacity analysis already in progress"}  ← if analysis_lock held
 ```
 
 ## Environment Variables
@@ -163,5 +164,11 @@ pub thermal:                 Arc<ThermalThrottleMap>,
 pub capacity_repo:           Arc<dyn ModelCapacityRepository>,
 pub capacity_settings_repo:  Arc<dyn CapacitySettingsRepository>,
 pub capacity_manual_trigger: Arc<tokio::sync::Notify>,
+pub capacity_analysis_lock:  Arc<tokio::sync::Semaphore>,  // 1-permit; held during each run
 pub analyzer_url:            String,
 ```
+
+`capacity_analysis_lock` is a 1-permit `Semaphore` shared between the analyzer loop and the
+`POST /sync` HTTP handler. The loop acquires it with `acquire_owned().await` before running and
+drops it on completion. The handler calls `available_permits() == 0` to detect a running analysis
+and immediately returns 409 without queuing a second trigger.

@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
+import { useLabSettings } from '@/components/lab-settings-provider'
 import { fmtDateOnly, fmtDatetimeShort } from '@/lib/date'
 
 // ── SSOT: Gemini query keys ────────────────────────────────────────────────────
@@ -2148,9 +2149,13 @@ function GeminiTab({
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-function ProvidersContent({ section }: { section: string }) {
+function ProvidersContent({ section: sectionParam }: { section: string }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const { labSettings } = useLabSettings()
+  const geminiEnabled = labSettings?.gemini_function_calling ?? false
+  // Fall back to 'ollama' when Gemini is disabled and the URL says ?s=gemini
+  const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'ollama' : sectionParam
 
   const [registerBackendType, setRegisterBackendType] = useState<'ollama' | 'gemini' | null>(null)
   const [editingBackend, setEditingBackend] = useState<Backend | null>(null)

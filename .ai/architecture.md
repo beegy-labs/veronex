@@ -1,6 +1,6 @@
 # Architecture
 
-> Hexagonal Architecture overview | **Last Updated**: 2026-03-02 (rev2: MessageStore port + S3MessageStore adapter; message_store in AppState)
+> Hexagonal Architecture overview | **Last Updated**: 2026-03-02
 
 ## Structure
 
@@ -57,11 +57,18 @@ infrastructure → application → domain
 ## HTTP Auth Layers
 
 ```
-Public         /v1/setup/*, /v1/auth/*     no middleware
-API Key Auth   /v1/chat/*, /v1/inference/* api_key_auth + rate_limiter
-JWT Bearer     /v1/accounts/*, /v1/audit   jwt_auth middleware → RequireSuper extractor
-JWT Bearer     /v1/test/*                  jwt_auth (no rate limit, account_id tracking)
+Public         /v1/setup/*, /v1/auth/*                no middleware
+API Key Auth   /v1/chat/*, /v1/inference/*             api_key_auth + rate_limiter
+JWT Bearer     /v1/accounts/*, /v1/audit               jwt_auth middleware → RequireSuper extractor
+JWT Bearer     /v1/test/*                              jwt_auth (no rate limit, account_id tracking)
+API Key Auth   /v1/dashboard/*, /v1/servers/*, /v1/usage/*, /v1/keys/*  api_key_auth (admin key)
 ```
+
+Dashboard admin endpoints:
+- `GET/PATCH /v1/dashboard/capacity/settings` — capacity analyzer config
+- `POST /v1/dashboard/capacity/sync` — manual capacity analysis; 202 Accepted / 409 Conflict (already running)
+- `POST /v1/dashboard/session-grouping/trigger` — manual session grouping; body `{ before_date?: "YYYY-MM-DD" }`; 202 OK / 409 Conflict (already running)
+- `GET /v1/usage/{key_id}/models?hours=N` — per-key model breakdown
 
 `/v1/setup/status` + `POST /v1/setup` — no auth, first-run only. `POST /v1/setup` returns 409 if any account exists.
 
@@ -143,27 +150,27 @@ All state injected via `Arc<dyn Trait>` into Axum `State<AppState>`:
 - `capacity_repo: Arc<dyn ModelCapacityRepository>` — VRAM + throughput DB
 - `capacity_settings_repo: Arc<dyn CapacitySettingsRepository>` — analysis config
 - `capacity_manual_trigger: Arc<Notify>` — instant analysis trigger
+- `capacity_analysis_lock: Arc<Semaphore(1)>` — prevents concurrent capacity analysis runs (409 if already active)
 - `analyzer_url: String` — Ollama URL for capacity LLM (CAPACITY_ANALYZER_OLLAMA_URL)
 - `lab_settings_repo: Arc<dyn LabSettingsRepository>` — experimental feature flags (SSOT: `docs/llm/backend/lab_features.md`)
 - `message_store: Option<Arc<dyn MessageStore>>` — S3MessageStore (None when S3_ENDPOINT unset)
+- `session_grouping_lock: Arc<Semaphore(1)>` — prevents concurrent session grouping runs (409 if already active)
 
 ## Background Loops
 
 | Loop | Interval | Purpose |
 |------|----------|---------|
 | `health_checker` | 30 s | Backend online/offline + thermal update |
-| `run_capacity_analysis_loop` | 30 s tick (runs per DB interval) | KV cache calc + LLM slot recommendation |
+| `run_capacity_analysis_loop` | 30 s tick (runs per DB interval) | KV cache calc + LLM slot recommendation; holds `capacity_analysis_lock` during each run |
 | `queue_dispatcher_loop` | BLPOP 5s | VRAM-sorted job dispatch + slot acquire |
-| `run_session_grouping_loop` | 24 h (`SESSION_GROUPING_INTERVAL_SECS`) | Batch-assign `conversation_id` via `messages_prefix_hash` chaining — no LLM |
+| `run_session_grouping_loop` | 24 h (`SESSION_GROUPING_INTERVAL_SECS`) | Batch-assign `conversation_id` via `messages_prefix_hash` chaining — no LLM; date cutoff = today (`created_at < DATE_TRUNC('day', NOW())`); skips tick if `session_grouping_lock` held |
 
-## Dynamic Concurrency (feat: api-key-usage)
+## Dynamic Concurrency
 
-Old: `busy_backends: HashSet<Uuid>` → max 1 job/backend, no VRAM awareness
-
-New: `ConcurrencySlotMap` → `(backend_id, model_name) → Semaphore(N)` where N ∈ [1,8]
-- Capacity analyzer updates N every 5 min using `/api/ps` VRAM + `/api/show` KV formula
-- Thermal throttle gates dispatch: Soft=cap new, Hard=block all
+`ConcurrencySlotMap` → `(backend_id, model_name) → Semaphore(N)` where N = `OLLAMA_NUM_PARALLEL` (default 1)
+- Capacity analyzer updates N every 5 min via `/api/ps` VRAM + `/api/show` KV cache formula
+- Thermal throttle gates dispatch: Normal < 78°C / Soft ≥ 85°C / Hard ≥ 92°C
 - RAII permit drop auto-releases slot for next job
-- SSOT: `docs/llm/backend/capacity.md`
+- **SSOT**: `docs/llm/backend/capacity.md`
 
 **SSOT**: `docs/llm/policies/architecture.md`

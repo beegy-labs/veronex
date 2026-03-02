@@ -10,9 +10,36 @@ use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::application::ports::outbound::audit_port::AuditEvent;
 use crate::domain::entities::{Account, Session};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 use crate::infrastructure::inbound::http::state::AppState;
+
+async fn emit_audit(
+    state: &AppState,
+    account_id: Uuid,
+    account_name: &str,
+    action: &str,
+    resource_type: &str,
+    resource_id: &str,
+    resource_name: &str,
+    details: &str,
+) {
+    if let Some(ref port) = state.audit_port {
+        port.record(AuditEvent {
+            event_time: Utc::now(),
+            account_id,
+            account_name: account_name.to_string(),
+            action: action.to_string(),
+            resource_type: resource_type.to_string(),
+            resource_id: resource_id.to_string(),
+            resource_name: resource_name.to_string(),
+            ip_address: None,
+            details: Some(details.to_string()),
+        })
+        .await;
+    }
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -152,6 +179,9 @@ pub async fn login(
         tracing::warn!("failed to persist session (non-fatal): {e}");
     }
 
+    emit_audit(&state, account.id, &account.username, "login", "account", &account.id.to_string(), &account.username,
+        &format!("User '{}' logged in successfully", account.username)).await;
+
     Ok(Json(LoginResponse {
         access_token,
         token_type: "Bearer".to_string(),
@@ -174,6 +204,8 @@ pub async fn logout(
     if let Ok(Some(session)) = state.session_repo.get_by_refresh_hash(&hash).await {
         let _ = state.session_repo.revoke(&session.id).await;
         revoke_jti(&state, session.jti, session.expires_at).await;
+        emit_audit(&state, session.account_id, &session.account_id.to_string(), "logout", "account", &session.account_id.to_string(), &session.account_id.to_string(),
+            "Session terminated: refresh token revoked and JWT blocklisted").await;
     }
 
     StatusCode::NO_CONTENT
@@ -268,6 +300,9 @@ pub async fn reset_password(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    emit_audit(&state, account_id, &account_id.to_string(), "reset_password", "account", &account_id.to_string(), &account_id.to_string(),
+        "Password changed via one-time reset token").await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -348,6 +383,8 @@ pub async fn setup(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     tracing::info!("first-run setup: super account '{}' created", account.username);
+    emit_audit(&state, account.id, &account.username, "create", "account", &account.id.to_string(), &account.username,
+        &format!("First-run setup: super admin account '{}' created", account.username)).await;
 
     // Issue access token + session so the user lands directly on the dashboard.
     let jti = Uuid::now_v7();

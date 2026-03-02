@@ -1,6 +1,6 @@
 # Auth — RBAC, JWT & Audit Trail
 
-> SSOT | **Last Updated**: 2026-03-02 (rev: test routes expanded to 5 entries — Ollama + Gemini compat; localStorage keys documented)
+> SSOT | **Last Updated**: 2026-03-02 (rev 4 — audit details always populated; token storage updated to cookies)
 
 ## Overview
 
@@ -358,21 +358,88 @@ pub struct AuditEvent {
     pub event_time: DateTime<Utc>,
     pub account_id: Uuid,
     pub account_name: String,
-    pub action: String,        // "create"|"update"|"delete"|"login"|"logout"|"reset_password"
-    pub resource_type: String, // "api_key"|"ollama_backend"|"gemini_backend"|"account"|"gpu_server"
+    pub action: String,        // "create"|"update"|"delete"|"login"|"logout"|"reset_password"|"sync"|"trigger"
+    pub resource_type: String, // "api_key"|"ollama_backend"|"gemini_backend"|"account"|"gpu_server"|"session"|"lab_settings"|"capacity_settings"
     pub resource_id: String,
     pub resource_name: String,
     pub ip_address: Option<String>,
-    pub details: Option<String>,
+    pub details: Option<String>, // ALWAYS Some(…) — human-readable description of the action
 }
 ```
 
-Implemented by `RedpandaAuditAdapter` — produces to `audit` topic in Redpanda.
+**Rule**: every `emit_audit()` call site MUST pass a descriptive `details` string so the
+log entry is self-explanatory when read without additional context.
+
+Implemented by `HttpAuditAdapter` — forwards to veronex-analytics.
+
+### Covered Actions
+
+| Handler | Action | resource_type |
+|---------|--------|---------------|
+| `auth_handlers::login` | `login` | `account` |
+| `auth_handlers::logout` | `logout` | `account` |
+| `auth_handlers::reset_password` | `reset_password` | `account` |
+| `auth_handlers::setup` | `create` | `account` |
+| `account_handlers::create_account` | `create` | `account` |
+| `account_handlers::update_account` | `update` | `account` |
+| `account_handlers::delete_account` | `delete` | `account` |
+| `account_handlers::set_account_active` | `update` | `account` |
+| `account_handlers::create_reset_link` | `reset_password` | `account` |
+| `account_handlers::revoke_session` | `delete` | `session` |
+| `account_handlers::revoke_all_account_sessions` | `delete` | `session` |
+| `key_handlers::create_key` | `create` | `api_key` |
+| `key_handlers::delete_key` | `delete` | `api_key` |
+| `key_handlers::toggle_key` | `update` | `api_key` |
+| `backend_handlers::register_backend` | `create` | `ollama_backend` / `gemini_backend` |
+| `backend_handlers::delete_backend` | `delete` | `ollama_backend` |
+| `backend_handlers::update_backend` | `update` | `ollama_backend` / `gemini_backend` |
+| `gpu_server_handlers::register_gpu_server` | `create` | `gpu_server` |
+| `gpu_server_handlers::update_gpu_server` | `update` | `gpu_server` |
+| `gpu_server_handlers::delete_gpu_server` | `delete` | `gpu_server` |
+| `gemini_model_handlers::set_sync_config` | `update` | `gemini_backend` |
+| `gemini_model_handlers::sync_models` | `sync` | `gemini_backend` |
+| `gemini_policy_handlers::upsert_gemini_policy` | `update` | `gemini_backend` |
+| `dashboard_handlers::patch_capacity_settings` | `update` | `capacity_settings` |
+| `dashboard_handlers::trigger_capacity_sync` | `trigger` | `capacity_settings` |
+| `dashboard_handlers::patch_lab_settings` | `update` | `lab_settings` |
+
+### Details Format
+
+Each call site passes a specific human-readable string so audit logs are self-explanatory:
+
+| Handler | Details string (template) |
+|---------|--------------------------|
+| `auth_handlers::login` | `"User '{username}' logged in successfully"` |
+| `auth_handlers::logout` | `"Session terminated: refresh token revoked and JWT blocklisted"` |
+| `auth_handlers::reset_password` | `"Password changed via one-time reset token"` |
+| `auth_handlers::setup` | `"First-run setup: super admin account '{username}' created"` |
+| `account_handlers::create_account` | `"Account '{username}' (role: {role}) created with auto-generated test API key"` |
+| `account_handlers::update_account` | `"Account '{username}' ({id}) profile updated (name/email/department/position)"` |
+| `account_handlers::delete_account` | `"Account '{username}' ({id}) soft-deleted (login disabled, data retained)"` |
+| `account_handlers::set_account_active` | `"Account {id} is_active set to {bool} (login enabled/disabled)"` |
+| `account_handlers::create_reset_link` | `"Password reset link generated for account '{username}' ({id}); token valid 24h"` |
+| `account_handlers::revoke_session` | `"Session {session_id} manually revoked by admin"` |
+| `account_handlers::revoke_all_account_sessions` | `"All active sessions for account {id} force-revoked by admin"` |
+| `key_handlers::create_key` | `"API key '{name}' created for tenant '{tenant}' (tier: {tier}, rpm_limit: {N}, tpm_limit: {N})"` |
+| `key_handlers::delete_key` | `"API key {id} soft-deleted (access permanently revoked)"` |
+| `key_handlers::toggle_key` | `"API key {id} updated — is_active={bool}, tier={tier}"` (lists only changed fields) |
+| `backend_handlers::register_backend` | `"Backend '{name}' registered (type: {ollama/gemini}, initial_status: {status})"` |
+| `backend_handlers::delete_backend` | `"Backend '{name}' ({id}) deactivated (soft-deleted, no longer routed)"` |
+| `backend_handlers::update_backend` | `"Backend '{name}' ({id}) configuration updated"` |
+| `gpu_server_handlers::register_gpu_server` | `"GPU server '{name}' registered (id: {id})"` |
+| `gpu_server_handlers::update_gpu_server` | `"GPU server '{name}' ({id}) configuration updated"` |
+| `gpu_server_handlers::delete_gpu_server` | `"GPU server {id} permanently deleted"` |
+| `gemini_model_handlers::set_sync_config` | `"Gemini admin API key replaced (used for global model list sync)"` |
+| `gemini_model_handlers::sync_models` | `"Global Gemini model list synced from API: {N} models discovered"` |
+| `gemini_policy_handlers::upsert_gemini_policy` | `"Gemini rate-limit policy for '{model}' upserted: rpm={N}, rpd={N}, free_tier={bool}"` |
+| `dashboard_handlers::patch_capacity_settings` | `"Capacity analyzer settings updated: model={:?}, batch_enabled={:?}, batch_interval_secs={:?}"` |
+| `dashboard_handlers::trigger_capacity_sync` | `"Manual capacity analysis triggered by admin"` |
+| `dashboard_handlers::patch_lab_settings` | `"Lab feature flags updated: gemini_function_calling={:?}"` |
 
 ### Pipeline
 
 ```
-account_handlers.rs → AuditPort::record() → HttpAuditAdapter
+*_handlers.rs → AuditPort::record() → HttpAuditAdapter
                                            → POST /internal/ingest/audit (veronex-analytics)
                                            → OTel LogRecord (event.name="audit.action")
                                            → OTLP gRPC → OTel Collector
@@ -472,7 +539,7 @@ from docker-compose defaults — use `POST /v1/setup` (first-run UI flow) instea
 
 ### Token Storage
 
-Tokens stored in `localStorage`:
+Tokens stored in **cookies** (7-day expiry, `SameSite=Strict`):
 
 ```
 veronex_access_token   → JWT access token (1h)
@@ -483,12 +550,18 @@ veronex_account_id     → account UUID (session management)
 ```
 
 Helpers in `web/lib/auth.ts`:
-- `getAccessToken()` / `getRefreshToken()` — read from localStorage
-- `setTokens(resp: LoginResponse)` — saves access_token + refresh_token from login response
+- `getAccessToken()` / `getRefreshToken()` — read from cookies
+- `setTokens(resp: LoginResponse)` — saves access_token + refresh_token (7-day cookie)
 - `setAccessToken(token)` — updates only access_token (used after token refresh)
-- `clearTokens()` — clear all (logout, forced redirect to /login)
-- `getAuthUser()` → `{ username, role, accountId }` (reads from localStorage)
-- `isLoggedIn()` — returns true if access token present
+- `clearTokens()` — clears all auth cookies (logout, forced redirect to /login)
+- `getAuthUser()` → `{ username, role, accountId }` (reads from cookies)
+- `isLoggedIn()` — returns true if access token cookie present
+
+**Auth flow SSOT**: `web/lib/auth-guard.ts`
+- Module-level mutex `refreshMutex` — concurrent 401s share the same refresh promise
+- `tryRefresh()` — attempts token refresh; clears cookies and redirects on failure
+- `redirectToLogin()` — checks `PUBLIC_PATHS = ['/login', '/setup']` before redirecting
+- Never duplicate auth logic outside `auth-guard.ts`
 
 ### API Client (`web/lib/api-client.ts`)
 
@@ -511,7 +584,7 @@ Helpers in `web/lib/auth.ts`:
 |------|------|----------------|
 | Add new auth endpoint | `infrastructure/inbound/http/auth_handlers.rs` | Handler + router entry in `router.rs` public block |
 | Add new account field | `migrations/` new SQL + `domain/entities/account.rs` + `account_repository.rs` | Update trait + impl |
-| Add new auditable action | `account_handlers.rs` (or other handlers) | Call `emit_audit()` with action string |
+| Add new auditable action | `account_handlers.rs` (or other handlers) | Call `emit_audit()` with action string + a descriptive `details` string (REQUIRED) |
 | Change JWT expiry | `auth_handlers.rs` `issue_access_token()` | Update `exp` calculation |
 | Change refresh TTL | `auth_handlers.rs` login handler | `EXPIRE` call duration |
 | Add new audit filter | `audit_handlers.rs` | Add query param + `WHERE` clause |

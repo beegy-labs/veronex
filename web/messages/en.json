@@ -500,7 +500,12 @@
     "estimatedCost": "Est. Cost",
     "totalCost": "Total Cost",
     "backend": "Provider",
-    "share": "Share"
+    "share": "Share",
+    "overview": "Overview",
+    "byModel": "By Model",
+    "searchModels": "Search models...",
+    "modelLatencyChart": "Model Latency",
+    "keyDetail": "Key Detail"
   },
   "performance": {
     "title": "Performance",
@@ -525,7 +530,13 @@
     "ms": "ms",
     "errors": "Errors",
     "errorRate": "Error Rate",
-    "errorRateTrend": "Error Rate / Hour"
+    "errorRateTrend": "Error Rate / Hour",
+    "byModel": "By Model",
+    "byKey": "By Key",
+    "modelLatency": "Model Avg Latency",
+    "keyPerformance": "Key Performance",
+    "keyCol": "Key",
+    "tpsHour": "Avg TPS / Hour"
   },
   "test": {
     "title": "Inference Test",

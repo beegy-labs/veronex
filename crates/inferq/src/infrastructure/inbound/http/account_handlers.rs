@@ -107,6 +107,7 @@ async fn emit_audit(
     resource_type: &str,
     resource_id: &str,
     resource_name: &str,
+    details: &str,
 ) {
     if let Some(ref port) = state.audit_port {
         port.record(AuditEvent {
@@ -118,7 +119,7 @@ async fn emit_audit(
             resource_id: resource_id.to_string(),
             resource_name: resource_name.to_string(),
             ip_address: None,
-            details: None,
+            details: Some(details.to_string()),
         })
         .await;
     }
@@ -204,7 +205,9 @@ pub async fn create_account(
     // In production this would be in a transaction, but sqlx PgPool supports it.
     let _ = state.api_key_repo.create(&test_key).await;
 
-    emit_audit(&state, &claims, "create", "account", &account.id.to_string(), &req.username).await;
+    emit_audit(&state, &claims, "create", "account", &account.id.to_string(), &req.username,
+        &format!("Account '{}' (role: {}) created with auto-generated test API key",
+            req.username, req.role)).await;
 
     Ok(Json(CreateAccountResponse {
         id: account.id,
@@ -245,7 +248,9 @@ pub async fn update_account(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    emit_audit(&state, &claims, "update", "account", &id, &account.username).await;
+    emit_audit(&state, &claims, "update", "account", &id, &account.username,
+        &format!("Account '{}' ({}) profile updated (name/email/department/position)",
+            account.username, id)).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -272,7 +277,9 @@ pub async fn delete_account(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    emit_audit(&state, &claims, "delete", "account", &id, &account.username).await;
+    emit_audit(&state, &claims, "delete", "account", &id, &account.username,
+        &format!("Account '{}' ({}) soft-deleted (login disabled, data retained)",
+            account.username, id)).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -293,8 +300,9 @@ pub async fn set_account_active(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let action = if req.is_active { "update" } else { "update" };
-    emit_audit(&state, &claims, action, "account", &id, &id).await;
+    emit_audit(&state, &claims, "update", "account", &id, &id,
+        &format!("Account {} is_active set to {} (login {})",
+            id, req.is_active, if req.is_active { "enabled" } else { "disabled" })).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -340,7 +348,7 @@ pub async fn list_account_sessions(
 // ── DELETE /v1/sessions/{session_id} ──────────────────────────────────────────
 
 pub async fn revoke_session(
-    RequireSuper(_claims): RequireSuper,
+    RequireSuper(claims): RequireSuper,
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
@@ -350,13 +358,15 @@ pub async fn revoke_session(
         .revoke(&uuid)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    emit_audit(&state, &claims, "delete", "session", &session_id, &session_id,
+        &format!("Session {} manually revoked by admin", session_id)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
 // ── DELETE /v1/accounts/{id}/sessions ─────────────────────────────────────────
 
 pub async fn revoke_all_account_sessions(
-    RequireSuper(_claims): RequireSuper,
+    RequireSuper(claims): RequireSuper,
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
@@ -366,6 +376,8 @@ pub async fn revoke_all_account_sessions(
         .revoke_all_for_account(&uuid)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    emit_audit(&state, &claims, "delete", "session", &id, &format!("all_sessions:{id}"),
+        &format!("All active sessions for account {} force-revoked by admin", id)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -396,7 +408,9 @@ pub async fn create_reset_link(
             .await;
     }
 
-    emit_audit(&state, &claims, "reset_password", "account", &id, &account.username).await;
+    emit_audit(&state, &claims, "reset_password", "account", &id, &account.username,
+        &format!("Password reset link generated for account '{}' ({}); token valid 24h",
+            account.username, id)).await;
 
     Ok(Json(ResetLinkResponse { token }))
 }

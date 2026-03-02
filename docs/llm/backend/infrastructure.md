@@ -1,13 +1,13 @@
 # Infrastructure — Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-03-02 (rev: dep upgrades — fred 10, reqwest 0.13, Next.js 16, recharts 3, Valkey 9, Redpanda v25.3, OTel 0.146; migrations 41-45)
+> SSOT | **Last Updated**: 2026-03-02 (rev3: MinIO/S3 message store — mandatory S3_ENDPOINT; MessageStore port; AppState: message_store)
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add new service | `docker-compose.yml` + `helm/veronex/templates/` | New service block + Helm Deployment/Service |
-| Add new env var | `crates/inferq/src/main.rs` + `docker-compose.yml` + `web/.env.local.example` | Read in `main()`, set in compose `environment:`, document here |
+| Add new service | `docker-compose.yml` | New service block |
+| Add new env var | `crates/inferq/src/main.rs` + `docker-compose.yml` + `.env.example` | Read in `main()`, set in compose `environment:`, document here |
 | Add new Valkey key pattern | `infrastructure.rs` (this file) + relevant handler | Add to Valkey Key Patterns table, use `veronex:` prefix |
 | Add new DB migration | `crates/inferq/migrations/` new `.sql` file | Name: `{next_number}_description.sql`; add row to migration list in this file |
 | Add new repo to AppState | `infrastructure/inbound/http/state.rs` + `crates/inferq/src/main.rs` | Add `Arc<dyn Trait>` field to `AppState`, init in `main()` composition root |
@@ -21,7 +21,8 @@
 | `crates/inferq/src/main.rs` | Composition root (all adapters wired) |
 | `crates/inferq/src/infrastructure/inbound/http/state.rs` | `AppState` struct |
 | `crates/inferq/migrations/` | All DB migrations |
-| `helm/veronex/` | Kubernetes Helm chart |
+| `docker/clickhouse/schema.sql` | ClickHouse schema (with `__RETENTION_*__` placeholders) |
+| `docker/clickhouse/init.sh` | Substitutes retention env vars and applies schema |
 
 ---
 
@@ -49,6 +50,7 @@ veronex ──→ veronex-analytics ──→ GET /internal/* ──→ ClickHou
 | valkey | valkey/valkey:9.0.3-alpine | **6380** | Queue (BLPOP), rate limiting, JWT revocation blocklist |
 | clickhouse | clickhouse-server:26.1 | 8123, 9000 | Analytics read layer — `otel_logs`, `otel_metrics_gauge` |
 | redpanda | redpandadata/redpanda:v25.3.9 | 9092 | Single message bus (Kafka-compatible) |
+| minio | minio/minio:latest | **9010** (API), **9011** (Console) | S3-compatible object store — `messages_json` conversation contexts |
 | veronex | local build | **3001**→3000 | Rust API server (crate: `veronex`) |
 | veronex-analytics | local build | internal 3003 | Analytics service — OTel write + ClickHouse read |
 | veronex-web | local build | 3002 | Next.js admin dashboard |
@@ -75,6 +77,13 @@ JWT_SECRET=change-me-in-production       # HS256 key — MUST change in producti
 # BOOTSTRAP_SUPER_USER=<username>        # optional: pre-seed super account (CI/automated)
 # BOOTSTRAP_SUPER_PASS=<password>        # optional: omit to use first-run setup flow
 
+# S3 / MinIO — conversation context storage (MANDATORY)
+S3_ENDPOINT=http://localhost:9010       # docker: http://minio:9000
+S3_ACCESS_KEY=veronex
+S3_SECRET_KEY=veronex123
+S3_BUCKET=veronex-messages             # bucket auto-created on startup
+S3_REGION=us-east-1                    # any valid region string for MinIO
+
 # Capacity analyzer (dynamic concurrency)
 CAPACITY_ANALYZER_OLLAMA_URL=http://localhost:11434  # default: same as OLLAMA_URL
 # analyzer_model configured via DB: PATCH /v1/dashboard/capacity/settings (default: qwen2.5:3b)
@@ -90,6 +99,12 @@ CLICKHOUSE_PASSWORD=veronex
 CLICKHOUSE_DB=veronex
 OTEL_HTTP_ENDPOINT=http://otel-collector:4318   # OTLP HTTP (not gRPC)
 ANALYTICS_SECRET=<shared-secret>
+
+# ClickHouse data retention (set before first `docker compose up -d`)
+# Applied by docker/clickhouse/init.sh on first volume creation only.
+CLICKHOUSE_RETENTION_ANALYTICS_DAYS=90    # otel_logs (inference + audit events)
+CLICKHOUSE_RETENTION_METRICS_DAYS=30     # otel_metrics_gauge, otel_traces_raw, node_metrics
+CLICKHOUSE_RETENTION_AUDIT_DAYS=365      # audit_events (legacy table)
 
 # Next.js web (veronex-web)
 NEXT_PUBLIC_VERONEX_API_URL=http://localhost:3001
@@ -168,6 +183,8 @@ veronex:hw:{backend_id}                         # hw_metrics JSON (temp_c, vram_
 | 000043 | inference_jobs: add `conversation_id` TEXT + `tool_calls_json` JSONB; GIN + btree indexes |
 | 000044 | lab_settings CREATE — singleton (id=1), `gemini_function_calling` BOOLEAN (default false) |
 | 000045 | inference_jobs: add `messages_json` JSONB — full LLM input context for training data |
+| 000046 | inference_jobs: add `queue_time_ms` INTEGER + `cancelled_at` TIMESTAMPTZ |
+| 000047 | model_pricing CREATE — `(provider, model_name)` PK; Gemini 2026-03 seed rows; Ollama = no rows (always $0.00) |
 
 ---
 
@@ -218,6 +235,10 @@ pub struct AppState {
     pub capacity_settings_repo:    Arc<dyn CapacitySettingsRepository>,
     pub capacity_manual_trigger:   Arc<tokio::sync::Notify>,
     pub analyzer_url:              String,
+    // Lab features
+    pub lab_settings_repo:         Arc<dyn LabSettingsRepository>,
+    // Object storage (messages_json)
+    pub message_store:             Option<Arc<dyn MessageStore>>,   // None when S3_ENDPOINT unset
     // Infrastructure
     pub valkey_pool:               Option<fred::clients::Pool>,
     pub pg_pool:                   sqlx::PgPool,
@@ -226,24 +247,25 @@ pub struct AppState {
 
 ---
 
-## Helm Chart (helm/veronex/)
+## ClickHouse Data Retention
 
-```
-helm/veronex/
-├── Chart.yaml
-├── values.yaml
-└── templates/
-    ├── veronex/           Deployment + Service (veronex binary)
-    ├── veronex-analytics/ Deployment + Service (analytics internal service)
-    ├── veronex-web/       Deployment + Service (Next.js)
-    ├── postgres/          Deployment + Service + PVC
-    ├── valkey/            Deployment + Service + PVC
-    ├── clickhouse/        Deployment + Service + PVC
-    ├── redpanda/          Deployment + Service
-    └── otel-collector/    Deployment + Service + ConfigMap
-```
+Configured via env vars in `docker-compose.yml`. Applied **on first volume creation** only.
 
-**Setup flow**: No `BOOTSTRAP_SUPER_USER`/`BOOTSTRAP_SUPER_PASS` defaults.
-Use `POST /v1/setup` (no auth) on first access to create the super admin account.
+| Variable | Default | Applies to |
+|----------|---------|------------|
+| `CLICKHOUSE_RETENTION_ANALYTICS_DAYS` | `90` | `otel_logs` (inference + audit events) |
+| `CLICKHOUSE_RETENTION_METRICS_DAYS` | `30` | `otel_metrics_gauge`, `otel_traces_raw`, `node_metrics` |
+| `CLICKHOUSE_RETENTION_AUDIT_DAYS` | `365` | `audit_events` (legacy table) |
+
+**On an existing volume**, use ALTER TABLE to change TTL:
+
+```sql
+-- Change inference/audit log retention to 30 days
+ALTER TABLE otel_logs MODIFY TTL toDate(Timestamp) + INTERVAL 30 DAY;
+
+-- Change metrics retention to 14 days
+ALTER TABLE otel_metrics_gauge MODIFY TTL toDate(TimeUnix) + INTERVAL 14 DAY;
+ALTER TABLE node_metrics MODIFY TTL toDate(ts) + INTERVAL 14 DAY;
+```
 
 → See `docs/llm/backend/infrastructure-otel.md` for OTel pipeline details.
