@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT model_name, COUNT(provider_id) AS \"provider_count!: i64\"\n            FROM ollama_models\n            GROUP BY model_name\n            ORDER BY model_name ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "provider_count!: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "36a3a874dc5ee7fa394c6c712cde2ba6d0d6067988004b593aa82309897fca5c"
+}
