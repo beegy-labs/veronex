@@ -1,2 +1,0 @@
-ALTER TABLE llm_backends
-    ADD COLUMN IF NOT EXISTS server_id UUID REFERENCES gpu_servers(id) ON DELETE SET NULL;
