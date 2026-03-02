@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -10,12 +10,39 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::application::ports::outbound::audit_port::AuditEvent;
 use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
 use crate::domain::entities::LlmBackend;
 use crate::domain::enums::{BackendType, LlmBackendStatus};
+use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 use crate::infrastructure::outbound::health_checker::check_backend;
 
 use super::state::AppState;
+
+async fn emit_audit(
+    state: &AppState,
+    actor: &Claims,
+    action: &str,
+    resource_type: &str,
+    resource_id: &str,
+    resource_name: &str,
+    details: &str,
+) {
+    if let Some(ref port) = state.audit_port {
+        port.record(AuditEvent {
+            event_time: Utc::now(),
+            account_id: actor.sub,
+            account_name: actor.sub.to_string(),
+            action: action.to_string(),
+            resource_type: resource_type.to_string(),
+            resource_id: resource_id.to_string(),
+            resource_name: resource_name.to_string(),
+            ip_address: None,
+            details: Some(details.to_string()),
+        })
+        .await;
+    }
+}
 
 // ── Model cache helpers ─────────────────────────────────────────────────────────
 
@@ -262,6 +289,7 @@ fn parse_backend_type(s: &str) -> Option<BackendType> {
 ///
 /// Immediately runs a health check and sets the initial status.
 pub async fn register_backend(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(req): Json<RegisterBackendRequest>,
 ) -> impl IntoResponse {
@@ -343,6 +371,14 @@ pub async fn register_backend(
         "backend registered"
     );
 
+    let resource_type = match backend.backend_type {
+        BackendType::Ollama => "ollama_backend",
+        BackendType::Gemini => "gemini_backend",
+    };
+    emit_audit(&state, &claims, "create", resource_type, &backend.id.to_string(), &backend.name,
+        &format!("Backend '{}' registered (type: {}, initial_status: {})",
+            backend.name, req.backend_type, status_str)).await;
+
     (
         StatusCode::CREATED,
         Json(RegisterBackendResponse {
@@ -373,11 +409,19 @@ pub async fn list_backends(State(state): State<AppState>) -> impl IntoResponse {
 
 /// `DELETE /v1/backends/{id}` — soft-delete (deactivate) a backend.
 pub async fn delete_backend(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
+    // Fetch name before deactivating for the audit record.
+    let name = backend_registry(&state).get(id).await.ok().flatten().map(|b| b.name).unwrap_or_default();
+
     match backend_registry(&state).deactivate(id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            emit_audit(&state, &claims, "delete", "ollama_backend", &id.to_string(), &name,
+                &format!("Backend '{}' ({}) deactivated (soft-deleted, no longer routed)", name, id)).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             tracing::error!(%id, "failed to deactivate backend: {e}");
             (
@@ -440,6 +484,7 @@ pub async fn healthcheck_backend(
 /// All fields are optional; only provided (non-null) fields are applied.
 /// Passing `api_key: ""` leaves the existing key unchanged.
 pub async fn update_backend(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateBackendRequest>,
@@ -495,6 +540,12 @@ pub async fn update_backend(
             .into_response();
     }
 
+    let resource_type = match backend.backend_type {
+        BackendType::Ollama => "ollama_backend",
+        BackendType::Gemini => "gemini_backend",
+    };
+    emit_audit(&state, &claims, "update", resource_type, &id.to_string(), &backend.name,
+        &format!("Backend '{}' ({}) configuration updated", backend.name, id)).await;
     tracing::info!(%id, "backend updated");
     (StatusCode::OK, Json(BackendSummary::from(backend))).into_response()
 }

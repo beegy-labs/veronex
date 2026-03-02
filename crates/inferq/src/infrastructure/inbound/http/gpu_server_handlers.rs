@@ -1,4 +1,4 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -6,10 +6,36 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::application::ports::outbound::audit_port::AuditEvent;
 use crate::domain::entities::GpuServer;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 use crate::infrastructure::outbound::hw_metrics;
 
 use super::state::AppState;
+
+async fn emit_audit(
+    state: &AppState,
+    actor: &Claims,
+    action: &str,
+    resource_id: &str,
+    resource_name: &str,
+    details: &str,
+) {
+    if let Some(ref port) = state.audit_port {
+        port.record(AuditEvent {
+            event_time: Utc::now(),
+            account_id: actor.sub,
+            account_name: actor.sub.to_string(),
+            action: action.to_string(),
+            resource_type: "gpu_server".to_string(),
+            resource_id: resource_id.to_string(),
+            resource_name: resource_name.to_string(),
+            ip_address: None,
+            details: Some(details.to_string()),
+        })
+        .await;
+    }
+}
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
 
@@ -42,6 +68,7 @@ impl From<GpuServer> for GpuServerSummary {
 
 /// `POST /v1/servers`
 pub async fn register_gpu_server(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(req): Json<RegisterGpuServerRequest>,
 ) -> impl IntoResponse {
@@ -70,6 +97,8 @@ pub async fn register_gpu_server(
             .into_response();
     }
 
+    emit_audit(&state, &claims, "create", &id.to_string(), &req.name,
+        &format!("GPU server '{}' registered (id: {})", req.name, id)).await;
     tracing::info!(%id, name = %req.name, "gpu server registered");
     (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response()
 }
@@ -103,6 +132,7 @@ pub struct UpdateGpuServerRequest {
 
 /// `PATCH /v1/servers/{id}`
 pub async fn update_gpu_server(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateGpuServerRequest>,
@@ -150,17 +180,24 @@ pub async fn update_gpu_server(
             .into_response();
     }
 
+    emit_audit(&state, &claims, "update", &id.to_string(), &updated.name,
+        &format!("GPU server '{}' ({}) configuration updated", updated.name, id)).await;
     tracing::info!(%id, name = %updated.name, "gpu server updated");
     (StatusCode::OK, Json(GpuServerSummary::from(updated))).into_response()
 }
 
 /// `DELETE /v1/servers/{id}`
 pub async fn delete_gpu_server(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     match state.gpu_server_registry.delete(id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            emit_audit(&state, &claims, "delete", &id.to_string(), &id.to_string(),
+                &format!("GPU server {} permanently deleted", id)).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             tracing::error!(%id, "failed to delete gpu server: {e}");
             (

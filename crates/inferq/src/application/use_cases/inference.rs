@@ -16,6 +16,7 @@ use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyR
 use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::llm_backend_registry::LlmBackendRegistry;
+use crate::application::ports::outbound::message_store::MessageStore;
 use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::{InferenceEvent, ObservabilityPort};
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
@@ -25,6 +26,7 @@ use crate::domain::value_objects::{JobId, JobStatusEvent, ModelName, Prompt, Str
 use crate::infrastructure::outbound::backend_router::{get_ollama_available_vram_mb, increment_gemini_counters, make_adapter, pick_best_backend};
 use crate::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap;
 use crate::infrastructure::outbound::capacity::thermal::{ThermalThrottleMap, ThrottleLevel};
+use crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 
 // ── Queue keys ─────────────────────────────────────────────────────────────────
 
@@ -77,9 +79,14 @@ pub struct InferenceUseCaseImpl {
     slot_map: Arc<ConcurrencySlotMap>,
     /// Thermal throttle state — updated by health_checker every 30 s.
     thermal: Arc<ThermalThrottleMap>,
+    /// Per-backend circuit breaker — isolates backends after consecutive failures.
+    circuit_breaker: Arc<CircuitBreakerMap>,
     /// Broadcast channel: fires on every job status transition (pending/running/completed/failed).
     /// Capacity 256 — slow consumers lag-skip rather than block producers.
     event_tx: broadcast::Sender<JobStatusEvent>,
+    /// S3-compatible object store for conversation contexts. When set, messages_json
+    /// is uploaded to S3 on submit() and DB column stays NULL for new jobs.
+    message_store: Option<Arc<dyn MessageStore>>,
 }
 
 impl InferenceUseCaseImpl {
@@ -94,7 +101,9 @@ impl InferenceUseCaseImpl {
         model_manager: Option<Arc<dyn ModelManagerPort>>,
         slot_map: Arc<ConcurrencySlotMap>,
         thermal: Arc<ThermalThrottleMap>,
+        circuit_breaker: Arc<CircuitBreakerMap>,
         event_tx: broadcast::Sender<JobStatusEvent>,
+        message_store: Option<Arc<dyn MessageStore>>,
     ) -> Self {
         Self {
             registry,
@@ -108,7 +117,9 @@ impl InferenceUseCaseImpl {
             jobs: Arc::new(DashMap::new()),
             slot_map,
             thermal,
+            circuit_breaker,
             event_tx,
+            message_store,
         }
     }
 
@@ -137,6 +148,7 @@ impl InferenceUseCaseImpl {
         let model_manager = self.model_manager.clone();
         let slot_map = self.slot_map.clone();
         let thermal = self.thermal.clone();
+        let circuit_breaker = self.circuit_breaker.clone();
         let gemini_policy_repo = self.gemini_policy_repo.clone();
         let model_selection_repo = self.model_selection_repo.clone();
         let ollama_model_repo = self.ollama_model_repo.clone();
@@ -157,6 +169,7 @@ impl InferenceUseCaseImpl {
                 model_manager,
                 slot_map,
                 thermal,
+                circuit_breaker,
                 event_tx,
                 shutdown,
             )
@@ -278,12 +291,21 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             tool_calls_json: None,
         };
 
-        self.job_repo.save(&job).await?;
+        // Upload conversation context to S3 (authoritative store for messages_json).
+        // DB column stays NULL for new jobs — avoids JSONB bloat on inference_jobs.
+        if let (Some(msgs), Some(store)) = (&job.messages, &self.message_store) {
+            if let Err(e) = store.put(job_id.0, msgs).await {
+                tracing::warn!(job_id = %job_id.0, "S3 message upload failed (non-fatal): {e}");
+            }
+        }
+        // Save to DB without messages — COALESCE keeps NULL for new rows
+        let job_for_db = InferenceJob { messages: None, ..job.clone() };
+        self.job_repo.save(&job_for_db).await?;
 
         self.jobs.insert(
             job_id.0,
             JobEntry {
-                job: job.clone(),
+                job: job.clone(), // original: retains messages for dispatch
                 status: JobStatus::Pending,
                 tokens: Vec::with_capacity(256),
                 done: false,
@@ -335,6 +357,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                         self.model_manager.clone(),
                         self.slot_map.clone(),
                         self.thermal.clone(),
+                        self.circuit_breaker.clone(),
                         uuid,
                         job,
                         gemini_tier,
@@ -356,6 +379,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 self.model_manager.clone(),
                 self.slot_map.clone(),
                 self.thermal.clone(),
+                self.circuit_breaker.clone(),
                 uuid,
                 job,
                 gemini_tier,
@@ -549,6 +573,7 @@ fn spawn_job_direct(
     model_manager: Option<Arc<dyn ModelManagerPort>>,
     slot_map: Arc<ConcurrencySlotMap>,
     thermal: Arc<ThermalThrottleMap>,
+    circuit_breaker: Arc<CircuitBreakerMap>,
     uuid: Uuid,
     job: InferenceJob,
     gemini_tier: Option<String>,
@@ -572,6 +597,12 @@ fn spawn_job_direct(
         let backend_id = backend_cfg.id;
         let backend_is_free_tier = backend_cfg.is_free_tier;
 
+        // Circuit breaker gate — skip open backends even in direct mode.
+        if !circuit_breaker.is_allowed(backend_id) {
+            tracing::warn!(job_id = %uuid, %backend_id, "direct spawn skipped — circuit open");
+            return;
+        }
+
         // Respect thermal limits even in direct mode
         match thermal.get(backend_id) {
             ThrottleLevel::Hard => {
@@ -590,7 +621,7 @@ fn spawn_job_direct(
         let permit = slot_map.try_acquire(backend_id, job.model_name.as_str());
         let adapter = make_adapter(&backend_cfg);
 
-        if let Err(e) = run_job(
+        match run_job(
             jobs,
             adapter,
             job_repo,
@@ -605,7 +636,11 @@ fn spawn_job_direct(
         )
         .await
         {
-            tracing::error!(job_id = %uuid, "inference job failed: {e}");
+            Ok(()) => circuit_breaker.on_success(backend_id),
+            Err(e) => {
+                tracing::error!(job_id = %uuid, "inference job failed: {e}");
+                circuit_breaker.on_failure(backend_id);
+            }
         }
         drop(permit); // RAII: slot auto-released
     });
@@ -637,6 +672,7 @@ async fn queue_dispatcher_loop(
     model_manager: Option<Arc<dyn ModelManagerPort>>,
     slot_map: Arc<ConcurrencySlotMap>,
     thermal: Arc<ThermalThrottleMap>,
+    circuit_breaker: Arc<CircuitBreakerMap>,
     event_tx: broadcast::Sender<JobStatusEvent>,
     shutdown: CancellationToken,
 ) {
@@ -760,11 +796,21 @@ async fn queue_dispatcher_loop(
             }
         });
 
-        // Claim a slot on the best available backend (VRAM-sorted, thermal-filtered).
+        // Claim a slot on the best available backend (VRAM-sorted, thermal-filtered,
+        // circuit-breaker-filtered).
         let claimed = availability
             .into_iter()
             .filter(|(_b, avail)| *avail > 0)
             .find_map(|(backend, _)| {
+                // Circuit breaker gate — skip open backends.
+                if !circuit_breaker.is_allowed(backend.id) {
+                    tracing::debug!(
+                        backend_id = %backend.id,
+                        backend_name = %backend.name,
+                        "circuit open — skipping backend"
+                    );
+                    return None;
+                }
                 // Thermal gate
                 match thermal.get(backend.id) {
                     ThrottleLevel::Hard => return None,
@@ -801,10 +847,11 @@ async fn queue_dispatcher_loop(
                 let obs_c = observability.clone();
                 let mm_c = model_manager.clone();
                 let ev_c = event_tx.clone();
+                let cb_c = circuit_breaker.clone();
 
                 tokio::spawn(async move {
                     let _permit = permit; // RAII: dropped when task finishes
-                    if let Err(e) = run_job(
+                    match run_job(
                         jobs_c,
                         adapter,
                         job_repo_c,
@@ -819,7 +866,11 @@ async fn queue_dispatcher_loop(
                     )
                     .await
                     {
-                        tracing::error!(%uuid, %backend_id, "inference job failed: {e}");
+                        Ok(()) => cb_c.on_success(backend_id),
+                        Err(e) => {
+                            tracing::error!(%uuid, %backend_id, "inference job failed: {e}");
+                            cb_c.on_failure(backend_id);
+                        }
                     }
                     tracing::debug!(%backend_id, "slot released");
                 });
@@ -920,6 +971,8 @@ async fn run_job(
     // Ref dropped here
 
     let mut token_stream = backend.stream_tokens(&job);
+    // Clear messages after stream is created — S3 is authoritative; DB saves must omit
+    job.messages = None;
     let mut token_count: u64 = 0;
     let mut accumulated_text = String::new();
     // Collected tool calls from all StreamToken.tool_calls across this job.

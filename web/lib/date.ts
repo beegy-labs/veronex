@@ -32,6 +32,11 @@ export function fmtDateOnly(iso: string, tz: Timezone): string {
   }).format(new Date(iso))
 }
 
+/** "1,234,567" — integer count with comma separators (SSOT for all numeric counts) */
+export function fmtNumber(n: number): string {
+  return new Intl.NumberFormat('en-US').format(n)
+}
+
 /** "3/1 14h" — hourly chart x-axis labels */
 export function fmtHourLabel(iso: string, tz: Timezone): string {
   const parts = new Intl.DateTimeFormat('en-US', {

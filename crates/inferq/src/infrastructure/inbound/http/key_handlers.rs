@@ -1,9 +1,37 @@
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::application::ports::outbound::audit_port::AuditEvent;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
+
+async fn emit_audit(
+    state: &super::state::AppState,
+    actor: &Claims,
+    action: &str,
+    resource_type: &str,
+    resource_id: &str,
+    resource_name: &str,
+    details: &str,
+) {
+    if let Some(ref port) = state.audit_port {
+        port.record(AuditEvent {
+            event_time: Utc::now(),
+            account_id: actor.sub,
+            account_name: actor.sub.to_string(),
+            action: action.to_string(),
+            resource_type: resource_type.to_string(),
+            resource_id: resource_id.to_string(),
+            resource_name: resource_name.to_string(),
+            ip_address: None,
+            details: Some(details.to_string()),
+        })
+        .await;
+    }
+}
 
 #[derive(Deserialize)]
 pub struct PatchKeyRequest {
@@ -67,6 +95,7 @@ pub struct KeySummary {
 ///
 /// Returns the plaintext key exactly once. It is never stored or retrievable again.
 pub async fn create_key(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(req): Json<CreateKeyRequest>,
 ) -> Result<Json<CreateKeyResponse>, StatusCode> {
@@ -94,6 +123,11 @@ pub async fn create_key(
         .create(&api_key)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    emit_audit(&state, &claims, "create", "api_key", &id.to_string(), &api_key.name,
+        &format!("API key '{}' created for tenant '{}' (tier: {}, rpm_limit: {}, tpm_limit: {})",
+            api_key.name, api_key.tenant_id, api_key.tier,
+            api_key.rate_limit_rpm, api_key.rate_limit_tpm)).await;
 
     Ok(Json(CreateKeyResponse {
         id,
@@ -140,6 +174,7 @@ pub async fn list_keys(
 
 /// DELETE /v1/keys/{id} — Soft-delete an API key (hidden from list, blocked from auth).
 pub async fn delete_key(
+    Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
@@ -151,16 +186,30 @@ pub async fn delete_key(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    emit_audit(&state, &claims, "delete", "api_key", &id, &id,
+        &format!("API key {id} soft-deleted (access permanently revoked)")).await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// PATCH /v1/keys/{id} — Update mutable fields: `is_active` and/or `tier`.
 pub async fn toggle_key(
+    Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
     State(state): State<AppState>,
     Json(req): Json<PatchKeyRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // Build audit description before consuming req fields.
+    let mut changes = Vec::new();
+    if let Some(active) = req.is_active { changes.push(format!("is_active={active}")); }
+    if let Some(ref tier) = req.tier { changes.push(format!("tier={tier}")); }
+    let details = if changes.is_empty() {
+        format!("API key {id} updated (no changes)")
+    } else {
+        format!("API key {id} updated — {}", changes.join(", "))
+    };
 
     if let Some(active) = req.is_active {
         state
@@ -180,6 +229,8 @@ pub async fn toggle_key(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
+
+    emit_audit(&state, &claims, "update", "api_key", &id, &id, &details).await;
 
     Ok(StatusCode::NO_CONTENT)
 }

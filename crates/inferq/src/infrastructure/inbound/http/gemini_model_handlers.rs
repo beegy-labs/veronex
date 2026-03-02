@@ -1,4 +1,4 @@
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -6,10 +6,36 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::application::ports::outbound::audit_port::AuditEvent;
 use crate::domain::enums::{BackendType, LlmBackendStatus};
+use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 use crate::infrastructure::outbound::health_checker::check_backend;
 
 use super::state::AppState;
+
+async fn emit_audit(
+    state: &AppState,
+    actor: &Claims,
+    action: &str,
+    resource_id: &str,
+    resource_name: &str,
+    details: &str,
+) {
+    if let Some(ref port) = state.audit_port {
+        port.record(AuditEvent {
+            event_time: Utc::now(),
+            account_id: actor.sub,
+            account_name: actor.sub.to_string(),
+            action: action.to_string(),
+            resource_type: "gemini_backend".to_string(),
+            resource_id: resource_id.to_string(),
+            resource_name: resource_name.to_string(),
+            ip_address: None,
+            details: Some(details.to_string()),
+        })
+        .await;
+    }
+}
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
 
@@ -110,6 +136,7 @@ pub async fn get_sync_config(State(state): State<AppState>) -> impl IntoResponse
 
 /// `PUT /v1/gemini/sync-config` — store (or replace) the admin API key.
 pub async fn set_sync_config(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(req): Json<SetSyncConfigRequest>,
 ) -> impl IntoResponse {
@@ -122,7 +149,11 @@ pub async fn set_sync_config(
     }
 
     match state.gemini_sync_config_repo.set_api_key(req.api_key.trim()).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            emit_audit(&state, &claims, "update", "gemini_sync_config", "gemini_sync_config",
+                "Gemini admin API key replaced (used for global model list sync)").await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             tracing::error!("set_sync_config: {e}");
             (
@@ -137,7 +168,10 @@ pub async fn set_sync_config(
 /// `POST /v1/gemini/models/sync` — fetch the global Gemini model list and persist it.
 ///
 /// Uses the stored admin API key. Returns `400` if no key is configured.
-pub async fn sync_models(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn sync_models(
+    Extension(claims): Extension<Claims>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     let api_key = match state.gemini_sync_config_repo.get_api_key().await {
         Ok(Some(k)) => k,
         Ok(None) => {
@@ -182,6 +216,8 @@ pub async fn sync_models(State(state): State<AppState>) -> impl IntoResponse {
 
     let count = models.len();
     tracing::info!(count, "global gemini model list synced");
+    emit_audit(&state, &claims, "sync", &format!("{count} models"), "gemini_models",
+        &format!("Global Gemini model list synced from API: {count} models discovered")).await;
     (StatusCode::OK, Json(SyncModelsResponse { models, count })).into_response()
 }
 

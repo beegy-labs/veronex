@@ -23,6 +23,7 @@ import { useTranslation } from '@/i18n'
 import type { Backend } from '@/lib/types'
 import type { FlowEvent } from '@/hooks/use-inference-stream'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useLabSettings } from '@/components/lab-settings-provider'
 
 /* ─── viewport ──────────────────────────────────────────────── */
 const VIEW_W = 540
@@ -131,13 +132,19 @@ interface Props {
 
 export function ProviderFlowPanel({ backends, events, queueDepth = 0 }: Props) {
   const { t } = useTranslation()
+  const { labSettings } = useLabSettings()
+  const geminiEnabled = labSettings?.gemini_function_calling ?? false
+
   const spawnedRef   = useRef(new Set<string>())
   const containerRef = useRef<HTMLDivElement>(null)
   const [scale,  setScale]  = useReducer((_: number, v: number) => v, 1)
   const [bees,   dispatch]  = useReducer(beeReducer, [])
 
   const localBs = useMemo(() => backends.filter(b => b.backend_type === 'ollama'), [backends])
-  const apiBs   = useMemo(() => backends.filter(b => b.backend_type === 'gemini'), [backends])
+  const apiBs   = useMemo(
+    () => geminiEnabled ? backends.filter(b => b.backend_type === 'gemini') : [],
+    [backends, geminiEnabled],
+  )
 
   // Responsive scaling
   useEffect(() => {
@@ -218,15 +225,19 @@ export function ProviderFlowPanel({ backends, events, queueDepth = 0 }: Props) {
               <path d={PATH_QUEUE_OLLAMA} fill="none" markerEnd="url(#pfp-arrow)"
                 style={{ stroke: 'var(--theme-border)', strokeWidth: 1.5, strokeDasharray: '6 4' }} />
 
-              {/* Queue → Gemini */}
-              <path d={PATH_QUEUE_GEMINI} fill="none" markerEnd="url(#pfp-arrow)"
-                style={{ stroke: 'var(--theme-border)', strokeWidth: 1.5, strokeDasharray: '6 4' }} />
+              {/* Queue → Gemini (lab-gated) */}
+              {geminiEnabled && (
+                <path d={PATH_QUEUE_GEMINI} fill="none" markerEnd="url(#pfp-arrow)"
+                  style={{ stroke: 'var(--theme-border)', strokeWidth: 1.5, strokeDasharray: '6 4' }} />
+              )}
 
               {/* Response arcs — dimmed (bypass Queue) */}
               <path d={PATH_OLLAMA_API} fill="none"
                 style={{ stroke: 'var(--theme-border)', strokeWidth: 1, strokeDasharray: '3 7', opacity: 0.4 }} />
-              <path d={PATH_GEMINI_API} fill="none"
-                style={{ stroke: 'var(--theme-border)', strokeWidth: 1, strokeDasharray: '3 7', opacity: 0.4 }} />
+              {geminiEnabled && (
+                <path d={PATH_GEMINI_API} fill="none"
+                  style={{ stroke: 'var(--theme-border)', strokeWidth: 1, strokeDasharray: '3 7', opacity: 0.4 }} />
+              )}
 
               {/* ── Node 1: Veronex API — rounded rect with left accent ── */}
               {/* Drop shadow */}
@@ -324,26 +335,30 @@ export function ProviderFlowPanel({ backends, events, queueDepth = 0 }: Props) {
                   : 'no backends'}
               </text>
 
-              {/* ── Node 3b: Gemini — octagon ────────────────────────── */}
-              {/* Drop shadow */}
-              <polygon
-                points={octPoints(PROV_CX + 2, GEMINI_CY + 2, PROV_W, PROV_H, PROV_INSET)}
-                style={{ fill: 'rgba(0,0,0,0.12)' }}
-              />
-              <polygon
-                points={octPoints(PROV_CX, GEMINI_CY, PROV_W, PROV_H, PROV_INSET)}
-                style={{ fill: 'var(--theme-bg-card)', stroke: providerStroke(apiBs), strokeWidth: 1.5 }}
-              />
-              <text x={PROV_CX} y={GEMINI_CY - 4} textAnchor="middle"
-                style={{ fill: 'var(--theme-text-primary)', fontSize: 11, fontWeight: 600 }}>
-                Gemini
-              </text>
-              <text x={PROV_CX} y={GEMINI_CY + 10} textAnchor="middle"
-                style={{ fill: 'var(--theme-text-secondary)', fontSize: 8 }}>
-                {apiBs.length > 0
-                  ? `${apiBs.filter(b => b.status === 'online').length}/${apiBs.length} online`
-                  : 'no backends'}
-              </text>
+              {/* ── Node 3b: Gemini — octagon (lab-gated) ───────────── */}
+              {geminiEnabled && (
+                <>
+                  {/* Drop shadow */}
+                  <polygon
+                    points={octPoints(PROV_CX + 2, GEMINI_CY + 2, PROV_W, PROV_H, PROV_INSET)}
+                    style={{ fill: 'rgba(0,0,0,0.12)' }}
+                  />
+                  <polygon
+                    points={octPoints(PROV_CX, GEMINI_CY, PROV_W, PROV_H, PROV_INSET)}
+                    style={{ fill: 'var(--theme-bg-card)', stroke: providerStroke(apiBs), strokeWidth: 1.5 }}
+                  />
+                  <text x={PROV_CX} y={GEMINI_CY - 4} textAnchor="middle"
+                    style={{ fill: 'var(--theme-text-primary)', fontSize: 11, fontWeight: 600 }}>
+                    Gemini
+                  </text>
+                  <text x={PROV_CX} y={GEMINI_CY + 10} textAnchor="middle"
+                    style={{ fill: 'var(--theme-text-secondary)', fontSize: 8 }}>
+                    {apiBs.length > 0
+                      ? `${apiBs.filter(b => b.status === 'online').length}/${apiBs.length} online`
+                      : 'no backends'}
+                  </text>
+                </>
+              )}
             </svg>
 
             {/* Bee overlay — positioned in SVG coordinate space then scaled */}

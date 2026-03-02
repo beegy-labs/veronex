@@ -500,7 +500,12 @@
     "estimatedCost": "예상 비용",
     "totalCost": "총 비용",
     "backend": "프로바이더",
-    "share": "비율"
+    "share": "비율",
+    "overview": "개요",
+    "byModel": "모델별",
+    "searchModels": "모델 검색...",
+    "modelLatencyChart": "모델 지연시간",
+    "keyDetail": "키 상세"
   },
   "performance": {
     "title": "성능",
@@ -525,7 +530,13 @@
     "ms": "ms",
     "errors": "오류",
     "errorRate": "에러율",
-    "errorRateTrend": "에러율 / 시간"
+    "errorRateTrend": "에러율 / 시간",
+    "byModel": "모델별",
+    "byKey": "키별",
+    "modelLatency": "모델 평균 지연시간",
+    "keyPerformance": "키별 성능",
+    "keyCol": "키",
+    "tpsHour": "평균 TPS / 시간"
   },
   "test": {
     "title": "추론 테스트",

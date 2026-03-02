@@ -31,6 +31,30 @@ export interface Job {
   account_name: string | null
   /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
   request_path: string | null
+  /** True when the model responded with tool calls instead of text. */
+  has_tool_calls: boolean
+  /** Estimated API cost in USD. 0.00 for Ollama (self-hosted). null = no pricing data. */
+  estimated_cost_usd: number | null
+}
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string | null
+  /** For tool-role messages: the tool call id this is a response to. */
+  tool_call_id?: string
+  /** For tool-role messages: the function name. */
+  name?: string
+  /** Tool calls emitted by the assistant (role=assistant with function calls). */
+  tool_calls?: ToolCall[]
+}
+
+export interface ToolCall {
+  id?: string
+  function?: {
+    name: string
+    index?: number
+    arguments?: Record<string, unknown> | string
+  }
 }
 
 export interface JobDetail {
@@ -56,6 +80,14 @@ export interface JobDetail {
   error: string | null
   /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
   request_path: string | null
+  /** Tool calls emitted by the model (when responding with function calls instead of text). */
+  tool_calls_json: ToolCall[] | null
+  /** Number of messages in the conversation context (multi-turn agent loop). */
+  message_count: number | null
+  /** Full conversation context sent to the model. Null for single-turn or pre-migration jobs. */
+  messages_json: ChatMessage[] | null
+  /** Estimated API cost in USD. 0.00 for Ollama (self-hosted). null = no pricing data. */
+  estimated_cost_usd: number | null
 }
 
 export interface DashboardStats {
@@ -145,6 +177,7 @@ export interface BackendBreakdown {
   prompt_tokens: number
   completion_tokens: number
   success_rate: number
+  estimated_cost_usd: number | null
 }
 
 export interface KeyBreakdown {
@@ -156,6 +189,7 @@ export interface KeyBreakdown {
   prompt_tokens: number
   completion_tokens: number
   success_rate: number
+  estimated_cost_usd: number | null
 }
 
 export interface ModelBreakdown {
@@ -166,12 +200,14 @@ export interface ModelBreakdown {
   prompt_tokens: number
   completion_tokens: number
   avg_latency_ms: number
+  estimated_cost_usd: number | null
 }
 
 export interface UsageBreakdown {
   by_backend: BackendBreakdown[]
   by_key: KeyBreakdown[]
   by_model: ModelBreakdown[]
+  total_cost_usd: number
 }
 
 export interface CreateKeyRequest {

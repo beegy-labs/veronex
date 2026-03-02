@@ -3,21 +3,48 @@ use std::convert::Infallible;
 use std::pin::Pin;
 use std::time::Duration;
 
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::Json;
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
+use crate::application::ports::outbound::audit_port::AuditEvent;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
 use super::state::AppState;
 use super::usage_handlers::UsageQuery;
+
+async fn emit_audit(
+    state: &AppState,
+    actor: &Claims,
+    action: &str,
+    resource_type: &str,
+    resource_id: &str,
+    resource_name: &str,
+    details: &str,
+) {
+    if let Some(ref port) = state.audit_port {
+        port.record(AuditEvent {
+            event_time: Utc::now(),
+            account_id: actor.sub,
+            account_name: actor.sub.to_string(),
+            action: action.to_string(),
+            resource_type: resource_type.to_string(),
+            resource_id: resource_id.to_string(),
+            resource_name: resource_name.to_string(),
+            ip_address: None,
+            details: Some(details.to_string()),
+        })
+        .await;
+    }
+}
 
 // ── Query parameters ───────────────────────────────────────────────
 
@@ -112,8 +139,8 @@ pub async fn get_stats(
     // Key counts (standard keys only — exclude test keys)
     let key_row = sqlx::query(
         "SELECT
-            COUNT(*) FILTER (WHERE deleted_at IS NULL AND key_type != 'test') AS total_keys,
-            COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'standard') AS active_keys
+            COUNT(*) FILTER (WHERE deleted_at IS NULL AND key_type != 'test' AND tenant_id = 'default') AS total_keys,
+            COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'standard' AND tenant_id = 'default') AS active_keys
          FROM api_keys",
     )
     .fetch_one(pool)
@@ -629,6 +656,7 @@ pub async fn get_capacity_settings(
 // ── PATCH /v1/dashboard/capacity/settings ──────────────────────────
 
 pub async fn patch_capacity_settings(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(body): Json<PatchCapacitySettings>,
 ) -> impl axum::response::IntoResponse {
@@ -643,6 +671,9 @@ pub async fn patch_capacity_settings(
 
     match updated {
         Ok(settings) => {
+            emit_audit(&state, &claims, "update", "capacity_settings", "capacity_settings", "capacity_settings",
+                &format!("Capacity analyzer settings updated: model={:?}, batch_enabled={:?}, batch_interval_secs={:?}",
+                    body.analyzer_model, body.batch_enabled, body.batch_interval_secs)).await;
             let available_models = fetch_ollama_tags(&state.analyzer_url).await;
             Json(CapacitySettingsResponse {
                 analyzer_model:      settings.analyzer_model,
@@ -663,8 +694,21 @@ pub async fn patch_capacity_settings(
 
 // ── POST /v1/dashboard/capacity/sync ───────────────────────────────
 
-pub async fn trigger_capacity_sync(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+pub async fn trigger_capacity_sync(
+    Extension(claims): Extension<Claims>,
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    // Prevent concurrent triggers — return 409 if analysis is already running.
+    if state.capacity_analysis_lock.available_permits() == 0 {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "message": "capacity analysis already in progress" })),
+        )
+            .into_response();
+    }
     state.capacity_manual_trigger.notify_one();
+    emit_audit(&state, &claims, "trigger", "capacity_settings", "capacity_settings", "capacity_sync",
+        "Manual capacity analysis triggered by admin").await;
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({ "message": "capacity analysis triggered" })),
@@ -797,18 +841,24 @@ pub struct PatchLabSettingsBody {
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
 pub async fn patch_lab_settings(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(body): Json<PatchLabSettingsBody>,
 ) -> impl axum::response::IntoResponse {
     match state.lab_settings_repo.update(body.gemini_function_calling).await {
-        Ok(s) => (
-            axum::http::StatusCode::OK,
-            Json(serde_json::json!({
-                "gemini_function_calling": s.gemini_function_calling,
-                "updated_at": s.updated_at,
-            })),
-        )
-            .into_response(),
+        Ok(s) => {
+            emit_audit(&state, &claims, "update", "lab_settings", "lab_settings", "lab_settings",
+                &format!("Lab feature flags updated: gemini_function_calling={:?}",
+                    body.gemini_function_calling)).await;
+            (
+                axum::http::StatusCode::OK,
+                Json(serde_json::json!({
+                    "gemini_function_calling": s.gemini_function_calling,
+                    "updated_at": s.updated_at,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => {
             tracing::warn!("patch_lab_settings: {e}");
             (

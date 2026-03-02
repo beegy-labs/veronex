@@ -500,7 +500,12 @@
     "estimatedCost": "推定コスト",
     "totalCost": "合計コスト",
     "backend": "プロバイダー",
-    "share": "割合"
+    "share": "割合",
+    "overview": "概要",
+    "byModel": "モデル別",
+    "searchModels": "モデルを検索...",
+    "modelLatencyChart": "モデルレイテンシー",
+    "keyDetail": "キー詳細"
   },
   "performance": {
     "title": "パフォーマンス",
@@ -525,7 +530,13 @@
     "ms": "ms",
     "errors": "エラー",
     "errorRate": "エラー率",
-    "errorRateTrend": "エラー率 / 時間"
+    "errorRateTrend": "エラー率 / 時間",
+    "byModel": "モデル別",
+    "byKey": "キー別",
+    "modelLatency": "モデル平均レイテンシー",
+    "keyPerformance": "キー別パフォーマンス",
+    "keyCol": "キー",
+    "tpsHour": "平均TPS / 時間"
   },
   "test": {
     "title": "推論テスト",

@@ -7,9 +7,9 @@ pub struct AuditEvent {
     pub event_time: DateTime<Utc>,
     pub account_id: Uuid,
     pub account_name: String,
-    /// `"create"` | `"update"` | `"delete"` | `"login"` | `"logout"` | `"reset_password"`
+    /// `"create"` | `"update"` | `"delete"` | `"login"` | `"logout"` | `"reset_password"` | `"sync"` | `"trigger"`
     pub action: String,
-    /// `"api_key"` | `"ollama_backend"` | `"gemini_backend"` | `"account"` | `"gpu_server"`
+    /// `"api_key"` | `"ollama_backend"` | `"gemini_backend"` | `"account"` | `"gpu_server"` | `"session"` | `"lab_settings"` | `"capacity_settings"`
     pub resource_type: String,
     pub resource_id: String,
     pub resource_name: String,

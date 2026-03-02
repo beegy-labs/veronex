@@ -1,6 +1,6 @@
 # Veronex
 
-> CDD Tier 1 — Entry Point (≤50 lines) | **Last Updated**: 2026-03-01
+> CDD Tier 1 — Entry Point (≤50 lines) | **Last Updated**: 2026-03-02
 
 ## Project
 
@@ -37,6 +37,7 @@ and a Next.js admin dashboard. Two Rust crates:
 | GPU servers + node-exporter | `docs/llm/backend/hardware.md` |
 | RBAC + JWT + Audit trail | `docs/llm/backend/auth.md` |
 | Dynamic concurrency + thermal throttle | `docs/llm/backend/capacity.md` |
+| Lab feature flags | `docs/llm/backend/lab_features.md` |
 | Services + env + ports + DB migrations | `docs/llm/backend/infrastructure.md` |
 | OTel Logs pipeline + veronex-analytics | `docs/llm/backend/infrastructure-otel.md` |
 
@@ -45,10 +46,12 @@ and a Next.js admin dashboard. Two Rust crates:
 | Topic | Path |
 |-------|------|
 | Brand + design tokens + nav + i18n | `docs/llm/frontend/web.md` |
-| Dashboard (/overview) + Network Flow (/flow) | `docs/llm/frontend/web.md` (Dashboard Page / Network Flow Page sections) |
+| Dashboard (/overview) + Network Flow (/flow) | `docs/llm/frontend/web.md` |
 | Servers page (/servers) | `docs/llm/frontend/web-servers.md` |
 | Providers page (/providers — Ollama + Gemini) | `docs/llm/frontend/web-providers.md` |
-| Jobs / Usage / Performance pages | `docs/llm/frontend/web-jobs.md` |
-| API Keys page | `docs/llm/frontend/web-keys.md` |
+| Jobs page (/jobs) | `docs/llm/frontend/web-jobs.md` |
+| Usage page (/usage) | `docs/llm/frontend/web-usage.md` |
+| Performance page (/performance) | `docs/llm/frontend/web-performance.md` |
+| API Keys page (/keys) | `docs/llm/frontend/web-keys.md` |
 | API Test + API Docs pages | `docs/llm/frontend/web-test.md` |
-| Login + Accounts + Audit pages | `docs/llm/backend/auth.md` (frontend section) |
+| Accounts + Audit + Setup pages | `docs/llm/frontend/web-accounts.md`, `web-audit.md`, `web-setup.md` |

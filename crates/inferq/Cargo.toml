@@ -42,6 +42,10 @@ tracing-opentelemetry = "0.28"
 # Config
 config = "0.14"
 
+# S3 / object storage (MinIO-compatible)
+aws-sdk-s3 = "1"
+bytes = "1"
+
 # Misc
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"

@@ -3,6 +3,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from '@/i18n'
 import type { FlowEvent } from '@/hooks/use-inference-stream'
+import { CheckCircle2, XCircle, Loader2, Ban, Clock } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { fmtMsNullable } from '@/lib/chart-theme'
 
@@ -21,6 +22,17 @@ function statusDotColor(status: string): string {
     case 'running':   return 'var(--theme-status-info)'
     case 'cancelled': return 'var(--theme-status-cancelled)'
     default:          return 'var(--theme-status-warning)'
+  }
+}
+
+function StatusIcon({ status }: { status: string }) {
+  const cls = 'h-3 w-3 shrink-0'
+  switch (status) {
+    case 'completed': return <CheckCircle2 className={cls} />
+    case 'failed':    return <XCircle className={cls} />
+    case 'running':   return <Loader2 className={`${cls} animate-spin`} />
+    case 'cancelled': return <Ban className={cls} />
+    default:          return <Clock className={cls} />
   }
 }
 
@@ -99,9 +111,12 @@ export function LiveFeed({ events }: Props) {
                       <td className="py-2 px-2 text-muted-foreground capitalize">
                         {ev.provider}
                       </td>
-                      {/* Current status */}
+                      {/* Current status — color + icon + text (WCAG 1.4.1) */}
                       <td className="py-2 px-2" style={{ color: statusDotColor(cur.status) }}>
-                        {cur.status}
+                        <span className="flex items-center gap-1">
+                          <StatusIcon status={cur.status} />
+                          {cur.status}
+                        </span>
                       </td>
                       {/* Latency — populated once job completes */}
                       <td className="py-2 px-2 tabular-nums text-muted-foreground text-right">

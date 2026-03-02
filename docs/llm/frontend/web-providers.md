@@ -1,6 +1,6 @@
 # Web — Providers Page (/providers)
 
-> SSOT | **Last Updated**: 2026-03-02 (Ollama model enable/disable — OllamaBackendModelsModal → Switch toggle UI)
+> SSOT | **Last Updated**: 2026-03-02 (rev2: GeminiTab gated by lab settings — gemini_function_calling must be enabled)
 
 ## Task Guide
 
@@ -35,12 +35,22 @@
 
 URL `?s=` param (default: `ollama`):
 
-| URL | Section |
-|-----|---------|
-| `/providers` or `?s=ollama` | `OllamaTab` — Ollama backend management |
-| `?s=gemini` | `GeminiTab` — Gemini + rate-limit policies |
+| URL | Section | Lab Gate |
+|-----|---------|----------|
+| `/providers` or `?s=ollama` | `OllamaTab` — Ollama backend management | always visible |
+| `?s=gemini` | `GeminiTab` — Gemini + rate-limit policies | **`gemini_function_calling` must be enabled** |
 
 Section switching via `<Link>` in `nav.tsx` — no internal tab state in page.
+
+**Lab gating** (`ProvidersContent`):
+```typescript
+const { labSettings } = useLabSettings()
+const geminiEnabled = labSettings?.gemini_function_calling ?? false
+const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'ollama' : sectionParam
+```
+- When disabled: direct navigation to `?s=gemini` falls back to OllamaTab silently.
+- The Gemini nav child item is also hidden in `nav.tsx` (filtered by `useLabSettings()`).
+- Enable via Settings → Lab Features → "Gemini function calling" toggle.
 
 Nav entry: `NavGroup` with `id: 'providers'`, `basePath: '/providers'`, `Server` icon.
 

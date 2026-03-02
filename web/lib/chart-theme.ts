@@ -54,6 +54,20 @@ export const CURSOR_FILL = { fill: 'var(--theme-bg-hover)' }
 /** <Tooltip cursor={CURSOR_STROKE}> — vertical stroke shown on line chart hover */
 export const CURSOR_STROKE = { stroke: 'var(--theme-border)' }
 
+// ── Compact number formatter ─────────────────────────────────────────────────
+
+/**
+ * Compact number for chart labels, KPI cards, and table cells where space is limited.
+ * SSOT: use instead of local fmt() functions in page files.
+ *
+ * Examples: 1234 → "1.2K" | 1_500_000 → "1.5M" | 999 → "999"
+ */
+export function fmtCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
 // ── Duration / latency formatters ────────────────────────────────────────────
 
 /**

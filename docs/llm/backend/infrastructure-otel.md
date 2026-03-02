@@ -19,9 +19,9 @@
 | File | Purpose |
 |------|---------|
 | `docker/otel/Dockerfile` | OTel Collector image (debian-wrapped, adds wget for healthcheck) |
-| `docker/otel/config.yaml` | Receiver + exporter + pipeline config |
-| `docker/otel/config.yaml` | Receiver + exporter + pipeline config (metrics, traces, **logs**) |
-| `docker/clickhouse/init.sql` | All ClickHouse tables: MergeTree targets + Kafka Engine + Materialized Views |
+| `docker/otel/config.yaml` | Receiver + exporter + pipeline config (metrics, traces, logs) |
+| `docker/clickhouse/schema.sql` | ClickHouse tables: MergeTree targets + Kafka Engine + Materialized Views |
+| `docker/clickhouse/init.sh` | Init script — substitutes `__RETENTION_*__` vars into schema.sql |
 | `docker-compose.yml` | `otel-collector`, `redpanda`, `clickhouse`, `veronex`, `veronex-analytics` services |
 | `crates/veronex-analytics/src/` | Internal analytics service (OTel write + ClickHouse read) |
 | `crates/inferq/src/infrastructure/outbound/observability/http_observability_adapter.rs` | `HttpObservabilityAdapter` (replaces RedpandaObservabilityAdapter) |
@@ -313,9 +313,10 @@ If `ANALYTICS_URL` not set: `observability = None`, `audit_port = None` (fail-op
 
 ---
 
-## Prometheus HTTP SD
+## Prometheus HTTP Service Discovery (OTel Collector only)
 
-`GET /v1/metrics/targets` — no auth, OTel Collector only:
+`GET /v1/metrics/targets` — no auth, consumed by OTel Collector's `prometheus` receiver only.
+> Note: Prometheus itself is **not** used. This endpoint provides HTTP SD for the OTel Collector to discover node-exporter targets; metrics are stored in ClickHouse, not Prometheus.
 
 ```json
 [{
@@ -414,38 +415,20 @@ docker compose exec veronex-analytics wget -qO- http://localhost:3003/health
 
 ---
 
-## Helm Deployment Scenarios
+## Data Retention
 
-```bash
-# Default (all services)
-helm install veronex ./helm/veronex/
+TTLs are set per table in `docker/clickhouse/schema.sql` via `__RETENTION_*__` placeholders substituted by `init.sh` at first volume creation.
 
-# External Kafka (e.g. Confluent Cloud, MSK)
-helm install veronex ./helm/veronex/ \
-  --set redpanda.enabled=false \
-  --set otelCollector.kafka.brokers="kafka-broker:9092" \
-  --set veronex.env.REDPANDA_URL="kafka-broker:9092"
+| Table | Env var | Default |
+|-------|---------|---------|
+| `otel_logs` | `CLICKHOUSE_RETENTION_ANALYTICS_DAYS` | 90 days |
+| `otel_metrics_gauge` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
+| `otel_traces_raw` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
+| `node_metrics` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
+| `audit_events` | `CLICKHOUSE_RETENTION_AUDIT_DAYS` | 365 days |
 
-# Disable OTel Collector (use existing)
-helm install veronex ./helm/veronex/ --set otelCollector.enabled=false
-```
+Set in `.env` before first `docker compose up -d`. For existing volumes, use `ALTER TABLE`:
 
-When using existing OTel Collector, add this scrape job and kafka exporters:
-```yaml
-receivers:
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: veronex-node-exporters
-          http_sd_configs:
-            - url: http://<release>.<namespace>.svc.cluster.local:3000/v1/metrics/targets
-exporters:
-  kafka/metrics:
-    brokers: [<kafka-broker>:9092]
-    topic: otel-metrics
-    encoding: otlp_json
-  kafka/traces:
-    brokers: [<kafka-broker>:9092]
-    topic: otel-traces
-    encoding: otlp_json
+```sql
+ALTER TABLE otel_logs MODIFY TTL toDate(Timestamp) + INTERVAL 30 DAY;
 ```

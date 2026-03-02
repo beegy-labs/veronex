@@ -32,7 +32,31 @@ jobs:
         with:
           submodules: true
 
-      # TODO: Add lint/test steps once tech stack is defined
+      - name: Rust fmt
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --all
+        env:
+          # Tests that need DB should be skipped or mocked; pure unit tests run fine
+          RUST_LOG: error
+
+  check-web:
+    name: Check Web
+    if: github.event_name == 'pull_request'
+    runs-on: [self-hosted, kubernetes, gitops]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+      - name: Type check
+        working-directory: web
+        run: npx tsc --noEmit
 
   build:
     name: Build

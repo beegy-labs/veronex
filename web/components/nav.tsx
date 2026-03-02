@@ -7,7 +7,7 @@ import {
   LayoutDashboard, List, Key, Server,
   BarChart2, Gauge, Sun, Moon, ChevronLeft, Languages, Clock,
   BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
-  Users, Shield, LogOut, Workflow, Settings2, FlaskConical,
+  Users, Shield, LogOut, Settings2, FlaskConical,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'

@@ -118,10 +118,9 @@ Dark status colors: `#34d399` / `#fb7185` / `#fbbf24` / `#60a5fa`
 ```
 ▼ Monitor         ← collapsible group (LayoutDashboard), id='overview', default OPEN
   ├── Dashboard   → /overview         (LayoutDashboard icon)
-  ├── Network Flow→ /flow             (Workflow icon)
   ├── Usage       → /usage            (BarChart2 icon)
   └── Performance → /performance      (Gauge icon)
-Jobs              → /jobs
+Jobs              → /jobs              ← standalone link (List icon); 3 tabs: API Jobs / Test Runs / Network Flow
 API Keys          → /keys
 Servers           → /servers           ← standalone link (HardDrive icon)
 ▼ Providers       ← collapsible group (Server icon)
@@ -152,7 +151,8 @@ Language and timezone selectors were moved out of the footer bar and into this d
 - `isGroupActive()` checks all children via `isChildActive()` (not `basePath.startsWith`)
 - Servers: top-level `NavLink` at `/servers` (not grouped with Providers)
 - Providers: `NavGroup` with `id: 'providers'`, `basePath: '/providers'`
-- Monitor: `NavGroup` with `id: 'overview'`, `labelKey: 'nav.monitor'`, `basePath: '/overview'`; children at `/overview`, `/flow`, `/usage`, `/performance`
+- Monitor: `NavGroup` with `id: 'overview'`, `labelKey: 'nav.monitor'`, `basePath: '/overview'`; children: `/overview`, `/usage`, `/performance` — **`/flow` removed from nav** (accessible as Jobs page 3rd tab)
+- Jobs: top-level `NavLink` at `/jobs` (standalone link, not a group)
 
 ### Mobile Responsive Nav (hamburger slide sidebar)
 
@@ -469,19 +469,21 @@ No tabs — renders `DashboardTab` directly.
 
 ---
 
-## Network Flow Page (`/flow`)
+## Network Flow (Jobs Page Tab)
 
-Real-time inference traffic visualization. Shows `ProviderFlowPanel` + `LiveFeed`.
+Real-time inference traffic visualization. Accessible as the **3rd tab** on `/jobs` page.
+The standalone `/flow` route still exists but is **not linked in the nav**.
 
 ### Component Files
 
 | File | Role |
 |------|------|
-| `web/app/flow/page.tsx` | Data fetching (backends only) + renders `NetworkFlowTab` |
-| `web/app/overview/components/network-flow-tab.tsx` | Composes ProviderFlowPanel + LiveFeed; accepts `backends` only |
-| `web/app/overview/components/provider-flow-panel.tsx` | SVG topology: Veronex API → Queue → Ollama / Gemini (3-column) |
+| `web/app/jobs/page.tsx` | Jobs page — renders `<NetworkFlowTab>` as 3rd tab |
+| `web/app/flow/page.tsx` | Standalone page (legacy nav route, still accessible directly) |
+| `web/app/overview/components/network-flow-tab.tsx` | Composes ProviderFlowPanel + LiveFeed; accepts `backends` prop |
+| `web/app/overview/components/provider-flow-panel.tsx` | SVG topology: Veronex API → Queue → Ollama / Gemini (4-column) |
 | `web/app/overview/components/live-feed.tsx` | Scrollable real-time event list |
-| `web/hooks/use-inference-stream.ts` | SSE client; `fetch()` + JWT Bearer auth to `/v1/dashboard/jobs/stream` |
+| `web/hooks/use-inference-stream.ts` | 5s TanStack Query polling of `GET /v1/dashboard/jobs?limit=50` |
 
 ---
 
