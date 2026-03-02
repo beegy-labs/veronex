@@ -166,6 +166,11 @@ fn build_jwt_router() -> Router<AppState> {
                 .patch(dashboard_handlers::patch_capacity_settings),
         )
         .route("/v1/dashboard/capacity/sync", post(dashboard_handlers::trigger_capacity_sync))
+        // Session grouping
+        .route(
+            "/v1/dashboard/session-grouping/trigger",
+            post(dashboard_handlers::trigger_session_grouping),
+        )
         // Lab (experimental) features
         .route(
             "/v1/dashboard/lab",

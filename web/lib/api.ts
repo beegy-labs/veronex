@@ -54,6 +54,11 @@ export const api = {
   triggerCapacitySync: () =>
     apiClient.post<{ message: string }>('/v1/dashboard/capacity/sync', {}),
 
+  triggerSessionGrouping: (beforeDate?: string) =>
+    apiClient.post<{ message: string }>('/v1/dashboard/session-grouping/trigger', {
+      before_date: beforeDate ?? null,
+    }),
+
   // ── Lab (experimental) features (JWT-protected) ───────────────────────────
   labSettings: () =>
     apiClient.get<LabSettings>('/v1/dashboard/lab'),

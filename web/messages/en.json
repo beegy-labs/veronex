@@ -208,7 +208,15 @@
     "cancelling": "Cancelling…",
     "retryInTest": "Retry in Test",
     "apiJobs": "API Jobs",
-    "testRuns": "Test Runs"
+    "testRuns": "Test Runs",
+    "networkFlow": "Network Flow",
+    "groupSessions": "Group Sessions",
+    "groupSessionsDesc": "Assign conversation IDs to completed jobs before the selected date.",
+    "groupBeforeDate": "Group jobs before",
+    "groupNow": "Group Now",
+    "grouping": "Grouping…",
+    "groupingSuccess": "Session grouping triggered",
+    "groupingError": "Failed to trigger session grouping"
   },
   "keys": {
     "title": "API Keys",
@@ -240,7 +248,7 @@
     "deleteKey": "Delete key",
     "loadingKeys": "Loading keys…",
     "failedKeys": "Failed to load keys",
-"tier": "Tier",
+    "tier": "Tier",
     "tierFree": "Free",
     "tierPaid": "Paid",
     "keysCount": "{{count}} keys",

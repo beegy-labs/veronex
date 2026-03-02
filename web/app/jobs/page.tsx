@@ -2,19 +2,22 @@
 
 import { useState, useCallback, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { dashboardJobsQuery } from '@/lib/queries'
+import { dashboardJobsQuery, backendsQuery } from '@/lib/queries'
 import type { RetryParams } from '@/lib/types'
 import JobTable from '@/components/job-table'
 import { ApiTestPanel } from '@/components/api-test-panel'
-import { ChevronLeft, ChevronRight, Search, X } from 'lucide-react'
+import { NetworkFlowTab } from '@/app/overview/components/network-flow-tab'
+import { ChevronLeft, ChevronRight, Search, X, GitMerge } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useTranslation } from '@/i18n'
+import { fmtNumber } from '@/lib/date'
+import { api } from '@/lib/api'
 
 const PAGE_SIZE = 50
 
@@ -25,6 +28,66 @@ function buildPageSlots(current: number, total: number): (number | '…')[] {
   if (current <= 3) return [0, 1, 2, 3, 4, '…', last]
   if (current >= total - 4) return [first, '…', last - 4, last - 3, last - 2, last - 1, last]
   return [first, '…', current - 1, current, current + 1, '…', last]
+}
+
+// ── Group Sessions panel ───────────────────────────────────────────────────────
+
+function GroupSessionsPanel() {
+  const { t } = useTranslation()
+  const [date, setDate] = useState(() => {
+    // default: yesterday
+    const d = new Date()
+    d.setDate(d.getDate() - 1)
+    return d.toISOString().slice(0, 10)
+  })
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  async function handleGroup() {
+    setLoading(true)
+    setMessage(null)
+    try {
+      await api.triggerSessionGrouping(date)
+      setMessage({ type: 'success', text: t('jobs.groupingSuccess') })
+    } catch {
+      setMessage({ type: 'error', text: t('jobs.groupingError') })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <GitMerge className="h-4 w-4 text-muted-foreground" />
+          <CardTitle className="text-base">{t('jobs.groupSessions')}</CardTitle>
+        </div>
+        <CardDescription>{t('jobs.groupSessionsDesc')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-3 flex-wrap">
+          <label className="text-sm text-muted-foreground whitespace-nowrap">
+            {t('jobs.groupBeforeDate')}
+          </label>
+          <Input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="w-40 h-9 text-sm"
+          />
+          <Button size="sm" onClick={handleGroup} disabled={loading || !date}>
+            {loading ? t('jobs.grouping') : t('jobs.groupNow')}
+          </Button>
+          {message && (
+            <span className={`text-sm ${message.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-destructive'}`}>
+              {message.text}
+            </span>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  )
 }
 
 // ── Reusable jobs section ──────────────────────────────────────────────────────
@@ -69,7 +132,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
       {/* Controls */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <p className="text-sm text-muted-foreground">
-          {data ? `${data.total.toLocaleString()} ${t('jobs.totalLabel')}` : t('common.loading')}
+          {data ? `${fmtNumber(data.total)} ${t('jobs.totalLabel')}` : t('common.loading')}
         </p>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Search */}
@@ -144,7 +207,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
           <p className="text-sm text-muted-foreground tabular-nums">
             {data.total === 0
               ? t('jobs.noJobs')
-              : `${firstItem.toLocaleString()}–${lastItem.toLocaleString()} of ${data.total.toLocaleString()}`}
+              : `${fmtNumber(firstItem)}–${fmtNumber(lastItem)} of ${fmtNumber(data.total)}`}
           </p>
           {totalPages > 1 && (
             <div className="flex items-center gap-1">
@@ -180,8 +243,10 @@ export default function JobsPage() {
   const { t } = useTranslation()
   const testPanelRef = useRef<HTMLDivElement>(null)
 
-  const [activeTab, setActiveTab] = useState<'test' | 'api'>('api')
+  const [activeTab, setActiveTab] = useState<'api' | 'test' | 'flow'>('api')
   const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
+
+  const { data: backends } = useQuery(backendsQuery)
 
   function handleRetry(params: RetryParams) {
     setRetryParams(params)
@@ -199,11 +264,15 @@ export default function JobsPage() {
         <p className="text-muted-foreground mt-1 text-sm">{t('jobs.description')}</p>
       </div>
 
+      {/* ── Group Sessions ────────────────────────────────────────────────────── */}
+      <GroupSessionsPanel />
+
       {/* ── Tabs ──────────────────────────────────────────────────────────────── */}
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'test' | 'api')}>
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'api' | 'test' | 'flow')}>
         <TabsList>
           <TabsTrigger value="api">{t('jobs.apiJobs')}</TabsTrigger>
           <TabsTrigger value="test">{t('jobs.testRuns')}</TabsTrigger>
+          <TabsTrigger value="flow">{t('jobs.networkFlow')}</TabsTrigger>
         </TabsList>
 
         {/* ── API Jobs tab ──────────────────────────────────────────────────── */}
@@ -222,6 +291,11 @@ export default function JobsPage() {
           <div className="border-t border-border pt-6">
             <JobsSection source="test" onRetry={handleRetry} />
           </div>
+        </TabsContent>
+
+        {/* ── Network Flow tab ──────────────────────────────────────────────── */}
+        <TabsContent value="flow" className="mt-6">
+          <NetworkFlowTab backends={backends ?? []} />
         </TabsContent>
       </Tabs>
     </div>
