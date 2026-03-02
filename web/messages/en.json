@@ -216,7 +216,8 @@
     "groupNow": "Group Now",
     "grouping": "Grouping…",
     "groupingSuccess": "Session grouping triggered",
-    "groupingError": "Failed to trigger session grouping"
+    "groupingError": "Failed to trigger session grouping",
+    "groupingAlreadyRunning": "Session grouping already in progress"
   },
   "keys": {
     "title": "API Keys",

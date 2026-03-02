@@ -216,7 +216,8 @@
     "groupNow": "지금 묶기",
     "grouping": "묶는 중…",
     "groupingSuccess": "세션 묶기가 시작되었습니다",
-    "groupingError": "세션 묶기 실행에 실패했습니다"
+    "groupingError": "세션 묶기 실행에 실패했습니다",
+    "groupingAlreadyRunning": "세션 묶기가 이미 실행 중입니다"
   },
   "keys": {
     "title": "API 키",

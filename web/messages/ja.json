@@ -216,7 +216,8 @@
     "groupNow": "今すぐまとめる",
     "grouping": "まとめ中…",
     "groupingSuccess": "セッションのまとめを開始しました",
-    "groupingError": "セッションのまとめに失敗しました"
+    "groupingError": "セッションのまとめに失敗しました",
+    "groupingAlreadyRunning": "セッションのまとめは既に実行中です"
   },
   "keys": {
     "title": "APIキー",
