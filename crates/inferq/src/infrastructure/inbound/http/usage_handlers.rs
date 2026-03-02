@@ -143,6 +143,82 @@ pub async fn key_usage_jobs(
     Ok(Json(jobs))
 }
 
+/// GET /v1/usage/{key_id}/models — Per-key model breakdown from PostgreSQL.
+/// Returns which models the key has used, with request counts and token stats.
+pub async fn key_model_breakdown(
+    Path(key_id): Path<String>,
+    State(state): State<AppState>,
+    Query(params): Query<UsageQuery>,
+) -> Result<Json<Vec<ModelBreakdown>>, StatusCode> {
+    use sqlx::Row;
+
+    let uuid = Uuid::parse_str(&key_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let interval = format!("{} hours", params.hours);
+    let pool = &state.pg_pool;
+
+    let total_row = sqlx::query(&format!(
+        "SELECT COUNT(*) AS total FROM inference_jobs
+         WHERE api_key_id = $1
+           AND created_at > NOW() - INTERVAL '{interval}'"
+    ))
+    .bind(uuid)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| { tracing::warn!("key_model_breakdown total: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+    let total: i64 = total_row.try_get("total").unwrap_or(1).max(1);
+
+    let rows = sqlx::query(&format!(
+        "SELECT
+            j.model_name,
+            j.backend,
+            COUNT(*)                                                                           AS request_count,
+            COUNT(*) FILTER (WHERE j.status = 'completed')                                    AS success_count,
+            COALESCE(SUM(j.prompt_tokens), 0)                                                  AS prompt_tokens,
+            COALESCE(SUM(j.completion_tokens), 0)                                              AS completion_tokens,
+            COALESCE(AVG(j.latency_ms) FILTER (WHERE j.status = 'completed' AND j.latency_ms > 0), 0) AS avg_latency_ms,
+            CASE
+                WHEN j.backend = 'ollama' THEN 0.0
+                WHEN pricing.input_per_1m IS NOT NULL THEN
+                    (COALESCE(SUM(j.prompt_tokens), 0)::float8     / 1000000.0 * pricing.input_per_1m) +
+                    (COALESCE(SUM(j.completion_tokens), 0)::float8 / 1000000.0 * pricing.output_per_1m)
+                ELSE NULL
+            END AS estimated_cost_usd
+         FROM inference_jobs j
+         LEFT JOIN LATERAL (
+             SELECT input_per_1m, output_per_1m FROM model_pricing
+             WHERE provider = j.backend
+               AND (model_name = j.model_name OR model_name = '*')
+             ORDER BY CASE WHEN model_name = j.model_name THEN 0 ELSE 1 END
+             LIMIT 1
+         ) pricing ON true
+         WHERE j.api_key_id = $1
+           AND j.created_at > NOW() - INTERVAL '{interval}'
+         GROUP BY j.model_name, j.backend, pricing.input_per_1m, pricing.output_per_1m
+         ORDER BY request_count DESC
+         LIMIT 50"
+    ))
+    .bind(uuid)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| { tracing::warn!("key_model_breakdown: {e}"); StatusCode::INTERNAL_SERVER_ERROR })?;
+
+    let breakdown: Vec<ModelBreakdown> = rows.iter().map(|r| {
+        let request_count: i64 = r.try_get("request_count").unwrap_or(0);
+        ModelBreakdown {
+            model_name:        r.try_get("model_name").unwrap_or_default(),
+            backend:           r.try_get("backend").unwrap_or_default(),
+            request_count,
+            call_pct:          request_count as f64 / total as f64 * 100.0,
+            prompt_tokens:     r.try_get("prompt_tokens").unwrap_or(0),
+            completion_tokens: r.try_get("completion_tokens").unwrap_or(0),
+            avg_latency_ms:    r.try_get("avg_latency_ms").unwrap_or(0.0),
+            estimated_cost_usd: r.try_get("estimated_cost_usd").unwrap_or(None),
+        }
+    }).collect();
+
+    Ok(Json(breakdown))
+}
+
 // ── Breakdown types (still queried from PG directly) ──────────────────────────
 
 #[derive(Serialize)]
@@ -154,6 +230,8 @@ pub struct BackendBreakdown {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub success_rate: f64,
+    /// Estimated API cost (USD). $0.00 for Ollama. None = no pricing configured.
+    pub estimated_cost_usd: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -166,6 +244,7 @@ pub struct KeyBreakdown {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub success_rate: f64,
+    pub estimated_cost_usd: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -177,6 +256,7 @@ pub struct ModelBreakdown {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub avg_latency_ms: f64,
+    pub estimated_cost_usd: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -184,6 +264,8 @@ pub struct UsageBreakdownResponse {
     pub by_backend: Vec<BackendBreakdown>,
     pub by_key: Vec<KeyBreakdown>,
     pub by_model: Vec<ModelBreakdown>,
+    /// Sum of estimated costs across all backends (USD).
+    pub total_cost_usd: f64,
 }
 
 /// GET /v1/usage/breakdown — Backend, API key, and model breakdown from PostgreSQL.
@@ -195,18 +277,31 @@ pub async fn usage_breakdown(
     let pool = &state.pg_pool;
     let interval = format!("{} hours", params.hours);
 
-    // ── By backend ────────────────────────────────────────────────────
+    // ── By backend (with LATERAL pricing join) ────────────────────────
     let backend_rows = sqlx::query(&format!(
         "SELECT
-            backend,
+            j.backend,
             COUNT(*)                                              AS request_count,
-            COUNT(*) FILTER (WHERE status = 'completed')         AS success_count,
-            COUNT(*) FILTER (WHERE status = 'failed')            AS error_count,
-            COALESCE(SUM(prompt_tokens), 0)                      AS prompt_tokens,
-            COALESCE(SUM(completion_tokens), 0)                  AS completion_tokens
-         FROM inference_jobs
-         WHERE created_at >= now() - interval '{interval}'
-         GROUP BY backend
+            COUNT(*) FILTER (WHERE j.status = 'completed')       AS success_count,
+            COUNT(*) FILTER (WHERE j.status = 'failed')          AS error_count,
+            COALESCE(SUM(j.prompt_tokens), 0)                    AS prompt_tokens,
+            COALESCE(SUM(j.completion_tokens), 0)                AS completion_tokens,
+            CASE
+                WHEN j.backend = 'ollama' THEN 0.0
+                WHEN pricing.input_per_1m IS NOT NULL THEN
+                    (COALESCE(SUM(j.prompt_tokens), 0)::float8 / 1000000.0 * pricing.input_per_1m) +
+                    (COALESCE(SUM(j.completion_tokens), 0)::float8 / 1000000.0 * pricing.output_per_1m)
+                ELSE NULL
+            END AS estimated_cost_usd
+         FROM inference_jobs j
+         LEFT JOIN LATERAL (
+             SELECT input_per_1m, output_per_1m
+             FROM model_pricing
+             WHERE provider = j.backend AND model_name = '*'
+             LIMIT 1
+         ) pricing ON true
+         WHERE j.created_at >= now() - interval '{interval}'
+         GROUP BY j.backend, j.backend, pricing.input_per_1m, pricing.output_per_1m
          ORDER BY request_count DESC",
     ))
     .fetch_all(pool)
@@ -231,6 +326,7 @@ pub async fn usage_breakdown(
                 prompt_tokens: r.try_get("prompt_tokens").unwrap_or(0),
                 completion_tokens: r.try_get("completion_tokens").unwrap_or(0),
                 success_rate,
+                estimated_cost_usd: r.try_get("estimated_cost_usd").unwrap_or(None),
             }
         })
         .collect();
@@ -244,9 +340,26 @@ pub async fn usage_breakdown(
             COUNT(j.id)                                            AS request_count,
             COUNT(j.id) FILTER (WHERE j.status = 'completed')     AS success_count,
             COALESCE(SUM(j.prompt_tokens), 0)                     AS prompt_tokens,
-            COALESCE(SUM(j.completion_tokens), 0)                 AS completion_tokens
+            COALESCE(SUM(j.completion_tokens), 0)                 AS completion_tokens,
+            SUM(
+                CASE
+                    WHEN j.backend = 'ollama' THEN 0.0
+                    WHEN j.prompt_tokens IS NOT NULL AND j.completion_tokens IS NOT NULL THEN
+                        (j.prompt_tokens::float8 / 1000000.0 * COALESCE(pricing.input_per_1m, 0)) +
+                        (j.completion_tokens::float8 / 1000000.0 * COALESCE(pricing.output_per_1m, 0))
+                    ELSE NULL
+                END
+            ) AS estimated_cost_usd
          FROM inference_jobs j
          JOIN api_keys k ON k.id = j.api_key_id
+         LEFT JOIN LATERAL (
+             SELECT input_per_1m, output_per_1m
+             FROM model_pricing
+             WHERE provider = j.backend
+               AND (model_name = j.model_name OR model_name = '*')
+             ORDER BY CASE WHEN model_name = j.model_name THEN 0 ELSE 1 END
+             LIMIT 1
+         ) pricing ON true
          WHERE j.created_at >= now() - interval '{interval}'
          GROUP BY k.id, k.name, k.key_prefix
          ORDER BY request_count DESC",
@@ -274,6 +387,7 @@ pub async fn usage_breakdown(
                 prompt_tokens: r.try_get("prompt_tokens").unwrap_or(0),
                 completion_tokens: r.try_get("completion_tokens").unwrap_or(0),
                 success_rate,
+                estimated_cost_usd: r.try_get("estimated_cost_usd").unwrap_or(None),
             }
         })
         .collect();
@@ -283,15 +397,32 @@ pub async fn usage_breakdown(
 
     let model_rows = sqlx::query(&format!(
         "SELECT
-            model_name,
-            backend,
+            j.model_name,
+            j.backend,
             COUNT(*)                                     AS request_count,
-            COALESCE(SUM(prompt_tokens), 0)              AS prompt_tokens,
-            COALESCE(SUM(completion_tokens), 0)          AS completion_tokens,
-            COALESCE(AVG(latency_ms) FILTER (WHERE latency_ms IS NOT NULL), 0) AS avg_latency_ms
-         FROM inference_jobs
-         WHERE created_at >= now() - interval '{interval}'
-         GROUP BY model_name, backend
+            COALESCE(SUM(j.prompt_tokens), 0)            AS prompt_tokens,
+            COALESCE(SUM(j.completion_tokens), 0)        AS completion_tokens,
+            COALESCE(AVG(j.latency_ms) FILTER (WHERE j.latency_ms IS NOT NULL), 0) AS avg_latency_ms,
+            SUM(
+                CASE
+                    WHEN j.backend = 'ollama' THEN 0.0
+                    WHEN j.prompt_tokens IS NOT NULL AND j.completion_tokens IS NOT NULL THEN
+                        (j.prompt_tokens::float8 / 1000000.0 * COALESCE(pricing.input_per_1m, 0)) +
+                        (j.completion_tokens::float8 / 1000000.0 * COALESCE(pricing.output_per_1m, 0))
+                    ELSE NULL
+                END
+            ) AS estimated_cost_usd
+         FROM inference_jobs j
+         LEFT JOIN LATERAL (
+             SELECT input_per_1m, output_per_1m
+             FROM model_pricing
+             WHERE provider = j.backend
+               AND (model_name = j.model_name OR model_name = '*')
+             ORDER BY CASE WHEN model_name = j.model_name THEN 0 ELSE 1 END
+             LIMIT 1
+         ) pricing ON true
+         WHERE j.created_at >= now() - interval '{interval}'
+         GROUP BY j.model_name, j.backend
          ORDER BY request_count DESC",
     ))
     .fetch_all(pool)
@@ -315,11 +446,16 @@ pub async fn usage_breakdown(
                 prompt_tokens: r.try_get("prompt_tokens").unwrap_or(0),
                 completion_tokens: r.try_get("completion_tokens").unwrap_or(0),
                 avg_latency_ms: r.try_get::<f64, _>("avg_latency_ms").unwrap_or(0.0),
+                estimated_cost_usd: r.try_get("estimated_cost_usd").unwrap_or(None),
             }
         })
         .collect();
 
-    Ok(Json(UsageBreakdownResponse { by_backend, by_key, by_model }))
+    let total_cost_usd: f64 = by_backend.iter()
+        .filter_map(|b| b.estimated_cost_usd)
+        .sum();
+
+    Ok(Json(UsageBreakdownResponse { by_backend, by_key, by_model, total_cost_usd }))
 }
 
 #[cfg(test)]

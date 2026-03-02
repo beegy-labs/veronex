@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { keyUsageQuery } from '@/lib/queries'
+import { keyUsageQuery, keyModelBreakdownQuery } from '@/lib/queries'
 import type { ApiKey } from '@/lib/types'
 import {
   AreaChart, Area, BarChart, Bar,
@@ -10,31 +10,20 @@ import {
 } from 'recharts'
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
-  AXIS_TICK, LEGEND_STYLE, CURSOR_FILL,
+  AXIS_TICK, LEGEND_STYLE, CURSOR_FILL, fmtCompact,
 } from '@/lib/chart-theme'
 import { Hash, Coins, CheckCircle, XCircle } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table'
+import { DataTable } from '@/components/data-table'
 import StatsCard from '@/components/stats-card'
 import { useTranslation } from '@/i18n'
-
-const TIME_OPTIONS = [
-  { label: '24h', hours: 24 },
-  { label: '7d',  hours: 168 },
-  { label: '30d', hours: 720 },
-]
-
-function fmt(n: number) {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
-
-function fmtHour(iso: string) {
-  const d = new Date(iso)
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}h`
-}
+import { TIME_OPTIONS, TimeRangeSelector } from '@/components/time-range-selector'
+import { fmtHourLabel } from '@/lib/date'
+import { useTimezone } from '@/components/timezone-provider'
 
 export function KeyUsageModal({
   apiKey,
@@ -44,12 +33,14 @@ export function KeyUsageModal({
   onClose: () => void
 }) {
   const { t } = useTranslation()
+  const { tz } = useTimezone()
   const [hours, setHours] = useState(24)
 
   const { data: hourly, isLoading } = useQuery(keyUsageQuery(apiKey.id, hours))
+  const { data: models } = useQuery(keyModelBreakdownQuery(apiKey.id, hours))
 
   const chartData = hourly?.map((h) => ({
-    hour:     fmtHour(h.hour),
+    hour:     fmtHourLabel(h.hour, tz),
     tokens:   h.total_tokens,
     prompt:   h.prompt_tokens,
     compl:    h.completion_tokens,
@@ -90,16 +81,7 @@ export function KeyUsageModal({
               </div>
             </div>
             <div className="flex items-center gap-1">
-              {TIME_OPTIONS.map((opt) => (
-                <Button
-                  key={opt.hours}
-                  variant={hours === opt.hours ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setHours(opt.hours)}
-                >
-                  {opt.label}
-                </Button>
-              ))}
+              <TimeRangeSelector value={hours} onChange={setHours} />
             </div>
           </div>
         </DialogHeader>
@@ -116,12 +98,12 @@ export function KeyUsageModal({
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <StatsCard
                 title={t('usage.totalRequests')}
-                value={fmt(totalRequests)}
+                value={fmtCompact(totalRequests)}
                 icon={<Hash className="h-4 w-4" />}
               />
               <StatsCard
                 title={t('usage.totalTokens')}
-                value={fmt(totalTokens)}
+                value={fmtCompact(totalTokens)}
                 icon={<Coins className="h-4 w-4" />}
               />
               <StatsCard
@@ -131,10 +113,51 @@ export function KeyUsageModal({
               />
               <StatsCard
                 title={t('usage.errors')}
-                value={fmt(totalErrors)}
+                value={fmtCompact(totalErrors)}
                 icon={<XCircle className="h-4 w-4" />}
               />
             </div>
+
+            {/* Model breakdown table */}
+            {models && models.length > 0 && (
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-3">
+                  {t('keys.modelBreakdown')}
+                </p>
+                <DataTable minWidth="480px">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t('jobs.model')}</TableHead>
+                      <TableHead>{t('usage.backend')}</TableHead>
+                      <TableHead className="text-right">{t('usage.requests')}</TableHead>
+                      <TableHead className="text-right">{t('usage.share')}</TableHead>
+                      <TableHead className="text-right">{t('usage.totalTokens')}</TableHead>
+                      <TableHead className="text-right">{t('usage.avgLatency')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {models.map((m) => (
+                      <TableRow key={`${m.model_name}-${m.backend}`}>
+                        <TableCell className="font-mono text-xs">{m.model_name}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-[10px] capitalize">{m.backend}</Badge>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtCompact(m.request_count)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {m.call_pct.toFixed(1)}%
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {fmtCompact(m.prompt_tokens + m.completion_tokens)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {m.avg_latency_ms > 0 ? `${(m.avg_latency_ms / 1000).toFixed(1)}s` : '—'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </DataTable>
+              </div>
+            )}
 
             {chartData.length === 0 ? (
               <div className="flex h-32 items-center justify-center text-muted-foreground text-sm rounded-lg border border-dashed">
@@ -160,8 +183,8 @@ export function KeyUsageModal({
                         </linearGradient>
                       </defs>
                       <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
-                      <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={42} tickFormatter={fmt} />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => fmt(Number(v))} />
+                      <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={42} tickFormatter={fmtCompact} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => fmtCompact(Number(v))} />
                       <Legend wrapperStyle={LEGEND_STYLE} />
                       <Area type="monotone" dataKey="prompt" name="Prompt"     stroke="var(--theme-primary)"       fill="url(#ku-gradPrompt)" strokeWidth={2} dot={false} />
                       <Area type="monotone" dataKey="compl"  name="Completion" stroke="var(--theme-status-info)"  fill="url(#ku-gradCompl)"  strokeWidth={2} dot={false} />
