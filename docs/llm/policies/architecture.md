@@ -156,7 +156,7 @@ pub struct AppState {
     pub analyzer_url:              String,
     // Infrastructure
     pub cpu_snapshot_cache:        Arc<DashMap<Uuid, CpuSnapshot>>, // GPU snapshot per server (DashMap; no lock)
-    pub valkey_pool:               Option<fred::clients::RedisPool>,
+    pub valkey_pool:               Option<fred::clients::Pool>,
     pub pg_pool:                   sqlx::PgPool,
 }
 ```

@@ -1,6 +1,6 @@
 # Web — Providers Page (/providers)
 
-> SSOT | **Last Updated**: 2026-03-02
+> SSOT | **Last Updated**: 2026-03-02 (Ollama model enable/disable — OllamaBackendModelsModal → Switch toggle UI)
 
 ## Task Guide
 
@@ -16,6 +16,7 @@
 | Change table page size | `web/app/providers/page.tsx` `PAGE_SIZE` constant | Single constant used by all 3 tables |
 | Change rate limit policy table columns | `web/app/providers/page.tsx` `GeminiSyncSection` table | Add/remove column header + cell render |
 | Change ModelSelectionModal empty state | `web/app/providers/page.tsx` `ModelSelectionModal` + `web/messages/en.json` `backends.noGlobalModels` | Update i18n key in all 3 locales |
+| Change OllamaBackendModelsModal empty state | `web/app/providers/page.tsx` `OllamaBackendModelsModal` + `web/messages/en.json` `backends.ollama.noBackendModels` | Update i18n key in all 3 locales |
 | Change Ollama live metrics refresh interval | `web/app/providers/page.tsx` `OllamaServerMetrics` `refetchInterval` | Default: 30 000 ms |
 | Add live metric field to Ollama server cell | `web/app/providers/page.tsx` `OllamaServerMetrics` render | Add field from `NodeMetrics.gpus[n]` |
 
@@ -89,10 +90,10 @@ http://host:11434    GPU 0  VRAM 32 GB
 4. `<OllamaCapacitySection />` — concurrency control (see below)
 5. Modals: `OllamaBackendModelsModal`, `ServerHistoryModal`
 
-Actions: [↻ Healthcheck] [🔄 Sync Models] [⊞ Models (`ListFilter`)] [✏️ Edit] [🗑 Delete]
+Actions: [↻ Healthcheck] [🔄 Sync Models] [⊞ Model Selection (`ListFilter`)] [✏️ Edit] [🗑 Delete]
 
-- **[🔄 Sync Models]**: `POST /v1/backends/{id}/models/sync` — also persists to `ollama_models` table. Invalidates `['ollama-sync-status']` and `['ollama-models']`.
-- **[⊞ Models]** (ListFilter icon): opens `OllamaBackendModelsModal` — shows all models synced for that backend.
+- **[🔄 Sync Models]**: `POST /v1/backends/{id}/models/sync` — persists to `ollama_models` + upserts `backend_selected_models` (`is_enabled=true` for new rows). Invalidates `['ollama-sync-status']`, `['ollama-models']`, `['selected-models', backendId]`.
+- **[⊞ Model Selection]** (ListFilter icon): opens `OllamaBackendModelsModal` — Switch toggle per model, same pattern as Gemini `ModelSelectionModal`.
 
 ### OllamaServerMetrics (inline in Server column)
 
@@ -120,10 +121,14 @@ Displays (compact single line):
 
 ### OllamaBackendModelsModal
 
-Opened by [⊞] on a backend row. Shows models from DB (`GET /v1/ollama/backends/{id}/models`).
+Opened by [⊞ Model Selection] on a backend row. Switch toggle UI per synced model — identical pattern to Gemini `ModelSelectionModal`.
 
-- `queryKey: ['ollama-backend-models', backendId]`, `staleTime: 30_000`
-- Search filters badges client-side
+- Data: `GET /v1/backends/{id}/selected-models` → Ollama branch: `ollama_models` merged with `backend_selected_models`, default `is_enabled = true`
+- Toggle → `PATCH /v1/backends/{id}/selected-models/{model_name}` `{ is_enabled: bool }`
+- `queryKey: ['selected-models', backendId]`
+- Optimistic update: switch flips immediately, reverts on error
+- Empty state: `backends.ollama.noBackendModels` (no models synced yet)
+- Enabled count: `backends.ollama.enabledCount` (`X/Y enabled`)
 
 ### OllamaSyncSection — Global Model Sync
 
@@ -355,16 +360,18 @@ Model: gemini-2.5-flash
 
 **SetSyncKeyModal**: password input → `PUT /v1/gemini/sync-config`. Invalidates `GEMINI_QUERY_KEYS.syncConfig`.
 
-### 4. ModelSelectionModal (paid backends)
+### 4. ModelSelectionModal (paid Gemini backends)
 
 Opened by `ListFilter` button on paid backend rows.
 
-- Data: `GET /v1/backends/{id}/selected-models` → global models merged with per-backend state
+- Data: `GET /v1/backends/{id}/selected-models` → Gemini branch: global `gemini_models` merged with per-backend state, default `is_enabled = false`
 - Toggle → `PATCH /v1/backends/{id}/selected-models/{model_name}` `{ is_enabled: bool }`
 - Optimistic update: switch flips immediately, reverts on error
 - Empty state: "No global models. Set an admin key and click Sync Now."
 - `useQuery({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, backendId] })`
 - Auto-refreshed when `refreshGeminiData()` is called (prefix invalidation)
+
+> **Ollama counterpart**: `OllamaBackendModelsModal` — same Switch UI, same endpoint, Ollama branch returns per-backend models with `is_enabled = true` default. See above.
 
 ---
 
@@ -376,6 +383,7 @@ Opened by `ListFilter` button on paid backend rows.
 "ollama.ollamaSyncSection", "ollama.ollamaSyncAll", "ollama.ollamaSyncing",
 "ollama.ollamaSyncDone", "ollama.ollamaAvailableModels", "ollama.ollamaNoSync",
 "ollama.ollamaSearchModels", "ollama.viewModels",
+"ollama.modelSelection", "ollama.modelSelectionDesc", "ollama.enabledCount",
 "registerGemini", "editGemini", "apiKey", "freeTier",
 "gemini.statusSyncSection", "gemini.statusSyncDesc", "gemini.syncStatus",
 "gemini.syncingStatus", "gemini.statusSyncDone", "gemini.noStatusResults",

@@ -40,25 +40,36 @@ Thermal state is updated in `health_checker` every 30 s from `hw_metrics` (Valke
 ## KV Cache Formula (exact, model-architecture-based)
 
 ```
-kv_bytes_per_token = 2 × num_layers × num_kv_heads × head_dim × 2  (BF16)
-                     K+V              GQA-aware      usually 128
+kv_bytes_per_token = 2 × num_layers × num_kv_heads × head_dim × bytes_per_element
+                     K+V              GQA-aware      usually 128  (1=q8_0, 2=BF16/FP16)
 
-worst_case_mb = kv_bytes_per_token × num_ctx / 1_048_576
-realistic_mb  = kv_bytes_per_token × avg_tokens / 1_048_576
+effective_ctx = min(configured_ctx, max_ctx)   ← clamp: prevents over-estimating small models
+                                                  configured_ctx from /api/show parameters field
+                                                  max_ctx from model_info context_length
+
+worst_case_mb = kv_bytes_per_token × effective_ctx / 1_048_576
+realistic_mb  = kv_bytes_per_token × avg_tokens    / 1_048_576
 ```
 
 Architecture parameters come from Ollama `/api/show` `model_info`:
 - `*.block_count` → `num_layers`
-- `*.attention.head_count_kv` → `num_kv_heads` (GQA-aware)
-- `*.attention.key_length` → `head_dim`
+- `*.attention.head_count_kv` → `num_kv_heads` (GQA-aware; llama3/qwen2.5 have num_kv_heads << num_heads)
+- `*.attention.key_length` → `head_dim` (default: 128 if absent)
+- `parameters` field (`num_ctx <N>`) → `configured_ctx`
+- `model_info.*.context_length` → `max_ctx` (model native maximum)
+
+**`bytes_per_element` is always `1`** in current deployments (all backends use `OLLAMA_KV_CACHE_TYPE=q8_0`).
 
 ## Slot Recommendation Logic
 
 ```
 available_mb = vram_total - vram_model_loaded - 512_MB_buffer
-math_slots   = clamp(1 + min(by_realistic, by_worst * 2), 1, 8)
+math_slots   = clamp(1 + min(by_realistic, by_worst * 2), 1, OLLAMA_NUM_PARALLEL)
 final_slots  = llm_recommend ?? math_slots  (fallback if LLM fails)
 ```
+
+Slot ceiling is `OLLAMA_NUM_PARALLEL` (default `1`), not a hardcoded `8`.
+Recommending more slots than Ollama's parallel capacity is pointless — Ollama serialises excess requests.
 
 The LLM (`qwen2.5:3b` by default) receives the full context in a JSON prompt
 and responds with `{recommended_slots, concern, reason}`.
@@ -119,7 +130,19 @@ POST /v1/dashboard/capacity/sync
 ```bash
 CAPACITY_ANALYZER_OLLAMA_URL=http://localhost:11434  # default: same as OLLAMA_URL
 # analyzer_model is configured via DB (PATCH /v1/dashboard/capacity/settings)
+
+OLLAMA_NUM_PARALLEL=1   # mirrors the Ollama StatefulSet env var
+                        # used as the upper bound for math_slots clamp
+                        # default: 1 (AMD APU / single-GPU deployments)
 ```
+
+### AMD APU Notes (Ryzen AI Max+ 395 / gfx1151)
+
+`OLLAMA_NUM_PARALLEL` **must remain `1`** on Strix Halo APU deployments:
+- GTT/VRAM misreporting bug: with `NUM_PARALLEL > 1` Ollama may refuse GPU inference and fall back to CPU
+- Bandwidth already saturated at `batch=1` (~215 GB/s LPDDR5X)
+- Multi-model parallelism achieved via `OLLAMA_MAX_LOADED_MODELS=2` instead:
+  each model processes its own queue sequentially but independently
 
 ## Web UI
 

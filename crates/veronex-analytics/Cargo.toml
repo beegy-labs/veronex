@@ -9,7 +9,7 @@ description = "Internal analytics service — OTel log ingestion + ClickHouse re
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

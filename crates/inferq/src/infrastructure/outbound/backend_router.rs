@@ -181,7 +181,7 @@ async fn gemini_limit_status(
     model: &str,
     rpm_limit: i32,
     rpd_limit: i32,
-    valkey: &fred::clients::RedisPool,
+    valkey: &fred::clients::Pool,
 ) -> (bool, bool) {
     use fred::prelude::*;
 
@@ -212,7 +212,7 @@ async fn gemini_limit_status(
 
 /// Increment per-(backend, model) RPM and RPD counters after a successful inference.
 pub async fn increment_gemini_counters(
-    pool: &fred::clients::RedisPool,
+    pool: &fred::clients::Pool,
     backend_id: uuid::Uuid,
     model: &str,
 ) -> anyhow::Result<()> {
@@ -222,10 +222,10 @@ pub async fn increment_gemini_counters(
     let rpd_key = gemini_rpd_key(backend_id, model);
 
     let _: i64 = pool.incr_by(&rpm_key, 1).await?;
-    let _: bool = pool.expire(&rpm_key, 120).await?;
+    let _: bool = pool.expire(&rpm_key, 120, None).await?;
 
     let _: i64 = pool.incr_by(&rpd_key, 1).await?;
-    let _: bool = pool.expire(&rpd_key, 90_000).await?;
+    let _: bool = pool.expire(&rpd_key, 90_000, None).await?;
 
     Ok(())
 }
@@ -253,7 +253,7 @@ pub async fn pick_best_backend(
     ollama_model_repo: Option<&dyn OllamaModelRepository>,
     bt: &BackendType,
     model_name: &str,
-    valkey: Option<&fred::clients::RedisPool>,
+    valkey: Option<&fred::clients::Pool>,
     tier_filter: Option<&str>,
 ) -> Result<LlmBackend> {
     let all = registry.list_all().await?;
@@ -304,8 +304,39 @@ pub async fn pick_best_backend(
                 candidates
             };
 
+            // Filter by model selection: if a backend has selection rows for this model
+            // and the model is disabled, skip that backend.
+            let selection_filtered = if let Some(repo) = model_selection_repo {
+                if !model_name.is_empty() {
+                    let mut result = Vec::new();
+                    for b in filtered_candidates {
+                        match repo.list_enabled(b.id).await {
+                            Ok(enabled) if !enabled.is_empty() => {
+                                if enabled.iter().any(|m| m == model_name) {
+                                    result.push(b);
+                                } else {
+                                    tracing::debug!(
+                                        backend_id = %b.id,
+                                        name = %b.name,
+                                        model_name = %model_name,
+                                        "model disabled on ollama backend, skipping"
+                                    );
+                                }
+                            }
+                            // No rows or error → no restriction, include this backend.
+                            _ => result.push(b),
+                        }
+                    }
+                    result
+                } else {
+                    filtered_candidates
+                }
+            } else {
+                filtered_candidates
+            };
+
             let mut best: Option<(LlmBackend, i64)> = None;
-            for b in filtered_candidates {
+            for b in selection_filtered {
                 let avail = get_ollama_available_vram_mb(&b, valkey).await;
                 match &best {
                     None => best = Some((b, avail)),
@@ -327,7 +358,7 @@ async fn pick_gemini_backend(
     policy_repo: Option<&dyn GeminiPolicyRepository>,
     model_selection_repo: Option<&dyn BackendModelSelectionRepository>,
     model_name: &str,
-    valkey: Option<&fred::clients::RedisPool>,
+    valkey: Option<&fred::clients::Pool>,
     tier_filter: Option<&str>,
 ) -> Result<LlmBackend> {
     // Look up the shared rate-limit policy for this model.
@@ -486,7 +517,7 @@ async fn pick_gemini_backend(
 /// 4. `0` on any network / parse error (treats backend as full).
 pub async fn get_ollama_available_vram_mb(
     backend: &LlmBackend,
-    valkey: Option<&fred::clients::RedisPool>,
+    valkey: Option<&fred::clients::Pool>,
 ) -> i64 {
     // ── 1. Valkey cache (agent data) ─────────────────────────────────────────
     if let Some(pool) = valkey {

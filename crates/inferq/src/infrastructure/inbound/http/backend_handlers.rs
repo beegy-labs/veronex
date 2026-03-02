@@ -106,7 +106,7 @@ async fn fetch_models_live(backend: &LlmBackend) -> Result<Vec<String>> {
 }
 
 /// Write models to the Valkey cache (fire-and-forget; errors are logged, not surfaced).
-async fn store_models_cache(pool: &fred::clients::RedisPool, key: &str, models: &[String]) {
+async fn store_models_cache(pool: &fred::clients::Pool, key: &str, models: &[String]) {
     use fred::prelude::*;
 
     let Ok(json_str) = serde_json::to_string(models) else {
@@ -127,7 +127,7 @@ async fn store_models_cache(pool: &fred::clients::RedisPool, key: &str, models: 
 }
 
 /// Read models from the Valkey cache. Returns `None` on miss or error.
-async fn load_models_cache(pool: &fred::clients::RedisPool, key: &str) -> Option<Vec<String>> {
+async fn load_models_cache(pool: &fred::clients::Pool, key: &str) -> Option<Vec<String>> {
     use fred::prelude::*;
 
     let cached: Option<String> = pool.get(key).await.unwrap_or(None);
@@ -695,6 +695,10 @@ pub async fn sync_backend_models(
             if let Err(e) = state.ollama_model_repo.sync_backend_models(id, &models).await {
                 tracing::warn!(%id, "failed to persist ollama models to DB (non-fatal): {e}");
             }
+            // Upsert model selections (is_enabled defaults to true for new rows).
+            if let Err(e) = state.model_selection_repo.upsert_models(id, &models).await {
+                tracing::warn!(%id, "failed to upsert model selections (non-fatal): {e}");
+            }
             tracing::info!(%id, count = models.len(), "model list synced");
             (
                 StatusCode::OK,
@@ -722,19 +726,28 @@ struct SelectedModelDto {
     synced_at: DateTime<Utc>,
 }
 
-/// `GET /v1/backends/{id}/selected-models` — list global Gemini models with per-backend enabled state.
+/// `GET /v1/backends/{id}/selected-models` — list models with per-backend enabled state.
 ///
-/// Merges the global `gemini_models` pool with per-backend selection rows.
-/// Models that have never been toggled default to `is_enabled = false`.
+/// **Ollama**: merges per-backend `ollama_models` with `backend_selected_models`.
+///   New models default to `is_enabled = true`.
+/// **Gemini**: merges the global `gemini_models` pool with `backend_selected_models`.
+///   New models default to `is_enabled = false`.
 pub async fn list_selected_models(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    // 1. Global model pool.
-    let global = match state.gemini_model_repo.list().await {
-        Ok(g) => g,
+    // Resolve the backend to branch by type.
+    let backend = match state.backend_registry.get(id).await {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "backend not found"})),
+            )
+                .into_response();
+        }
         Err(e) => {
-            tracing::error!(%id, "list_selected_models: failed to list global models: {e}");
+            tracing::error!(%id, "list_selected_models: failed to fetch backend: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "database error"})),
@@ -743,7 +756,7 @@ pub async fn list_selected_models(
         }
     };
 
-    // 2. Per-backend selections (enabled/disabled overrides).
+    // Per-backend selections (enabled/disabled overrides).
     let selections = match state.model_selection_repo.list(id).await {
         Ok(s) => s,
         Err(e) => {
@@ -760,20 +773,61 @@ pub async fn list_selected_models(
         .map(|s| (s.model_name, s.is_enabled))
         .collect();
 
-    // 3. Merge: global model → enabled = stored override, default false.
-    let dtos: Vec<SelectedModelDto> = global
-        .into_iter()
-        .map(|m| {
-            let is_enabled = sel_map.get(&m.model_name).copied().unwrap_or(false);
-            SelectedModelDto {
-                model_name: m.model_name,
-                is_enabled,
-                synced_at: m.synced_at,
-            }
-        })
-        .collect();
+    match backend.backend_type {
+        BackendType::Ollama => {
+            // Use per-backend synced model list; default is_enabled = true.
+            let models = match state.ollama_model_repo.models_for_backend(id).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(%id, "list_selected_models: failed to list ollama models: {e}");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "database error"})),
+                    )
+                        .into_response();
+                }
+            };
+            let dtos: Vec<SelectedModelDto> = models
+                .into_iter()
+                .map(|model_name| {
+                    let is_enabled = sel_map.get(&model_name).copied().unwrap_or(true);
+                    SelectedModelDto {
+                        model_name,
+                        is_enabled,
+                        synced_at: Utc::now(),
+                    }
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
+        }
 
-    (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
+        BackendType::Gemini => {
+            // Global model pool; default is_enabled = false.
+            let global = match state.gemini_model_repo.list().await {
+                Ok(g) => g,
+                Err(e) => {
+                    tracing::error!(%id, "list_selected_models: failed to list global models: {e}");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "database error"})),
+                    )
+                        .into_response();
+                }
+            };
+            let dtos: Vec<SelectedModelDto> = global
+                .into_iter()
+                .map(|m| {
+                    let is_enabled = sel_map.get(&m.model_name).copied().unwrap_or(false);
+                    SelectedModelDto {
+                        model_name: m.model_name,
+                        is_enabled,
+                        synced_at: m.synced_at,
+                    }
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

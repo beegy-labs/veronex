@@ -1,9 +1,15 @@
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::pin::Pin;
+use std::time::Duration;
+
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::Json;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
@@ -608,6 +614,129 @@ async fn fetch_ollama_tags(analyzer_url: &str) -> Vec<String> {
             .map(|t| t.models.into_iter().map(|m| m.name).collect())
             .unwrap_or_default(),
         Err(_) => vec![],
+    }
+}
+
+// ── GET /v1/dashboard/queue/depth — Valkey queue lengths ────────────
+
+/// Returns the number of jobs currently waiting in each Valkey queue.
+/// Polls `LLEN` on the three queue keys; returns zero counts when Valkey is unavailable.
+#[derive(Serialize)]
+pub struct QueueDepth {
+    pub api_paid: i64,
+    pub api: i64,
+    pub test: i64,
+    pub total: i64,
+}
+
+pub async fn get_queue_depth(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    let Some(ref pool) = state.valkey_pool else {
+        return Json(QueueDepth { api_paid: 0, api: 0, test: 0, total: 0 }).into_response();
+    };
+
+    use fred::prelude::*;
+
+    let (paid, api, test): (i64, i64, i64) = tokio::join!(
+        async { pool.llen::<i64, _>("veronex:queue:jobs:paid").await.unwrap_or(0) },
+        async { pool.llen::<i64, _>("veronex:queue:jobs").await.unwrap_or(0) },
+        async { pool.llen::<i64, _>("veronex:queue:jobs:test").await.unwrap_or(0) },
+    );
+
+    Json(QueueDepth {
+        api_paid: paid,
+        api,
+        test,
+        total: paid + api + test,
+    })
+    .into_response()
+}
+
+// ── GET /v1/dashboard/jobs/stream — Real-time job status SSE ───────
+//
+// Streams JobStatusEvent JSON objects as SSE data frames.
+// The client receives one event per job state transition
+// (pending → running → completed/failed/cancelled).
+// JWT Bearer auth enforced by the dashboard router middleware.
+
+type SseJobStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
+
+pub async fn job_events_sse(State(state): State<AppState>) -> impl IntoResponse {
+    let mut rx = state.job_event_tx.subscribe();
+
+    let stream: SseJobStream = Box::pin(async_stream::stream! {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let json = serde_json::to_string(&event).unwrap_or_default();
+                    yield Ok::<Event, Infallible>(Event::default().event("job_status").data(json));
+                }
+                // Lag-skip (RecvError::Lagged): continue receiving; channel closed = break
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    (
+        [("X-Accel-Buffering", "no")],
+        Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(20))),
+    )
+}
+
+// ── Lab feature settings ─────────────────────────────────────────────
+//
+// Experimental features are disabled by default.
+// Enable them deliberately in Settings → Lab Features.
+
+/// `GET /v1/dashboard/lab` — return current lab feature flags.
+pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    match state.lab_settings_repo.get().await {
+        Ok(s) => (
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({
+                "gemini_function_calling": s.gemini_function_calling,
+                "updated_at": s.updated_at,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!("get_lab_settings: {e}");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct PatchLabSettingsBody {
+    pub gemini_function_calling: Option<bool>,
+}
+
+/// `PATCH /v1/dashboard/lab` — update lab feature flags.
+pub async fn patch_lab_settings(
+    State(state): State<AppState>,
+    Json(body): Json<PatchLabSettingsBody>,
+) -> impl axum::response::IntoResponse {
+    match state.lab_settings_repo.update(body.gemini_function_calling).await {
+        Ok(s) => (
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({
+                "gemini_function_calling": s.gemini_function_calling,
+                "updated_at": s.updated_at,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!("patch_lab_settings: {e}");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
     }
 }
 

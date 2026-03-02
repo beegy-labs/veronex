@@ -20,6 +20,7 @@ use veronex::application::ports::outbound::observability_port::ObservabilityPort
 use veronex::application::ports::outbound::session_repository::SessionRepository;
 use veronex::application::use_cases::InferenceUseCaseImpl;
 use veronex::domain::enums::BackendType;
+use veronex::domain::value_objects::JobStatusEvent;
 use veronex::infrastructure::inbound::http::router::build_app;
 use veronex::infrastructure::inbound::http::state::AppState;
 use veronex::infrastructure::outbound::analytics::HttpAnalyticsClient;
@@ -90,10 +91,9 @@ async fn main() -> Result<()> {
     let valkey_pool = if let Some(ref url) = valkey_url {
         use fred::prelude::*;
         tracing::info!("connecting to valkey at {url}");
-        let config = RedisConfig::from_url(url)?;
-        let pool = RedisPool::new(config, None, None, None, 6)?;
-        pool.connect();
-        pool.wait_for_connect().await?;
+        let config = Config::from_url(url)?;
+        let pool = Pool::new(config, None, None, None, 6)?;
+        pool.init().await?;
         tracing::info!("valkey ready");
         Some(pool)
     } else {
@@ -163,6 +163,8 @@ async fn main() -> Result<()> {
         Arc::new(PostgresOllamaSyncJobRepository::new(pg_pool.clone()));
     let session_repo: Arc<dyn SessionRepository> =
         Arc::new(PostgresSessionRepository::new(pg_pool.clone()));
+    let lab_settings_repo: Arc<dyn veronex::application::ports::outbound::lab_settings_repository::LabSettingsRepository> =
+        Arc::new(veronex::infrastructure::outbound::persistence::lab_settings_repository::PostgresLabSettingsRepository::new(pg_pool.clone()));
 
     // ── Bootstrap super account (optional — CI/automated deployments) ──────
     // When BOOTSTRAP_SUPER_USER + BOOTSTRAP_SUPER_PASS are set, a super account
@@ -211,6 +213,13 @@ async fn main() -> Result<()> {
     // ── Capacity analyzer URL ───────────────────────────────────────
     let analyzer_url = std::env::var("CAPACITY_ANALYZER_OLLAMA_URL")
         .unwrap_or_else(|_| ollama_url.clone());
+
+    // OLLAMA_NUM_PARALLEL caps the slot ceiling in the capacity analyzer.
+    // Must match the Ollama StatefulSet env var (default: 1 for AMD APU).
+    let ollama_num_parallel: u32 = std::env::var("OLLAMA_NUM_PARALLEL")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
 
     // ── Capacity infrastructure ─────────────────────────────────────
     let capacity_repo: Arc<dyn ModelCapacityRepository> =
@@ -310,8 +319,12 @@ async fn main() -> Result<()> {
         capacity_manual_trigger.clone(),
         Duration::from_secs(30), // base tick (checks DB settings each tick)
         shutdown.child_token(),
+        ollama_num_parallel,
     ));
     tracing::info!("capacity analysis loop started (analyzer: {analyzer_url})");
+
+    let (job_event_tx, _) = tokio::sync::broadcast::channel::<JobStatusEvent>(256);
+    let job_event_tx = Arc::new(job_event_tx);
 
     let use_case_impl = Arc::new(InferenceUseCaseImpl::new(
         backend_registry.clone(),
@@ -324,6 +337,7 @@ async fn main() -> Result<()> {
         model_manager,
         slot_map.clone(),
         thermal.clone(),
+        (*job_event_tx).clone(),
     ));
 
     if let Err(e) = use_case_impl.recover_pending_jobs().await {
@@ -358,6 +372,8 @@ async fn main() -> Result<()> {
         capacity_settings_repo,
         capacity_manual_trigger,
         analyzer_url,
+        job_event_tx,
+        lab_settings_repo,
     };
 
     let app = build_app(state);

@@ -74,7 +74,11 @@
     "customTimezoneInvalid": "無効なタイムゾーンです。",
     "custom": "カスタム",
     "settings": "設定",
-    "language": "言語"
+    "language": "言語",
+    "labFeatures": "ラボ機能",
+    "labFeaturesDesc": "実験的機能 — 不安定な場合があります。",
+    "labGeminiFunctionCalling": "Gemini 関数呼び出し",
+    "labGeminiFunctionCallingDesc": "Gemini 互換エンドポイントを通じたツール使用（関数呼び出し）を有効にします。開発中です。"
   },
   "overview": {
     "title": "概要",
@@ -126,6 +130,7 @@
     "liveFeed": "ライブフィード",
     "waitingRequests": "リクエスト待機中...",
     "reqLast5m": "{{count}} リクエスト / 5分",
+    "queueWaiting": "{{count}} 待機中",
     "thermalAlert": "発熱アラート",
     "thermalAlertDesc": "{{count}}台のサーバーを確認してください",
     "tempCritical": "危険",
@@ -162,6 +167,7 @@
     "ttft": "初回トークン",
     "tokens": "トークン",
     "promptTokens": "入力トークン",
+    "promptTokensTooltip": "モデルに送信された全コンテキストのトークン数 — システムプロンプト、会話履歴全体、ツール呼び出し結果を含みます。表示されるプロンプトは最後のユーザーメッセージのみです。",
     "completionTokens": "出力トークン",
     "cachedTokens": "キャッシュトークン",
     "totalTokens": "合計トークン",
@@ -232,7 +238,9 @@
 "tier": "ティア",
     "tierFree": "無料",
     "tierPaid": "有料",
-    "keysCount": "{{count}}件"
+    "keysCount": "{{count}}件",
+    "viewUsage": "使用量を見る",
+    "usageTitle": "使用量 — {{name}}"
   },
   "backends": {
     "title": "プロバイダー",
@@ -303,7 +311,12 @@
       "ollamaUrl": "Ollama URL",
       "modelsCount": "{{count}}個のモデル",
       "serversWithModel": "このモデルを持つサーバー",
-      "editTitle": "Ollamaプロバイダーの編集"
+      "editTitle": "Ollamaプロバイダーの編集",
+      "freeTier": "無料ティア",
+      "freeTierDesc": "このバックエンドを無料ティアのAPIキーリクエスト専用にします。",
+      "modelSelection": "モデル選択",
+      "modelSelectionDesc": "このバックエンドにルーティングするモデルのみ有効にしてください。",
+      "enabledCount": "{{enabled}}/{{total}} 有効"
     },
     "capacity": {
       "title": "並行処理制御",

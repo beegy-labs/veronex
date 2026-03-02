@@ -62,7 +62,7 @@ export function LiveFeed({ events }: Props) {
                 className="h-1.5 w-1.5 rounded-full animate-pulse"
                 style={{ background: 'var(--theme-status-success)' }}
               />
-              live · 5s
+              live
             </span>
           )}
         </div>
@@ -95,15 +95,9 @@ export function LiveFeed({ events }: Props) {
                       <td className="py-2 px-2 font-mono max-w-[160px] truncate text-foreground">
                         {ev.model}
                       </td>
-                      {/* Provider → Server */}
-                      <td className="py-2 px-2 text-muted-foreground">
-                        <span className="capitalize">{ev.provider}</span>
-                        {ev.serverName && (
-                          <>
-                            <span className="mx-1 opacity-40">→</span>
-                            <span>{ev.serverName}</span>
-                          </>
-                        )}
+                      {/* Provider */}
+                      <td className="py-2 px-2 text-muted-foreground capitalize">
+                        {ev.provider}
                       </td>
                       {/* Current status */}
                       <td className="py-2 px-2" style={{ color: statusDotColor(cur.status) }}>

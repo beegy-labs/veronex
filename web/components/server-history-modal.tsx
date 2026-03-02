@@ -104,7 +104,7 @@ export function ServerHistoryModal({
                 <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                   <XAxis dataKey="ts" tick={{ fontSize: 10, fill: 'var(--theme-text-faint)' }} interval="preserveStartEnd" />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: 'var(--theme-text-faint)' }} unit="%" />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [`${v}%`, 'Mem Used']} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v)}%`, 'Mem Used'] as [string, string]} />
                   <Line type="monotone" dataKey="memUsedPct" stroke="var(--theme-status-info)" dot={false} strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
@@ -117,7 +117,7 @@ export function ServerHistoryModal({
                     <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                       <XAxis dataKey="ts" tick={{ fontSize: 10, fill: 'var(--theme-text-faint)' }} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 10, fill: 'var(--theme-text-faint)' }} unit="°C" />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [`${v}°C`, 'GPU Temp']} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v)}°C`, 'GPU Temp'] as [string, string]} />
                       <Line type="monotone" dataKey="gpuTemp" stroke="var(--theme-status-error)" dot={false} strokeWidth={2} connectNulls />
                     </LineChart>
                   </ResponsiveContainer>
@@ -128,7 +128,7 @@ export function ServerHistoryModal({
                     <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                       <XAxis dataKey="ts" tick={{ fontSize: 10, fill: 'var(--theme-text-faint)' }} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 10, fill: 'var(--theme-text-faint)' }} unit="W" />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [`${v}W`, 'GPU Power']} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v)}W`, 'GPU Power'] as [string, string]} />
                       <Line type="monotone" dataKey="gpuPower" stroke="var(--theme-accent-power)" dot={false} strokeWidth={2} connectNulls />
                     </LineChart>
                   </ResponsiveContainer>

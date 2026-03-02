@@ -1,6 +1,6 @@
 # Web — Brand, Design System & Architecture
 
-> SSOT | **Last Updated**: 2026-03-01 (network flow 3-phase enqueue/dispatch/response; 4-column Queue topology; live feed latestByJob live status updates; cancelled bee color; yellow enqueue bees)
+> SSOT | **Last Updated**: 2026-03-02 (ArgoCD-style flow panel: distinct node shapes API/Queue/Provider; queue depth badge via LLEN; max-width 680px cap)
 
 ## Task Guide
 
@@ -36,8 +36,8 @@
 | `web/components/donut-chart.tsx` | Shared `DonutChart` component — always use instead of inline `<PieChart>` |
 | `web/lib/api.ts` | All API client functions |
 | `web/lib/types.ts` | All TypeScript types |
-| `web/hooks/use-inference-stream.ts` | `useInferenceStream` — 5 s polling → `FlowEvent[]` for network flow visualization |
-| `web/package.json` | Next.js 15, Tailwind v4, TanStack Query, shadcn/ui |
+| `web/hooks/use-inference-stream.ts` | `useInferenceStream` — SSE real-time stream → `FlowEvent[]` for network flow visualization |
+| `web/package.json` | Next.js 16, Tailwind v4, TanStack Query, shadcn/ui |
 
 ---
 
@@ -341,10 +341,11 @@ Real-time inference traffic visualization. Shows `ProviderFlowPanel` + `LiveFeed
 
 | File | Role |
 |------|------|
-| `web/app/flow/page.tsx` | Data fetching (backends + servers only) + renders `NetworkFlowTab` |
-| `web/app/overview/components/network-flow-tab.tsx` | Composes ProviderFlowPanel + LiveFeed |
-| `web/app/overview/components/provider-flow-panel.tsx` | SVG topology: Veronex API → Ollama → GPU servers / Gemini |
+| `web/app/flow/page.tsx` | Data fetching (backends only) + renders `NetworkFlowTab` |
+| `web/app/overview/components/network-flow-tab.tsx` | Composes ProviderFlowPanel + LiveFeed; accepts `backends` only |
+| `web/app/overview/components/provider-flow-panel.tsx` | SVG topology: Veronex API → Queue → Ollama / Gemini (3-column) |
 | `web/app/overview/components/live-feed.tsx` | Scrollable real-time event list |
+| `web/hooks/use-inference-stream.ts` | SSE client; `fetch()` + JWT Bearer auth to `/v1/dashboard/jobs/stream` |
 
 ---
 
@@ -512,29 +513,29 @@ i18n keys: `overview.serverHealth`, `overview.connected`, `overview.unreachable`
 
 ### Network Flow Page (`/flow`) — Detail
 
-Real-time **3-phase bidirectional** visualization of the inference pipeline — 4-column topology.
-Data source: `useInferenceStream` hook (`web/hooks/use-inference-stream.ts`).
-Page fetches only `backends` + `servers` (no heavy analytics queries).
+Real-time **3-phase bidirectional** visualization of the inference pipeline — **3-column topology** (GPU server column removed).
+Data source: `useInferenceStream` SSE hook — connects to `GET /v1/dashboard/jobs/stream`.
+Page fetches only `backends` (no `servers`, no heavy analytics queries).
 
 #### Layout
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│  Provider Flow                                                          │
-│                                                                         │
-│  [Veronex API] ──🟡──→ [Queue] ──🔵──→ [Ollama] ──🔵──→ [gpu-srv-1]  │
-│                                  ·····←🟢·····           ←🟢──         │
-│                          ──🔵──→ [Gemini]         ──🔵──→ [gpu-srv-2]  │
-│                           ·····←🟢·····             ←🟢──              │
-│                                                                         │
-│  N req/5m below each provider node                                      │
-└────────────────────────────────────────────────────────────────────────┘
-┌────────────────────────────────────────────────────────────────────────┐
-│  Live Feed  ● live · 5s                                                 │
-│  ● llama3 → Ollama → gpu-1   completed  423ms   just now              │
-│  ● qwen3:8b → Ollama          running    —       5s ago               │
-│  ● gemini-pro → Gemini        pending    —       10s ago              │
-└────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  Provider Flow                                                  │
+│                                                                 │
+│  [Veronex API] ──🟡──→ [Queue] ──🔵──→ [Ollama]              │
+│                         ·····←🟢·····                          │
+│                                 ──🔵──→ [Gemini]               │
+│                         ············←🟢·····                   │
+│                                                                 │
+│  N req/5m below each provider node                              │
+└────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  Live Feed  ● live                                              │
+│  ● llama3   Ollama   completed  423ms   just now               │
+│  ● qwen3:8b Ollama   running    —       5s ago                 │
+│  ● gemini   Gemini   pending    —       10s ago                │
+└────────────────────────────────────────────────────────────────┘
 ```
 Status updates live: pending → running → completed/failed/cancelled (latencyMs filled on completion)
 
@@ -542,72 +543,44 @@ Legend: 🟡 enqueue (amber) · 🔵 dispatch (blue) · 🟢 response (green/red
 
 #### Bee phases and routing
 
-Three phases per inference job, matching the real Valkey queue pipeline:
-
 | Phase | Direction | Trigger | Status | Visual |
 |-------|-----------|---------|--------|--------|
-| `enqueue` | API → Queue | New job in Valkey queue | `pending` | Full opacity, yellow (`#facc15`) |
-| `dispatch` | Queue → Provider [→ Server] | `pending → running` | `running` | Full opacity, blue |
-| `response` | Server → Provider → API | Job reaches terminal state | `completed\|failed\|cancelled` | Dimmed (`cc` bg, `28` glow) |
+| `enqueue` | API → Queue | `pending` SSE event | `pending` | Full opacity, yellow (`#facc15`) |
+| `dispatch` | Queue → Provider | `running` SSE event | `running` | Full opacity, blue |
+| `response` | Provider → API | `completed\|failed\|cancelled` SSE event | terminal | Dimmed (`cc` bg, `28` glow) |
 
 Response arcs **bypass the Queue** — inferences don't re-queue on return.
 
-**Ollama + GPU server**:
-- Enqueue:  1 bee API→Queue
-- Dispatch: hop 1 Queue→Ollama (delay 0 ms) + hop 2 Ollama→Server (delay 700 ms)
-- Response: hop 1 Server→Ollama (delay 0 ms) + hop 2 Ollama→API arc (delay 700 ms, bypasses Queue)
-
-**Ollama, no GPU server linked**:
-- Enqueue:  API→Queue
-- Dispatch: Queue→Ollama only
-- Response: Ollama→API bypass arc only
-
-**Gemini** (no GPU column):
-- Enqueue:  API→Queue
-- Dispatch: Queue→Gemini
-- Response: Gemini→API bypass arc
-
-**Init (first mount)**:
-- `pending` jobs → emit `enqueue` (still waiting in queue)
-- `running` jobs → emit `dispatch` (currently being processed)
-- Completed/failed jobs → no init event
-
-**First-time seen (missed earlier state)**:
-- Seen as `running` → emit `dispatch` only (enqueue already happened)
-- Seen as `completed|failed|cancelled` → emit `response` only
+**Ollama**: Queue→Ollama (dispatch) · Ollama→API arc above Queue (response)
+**Gemini**: Queue→Gemini (dispatch) · Gemini→API arc below Queue (response)
 
 #### useInferenceStream (`web/hooks/use-inference-stream.ts`)
 
-Polls `GET /v1/dashboard/jobs?limit=50` every **5 s** (`refetchIntervalInBackground: false`).
+SSE stream — `fetch()` to `GET /v1/dashboard/jobs/stream` with `Authorization: Bearer <JWT>`.
 
 ```ts
 export interface FlowEvent {
-  id: string           // jobId + phase + spawn timestamp (unique)
+  id: string           // jobId + status + spawn timestamp (unique)
   jobId: string
-  provider: 'ollama' | 'gemini' | string
+  provider: 'ollama' | 'gemini' | string   // looked up from backends[] by name
   backendName: string
-  serverName: string | null  // null for Gemini or unlinked Ollama
   model: string
-  status: Job['status']
+  status: string
   latencyMs: number | null
-  ts: number           // ms when detected
-  /**
-   * enqueue  = job placed in Valkey queue (API → Queue)
-   * dispatch = job dequeued, sent to Provider/Server (pending → running)
-   * response = inference complete, result returned (running → completed|failed)
-   */
+  ts: number           // ms when received
   phase: 'enqueue' | 'dispatch' | 'response'
 }
 ```
 
-**Subsequent polls** (transition rules):
-- `statusMap` miss, status `pending` → `enqueue` event
-- `statusMap` miss, status `running` → `dispatch` event (missed enqueue)
-- `statusMap` miss, status `completed|failed|cancelled` → `response` event (missed pipeline)
-- `pending → running` transition → `dispatch` event
-- `pending|running → completed|failed|cancelled` transition → `response` event
-- Any other change → update `statusMap` only, no event
+**Phase mapping** (one-to-one from SSE event status — no state diffing needed):
+- `pending` → `enqueue`
+- `running` → `dispatch`
+- `completed | failed | cancelled` → `response`
 
+**Provider resolution**: `backendTypeMapRef.get(event.backend) ?? 'ollama'`
+(looks up backend name → type from `backends[]` prop via `useRef`).
+
+**Reconnection**: exponential backoff, `2s → 30s` max. No polling interval.
 Rolling list capped at **50 events** (newest first).
 
 #### Bee Particle Animation
@@ -633,9 +606,9 @@ Not SVG SMIL — CSS is GPU-composited, SMIL is not (2026 best practice).
 }
 ```
 
-**Coordinate system**: Fixed `450 × 260` logical space.
-A `ResizeObserver` measures the container width and applies `transform: scale(w/450)`
-to the bee overlay div, so `offset-path` coordinates always match `viewBox="0 0 450 260"`.
+**Coordinate system**: Fixed `360 × 240` logical space.
+A `ResizeObserver` measures the container width and applies `transform: scale(w/360)`
+to the bee overlay div, so `offset-path` coordinates always match `viewBox="0 0 360 240"`.
 
 **State**: `useReducer(beeReducer, [])` — `SPAWN` adds bees, `EXPIRE` removes them.
 Cleanup: `onAnimationEnd` → `EXPIRE` dispatch — no `setTimeout` leaks.
@@ -659,59 +632,56 @@ Hop 2 of each leg sets `animationDelay: 700ms` so bees appear to flow segment-by
 Response bees: `backgroundColor: color + 'cc'`, `boxShadow: color + '28'` (dimmed).
 `statusDotColor()` in `live-feed.tsx` follows the same mapping.
 
-#### Provider Flow Panel — SVG Topology (450 × 260)
+#### Provider Flow Panel — SVG Topology (540 × 264) — ArgoCD style
 
-4-column layout. Response arcs from Provider bypass Queue (arc above/below Queue node).
+3-column layout, **ArgoCD-style distinct node shapes**. Max-width cap: 680 px (prevents unbounded growth on wide screens).
+Response arcs from Provider bypass Queue (arc above/below Queue node).
 
 ```
-Column    Node          cx    cy    w    h    stroke
-──────────────────────────────────────────────────────────────────────
-Col 1     Veronex API   56    140   96   36   var(--theme-primary)
-Col 2     Queue(Valkey) 172   140   72   36   var(--theme-border)
-Col 3     Ollama        288   80    96   36   nodeStroke(localBs)
-Col 3     Gemini        288   200   96   36   nodeStroke(apiBs)
-Col 4     GPU server i  404   *     72   28   info (active) / border
+Column    Node           Shape      cx    cy    dim                 stroke
+───────────────────────────────────────────────────────────────────────────────
+Col 1     Veronex API    Rect+accent  72   132   w=108 h=56          var(--theme-primary) + left accent bar (5px, clipped)
+Col 2     Queue(Valkey)  Cylinder   244   132   rx=44 ry=10 body=44  var(--theme-border) — top ellipse fill=bg-elevated
+Col 3     Ollama         Octagon    460    72   w=108 h=52 inset=10  providerStroke(localBs)
+Col 3     Gemini         Octagon    460   192   w=108 h=52 inset=10  providerStroke(apiBs)
 
-nodeStroke: online→success | degraded→warning | offline→error | empty→border
-GPU server cy: serverNodeY(i, total) = 80 - (total-1)/2*30 + i*30
-  max 5 servers, GPU_SPACING=30, centered around OLLAMA_CY=80
+providerStroke: online→success | degraded→warning | offline→error | empty→border
 
-Bee paths — enqueue (API → Queue):
-  API → Queue:         M 104,140 C 114,140 126,140 136,140
+Bee paths — enqueue:
+  API → Queue:    M 126,132 C 150,132 176,132 200,132
 
-Bee paths — dispatch (Queue → Provider [→ Server]):
-  Queue → Ollama:      M 208,140 C 224,140 224,80  240,80
-  Queue → Gemini:      M 208,140 C 224,140 224,200 240,200
-  Ollama → GPU(cy):    M 336,80  C 360,80  360,{cy} 368,{cy}
+Bee paths — dispatch:
+  Queue → Ollama: M 288,132 C 318,132 376,72  406,72
+  Queue → Gemini: M 288,132 C 318,132 376,192 406,192
 
-Bee paths — response (Provider → API, bypass Queue):
-  Ollama → API (above Queue): M 240,80  C 196,45  148,45  104,140
-  Gemini → API (below Queue): M 240,200 C 196,235 148,235 104,140
-  GPU(cy) → Ollama:    M 368,{cy} C 360,{cy} 360,80 336,80
+Bee paths — response bypass:
+  Ollama → API:   M 406,72  C 346,18  186,18  126,132
+  Gemini → API:   M 406,192 C 346,246 186,246 126,132
 
-Guide lines:
-  Dispatch paths:  strokeDasharray='5 4', strokeWidth=1.5 (prominent)
-  Response bypass: strokeDasharray='3 6', strokeWidth=1, opacity=0.5 (faint arc hint)
+Connection lines:
+  Dispatch paths:  strokeDasharray='6 4', strokeWidth=1.5, markerEnd arrowhead
+  Response bypass: strokeDasharray='3 7', strokeWidth=1, opacity=0.4 (faint arc)
 ```
 
-Active GPU server: info-blue stroke + filled dot (top-right of node)
-  when server has `dispatch`-phase events in last 5 m.
-If >5 linked servers: "+N more" text below last server node.
-Below each provider: `overview.reqLast5m` count (`enqueue`-phase events in last 5 m).
+Queue depth badge: shown below Queue cylinder bottom cap when `queueDepth > 0`.
+- Poll: `GET /v1/dashboard/queue/depth` every 3 s (`queueDepthQuery`)
+- Response: `{ api_paid, api, test, total }` — panel receives `total` as `queueDepth` prop
+- Badge: `overview.queueWaiting` i18n key (`{{count}} waiting`)
+- Valkey LLEN on: `veronex:queue:jobs:paid` + `veronex:queue:jobs` + `veronex:queue:jobs:test`
 
 #### Live Feed
 
 Scrollable table (`max-h-64`), newest event first.
 Shows **`enqueue`-phase events only** (job arrivals) — dispatch/response are animation-only.
-Columns: status dot · model (mono) · provider [→ server] · status · latency · time ago.
+Columns: status dot · model (mono) · provider · status · latency · time ago.
 Empty state: `overview.waitingRequests`.
-Header pulse dot when events exist: `● live · 5s`.
+Header pulse dot when events exist: `● live`.
 
-**Live status updates**: The displayed status is NOT frozen at 'pending' (enqueue time).
+**Live status updates**: displayed status is NOT frozen at 'pending' (enqueue time).
 A `latestByJob` map is computed from ALL events (newest-first → first match per jobId = latest state).
-- On `dispatch` event: row updates to `running` (blue dot)
-- On `response` event: row updates to `completed`/`failed`/`cancelled` + latencyMs populated
-- Source: `useMemo` over `events` prop (all phases); O(n) scan, updates every 5s poll
+- On `dispatch` SSE: row updates to `running` (blue dot)
+- On `response` SSE: row updates to `completed`/`failed`/`cancelled` + latencyMs populated
+- Source: `useMemo` over `events` prop (all phases); O(n) scan, instant on SSE event
 
 #### i18n Keys (overview.* — Network Flow Page)
 
@@ -722,6 +692,7 @@ A `latestByJob` map is computed from ALL events (newest-first → first match pe
 | `providerFlow` | Provider Flow |
 | `liveFeed` | Live Feed |
 | `waitingRequests` | Waiting for requests... |
+| `queueWaiting` | {{count}} waiting |
 | `reqLast5m` | `{{count}}` req / 5m |
 
 ---

@@ -5,6 +5,17 @@ use uuid::Uuid;
 
 use crate::domain::errors::DomainError;
 
+/// Lightweight event fired on every job status transition.
+/// Broadcast via tokio broadcast channel → SSE endpoint → network flow UI.
+#[derive(Debug, Clone, Serialize)]
+pub struct JobStatusEvent {
+    pub id: String,
+    pub status: String,
+    pub model_name: String,
+    pub backend: String,
+    pub latency_ms: Option<i32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobId(pub Uuid);
 
@@ -71,4 +82,8 @@ pub struct StreamToken {
     /// Tokens served from cache (Gemini `cachedContentTokenCount`).
     /// Only populated on the final token; `None` for Ollama.
     pub cached_tokens: Option<u32>,
+    /// Tool calls returned by the model (Ollama `/api/chat` format).
+    /// When Some, this token carries tool call data instead of text content.
+    /// Handlers must convert to the appropriate wire format (OpenAI vs Ollama NDJSON).
+    pub tool_calls: Option<serde_json::Value>,
 }

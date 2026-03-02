@@ -67,6 +67,13 @@ export interface DashboardStats {
   jobs_by_status: Record<string, number>
 }
 
+export interface QueueDepth {
+  api_paid: number
+  api: number
+  test: number
+  total: number
+}
+
 export interface UsageAggregate {
   request_count: number
   success_count: number
@@ -457,6 +464,15 @@ export interface PatchCapacitySettings {
   analyzer_model?: string
   batch_enabled?: boolean
   batch_interval_secs?: number
+}
+
+export interface LabSettings {
+  gemini_function_calling: boolean
+  updated_at: string
+}
+
+export interface PatchLabSettings {
+  gemini_function_calling?: boolean
 }
 
 export interface AuditEvent {

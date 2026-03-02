@@ -108,7 +108,7 @@ pub async fn check_backend(client: &reqwest::Client, backend: &LlmBackend) -> Ll
 async fn poll_agent_metrics(
     client: &reqwest::Client,
     backend: &LlmBackend,
-    valkey_pool: &fred::clients::RedisPool,
+    valkey_pool: &fred::clients::Pool,
 ) {
     let Some(ref agent_url) = backend.agent_url else {
         return;
@@ -185,7 +185,7 @@ async fn poll_agent_metrics(
 pub async fn run_health_checker_loop(
     registry:    Arc<dyn LlmBackendRegistry>,
     interval_secs: u64,
-    valkey_pool: Option<fred::clients::RedisPool>,
+    valkey_pool: Option<fred::clients::Pool>,
     thermal:     Arc<ThermalThrottleMap>,
     shutdown:    CancellationToken,
 ) {

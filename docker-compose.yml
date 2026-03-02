@@ -19,7 +19,7 @@ services:
       retries: 10
 
   valkey:
-    image: valkey/valkey:8-alpine
+    image: valkey/valkey:9.0.3-alpine
     platform: linux/amd64
     command:
       - valkey-server
@@ -112,7 +112,7 @@ services:
     restart: unless-stopped
 
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    image: docker.redpanda.com/redpandadata/redpanda:v25.3.9
     command:
       - redpanda
       - start

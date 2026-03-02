@@ -6,7 +6,7 @@ import type { Job, JobDetail, RetryParams } from '@/lib/types'
 import { api } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { RotateCcw, X, Loader2 } from 'lucide-react'
+import { RotateCcw, X, Loader2, Info } from 'lucide-react'
 import {
   TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -14,6 +14,7 @@ import { DataTable, DataTableEmpty } from '@/components/data-table'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useTranslation } from '@/i18n'
 import { fmtMsNullable } from '@/lib/chart-theme'
 import { useTimezone } from '@/components/timezone-provider'
@@ -121,6 +122,7 @@ function JobDetailModal({
                 <MetaItem
                   label={t('jobs.promptTokens')}
                   value={data.prompt_tokens != null ? data.prompt_tokens.toLocaleString() : '—'}
+                  tooltip={t('jobs.promptTokensTooltip')}
                 />
                 <MetaItem
                   label={t('jobs.completionTokens')}
@@ -218,10 +220,24 @@ function JobDetailModal({
   )
 }
 
-function MetaItem({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function MetaItem({ label, value, accent, tooltip }: { label: string; value: string; accent?: boolean; tooltip?: string }) {
   return (
     <div>
-      <span className="text-muted-foreground">{label}: </span>
+      {tooltip ? (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-muted-foreground inline-flex items-center gap-0.5 cursor-default">
+                {label}
+                <Info className="h-3 w-3 shrink-0" />:
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{tooltip}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      ) : (
+        <span className="text-muted-foreground">{label}: </span>
+      )}
       <span className={`tabular-nums ${accent ? 'text-primary' : 'text-foreground'}`}>{value}</span>
     </div>
   )

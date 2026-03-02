@@ -77,6 +77,9 @@ struct CandidateContent {
 #[derive(Deserialize)]
 struct CandidatePart {
     text: Option<String>,
+    /// Gemini function call: `{"name": "tool_name", "args": {...}}`
+    #[serde(rename = "functionCall")]
+    function_call: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +109,32 @@ fn extract_text(candidates: &[Candidate]) -> String {
                 .join("")
         })
         .unwrap_or_default()
+}
+
+/// Extract `functionCall` parts from Gemini candidates, converted to Ollama tool_calls format.
+/// Returns None when no function calls are present.
+fn extract_function_calls(candidates: &[Candidate]) -> Option<serde_json::Value> {
+    let calls: Vec<serde_json::Value> = candidates
+        .first()
+        .and_then(|c| c.content.as_ref())
+        .map(|c| {
+            c.parts
+                .iter()
+                .filter_map(|p| p.function_call.as_ref())
+                .map(|fc| {
+                    // Normalise Gemini `{name, args}` to Ollama `{function: {name, arguments}}`
+                    serde_json::json!({
+                        "function": {
+                            "name": fc.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                            "arguments": fc.get("args").cloned().unwrap_or(serde_json::Value::Null),
+                        }
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if calls.is_empty() { None } else { Some(serde_json::Value::Array(calls)) }
 }
 
 fn is_done(candidates: &[Candidate]) -> bool {
@@ -238,6 +267,7 @@ impl InferenceBackendPort for GeminiAdapter {
                     };
 
                     let text = extract_text(&parsed.candidates);
+                    let tool_calls = extract_function_calls(&parsed.candidates);
                     let done = is_done(&parsed.candidates);
 
                     let (prompt_tokens, completion_tokens, cached_tokens) = if done {
@@ -246,7 +276,12 @@ impl InferenceBackendPort for GeminiAdapter {
                         (None, None, None)
                     };
 
-                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens, cached_tokens };
+                    // Emit a dedicated token for tool calls (empty text) so run_job
+                    // can store them in tool_calls_json independently of result_text.
+                    if let Some(ref tc) = tool_calls {
+                        yield StreamToken { value: String::new(), is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: Some(tc.clone()) };
+                    }
+                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None };
 
                     if done {
                         return;
@@ -265,7 +300,7 @@ impl InferenceBackendPort for GeminiAdapter {
                     if let Ok(parsed) = serde_json::from_str::<GenerateResponse>(s) {
                         let text = extract_text(&parsed.candidates);
                         let (prompt_tokens, completion_tokens, cached_tokens) = extract_usage(&parsed);
-                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens };
+                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None };
                         return;
                     }
                 }
@@ -274,7 +309,7 @@ impl InferenceBackendPort for GeminiAdapter {
             // Stream ended without a finishReason event — emit empty done marker
             // so run_job marks the job as completed and the SSE client receives
             // a 'done' event.
-            yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None };
+            yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None };
         })
     }
 }

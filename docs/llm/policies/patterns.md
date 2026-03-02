@@ -1,7 +1,7 @@
 # Code Patterns — 2026 Reference
 
 > SSOT | **Last Updated**: 2026-03-02 (rev: DashMap concurrent map pattern; Lua eval atomic Valkey ops)
-> Rust Edition 2024 · Axum 0.8 · sqlx 0.8 · Next.js 15 · React 19 · TanStack Query v5
+> Rust Edition 2024 · Axum 0.8 · sqlx 0.8 · Next.js 16 · React 19 · TanStack Query v5
 
 ---
 
@@ -310,7 +310,7 @@ Each background loop accepts a `CancellationToken` and uses `select!` to exit cl
 pub async fn run_health_checker_loop(
     registry: Arc<dyn LlmBackendRegistry>,
     interval_secs: u64,
-    valkey_pool: Option<RedisPool>,
+    valkey_pool: Option<Pool>,
     thermal: Arc<ThermalThrottleMap>,
     shutdown: CancellationToken,          // ← added parameter
 ) {

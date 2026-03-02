@@ -333,7 +333,7 @@ If `ANALYTICS_URL` not set: `observability = None`, `audit_port = None` (fail-op
 ## Redpanda
 
 ```yaml
-image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+image: docker.redpanda.com/redpandadata/redpanda:v25.3.9
 command:
   - redpanda start --smp=1 --memory=512M --overprovisioned
   - --kafka-addr=PLAINTEXT://0.0.0.0:9092

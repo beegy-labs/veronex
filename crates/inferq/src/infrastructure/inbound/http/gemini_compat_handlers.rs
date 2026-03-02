@@ -155,12 +155,37 @@ struct GeminiUsageMetadata {
 /// export GEMINI_API_KEY="<veronex-api-key>"
 /// export GEMINI_MODEL="qwen3-coder-next-128k:latest"
 /// ```
+///
+/// **Function calling (tool use)** is a lab feature: disabled by default.
+/// Enable it in Settings → Lab Features before sending requests with `tools`.
 pub async fn handle_request(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    headers: axum::http::HeaderMap,
     Path(path): Path<String>,
     Json(req): Json<GeminiGenerateRequest>,
 ) -> Response {
+    let conversation_id = headers.get("x-conversation-id").and_then(|v| v.to_str().ok()).map(str::to_string);
+
+    // ── Lab: function calling gate ───────────────────────────────────
+    // If the request carries tool declarations, check whether the
+    // "Gemini function calling" lab feature is enabled.
+    // Disabled → 501 with a descriptive message so developers know
+    // exactly which setting to toggle.
+    let has_tools = !req.tools.is_empty();
+    if has_tools {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        if !lab.gemini_function_calling {
+            return gemini_error(
+                StatusCode::NOT_IMPLEMENTED,
+                501,
+                "UNIMPLEMENTED",
+                "Gemini function calling is a lab (experimental) feature. \
+                 Enable it in Settings → Lab Features → Gemini function calling.",
+            );
+        }
+    }
+
     // Parse "qwen3-coder:latest:streamGenerateContent"
     //   → model  = "qwen3-coder:latest"
     //   → action = "streamGenerateContent"
@@ -173,8 +198,8 @@ pub async fn handle_request(
     }
 
     match action.as_str() {
-        "streamGenerateContent" => stream_generate(state, api_key, model, req).await,
-        "generateContent" => generate_content(state, api_key, model, req).await,
+        "streamGenerateContent" => stream_generate(state, api_key, model, req, conversation_id).await,
+        "generateContent" => generate_content(state, api_key, model, req, conversation_id).await,
         _ => gemini_error(
             StatusCode::NOT_FOUND,
             404,
@@ -196,6 +221,7 @@ async fn stream_generate(
     api_key: crate::domain::entities::ApiKey,
     model: String,
     req: GeminiGenerateRequest,
+    conversation_id: Option<String>,
 ) -> Response {
     let messages = contents_to_ollama(req.system_instruction, req.contents);
 
@@ -209,6 +235,8 @@ async fn stream_generate(
         .to_string();
 
     let messages_json = serde_json::Value::Array(messages);
+    // Tools already passed the lab gate in handle_request; convert here.
+    let tools = gemini_tools_to_ollama(req.tools);
 
     let job_id = match state
         .use_case
@@ -221,7 +249,10 @@ async fn stream_generate(
             JobSource::Api,
             ApiFormat::GeminiNative,
             Some(messages_json),
+            tools,
             Some(format!("/v1beta/models/{}:streamGenerateContent", model)),
+            conversation_id,
+            Some(api_key.tier.clone()),
         )
         .await
     {
@@ -294,6 +325,7 @@ async fn generate_content(
     api_key: crate::domain::entities::ApiKey,
     model: String,
     req: GeminiGenerateRequest,
+    conversation_id: Option<String>,
 ) -> Response {
     let messages = contents_to_ollama(req.system_instruction, req.contents);
 
@@ -306,6 +338,7 @@ async fn generate_content(
         .to_string();
 
     let messages_json = serde_json::Value::Array(messages);
+    let tools = gemini_tools_to_ollama(req.tools);
 
     let job_id = match state
         .use_case
@@ -318,7 +351,10 @@ async fn generate_content(
             JobSource::Api,
             ApiFormat::GeminiNative,
             Some(messages_json),
+            tools,
             Some(format!("/v1beta/models/{}:generateContent", model)),
+            conversation_id,
+            Some(api_key.tier.clone()),
         )
         .await
     {
@@ -464,6 +500,29 @@ fn contents_to_ollama(
     }
 
     messages
+}
+
+/// Convert Gemini `tools[].functionDeclarations` → Ollama `tools` JSON Value (Array).
+///
+/// Only called when the Gemini function-calling lab feature is enabled.
+/// Returns `None` when the tools list is empty (no tools → submit without tools).
+fn gemini_tools_to_ollama(tools: Vec<GeminiTool>) -> Option<serde_json::Value> {
+    let ollama_tools: Vec<serde_json::Value> = tools
+        .into_iter()
+        .flat_map(|t| t.function_declarations)
+        .map(|fd| {
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": fd.name,
+                    "description": fd.description.unwrap_or_default(),
+                    "parameters": fd.parameters.unwrap_or_else(|| serde_json::json!({})),
+                }
+            })
+        })
+        .collect();
+
+    if ollama_tools.is_empty() { None } else { Some(serde_json::Value::Array(ollama_tools)) }
 }
 
 fn extract_text_parts(parts: &[GeminiPart]) -> String {

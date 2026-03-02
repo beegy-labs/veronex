@@ -1,4 +1,4 @@
-import type { Account, AnalyticsStats, ApiKey, AuditEvent, Backend, BackendSelectedModel, CapacityResponse, CapacitySettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LoginRequest, LoginResponse, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, PerformanceStats, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AnalyticsStats, ApiKey, AuditEvent, Backend, BackendSelectedModel, CapacityResponse, CapacitySettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { apiClient } from './api-client'
 
 const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
@@ -37,6 +37,10 @@ export const api = {
   analytics: (hours = 24) =>
     apiClient.get<AnalyticsStats>(`/v1/dashboard/analytics?hours=${hours}`),
 
+  // ── Queue depth (JWT-protected) ──────────────────────────────────────────
+  queueDepth: () =>
+    apiClient.get<QueueDepth>('/v1/dashboard/queue/depth'),
+
   // ── Capacity (JWT-protected) ──────────────────────────────────────────────
   capacity: () =>
     apiClient.get<CapacityResponse>('/v1/dashboard/capacity'),
@@ -50,6 +54,13 @@ export const api = {
   triggerCapacitySync: () =>
     apiClient.post<{ message: string }>('/v1/dashboard/capacity/sync', {}),
 
+  // ── Lab (experimental) features (JWT-protected) ───────────────────────────
+  labSettings: () =>
+    apiClient.get<LabSettings>('/v1/dashboard/lab'),
+
+  patchLabSettings: (body: PatchLabSettings) =>
+    apiClient.patch<LabSettings>('/v1/dashboard/lab', body),
+
   // ── Key management (JWT-protected) ────────────────────────────────────────
   keys: () =>
     apiClient.get<ApiKey[]>('/v1/keys'),
@@ -62,6 +73,9 @@ export const api = {
 
   toggleKeyActive: (id: string, is_active: boolean) =>
     apiClient.patch<void>(`/v1/keys/${id}`, { is_active }),
+
+  updateKeyTier: (id: string, tier: 'free' | 'paid') =>
+    apiClient.patch<void>(`/v1/keys/${id}`, { tier }),
 
   // ── Usage (JWT-protected) ─────────────────────────────────────────────────
   usageAggregate: (hours = 24) =>

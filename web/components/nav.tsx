@@ -7,7 +7,7 @@ import {
   LayoutDashboard, List, Key, Server,
   BarChart2, Gauge, Sun, Moon, ChevronLeft, Languages, Clock,
   BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
-  Users, Shield, LogOut, Workflow, Settings2,
+  Users, Shield, LogOut, Workflow, Settings2, FlaskConical,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
@@ -22,6 +22,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { getAuthUser, clearTokens } from '@/lib/auth'
+import { api } from '@/lib/api'
+import type { LabSettings } from '@/lib/types'
+import { Switch } from '@/components/ui/switch'
 import { useTimezone, type Timezone, PRESET_TIMEZONES, isValidTimezone } from '@/components/timezone-provider'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -173,6 +176,8 @@ function NavContent() {
   const [showCustomTzInline, setShowCustomTzInline] = useState(false)
   const [customTzInput, setCustomTzInput] = useState('')
   const [customTzError, setCustomTzError] = useState(false)
+  const [labSettings, setLabSettings] = useState<LabSettings | null>(null)
+  const [labLoading, setLabLoading] = useState(false)
 
   const isPresetTz = PRESET_TIMEZONES.includes(tz as typeof PRESET_TIMEZONES[number])
   const tzSelectValue = isPresetTz ? tz : '__custom__'
@@ -203,6 +208,12 @@ function NavContent() {
     }
     setOpenGroups(groups)
   }, [])
+
+  // Load lab settings when Settings dialog opens
+  useEffect(() => {
+    if (!showSettings) return
+    api.labSettings().then(setLabSettings).catch(() => {})
+  }, [showSettings])
 
   // Close mobile nav on route change
   useEffect(() => { setMobileOpen(false) }, [pathname])
@@ -599,6 +610,43 @@ function NavContent() {
                       <SelectItem value="__custom__" className="text-xs">{t('common.custom')}</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+
+                {/* Lab features section */}
+                <div className="border-t pt-3 mt-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <FlaskConical className="h-4 w-4 text-amber-500 shrink-0" />
+                    <span className="text-sm font-medium flex-1">{t('common.labFeatures')}</span>
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 uppercase tracking-wide">
+                      Lab
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mb-3 pl-6">{t('common.labFeaturesDesc')}</p>
+
+                  {/* Gemini function calling */}
+                  <div className="pl-6 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium">{t('common.labGeminiFunctionCalling')}</p>
+                        <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{t('common.labGeminiFunctionCallingDesc')}</p>
+                      </div>
+                      <Switch
+                        checked={labSettings?.gemini_function_calling ?? false}
+                        disabled={labLoading || labSettings === null}
+                        onCheckedChange={async (checked) => {
+                          setLabLoading(true)
+                          try {
+                            const updated = await api.patchLabSettings({ gemini_function_calling: checked })
+                            setLabSettings(updated)
+                          } catch {
+                            // keep previous state on error
+                          } finally {
+                            setLabLoading(false)
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {/* Custom IANA input — shown inline when "Custom…" is selected */}

@@ -6,7 +6,7 @@ import {
   usageAggregateQuery, analyticsQuery, performanceQuery,
   usageBreakdownQuery, keysQuery, keyUsageQuery,
 } from '@/lib/queries'
-import type { AnalyticsStats, UsageBreakdown } from '@/lib/types'
+import type { AnalyticsStats, ApiKey, UsageBreakdown } from '@/lib/types'
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -17,7 +17,7 @@ import {
   AXIS_TICK, LEGEND_STYLE, CURSOR_FILL,
   fmtMs,
 } from '@/lib/chart-theme'
-import { Hash, Coins, CheckCircle, XCircle, AlertTriangle, Zap, MessageSquare, Bot, Server, Key } from 'lucide-react'
+import { Hash, Coins, CheckCircle, XCircle, AlertTriangle, Zap, MessageSquare, Bot, Server, Key, BarChart2 } from 'lucide-react'
 import StatsCard from '@/components/stats-card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -31,6 +31,7 @@ import {
 } from '@/components/ui/table'
 import { DataTable } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
+import { KeyUsageModal } from '@/components/key-usage-modal'
 
 const TIME_OPTIONS = [
   { label: '24h', hours: 24 },
@@ -191,10 +192,19 @@ function BackendBreakdownSection({ data }: { data: UsageBreakdown }) {
 }
 
 /* ─── API Key breakdown section ───────────────────────────── */
-function KeyBreakdownSection({ data }: { data: UsageBreakdown }) {
+function KeyBreakdownSection({
+  data,
+  keys,
+  onKeyClick,
+}: {
+  data: UsageBreakdown
+  keys: ApiKey[] | undefined
+  onKeyClick: (key: ApiKey) => void
+}) {
   const { t } = useTranslation()
   if (data.by_key.length === 0) return null
   const total = data.by_key.reduce((s, k) => s + k.request_count, 0)
+  const keyMap = new Map(keys?.map((k) => [k.id, k]) ?? [])
 
   return (
     <div className="space-y-3">
@@ -207,12 +217,14 @@ function KeyBreakdownSection({ data }: { data: UsageBreakdown }) {
             <TableHead className="text-right w-20">Share</TableHead>
             <TableHead className="text-right w-24">Success</TableHead>
             <TableHead className="text-right w-28">Tokens</TableHead>
+            <TableHead className="w-10" />
           </TableRow>
         </TableHeader>
         <TableBody>
           {data.by_key.map((k) => {
             const pct = total > 0 ? Math.round((k.request_count / total) * 100) : 0
             const totalTok = k.prompt_tokens + k.completion_tokens
+            const apiKey = keyMap.get(k.key_id)
             return (
               <TableRow key={k.key_id}>
                 <TableCell>
@@ -234,6 +246,14 @@ function KeyBreakdownSection({ data }: { data: UsageBreakdown }) {
                   </span>
                 </TableCell>
                 <TableCell className="text-right tabular-nums text-muted-foreground text-sm">{fmt(totalTok)}</TableCell>
+                <TableCell className="text-right">
+                  {apiKey && (
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary"
+                      onClick={() => onKeyClick(apiKey)} title={t('keys.viewUsage')}>
+                      <BarChart2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </TableCell>
               </TableRow>
             )
           })}
@@ -425,6 +445,7 @@ export default function UsagePage() {
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const activeKeyId = selectedKey ?? keys?.[0]?.id ?? null
+  const [usageModalKey, setUsageModalKey] = useState<ApiKey | null>(null)
 
   const { data: hourly, isLoading: hourlyLoading } = useQuery(keyUsageQuery(activeKeyId, hours))
 
@@ -539,7 +560,7 @@ export default function UsagePage() {
                 </defs>
                 <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
                 <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={45} tickFormatter={fmt} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v: number) => fmt(v)} />
+                <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => fmt(Number(v))} />
                 <Legend wrapperStyle={LEGEND_STYLE} />
                 <Area type="monotone" dataKey="requests" name={t('usage.requests')}
                   stroke="var(--theme-primary)" fill="url(#gradReqs)" strokeWidth={2} dot={false} />
@@ -571,7 +592,7 @@ export default function UsagePage() {
                 <Tooltip
                   contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}
                   cursor={CURSOR_FILL}
-                  formatter={(v: number) => [fmt(v), t('usage.reqCount')]}
+                  formatter={(v) => [fmt(Number(v)), t('usage.reqCount')] as [string, string]}
                 />
                 <Bar dataKey="requests" name={t('usage.reqCount')} fill="var(--theme-primary)" radius={[0, 4, 4, 0]} />
               </BarChart>
@@ -592,7 +613,7 @@ export default function UsagePage() {
           </CardHeader>
           <CardContent className="space-y-8">
             <BackendBreakdownSection data={breakdown} />
-            <KeyBreakdownSection data={breakdown} />
+            <KeyBreakdownSection data={breakdown} keys={keys} onKeyClick={setUsageModalKey} />
             <ModelBreakdownSection data={breakdown} />
           </CardContent>
         </Card>
@@ -652,7 +673,7 @@ export default function UsagePage() {
                       </defs>
                       <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
                       <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={45} tickFormatter={fmt} />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v: number) => fmt(v)} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => fmt(Number(v))} />
                       <Legend wrapperStyle={LEGEND_STYLE} />
                       <Area type="monotone" dataKey="prompt" name="Prompt"     stroke="var(--theme-primary)"       fill="url(#gradPrompt)" strokeWidth={2} dot={false} />
                       <Area type="monotone" dataKey="compl"  name="Completion" stroke="var(--theme-status-info)"  fill="url(#gradCompl)"  strokeWidth={2} dot={false} />
@@ -692,6 +713,10 @@ export default function UsagePage() {
       {/* ── Analytics (ClickHouse) ─────────────────────── */}
       {analytics && !aggError && (
         <AnalyticsSection data={analytics} hours={hours} />
+      )}
+
+      {usageModalKey && (
+        <KeyUsageModal apiKey={usageModalKey} onClose={() => setUsageModalKey(null)} />
       )}
     </div>
   )

@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Deserialize)]
-pub struct ToggleKeyRequest {
-    pub is_active: bool,
+pub struct PatchKeyRequest {
+    pub is_active: Option<bool>,
+    /// Billing tier: `"paid"` | `"free"`.
+    pub tier: Option<String>,
 }
 
 use crate::domain::entities::ApiKey;
@@ -152,19 +154,32 @@ pub async fn delete_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// PATCH /v1/keys/{id} — Toggle is_active (deactivate / reactivate).
+/// PATCH /v1/keys/{id} — Update mutable fields: `is_active` and/or `tier`.
 pub async fn toggle_key(
     Path(id): Path<String>,
     State(state): State<AppState>,
-    Json(req): Json<ToggleKeyRequest>,
+    Json(req): Json<PatchKeyRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    state
-        .api_key_repo
-        .set_active(&uuid, req.is_active)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(active) = req.is_active {
+        state
+            .api_key_repo
+            .set_active(&uuid, active)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    if let Some(tier) = req.tier {
+        if tier != "paid" && tier != "free" {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        state
+            .api_key_repo
+            .set_tier(&uuid, &tier)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -125,7 +125,7 @@ return redis.call('ZCARD', KEYS[1])
 /// Single atomic Lua eval replaces the previous 4-command round-trip sequence.
 /// Returns `true` when the request is within the limit.
 async fn check_rpm(
-    pool: &fred::clients::RedisPool,
+    pool: &fred::clients::Pool,
     key: &str,
     now_ms: f64,
     limit: u64,
@@ -135,7 +135,7 @@ async fn check_rpm(
 
     let window_start = now_ms - RPM_WINDOW_MS;
 
-    // pool.next() returns Arc<RedisClient> which implements LuaInterface.
+    // pool.next() returns Arc<Client> which implements LuaInterface.
     let count: u64 = pool
         .next()
         .eval(
@@ -159,7 +159,7 @@ async fn check_rpm(
 /// The counter is incremented by `InferenceUseCaseImpl` after each job
 /// completes (see `record_tpm`).
 async fn check_tpm(
-    pool: &fred::clients::RedisPool,
+    pool: &fred::clients::Pool,
     key: &str,
     limit: u64,
 ) -> anyhow::Result<bool> {

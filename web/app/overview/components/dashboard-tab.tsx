@@ -596,7 +596,7 @@ export function DashboardTab({
                     <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={38} tickFormatter={v => `${v}ms`} />
                     <Tooltip
                       contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}
-                      formatter={(v: number) => [fmtMs(v), 'Avg']}
+                      formatter={(v) => [fmtMs(Number(v)), 'Avg'] as [string, string]}
                     />
                     <Area type="monotone" dataKey="ms" stroke="var(--theme-status-warning)"
                       fill="var(--theme-status-warning)" fillOpacity={0.1} strokeWidth={1.5} dot={false} />
@@ -718,10 +718,10 @@ export function DashboardTab({
                 />
                 <Tooltip
                   contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL}
-                  formatter={(v: number, _name: string, props: { payload?: ModelBreakdown }) => [
-                    `${fmt(v)} ${t('usage.reqCount')}`,
+                  formatter={(v, _name, props: { payload?: ModelBreakdown }) => [
+                    `${fmt(Number(v))} ${t('usage.reqCount')}`,
                     props.payload?.backend ?? '',
-                  ]}
+                  ] as [string, string]}
                 />
                 <Bar dataKey="request_count" radius={[0, 4, 4, 0]}>
                   {modelBarData.map((m, i) => (

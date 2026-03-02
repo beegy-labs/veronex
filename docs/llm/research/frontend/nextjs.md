@@ -1,4 +1,4 @@
-# Next.js 15 — Research
+# Next.js 16 — Research
 
 > **Last Researched**: 2026-03-02 | **Source**: Implementation experience + web search
 > **Status**: ✅ Verified — all patterns researched and documented
@@ -70,7 +70,7 @@ Locale files: `en.json`, `ko.json`, `ja.json`.
 
 ---
 
-## Server Components vs Client Components (Next.js 15)
+## Server Components vs Client Components (Next.js 16)
 
 ### General Rule (2026)
 
@@ -115,7 +115,7 @@ Server Actions would add value only if Next.js had its own DB layer, which it do
 
 ---
 
-## Partial Pre-Rendering (PPR — Next.js 15)
+## Partial Pre-Rendering (PPR — Next.js 16)
 
 PPR statically renders the page shell and streams dynamic slots — combining static and dynamic in one request without an extra network hop.
 
@@ -184,6 +184,6 @@ function ClientList({ dataPromise }: { dataPromise: Promise<Item[]> }) {
 
 ## Sources
 
-- Next.js 15 docs: https://nextjs.org/docs
+- Next.js 16 docs: https://nextjs.org/docs
 - Verified: `web/app/` directory structure, `web/app/layout.tsx`
-- Web search: Next.js 15 App Router 2026 patterns, PPR, Server Actions
+- Web search: Next.js 16 App Router 2026 patterns, PPR, Server Actions
