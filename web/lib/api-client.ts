@@ -1,12 +1,12 @@
 /**
- * ApiClient — SSOT for all JWT-protected API calls.
+ * ApiClient — HTTP transport layer for JWT-protected API calls.
  *
- * Automatically attaches `Authorization: Bearer <access_token>`.
- * On 401: attempts a single token refresh, then retries the request.
- * If refresh fails, clears all stored tokens and redirects to /login.
+ * Auth flow (refresh mutex, redirect) is owned by auth-guard.ts — not here.
+ * This module only handles: attach token → fetch → handle 401 via auth-guard.
  */
 
-import { clearTokens, getAccessToken, getRefreshToken, setAccessToken } from './auth'
+import { getAccessToken } from './auth'
+import { tryRefresh, redirectToLogin } from './auth-guard'
 
 const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
 
@@ -24,35 +24,13 @@ class ApiClient {
     })
   }
 
-  private async tryRefresh(): Promise<boolean> {
-    const rt = getRefreshToken()
-    if (!rt) return false
-    try {
-      const r = await fetch(`${BASE}/v1/auth/refresh`, {
-        method: 'POST',
-        body: JSON.stringify({ refresh_token: rt }),
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
-      })
-      if (!r.ok) return false
-      const { access_token } = await r.json()
-      setAccessToken(access_token)
-      return true
-    } catch {
-      return false
-    }
-  }
-
   async request<T>(path: string, init?: RequestInit): Promise<T> {
     let res = await this.fetchWithToken(path, init)
 
     if (res.status === 401) {
-      const refreshed = await this.tryRefresh()
+      const refreshed = await tryRefresh()
       if (!refreshed) {
-        clearTokens()
-        if (typeof window !== 'undefined') {
-          window.location.href = '/login'
-        }
+        redirectToLogin()
         throw new Error('Unauthorized')
       }
       res = await this.fetchWithToken(path, init)

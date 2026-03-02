@@ -10,6 +10,7 @@ import { ThemeProvider } from '@/components/theme-provider'
 import { isLoggedIn } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { TimezoneProvider } from '@/components/timezone-provider'
+import { LabSettingsProvider } from '@/components/lab-settings-provider'
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -62,6 +63,7 @@ export default function RootLayout({
       queries: {
         staleTime: 30_000,
         retry: 1,
+        refetchOnWindowFocus: false,
       },
     },
   }))
@@ -80,7 +82,9 @@ export default function RootLayout({
           <I18nProvider>
             <TimezoneProvider>
               <QueryClientProvider client={queryClient}>
-                <AppShell>{children}</AppShell>
+                <LabSettingsProvider>
+                  <AppShell>{children}</AppShell>
+                </LabSettingsProvider>
               </QueryClientProvider>
             </TimezoneProvider>
           </I18nProvider>

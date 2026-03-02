@@ -1,6 +1,6 @@
 # Jobs — Lifecycle, Queue & API
 
-> SSOT | **Last Updated**: 2026-03-02 (rev: 3-tier queue paid/api/test; queue_time_ms + cancelled_at fields; GET /v1/dashboard/queue/depth endpoint)
+> SSOT | **Last Updated**: 2026-03-02 (rev3: session grouping — messages_hash + messages_prefix_hash + daily background loop)
 
 ## Task Guide
 
@@ -189,19 +189,21 @@ CREATE TABLE inference_jobs (
     backend_id        UUID REFERENCES llm_backends(id),      -- migration 000039 (set at dispatch)
     api_format        TEXT NOT NULL DEFAULT 'openai_compat', -- migration 000041
     request_path      TEXT,                                  -- migration 000042 ("/v1/chat/completions" etc.)
-    conversation_id   TEXT,                                  -- migration 000043 (X-Conversation-ID)
-    tool_calls_json   JSONB,                                 -- migration 000043 (model tool calls)
-    messages_json     JSONB,                                 -- migration 000045 (FULL input context)
-    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    started_at        TIMESTAMPTZ,
-    completed_at      TIMESTAMPTZ,
-    cancelled_at      TIMESTAMPTZ,                              -- set by cancel()
-    queue_time_ms     INTEGER,                                  -- created_at → started_at
-    latency_ms        INTEGER,
-    ttft_ms           INTEGER,
-    completion_tokens INTEGER,
-    prompt_tokens     INTEGER,    -- migration 000029
-    cached_tokens     INTEGER     -- migration 000030
+    conversation_id      TEXT,                                  -- migration 000043 (X-Conversation-ID or batch-assigned)
+    tool_calls_json      JSONB,                                 -- migration 000043 (model tool calls)
+    messages_json        JSONB,                                 -- migration 000045 (FULL input context)
+    created_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    started_at           TIMESTAMPTZ,
+    completed_at         TIMESTAMPTZ,
+    cancelled_at         TIMESTAMPTZ,                           -- set by cancel()
+    queue_time_ms        INTEGER,                               -- created_at → started_at
+    latency_ms           INTEGER,
+    ttft_ms              INTEGER,
+    completion_tokens    INTEGER,
+    prompt_tokens        INTEGER,    -- migration 000029
+    cached_tokens        INTEGER,    -- migration 000030
+    messages_hash        TEXT,       -- migration 000048 (Blake2b-256 of full messages array)
+    messages_prefix_hash TEXT        -- migration 000048 (Blake2b-256 of messages[0..-1], "" for first turn)
 );
 -- migrations: 000002 CREATE, 000004 result_text, 000014 api_key_id,
 --             000015 latency_ms, 000020 ttft_ms+completion_tokens,
@@ -209,7 +211,7 @@ CREATE TABLE inference_jobs (
 --             000037 account_id, 000039 backend_id, 000041 api_format,
 --             000042 request_path, 000043 conversation_id+tool_calls_json,
 --             000044 (lab_settings — separate table), 000045 messages_json,
---             000046 queue_time_ms + cancelled_at
+--             000046 queue_time_ms + cancelled_at, 000048 messages_hash + messages_prefix_hash
 CREATE INDEX idx_inference_jobs_source         ON inference_jobs(source);
 CREATE INDEX idx_inference_jobs_conversation_id ON inference_jobs(conversation_id)
     WHERE conversation_id IS NOT NULL;
@@ -218,6 +220,12 @@ CREATE INDEX idx_inference_jobs_tool_calls      ON inference_jobs USING GIN (too
 CREATE INDEX idx_inference_jobs_backend_capacity
     ON inference_jobs(backend_id, model_name, created_at DESC)
     WHERE status = 'Completed';
+CREATE INDEX idx_inference_jobs_messages_hash
+    ON inference_jobs(api_key_id, messages_hash)
+    WHERE messages_hash IS NOT NULL;
+CREATE INDEX idx_inference_jobs_session_ungrouped
+    ON inference_jobs(api_key_id, messages_prefix_hash, created_at)
+    WHERE conversation_id IS NULL AND messages_prefix_hash IS NOT NULL AND messages_prefix_hash != '';
 ```
 
 ---
@@ -255,13 +263,20 @@ ORDER BY conversation_id, created_at;
 - Tool-call turns: `result_text = "..."`, `tool_calls_json = [{function: {name, arguments}}]`
 - Text turns: `result_text = <actual answer>`, `tool_calls_json = NULL`
 
-**Conversation threading via `X-Conversation-ID` header**:
+**Conversation threading — two mechanisms:**
 
-Clients (Cline, Claude Code, Gemini CLI) must send this header to group turns:
-```
-X-Conversation-ID: <session-uuid>
-```
-Without it, `conversation_id IS NULL` and turns cannot be grouped into sessions.
+| 방법 | 동작 | 적용 대상 |
+|------|------|----------|
+| `X-Conversation-ID` 헤더 | 클라이언트가 UUID를 직접 전송 → 즉시 반영 | Cline, Claude Code, Gemini CLI 등 헤더 지원 클라이언트 |
+| 서버 배치 자동 추론 | `run_session_grouping_loop` (1일 1회) — 없음 → 자동 할당 | Qwen Code, Cursor 등 헤더 미지원 클라이언트 |
+
+**배치 자동 추론 알고리즘** (`infrastructure/outbound/session_grouping.rs`):
+- Job 저장 시 Blake2b-256으로 `messages_hash` + `messages_prefix_hash` 계산
+- `messages_prefix_hash` = hash(messages[0..-1]) — 마지막 user 메시지 제외
+- 배치: job B의 `messages_prefix_hash` == job A의 `messages_hash` → 같은 `conversation_id`
+- 첫 턴(`messages_prefix_hash = ""`): 새 `conversation_id` (UUIDv7) 생성
+- `SESSION_GROUPING_INTERVAL_SECS` 환경변수로 주기 조정 (기본: 86400s = 24h)
+- Race condition 없음 — 완료된 job 이력 기반, LLM 호출 없음
 
 ---
 
@@ -400,10 +415,83 @@ pub struct JobSummary {
     pub cached_tokens: Option<i64>,
     pub tps: Option<f64>,             // completion_tokens / (latency_ms - ttft_ms) * 1000
     pub api_key_name: Option<String>, // LEFT JOIN api_keys
+    pub account_name: Option<String>, // LEFT JOIN accounts (test run jobs)
+    pub request_path: Option<String>, // e.g. "/v1/chat/completions"
+    pub has_tool_calls: bool,         // true when tool_calls_json IS NOT NULL
+    pub estimated_cost_usd: Option<f64>, // NULL = no pricing data; 0.0 = Ollama; >0 = Gemini
 }
 
-pub struct JobDetail { /* all JobSummary fields + started_at, prompt, result_text, error */ }
+pub struct JobDetail {
+    // All JobSummary fields +
+    pub started_at: Option<String>,
+    pub prompt: String,               // last user message (display; NOT full context)
+    pub result_text: Option<String>,  // None when model responded with tool calls
+    pub error: Option<String>,
+    pub tool_calls_json: Option<Vec<ToolCall>>, // populated when model used function calls
+    pub message_count: Option<i64>,   // JSONB array length of messages_json (conversation turns)
+    pub estimated_cost_usd: Option<f64>,
+}
 ```
+
+> **`result_text` vs `tool_calls_json`**: When a model responds with function calls (agentic loop turn), `result_text = NULL` and `tool_calls_json` is populated. The UI renders a Tool Calls section in these cases instead of showing "(no result stored)".
+
+> **`estimated_cost_usd`**: Computed via a LATERAL JOIN on `model_pricing`. Ollama always returns `0.0` (self-hosted = no cost). Gemini returns the actual cost per 1M tokens × token counts. `NULL` means no pricing row found (unknown provider or no seed data).
+
+---
+
+## Token Cost Measurement
+
+Token costs are computed at query time via a LATERAL JOIN against the `model_pricing` table — no cost is stored in `inference_jobs` itself.
+
+### `model_pricing` Table (migration 000047)
+
+```sql
+CREATE TABLE model_pricing (
+    provider      TEXT    NOT NULL,
+    model_name    TEXT    NOT NULL,   -- exact name or '*' for wildcard fallback
+    input_per_1m  FLOAT8  NOT NULL DEFAULT 0,  -- USD per 1M prompt tokens
+    output_per_1m FLOAT8  NOT NULL DEFAULT 0,  -- USD per 1M completion tokens
+    currency      TEXT    NOT NULL DEFAULT 'USD',
+    PRIMARY KEY (provider, model_name)
+);
+```
+
+- Ollama: **no rows** — `CASE WHEN backend = 'ollama' THEN 0.0` always applies.
+- Gemini: exact model rows + `'*'` wildcard fallback (seeded with 2026-03 Google AI pricing).
+
+### LATERAL JOIN Pattern
+
+```sql
+LEFT JOIN LATERAL (
+    SELECT input_per_1m, output_per_1m
+    FROM model_pricing
+    WHERE provider = j.backend
+      AND (model_name = j.model_name OR model_name = '*')
+    ORDER BY CASE WHEN model_name = j.model_name THEN 0 ELSE 1 END
+    LIMIT 1
+) pricing ON true
+```
+
+Cost expression used in `JobDetail`, `JobSummary`, `UsageBreakdownResponse`:
+```sql
+CASE
+    WHEN j.backend = 'ollama' THEN 0.0
+    WHEN pricing.input_per_1m IS NOT NULL
+         AND j.prompt_tokens IS NOT NULL
+         AND j.completion_tokens IS NOT NULL THEN
+        (j.prompt_tokens::float8 / 1000000.0 * pricing.input_per_1m) +
+        (j.completion_tokens::float8 / 1000000.0 * pricing.output_per_1m)
+    ELSE NULL
+END AS estimated_cost_usd
+```
+
+### Usage Breakdown Cost Aggregation
+
+`GET /v1/usage/breakdown` → `UsageBreakdownResponse`:
+- `by_backend[*].estimated_cost_usd` — total cost for that provider in the window
+- `by_key[*].estimated_cost_usd` — total cost per API key
+- `by_model[*].estimated_cost_usd` — total cost per model+backend combination
+- `total_cost_usd` — sum of all backend costs (for the breakdown card header KPI)
 
 ---
 

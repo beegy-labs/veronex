@@ -1,6 +1,8 @@
 pub mod analytics;
+pub mod s3;
 pub mod capacity;
 pub mod backend_router;
+pub mod circuit_breaker;
 pub mod gemini;
 pub mod health_checker;
 pub mod hw_metrics;
@@ -8,3 +10,4 @@ pub mod model_manager;
 pub mod observability;
 pub mod ollama;
 pub mod persistence;
+pub mod session_grouping;

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use blake2::{Blake2b, Digest, digest::consts::U32};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -8,6 +9,40 @@ use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{ApiFormat, BackendType, JobSource, JobStatus};
 use crate::domain::value_objects::{JobId, ModelName, Prompt};
+
+type Blake2b256 = Blake2b<U32>;
+
+/// Compute Blake2b-256 of the full messages array and its prefix (all-but-last).
+///
+/// Returns `(messages_hash, messages_prefix_hash)`.
+/// `messages_prefix_hash` is an empty string for single-turn jobs (first message only).
+/// Returns `None` when `messages` is None or not a JSON array.
+fn compute_message_hashes(messages: &serde_json::Value) -> Option<(String, String)> {
+    let arr = messages.as_array()?;
+    if arr.is_empty() {
+        return None;
+    }
+
+    // Full hash — identity of this job's complete context snapshot.
+    let full_json = serde_json::to_string(arr).ok()?;
+    let mut h = Blake2b256::new();
+    h.update(full_json.as_bytes());
+    let messages_hash = hex::encode(h.finalize());
+
+    // Prefix hash — all turns except the last user message.
+    // Empty string signals "first turn" so the grouping loop can skip parent lookup.
+    let messages_prefix_hash = if arr.len() <= 1 {
+        String::new()
+    } else {
+        let prefix = &arr[..arr.len() - 1];
+        let prefix_json = serde_json::to_string(prefix).ok()?;
+        let mut h = Blake2b256::new();
+        h.update(prefix_json.as_bytes());
+        hex::encode(h.finalize())
+    };
+
+    Some((messages_hash, messages_prefix_hash))
+}
 
 pub struct PostgresJobRepository {
     pool: PgPool,
@@ -176,26 +211,34 @@ impl JobRepository for PostgresJobRepository {
     /// because immutable fields (prompt, model_name, backend, created_at)
     /// are excluded from the ON CONFLICT update clause.
     async fn save(&self, job: &InferenceJob) -> Result<()> {
+        let (messages_hash, messages_prefix_hash) = job.messages
+            .as_ref()
+            .and_then(|m| compute_message_hashes(m))
+            .map(|(h, p)| (Some(h), Some(p)))
+            .unwrap_or((None, None));
+
         sqlx::query(
             "INSERT INTO inference_jobs
-                 (id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+                 (id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at, messages_hash, messages_prefix_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
              ON CONFLICT (id) DO UPDATE SET
-                 status            = EXCLUDED.status,
-                 error             = EXCLUDED.error,
-                 result_text       = COALESCE(EXCLUDED.result_text, inference_jobs.result_text),
-                 started_at        = EXCLUDED.started_at,
-                 completed_at      = EXCLUDED.completed_at,
-                 latency_ms        = COALESCE(EXCLUDED.latency_ms, inference_jobs.latency_ms),
-                 ttft_ms           = COALESCE(EXCLUDED.ttft_ms, inference_jobs.ttft_ms),
-                 prompt_tokens     = COALESCE(EXCLUDED.prompt_tokens, inference_jobs.prompt_tokens),
-                 completion_tokens = COALESCE(EXCLUDED.completion_tokens, inference_jobs.completion_tokens),
-                 cached_tokens     = COALESCE(EXCLUDED.cached_tokens, inference_jobs.cached_tokens),
-                 backend_id        = COALESCE(EXCLUDED.backend_id, inference_jobs.backend_id),
-                 tool_calls_json   = COALESCE(EXCLUDED.tool_calls_json, inference_jobs.tool_calls_json),
-                 messages_json     = COALESCE(EXCLUDED.messages_json, inference_jobs.messages_json),
-                 queue_time_ms     = COALESCE(EXCLUDED.queue_time_ms, inference_jobs.queue_time_ms),
-                 cancelled_at      = COALESCE(EXCLUDED.cancelled_at, inference_jobs.cancelled_at)",
+                 status                = EXCLUDED.status,
+                 error                 = EXCLUDED.error,
+                 result_text           = COALESCE(EXCLUDED.result_text, inference_jobs.result_text),
+                 started_at            = EXCLUDED.started_at,
+                 completed_at          = EXCLUDED.completed_at,
+                 latency_ms            = COALESCE(EXCLUDED.latency_ms, inference_jobs.latency_ms),
+                 ttft_ms               = COALESCE(EXCLUDED.ttft_ms, inference_jobs.ttft_ms),
+                 prompt_tokens         = COALESCE(EXCLUDED.prompt_tokens, inference_jobs.prompt_tokens),
+                 completion_tokens     = COALESCE(EXCLUDED.completion_tokens, inference_jobs.completion_tokens),
+                 cached_tokens         = COALESCE(EXCLUDED.cached_tokens, inference_jobs.cached_tokens),
+                 backend_id            = COALESCE(EXCLUDED.backend_id, inference_jobs.backend_id),
+                 tool_calls_json       = COALESCE(EXCLUDED.tool_calls_json, inference_jobs.tool_calls_json),
+                 messages_json         = COALESCE(EXCLUDED.messages_json, inference_jobs.messages_json),
+                 queue_time_ms         = COALESCE(EXCLUDED.queue_time_ms, inference_jobs.queue_time_ms),
+                 cancelled_at          = COALESCE(EXCLUDED.cancelled_at, inference_jobs.cancelled_at),
+                 messages_hash         = COALESCE(EXCLUDED.messages_hash, inference_jobs.messages_hash),
+                 messages_prefix_hash  = COALESCE(EXCLUDED.messages_prefix_hash, inference_jobs.messages_prefix_hash)",
         )
         .bind(job.id.0)
         .bind(job.prompt.as_str())
@@ -223,6 +266,8 @@ impl JobRepository for PostgresJobRepository {
         .bind(&job.messages)   // full input context (messages_json)
         .bind(job.queue_time_ms)
         .bind(job.cancelled_at)
+        .bind(messages_hash)
+        .bind(messages_prefix_hash)
         .execute(&self.pool)
         .await
         .context("failed to save inference job")?;

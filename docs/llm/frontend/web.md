@@ -1,6 +1,6 @@
 # Web — Brand, Design System & Architecture
 
-> SSOT | **Last Updated**: 2026-03-02 (ArgoCD-style flow panel: distinct node shapes API/Queue/Provider; queue depth badge via LLEN; max-width 680px cap)
+> SSOT | **Last Updated**: 2026-03-02 (rev5: login page — remember username cookie + language selector)
 
 ## Task Guide
 
@@ -11,10 +11,13 @@
 | Add new color token | `web/app/tokens.css` | Layer 1 (`--palette-*`) → Layer 2 (`--theme-*`) → Layer 0 (`@property`) → Layer 3 (`@theme inline`) |
 | Add new locale | `web/i18n/config.ts` `locales[]` + new `web/messages/{locale}.json` | Copy en.json structure, translate values; add locale→timezone default in `timezone-provider.tsx` `localeDefault()` |
 | Add new provider backend type | See "Adding a New Provider" section below | 5-step process: nav → page → i18n → Rust adapter → docs |
+| Add a new public (no-auth) route | `web/lib/auth-guard.ts` `PUBLIC_PATHS` array | Add path string — prevents reload loop on unauthenticated pages |
 | Change nav collapsed localStorage key | `web/components/nav.tsx` `localStorage('nav-collapsed')` | Change key string (clears all users' preferences) |
 | Change theme colors | `web/app/tokens.css` Layer 2 `--theme-*` values | Only edit `--theme-*` variables, never hardcode hex in TSX |
 | Add a new flow visualization panel | `web/app/overview/components/` | Create panel component + update `network-flow-tab.tsx`; follow CSS Motion Path bee pattern |
 | Display a new date/time field | `web/lib/date.ts` + component | Import `fmtDatetime`/`fmtDatetimeShort`/`fmtDateOnly`; call `useTimezone()` in component |
+| Gate a component on a lab feature | `web/components/lab-settings-provider.tsx` | `const { labSettings } = useLabSettings(); const enabled = labSettings?.my_flag ?? false` |
+| Refresh UI after lab settings change | `web/components/nav.tsx` Settings dialog toggle | After `api.patchLabSettings()` call `refetch()` from `useLabSettings()` — never re-fetch locally |
 
 ## Key Files
 
@@ -22,7 +25,8 @@
 |------|---------|
 | `web/app/tokens.css` | Design token SSOT (4-layer architecture) |
 | `web/app/globals.css` | Tailwind v4 entry + focus ring + `@keyframes bee-fly` + `.bee-particle` |
-| `web/app/layout.tsx` | `ThemeProvider` + `I18nProvider` + `TimezoneProvider` + `QueryClientProvider` |
+| `web/app/layout.tsx` | `ThemeProvider` + `I18nProvider` + `TimezoneProvider` + `QueryClientProvider` + `LabSettingsProvider` |
+| `web/components/lab-settings-provider.tsx` | `LabSettingsProvider` + `useLabSettings()` — SSOT for experimental feature flags; auto-fetches `GET /v1/dashboard/lab` on mount |
 | `web/components/nav.tsx` | Collapsible sidebar + `HexLogo` SVG |
 | `web/components/theme-provider.tsx` | `data-theme` switcher, `localStorage('hg-theme')` |
 | `web/components/i18n-provider.tsx` | react-i18next wrapper |
@@ -34,7 +38,10 @@
 | `web/components/data-table.tsx` | `DataTable` + `DataTableEmpty` — SSOT for all data tables |
 | `web/lib/chart-theme.ts` | Recharts style constants SSOT (`TOOLTIP_STYLE`, `AXIS_TICK`, `LEGEND_STYLE`, …) |
 | `web/components/donut-chart.tsx` | Shared `DonutChart` component — always use instead of inline `<PieChart>` |
-| `web/lib/api.ts` | All API client functions |
+| `web/lib/auth.ts` | Token CRUD — cookie read/write/clear (access, refresh, username, role, account_id) |
+| `web/lib/auth-guard.ts` | Auth flow SSOT — `PUBLIC_PATHS`, `tryRefresh()` mutex, `redirectToLogin()` |
+| `web/lib/api-client.ts` | HTTP transport — attaches Bearer token, delegates 401 to auth-guard |
+| `web/lib/api.ts` | All API call functions (uses apiClient) |
 | `web/lib/types.ts` | All TypeScript types |
 | `web/hooks/use-inference-stream.ts` | `useInferenceStream` — SSE real-time stream → `FlowEvent[]` for network flow visualization |
 | `web/package.json` | Next.js 16, Tailwind v4, TanStack Query, shadcn/ui |
@@ -239,6 +246,135 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/compon
   `['gemini-sync-config']`, `['job-detail', jobId]`, etc.
 - Local state: `useState` for modals
 - No global client store (no Redux/Zustand)
+
+### QueryClient Global Config (`web/app/layout.tsx`)
+
+```typescript
+new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      refetchOnWindowFocus: false,  // prevent burst refetch on tab re-focus
+    },
+  },
+})
+```
+
+`refetchOnWindowFocus: false` is critical: without it, switching browser tabs/windows triggers
+simultaneous refetch of all active queries, which causes a visible "reload" effect and can race
+against the token refresh mutex.
+
+---
+
+## Login Page (`web/app/login/page.tsx`)
+
+Public route (`/login`) — no auth required.
+
+### Features
+- **Remember username**: checkbox "계정 저장하기" — on login success, if checked, saves username to `veronex_saved_username` cookie (30-day, `SameSite=Lax`); if unchecked, clears the cookie. On mount, pre-fills username field and auto-checks the checkbox when cookie is present.
+- **Language selector**: compact `<Select>` in card footer (en / 한국어 / 日本語) — calls `i18n.changeLanguage()` + persists to `localStorage['hg-lang']`. Same mechanism as the nav Settings dialog.
+- **Fully i18n**: all labels use `t('auth.*')` keys (`auth.login`, `auth.username`, `auth.password`, `auth.rememberUsername`, `auth.loginDescription`, `auth.signingIn`, `auth.invalidCredentials`).
+
+### Cookie
+| Cookie | Value | Expiry | SameSite |
+|--------|-------|--------|----------|
+| `veronex_saved_username` | Saved username for pre-fill | 30 days | Lax |
+
+This cookie is **not** a session token — it only pre-fills the login form. Managed entirely in `login/page.tsx` (not in `auth.ts`).
+
+---
+
+## Auth — Cookie-Based Session (`web/lib/auth.ts`)
+
+Tokens are stored in **browser cookies** (not localStorage) for persistence across browser restarts.
+
+| Cookie | Value | Expiry |
+|--------|-------|--------|
+| `veronex_access_token` | JWT access token | 7 days |
+| `veronex_refresh_token` | Refresh token | 7 days |
+| `veronex_username` | Display name | 7 days |
+| `veronex_role` | `super` \| `admin` | 7 days |
+| `veronex_account_id` | UUIDv7 | 7 days |
+
+Settings: `SameSite=Strict; path=/; expires={7d}`
+
+**Functions** (all use `document.cookie` API directly — no external library):
+```typescript
+getAccessToken()  → string | null   // read cookie
+getRefreshToken() → string | null
+setTokens(LoginResponse)            // write all 5 cookies
+setAccessToken(token)               // update access token after refresh
+clearTokens()                       // delete all 5 cookies on logout
+getAuthUser()     → { username, role, accountId } | null
+isLoggedIn()      → boolean         // true when access_token cookie present
+```
+
+Nav sidebar reads `getAuthUser()` in a `useEffect([])` on mount to populate the user chip.
+
+---
+
+## Auth Guard — SSOT for Token Lifecycle (`web/lib/auth-guard.ts`)
+
+All auth flow policy lives here. **Never** duplicate refresh or redirect logic in other files.
+
+### Responsibility Map
+
+| File | Owns |
+|------|------|
+| `auth.ts` | Token CRUD — cookie read/write/clear only |
+| `auth-guard.ts` | Auth flow SSOT — mutex, refresh, redirect, public paths |
+| `api-client.ts` | HTTP transport only — delegates 401 handling to auth-guard |
+| `nav.tsx` logout | Calls `redirectToLogin()` — no manual `clearTokens()` + `window.location` |
+
+### PUBLIC_PATHS
+
+```typescript
+// web/lib/auth-guard.ts
+export const PUBLIC_PATHS = ['/login', '/setup'] as const
+export function isPublicPath(pathname: string): boolean { ... }
+```
+
+Add any unauthenticated route here. `redirectToLogin()` is a no-op on these paths,
+preventing the reload loop caused by `LabSettingsProvider` (and any other provider that
+wraps the full app) calling authenticated endpoints on pages that don't require login.
+
+### Token Refresh Mutex
+
+```
+10 queries fired simultaneously → all receive 401
+  ↓
+Caller 1: refreshMutex === null → set refreshMutex = doRefresh()
+Callers 2–10: refreshMutex !== null → return same Promise (piggyback)
+  ↓
+Single POST /v1/auth/refresh sent
+  ↓
+Success → setAccessToken() → .finally() → refreshMutex = null
+All 10: refreshed=true → retry with new token
+```
+
+```typescript
+// Module-level — persists across re-renders, reset only on full page reload
+let refreshMutex: Promise<boolean> | null = null
+let redirecting = false
+
+export function tryRefresh(): Promise<boolean> {
+  if (refreshMutex !== null) return refreshMutex          // piggyback
+  refreshMutex = doRefresh().finally(() => { refreshMutex = null })
+  return refreshMutex
+}
+
+export function redirectToLogin(): void {
+  if (redirecting) return                                  // already in progress
+  if (isPublicPath(window.location.pathname)) return      // suppress on /login, /setup
+  redirecting = true
+  clearTokens()
+  window.location.href = '/login'
+}
+```
+
+**Module-level state** (not class-level) means the mutex survives component re-renders
+and is shared across all callers in the same browser session.
 
 ---
 
