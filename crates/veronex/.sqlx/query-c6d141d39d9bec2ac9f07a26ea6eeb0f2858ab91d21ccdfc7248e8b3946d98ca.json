@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO ollama_sync_jobs (id, total_providers)\n            VALUES ($1, $2)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c6d141d39d9bec2ac9f07a26ea6eeb0f2858ab91d21ccdfc7248e8b3946d98ca"
+}
