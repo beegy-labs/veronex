@@ -142,9 +142,9 @@
   --status-d-cancelled:#64748b;   /* slate-500    4.2:1  ✓ AA  */
 
   /* ── Logo gradient ───────────────────────────────────────────── */
-  --palette-logo-light-start: #091e12;   /* ivy-950 — deepest shadow */
-  --palette-logo-light-end:   #0f3325;   /* Deep Ivy — brand primary */
-  --palette-logo-dark-start:  #047857;   /* emerald-700 — rich depth */
+  --palette-logo-light-start: #0c4a2a;   /* forest-900  — dark anchor  */
+  --palette-logo-light-end:   #16a34a;   /* green-600   — bright apex  */
+  --palette-logo-dark-start:  #047857;   /* emerald-700 — rich depth   */
   --palette-logo-dark-end:    #10b981;   /* Bio-Emerald — brand primary */
 }
 
