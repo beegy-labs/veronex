@@ -81,12 +81,21 @@ const navItems: NavItem[] = [
     basePath: '/overview',
     children: [
       { href: '/overview',     labelKey: 'nav.dashboard',   icon: LayoutDashboard },
-      { href: '/flow',         labelKey: 'nav.flow',        icon: Workflow },
       { href: '/usage',        labelKey: 'nav.usage',       icon: BarChart2 },
       { href: '/performance',  labelKey: 'nav.performance', icon: Gauge },
     ],
   },
-  { type: 'link', href: '/jobs',    labelKey: 'nav.jobs',    icon: List },
+  {
+    type: 'group',
+    id: 'jobs',
+    labelKey: 'nav.jobs',
+    icon: List,
+    basePath: '/jobs',
+    children: [
+      { href: '/jobs',  labelKey: 'nav.jobs',  icon: List },
+      { href: '/flow',  labelKey: 'nav.flow',  icon: Workflow },
+    ],
+  },
   { type: 'link', href: '/keys',    labelKey: 'nav.keys',    icon: Key },
   { type: 'link', href: '/servers', labelKey: 'nav.servers', icon: HardDrive },
   {

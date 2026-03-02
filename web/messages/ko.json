@@ -208,7 +208,15 @@
     "cancelling": "중단 중…",
     "retryInTest": "테스트에서 재시도",
     "apiJobs": "API 작업",
-    "testRuns": "테스트 실행"
+    "testRuns": "테스트 실행",
+    "networkFlow": "네트워크 흐름",
+    "groupSessions": "세션 묶기",
+    "groupSessionsDesc": "선택한 날짜 이전에 완료된 작업에 대화 ID를 할당합니다.",
+    "groupBeforeDate": "이 날짜 이전 작업 묶기",
+    "groupNow": "지금 묶기",
+    "grouping": "묶는 중…",
+    "groupingSuccess": "세션 묶기가 시작되었습니다",
+    "groupingError": "세션 묶기 실행에 실패했습니다"
   },
   "keys": {
     "title": "API 키",
@@ -240,7 +248,7 @@
     "deleteKey": "키 삭제",
     "loadingKeys": "키 로딩 중…",
     "failedKeys": "키 로드 실패",
-"tier": "등급",
+    "tier": "등급",
     "tierFree": "무료",
     "tierPaid": "유료",
     "keysCount": "{{count}}개",

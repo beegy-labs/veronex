@@ -8,11 +8,13 @@ use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::Json;
+use chrono::NaiveDate;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
+use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
 use super::state::AppState;
 use super::usage_handlers::UsageQuery;
@@ -69,6 +71,10 @@ pub struct JobSummary {
     pub account_name: Option<String>,
     /// HTTP path of the inbound request, e.g. "/v1/chat/completions".
     pub request_path: Option<String>,
+    /// True when the model responded with tool calls instead of (or in addition to) text.
+    pub has_tool_calls: bool,
+    /// Estimated API cost in USD. $0.00 for Ollama (self-hosted). None = no pricing data.
+    pub estimated_cost_usd: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -189,6 +195,14 @@ pub struct JobDetail {
     pub error: Option<String>,
     /// HTTP path of the inbound request, e.g. "/v1/chat/completions".
     pub request_path: Option<String>,
+    /// Tool calls the model emitted (when it responded with function calls instead of text).
+    pub tool_calls_json: Option<serde_json::Value>,
+    /// Number of messages in the conversation context (messages_json array length).
+    pub message_count: Option<i64>,
+    /// Full conversation context sent to the model (messages_json JSONB array).
+    pub messages_json: Option<serde_json::Value>,
+    /// Estimated API cost in USD. $0.00 for Ollama (self-hosted). None = no pricing data.
+    pub estimated_cost_usd: Option<f64>,
 }
 
 /// GET /v1/dashboard/jobs/{id} — Full job detail.
@@ -204,11 +218,31 @@ pub async fn get_job_detail(
                 j.created_at, j.started_at, j.completed_at,
                 j.latency_ms, j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
                 j.prompt, j.result_text, j.error, j.request_path,
+                j.tool_calls_json,
+                j.messages_json,
+                COALESCE(jsonb_array_length(j.messages_json), 0) AS message_count,
                 k.name AS api_key_name,
-                a.name AS account_name
+                a.name AS account_name,
+                CASE
+                    WHEN j.backend = 'ollama' THEN 0.0
+                    WHEN pricing.input_per_1m IS NOT NULL
+                         AND j.prompt_tokens IS NOT NULL
+                         AND j.completion_tokens IS NOT NULL THEN
+                        (j.prompt_tokens::float8 / 1000000.0 * pricing.input_per_1m) +
+                        (j.completion_tokens::float8 / 1000000.0 * pricing.output_per_1m)
+                    ELSE NULL
+                END AS estimated_cost_usd
          FROM inference_jobs j
          LEFT JOIN api_keys k ON k.id = j.api_key_id
          LEFT JOIN accounts a ON a.id = j.account_id
+         LEFT JOIN LATERAL (
+             SELECT input_per_1m, output_per_1m
+             FROM model_pricing
+             WHERE provider = j.backend
+               AND (model_name = j.model_name OR model_name = '*')
+             ORDER BY CASE WHEN model_name = j.model_name THEN 0 ELSE 1 END
+             LIMIT 1
+         ) pricing ON true
          WHERE j.id = $1",
     )
     .bind(id)
@@ -238,6 +272,26 @@ pub async fn get_job_detail(
     let result_text: Option<String> = row.try_get("result_text").unwrap_or(None);
     let error: Option<String> = row.try_get("error").unwrap_or(None);
     let request_path: Option<String> = row.try_get("request_path").unwrap_or(None);
+    let tool_calls_json: Option<serde_json::Value> = row.try_get("tool_calls_json").unwrap_or(None);
+    // messages_json: DB stores NULL for new jobs (S3 is authoritative).
+    // Fall back to DB value for old jobs migrated before S3 was introduced.
+    let db_messages: Option<serde_json::Value> = row.try_get("messages_json").unwrap_or(None);
+    let message_count: Option<i32> = row.try_get("message_count").unwrap_or(None);
+    let estimated_cost_usd: Option<f64> = row.try_get("estimated_cost_usd").unwrap_or(None);
+
+    // Resolve messages: S3 first (authoritative for new jobs), DB fallback for old jobs
+    let messages_json = if let Some(ref store) = state.message_store {
+        match store.get(id).await {
+            Ok(Some(v)) => Some(v),
+            Ok(None) => db_messages, // not in S3 → use DB value (old job)
+            Err(e) => {
+                tracing::warn!(job_id = %id, "S3 message fetch failed (using DB fallback): {e}");
+                db_messages
+            }
+        }
+    } else {
+        db_messages
+    };
 
     let tps = compute_tps(latency_ms, ttft_ms, completion_tokens);
 
@@ -262,6 +316,10 @@ pub async fn get_job_detail(
         result_text,
         error,
         request_path,
+        tool_calls_json,
+        messages_json,
+        message_count: message_count.map(|v| v as i64),
+        estimated_cost_usd,
     }))
 }
 
@@ -303,11 +361,29 @@ pub async fn list_jobs(
                 j.created_at, j.completed_at, j.latency_ms,
                 j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
                 j.request_path,
+                (j.tool_calls_json IS NOT NULL) AS has_tool_calls,
                 k.name AS api_key_name,
-                a.name AS account_name
+                a.name AS account_name,
+                CASE
+                    WHEN j.backend = 'ollama' THEN 0.0
+                    WHEN pricing.input_per_1m IS NOT NULL
+                         AND j.prompt_tokens IS NOT NULL
+                         AND j.completion_tokens IS NOT NULL THEN
+                        (j.prompt_tokens::float8 / 1000000.0 * pricing.input_per_1m) +
+                        (j.completion_tokens::float8 / 1000000.0 * pricing.output_per_1m)
+                    ELSE NULL
+                END AS estimated_cost_usd
          FROM inference_jobs j
          LEFT JOIN api_keys k ON k.id = j.api_key_id
          LEFT JOIN accounts a ON a.id = j.account_id
+         LEFT JOIN LATERAL (
+             SELECT input_per_1m, output_per_1m
+             FROM model_pricing
+             WHERE provider = j.backend
+               AND (model_name = j.model_name OR model_name = '*')
+             ORDER BY CASE WHEN model_name = j.model_name THEN 0 ELSE 1 END
+             LIMIT 1
+         ) pricing ON true
          WHERE ($1::TEXT IS NULL OR j.status = $1)
            AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
            AND ($3::TEXT IS NULL OR j.source = $3)
@@ -342,6 +418,8 @@ pub async fn list_jobs(
             let api_key_name: Option<String> = row.try_get("api_key_name").unwrap_or(None);
             let account_name: Option<String> = row.try_get("account_name").unwrap_or(None);
             let request_path: Option<String> = row.try_get("request_path").unwrap_or(None);
+            let has_tool_calls: bool = row.try_get("has_tool_calls").unwrap_or(false);
+            let estimated_cost_usd: Option<f64> = row.try_get("estimated_cost_usd").unwrap_or(None);
             let tps = compute_tps(latency_ms, ttft_ms, completion_tokens);
 
             JobSummary {
@@ -361,6 +439,8 @@ pub async fn list_jobs(
                 api_key_name,
                 account_name,
                 request_path,
+                has_tool_calls,
+                estimated_cost_usd,
             }
         })
         .collect();
@@ -782,4 +862,35 @@ mod tests {
         assert_eq!(json["total_keys"], 10);
         assert_eq!(json["active_keys"], 8);
     }
+}
+
+// ── POST /v1/dashboard/session-grouping/trigger ─────────────────────
+
+/// Immediately runs the session grouping algorithm in a background task.
+/// Optional `before_date` limits the cutoff to jobs created before that date (ISO 8601).
+/// Defaults to today's midnight — never touches today's in-progress conversations.
+#[derive(Deserialize)]
+pub struct TriggerGroupingRequest {
+    /// ISO 8601 date (e.g. "2026-03-01"). Jobs created before this date are grouped.
+    /// Omit to use the default: today's midnight (all jobs before today).
+    pub before_date: Option<NaiveDate>,
+}
+
+pub async fn trigger_session_grouping(
+    State(state): State<AppState>,
+    Json(body): Json<TriggerGroupingRequest>,
+) -> impl IntoResponse {
+    let pg_pool = state.pg_pool.clone();
+    let cutoff  = body.before_date;
+    tokio::spawn(async move {
+        match group_sessions_before(&pg_pool, cutoff).await {
+            Ok(n)  => tracing::info!(grouped = n, cutoff = ?cutoff, "manual session grouping complete"),
+            Err(e) => tracing::warn!("manual session grouping failed: {e}"),
+        }
+    });
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "message": "session grouping triggered" })),
+    )
+        .into_response()
 }

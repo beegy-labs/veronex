@@ -208,7 +208,15 @@
     "cancelling": "キャンセル中…",
     "retryInTest": "テストで再実行",
     "apiJobs": "API ジョブ",
-    "testRuns": "テスト実行"
+    "testRuns": "テスト実行",
+    "networkFlow": "ネットワークフロー",
+    "groupSessions": "セッションをまとめる",
+    "groupSessionsDesc": "選択した日付より前に完了したジョブに会話IDを割り当てます。",
+    "groupBeforeDate": "この日付以前のジョブをまとめる",
+    "groupNow": "今すぐまとめる",
+    "grouping": "まとめ中…",
+    "groupingSuccess": "セッションのまとめを開始しました",
+    "groupingError": "セッションのまとめに失敗しました"
   },
   "keys": {
     "title": "APIキー",
@@ -240,7 +248,7 @@
     "deleteKey": "キーを削除",
     "loadingKeys": "キーを読み込み中…",
     "failedKeys": "キーの読み込みに失敗",
-"tier": "ティア",
+    "tier": "ティア",
     "tierFree": "無料",
     "tierPaid": "有料",
     "keysCount": "{{count}}件",
