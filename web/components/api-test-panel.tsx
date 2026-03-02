@@ -166,7 +166,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   useEffect(() => {
     if (!retryParams) return
     setPrompt(retryParams.prompt)
-    setBackend(retryParams.backend)
+    setBackend(retryParams.provider_type)
     if (availableModels.includes(retryParams.model)) {
       setModel(retryParams.model)
     }
@@ -274,7 +274,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
         body: JSON.stringify({
           model,
           messages: [{ role: 'user', content: prompt.trim() }],
-          backend,
+          provider_type: backend,
           stream: true,
         }),
       })

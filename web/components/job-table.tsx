@@ -152,7 +152,7 @@ function JobDetailModal({
                 <span className="font-mono text-xs text-muted-foreground">{data.id}</span>
                 <StatusBadge status={data.status} />
                 <span className="text-sm font-normal text-muted-foreground">
-                  {data.model_name} · {data.backend}
+                  {data.model_name} · {data.provider_type}
                 </span>
               </>
             ) : (
@@ -297,7 +297,7 @@ function JobDetailModal({
               size="sm"
               variant="outline"
               onClick={() => {
-                onRetry?.({ prompt: data.prompt, model: data.model_name, backend: data.backend })
+                onRetry?.({ prompt: data.prompt, model: data.model_name, provider_type: data.provider_type })
                 onClose()
               }}
             >
@@ -418,7 +418,7 @@ export default function JobTable({
                 <span title={job.id}>{truncateId(job.id)}</span>
               </TableCell>
               <TableCell>{job.model_name}</TableCell>
-              <TableCell className="text-muted-foreground">{job.backend}</TableCell>
+              <TableCell className="text-muted-foreground">{job.provider_type}</TableCell>
               <TableCell className="text-xs text-primary/80">
                 {job.source === 'test'
                   ? (job.account_name ?? <span className="text-muted-foreground">—</span>)

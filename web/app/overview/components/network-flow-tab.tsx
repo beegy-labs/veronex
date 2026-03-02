@@ -12,7 +12,7 @@ interface Props {
 }
 
 export function NetworkFlowTab({ backends }: Props) {
-  const events = useInferenceStream(backends)
+  const events = useInferenceStream()
   const { data: depth } = useQuery(queueDepthQuery)
 
   return (

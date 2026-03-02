@@ -15,7 +15,7 @@ export interface ApiKey {
 export interface Job {
   id: string
   model_name: string
-  backend: string
+  provider_type: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   source: 'api' | 'test'
   created_at: string
@@ -60,7 +60,7 @@ export interface ToolCall {
 export interface JobDetail {
   id: string
   model_name: string
-  backend: string
+  provider_type: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   source: 'api' | 'test'
   created_at: string
@@ -169,8 +169,8 @@ export interface HourlyThroughput {
   total_tokens: number
 }
 
-export interface BackendBreakdown {
-  backend: string
+export interface ProviderBreakdown {
+  provider_type: string
   request_count: number
   success_count: number
   error_count: number
@@ -194,7 +194,7 @@ export interface KeyBreakdown {
 
 export interface ModelBreakdown {
   model_name: string
-  backend: string
+  provider_type: string
   request_count: number
   call_pct: number
   prompt_tokens: number
@@ -204,7 +204,7 @@ export interface ModelBreakdown {
 }
 
 export interface UsageBreakdown {
-  by_backend: BackendBreakdown[]
+  by_providers: ProviderBreakdown[]
   by_key: KeyBreakdown[]
   by_model: ModelBreakdown[]
   total_cost_usd: number
@@ -371,7 +371,7 @@ export interface CreateKeyResponse {
 }
 
 export interface OllamaSyncResult {
-  backend_id: string
+  provider_id: string
   name: string
   models: string[]
   error: string | null
@@ -382,26 +382,26 @@ export interface OllamaSyncJob {
   started_at: string
   completed_at: string | null
   status: 'running' | 'completed'
-  total_backends: number
-  done_backends: number
+  total_providers: number
+  done_providers: number
   results: OllamaSyncResult[]
 }
 
 /** Model with count of backends that carry it (from GET /v1/ollama/models). */
 export interface OllamaModelWithCount {
   model_name: string
-  backend_count: number
+  provider_count: number
 }
 
 /** Backend info returned by GET /v1/ollama/models/:model_name/backends. */
 export interface RetryParams {
   prompt: string
   model: string
-  backend: string
+  provider_type: string
 }
 
 export interface OllamaBackendForModel {
-  backend_id: string
+  provider_id: string
   name: string
   url: string
   status: string
@@ -476,15 +476,15 @@ export interface ModelCapacityInfo {
 }
 
 export interface BackendCapacityInfo {
-  backend_id: string
-  backend_name: string
+  provider_id: string
+  provider_name: string
   thermal_state: 'normal' | 'soft' | 'hard'
   temp_c: number | null
   models: ModelCapacityInfo[]
 }
 
 export interface CapacityResponse {
-  backends: BackendCapacityInfo[]
+  providers: BackendCapacityInfo[]
 }
 
 export interface CapacitySettings {
