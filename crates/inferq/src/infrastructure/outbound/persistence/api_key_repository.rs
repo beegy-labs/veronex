@@ -135,6 +135,17 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
         Ok(())
     }
 
+    async fn set_tier(&self, key_id: &Uuid, tier: &str) -> Result<()> {
+        sqlx::query("UPDATE api_keys SET tier = $1 WHERE id = $2 AND deleted_at IS NULL")
+            .bind(tier)
+            .bind(key_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to set api key tier")?;
+
+        Ok(())
+    }
+
     async fn soft_delete(&self, key_id: &Uuid) -> Result<()> {
         sqlx::query("UPDATE api_keys SET deleted_at = NOW() WHERE id = $1")
             .bind(key_id)

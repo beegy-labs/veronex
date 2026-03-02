@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
 use futures::StreamExt as _;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
 use crate::domain::entities::{InferenceJob, InferenceResult};
@@ -15,6 +15,26 @@ use crate::domain::value_objects::StreamToken;
 pub struct OllamaAdapter {
     base_url: String,
     client: reqwest::Client,
+}
+
+// ── Context length helper ───────────────────────────────────────────────────────
+
+/// Derive the effective `num_ctx` to send to Ollama based on the model name.
+///
+/// Ollama uses `OLLAMA_CONTEXT_LENGTH` as the global default, but the per-request
+/// `options.num_ctx` takes precedence and lets each model use its natural window:
+///
+/// - Models with "128k" / "200k" in their name get the matching context.
+/// - Large models (70B+) are capped at 32K to keep KV cache manageable.
+/// - Everything else defaults to 32K, which is well under the 200K global
+///   env var and avoids over-allocating KV cache for small models.
+fn model_effective_num_ctx(model: &str) -> u32 {
+    let m = model.to_lowercase();
+    if m.contains("200k")                        { return 204_800; }
+    if m.contains("128k")                        { return 131_072; }
+    if m.contains("1m")                          { return 131_072; } // 1M models: 128K practical limit
+    if m.contains("72b") || m.contains("70b")    { return  32_768; }
+    32_768 // sensible default for 7B–32B models
 }
 
 impl OllamaAdapter {
@@ -27,15 +47,6 @@ impl OllamaAdapter {
 }
 
 // ── /api/generate response types ───────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct GenerateRequest<'a> {
-    model: &'a str,
-    prompt: &'a str,
-    stream: bool,
-    /// Disable extended thinking (qwen3 and similar models).
-    think: bool,
-}
 
 #[derive(Deserialize)]
 struct GenerateResponse {
@@ -79,17 +90,18 @@ impl InferenceBackendPort for OllamaAdapter {
         let start = Instant::now();
 
         let url = format!("{}/api/generate", self.base_url);
-        let body = GenerateRequest {
-            model: job.model_name.as_str(),
-            prompt: job.prompt.as_str(),
-            stream: false,
-            think: false,
-        };
+        let num_ctx = model_effective_num_ctx(job.model_name.as_str());
 
         let resp: GenerateResponse = self
             .client
             .post(&url)
-            .json(&body)
+            .json(&serde_json::json!({
+                "model":   job.model_name.as_str(),
+                "prompt":  job.prompt.as_str(),
+                "stream":  false,
+                "think":   false,
+                "options": { "num_ctx": num_ctx },
+            }))
             .send()
             .await?
             .error_for_status()?
@@ -117,7 +129,7 @@ impl InferenceBackendPort for OllamaAdapter {
         // Use /api/chat when the request has multi-turn messages (e.g. Ollama chat, Gemini compat).
         // Fall back to /api/generate for single-prompt requests.
         if let Some(messages) = &job.messages {
-            return self.stream_chat(job.model_name.as_str(), messages.clone());
+            return self.stream_chat(job.model_name.as_str(), messages.clone(), job.tools.clone());
         }
         self.stream_generate(job.model_name.as_str(), job.prompt.as_str())
     }
@@ -135,16 +147,19 @@ impl OllamaAdapter {
         let model = model.to_string();
         let prompt = prompt.to_string();
 
+        let num_ctx = model_effective_num_ctx(&model);
+
         Box::pin(async_stream::try_stream! {
             let response = client
                 .post(&url)
                 .json(&serde_json::json!({
-                    "model": model,
-                    "prompt": prompt,
-                    "stream": true,
+                    "model":   model,
+                    "prompt":  prompt,
+                    "stream":  true,
                     // Disable extended thinking — keeps eval_count accurate for
                     // visible output only and removes <think>…</think> from the stream.
-                    "think": false,
+                    "think":   false,
+                    "options": { "num_ctx": num_ctx },
                 }))
                 .send()
                 .await?;
@@ -193,6 +208,7 @@ impl OllamaAdapter {
                         prompt_tokens,
                         completion_tokens,
                         cached_tokens: None,
+                        tool_calls: None,
                     };
 
                     if chunk.done {
@@ -204,24 +220,42 @@ impl OllamaAdapter {
     }
 
     /// Stream from Ollama `/api/chat` (multi-turn messages).
+    ///
+    /// Forwards `tools` to Ollama so function-calling models (e.g. qwen3-coder)
+    /// receive the tool definitions and can produce proper `tool_calls` responses.
+    ///
+    /// When the model generates a tool call instead of text content, a `StreamToken`
+    /// with `tool_calls` populated (and empty `value`) is yielded, followed by the
+    /// normal final token with usage counts.  Callers (HTTP handlers) must check
+    /// `token.tool_calls` and format the response accordingly.
     fn stream_chat(
         &self,
         model: &str,
         messages: serde_json::Value,
+        tools: Option<serde_json::Value>,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
         let url = format!("{}/api/chat", self.base_url);
         let client = self.client.clone();
+        let num_ctx = model_effective_num_ctx(&model);
         let model = model.to_string();
 
         Box::pin(async_stream::try_stream! {
+            let mut body = serde_json::json!({
+                "model":    model,
+                "messages": messages,
+                "stream":   true,
+                "think":    false,
+                "options":  { "num_ctx": num_ctx },
+            });
+
+            // Forward tool definitions so the model can produce tool_calls responses.
+            if let Some(t) = tools {
+                body["tools"] = t;
+            }
+
             let response = client
                 .post(&url)
-                .json(&serde_json::json!({
-                    "model": model,
-                    "messages": messages,
-                    "stream": true,
-                    "think": false,
-                }))
+                .json(&body)
                 .send()
                 .await?;
 
@@ -232,6 +266,7 @@ impl OllamaAdapter {
 
             let mut byte_stream = response.bytes_stream();
             let mut buf = String::new();
+            let mut emitted_tool_calls = false;
 
             while let Some(chunk) = byte_stream.next().await {
                 let bytes = chunk.map_err(|e| anyhow::anyhow!(e))?;
@@ -259,28 +294,44 @@ impl OllamaAdapter {
                         (None, None)
                     };
 
-                    // Prefer text content; fall back to serialised tool_calls JSON
-                    // so function-calling models (e.g. qwen3-coder) don't produce
-                    // silent empty responses.
-                    let content = match chunk.message.as_ref() {
-                        Some(m) if m.content.as_deref().is_some_and(|c| !c.is_empty()) => {
-                            m.content.clone().unwrap_or_default()
+                    // Check for tool_calls in the message.
+                    // When the model calls a tool, content is empty and tool_calls is set.
+                    // We emit a dedicated StreamToken carrying the tool_calls so HTTP handlers
+                    // can format the response correctly (OpenAI delta vs Ollama NDJSON).
+                    if let Some(ref msg) = chunk.message {
+                        if let Some(ref tc) = msg.tool_calls {
+                            if !emitted_tool_calls {
+                                emitted_tool_calls = true;
+                                yield StreamToken {
+                                    value: String::new(),
+                                    is_final: false,
+                                    prompt_tokens: None,
+                                    completion_tokens: None,
+                                    cached_tokens: None,
+                                    tool_calls: Some(tc.clone()),
+                                };
+                            }
                         }
-                        Some(m) if m.tool_calls.is_some() => {
-                            serde_json::to_string(m.tool_calls.as_ref().unwrap())
-                                .unwrap_or_default()
-                        }
-                        Some(m) => m.content.clone().unwrap_or_default(),
-                        None => String::new(),
-                    };
+                    }
 
-                    yield StreamToken {
-                        value: content,
-                        is_final: chunk.done,
-                        prompt_tokens,
-                        completion_tokens,
-                        cached_tokens: None,
-                    };
+                    // Text content token (normal streaming text).
+                    let content = chunk.message.as_ref()
+                        .and_then(|m| m.content.as_deref())
+                        .filter(|c| !c.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_default();
+
+                    // Always emit the final token (even if empty) so usage counts arrive.
+                    if chunk.done || !content.is_empty() {
+                        yield StreamToken {
+                            value: content,
+                            is_final: chunk.done,
+                            prompt_tokens,
+                            completion_tokens,
+                            cached_tokens: None,
+                            tool_calls: None,
+                        };
+                    }
 
                     if chunk.done {
                         return;

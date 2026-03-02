@@ -1,6 +1,6 @@
 # docs/llm — SSOT Index
 
-> Tier 2 CDD documents (LLM-facing, editable) | **Last Updated**: 2026-03-02 (rev: auth/RBAC/JWT, capacity control, thermal throttle, capacity web UI)
+> Tier 2 CDD documents (LLM-facing, editable) | **Last Updated**: 2026-03-02 (rev: dep upgrades — fred 10, reqwest 0.13, Next.js 16, recharts 3, Valkey 9, Redpanda v25.3, OTel 0.146; migrations 41-45)
 
 ## Policies
 
@@ -57,7 +57,7 @@
 | CSS Animations | `research/frontend/css-animations.md` | CSS Motion Path, offset-path vs SMIL, particle systems | ✅ |
 | React Patterns | `research/frontend/react.md` | useReducer, ResizeObserver, onAnimationEnd, useMemo rules | ✅ |
 | Data Fetching | `research/frontend/data-fetching.md` | TanStack Query v5, polling, background refetch | ✅ |
-| Next.js 15 | `research/frontend/nextjs.md` | App Router, 'use client' rationale, Server Actions, PPR, Suspense | ✅ |
+| Next.js 16 | `research/frontend/nextjs.md` | App Router, 'use client' rationale, Server Actions, PPR, Suspense | ✅ |
 | Tailwind v4 | `research/frontend/tailwind.md` | CSS-first config, 4-layer tokens, @utility, container queries | ✅ |
 | TanStack Query | `research/frontend/tanstack-query.md` | queryOptions factory, lib/queries/ SSOT, invalidation, optimistic updates | ✅ |
 | Rust / Axum | `research/backend/rust-axum.md` | Axum 0.8 breaking changes, AppState, SSE, sqlx | ✅ |
@@ -65,15 +65,6 @@
 | Observability | `research/infrastructure/observability.md` | OTel pipeline, Redpanda, ClickHouse Kafka Engine | ✅ |
 | Database | `research/infrastructure/database.md` | PG18 uuidv7, sqlx, ClickHouse query patterns | ✅ |
 | Auth & Sessions | `research/security/auth.md` | JWT jti, rolling refresh, BLAKE2b, Valkey revocation | ✅ |
-
----
-
-## Specs
-
-| Document | Path | Status |
-|----------|------|--------|
-| Design CI/BI | `specs/20-design-ci-bi.md` | Active |
-| Adaptive Concurrency | `specs/21-adaptive-concurrency.md` | ⚠️ Superseded → see `backend/capacity.md` |
 
 ---
 
@@ -113,3 +104,6 @@
 | Dynamic concurrency / thermal throttle | `backend/capacity.md` |
 | Capacity analysis / slot recommendation | `backend/capacity.md` |
 | Modify capacity control web UI | `frontend/web-providers.md` (OllamaCapacitySection) + `backend/capacity.md` |
+| Network flow SSE stream | `backend/jobs.md` (Real-Time Job Status Stream section) + `frontend/web.md` (useInferenceStream) |
+| Network flow visualization | `frontend/web.md` (Network Flow Page — Detail; ArgoCD-style ProviderFlowPanel topology) |
+| Queue depth (waiting jobs) | `backend/jobs.md` (Queue Depth section) — `GET /v1/dashboard/queue/depth`; 3-key LLEN; `queueDepthQuery` polls 3 s |

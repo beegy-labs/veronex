@@ -1,21 +1,23 @@
 'use client'
 
-import type { Backend, GpuServer } from '@/lib/types'
+import { useQuery } from '@tanstack/react-query'
+import type { Backend } from '@/lib/types'
+import { queueDepthQuery } from '@/lib/queries'
 import { useInferenceStream } from '@/hooks/use-inference-stream'
 import { ProviderFlowPanel } from './provider-flow-panel'
 import { LiveFeed } from './live-feed'
 
 interface Props {
   backends: Backend[]
-  servers: GpuServer[]
 }
 
-export function NetworkFlowTab({ backends, servers }: Props) {
-  const events = useInferenceStream(backends, servers)
+export function NetworkFlowTab({ backends }: Props) {
+  const events = useInferenceStream(backends)
+  const { data: depth } = useQuery(queueDepthQuery)
 
   return (
     <div className="space-y-4">
-      <ProviderFlowPanel backends={backends} servers={servers} events={events} />
+      <ProviderFlowPanel backends={backends} events={events} queueDepth={depth?.total ?? 0} />
       <LiveFeed events={events} />
     </div>
   )

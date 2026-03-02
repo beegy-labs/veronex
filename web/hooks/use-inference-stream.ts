@@ -1,9 +1,10 @@
 'use client'
 
 import { useEffect, useRef, useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { flowJobsQuery } from '@/lib/queries/flow'
-import type { Backend, GpuServer, Job } from '@/lib/types'
+import { getAccessToken } from '@/lib/auth'
+import type { Backend } from '@/lib/types'
+
+const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
 
 export interface FlowEvent {
   /** Unique per-event: jobId + phase + spawn timestamp */
@@ -11,130 +12,143 @@ export interface FlowEvent {
   jobId: string
   provider: 'ollama' | 'gemini' | string
   backendName: string
-  /** Linked GPU server name — null for Gemini or unlinked Ollama */
-  serverName: string | null
   model: string
-  status: Job['status']
+  status: string
   latencyMs: number | null
   /** Unix ms when this event was detected */
   ts: number
   /**
    * enqueue  = job placed in Valkey queue (API → Queue)
-   * dispatch = job dequeued, dispatched to Provider → GPU Server (pending → running)
-   * response = inference complete, result returned (running → completed | failed)
+   * dispatch = job sent to Provider (pending → running)
+   * response = inference complete (running → completed | failed)
    */
   phase: 'enqueue' | 'dispatch' | 'response'
 }
 
+/** Raw shape of JobStatusEvent from the SSE stream */
+interface RawJobStatusEvent {
+  id: string
+  status: string
+  model_name: string
+  backend: string
+  latency_ms: number | null
+}
+
 /**
- * Polls /v1/dashboard/jobs every 5 s and emits FlowEvents:
- *  - 'enqueue'  on new job detection (job placed in Valkey queue)
- *  - 'dispatch' when a job transitions pending → running (sent to provider/server)
- *  - 'response' when a job transitions pending|running → completed|failed
+ * Connects to /v1/dashboard/jobs/stream (SSE) and emits FlowEvents in real time.
+ * Each SSE event carries a single job status transition — no polling needed.
  *
- * First mount init:
- *  - pending jobs → enqueue (still waiting in queue)
- *  - running jobs → dispatch (currently being processed)
+ * Phase mapping:
+ *  pending  → enqueue  (job entered Valkey queue)
+ *  running  → dispatch (job sent to provider)
+ *  completed | failed | cancelled → response
  *
  * Returns a rolling list of the 50 most recent events (newest first).
  */
-export function useInferenceStream(
-  backends: Backend[],
-  servers: GpuServer[],
-): FlowEvent[] {
-  const statusMap   = useRef<Map<string, Job['status']>>(new Map())
-  const initialized = useRef(false)
+export function useInferenceStream(backends: Backend[]): FlowEvent[] {
   const [events, setEvents] = useState<FlowEvent[]>([])
 
-  /** backend name → { provider, serverName } */
-  const backendMeta = useMemo(() => {
-    const serverById = new Map(servers.map(s => [s.id, s.name]))
-    return new Map(
-      backends.map(b => [
-        b.name,
-        {
-          provider:   b.backend_type as 'ollama' | 'gemini',
-          serverName: b.server_id ? (serverById.get(b.server_id) ?? null) : null,
-        },
-      ]),
-    )
-  }, [backends, servers])
+  /** backend name → provider type */
+  const backendTypeMap = useMemo(
+    () => new Map(backends.map(b => [b.name, b.backend_type as 'ollama' | 'gemini'])),
+    [backends],
+  )
 
-  const { data } = useQuery(flowJobsQuery)
+  const backendTypeMapRef = useRef(backendTypeMap)
+  useEffect(() => { backendTypeMapRef.current = backendTypeMap }, [backendTypeMap])
 
   useEffect(() => {
-    if (!data) return
-    const jobs = data.jobs
-    const now  = Date.now()
+    let active = true
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let retryDelay = 2_000
 
-    if (!initialized.current) {
-      // First mount: snapshot all statuses.
-      // Emit enqueue for pending (in queue) and dispatch for running (being processed).
-      const initEvents: FlowEvent[] = []
-      jobs.forEach(j => {
-        statusMap.current.set(j.id, j.status)
-        const meta = backendMeta.get(j.backend)
-        const base = {
-          jobId: j.id, provider: meta?.provider ?? 'ollama', backendName: j.backend,
-          serverName: meta?.serverName ?? null, model: j.model_name,
-          status: j.status, latencyMs: j.latency_ms, ts: now,
-        }
-        if (j.status === 'pending') {
-          initEvents.push({ id: `${j.id}-init-${now}`, ...base, phase: 'enqueue' })
-        } else if (j.status === 'running') {
-          initEvents.push({ id: `${j.id}-init-${now}`, ...base, phase: 'dispatch' })
-        }
+    function connect() {
+      const token = getAccessToken()
+      if (!token) return
+
+      const ctrl = new AbortController()
+
+      fetch(`${BASE}/v1/dashboard/jobs/stream`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
       })
-      initialized.current = true
-      if (initEvents.length > 0) setEvents(initEvents)
-      return
+        .then(async res => {
+          if (!res.ok || !res.body) throw new Error(`SSE ${res.status}`)
+          retryDelay = 2_000 // reset backoff on success
+
+          const reader = res.body.getReader()
+          const decoder = new TextDecoder()
+          let buf = ''
+
+          while (active) {
+            const { value, done } = await reader.read()
+            if (done) break
+            buf += decoder.decode(value, { stream: true })
+
+            // SSE frames end with '\n\n'
+            const frames = buf.split('\n\n')
+            buf = frames.pop() ?? ''
+
+            for (const frame of frames) {
+              // Parse 'data: {...}' lines
+              const dataLine = frame.split('\n').find(l => l.startsWith('data:'))
+              if (!dataLine) continue
+              try {
+                const raw: RawJobStatusEvent = JSON.parse(dataLine.slice(5).trim())
+                const phase =
+                  raw.status === 'pending'
+                    ? 'enqueue'
+                    : raw.status === 'running'
+                      ? 'dispatch'
+                      : 'response'
+
+                const provider =
+                  backendTypeMapRef.current.get(raw.backend) ?? 'ollama'
+
+                const event: FlowEvent = {
+                  id: `${raw.id}-${raw.status}-${Date.now()}`,
+                  jobId: raw.id,
+                  provider,
+                  backendName: raw.backend,
+                  model: raw.model_name,
+                  status: raw.status,
+                  latencyMs: raw.latency_ms,
+                  ts: Date.now(),
+                  phase,
+                }
+
+                if (active) {
+                  setEvents(prev => [event, ...prev].slice(0, 50))
+                }
+              } catch {
+                // malformed JSON — skip
+              }
+            }
+          }
+        })
+        .catch(err => {
+          if (!active) return
+          if ((err as Error).name === 'AbortError') return
+          // Reconnect with exponential backoff (max 30 s)
+          retryTimer = setTimeout(() => {
+            if (active) {
+              retryDelay = Math.min(retryDelay * 2, 30_000)
+              connect()
+            }
+          }, retryDelay)
+        })
+
+      return ctrl
     }
 
-    const newEvents: FlowEvent[] = []
+    const ctrl = connect()
 
-    for (const j of jobs) {
-      const prevStatus = statusMap.current.get(j.id)
-      const meta = backendMeta.get(j.backend)
-      const base = {
-        jobId: j.id, provider: meta?.provider ?? 'ollama', backendName: j.backend,
-        serverName: meta?.serverName ?? null, model: j.model_name,
-        status: j.status, latencyMs: j.latency_ms, ts: now,
-      }
-
-      if (prevStatus === undefined) {
-        // First time seeing this job — emit based on current status
-        statusMap.current.set(j.id, j.status)
-        if (j.status === 'running') {
-          // Missed pending state — show dispatch (already past enqueue)
-          newEvents.push({ id: `${j.id}-dsp-${now}`, ...base, phase: 'dispatch' })
-        } else if (j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled') {
-          // Missed entire pipeline — show response
-          newEvents.push({ id: `${j.id}-res-${now}`, ...base, phase: 'response' })
-        } else {
-          // pending or unknown — enqueue
-          newEvents.push({ id: `${j.id}-enq-${now}`, ...base, phase: 'enqueue' })
-        }
-      } else if (prevStatus === 'pending' && j.status === 'running') {
-        // Dispatched to provider/server
-        statusMap.current.set(j.id, j.status)
-        newEvents.push({ id: `${j.id}-dsp-${now}`, ...base, phase: 'dispatch' })
-      } else if (
-        (prevStatus === 'pending' || prevStatus === 'running') &&
-        (j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled')
-      ) {
-        // Inference finished or cancelled — response animation (bypasses queue on return)
-        statusMap.current.set(j.id, j.status)
-        newEvents.push({ id: `${j.id}-res-${now}`, ...base, phase: 'response' })
-      } else if (prevStatus !== j.status) {
-        // Any other status change — update map only, no animation
-        statusMap.current.set(j.id, j.status)
-      }
+    return () => {
+      active = false
+      ctrl?.abort()
+      if (retryTimer) clearTimeout(retryTimer)
     }
-
-    if (newEvents.length > 0) {
-      setEvents(prev => [...newEvents, ...prev].slice(0, 50))
-    }
-  }, [data, backendMeta])
+  }, []) // connect once on mount; backendTypeMapRef stays current via ref
 
   return events
 }

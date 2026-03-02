@@ -120,6 +120,8 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/dashboard/analytics", get(usage_handlers::get_analytics))
         // Dashboard
         .route("/v1/dashboard/stats", get(dashboard_handlers::get_stats))
+        .route("/v1/dashboard/queue/depth", get(dashboard_handlers::get_queue_depth))
+        .route("/v1/dashboard/jobs/stream", get(dashboard_handlers::job_events_sse))
         .route("/v1/dashboard/jobs", get(dashboard_handlers::list_jobs))
         .route(
             "/v1/dashboard/jobs/{id}",
@@ -164,6 +166,12 @@ fn build_jwt_router() -> Router<AppState> {
                 .patch(dashboard_handlers::patch_capacity_settings),
         )
         .route("/v1/dashboard/capacity/sync", post(dashboard_handlers::trigger_capacity_sync))
+        // Lab (experimental) features
+        .route(
+            "/v1/dashboard/lab",
+            get(dashboard_handlers::get_lab_settings)
+                .patch(dashboard_handlers::patch_lab_settings),
+        )
 }
 
 /// Build the full application router with health endpoints and middleware.

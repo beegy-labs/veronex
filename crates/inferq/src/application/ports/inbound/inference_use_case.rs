@@ -28,7 +28,12 @@ pub trait InferenceUseCase: Send + Sync {
         source: JobSource,
         api_format: ApiFormat,
         messages: Option<serde_json::Value>,
+        tools: Option<serde_json::Value>,
         request_path: Option<String>,
+        conversation_id: Option<String>,
+        // Billing tier of the API key: `Some("paid")` routes to the high-priority queue.
+        // `None` or `Some("free")` uses the standard queue.
+        key_tier: Option<String>,
     ) -> Result<JobId>;
 
     /// Process a job synchronously (used by the queue worker).

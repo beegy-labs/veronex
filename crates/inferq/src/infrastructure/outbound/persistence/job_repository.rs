@@ -129,6 +129,11 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
     let api_format_str: String = row.try_get("api_format").unwrap_or_else(|_| "openai_compat".to_string());
     let backend_id: Option<Uuid> = row.try_get("backend_id").unwrap_or(None);
     let request_path: Option<String> = row.try_get("request_path").unwrap_or(None);
+    let conversation_id: Option<String> = row.try_get("conversation_id").unwrap_or(None);
+    let tool_calls_json: Option<serde_json::Value> = row.try_get("tool_calls_json").unwrap_or(None);
+    let messages_json: Option<serde_json::Value> = row.try_get("messages_json").unwrap_or(None);
+    let queue_time_ms: Option<i32> = row.try_get("queue_time_ms").unwrap_or(None);
+    let cancelled_at: Option<DateTime<Utc>> = row.try_get("cancelled_at").unwrap_or(None);
 
     Ok(InferenceJob {
         id: JobId(id),
@@ -151,8 +156,13 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         source: str_to_source(&source_str),
         backend_id,
         api_format: str_to_api_format(&api_format_str),
-        messages: None,
+        messages: messages_json, // persisted as messages_json (migration 000045)
+        tools: None,             // not persisted — in-memory only during dispatch
         request_path,
+        queue_time_ms,
+        cancelled_at,
+        conversation_id,
+        tool_calls_json,
     })
 }
 
@@ -168,8 +178,8 @@ impl JobRepository for PostgresJobRepository {
     async fn save(&self, job: &InferenceJob) -> Result<()> {
         sqlx::query(
             "INSERT INTO inference_jobs
-                 (id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+                 (id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
              ON CONFLICT (id) DO UPDATE SET
                  status            = EXCLUDED.status,
                  error             = EXCLUDED.error,
@@ -181,7 +191,11 @@ impl JobRepository for PostgresJobRepository {
                  prompt_tokens     = COALESCE(EXCLUDED.prompt_tokens, inference_jobs.prompt_tokens),
                  completion_tokens = COALESCE(EXCLUDED.completion_tokens, inference_jobs.completion_tokens),
                  cached_tokens     = COALESCE(EXCLUDED.cached_tokens, inference_jobs.cached_tokens),
-                 backend_id        = COALESCE(EXCLUDED.backend_id, inference_jobs.backend_id)",
+                 backend_id        = COALESCE(EXCLUDED.backend_id, inference_jobs.backend_id),
+                 tool_calls_json   = COALESCE(EXCLUDED.tool_calls_json, inference_jobs.tool_calls_json),
+                 messages_json     = COALESCE(EXCLUDED.messages_json, inference_jobs.messages_json),
+                 queue_time_ms     = COALESCE(EXCLUDED.queue_time_ms, inference_jobs.queue_time_ms),
+                 cancelled_at      = COALESCE(EXCLUDED.cancelled_at, inference_jobs.cancelled_at)",
         )
         .bind(job.id.0)
         .bind(job.prompt.as_str())
@@ -204,6 +218,11 @@ impl JobRepository for PostgresJobRepository {
         .bind(job.backend_id)
         .bind(api_format_to_str(job.api_format))
         .bind(&job.request_path)
+        .bind(&job.conversation_id)
+        .bind(&job.tool_calls_json)
+        .bind(&job.messages)   // full input context (messages_json)
+        .bind(job.queue_time_ms)
+        .bind(job.cancelled_at)
         .execute(&self.pool)
         .await
         .context("failed to save inference job")?;
@@ -213,7 +232,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn get(&self, job_id: &JobId) -> Result<Option<InferenceJob>> {
         let row = sqlx::query(
-            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path
+            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at
              FROM inference_jobs
              WHERE id = $1",
         )
@@ -239,9 +258,25 @@ impl JobRepository for PostgresJobRepository {
         Ok(())
     }
 
+    async fn cancel_job(&self, job_id: &JobId, cancelled_at: DateTime<Utc>) -> Result<()> {
+        sqlx::query(
+            "UPDATE inference_jobs
+             SET status = 'cancelled', cancelled_at = $2
+             WHERE id = $1
+               AND status NOT IN ('completed', 'failed')",
+        )
+        .bind(job_id.0)
+        .bind(cancelled_at)
+        .execute(&self.pool)
+        .await
+        .context("failed to cancel inference job")?;
+
+        Ok(())
+    }
+
     async fn list_pending(&self) -> Result<Vec<InferenceJob>> {
         let rows = sqlx::query(
-            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path
+            "SELECT id, prompt, model_name, backend, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, backend_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at
              FROM inference_jobs
              WHERE status IN ('pending', 'running')
              ORDER BY created_at ASC",

@@ -1,6 +1,6 @@
 # Backends — Ollama: Registration, Routing & Health
 
-> SSOT | **Last Updated**: 2026-03-02 (rev: CachingBackendRegistry — 5s TTL cache wrapping PostgresBackendRegistry)
+> SSOT | **Last Updated**: 2026-03-02 (rev: Ollama model enable/disable — `backend_selected_models` per-backend toggle, selection filter in router)
 
 ## Task Guide
 
@@ -14,6 +14,8 @@
 | Change thermal throttle thresholds | `infrastructure/outbound/capacity/thermal.rs` → `ThermalThrottleMap::update()` |
 | Add new LlmBackend DB column | `migrations/` new file + `domain/entities/llm_backend.rs` + `persistence/backend_registry.rs` |
 | Change backend list cache TTL | `persistence/caching_backend_registry.rs` → `CachingBackendRegistry::new()` TTL arg in `main.rs` |
+| Toggle a model on/off per Ollama backend | `PATCH /v1/backends/{id}/selected-models/{model}` → `set_model_enabled()` in `backend_handlers.rs` |
+| Change Ollama model selection defaults | `backend_handlers.rs` → `list_selected_models()` Ollama branch — default is `true` |
 
 ## Key Files
 
@@ -98,6 +100,16 @@ POST   /v1/backends/{id}/models/sync
        → { models, synced: true }
 
 GET    /v1/backends/{id}/key         → { api_key: "AIza…" } (decrypted, admin only)
+
+GET    /v1/backends/{id}/selected-models
+       Ollama → per-backend model list (ollama_models) merged with backend_selected_models
+               default is_enabled = true for rows not yet in selection table
+       Gemini → global gemini_models merged with backend_selected_models (default false)
+       → { models: [{ model_name, is_enabled, synced_at }, ...] }
+
+PATCH  /v1/backends/{id}/selected-models/{model_name}
+       { is_enabled: bool } → 204
+       (shared with Gemini — same handler, same table)
 ```
 
 ### Global Model Pool (ollama_model_handlers.rs)
@@ -194,6 +206,12 @@ Concurrency slots (ConcurrencySlotMap):
   Range: 1–8 slots; updated atomically (Semaphore replacement; in-flight permits unaffected)
 
 → Full concurrency + thermal spec: `docs/llm/backend/capacity.md`
+
+Model selection filter (pick_best_backend):
+  After VRAM candidate list: list_enabled(backend_id) from model_selection_repo
+  Non-empty list + model not in list → skip backend (disabled)
+  Empty list or error → include backend (backward compat — no restriction)
+→ Full model selection spec: `docs/llm/backend/backends-ollama-models.md`
 ```
 
 ---
@@ -229,10 +247,33 @@ fn stream_tokens(&self, job: &InferenceJob) -> Pin<Box<dyn Stream<...>>> {
 | `job.messages = None` | `POST /api/generate` | `POST /v1/inference` (VeronexNative) |
 | `job.messages = Some(...)` | `POST /api/chat` | All compat handlers (OpenAI, Ollama, Gemini) |
 
+### Context Length (`num_ctx`) per Request
+
+Every Ollama request includes `options.num_ctx` derived from `model_effective_num_ctx(model_name)`:
+
+```rust
+fn model_effective_num_ctx(model: &str) -> u32 {
+    let m = model.to_lowercase();
+    if m.contains("200k")                     { return 204_800; }
+    if m.contains("128k")                     { return 131_072; }
+    if m.contains("1m")                       { return 131_072; } // 1M models: 128K practical limit
+    if m.contains("72b") || m.contains("70b") { return  32_768; }
+    32_768 // default for 7B–32B models
+}
+```
+
+This per-request override ensures each model uses its natural context window regardless of the global `OLLAMA_CONTEXT_LENGTH` env var on the Ollama server.
+
+**Why this matters**: Without `options.num_ctx`, all models fall back to `OLLAMA_CONTEXT_LENGTH` (e.g. `8192`). A 128K model receiving a 24K-token conversation gets silently truncated → model gives incomplete answers → client retries with growing context → retry storm.
+
+**Dual protection** (belt + suspenders):
+1. GitOps: `OLLAMA_CONTEXT_LENGTH: 204800` on Ollama StatefulSet (global floor)
+2. Veronex: `options.num_ctx` per request (model-specific override)
+
 ### `/api/generate` — single prompt
 
 ```json
-{ "model": "qwen3:8b", "prompt": "...", "stream": true, "think": false }
+{ "model": "qwen3:8b", "prompt": "...", "stream": true, "think": false, "options": {"num_ctx": 32768} }
 ```
 
 ```rust
@@ -257,7 +298,8 @@ struct GenerateResponse {
     {"role": "user",   "content": "..."}
   ],
   "stream": true,
-  "think": false
+  "think": false,
+  "options": {"num_ctx": 32768}
 }
 ```
 

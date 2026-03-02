@@ -1,4 +1,5 @@
 pub mod account_repository;
+pub mod lab_settings_repository;
 pub mod capacity_settings_repository;
 pub mod model_capacity_repository;
 pub mod analytics_repository;

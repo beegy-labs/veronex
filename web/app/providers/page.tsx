@@ -146,7 +146,7 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
         total_vram_mb: vram ? parseInt(vram, 10) : 0,
         gpu_index: gpuIndex !== 'none' && gpuIndex !== '' ? parseInt(gpuIndex, 10) : null,
         server_id: serverId !== 'none' ? serverId : null,
-        ...(backend.backend_type === 'gemini' && { is_free_tier: isFreeTier }),
+        is_free_tier: isFreeTier,
       }
       return api.updateBackend(backend.id, body)
     },
@@ -228,6 +228,14 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
                   )}
                 </div>
                 <VramInput valueMb={vram} onChange={setVram} />
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">{t('backends.ollama.freeTier')}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{t('backends.ollama.freeTierDesc')}</p>
+                </div>
+                <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} />
               </div>
             </>
           )}
@@ -850,69 +858,92 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
 
 function OllamaBackendModelsModal({ backend, onClose }: { backend: Backend; onClose: () => void }) {
   const { t } = useTranslation()
-  const [search, setSearch] = useState('')
+  const queryClient = useQueryClient()
 
-  const { data, isLoading } = useQuery<{ models: string[] }>({
-    queryKey: ['ollama-backend-models', backend.id],
-    queryFn: () => api.ollamaBackendModels(backend.id),
-    staleTime: 30_000,
+  const { data, isLoading } = useQuery(selectedModelsQuery(backend.id))
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ modelName, isEnabled }: { modelName: string; isEnabled: boolean }) =>
+      api.setModelEnabled(backend.id, modelName, isEnabled),
+    onMutate: async ({ modelName, isEnabled }) => {
+      await queryClient.cancelQueries({ queryKey: ['selected-models', backend.id] })
+      const prev = queryClient.getQueryData<{ models: BackendSelectedModel[] }>(['selected-models', backend.id])
+      queryClient.setQueryData<{ models: BackendSelectedModel[] }>(['selected-models', backend.id], (old) => {
+        if (!old) return old
+        return {
+          models: old.models.map((m) =>
+            m.model_name === modelName ? { ...m, is_enabled: isEnabled } : m,
+          ),
+        }
+      })
+      return { prev }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.prev) {
+        queryClient.setQueryData(['selected-models', backend.id], context.prev)
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['selected-models', backend.id] })
+    },
   })
 
-  const models = (data?.models ?? []).filter((m) =>
-    m.toLowerCase().includes(search.toLowerCase())
-  )
+  const models = data?.models ?? []
+  const enabledCount = models.filter((m) => m.is_enabled).length
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-sm">
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Cpu className="h-4 w-4 text-accent-gpu" />
-            {backend.name}
+            <ListFilter className="h-4 w-4 text-accent-gpu" />
+            {t('backends.ollama.modelSelection')}
+            <span className="text-muted-foreground font-normal text-sm">— {backend.name}</span>
           </DialogTitle>
         </DialogHeader>
 
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground/60 pointer-events-none" />
-          <Input
-            className="pl-8 h-8 text-sm"
-            placeholder={t('backends.ollama.ollamaSearchModels')}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+        <p className="text-xs text-muted-foreground -mt-1">
+          {t('backends.ollama.modelSelectionDesc')}
+        </p>
 
         {isLoading && (
-          <p className="text-sm text-muted-foreground py-4 text-center animate-pulse">{t('common.loading')}</p>
+          <div className="flex h-20 items-center justify-center text-muted-foreground text-sm animate-pulse">
+            {t('common.loading')}
+          </div>
         )}
 
-        {!isLoading && data?.models.length === 0 && (
-          <p className="text-sm text-muted-foreground py-4 text-center italic">
+        {!isLoading && models.length === 0 && (
+          <p className="text-sm text-muted-foreground py-4 text-center">
             {t('backends.ollama.noBackendModels')}
           </p>
         )}
 
-        {!isLoading && models.length === 0 && search && (
-          <p className="text-sm text-muted-foreground py-2 text-center italic">
-            {t('backends.ollama.noModelsMatch')} &ldquo;{search}&rdquo;
-          </p>
-        )}
-
-        {!isLoading && models.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 max-h-64 overflow-y-auto py-1">
+        {models.length > 0 && (
+          <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
             {models.map((m) => (
-              <Badge key={m} variant="outline" className="font-mono text-[11px] px-2 py-0.5">
-                {m}
-              </Badge>
+              <div key={m.model_name}
+                className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+                <span className="font-mono text-sm text-text-bright">{m.model_name}</span>
+                <Switch
+                  checked={m.is_enabled}
+                  onCheckedChange={(checked) =>
+                    toggleMutation.mutate({ modelName: m.model_name, isEnabled: checked })
+                  }
+                  disabled={toggleMutation.isPending}
+                />
+              </div>
             ))}
           </div>
         )}
 
+        {models.length > 0 && (
+          <p className="text-xs text-muted-foreground text-right">
+            {t('backends.ollama.enabledCount', { enabled: enabledCount, total: models.length })}
+          </p>
+        )}
+
         <DialogFooter>
-          <span className="text-xs text-muted-foreground mr-auto">
-            {t('backends.ollama.modelsCount', { count: data?.models.length ?? 0 })}
-          </span>
-          <Button variant="outline" size="sm" onClick={onClose}>{t('common.close')}</Button>
+          <Button variant="outline" onClick={onClose}>{t('common.close')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1750,7 +1781,14 @@ function OllamaTab({
                   return (
                     <TableRow key={b.id}>
                       <TableCell>
-                        <div className="font-semibold text-text-bright mb-1">{b.name}</div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-semibold text-text-bright">{b.name}</span>
+                          {b.is_free_tier && (
+                            <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
+                              {t('backends.ollama.freeTier')}
+                            </Badge>
+                          )}
+                        </div>
                         {b.url && (
                           <span className="font-mono text-xs text-muted-foreground/70">{extractHost(b.url)}</span>
                         )}
@@ -1831,7 +1869,7 @@ function OllamaTab({
                           <Button variant="ghost" size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
                             onClick={() => setViewModelsBackend(b)}
-                            title={t('backends.ollama.viewModels')}>
+                            title={t('backends.ollama.modelSelection')}>
                             <ListFilter className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="icon"

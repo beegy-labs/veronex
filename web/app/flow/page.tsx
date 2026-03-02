@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { backendsQuery, serversQuery } from '@/lib/queries'
+import { backendsQuery } from '@/lib/queries'
 import { useTranslation } from '@/i18n'
 import { NetworkFlowTab } from '@/app/overview/components/network-flow-tab'
 
@@ -9,7 +9,6 @@ export default function FlowPage() {
   const { t } = useTranslation()
 
   const { data: backends } = useQuery(backendsQuery)
-  const { data: servers } = useQuery(serversQuery)
 
   return (
     <div className="space-y-6">
@@ -18,10 +17,7 @@ export default function FlowPage() {
         <p className="text-muted-foreground mt-1 text-sm">{t('overview.networkFlowDesc')}</p>
       </div>
 
-      <NetworkFlowTab
-        backends={backends ?? []}
-        servers={servers ?? []}
-      />
+      <NetworkFlowTab backends={backends ?? []} />
     </div>
   )
 }

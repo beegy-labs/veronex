@@ -22,6 +22,9 @@ pub trait ApiKeyRepository: Send + Sync {
     /// Toggle is_active without hiding the key.
     async fn set_active(&self, key_id: &Uuid, active: bool) -> Result<()>;
 
+    /// Update billing tier: `"paid"` | `"free"`.
+    async fn set_tier(&self, key_id: &Uuid, tier: &str) -> Result<()>;
+
     /// Soft-delete: set deleted_at so the key disappears from list and cannot authenticate.
     async fn soft_delete(&self, key_id: &Uuid) -> Result<()>;
 }
@@ -81,6 +84,14 @@ mod tests {
             let mut keys = self.keys.lock().await;
             if let Some(key) = keys.iter_mut().find(|k| k.id == *key_id) {
                 key.is_active = active;
+            }
+            Ok(())
+        }
+
+        async fn set_tier(&self, key_id: &Uuid, tier: &str) -> Result<()> {
+            let mut keys = self.keys.lock().await;
+            if let Some(key) = keys.iter_mut().find(|k| k.id == *key_id) {
+                key.tier = tier.to_string();
             }
             Ok(())
         }

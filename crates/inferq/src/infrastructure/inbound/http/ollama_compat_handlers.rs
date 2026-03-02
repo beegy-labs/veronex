@@ -30,12 +30,45 @@ use super::state::AppState;
 pub struct OllamaGenerateBody {
     model: String,
     prompt: String,
+    /// Text to append after the response (FIM / fill-in-the-middle).
+    #[serde(default)]
+    suffix: Option<String>,
+    /// System prompt override.
+    #[serde(default)]
+    system: Option<String>,
+    /// Base64-encoded images for multimodal requests.
+    #[serde(default)]
+    images: Option<Vec<String>>,
+    /// Structured output format ("json" or JSON schema).
+    #[serde(default)]
+    format: Option<serde_json::Value>,
+    /// Runtime generation options (temperature, num_ctx, top_p, …).
+    #[serde(default)]
+    options: Option<serde_json::Value>,
+    /// Disable prompt templating (raw passthrough).
+    #[serde(default)]
+    raw: Option<bool>,
+    /// How long to keep the model loaded after this request.
+    #[serde(default)]
+    keep_alive: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
 pub struct OllamaChatBody {
     model: String,
     messages: Vec<serde_json::Value>,
+    /// Tool/function definitions forwarded to the model.
+    #[serde(default)]
+    tools: Option<Vec<serde_json::Value>>,
+    /// Structured output format.
+    #[serde(default)]
+    format: Option<serde_json::Value>,
+    /// Runtime generation options.
+    #[serde(default)]
+    options: Option<serde_json::Value>,
+    /// How long to keep the model loaded.
+    #[serde(default)]
+    keep_alive: Option<serde_json::Value>,
 }
 
 // ── Model listing (Veronex-owned) ───────────────────────────────────────────────
@@ -90,8 +123,10 @@ pub async fn list_local_models(State(state): State<AppState>) -> Response {
 pub async fn generate(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<OllamaGenerateBody>,
 ) -> Response {
+    let conversation_id = headers.get("x-conversation-id").and_then(|v| v.to_str().ok()).map(str::to_string);
     if req.prompt.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -113,7 +148,10 @@ pub async fn generate(
             JobSource::Api,
             ApiFormat::OllamaNative,
             None,
+            None, // no tools for /api/generate
             Some("/api/generate".to_string()),
+            conversation_id,
+            Some(api_key.tier.clone()),
         )
         .await
     {
@@ -174,8 +212,10 @@ pub async fn generate(
 pub async fn chat(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<OllamaChatBody>,
 ) -> Response {
+    let conversation_id = headers.get("x-conversation-id").and_then(|v| v.to_str().ok()).map(str::to_string);
     // Extract last user message as display prompt (required by InferenceJob).
     let prompt = req
         .messages
@@ -196,6 +236,7 @@ pub async fn chat(
 
     let model = req.model.clone();
     let messages = serde_json::Value::Array(req.messages);
+    let tools = req.tools.map(serde_json::Value::Array);
 
     let job_id = match state
         .use_case
@@ -208,7 +249,10 @@ pub async fn chat(
             JobSource::Api,
             ApiFormat::OllamaNative,
             Some(messages),
+            tools,
             Some("/api/chat".to_string()),
+            conversation_id,
+            Some(api_key.tier.clone()),
         )
         .await
     {
@@ -230,6 +274,20 @@ pub async fn chat(
         let model = model_clone.clone();
         let created_at = chrono::Utc::now().to_rfc3339();
         let line = match result {
+            Ok(token) if token.tool_calls.is_some() => {
+                // Model returned tool calls — emit in Ollama NDJSON format.
+                // The client (Qwen Code) expects message.tool_calls, not content.
+                serde_json::json!({
+                    "model": model,
+                    "created_at": created_at,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": token.tool_calls,
+                    },
+                    "done": false,
+                })
+            }
             Ok(token) if token.is_final => serde_json::json!({
                 "model": model,
                 "created_at": created_at,
@@ -240,6 +298,7 @@ pub async fn chat(
                 "prompt_eval_count": token.prompt_tokens.unwrap_or(0),
                 "eval_count": token.completion_tokens.unwrap_or(0),
             }),
+            Ok(token) if token.value.is_empty() => return Ok(Bytes::new()),
             Ok(token) => serde_json::json!({
                 "model": model,
                 "created_at": created_at,

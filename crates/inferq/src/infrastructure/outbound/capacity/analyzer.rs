@@ -64,30 +64,39 @@ struct KvPerSlot {
     realistic:  i32, // kv_bytes × avg_tokens → MB (typical usage)
 }
 
-fn compute_kv_per_slot_mb(arch: &ModelArchProfile, stats: &ThroughputStats) -> KvPerSlot {
+fn compute_kv_per_slot_mb(
+    arch:               &ModelArchProfile,
+    stats:              &ThroughputStats,
+    bytes_per_element:  u64, // 1 = q8_0/q4, 2 = bf16/fp16
+) -> KvPerSlot {
     if arch.num_layers == 0 {
-        // No architecture info — use conservative fallback
+        // No architecture info — conservative fallback
         return KvPerSlot { worst_case: 256, realistic: 128 };
     }
 
-    // KV cache per token: 2 (K+V) × layers × kv_heads × head_dim × 2 bytes (BF16)
+    // KV cache per token: 2 (K+V) × layers × kv_heads × head_dim × bytes_per_element
     let kv_bytes_per_token = 2u64
         * arch.num_layers as u64
         * arch.num_kv_heads as u64
         * arch.head_dim as u64
-        * 2; // BF16
+        * bytes_per_element;
 
-    let num_ctx = if arch.configured_ctx > 0 {
-        arch.configured_ctx
-    } else {
-        arch.max_ctx.min(4096)
+    // Fix: clamp to the model's native maximum.
+    // If OLLAMA_CONTEXT_LENGTH (e.g. 204800) exceeds the model's actual max_ctx
+    // (e.g. 32768 for qwen2.5:7b), using configured_ctx would over-estimate
+    // KV cache by 6× and cause the slot calculator to under-allocate.
+    let effective_ctx = match (arch.configured_ctx, arch.max_ctx) {
+        (c, m) if c > 0 && m > 0 => c.min(m),
+        (c, _) if c > 0           => c,
+        (_, m) if m > 0           => m,
+        _                          => 4_096,
     };
 
     let avg_tokens = (stats.avg_prompt_tokens + stats.avg_output_tokens).max(128.0) as u64;
 
     KvPerSlot {
-        worst_case: ((kv_bytes_per_token * num_ctx as u64) / 1_048_576).max(64) as i32,
-        realistic:  ((kv_bytes_per_token * avg_tokens) / 1_048_576).max(32) as i32,
+        worst_case: ((kv_bytes_per_token * effective_ctx as u64) / 1_048_576).max(64) as i32,
+        realistic:  ((kv_bytes_per_token * avg_tokens)           / 1_048_576).max(32) as i32,
     }
 }
 
@@ -237,15 +246,16 @@ Respond ONLY with valid JSON (no markdown):
 // ── Per-backend analysis ──────────────────────────────────────────────────────
 
 async fn analyze_backend(
-    client:         &reqwest::Client,
-    backend_id:     Uuid,
-    backend_name:   &str,
-    ollama_url:     &str,
-    analyzer_url:   &str,
-    analyzer_model: &str,
-    capacity_repo:  &dyn ModelCapacityRepository,
-    slot_map:       &ConcurrencySlotMap,
-    valkey_pool:    Option<&fred::clients::RedisPool>,
+    client:              &reqwest::Client,
+    backend_id:          Uuid,
+    backend_name:        &str,
+    ollama_url:          &str,
+    analyzer_url:        &str,
+    analyzer_model:      &str,
+    capacity_repo:       &dyn ModelCapacityRepository,
+    slot_map:            &ConcurrencySlotMap,
+    valkey_pool:         Option<&fred::clients::Pool>,
+    ollama_num_parallel: u32,
 ) -> Result<()> {
     // 1. Ollama /api/ps — currently loaded models + their VRAM
     let ps: OllamaProcessStatus = client
@@ -285,17 +295,22 @@ async fn analyze_backend(
             .flatten()
             .unwrap_or_default();
 
-        // 5. KV cache per slot (accurate formula)
-        let kv = compute_kv_per_slot_mb(&arch, &stats);
+        // 5. KV cache per slot (accurate formula).
+        //    OLLAMA_KV_CACHE_TYPE=q8_0 → 1 byte per element (not BF16's 2).
+        //    Ollama uses q8_0 by default on this deployment, so we match it.
+        let kv = compute_kv_per_slot_mb(&arch, &stats, 1 /* q8_0 = 1 byte */);
 
-        // 6. Math-based slot estimate (dual: realistic + worst-case safety)
+        // 6. Math-based slot estimate.
+        //    Upper bound is OLLAMA_NUM_PARALLEL — Ollama won't process more
+        //    requests concurrently than that regardless of VRAM headroom.
         let vram_buffer  = 512i32;
         let available_mb = vram_total_mb - loaded_vram_mb - vram_buffer;
         let math_slots = if available_mb > 0 && kv.realistic > 0 {
             let by_realistic = available_mb / kv.realistic;
             let by_worst     = available_mb / kv.worst_case.max(1);
-            // Use realistic estimate but cap at 2× worst-case for safety
-            (1 + by_realistic.min(by_worst * 2)).clamp(1, 8)
+            // Use realistic estimate but cap at 2× worst-case for safety,
+            // and never exceed OLLAMA_NUM_PARALLEL (Ollama's hard ceiling).
+            (1 + by_realistic.min(by_worst * 2)).clamp(1, ollama_num_parallel as i32)
         } else {
             1
         };
@@ -374,15 +389,16 @@ async fn analyze_backend(
 /// changes to `batch_interval_secs` and `batch_enabled`.  A `manual_trigger`
 /// Notify bypasses the interval check for immediate on-demand analysis.
 pub async fn run_capacity_analysis_loop(
-    registry:        Arc<dyn LlmBackendRegistry>,
-    capacity_repo:   Arc<dyn ModelCapacityRepository>,
-    settings_repo:   Arc<dyn CapacitySettingsRepository>,
-    slot_map:        Arc<ConcurrencySlotMap>,
-    valkey_pool:     Option<fred::clients::RedisPool>,
-    analyzer_url:    String,
-    manual_trigger:  Arc<Notify>,
-    base_tick:       Duration,
-    shutdown:        CancellationToken,
+    registry:            Arc<dyn LlmBackendRegistry>,
+    capacity_repo:       Arc<dyn ModelCapacityRepository>,
+    settings_repo:       Arc<dyn CapacitySettingsRepository>,
+    slot_map:            Arc<ConcurrencySlotMap>,
+    valkey_pool:         Option<fred::clients::Pool>,
+    analyzer_url:        String,
+    manual_trigger:      Arc<Notify>,
+    base_tick:           Duration,
+    shutdown:            CancellationToken,
+    ollama_num_parallel: u32,
 ) {
     let client = reqwest::Client::new();
     let mut ticker = tokio::time::interval(base_tick);
@@ -433,6 +449,7 @@ pub async fn run_capacity_analysis_loop(
                 &*capacity_repo,
                 &slot_map,
                 valkey_pool.as_ref(),
+                ollama_num_parallel,
             )
             .await
             {

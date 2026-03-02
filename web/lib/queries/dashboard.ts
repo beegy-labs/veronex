@@ -50,6 +50,16 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
   refetchIntervalInBackground: false,
 })
 
+// ── Queue depth (live — 3 s poll) ─────────────────────────────────────────────
+
+export const queueDepthQuery = queryOptions({
+  queryKey: ['queue-depth'] as const,
+  queryFn: () => api.queueDepth(),
+  staleTime: 2_000,
+  refetchInterval: 3_000,
+  refetchIntervalInBackground: false,
+})
+
 // ── Performance metrics ───────────────────────────────────────────────────────
 // refetchInterval scales with the window: longer windows change less frequently.
 

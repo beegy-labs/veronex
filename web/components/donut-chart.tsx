@@ -100,7 +100,7 @@ export function DonutChart({
           contentStyle={TOOLTIP_STYLE}
           labelStyle={TOOLTIP_LABEL_STYLE}
           itemStyle={TOOLTIP_ITEM_STYLE}
-          formatter={formatter ? (v: number) => formatter(v) : undefined}
+          formatter={formatter ? (v) => formatter(Number(v)) : undefined}
         />
       </PieChart>
     </ResponsiveContainer>

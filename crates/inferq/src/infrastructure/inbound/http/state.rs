@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 
-use tokio::sync::Notify;
+use tokio::sync::{broadcast, Notify};
 use uuid::Uuid;
+
+use crate::domain::value_objects::JobStatusEvent;
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
 use crate::application::ports::outbound::account_repository::AccountRepository;
@@ -12,6 +14,7 @@ use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
 use crate::application::ports::outbound::audit_port::AuditPort;
 use crate::application::ports::outbound::backend_model_selection::BackendModelSelectionRepository;
 use crate::application::ports::outbound::capacity_settings_repository::CapacitySettingsRepository;
+use crate::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
 use crate::application::ports::outbound::gemini_model_repository::GeminiModelRepository;
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
 use crate::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
@@ -41,7 +44,7 @@ pub struct AppState {
     pub model_selection_repo: Arc<dyn BackendModelSelectionRepository>,
     pub ollama_model_repo: Arc<dyn OllamaModelRepository>,
     pub ollama_sync_job_repo: Arc<dyn OllamaSyncJobRepository>,
-    pub valkey_pool: Option<fred::clients::RedisPool>,
+    pub valkey_pool: Option<fred::clients::Pool>,
     /// Analytics repository — proxies queries through veronex-analytics service.
     /// `None` when ANALYTICS_URL is not configured.
     pub analytics_repo: Option<Arc<dyn AnalyticsRepository>>,
@@ -63,4 +66,9 @@ pub struct AppState {
     pub capacity_manual_trigger: Arc<Notify>,
     /// Ollama URL used by the capacity analyzer (CAPACITY_ANALYZER_OLLAMA_URL).
     pub analyzer_url: String,
+    /// Broadcast channel sender for real-time job status events.
+    /// Handlers subscribe by calling `.subscribe()` on this sender.
+    pub job_event_tx: Arc<broadcast::Sender<JobStatusEvent>>,
+    /// Lab (experimental) feature flags — singleton row in DB.
+    pub lab_settings_repo: Arc<dyn LabSettingsRepository>,
 }

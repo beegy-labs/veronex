@@ -68,17 +68,46 @@ pub struct InferenceJob {
     /// Which API format the inbound request arrived via (route-based discriminator).
     #[serde(default)]
     pub api_format: ApiFormat,
-    /// Multi-turn chat messages in Ollama `/api/chat` format.
+    /// Full LLM input context — complete messages array in Ollama `/api/chat` format.
     ///
-    /// When Some, the OllamaAdapter uses `/api/chat` instead of `/api/generate`.
-    /// Not persisted to DB — stored only in the in-memory DashMap during dispatch.
+    /// Contains: system prompt + prior turns (user/assistant/tool) + current user message.
+    /// When Some, the OllamaAdapter routes to `/api/chat`; when None, to `/api/generate`.
+    ///
+    /// Persisted to DB as `messages_json JSONB` (migration 000045).
+    /// Serves as ground-truth training input: input=messages_json, output=result_text+tool_calls_json.
+    /// Can reach 100–500 KB for agentic sessions with large file contents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messages: Option<serde_json::Value>,
+    /// Tool/function definitions forwarded from the client (OpenAI or Ollama format).
+    /// Passed to the backend so it can produce proper `tool_calls` responses.
+    /// Not persisted to DB — in-memory only during dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<serde_json::Value>,
     /// The HTTP path of the inbound request that created this job.
     /// e.g. "/v1/chat/completions", "/api/chat", "/v1beta/models/gemini-2.0-flash:generateContent"
     /// Not set for jobs recovered on startup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_path: Option<String>,
+    /// Time the job spent waiting in the Valkey queue before dispatch (ms).
+    /// Computed as `started_at - created_at` when the job transitions to Running.
+    /// `None` while pending (not yet dispatched).
+    #[serde(default)]
+    pub queue_time_ms: Option<i32>,
+    /// Timestamp when a cancellation request was received.
+    /// Set by `InferenceUseCaseImpl::cancel()` for non-terminal jobs.
+    /// `None` if the job was never cancelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled_at: Option<DateTime<Utc>>,
+    /// Client-supplied conversation / thread ID (from X-Conversation-ID header).
+    /// Groups all LLM turns that belong to one agent session.
+    /// NULL for single-turn requests or clients that do not send the header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    /// Structured tool calls returned by the model (JSONB in DB).
+    /// Ollama format: `[{function: {name, arguments}}]`
+    /// Populated when the model made at least one tool call; None for text-only responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls_json: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,7 +225,12 @@ mod tests {
             backend_id: None,
             api_format: ApiFormat::OpenaiCompat,
             messages: None,
+            tools: None,
             request_path: None,
+            queue_time_ms: None,
+            cancelled_at: None,
+            conversation_id: None,
+            tool_calls_json: None,
         }
     }
 
@@ -281,6 +315,10 @@ mod tests {
             api_format: ApiFormat::OpenaiCompat,
             messages: None,
             request_path: None,
+            queue_time_ms: None,
+            cancelled_at: None,
+            conversation_id: None,
+            tool_calls_json: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());

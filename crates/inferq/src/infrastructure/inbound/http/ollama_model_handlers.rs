@@ -172,6 +172,7 @@ pub async fn sync_all_backends(State(state): State<AppState>) -> impl IntoRespon
     // Clone Arcs for the background task.
     let ollama_model_repo = state.ollama_model_repo.clone();
     let ollama_sync_job_repo = state.ollama_sync_job_repo.clone();
+    let model_selection_repo = state.model_selection_repo.clone();
 
     tokio::spawn(async move {
         let client = reqwest::Client::new();
@@ -208,6 +209,10 @@ pub async fn sync_all_backends(State(state): State<AppState>) -> impl IntoRespon
 
             let progress_entry = match result {
                 Ok(models) => {
+                    // Upsert model selections (is_enabled defaults to true for new rows).
+                    if let Err(e) = model_selection_repo.upsert_models(backend.id, &models).await {
+                        tracing::warn!(backend_id = %backend.id, "upsert model selections failed (non-fatal): {e}");
+                    }
                     tracing::info!(
                         backend_id = %backend.id,
                         name = %backend.name,

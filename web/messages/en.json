@@ -74,7 +74,11 @@
     "customTimezoneInvalid": "Invalid timezone identifier.",
     "custom": "Custom…",
     "settings": "Settings",
-    "language": "Language"
+    "language": "Language",
+    "labFeatures": "Lab Features",
+    "labFeaturesDesc": "Experimental features — may be unstable.",
+    "labGeminiFunctionCalling": "Gemini function calling",
+    "labGeminiFunctionCallingDesc": "Enable tool use (function calling) through the Gemini-compatible endpoint. Still in development."
   },
   "overview": {
     "title": "Overview",
@@ -126,6 +130,7 @@
     "liveFeed": "Live Feed",
     "waitingRequests": "Waiting for requests...",
     "reqLast5m": "{{count}} req / 5m",
+    "queueWaiting": "{{count}} waiting",
     "thermalAlert": "Thermal Alert",
     "thermalAlertDesc": "{{count}} server(s) need attention",
     "tempCritical": "Critical",
@@ -162,6 +167,7 @@
     "ttft": "TTFT",
     "tokens": "Tokens",
     "promptTokens": "Input tokens",
+    "promptTokensTooltip": "Full context sent to the model — includes system prompt, all conversation history, and tool call results. The displayed prompt shows only the last user message.",
     "completionTokens": "Output tokens",
     "cachedTokens": "Cached tokens",
     "totalTokens": "Total tokens",
@@ -232,7 +238,9 @@
 "tier": "Tier",
     "tierFree": "Free",
     "tierPaid": "Paid",
-    "keysCount": "{{count}} keys"
+    "keysCount": "{{count}} keys",
+    "viewUsage": "View usage",
+    "usageTitle": "Usage — {{name}}"
   },
   "backends": {
     "title": "Providers",
@@ -303,7 +311,12 @@
       "ollamaUrl": "Ollama URL",
       "modelsCount": "{{count}} models",
       "serversWithModel": "servers with this model",
-      "editTitle": "Edit Ollama Provider"
+      "editTitle": "Edit Ollama Provider",
+      "modelSelection": "Model Selection",
+      "modelSelectionDesc": "Enable only the models you want to route to this backend.",
+      "enabledCount": "{{enabled}}/{{total}} enabled",
+      "freeTier": "Free Tier",
+      "freeTierDesc": "Reserve this backend for free-tier API key requests."
     },
     "capacity": {
       "title": "Concurrency Control",

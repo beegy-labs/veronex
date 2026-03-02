@@ -38,12 +38,12 @@
 | -------------- | --------------------------------- |
 | **Runtime**    | Rust (Axum 0.8, tokio, Edition 2024) |
 | **DB**         | PostgreSQL 18 (sqlx 0.8, native uuidv7()) |
-| **Queue**      | Valkey (fred 9, BLPOP/RPUSH)     |
+| **Queue**      | Valkey (fred 10, BLPOP/RPUSH)    |
 | **Streaming**  | SSE (Server-Sent Events)         |
 | **Analytics**  | ClickHouse + OTel Collector      |
 | **Messaging**  | Redpanda (Kafka-compatible)      |
 | **Deploy**     | Kubernetes (Helm), Docker        |
-| **Web**        | Next.js 15, Tailwind v4, shadcn/ui |
+| **Web**        | Next.js 16, Tailwind v4, shadcn/ui |
 
 ## Policies
 

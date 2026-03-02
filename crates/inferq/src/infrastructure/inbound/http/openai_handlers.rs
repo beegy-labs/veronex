@@ -189,12 +189,17 @@ struct CompletionChunk {
 pub async fn chat_completions(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Response {
+    let conversation_id = headers
+        .get("x-conversation-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
     let backend_type = req.backend.clone().unwrap_or_else(|| "ollama".to_string());
     match backend_type.as_str() {
-        "ollama" => ollama_chat_proxy(state, api_key, req).await,
-        _ => legacy_queue_chat(state, api_key, req, backend_type).await,
+        "ollama" => ollama_chat_proxy(state, api_key, req, conversation_id).await,
+        _ => legacy_queue_chat(state, api_key, req, backend_type, conversation_id).await,
     }
 }
 
@@ -209,6 +214,7 @@ async fn ollama_chat_proxy(
     state: AppState,
     api_key: crate::domain::entities::ApiKey,
     req: ChatCompletionRequest,
+    conversation_id: Option<String>,
 ) -> Response {
     // Convert messages to Ollama format (normalise content, convert tool_calls).
     let ollama_messages: Vec<serde_json::Value> =
@@ -225,6 +231,8 @@ async fn ollama_chat_proxy(
 
     let model = req.model.clone();
     let messages = serde_json::Value::Array(ollama_messages);
+    // Forward tools in Ollama format (OpenAI tools array is already compatible with Ollama).
+    let tools = req.tools.map(serde_json::Value::Array);
 
     let job_id = match state
         .use_case
@@ -237,7 +245,10 @@ async fn ollama_chat_proxy(
             JobSource::Api,
             ApiFormat::OpenaiCompat,
             Some(messages),
+            tools,
             Some("/v1/chat/completions".to_string()),
+            conversation_id,
+            Some(api_key.tier.clone()),
         )
         .await
     {
@@ -256,9 +267,60 @@ async fn ollama_chat_proxy(
     let created = chrono::Utc::now().timestamp();
     let token_stream = state.use_case.stream(&job_id);
 
+    let mut saw_tool_calls = false;
     let content_stream = token_stream.map(move |result| -> Result<Event, Infallible> {
         match result {
+            Ok(token) if token.tool_calls.is_some() => {
+                // Model returned tool calls — emit OpenAI delta format.
+                // Ollama format: [{function: {name, arguments: Object}}]
+                // OpenAI format: [{index, id, type, function: {name, arguments: String}}]
+                saw_tool_calls = true;
+                let ollama_calls = token.tool_calls.as_ref()
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+
+                let openai_calls: Vec<serde_json::Value> = ollama_calls
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let name = c.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let args = c.get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .map(|a| serde_json::to_string(a).unwrap_or_default())
+                            .unwrap_or_default();
+                        serde_json::json!({
+                            "index": i,
+                            "id": format!("call_{i}"),
+                            "type": "function",
+                            "function": {"name": name, "arguments": args}
+                        })
+                    })
+                    .collect();
+
+                let chunk = CompletionChunk {
+                    id: chunk_id.clone(),
+                    object: "chat.completion.chunk",
+                    created,
+                    model: model.clone(),
+                    choices: vec![ChunkChoice {
+                        index: 0,
+                        delta: DeltaContent {
+                            role: None,
+                            content: None,
+                            tool_calls: Some(openai_calls),
+                        },
+                        finish_reason: None,
+                    }],
+                };
+                Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
+            }
             Ok(token) if token.is_final => {
+                let finish_reason = if saw_tool_calls { "tool_calls" } else { "stop" };
                 let stop_chunk = CompletionChunk {
                     id: chunk_id.clone(),
                     object: "chat.completion.chunk",
@@ -267,12 +329,16 @@ async fn ollama_chat_proxy(
                     choices: vec![ChunkChoice {
                         index: 0,
                         delta: DeltaContent::default(),
-                        finish_reason: Some("stop".to_string()),
+                        finish_reason: Some(finish_reason.to_string()),
                     }],
                 };
                 Ok(Event::default().data(serde_json::to_string(&stop_chunk).unwrap_or_default()))
             }
             Ok(token) => {
+                if token.value.is_empty() {
+                    // Skip empty non-final, non-tool-call tokens
+                    return Ok(Event::default().data(""));
+                }
                 let chunk = CompletionChunk {
                     id: chunk_id.clone(),
                     object: "chat.completion.chunk",
@@ -316,6 +382,7 @@ async fn legacy_queue_chat(
     api_key: crate::domain::entities::ApiKey,
     req: ChatCompletionRequest,
     backend_type: String,
+    conversation_id: Option<String>,
 ) -> Response {
     // Extract prompt from the last user message.
     let prompt = req
@@ -338,7 +405,7 @@ async fn legacy_queue_chat(
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, &backend_type, Some(api_key.id), None, JobSource::Api, ApiFormat::OpenaiCompat, None, Some("/v1/chat/completions".to_string()))
+        .submit(&prompt, &model, &backend_type, Some(api_key.id), None, JobSource::Api, ApiFormat::OpenaiCompat, None, None, Some("/v1/chat/completions".to_string()), conversation_id, Some(api_key.tier.clone()))
         .await
     {
         Ok(id) => id,
@@ -372,6 +439,7 @@ async fn legacy_queue_chat(
                 };
                 Ok(Event::default().data(serde_json::to_string(&stop_chunk).unwrap_or_default()))
             }
+            Ok(token) if token.value.is_empty() => Ok(Event::default().data("")),
             Ok(token) => {
                 let chunk = CompletionChunk {
                     id: chunk_id.clone(),

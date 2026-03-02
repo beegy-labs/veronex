@@ -197,7 +197,7 @@ export default function PerformancePage() {
                       <Tooltip
                         contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}
                         cursor={CURSOR_STROKE}
-                        formatter={(v: number) => [ms(v), t('performance.avgLatency')]}
+                        formatter={(v) => [ms(Number(v)), t('performance.avgLatency')] as [string, string]}
                       />
                       <ReferenceLine
                         y={data.p95_latency_ms}
@@ -259,7 +259,7 @@ export default function PerformancePage() {
                       <Tooltip
                         contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}
                         cursor={CURSOR_STROKE}
-                        formatter={(v: number) => [`${v}%`, t('performance.errorRate')]}
+                        formatter={(v) => [`${Number(v)}%`, t('performance.errorRate')] as [string, string]}
                       />
                       <Line
                         type="monotone" dataKey="errorRate"

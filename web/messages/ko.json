@@ -74,7 +74,11 @@
     "customTimezoneInvalid": "유효하지 않은 시간대입니다.",
     "custom": "사용자 정의",
     "settings": "설정",
-    "language": "언어"
+    "language": "언어",
+    "labFeatures": "실험실 기능",
+    "labFeaturesDesc": "실험적 기능 — 불안정할 수 있습니다.",
+    "labGeminiFunctionCalling": "Gemini 함수 호출",
+    "labGeminiFunctionCallingDesc": "Gemini 호환 엔드포인트를 통한 도구 사용을 활성화합니다. 아직 개발 중입니다."
   },
   "overview": {
     "title": "개요",
@@ -126,6 +130,7 @@
     "liveFeed": "실시간 피드",
     "waitingRequests": "요청 대기 중...",
     "reqLast5m": "{{count}} 요청 / 5분",
+    "queueWaiting": "{{count}} 대기 중",
     "thermalAlert": "발열 경보",
     "thermalAlertDesc": "{{count}}개 서버 점검 필요",
     "tempCritical": "위험",
@@ -162,6 +167,7 @@
     "ttft": "첫 토큰",
     "tokens": "토큰",
     "promptTokens": "입력 토큰",
+    "promptTokensTooltip": "모델에 실제로 전송된 전체 컨텍스트 토큰 수 — 시스템 프롬프트, 전체 대화 히스토리, 툴 호출 결과를 포함합니다. 표시된 프롬프트는 마지막 사용자 메시지만 보여줍니다.",
     "completionTokens": "출력 토큰",
     "cachedTokens": "캐시 토큰",
     "totalTokens": "전체 토큰",
@@ -232,7 +238,9 @@
 "tier": "등급",
     "tierFree": "무료",
     "tierPaid": "유료",
-    "keysCount": "{{count}}개"
+    "keysCount": "{{count}}개",
+    "viewUsage": "사용량 보기",
+    "usageTitle": "사용량 — {{name}}"
   },
   "backends": {
     "title": "프로바이더",
@@ -303,7 +311,12 @@
       "ollamaUrl": "Ollama URL",
       "modelsCount": "{{count}}개 모델",
       "serversWithModel": "이 모델을 가진 서버",
-      "editTitle": "Ollama 프로바이더 편집"
+      "editTitle": "Ollama 프로바이더 편집",
+      "modelSelection": "모델 선택",
+      "modelSelectionDesc": "이 백엔드로 라우팅할 모델만 활성화하세요.",
+      "enabledCount": "{{enabled}}/{{total}} 활성화",
+      "freeTier": "무료 티어",
+      "freeTierDesc": "이 백엔드를 무료 티어 API 키 요청 전용으로 설정합니다."
     },
     "capacity": {
       "title": "동시성 제어",

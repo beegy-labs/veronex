@@ -1,6 +1,6 @@
 # Infrastructure — Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-03-02 (rev: capacity control, thermal throttle, migrations 36-40)
+> SSOT | **Last Updated**: 2026-03-02 (rev: dep upgrades — fred 10, reqwest 0.13, Next.js 16, recharts 3, Valkey 9, Redpanda v25.3, OTel 0.146; migrations 41-45)
 
 ## Task Guide
 
@@ -46,9 +46,9 @@ veronex ──→ veronex-analytics ──→ GET /internal/* ──→ ClickHou
 | Service | Image | Host Port | Role |
 |---------|-------|-----------|------|
 | postgres | postgres:18-alpine | **5433** | Main DB — PG18, native `uuidv7()` |
-| valkey | valkey/valkey:8-alpine | **6380** | Queue (BLPOP), rate limiting, JWT revocation blocklist |
+| valkey | valkey/valkey:9.0.3-alpine | **6380** | Queue (BLPOP), rate limiting, JWT revocation blocklist |
 | clickhouse | clickhouse-server:26.1 | 8123, 9000 | Analytics read layer — `otel_logs`, `otel_metrics_gauge` |
-| redpanda | redpandadata/redpanda:v24.2.7 | 9092 | Single message bus (Kafka-compatible) |
+| redpanda | redpandadata/redpanda:v25.3.9 | 9092 | Single message bus (Kafka-compatible) |
 | veronex | local build | **3001**→3000 | Rust API server (crate: `veronex`) |
 | veronex-analytics | local build | internal 3003 | Analytics service — OTel write + ClickHouse read |
 | veronex-web | local build | 3002 | Next.js admin dashboard |
@@ -101,8 +101,9 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 ## Valkey Key Patterns
 
 ```
-veronex:queue:jobs                              # inference job queue — API key requests (RPUSH/BLPOP)
-veronex:queue:jobs:test                         # inference job queue — test run requests (lower priority)
+veronex:queue:jobs:paid                         # inference job queue — paid-tier API key requests (BLPOP polled first)
+veronex:queue:jobs                              # inference job queue — standard/free-tier API key requests (BLPOP polled second)
+veronex:queue:jobs:test                         # inference job queue — test run requests (BLPOP polled third)
 veronex:ratelimit:rpm:{key_id}:{minute}         # API key RPM sorted set
 veronex:ratelimit:tpm:{key_id}:{minute}         # API key TPM counter
 veronex:gemini:rpm:{backend_id}:{model}:{min}   # Gemini per-backend RPM
@@ -162,6 +163,11 @@ veronex:hw:{backend_id}                         # hw_metrics JSON (temp_c, vram_
 | 000038 | api_keys: add tier column |
 | 000039 | model_capacity CREATE (PK: backend_id+model_name); inference_jobs: add backend_id FK; capacity_settings singleton (id=1) |
 | 000040 | api_keys: drop `uq_api_keys_tenant_name` — name is a non-unique label; UUIDv7 `id` is the unique identifier |
+| 000041 | inference_jobs: add `api_format` TEXT (openai_compat \| ollama_native \| gemini_native \| veronex_native) |
+| 000042 | inference_jobs: add `request_path` TEXT — full matched route path (e.g. `/v1/chat/completions`) |
+| 000043 | inference_jobs: add `conversation_id` TEXT + `tool_calls_json` JSONB; GIN + btree indexes |
+| 000044 | lab_settings CREATE — singleton (id=1), `gemini_function_calling` BOOLEAN (default false) |
+| 000045 | inference_jobs: add `messages_json` JSONB — full LLM input context for training data |
 
 ---
 
@@ -213,7 +219,7 @@ pub struct AppState {
     pub capacity_manual_trigger:   Arc<tokio::sync::Notify>,
     pub analyzer_url:              String,
     // Infrastructure
-    pub valkey_pool:               Option<fred::clients::RedisPool>,
+    pub valkey_pool:               Option<fred::clients::Pool>,
     pub pg_pool:                   sqlx::PgPool,
 }
 ```

@@ -43,7 +43,7 @@ impl HwMetrics {
 /// Read cached hardware metrics for a backend from Valkey.
 /// Returns `None` on cache miss, parse failure, or Valkey error.
 pub async fn load_hw_metrics(
-    pool: &fred::clients::RedisPool,
+    pool: &fred::clients::Pool,
     backend_id: Uuid,
 ) -> Option<HwMetrics> {
     use fred::prelude::*;
@@ -55,7 +55,7 @@ pub async fn load_hw_metrics(
 /// Write hardware metrics for a backend to Valkey (TTL = 60 s).
 /// Errors are logged as warnings and ignored.
 pub async fn store_hw_metrics(
-    pool: &fred::clients::RedisPool,
+    pool: &fred::clients::Pool,
     backend_id: Uuid,
     metrics: &HwMetrics,
 ) {

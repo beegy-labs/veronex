@@ -1,8 +1,15 @@
 # Web — Chart System
 
-> SSOT | **Last Updated**: 2026-02-28 (rev: formatter fix — return string not [value,''])
+> SSOT | **Last Updated**: 2026-03-02 (rev: recharts 3.7 — no breaking changes for this codebase; formatter rule unchanged)
 
 ## Overview
+
+**Version**: recharts `^3.7.0` (upgraded from 2.x — no code migration needed for this codebase).
+
+> **Recharts 3 breaking changes that do NOT affect this project:**
+> - `CartesianGrid` now requires `xAxisId`/`yAxisId` — not used here
+> - `TooltipProps` → `TooltipContentProps` — no custom tooltip type annotations used
+> - `accessibilityLayer` defaults to `true` — no visual change
 
 All Recharts styling is managed from a single source of truth.
 Never define chart style constants inside page files.

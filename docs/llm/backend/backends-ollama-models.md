@@ -1,6 +1,6 @@
 # Backends — Ollama: Global Model Sync & Model-Aware Routing
 
-> SSOT | **Last Updated**: 2026-02-28 (model-count endpoint, per-model/per-backend lookup, UI pagination)
+> SSOT | **Last Updated**: 2026-03-02 (Ollama model enable/disable — upsert to backend_selected_models on sync; selection filter in router)
 
 ## Task Guide
 
@@ -13,7 +13,9 @@
 | Get models for a backend | `GET /v1/ollama/backends/{id}/models` | `ollama_model_handlers.rs` → `list_backend_models()` |
 | Per-backend sync (also updates DB) | `POST /v1/backends/{id}/models/sync` | `backend_handlers.rs` → `sync_backend_models()` (Ollama path) |
 | Change model-aware routing filter | `infrastructure/outbound/backend_router.rs` → `pick_best_backend()` | Modify `ollama_model_repo` filter block |
-| Change modal pagination size | `web/app/backends/page.tsx` `BACKENDS_PAGE_SIZE` | Affects `OllamaModelBackendsModal` |
+| Toggle a model on/off for a backend | `PATCH /v1/backends/{id}/selected-models/{model}` | `set_model_enabled()` in `backend_handlers.rs` → `backend_selected_models` |
+| Change model selection default on sync | `backend_handlers.rs` → `sync_backend_models()` + `ollama_model_handlers.rs` → `sync_all_backends()` | `upsert_models()` inserts `is_enabled = true` for new rows |
+| Change modal pagination size | `web/app/providers/page.tsx` `BACKENDS_PAGE_SIZE` | Affects `OllamaModelBackendsModal` |
 | Add field to OllamaModel | `migrations/` + `ollama_model_repository.rs` (port + pg impl) | |
 
 ## Key Files
@@ -137,6 +139,7 @@ POST /v1/ollama/models/sync
        for each backend:
          GET {backend.url}/api/tags → parse model names
          ollama_model_repo.sync_backend_models(id, &models)
+         model_selection_repo.upsert_models(id, &models)  // non-fatal; is_enabled=true for new rows
          ollama_sync_job_repo.update_progress(job_id, { backend_id, name, models, error: null })
          On failure:
            update_progress(job_id, { backend_id, name, models: [], error: "msg" })
@@ -200,26 +203,36 @@ GET /v1/ollama/backends/{backend_id}/models
 4. Returns `{ models, synced: true }`
 
 This keeps the global pool up-to-date even when only one backend is synced individually.
+Also calls `model_selection_repo.upsert_models(id, &models)` (non-fatal) → inserts `is_enabled = true` for new rows, preserves existing toggle state.
 
 ---
 
 ## Model-Aware Routing (backend_router.rs)
 
-`pick_best_backend()` accepts `ollama_model_repo: Option<&dyn OllamaModelRepository>`.
+`pick_best_backend()` accepts both `ollama_model_repo` and `model_selection_repo`.
 
-For Ollama dispatch:
+For Ollama dispatch (two sequential filters):
 
 ```
-1. Query backends_for_model(model_name) → set of backend IDs that have the model
-2. If set is non-empty: filter candidates to intersection
-   If set is empty (not yet synced): use all candidates (fallback — never breaks routing)
-3. From filtered candidates: pick highest available VRAM (existing logic)
+Filter 1 — Model presence (ollama_model_repo):
+  1. backends_for_model(model_name) → backend IDs that have the model synced
+  2. Non-empty set → filter candidates to intersection
+     Empty set (not yet synced) → use all candidates (fallback — never breaks routing)
+
+Filter 2 — Model selection (model_selection_repo):
+  3. For each candidate: list_enabled(backend_id) → Vec<String>
+  4. Non-empty list + model_name NOT in list → skip this backend (disabled)
+     Empty list or error → include backend (no restriction — backward compatible)
+
+Final pick: highest available VRAM from remaining candidates
 ```
 
-Fallback is intentional: new deployments with empty `ollama_models` table continue working.
+**Default state after sync**: all synced models are `is_enabled = true` → route normally.
+Disable a model: `PATCH /v1/backends/{id}/selected-models/{model}` `{ is_enabled: false }`.
 
-`InferenceUseCaseImpl` stores `ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>` and
-passes it to `pick_best_backend()` at inference time.
+Fallbacks are intentional: new deployments with empty tables continue routing without restriction.
+
+`InferenceUseCaseImpl` stores both repos and passes them to `pick_best_backend()` at inference time.
 
 ---
 

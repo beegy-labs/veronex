@@ -2,6 +2,33 @@
 
 > **Last Researched**: 2026-03-02 | **Source**: Axum 0.8 docs + web search + verified in production
 > **Status**: ✅ Verified — used throughout `crates/inferq/src/`
+> **Deps**: fred 10 (`Pool` type, `pool.init().await?`), reqwest 0.13
+
+---
+
+## Fred 10 — Valkey/Redis Client
+
+Fred 10 renamed core types. All `use fred::prelude::*;` imports continue to work; only the type names changed.
+
+| Fred 9 | Fred 10 | Notes |
+|--------|---------|-------|
+| `RedisConfig` | `Config` | from `fred::prelude::*` |
+| `RedisPool` | `Pool` | from `fred::clients::Pool` |
+| `RedisClient` | `Client` | from `fred::clients::Client` |
+| `pool.connect(); pool.wait_for_connect().await?` | `pool.init().await?` | Convenience: connect + wait in one call |
+
+```rust
+// fred 10 — Pool init pattern
+use fred::prelude::*;
+let config = Config::from_url(&valkey_url)?;
+let pool = Pool::new(config, None, None, None, 6)?;
+pool.init().await?;
+```
+
+- `Expiration::EX(secs)` — unchanged, still in `fred::types::Expiration`
+- `pool.blpop(keys, timeout)`, `pool.set(...)`, `pool.get(...)`, `pool.exists(...)` — signatures unchanged
+- `pool.next()` returns `Arc<Client>` (was `Arc<RedisClient>`)
+- `use fred::interfaces::LuaInterface as _` — unchanged
 
 ---
 

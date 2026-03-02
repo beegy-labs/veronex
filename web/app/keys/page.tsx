@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { keysQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, CreateKeyResponse } from '@/lib/types'
-import { Plus, Trash2, Copy, Check } from 'lucide-react'
+import { Plus, Trash2, Copy, Check, BarChart2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -30,6 +30,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
+import { KeyUsageModal } from '@/components/key-usage-modal'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
@@ -224,6 +225,7 @@ export default function KeysPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [createdKey, setCreatedKey] = useState<CreateKeyResponse | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null)
+  const [usageKey, setUsageKey] = useState<ApiKey | null>(null)
 
   const { data: keys, isLoading, error } = useQuery(keysQuery)
 
@@ -238,6 +240,12 @@ export default function KeysPage() {
   const toggleMutation = useMutation({
     mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
       api.toggleKeyActive(id, is_active),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
+  })
+
+  const tierMutation = useMutation({
+    mutationFn: ({ id, tier }: { id: string; tier: 'free' | 'paid' }) =>
+      api.updateKeyTier(id, tier),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
   })
 
@@ -306,16 +314,21 @@ export default function KeysPage() {
                     <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
                     <TableCell className="text-muted-foreground">{key.tenant_id}</TableCell>
                     <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          key.tier === 'free'
-                            ? 'text-muted-foreground border-border'
-                            : 'bg-status-info/10 text-status-info-fg border-status-info/30'
+                      <Select
+                        value={key.tier}
+                        onValueChange={(v) =>
+                          tierMutation.mutate({ id: key.id, tier: v as 'free' | 'paid' })
                         }
+                        disabled={tierMutation.isPending}
                       >
-                        {key.tier === 'free' ? t('keys.tierFree') : t('keys.tierPaid')}
-                      </Badge>
+                        <SelectTrigger className="h-7 w-24 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="paid">{t('keys.tierPaid')}</SelectItem>
+                          <SelectItem value="free">{t('keys.tierFree')}</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </TableCell>
                     <TableCell>
                       <Badge
@@ -346,16 +359,27 @@ export default function KeysPage() {
                       {fmtDateOnly(key.created_at, tz)}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setDeleteTarget(key)}
-                        disabled={deleteMutation.isPending}
-                        title={t('keys.deleteKey')}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setUsageKey(key)}
+                          title={t('keys.viewUsage')}
+                          className="text-muted-foreground hover:text-primary"
+                        >
+                          <BarChart2 className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setDeleteTarget(key)}
+                          disabled={deleteMutation.isPending}
+                          title={t('keys.deleteKey')}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -382,6 +406,10 @@ export default function KeysPage() {
           onClose={() => setDeleteTarget(null)}
           isPending={deleteMutation.isPending}
         />
+      )}
+
+      {usageKey && (
+        <KeyUsageModal apiKey={usageKey} onClose={() => setUsageKey(null)} />
       )}
     </div>
   )
