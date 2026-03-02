@@ -254,7 +254,8 @@
     "tierPaid": "유료",
     "keysCount": "{{count}}개",
     "viewUsage": "사용량 보기",
-    "usageTitle": "사용량 — {{name}}"
+    "usageTitle": "사용량 — {{name}}",
+    "modelBreakdown": "모델별 사용"
   },
   "backends": {
     "title": "프로바이더",
@@ -497,7 +498,9 @@
     "providerCol": "공급자",
     "callShare": "호출 비율",
     "estimatedCost": "예상 비용",
-    "totalCost": "총 비용"
+    "totalCost": "총 비용",
+    "backend": "프로바이더",
+    "share": "비율"
   },
   "performance": {
     "title": "성능",

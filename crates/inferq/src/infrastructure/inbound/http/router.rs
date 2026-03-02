@@ -116,6 +116,7 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/usage/breakdown", get(usage_handlers::usage_breakdown))
         .route("/v1/usage/{key_id}", get(usage_handlers::key_usage))
         .route("/v1/usage/{key_id}/jobs", get(usage_handlers::key_usage_jobs))
+        .route("/v1/usage/{key_id}/models", get(usage_handlers::key_model_breakdown))
         // Analytics
         .route("/v1/dashboard/analytics", get(usage_handlers::get_analytics))
         // Dashboard

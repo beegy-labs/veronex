@@ -254,7 +254,8 @@
     "tierPaid": "有料",
     "keysCount": "{{count}}件",
     "viewUsage": "使用量を見る",
-    "usageTitle": "使用量 — {{name}}"
+    "usageTitle": "使用量 — {{name}}",
+    "modelBreakdown": "モデル別使用状況"
   },
   "backends": {
     "title": "プロバイダー",
@@ -497,7 +498,9 @@
     "providerCol": "プロバイダー",
     "callShare": "呼び出し比率",
     "estimatedCost": "推定コスト",
-    "totalCost": "合計コスト"
+    "totalCost": "合計コスト",
+    "backend": "プロバイダー",
+    "share": "割合"
   },
   "performance": {
     "title": "パフォーマンス",

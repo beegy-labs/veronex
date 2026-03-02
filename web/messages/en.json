@@ -254,7 +254,8 @@
     "tierPaid": "Paid",
     "keysCount": "{{count}} keys",
     "viewUsage": "View usage",
-    "usageTitle": "Usage — {{name}}"
+    "usageTitle": "Usage — {{name}}",
+    "modelBreakdown": "Model Usage"
   },
   "backends": {
     "title": "Providers",
@@ -497,7 +498,9 @@
     "providerCol": "Provider",
     "callShare": "Call share",
     "estimatedCost": "Est. Cost",
-    "totalCost": "Total Cost"
+    "totalCost": "Total Cost",
+    "backend": "Provider",
+    "share": "Share"
   },
   "performance": {
     "title": "Performance",

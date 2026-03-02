@@ -45,3 +45,11 @@ export const keyUsageQuery = (keyId: string | null, hours: number) => queryOptio
   refetchIntervalInBackground: false,
   retry: false,
 })
+
+export const keyModelBreakdownQuery = (keyId: string | null, hours: number) => queryOptions({
+  queryKey: ['key-model-breakdown', keyId, hours] as const,
+  queryFn: () => api.keyModelBreakdown(keyId!, hours),
+  enabled: !!keyId,
+  staleTime: 59_000,
+  retry: false,
+})

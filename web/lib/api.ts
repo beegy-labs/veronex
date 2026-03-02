@@ -1,4 +1,4 @@
-import type { Account, AnalyticsStats, ApiKey, AuditEvent, Backend, BackendSelectedModel, CapacityResponse, CapacitySettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AnalyticsStats, ApiKey, AuditEvent, Backend, BackendSelectedModel, CapacityResponse, CapacitySettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { apiClient } from './api-client'
 
 const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
@@ -85,6 +85,9 @@ export const api = {
   // ── Usage (JWT-protected) ─────────────────────────────────────────────────
   usageAggregate: (hours = 24) =>
     apiClient.get<UsageAggregate>(`/v1/usage?hours=${hours}`),
+
+  keyModelBreakdown: (keyId: string, hours = 24) =>
+    apiClient.get<ModelBreakdown[]>(`/v1/usage/${keyId}/models?hours=${hours}`),
 
   keyUsage: (keyId: string, hours = 24) =>
     apiClient.get<HourlyUsage[]>(`/v1/usage/${keyId}?hours=${hours}`),
