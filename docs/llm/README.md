@@ -1,6 +1,6 @@
 # docs/llm — SSOT Index
 
-> Tier 2 CDD documents (LLM-facing, editable) | **Last Updated**: 2026-03-02 (rev5: web-usage, web-performance as separate docs; web-jobs row cleaned up)
+> Tier 2 CDD documents (LLM-facing, editable) | **Last Updated**: 2026-03-03 (rev6: security.md added to index; infrastructure.md — Helm + CORS; auth layers corrected)
 
 ## Policies
 
@@ -24,11 +24,12 @@
 | Ollama backends | `backend/backends-ollama.md` | LlmBackend, VRAM routing, DynamicBackendRouter, health_checker |
 | Ollama model sync | `backend/backends-ollama-models.md` | ollama_models, ollama_sync_jobs, OllamaModelRepository, model-aware routing |
 | Gemini rate limits | `backend/backends-gemini.md` | GeminiRateLimitPolicy, RPM, RPD, pick_gemini_backend, tier routing |
-| Gemini model sync | `backend/backends-gemini-models.md` | gemini_sync_config, gemini_models, backend_selected_models, UPSERT |
+| Gemini model sync | `backend/backends-gemini-models.md` | gemini_sync_config, gemini_models, provider_selected_models, UPSERT |
 | Hardware | `backend/hardware.md` | GpuServer, node-exporter, hw_metrics, AMD APU, ClickHouse history |
-| Infrastructure | `backend/infrastructure.md` | docker-compose, ports, env vars, Valkey keys, DB migrations |
+| Infrastructure | `backend/infrastructure.md` | docker-compose, Helm, Kubernetes, ports, env vars, CORS, CORS_ALLOWED_ORIGINS, Valkey keys, DB migrations |
 | OTel pipeline | `backend/infrastructure-otel.md` | OTel Collector, Redpanda, ClickHouse Kafka Engine, data retention |
 | Authentication | `backend/auth.md` | JWT HS256, accounts, sessions, RBAC, setup flow, audit trail, password reset |
+| Security | `backend/security.md` | CORS, circuit breaker, rate limiting, Argon2id, BLAKE2b, AES-256-GCM, security headers |
 | Capacity Control | `backend/capacity.md` | ConcurrencySlotMap, ThermalThrottleMap, capacity analyzer, model_capacity, qwen2.5:3b |
 | Lab Features | `backend/lab_features.md` | gemini_function_calling, LabSettingsProvider, LabSettingsRepository, feature visibility gating |
 | Model Pricing | `backend/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, Ollama $0.00, provider wildcard row |
@@ -119,8 +120,10 @@
 | Add new lab feature flag | `backend/lab_features.md` (step-by-step guide) |
 | Gate UI on lab feature | `backend/lab_features.md` (Frontend SSOT Architecture) — use `useLabSettings()` hook |
 | Toggle Gemini integration on/off | Settings dialog (⚙️) → Lab Features → toggle; see `backend/lab_features.md` |
-| Network flow visualization (/flow) | `frontend/web.md` (Network Flow Page section) + `frontend/web-jobs.md` (NetworkFlowTab in Jobs 3rd tab) |
+| Network flow visualization | `frontend/web-jobs.md` (NetworkFlowTab — Jobs page 3rd tab) |
 | Session grouping (manual trigger) | `backend/jobs.md` (Session Grouping section) + `frontend/web-jobs.md` (GroupSessionsPanel) |
+| Configure CORS allowed origins | `backend/infrastructure.md` (CORS_ALLOWED_ORIGINS) — `"*"` for dev, comma-separated list for prod |
+| Kubernetes / Helm deployment | `backend/infrastructure.md` (Helm Deployment section) — `deploy/helm/veronex/` |
 | Per-key model breakdown | `frontend/web-keys.md` (KeyUsageModal section) + `backend/api_keys.md` |
 | Queue depth (waiting jobs) | `backend/jobs.md` (Queue Depth section) — `GET /v1/dashboard/queue/depth`; 3-key LLEN; `queueDepthQuery` polls 3 s |
 | Modify usage page / tabs | `frontend/web-usage.md` — 4-tab layout (overview / by-key / by-model / by-provider) |

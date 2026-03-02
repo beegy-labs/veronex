@@ -1,27 +1,27 @@
-# Backends — Gemini: Rate Limiting & Tier Routing
+# Providers — Gemini: Rate Limiting & Tier Routing
 
-> SSOT | **Last Updated**: 2026-02-27
+> SSOT | **Last Updated**: 2026-03-03
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Change default RPM/RPD for a model | API: `PUT /v1/gemini/policies/{model}` | Or edit seed in `migrations/000017_*.sql` |
-| Add new Gemini tier routing logic | `crates/inferq/src/infrastructure/outbound/backend_router.rs` | `pick_gemini_backend()` function |
-| Change `available_on_free_tier` behavior | `backend_router.rs` | `pick_gemini_backend()` → early return block |
-| Add new Valkey counter key | `crates/inferq/src/infrastructure/inbound/http/backend_handlers.rs` | rate counter increment after job |
+| Change default RPM/RPD for a model | API: `PUT /v1/gemini/policies/{model}` | Or edit seed in init migration |
+| Add new Gemini tier routing logic | `crates/veronex/src/infrastructure/outbound/provider_router.rs` | `pick_gemini_provider()` function |
+| Change `available_on_free_tier` behavior | `provider_router.rs` | `pick_gemini_provider()` → early return block |
+| Add new Valkey counter key | `crates/veronex/src/infrastructure/inbound/http/backend_handlers.rs` | rate counter increment after job |
 | Add field to GeminiRateLimitPolicy | `domain/entities/` + migration + `persistence/` + `backend_handlers.rs` `UpsertGeminiPolicyRequest` |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `crates/inferq/src/domain/entities/gemini_rate_limit_policy.rs` | `GeminiRateLimitPolicy` entity |
-| `crates/inferq/src/application/ports/outbound/` | `GeminiPolicyRepository` trait |
-| `crates/inferq/src/infrastructure/outbound/persistence/` | `PostgresGeminiPolicyRepository` |
-| `crates/inferq/src/infrastructure/outbound/gemini/adapter.rs` | `GeminiAdapter` (streaming) |
-| `crates/inferq/src/infrastructure/outbound/backend_router.rs` | `pick_gemini_backend()` |
-| `crates/inferq/src/infrastructure/inbound/http/backend_handlers.rs` | Policy CRUD handlers |
+| `crates/veronex/src/domain/entities/gemini_rate_limit_policy.rs` | `GeminiRateLimitPolicy` entity |
+| `crates/veronex/src/application/ports/outbound/` | `GeminiPolicyRepository` trait |
+| `crates/veronex/src/infrastructure/outbound/persistence/` | `PostgresGeminiPolicyRepository` |
+| `crates/veronex/src/infrastructure/outbound/gemini/adapter.rs` | `GeminiAdapter` (streaming) |
+| `crates/veronex/src/infrastructure/outbound/provider_router.rs` | `pick_gemini_provider()` |
+| `crates/veronex/src/infrastructure/inbound/http/backend_handlers.rs` | Policy CRUD handlers |
 
 ---
 
@@ -44,14 +44,14 @@ pub struct GeminiRateLimitPolicy {
 
 ```sql
 CREATE TABLE gemini_rate_limit_policies (
-    id                     UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                     UUID         PRIMARY KEY DEFAULT uuidv7(),
     model_name             VARCHAR(255) NOT NULL UNIQUE, -- "*" = global fallback
     rpm_limit              INTEGER      NOT NULL DEFAULT 0,
     rpd_limit              INTEGER      NOT NULL DEFAULT 0,
     available_on_free_tier BOOLEAN      NOT NULL DEFAULT true,
     updated_at             TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
--- migrations: 000017 CREATE + seed, 000019 available_on_free_tier
+-- single init migration: 0000000001_init.sql
 ```
 
 ---
@@ -78,31 +78,31 @@ pub struct UpsertGeminiPolicyRequest {
 ## Core Routing Concept
 
 Rate limits are per **Google Cloud project** — all keys from same project share one pool.
-To roll across accounts: register keys from **different Google projects** as separate `LlmBackend` entries.
-All `is_free_tier=true` backends share one policy per model.
+To roll across accounts: register keys from **different Google projects** as separate `LlmProvider` entries.
+All `is_free_tier=true` providers share one policy per model.
 
 ### `available_on_free_tier` Flag
 
 ```
 true (default):
-  → Route through free backends in RPM/RPD order
+  → Route through free providers in RPM/RPD order
   → On exhaustion → paid fallback (unless tier_filter="gemini-free")
 
 false:
-  → Skip free backends entirely, route direct to paid
+  → Skip free providers entirely, route direct to paid
   → RPM/RPD counters NOT incremented
 ```
 
-### pick_gemini_backend() Sequence (backend_router.rs)
+### pick_gemini_provider() Sequence (provider_router.rs)
 
 ```
 1. policy.available_on_free_tier=false → paid direct
    (tier_filter="gemini-free" → error: model not available on free tier)
 
-2. Iterate free backends (is_free_tier=true):
+2. Iterate free providers (is_free_tier=true):
    - RPD exhausted → skip
    - RPM exhausted, RPD OK → wait up to next minute (max 3 retries)
-   - Both OK → use this backend, increment counters after job
+   - Both OK → use this provider, increment counters after job
 
 3. All free RPD exhausted → paid fallback
    (tier_filter="gemini-free" → error: all free tiers exhausted)
@@ -115,11 +115,11 @@ false:
 ## Valkey Counter Keys
 
 ```
-veronex:gemini:rpm:{backend_id}:{model}:{minute}     TTL=120s
-veronex:gemini:rpd:{backend_id}:{model}:{YYYY-MM-DD} TTL=90000s
+veronex:gemini:rpm:{provider_id}:{model}:{minute}     TTL=120s
+veronex:gemini:rpd:{provider_id}:{model}:{YYYY-MM-DD} TTL=90000s
 ```
 
-Counters incremented AFTER job completes, only for `is_free_tier=true` backends.
+Counters incremented AFTER job completes, only for `is_free_tier=true` providers.
 
 ---
 
@@ -134,7 +134,7 @@ LIMIT 1
 
 ---
 
-## 2026 Free Tier Default Limits (seeded in migration 000017)
+## 2026 Free Tier Default Limits (seeded in init migration)
 
 | Model | RPM | RPD |
 |-------|-----|-----|
@@ -142,19 +142,19 @@ LIMIT 1
 | gemini-2.5-flash | 10 | 250 |
 | gemini-2.5-flash-lite | 15 | 1,000 |
 
-Change via admin web `/backends?s=gemini` — no code change needed.
+Change via admin web `/providers?s=gemini` — no code change needed.
 
 ---
 
-## `backend` Field → Tier Filter Mapping
+## `provider_type` Field → Tier Filter Mapping
 
-| `backend` field value | `tier_filter` | Behavior |
-|----------------------|--------------|----------|
-| `"gemini-free"` | `Some("free")` | Free backends only, paid_backends = [] |
+| `provider_type` field value | `tier_filter` | Behavior |
+|----------------------------|--------------|----------|
+| `"gemini-free"` | `Some("free")` | Free providers only, paid_providers = [] |
 | `"gemini"` | `None` | Auto (free-first, paid-fallback) |
 
 ---
 
 ## Web UI
 
-→ See `docs/llm/frontend/web-backends.md` → GeminiTab + GeminiSyncSection
+→ See `docs/llm/frontend/web-providers.md` → GeminiTab + GeminiSyncSection

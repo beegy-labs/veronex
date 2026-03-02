@@ -6,7 +6,7 @@
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add new `backend` field value (e.g. `"anthropic"`) | `openai_handlers.rs` `chat_completions()` + `backend_router.rs` dispatch | Add new arm to `backend` match |
+| Add new `provider_type` field value (e.g. `"anthropic"`) | `openai_handlers.rs` `chat_completions()` + `provider_router.rs` dispatch | Add new arm to `provider_type` match |
 | Support multi-turn history forwarding | `openai_handlers.rs` `chat_completions()` | Change "last user message only" extraction to full messages |
 | Change SSE chunk format (OpenAI delta) | `openai_handlers.rs` SSE emit block | Modify `ChatCompletionChunk` serialization |
 | Add new field to ChatCompletionRequest | `openai_handlers.rs` `ChatCompletionRequest` struct | Add field + propagate to `submit()` call |
@@ -17,12 +17,12 @@
 
 | File | Purpose |
 |------|---------|
-| `crates/inferq/src/infrastructure/inbound/http/openai_handlers.rs` | `chat_completions` handler |
-| `crates/inferq/src/infrastructure/inbound/http/handlers.rs` | Native `/v1/inference` handlers |
-| `crates/inferq/src/infrastructure/inbound/http/docs_handlers.rs` | Swagger / ReDoc / OpenAPI spec |
-| `crates/inferq/src/infrastructure/inbound/http/router.rs` | Route registration |
-| `crates/inferq/src/application/use_cases/inference.rs` | `InferenceUseCaseImpl::submit()` |
-| `crates/inferq/src/infrastructure/inbound/http/openapi.json` | OpenAPI 3.0.3 spec (embedded via `include_str!`) |
+| `crates/veronex/src/infrastructure/inbound/http/openai_handlers.rs` | `chat_completions` handler |
+| `crates/veronex/src/infrastructure/inbound/http/handlers.rs` | Native `/v1/inference` handlers |
+| `crates/veronex/src/infrastructure/inbound/http/docs_handlers.rs` | Swagger / ReDoc / OpenAPI spec |
+| `crates/veronex/src/infrastructure/inbound/http/router.rs` | Route registration |
+| `crates/veronex/src/application/use_cases/inference.rs` | `InferenceUseCaseImpl::submit()` |
+| `crates/veronex/src/infrastructure/inbound/http/openapi.json` | OpenAPI 3.0.3 spec (embedded via `include_str!`) |
 
 ---
 

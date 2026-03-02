@@ -9,7 +9,7 @@
 | Add new backend option to test panel | `web/components/api-test-panel.tsx` backend options + `web/messages/en.json` `test.*` | Add option value + label |
 | Change SSE chunk parsing | `web/components/api-test-panel.tsx` `consumeStream()` SSE parsing block | Modify `line.slice(6)` / `JSON.parse` logic |
 | Add new API doc link | `web/app/api-docs/page.tsx` + `web/messages/en.json` `apiDocs.*` | Add card + i18n keys in all 3 locales |
-| Update OpenAPI spec | `crates/inferq/src/infrastructure/inbound/http/openapi.json` | Embedded via `include_str!` — edit JSON directly, rebuild Rust binary |
+| Update OpenAPI spec | `crates/veronex/src/infrastructure/inbound/http/openapi.json` | Embedded via `include_str!` — edit JSON directly, rebuild Rust binary |
 | Change max concurrent runs | `web/components/api-test-panel.tsx` `MAX_RUNS` constant | Default: 10 (oldest run auto-removed) |
 
 ## Key Files
@@ -152,7 +152,7 @@ GET /docs/openapi.json?lang=ja   → Japanese (overlay merged)
 
 **Overlay files** (only translatable fields — info.description, tags, paths summaries):
 ```
-crates/inferq/src/infrastructure/inbound/http/
+crates/veronex/src/infrastructure/inbound/http/
   openapi.json              ← base spec (English, authoritative)
   openapi.overlay.ko.json   ← Korean translations
   openapi.overlay.ja.json   ← Japanese translations
@@ -160,7 +160,7 @@ crates/inferq/src/infrastructure/inbound/http/
 
 Merge strategy: recursive deep merge — objects merge key-by-key, arrays/scalars replaced by overlay.
 
-Handler: `crates/inferq/src/infrastructure/inbound/http/docs_handlers.rs`
+Handler: `crates/veronex/src/infrastructure/inbound/http/docs_handlers.rs`
 No authentication required for any `/docs/*` route.
 
 ### ReDoc i18n (labels)

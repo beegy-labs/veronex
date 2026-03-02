@@ -1,6 +1,6 @@
 # Terminology Policy
 
-> SSOT | **Last Updated**: 2026-02-28
+> SSOT | **Last Updated**: 2026-03-03
 
 This is the single source of truth for all user-facing and internal terminology across the Veronex codebase.
 Every doc, component, and i18n key MUST follow these definitions.
@@ -15,7 +15,7 @@ Every doc, component, and i18n key MUST follow these definitions.
 | **Server** | A GPU hardware node registered with a `node_exporter_url` for live metrics scraping. Providers may be linked to a server via `server_id`. | `/servers` page, nav sidebar |
 | **API Key** | A bearer token that authenticates inference requests, enforces RPM/TPM rate limits, and tracks per-key usage. | `/keys` page, `X-API-Key` header |
 | **Job** | A single inference request lifecycle record: pending → running → completed/failed/cancelled. | `/jobs` page, `inference_jobs` table |
-| **Backend** | Internal / API-layer term for a provider configuration record. Maps to the `llm_backends` DB table and `/v1/backends` API routes. **Not used in user-visible UI labels.** | Rust structs, DB schema, API routes, internal variable names |
+| **Backend** | Retired term — fully replaced by **Provider** at all layers. Maps to the `llm_providers` DB table and `/v1/providers` API routes. **Not used anywhere in the codebase.** | (historical reference only) |
 | **Tenant** | A logical grouping owner of API keys. Not exposed in the UI today; reserved for multi-tenant mode. | `api_keys.tenant_id` DB column |
 
 ---

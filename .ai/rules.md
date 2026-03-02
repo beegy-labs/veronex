@@ -1,6 +1,6 @@
 # Core Development Rules
 
-> CDD Tier 1 — Essential rules for AI assistants | **Last Updated**: 2026-03-02
+> CDD Tier 1 — Essential rules for AI assistants | **Last Updated**: 2026-03-03
 
 ## Language Policy
 

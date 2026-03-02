@@ -100,7 +100,7 @@ struct BackendRow {
 
 let row = sqlx::query_as!(
     BackendRow,
-    "SELECT id, name, backend_type FROM llm_backends WHERE id = $1",
+    "SELECT id, name, provider_type FROM llm_providers WHERE id = $1",
     id
 )
 .fetch_optional(&self.pool)

@@ -1,16 +1,16 @@
 # Dynamic Concurrency Control + Thermal Throttle
 
-> **Status**: Implemented | **Branch**: `feat/api-key-usage` | **Migration**: `20260302000039_model_capacity.sql`
+> **Status**: Implemented | **Branch**: `feat/api-key-usage` | **Migration**: single init migration: 0000000001_init.sql
 
 ## Overview
 
-Replaces the old `busy_backends: HashSet<Uuid>` (1 job/backend hard limit) with a
+Replaces the old `busy_providers: HashSet<Uuid>` (1 job/provider hard limit) with a
 VRAM-aware, thermally-safe dynamic concurrency system.
 
 | Component | Implementation | Location |
 |-----------|---------------|----------|
-| `ConcurrencySlotMap` | `(backend_id, model_name)` → `Arc<Semaphore>` | `infrastructure/outbound/capacity/slot_map.rs` |
-| `ThermalThrottleMap` | `backend_id` → `ThrottleLevel` + cooldown | `infrastructure/outbound/capacity/thermal.rs` |
+| `ConcurrencySlotMap` | `(provider_id, model_name)` → `Arc<Semaphore>` | `infrastructure/outbound/capacity/slot_map.rs` |
+| `ThermalThrottleMap` | `provider_id` → `ThrottleLevel` + cooldown | `infrastructure/outbound/capacity/thermal.rs` |
 | `CapacityAnalyzer` | 5-min background loop | `infrastructure/outbound/capacity/analyzer.rs` |
 
 ## Two Completely Separate Paths
@@ -58,7 +58,7 @@ Architecture parameters come from Ollama `/api/show` `model_info`:
 - `parameters` field (`num_ctx <N>`) → `configured_ctx`
 - `model_info.*.context_length` → `max_ctx` (model native maximum)
 
-**`bytes_per_element` is always `1`** in current deployments (all backends use `OLLAMA_KV_CACHE_TYPE=q8_0`).
+**`bytes_per_element` is always `1`** in current deployments (all providers use `OLLAMA_KV_CACHE_TYPE=q8_0`).
 
 ## Slot Recommendation Logic
 
@@ -76,7 +76,7 @@ and responds with `{recommended_slots, concern, reason}`.
 
 ## DB Schema
 
-### `model_capacity` (PRIMARY KEY: backend_id, model_name)
+### `model_capacity` (PRIMARY KEY: provider_id, model_name)
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -97,18 +97,18 @@ and responds with `{recommended_slots, concern, reason}`.
 | `batch_interval_secs` | `300` | How often to run (min 60) |
 | `last_run_at` | null | Last successful run timestamp |
 
-### `inference_jobs.backend_id`
+### `inference_jobs.provider_id`
 
-Added `backend_id UUID` column to track which Ollama backend processed each job.
-Required for per-backend throughput aggregation in `compute_throughput_stats()`.
+Added `provider_id UUID` column to track which Ollama provider processed each job.
+Required for per-provider throughput aggregation in `compute_throughput_stats()`.
 
 ## API Endpoints
 
 All under JWT auth (`/v1/dashboard/...`):
 
 ```
-GET  /v1/dashboard/capacity
-     → {backends: [{backend_id, backend_name, thermal_state, temp_c,
+GET  /v1/capacity/providers
+     → {providers: [{provider_id, provider_name, thermal_state, temp_c,
                     models: [{model_name, recommended_slots, active_slots,
                              available_slots, vram_model_mb, vram_kv_per_slot_mb,
                              avg_tokens_per_sec, p95_latency_ms, llm_concern, ...}]}]}
@@ -153,7 +153,7 @@ See `docs/llm/frontend/web-providers.md` → **OllamaCapacitySection** for full 
 
 Summary:
 - **Settings card**: analyzer model selector (lists Ollama's available models), auto-analysis toggle, interval field, Save + Sync Now buttons, last-run timestamp/status
-- **Capacity table**: per-backend → per-loaded-model: thermal badge (Normal/Soft/Hard), recommended slots, active/max slots, VRAM (model loaded), KV/slot, avg TPS, P95, LLM concern row
+- **Capacity table**: per-provider → per-loaded-model: thermal badge (Normal/Soft/Hard), recommended slots, active/max slots, VRAM (model loaded), KV/slot, avg TPS, P95, LLM concern row
 - **Sync Now** fires `POST /v1/dashboard/capacity/sync` (202) → background analysis → refreshes after 3 s
 
 ## AppState Fields Added

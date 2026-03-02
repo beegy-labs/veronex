@@ -1,6 +1,6 @@
 # Infrastructure — OTel Pipeline, Redpanda & ClickHouse
 
-> SSOT | **Last Updated**: 2026-03-01 (rev: OTel Logs pipeline + veronex-analytics; kafka_inference/kafka_audit removed)
+> SSOT | **Last Updated**: 2026-03-03 (rev: OTel Logs pipeline + veronex-analytics; kafka_inference/kafka_audit removed)
 
 ## Task Guide
 
@@ -24,9 +24,9 @@
 | `docker/clickhouse/init.sh` | Init script — substitutes `__RETENTION_*__` vars into schema.sql |
 | `docker-compose.yml` | `otel-collector`, `redpanda`, `clickhouse`, `veronex`, `veronex-analytics` services |
 | `crates/veronex-analytics/src/` | Internal analytics service (OTel write + ClickHouse read) |
-| `crates/inferq/src/infrastructure/outbound/observability/http_observability_adapter.rs` | `HttpObservabilityAdapter` (replaces RedpandaObservabilityAdapter) |
-| `crates/inferq/src/infrastructure/outbound/observability/http_audit_adapter.rs` | `HttpAuditAdapter` (replaces RedpandaAuditAdapter) |
-| `crates/inferq/src/infrastructure/inbound/http/gpu_server_handlers.rs` | `GET /v1/metrics/targets` (HTTP SD) |
+| `crates/veronex/src/infrastructure/outbound/observability/http_observability_adapter.rs` | `HttpObservabilityAdapter` (replaces RedpandaObservabilityAdapter) |
+| `crates/veronex/src/infrastructure/outbound/observability/http_audit_adapter.rs` | `HttpAuditAdapter` (replaces RedpandaAuditAdapter) |
+| `crates/veronex/src/infrastructure/inbound/http/gpu_server_handlers.rs` | `GET /v1/metrics/targets` (HTTP SD) |
 
 ---
 
@@ -152,7 +152,7 @@ FROM (
 
 **Log attribute keys** (via `LogAttributes['key']`):
 - `event.name`: `"inference.completed"` | `"audit.action"`
-- Inference: `api_key_id`, `request_id`, `model_name`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `finish_reason`, `status`, `backend`
+- Inference: `api_key_id`, `request_id`, `model_name`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `finish_reason`, `status`, `provider_type`
 - Audit: `account_id`, `account_name`, `action`, `resource_type`, `resource_id`, `resource_name`
 
 **Target table** (`docker/clickhouse/init.sql`):
@@ -327,7 +327,7 @@ If `ANALYTICS_URL` not set: `observability = None`, `audit_port = None` (fail-op
 
 - Only servers with `node_exporter_url` set
 - `host` extracted from `node_exporter_url`
-- Multiple backends on same server → one target (deduped by server_id)
+- Multiple providers on same server → one target (deduped by server_id)
 
 ---
 

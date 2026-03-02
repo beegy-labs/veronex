@@ -102,7 +102,7 @@ http://host:11434    GPU 0  VRAM 32 GB
 
 Actions: [↻ Healthcheck] [🔄 Sync Models] [⊞ Model Selection (`ListFilter`)] [✏️ Edit] [🗑 Delete]
 
-- **[🔄 Sync Models]**: `POST /v1/backends/{id}/models/sync` — persists to `ollama_models` + upserts `backend_selected_models` (`is_enabled=true` for new rows). Invalidates `['ollama-sync-status']`, `['ollama-models']`, `['selected-models', backendId]`.
+- **[🔄 Sync Models]**: `POST /v1/providers/{id}/models/sync` — persists to `ollama_models` + upserts `provider_selected_models` (`is_enabled=true` for new rows). Invalidates `['ollama-sync-status']`, `['ollama-models']`, `['selected-models', providerId]`.
 - **[⊞ Model Selection]** (ListFilter icon): opens `OllamaBackendModelsModal` — Switch toggle per model, same pattern as Gemini `ModelSelectionModal`.
 
 ### OllamaServerMetrics (inline in Server column)
@@ -133,9 +133,9 @@ Displays (compact single line):
 
 Opened by [⊞ Model Selection] on a backend row. Switch toggle UI per synced model — identical pattern to Gemini `ModelSelectionModal`.
 
-- Data: `GET /v1/backends/{id}/selected-models` → Ollama branch: `ollama_models` merged with `backend_selected_models`, default `is_enabled = true`
-- Toggle → `PATCH /v1/backends/{id}/selected-models/{model_name}` `{ is_enabled: bool }`
-- `queryKey: ['selected-models', backendId]`
+- Data: `GET /v1/providers/{id}/selected-models` → Ollama branch: `ollama_models` merged with `provider_selected_models`, default `is_enabled = true`
+- Toggle → `PATCH /v1/providers/{id}/selected-models/{model_name}` `{ is_enabled: bool }`
+- `queryKey: ['selected-models', providerId]`
 - Optimistic update: switch flips immediately, reverts on error
 - Empty state: `backends.ollama.noBackendModels` (no models synced yet)
 - Enabled count: `backends.ollama.enabledCount` (`X/Y enabled`)
@@ -374,11 +374,11 @@ Model: gemini-2.5-flash
 
 Opened by `ListFilter` button on paid backend rows.
 
-- Data: `GET /v1/backends/{id}/selected-models` → Gemini branch: global `gemini_models` merged with per-backend state, default `is_enabled = false`
-- Toggle → `PATCH /v1/backends/{id}/selected-models/{model_name}` `{ is_enabled: bool }`
+- Data: `GET /v1/providers/{id}/selected-models` → Gemini branch: global `gemini_models` merged with per-provider state, default `is_enabled = false`
+- Toggle → `PATCH /v1/providers/{id}/selected-models/{model_name}` `{ is_enabled: bool }`
 - Optimistic update: switch flips immediately, reverts on error
 - Empty state: "No global models. Set an admin key and click Sync Now."
-- `useQuery({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, backendId] })`
+- `useQuery({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, providerId] })`
 - Auto-refreshed when `refreshGeminiData()` is called (prefix invalidation)
 
 > **Ollama counterpart**: `OllamaBackendModelsModal` — same Switch UI, same endpoint, Ollama branch returns per-backend models with `is_enabled = true` default. See above.

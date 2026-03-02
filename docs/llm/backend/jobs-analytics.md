@@ -1,28 +1,28 @@
 # Jobs — Token Observability & Analytics
 
-> SSOT | **Last Updated**: 2026-02-27
+> SSOT | **Last Updated**: 2026-03-03
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
 | Add new column to `inference_logs` | `infrastructure/outbound/observability/` ClickHouse adapter + `InferenceEvent` struct | Extend INSERT SQL + `record_inference()` |
-| Change TTFT calculation logic | `infrastructure/outbound/backend_router.rs` `run_job()` | Modify TTFT detection block (first non-empty non-final token) |
+| Change TTFT calculation logic | `infrastructure/outbound/provider_router.rs` `run_job()` | Modify TTFT detection block (first non-empty non-final token) |
 | Add new analytics endpoint | `infrastructure/inbound/http/handlers.rs` + ClickHouse SQL | Add handler + route in `router.rs` |
-| Change Ollama token count fallback | `infrastructure/outbound/backend_router.rs` `run_job()` | Modify `token_count` fallback (currently: SSE event count) |
-| Change ClickHouse data retention | `crates/inferq/migrations/` | Update pg_cron `DELETE` interval or add new MV TTL |
+| Change Ollama token count fallback | `infrastructure/outbound/provider_router.rs` `run_job()` | Modify `token_count` fallback (currently: SSE event count) |
+| Change ClickHouse data retention | `crates/veronex/migrations/` | Update pg_cron `DELETE` interval or add new MV TTL |
 | Add Gemini prompt token tracking | `infrastructure/outbound/gemini/adapter.rs` `extract_usage()` | Already implemented — verify `prompt_tokens` flows to `emit_inference_event()` |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `crates/inferq/src/domain/value_objects.rs` | `StreamToken` struct |
-| `crates/inferq/src/infrastructure/outbound/gemini/adapter.rs` | `extract_usage()` — Gemini usageMetadata |
-| `crates/inferq/src/infrastructure/outbound/backend_router.rs` | `run_job()` — TTFT + token recording |
-| `crates/inferq/src/infrastructure/outbound/observability/` | `ClickHouseObservabilityAdapter` |
-| `crates/inferq/src/application/ports/outbound/mod.rs` | `ObservabilityPort` trait |
-| `crates/inferq/src/infrastructure/inbound/http/handlers.rs` | `/v1/usage`, `/v1/dashboard/performance` |
+| `crates/veronex/src/domain/value_objects.rs` | `StreamToken` struct |
+| `crates/veronex/src/infrastructure/outbound/gemini/adapter.rs` | `extract_usage()` — Gemini usageMetadata |
+| `crates/veronex/src/infrastructure/outbound/provider_router.rs` | `run_job()` — TTFT + token recording |
+| `crates/veronex/src/infrastructure/outbound/observability/` | `ClickHouseObservabilityAdapter` |
+| `crates/veronex/src/application/ports/outbound/mod.rs` | `ObservabilityPort` trait |
+| `crates/veronex/src/infrastructure/inbound/http/handlers.rs` | `/v1/usage`, `/v1/dashboard/performance` |
 
 ---
 
@@ -34,7 +34,7 @@ pub struct StreamToken {
     pub value: String,
     pub is_final: bool,
     pub prompt_tokens: Option<u32>,     // set on last token only (Gemini)
-    pub completion_tokens: Option<u32>, // None = backend didn't provide
+    pub completion_tokens: Option<u32>, // None = provider didn't provide
 }
 ```
 
@@ -57,7 +57,7 @@ fn extract_usage(resp: &GenerateResponse) -> (Option<u32>, Option<u32>) {
 
 ---
 
-## run_job() — TTFT + Token Processing (backend_router.rs)
+## run_job() — TTFT + Token Processing (provider_router.rs)
 
 ```
 ttft_ms_value: Option<i32> = None
@@ -94,7 +94,7 @@ CREATE TABLE inference_logs (
     job_id            String,
     api_key_id        Nullable(String),
     model_name        String,
-    backend           String,
+    provider_type     String,
     status            String,
     prompt_tokens     UInt32,
     completion_tokens UInt32,
@@ -105,6 +105,23 @@ CREATE TABLE inference_logs (
 
 Written by `ClickHouseObservabilityAdapter::record_inference()` after each job.
 `chrono::DateTime<Utc>` → `time::OffsetDateTime` conversion required by clickhouse serde.
+
+---
+
+## IngestInferenceRequest
+
+```rust
+pub struct IngestInferenceRequest {
+    pub job_id:            String,
+    pub api_key_id:        Option<String>,
+    pub model_name:        String,
+    pub provider_type:     String,   // "ollama" | "gemini"
+    pub status:            String,
+    pub prompt_tokens:     u32,
+    pub completion_tokens: u32,
+    pub latency_ms:        i32,
+}
+```
 
 ---
 

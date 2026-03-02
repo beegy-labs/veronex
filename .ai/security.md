@@ -1,6 +1,6 @@
 # Security
 
-> CDD Tier 1 — Security indicator | **Last Updated**: 2026-03-02
+> CDD Tier 1 — Security indicator | **Last Updated**: 2026-03-03
 
 ## Quick Navigation
 
@@ -17,17 +17,18 @@
 - **API Keys**: BLAKE2b-256 hashed storage
 - **Passwords**: Argon2id hashing
 - **Rate Limiting**: RPM + TPM via Valkey (sliding window)
-- **RBAC**: super/admin/user roles
+- **RBAC**: super/admin roles
 - **Encrypted Fields**: Gemini API keys (AES-256-GCM)
+- **Circuit Breaker**: `CircuitBreakerMap` — per-backend failure gating
+- **CORS**: `CORS_ALLOWED_ORIGINS` env var — origin allowlist for production
 
 ## Security Enhancements (Planned)
 
 | Priority | Task | Path |
 |----------|------|------|
 | P0 | Secret management (Vault) | docs/llm/backend/security.md |
-| P0 | Circuit breaker pattern | docs/llm/backend/security.md |
 | P1 | DDoS protection | docs/llm/backend/security.md |
-| P1 | Security headers (XSS) | docs/llm/backend/security.md |
+| P1 | Security headers (XSS, CSP) | docs/llm/backend/security.md |
 
 ## Reporting
 

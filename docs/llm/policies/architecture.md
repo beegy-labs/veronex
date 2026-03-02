@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-02 (rev: RBAC, capacity control, thermal throttle, analytics service)
+> SSOT | **Last Updated**: 2026-03-03 (rev: RBAC, capacity control, thermal throttle, analytics service)
 > Code patterns and templates → `policies/patterns.md`
 
 ## Overview
@@ -10,10 +10,10 @@ Veronex uses **Hexagonal Architecture (Ports & Adapters)** to isolate the LLM in
 ## Directory Structure
 
 ```
-crates/inferq/src/
+crates/veronex/src/
 ├── domain/
-│   ├── entities/        # InferenceJob, LlmBackend, GpuServer, ApiKey, …
-│   ├── enums/           # JobStatus, BackendType, LlmBackendStatus, …
+│   ├── entities/        # InferenceJob, LlmProvider, GpuServer, ApiKey, …
+│   ├── enums/           # JobStatus, ProviderType, LlmProviderStatus, …
 │   └── value_objects/   # JobId, Prompt, ModelName
 │
 ├── application/
@@ -28,7 +28,7 @@ crates/inferq/src/
 │       ├── persistence/ # Postgres adapters (one per port)
 │       ├── ollama/      # OllamaAdapter
 │       ├── gemini/      # GeminiAdapter
-│       ├── backend_router.rs   # DynamicBackendRouter (VRAM-aware)
+│       ├── provider_router.rs  # DynamicProviderRouter (VRAM-aware)
 │       ├── health_checker.rs   # 30s background health checker (+ thermal throttle update)
 │       ├── model_manager.rs    # OllamaModelManager (LRU eviction)
 │       ├── observability/      # HttpObservabilityAdapter + HttpAuditAdapter (fail-open → veronex-analytics)
@@ -77,32 +77,32 @@ let pg_pool = database::connect(&database_url).await?;
 let api_key_repo: Arc<dyn ApiKeyRepository> =
     Arc::new(PostgresApiKeyRepository::new(pg_pool.clone()));
 
-// Decorator pattern: CachingBackendRegistry wraps PostgresBackendRegistry
+// Decorator pattern: CachingProviderRegistry wraps PostgresProviderRegistry
 // list_all() is called on every job dequeue — 5s TTL avoids repeated DB hits
-let backend_registry: Arc<dyn LlmBackendRegistry> = Arc::new(
-    CachingBackendRegistry::new(
-        Arc::new(PostgresBackendRegistry::new(pg_pool.clone())),
+let provider_registry: Arc<dyn LlmProviderRegistry> = Arc::new(
+    CachingProviderRegistry::new(
+        Arc::new(PostgresProviderRegistry::new(pg_pool.clone())),
         Duration::from_secs(5),
     )
 );
 // ... repeat for every port
 
-let state = AppState { use_case, api_key_repo, backend_registry, /* ... */ };
+let state = AppState { use_case, api_key_repo, provider_registry, /* ... */ };
 let app = build_app(state);
 axum::serve(listener, app).await?;
 ```
 
-## Multi-Backend Routing
+## Multi-Provider Routing
 
 ```
 Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → RPUSH veronex:queue:jobs
       OR POST /v1/test/completions  (Bearer JWT, source=Test)  → RPUSH veronex:queue:jobs:test
        → queue_dispatcher_loop: BLPOP [veronex:queue:jobs, veronex:queue:jobs:test] 5.0
          (API queue always polled first — BLPOP key-order priority guarantee)
-         → DynamicBackendRouter::dispatch
-           → list_active() → VRAM check → pick best backend
-           → thermal.get(backend_id) → skip if Hard; cap if Soft+active>0
-           → slot_map.try_acquire(backend_id, model)  ← OwnedSemaphorePermit (RAII)
+         → DynamicProviderRouter::dispatch
+           → list_active() → VRAM check → pick best provider
+           → thermal.get(provider_id) → skip if Hard; cap if Soft+active>0
+           → slot_map.try_acquire(provider_id, model)  ← OwnedSemaphorePermit (RAII)
            → tokio::spawn run_job(permit)
              → OllamaAdapter | GeminiAdapter → SSE tokens
              → permit dropped (auto) → slot released
@@ -115,7 +115,7 @@ Reconnect:
   GET /v1/test/jobs/{id}/stream (Bearer JWT) → SSE replay
 
 Background loops:
-  health_checker (30s): backend online/offline + thermal.update(temp_c)
+  health_checker (30s): provider online/offline + thermal.update(temp_c)
   run_capacity_analysis_loop (30s tick, checks DB batch_interval_secs):
     → Ollama /api/ps + /api/show → compute KV cache → qwen2.5:3b recommendation
     → slot_map.update_capacity() + model_capacity upsert
@@ -130,15 +130,15 @@ pub struct AppState {
     pub use_case:                  Arc<dyn InferenceUseCase>,
     pub job_repo:                  Arc<dyn JobRepository>,
     pub api_key_repo:              Arc<dyn ApiKeyRepository>,
-    // Backend routing
-    pub backend_registry:          Arc<dyn LlmBackendRegistry>,
+    // Provider routing
+    pub provider_registry:         Arc<dyn LlmProviderRegistry>,
     pub gpu_server_registry:       Arc<dyn GpuServerRegistry>,
     pub ollama_model_repo:         Arc<dyn OllamaModelRepository>,
     pub ollama_sync_job_repo:      Arc<dyn OllamaSyncJobRepository>,
     pub gemini_policy_repo:        Arc<dyn GeminiPolicyRepository>,
     pub gemini_sync_config_repo:   Arc<dyn GeminiSyncConfigRepository>,
     pub gemini_model_repo:         Arc<dyn GeminiModelRepository>,
-    pub model_selection_repo:      Arc<dyn BackendModelSelectionRepository>,
+    pub model_selection_repo:      Arc<dyn ProviderModelSelectionRepository>,
     // Auth / RBAC
     pub account_repo:              Arc<dyn AccountRepository>,
     pub session_repo:              Arc<dyn SessionRepository>,
@@ -187,7 +187,7 @@ All events flow through Redpanda as the single message bus.  ClickHouse is a con
 |----------|-----------|
 | Queue-based LB | Veronex is the load balancer — no external LB needed |
 | VRAM-aware routing | Minimizes model load cost (APU loads are slow) |
-| GpuServer split | Multiple Ollama backends per host → single node-exporter scrape |
+| GpuServer split | Multiple Ollama providers per host → single node-exporter scrape |
 | SSE over WebSocket | Unidirectional stream is sufficient; simpler implementation |
 | Arc<dyn Trait> | Runtime polymorphism; adapters freely swappable at composition root |
 | async-trait kept | `Arc<dyn Port>` requires it; native async fn in trait is not dyn-safe |
@@ -205,7 +205,7 @@ All events flow through Redpanda as the single message bus.  ClickHouse is a con
 | Port | Adapter | Notes |
 |------|---------|-------|
 | `InferenceBackendPort` | `OllamaAdapter`, `GeminiAdapter` | SSE streaming |
-| `LlmBackendRegistry` | `PostgresBackendRegistry` (DB) + `CachingBackendRegistry` (5s TTL decorator, used in production) | CRUD + health + update |
+| `LlmProviderRegistry` | `PostgresProviderRegistry` (DB) + `CachingProviderRegistry` (5s TTL decorator, used in production) | CRUD + health + update |
 | `GpuServerRegistry` | `PostgresGpuServerRegistry` | Physical server + node-exporter |
 | `JobRepository` | `PostgresJobRepository` | UPSERT on conflict |
 | `ApiKeyRepository` | `PostgresApiKeyRepository` | BLAKE2b hash lookup |
@@ -222,4 +222,4 @@ All events flow through Redpanda as the single message bus.  ClickHouse is a con
 | `GeminiPolicyRepository` | `PostgresGeminiPolicyRepository` | UPSERT + `*` fallback |
 | `GeminiSyncConfigRepository` | `PostgresGeminiSyncConfigRepository` | Singleton admin key |
 | `GeminiModelRepository` | `PostgresGeminiModelRepository` | Global model pool |
-| `BackendModelSelectionRepository` | `PostgresBackendModelSelectionRepository` | Per-paid-backend model filter |
+| `ProviderModelSelectionRepository` | `PostgresProviderModelSelectionRepository` | Per-paid-provider model filter |
