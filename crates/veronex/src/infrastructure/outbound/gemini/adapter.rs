@@ -7,7 +7,7 @@ use futures::Stream;
 use futures::StreamExt as _;
 use serde::{Deserialize, Serialize};
 
-use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
+use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
 use crate::domain::value_objects::StreamToken;
@@ -165,10 +165,10 @@ fn map_finish_reason(candidates: &[Candidate]) -> FinishReason {
     }
 }
 
-// ── InferenceBackendPort impl ──────────────────────────────────────────────────
+// ── InferenceProviderPort impl ──────────────────────────────────────────────────
 
 #[async_trait]
-impl InferenceBackendPort for GeminiAdapter {
+impl InferenceProviderPort for GeminiAdapter {
     async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
         let start = Instant::now();
         let model = job.model_name.as_str();
@@ -216,7 +216,7 @@ impl InferenceBackendPort for GeminiAdapter {
 
         Box::pin(async_stream::try_stream! {
             if api_key.is_empty() {
-                Err(anyhow::anyhow!("Gemini backend has no API key configured"))?;
+                Err(anyhow::anyhow!("Gemini provider has no API key configured"))?;
             }
 
             let url = format!(

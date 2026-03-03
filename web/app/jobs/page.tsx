@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { dashboardJobsQuery, backendsQuery } from '@/lib/queries'
+import { dashboardJobsQuery, providersQuery } from '@/lib/queries'
 import type { RetryParams } from '@/lib/types'
 import JobTable from '@/components/job-table'
 import { ApiTestPanel } from '@/components/api-test-panel'
@@ -251,7 +251,7 @@ export default function JobsPage() {
   const [activeTab, setActiveTab] = useState<'api' | 'test' | 'flow'>('api')
   const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
 
-  const { data: backends } = useQuery(backendsQuery)
+  const { data: backends } = useQuery(providersQuery)
 
   function handleRetry(params: RetryParams) {
     setRetryParams(params)

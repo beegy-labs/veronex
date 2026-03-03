@@ -7,9 +7,9 @@ use futures::Stream;
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::value_objects::StreamToken;
 
-/// Outbound port for a single LLM inference backend (Ollama, Gemini, …).
+/// Outbound port for a single LLM inference provider (Ollama, Gemini, …).
 #[async_trait]
-pub trait InferenceBackendPort: Send + Sync {
+pub trait InferenceProviderPort: Send + Sync {
     /// Non-streaming inference — returns when the full response is ready.
     async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult>;
 

@@ -38,8 +38,8 @@ pub struct GeminiPolicySummary {
     pub model_name: String,
     pub rpm_limit: i32,
     pub rpd_limit: i32,
-    /// When false: skip all free-tier backends; route directly to a paid backend.
-    /// Also suppresses RPM/RPD counter increments (paid backends have no limits).
+    /// When false: skip all free-tier providers; route directly to a paid provider.
+    /// Also suppresses RPM/RPD counter increments (paid providers have no limits).
     pub available_on_free_tier: bool,
     pub updated_at: DateTime<Utc>,
 }

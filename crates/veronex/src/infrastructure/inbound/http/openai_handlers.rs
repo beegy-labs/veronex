@@ -10,6 +10,7 @@ use axum::Json;
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use crate::domain::enums::{ApiFormat, JobSource};
+use super::cancel_guard::CancelOnDrop;
 use super::state::AppState;
 
 type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
@@ -129,7 +130,7 @@ impl ChatMessage {
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
-    /// Selects the veronex backend type ("ollama" | "gemini"). Optional.
+    /// Selects the veronex provider type ("ollama" | "gemini"). Optional.
     pub provider_type: Option<String>,
     /// Tool/function definitions — passed through to Ollama as-is.
     #[serde(default)]
@@ -181,7 +182,7 @@ struct CompletionChunk {
 
 /// `POST /v1/chat/completions` — OpenAI-compatible streaming chat endpoint.
 ///
-/// For Ollama backends: proxies the full request (messages, tools, temperature, …)
+/// For Ollama providers: proxies the full request (messages, tools, temperature, …)
 /// directly to Ollama's `/api/chat` and streams the response in OpenAI SSE format,
 /// including `tool_calls` deltas for function-calling agents.
 ///
@@ -205,7 +206,7 @@ pub async fn chat_completions(
 
 // ── Ollama queue-based path ─────────────────────────────────────────────────────
 
-/// Routes an OpenAI chat request to an Ollama backend via the Veronex queue.
+/// Routes an OpenAI chat request to an Ollama provider via the Veronex queue.
 ///
 /// Messages are converted to Ollama `/api/chat` format and stored in the job
 /// so the OllamaAdapter can forward the full conversation history.
@@ -366,7 +367,11 @@ async fn ollama_chat_proxy(
     let done_stream =
         futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
 
-    let sse_stream: SseStream = Box::pin(content_stream.chain(done_stream));
+    let sse_stream: SseStream = Box::pin(CancelOnDrop::new(
+        content_stream.chain(done_stream),
+        job_id,
+        state.use_case.clone(),
+    ));
 
     (
         [("X-Accel-Buffering", "no")],
@@ -468,7 +473,11 @@ async fn legacy_queue_chat(
     let done_stream =
         futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
 
-    let sse_stream: SseStream = Box::pin(content_stream.chain(done_stream));
+    let sse_stream: SseStream = Box::pin(CancelOnDrop::new(
+        content_stream.chain(done_stream),
+        job_id,
+        state.use_case.clone(),
+    ));
 
     (
         [("X-Accel-Buffering", "no")],

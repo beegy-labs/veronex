@@ -45,7 +45,7 @@ pub struct OllamaProviderDto {
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
 
-/// `GET /v1/ollama/models` — list all distinct Ollama model names with backend counts.
+/// `GET /v1/ollama/models` — list all distinct Ollama model names with provider counts.
 pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
     match state.ollama_model_repo.list_with_counts().await {
         Ok(models) => {
@@ -71,7 +71,7 @@ pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
 
 /// `GET /v1/ollama/models/:model_name/providers`
 /// — list providers (id, name, url, status) that have the given model synced.
-pub async fn list_model_backends(
+pub async fn list_model_providers(
     State(state): State<AppState>,
     Path(model_name): Path<String>,
 ) -> impl IntoResponse {
@@ -93,7 +93,7 @@ pub async fn list_model_backends(
             (StatusCode::OK, Json(serde_json::json!({"backends": dtos}))).into_response()
         }
         Err(e) => {
-            tracing::error!("ollama list_model_backends: {e}");
+            tracing::error!("ollama list_model_providers: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "database error"})),
@@ -124,12 +124,12 @@ pub async fn list_backend_models(
     }
 }
 
-/// `POST /v1/ollama/models/sync` — trigger a global background sync of all Ollama backends.
+/// `POST /v1/ollama/models/sync` — trigger a global background sync of all Ollama providers.
 ///
 /// Returns 202 immediately with the job ID. The sync runs in the background,
-/// processing each backend sequentially without retrying on failure.
-pub async fn sync_all_backends(State(state): State<AppState>) -> impl IntoResponse {
-    // List all active Ollama backends.
+/// processing each provider sequentially without retrying on failure.
+pub async fn sync_all_providers(State(state): State<AppState>) -> impl IntoResponse {
+    // List all active Ollama providers.
     let backends = match state.provider_registry.list_all().await {
         Ok(all) => {
             let ollama: Vec<_> = all
@@ -139,7 +139,7 @@ pub async fn sync_all_backends(State(state): State<AppState>) -> impl IntoRespon
             ollama
         }
         Err(e) => {
-            tracing::error!("sync_all_backends: failed to list backends: {e}");
+            tracing::error!("sync_all_providers: failed to list providers: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "database error"})),
@@ -151,7 +151,7 @@ pub async fn sync_all_backends(State(state): State<AppState>) -> impl IntoRespon
     if backends.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "no active Ollama backends registered"})),
+            Json(serde_json::json!({"error": "no active Ollama providers registered"})),
         )
             .into_response();
     }
@@ -160,7 +160,7 @@ pub async fn sync_all_backends(State(state): State<AppState>) -> impl IntoRespon
     let job_id = match state.ollama_sync_job_repo.create(total).await {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("sync_all_backends: failed to create sync job: {e}");
+            tracing::error!("sync_all_providers: failed to create sync job: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "database error"})),
@@ -177,8 +177,8 @@ pub async fn sync_all_backends(State(state): State<AppState>) -> impl IntoRespon
     tokio::spawn(async move {
         let client = reqwest::Client::new();
 
-        for backend in backends {
-            let url = format!("{}/api/tags", backend.url.trim_end_matches('/'));
+        for provider in backends {
+            let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
 
             let result = async {
                 let json: serde_json::Value = client
@@ -200,7 +200,7 @@ pub async fn sync_all_backends(State(state): State<AppState>) -> impl IntoRespon
                     .collect();
 
                 ollama_model_repo
-                    .sync_provider_models(backend.id, &models)
+                    .sync_provider_models(provider.id, &models)
                     .await?;
 
                 anyhow::Ok(models)
@@ -210,31 +210,31 @@ pub async fn sync_all_backends(State(state): State<AppState>) -> impl IntoRespon
             let progress_entry = match result {
                 Ok(models) => {
                     // Upsert model selections (is_enabled defaults to true for new rows).
-                    if let Err(e) = model_selection_repo.upsert_models(backend.id, &models).await {
-                        tracing::warn!(provider_id = %backend.id, "upsert model selections failed (non-fatal): {e}");
+                    if let Err(e) = model_selection_repo.upsert_models(provider.id, &models).await {
+                        tracing::warn!(provider_id = %provider.id, "upsert model selections failed (non-fatal): {e}");
                     }
                     tracing::info!(
-                        provider_id = %backend.id,
-                        name = %backend.name,
+                        provider_id = %provider.id,
+                        name = %provider.name,
                         count = models.len(),
-                        "ollama backend synced"
+                        "ollama provider synced"
                     );
                     serde_json::json!({
-                        "provider_id": backend.id,
-                        "name": backend.name,
+                        "provider_id": provider.id,
+                        "name": provider.name,
                         "models": models,
                         "error": null
                     })
                 }
                 Err(e) => {
                     tracing::warn!(
-                        provider_id = %backend.id,
-                        name = %backend.name,
-                        "ollama backend sync failed: {e}"
+                        provider_id = %provider.id,
+                        name = %provider.name,
+                        "ollama provider sync failed: {e}"
                     );
                     serde_json::json!({
-                        "provider_id": backend.id,
-                        "name": backend.name,
+                        "provider_id": provider.id,
+                        "name": provider.name,
                         "models": [],
                         "error": e.to_string()
                     })

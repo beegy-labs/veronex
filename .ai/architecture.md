@@ -30,7 +30,7 @@ infrastructure → application → domain
 | Port | Direction | Adapter |
 | ---- | --------- | ------- |
 | `InferenceUseCase` | Inbound | HTTP handlers |
-| `InferenceBackendPort` | Outbound | OllamaAdapter, GeminiAdapter |
+| `InferenceProviderPort` | Outbound | OllamaAdapter, GeminiAdapter |
 | `LlmProviderRegistry` | Outbound | CachingProviderRegistry (5s TTL) |
 | `JobRepository` | Outbound | PostgresJobRepository |
 | `ApiKeyRepository` | Outbound | PostgresApiKeyRepository |

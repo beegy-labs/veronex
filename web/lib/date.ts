@@ -2,7 +2,7 @@ import type { Timezone } from '@/components/timezone-provider'
 
 /**
  * Centralized date formatters — all accept an IANA Timezone string.
- * Backend always returns ISO 8601 UTC; the user's selected timezone
+ * API always returns ISO 8601 UTC; the user's selected timezone
  * is applied here on the client only.
  */
 
@@ -24,7 +24,7 @@ export function fmtDatetimeShort(iso: string, tz: Timezone): string {
   }).format(new Date(iso))
 }
 
-/** "Mar 1, 2026" — API keys, backend registered_at */
+/** "Mar 1, 2026" — API keys, provider registered_at */
 export function fmtDateOnly(iso: string, tz: Timezone): string {
   return new Intl.DateTimeFormat(undefined, {
     month: 'short', day: 'numeric', year: 'numeric',

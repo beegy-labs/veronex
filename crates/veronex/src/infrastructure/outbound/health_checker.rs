@@ -53,29 +53,29 @@ struct AgentOllama {
 ///
 /// - Ollama: `GET {url}/api/version` → 200
 /// - Gemini: lightweight models list with the stored API key → 200
-pub async fn check_backend(client: &reqwest::Client, backend: &LlmProvider) -> LlmProviderStatus {
-    match backend.provider_type {
+pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) -> LlmProviderStatus {
+    match provider.provider_type {
         ProviderType::Ollama => {
-            let url = format!("{}/api/version", backend.url.trim_end_matches('/'));
+            let url = format!("{}/api/version", provider.url.trim_end_matches('/'));
             match client.get(&url).timeout(Duration::from_secs(5)).send().await {
                 Ok(r) if r.status().is_success() => LlmProviderStatus::Online,
                 Ok(r) => {
                     tracing::warn!(
-                        provider_id = %backend.id,
+                        provider_id = %provider.id,
                         status = %r.status(),
                         "Ollama health check returned non-2xx"
                     );
                     LlmProviderStatus::Offline
                 }
                 Err(e) => {
-                    tracing::warn!(provider_id = %backend.id, "Ollama health check failed: {e}");
+                    tracing::warn!(provider_id = %provider.id, "Ollama health check failed: {e}");
                     LlmProviderStatus::Offline
                 }
             }
         }
         ProviderType::Gemini => {
-            let Some(ref key) = backend.api_key_encrypted else {
-                tracing::warn!(provider_id = %backend.id, "Gemini provider has no API key");
+            let Some(ref key) = provider.api_key_encrypted else {
+                tracing::warn!(provider_id = %provider.id, "Gemini provider has no API key");
                 return LlmProviderStatus::Offline;
             };
             let url = format!(
@@ -85,14 +85,14 @@ pub async fn check_backend(client: &reqwest::Client, backend: &LlmProvider) -> L
                 Ok(r) if r.status().is_success() => LlmProviderStatus::Online,
                 Ok(r) => {
                     tracing::warn!(
-                        provider_id = %backend.id,
+                        provider_id = %provider.id,
                         status = %r.status(),
                         "Gemini health check returned non-2xx"
                     );
                     LlmProviderStatus::Offline
                 }
                 Err(e) => {
-                    tracing::warn!(provider_id = %backend.id, "Gemini health check failed: {e}");
+                    tracing::warn!(provider_id = %provider.id, "Gemini health check failed: {e}");
                     LlmProviderStatus::Offline
                 }
             }
@@ -104,13 +104,13 @@ pub async fn check_backend(client: &reqwest::Client, backend: &LlmProvider) -> L
 
 /// Poll `{agent_url}/api/metrics`, parse the response, and cache it in Valkey.
 ///
-/// Errors are logged as warnings and do NOT affect the health status of the backend.
+/// Errors are logged as warnings and do NOT affect the health status of the provider.
 async fn poll_agent_metrics(
     client: &reqwest::Client,
-    backend: &LlmProvider,
+    provider: &LlmProvider,
     valkey_pool: &fred::clients::Pool,
 ) {
-    let Some(ref agent_url) = backend.agent_url else {
+    let Some(ref agent_url) = provider.agent_url else {
         return;
     };
 
@@ -120,8 +120,8 @@ async fn poll_agent_metrics(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(
-                provider_id = %backend.id,
-                name = %backend.name,
+                provider_id = %provider.id,
+                name = %provider.name,
                 "agent metrics poll failed: {e}"
             );
             return;
@@ -132,7 +132,7 @@ async fn poll_agent_metrics(
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(
-                provider_id = %backend.id,
+                provider_id = %provider.id,
                 "failed to parse agent metrics: {e}"
             );
             return;
@@ -161,20 +161,20 @@ async fn poll_agent_metrics(
     };
 
     tracing::debug!(
-        provider_id = %backend.id,
-        name = %backend.name,
+        provider_id = %provider.id,
+        name = %provider.name,
         vram = "{}/{} MiB",
         hw.vram_used_mb, hw.vram_total_mb,
         temp = hw.temp_c,
         "agent metrics collected"
     );
 
-    store_hw_metrics(valkey_pool, backend.id, &hw).await;
+    store_hw_metrics(valkey_pool, provider.id, &hw).await;
 }
 
 // ── Background task ────────────────────────────────────────────────────────────
 
-/// Background loop that checks all registered backends every `interval_secs`
+/// Background loop that checks all registered providers every `interval_secs`
 /// seconds: updates online/offline status and (when `agent_url` is set) polls hardware
 /// metrics and stores them in Valkey for the dispatcher.
 ///
@@ -201,7 +201,7 @@ pub async fn run_health_checker_loop(
             _ = tokio::time::sleep(interval) => {}
         }
 
-        let backends = match registry.list_all().await {
+        let providers = match registry.list_all().await {
             Ok(b) => b,
             Err(e) => {
                 tracing::error!("health checker: failed to list providers: {e}");
@@ -211,41 +211,41 @@ pub async fn run_health_checker_loop(
 
         // Only auto-check Ollama providers. Gemini status is updated manually
         // via POST /v1/gemini/sync-status to avoid unnecessary API quota usage.
-        let active: Vec<_> = backends
+        let active: Vec<_> = providers
             .into_iter()
             .filter(|b| b.is_active && matches!(b.provider_type, ProviderType::Ollama))
             .collect();
 
-        for backend in active {
+        for provider in active {
             // 1. Connectivity health check
-            let new_status = check_backend(&client, &backend).await;
-            if new_status != backend.status {
+            let new_status = check_provider(&client, &provider).await;
+            if new_status != provider.status {
                 tracing::info!(
-                    provider_id = %backend.id,
-                    name = %backend.name,
-                    old = ?backend.status,
+                    provider_id = %provider.id,
+                    name = %provider.name,
+                    old = ?provider.status,
                     new = ?new_status,
                     "provider status changed"
                 );
-                if let Err(e) = registry.update_status(backend.id, new_status).await {
-                    tracing::warn!(provider_id = %backend.id, "failed to update status: {e}");
+                if let Err(e) = registry.update_status(provider.id, new_status).await {
+                    tracing::warn!(provider_id = %provider.id, "failed to update status: {e}");
                 }
             }
 
             // 2. Hardware metrics (only when agent_url is configured)
             if let Some(ref pool) = valkey_pool {
-                poll_agent_metrics(&client, &backend, pool).await;
+                poll_agent_metrics(&client, &provider, pool).await;
 
                 // 3. Thermal throttle update from cached hw_metrics
-                if let Some(hw) = load_hw_metrics(pool, backend.id).await {
-                    let prev  = thermal.get(backend.id);
-                    let level = thermal.update(backend.id, hw.temp_c);
+                if let Some(hw) = load_hw_metrics(pool, provider.id).await {
+                    let prev  = thermal.get(provider.id);
+                    let level = thermal.update(provider.id, hw.temp_c);
 
                     if level != prev {
                         match &level {
                             ThrottleLevel::Hard => {
                                 tracing::warn!(
-                                    backend = %backend.name,
+                                    provider = %provider.name,
                                     temp    = hw.temp_c,
                                     cooldown_secs = 60,
                                     "HARD THROTTLE: dispatch suspended, cooldown active"
@@ -253,7 +253,7 @@ pub async fn run_health_checker_loop(
                                 use fred::prelude::*;
                                 let _: () = pool
                                     .set(
-                                        &format!("veronex:throttle:{}", backend.id),
+                                        &format!("veronex:throttle:{}", provider.id),
                                         "hard",
                                         Some(Expiration::EX(90)),
                                         None,
@@ -264,14 +264,14 @@ pub async fn run_health_checker_loop(
                             }
                             ThrottleLevel::Soft => {
                                 tracing::warn!(
-                                    backend = %backend.name,
+                                    provider = %provider.name,
                                     temp    = hw.temp_c,
                                     "SOFT THROTTLE: capped to 1 slot"
                                 );
                             }
                             ThrottleLevel::Normal => {
                                 tracing::info!(
-                                    backend = %backend.name,
+                                    provider = %provider.name,
                                     temp    = hw.temp_c,
                                     "throttle lifted — normal ops"
                                 );
@@ -279,7 +279,7 @@ pub async fn run_health_checker_loop(
                                 let _: () = pool
                                     .del::<(), _>(&format!(
                                         "veronex:throttle:{}",
-                                        backend.id
+                                        provider.id
                                     ))
                                     .await
                                     .unwrap_or(());

@@ -128,7 +128,7 @@ export function KeyUsageModal({
                   <TableHeader>
                     <TableRow>
                       <TableHead>{t('jobs.model')}</TableHead>
-                      <TableHead>{t('usage.backend')}</TableHead>
+                      <TableHead>{t('usage.provider')}</TableHead>
                       <TableHead className="text-right">{t('usage.requests')}</TableHead>
                       <TableHead className="text-right">{t('usage.share')}</TableHead>
                       <TableHead className="text-right">{t('usage.totalTokens')}</TableHead>

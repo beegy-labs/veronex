@@ -32,7 +32,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
     return (
       <div className="flex items-center gap-2">
         <Badge variant="outline" className="bg-status-error/10 text-status-error-fg border-status-error/30 text-xs font-medium">
-          <WifiOff className="h-3 w-3 mr-1.5" />{t('backends.servers.unreachable')}
+          <WifiOff className="h-3 w-3 mr-1.5" />{t('providers.servers.unreachable')}
         </Badge>
         <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground"
           onClick={() => refetch()} disabled={isFetching} title="Retry">
@@ -123,7 +123,7 @@ export function ServerMetricsCompact({
   })
 
   if (isError || (data && !data.scrape_ok)) {
-    return <span className="text-[10px] text-status-error-fg italic">{t('backends.servers.unreachable')}</span>
+    return <span className="text-[10px] text-status-error-fg italic">{t('providers.servers.unreachable')}</span>
   }
   if (!data) return null
 

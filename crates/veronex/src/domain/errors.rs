@@ -22,7 +22,7 @@ pub enum DomainError {
     RateLimitExceeded(String),
 
     // ── Backend / inference ───────────────────────────────────────────────
-    #[error("backend unavailable: {0}")]
+    #[error("provider unavailable: {0}")]
     BackendUnavailable(String),
 
     #[error("inference failed: {0}")]

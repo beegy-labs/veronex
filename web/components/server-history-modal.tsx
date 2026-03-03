@@ -59,7 +59,7 @@ export function ServerHistoryModal({
           <DialogTitle className="flex items-center gap-2">
             <BarChart2 className="h-4 w-4 text-accent-gpu" />
             {server.name}
-            <span className="text-muted-foreground font-normal text-sm">— {t('backends.clickhouseHistory')}</span>
+            <span className="text-muted-foreground font-normal text-sm">— {t('providers.clickhouseHistory')}</span>
           </DialogTitle>
         </DialogHeader>
 
@@ -86,20 +86,20 @@ export function ServerHistoryModal({
           </div>
         )}
         {isError && (
-          <p className="text-sm text-destructive py-2">{t('backends.checkOtel')}</p>
+          <p className="text-sm text-destructive py-2">{t('providers.checkOtel')}</p>
         )}
         {data && data.length === 0 && (
           <p className="text-sm text-muted-foreground py-6 text-center">
-            {t('backends.noClickhouseData', { hours })}
+            {t('providers.noClickhouseData', { hours })}
             <br />
-            <span className="text-xs opacity-60">{t('backends.checkOtel')}</span>
+            <span className="text-xs opacity-60">{t('providers.checkOtel')}</span>
           </p>
         )}
 
         {data && data.length > 0 && (
           <div className="space-y-5">
             <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{t('backends.memUsedPct')}</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{t('providers.memUsedPct')}</p>
               <ResponsiveContainer width="100%" height={110}>
                 <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                   <XAxis dataKey="ts" tick={{ fontSize: 10, fill: 'var(--theme-text-faint)' }} interval="preserveStartEnd" />
@@ -112,7 +112,7 @@ export function ServerHistoryModal({
             {hasGpu && (
               <>
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{t('backends.gpuTempC')}</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{t('providers.gpuTempC')}</p>
                   <ResponsiveContainer width="100%" height={110}>
                     <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                       <XAxis dataKey="ts" tick={{ fontSize: 10, fill: 'var(--theme-text-faint)' }} interval="preserveStartEnd" />
@@ -123,7 +123,7 @@ export function ServerHistoryModal({
                   </ResponsiveContainer>
                 </div>
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{t('backends.gpuPowerW')}</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{t('providers.gpuPowerW')}</p>
                   <ResponsiveContainer width="100%" height={110}>
                     <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                       <XAxis dataKey="ts" tick={{ fontSize: 10, fill: 'var(--theme-text-faint)' }} interval="preserveStartEnd" />

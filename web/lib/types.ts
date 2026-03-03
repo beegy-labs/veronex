@@ -258,7 +258,7 @@ export interface GpuNodeMetrics {
   busy_pct: number | null
 }
 
-export interface Backend {
+export interface Provider {
   id: string
   name: string
   backend_type: 'ollama' | 'gemini'
@@ -279,7 +279,7 @@ export interface Backend {
   api_key_masked: string | null
 }
 
-export interface RegisterBackendRequest {
+export interface RegisterProviderRequest {
   name: string
   backend_type: 'ollama' | 'gemini'
   url?: string
@@ -291,7 +291,7 @@ export interface RegisterBackendRequest {
   is_free_tier?: boolean
 }
 
-export interface UpdateBackendRequest {
+export interface UpdateProviderRequest {
   name: string
   url?: string
   api_key?: string
@@ -321,7 +321,7 @@ export interface GeminiRateLimitPolicy {
   rpm_limit: number
   rpd_limit: number
   /**
-   * When false: skip all free-tier backends and route directly to a paid backend.
+   * When false: skip all free-tier providers and route directly to a paid provider.
    * RPM/RPD counters are also suppressed for paid backends.
    */
   available_on_free_tier: boolean
@@ -342,7 +342,7 @@ export interface ServerMetricsPoint {
   gpu_power_w: number | null
 }
 
-export interface BackendSelectedModel {
+export interface ProviderSelectedModel {
   model_name: string
   is_enabled: boolean
   synced_at: string
@@ -357,7 +357,7 @@ export interface GeminiModel {
   synced_at: string
 }
 
-export interface RegisterBackendResponse {
+export interface RegisterProviderResponse {
   id: string
   status: string
 }
@@ -393,14 +393,14 @@ export interface OllamaModelWithCount {
   provider_count: number
 }
 
-/** Backend info returned by GET /v1/ollama/models/:model_name/backends. */
+/** Provider info returned by GET /v1/ollama/models/:model_name/providers. */
 export interface RetryParams {
   prompt: string
   model: string
   provider_type: string
 }
 
-export interface OllamaBackendForModel {
+export interface OllamaProviderForModel {
   provider_id: string
   name: string
   url: string
@@ -475,7 +475,7 @@ export interface ModelCapacityInfo {
   updated_at: string
 }
 
-export interface BackendCapacityInfo {
+export interface ProviderCapacityInfo {
   provider_id: string
   provider_name: string
   thermal_state: 'normal' | 'soft' | 'hard'
@@ -484,7 +484,7 @@ export interface BackendCapacityInfo {
 }
 
 export interface CapacityResponse {
-  providers: BackendCapacityInfo[]
+  providers: ProviderCapacityInfo[]
 }
 
 export interface CapacitySettings {

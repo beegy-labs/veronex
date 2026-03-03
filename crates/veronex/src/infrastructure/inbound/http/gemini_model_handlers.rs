@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::application::ports::outbound::audit_port::AuditEvent;
 use crate::domain::enums::{ProviderType, LlmProviderStatus};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
-use crate::infrastructure::outbound::health_checker::check_backend;
+use crate::infrastructure::outbound::health_checker::check_provider;
 
 use super::state::AppState;
 
@@ -239,13 +239,13 @@ pub struct GeminiSyncStatusResponse {
 
 /// `POST /v1/gemini/sync-status` — check all active Gemini backends and update their status.
 ///
-/// Runs synchronously (fast — just one lightweight API call per backend).
-/// Returns the updated status for each backend.
+/// Runs synchronously (fast — just one lightweight API call per provider).
+/// Returns the updated status for each provider.
 pub async fn sync_status(State(state): State<AppState>) -> impl IntoResponse {
     let backends = match state.provider_registry.list_all().await {
         Ok(b) => b,
         Err(e) => {
-            tracing::error!("gemini sync_status: failed to list backends: {e}");
+            tracing::error!("gemini sync_status: failed to list providers: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "database error"})),
@@ -262,8 +262,8 @@ pub async fn sync_status(State(state): State<AppState>) -> impl IntoResponse {
     let client = reqwest::Client::new();
     let mut results = Vec::with_capacity(gemini_active.len());
 
-    for backend in gemini_active {
-        let new_status = check_backend(&client, &backend).await;
+    for provider in gemini_active {
+        let new_status = check_provider(&client, &provider).await;
         let status_str = match new_status {
             LlmProviderStatus::Online => "online",
             LlmProviderStatus::Offline => "offline",
@@ -271,13 +271,13 @@ pub async fn sync_status(State(state): State<AppState>) -> impl IntoResponse {
         }
         .to_string();
 
-        if let Err(e) = state.provider_registry.update_status(backend.id, new_status).await {
-            tracing::warn!(backend_id = %backend.id, "gemini sync_status: failed to persist status: {e}");
+        if let Err(e) = state.provider_registry.update_status(provider.id, new_status).await {
+            tracing::warn!(backend_id = %provider.id, "gemini sync_status: failed to persist status: {e}");
         }
 
         results.push(GeminiStatusResult {
-            id: backend.id,
-            name: backend.name,
+            id: provider.id,
+            name: provider.name,
             status: status_str,
             error: None,
         });

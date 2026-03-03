@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
-use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
+use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::message_store::MessageStore;
@@ -112,12 +112,12 @@ impl InferenceUseCaseImpl {
         }
     }
 
-    /// Spawn the multi-backend queue dispatcher (no-op if Valkey is not configured).
+    /// Spawn the multi-provider queue dispatcher (no-op if Valkey is not configured).
     ///
-    /// The dispatcher pops jobs from the Valkey queue, finds the backend with the most
+    /// The dispatcher pops jobs from the Valkey queue, finds the provider with the most
     /// available VRAM (via Ollama's `/api/ps`), and spawns each job concurrently.
     /// Each physical GPU (Ollama server) processes one job at a time; multiple GPUs
-    /// run in parallel. If no backend has capacity, the job is re-queued and the
+    /// run in parallel. If no provider has capacity, the job is re-queued and the
     /// dispatcher backs off briefly.
     pub fn start_queue_worker(
         &self,
@@ -503,7 +503,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             // Don't override a job that has already reached a terminal state.
             // This prevents a tab-close cleanup from flipping a completed job
             // to cancelled after the stream has naturally finished.
-            if entry.status == JobStatus::Completed || entry.status == JobStatus::Failed {
+            if entry.status == JobStatus::Completed || entry.status == JobStatus::Failed || entry.status == JobStatus::Cancelled {
                 true
             } else {
                 entry.status = JobStatus::Cancelled;
@@ -607,15 +607,15 @@ fn spawn_job_direct(
     });
 }
 
-// ── Multi-backend queue dispatcher ────────────────────────────────────────────
+// ── Multi-provider queue dispatcher ────────────────────────────────────────────
 
 /// Pops jobs from the Valkey queue and dispatches each one to the best available
-/// backend concurrently.
+/// provider concurrently.
 ///
 /// For each popped job:
 ///   1. Find the Ollama server with the most available VRAM (or first Gemini key).
-///   2. If a backend is available and not currently busy: mark it busy, spawn the job.
-///   3. If no backend is available: LPUSH the job back to the front of the queue and
+///   2. If a provider is available and not currently busy: mark it busy, spawn the job.
+///   3. If no provider is available: LPUSH the job back to the front of the queue and
 ///      back off briefly (2s) before retrying.
 ///
 /// This allows N Ollama GPUs to work in parallel while each GPU processes one job
@@ -753,27 +753,27 @@ async fn queue_dispatcher_loop(
             }
         });
 
-        // Claim a slot on the best available backend (VRAM-sorted, thermal-filtered,
+        // Claim a slot on the best available provider (VRAM-sorted, thermal-filtered,
         // circuit-breaker-filtered).
         let claimed = availability
             .into_iter()
             .filter(|(_b, avail)| *avail > 0)
-            .find_map(|(backend, _)| {
+            .find_map(|(provider, _)| {
                 // Circuit breaker gate — skip open backends.
-                if !circuit_breaker.is_allowed(backend.id) {
+                if !circuit_breaker.is_allowed(provider.id) {
                     tracing::debug!(
-                        provider_id = %backend.id,
-                        provider_name = %backend.name,
+                        provider_id = %provider.id,
+                        provider_name = %provider.name,
                         "circuit open — skipping provider"
                     );
                     return None;
                 }
                 // Thermal gate
-                match thermal.get_level(backend.id) {
+                match thermal.get_level(provider.id) {
                     ThrottleLevel::Hard => return None,
                     ThrottleLevel::Soft => {
                         // Soft throttle: allow only if no active slots (cap=1 effect)
-                        if slot_map.active_slots(backend.id, job.model_name.as_str()) > 0 {
+                        if slot_map.active_slots(provider.id, job.model_name.as_str()) > 0 {
                             return None;
                         }
                     }
@@ -781,8 +781,8 @@ async fn queue_dispatcher_loop(
                 }
                 // Non-blocking semaphore acquire
                 slot_map
-                    .try_acquire(backend.id, job.model_name.as_str())
-                    .map(|permit| (backend, permit))
+                    .try_acquire(provider.id, job.model_name.as_str())
+                    .map(|permit| (provider, permit))
             });
 
         match claimed {
@@ -863,7 +863,7 @@ async fn queue_dispatcher_loop(
 #[allow(clippy::too_many_arguments)]
 async fn run_job(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
-    backend: Arc<dyn InferenceBackendPort>,
+    provider: Arc<dyn InferenceProviderPort>,
     job_repo: Arc<dyn JobRepository>,
     valkey_pool: Option<fred::clients::Pool>,
     observability: Option<Arc<dyn ObservabilityPort>>,
@@ -930,7 +930,7 @@ async fn run_job(
         .unwrap_or_else(|| Arc::new(Notify::new()));
     // Ref dropped here
 
-    let mut token_stream = backend.stream_tokens(&job);
+    let mut token_stream = provider.stream_tokens(&job);
     // Clear messages after stream is created — S3 is authoritative; DB saves must omit
     job.messages = None;
     let mut token_count: u64 = 0;
@@ -938,7 +938,7 @@ async fn run_job(
     // Collected tool calls from all StreamToken.tool_calls across this job.
     // Stored as JSONB in inference_jobs.tool_calls_json for training data / dashboard.
     let mut accumulated_tool_calls: Vec<serde_json::Value> = Vec::new();
-    // Actual token counts from backend usage metadata (e.g. Gemini usageMetadata).
+    // Actual token counts from provider usage metadata (e.g. Gemini usageMetadata).
     // Set when the final StreamToken carries real counts; None = fall back to token_count.
     let mut actual_prompt_tokens: Option<u32> = None;
     let mut actual_completion_tokens: Option<u32> = None;
@@ -988,7 +988,7 @@ async fn run_job(
                         other => accumulated_tool_calls.push(other.clone()),
                     }
                 }
-                // Capture actual token counts from backend usage metadata.
+                // Capture actual token counts from provider usage metadata.
                 if token.prompt_tokens.is_some() || token.completion_tokens.is_some() {
                     actual_prompt_tokens = token.prompt_tokens;
                     actual_completion_tokens = token.completion_tokens;

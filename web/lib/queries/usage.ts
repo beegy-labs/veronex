@@ -12,7 +12,7 @@ export const usageAggregateQuery = (hours: number) => queryOptions({
   retry: false,
 })
 
-// ── Usage breakdown (by backend / key / model) ────────────────────────────────
+// ── Usage breakdown (by provider / key / model) ────────────────────────────────
 
 export const usageBreakdownQuery = (hours: number) => queryOptions({
   queryKey: ['usage-breakdown', hours] as const,

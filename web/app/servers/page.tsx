@@ -60,24 +60,24 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{t('backends.servers.registerTitle')}</DialogTitle>
+          <DialogTitle>{t('providers.servers.registerTitle')}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="server-name">{t('backends.servers.name')} <span className="text-destructive">*</span></Label>
+            <Label htmlFor="server-name">{t('providers.servers.name')} <span className="text-destructive">*</span></Label>
             <Input id="server-name" value={name} onChange={(e) => setName(e.target.value)}
               placeholder="e.g. gpu-node-1" />
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="server-ne-url">
-              {t('backends.servers.nodeExporterUrl')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span>
+              {t('providers.servers.nodeExporterUrl')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span>
             </Label>
             <Input id="server-ne-url" type="url" value={nodeExporterUrl}
               onChange={(e) => setNodeExporterUrl(e.target.value)}
-              placeholder={t('backends.servers.nodeExporterUrlPlaceholder')} />
-            <p className="text-xs text-muted-foreground">{t('backends.servers.nodeExporterHint')}</p>
+              placeholder={t('providers.servers.nodeExporterUrlPlaceholder')} />
+            <p className="text-xs text-muted-foreground">{t('providers.servers.nodeExporterHint')}</p>
           </div>
         </div>
 
@@ -123,25 +123,25 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Pencil className="h-4 w-4 text-primary" />
-            {t('backends.servers.editTitle')}
+            {t('providers.servers.editTitle')}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="edit-server-name">{t('backends.servers.name')} <span className="text-destructive">*</span></Label>
+            <Label htmlFor="edit-server-name">{t('providers.servers.name')} <span className="text-destructive">*</span></Label>
             <Input id="edit-server-name" value={name} onChange={(e) => setName(e.target.value)}
               placeholder="e.g. gpu-node-1" />
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="edit-server-ne-url">
-              {t('backends.servers.nodeExporterUrl')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span>
+              {t('providers.servers.nodeExporterUrl')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span>
             </Label>
             <Input id="edit-server-ne-url" type="url" value={nodeExporterUrl}
               onChange={(e) => setNodeExporterUrl(e.target.value)}
-              placeholder={t('backends.servers.nodeExporterUrlPlaceholder')} />
-            <p className="text-xs text-muted-foreground">{t('backends.servers.nodeExporterHint')}</p>
+              placeholder={t('providers.servers.nodeExporterUrlPlaceholder')} />
+            <p className="text-xs text-muted-foreground">{t('providers.servers.nodeExporterHint')}</p>
           </div>
         </div>
 
@@ -202,19 +202,19 @@ function ServersTable({
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
               <HardDrive className="h-3 w-3 shrink-0" />
               <span className="tabular-nums">{servers.length}</span>
-              <span>{t('backends.servers.registered')}</span>
+              <span>{t('providers.servers.registered')}</span>
             </div>
             {configuredCount > 0 && (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-success/10 border border-status-success/30 text-xs font-medium text-status-success-fg">
                 <span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />
                 <span className="tabular-nums">{configuredCount}</span>
-                <span>{t('backends.servers.withMetrics')}</span>
+                <span>{t('providers.servers.withMetrics')}</span>
               </div>
             )}
             {servers.length - configuredCount > 0 && (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/40 border border-border/60 text-xs font-medium text-muted-foreground/70">
                 <span className="tabular-nums">{servers.length - configuredCount}</span>
-                <span>{t('backends.servers.noExporter')}</span>
+                <span>{t('providers.servers.noExporter')}</span>
               </div>
             )}
           </div>
@@ -223,13 +223,13 @@ function ServersTable({
         )}
 
         <Button onClick={onRegister} className="shrink-0">
-          <Plus className="h-4 w-4 mr-2" />{t('backends.servers.registerServer')}
+          <Plus className="h-4 w-4 mr-2" />{t('providers.servers.registerServer')}
         </Button>
       </div>
 
       {isLoading && (
         <div className="flex h-24 items-center justify-center text-muted-foreground text-sm animate-pulse">
-          {t('backends.servers.loadingServers')}
+          {t('providers.servers.loadingServers')}
         </div>
       )}
 
@@ -237,8 +237,8 @@ function ServersTable({
         <Card className="border-dashed">
           <CardContent className="p-8 text-center text-muted-foreground">
             <Server className="h-8 w-8 mx-auto mb-3 opacity-25" />
-            <p className="font-medium">{t('backends.servers.noServers')}</p>
-            <p className="text-sm mt-1">{t('backends.servers.noServersHint')}</p>
+            <p className="font-medium">{t('providers.servers.noServers')}</p>
+            <p className="text-sm mt-1">{t('providers.servers.noServersHint')}</p>
           </CardContent>
         </Card>
       )}
@@ -267,10 +267,10 @@ function ServersTable({
         >
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-48">{t('backends.servers.name')}</TableHead>
-              <TableHead>{t('backends.servers.nodeExporterUrl')}</TableHead>
-              <TableHead className="min-w-64">{t('backends.servers.liveMetrics')}</TableHead>
-              <TableHead className="w-32">{t('backends.servers.registeredAt')}</TableHead>
+              <TableHead className="w-48">{t('providers.servers.name')}</TableHead>
+              <TableHead>{t('providers.servers.nodeExporterUrl')}</TableHead>
+              <TableHead className="min-w-64">{t('providers.servers.liveMetrics')}</TableHead>
+              <TableHead className="w-32">{t('providers.servers.registeredAt')}</TableHead>
               <TableHead className="text-right w-24">{t('keys.actions')}</TableHead>
             </TableRow>
           </TableHeader>
@@ -281,7 +281,7 @@ function ServersTable({
                 <TableCell>
                   {s.node_exporter_url
                     ? <span className="font-mono text-xs text-text-dim bg-surface-code px-2 py-1 rounded">{s.node_exporter_url}</span>
-                    : <span className="text-xs text-text-faint italic">{t('backends.servers.notConfigured')}</span>
+                    : <span className="text-xs text-text-faint italic">{t('providers.servers.notConfigured')}</span>
                   }
                 </TableCell>
                 <TableCell>
@@ -297,18 +297,18 @@ function ServersTable({
                   <div className="flex items-center justify-end gap-1">
                     <Button variant="ghost" size="icon"
                       className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
-                      onClick={() => onHistory(s)} title={t('backends.servers.history')}>
+                      onClick={() => onHistory(s)} title={t('providers.servers.history')}>
                       <BarChart2 className="h-4 w-4" />
                     </Button>
                     <Button variant="ghost" size="icon"
                       className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                      onClick={() => onEdit(s)} title={t('backends.editBackend')}>
+                      onClick={() => onEdit(s)} title={t('providers.editProvider')}>
                       <Pencil className="h-4 w-4" />
                     </Button>
                     <Button variant="ghost" size="icon"
                       className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
                       onClick={() => onDelete(s.id, s.name)}
-                      disabled={deleteIsPending} title={t('backends.removeBackend')}>
+                      disabled={deleteIsPending} title={t('providers.removeProvider')}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -342,8 +342,8 @@ export default function ServersPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t('backends.servers.title')}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{t('backends.servers.description')}</p>
+        <h1 className="text-2xl font-bold tracking-tight">{t('providers.servers.title')}</h1>
+        <p className="text-muted-foreground mt-1 text-sm">{t('providers.servers.description')}</p>
       </div>
 
       <ServersTable
@@ -353,7 +353,7 @@ export default function ServersPage() {
         onEdit={(s) => setEditingServer(s)}
         onHistory={(s) => setHistoryServer(s)}
         onDelete={(id, name) => {
-          if (confirm(t('backends.deleteServerConfirm', { name }))) deleteMutation.mutate(id)
+          if (confirm(t('providers.deleteServerConfirm', { name }))) deleteMutation.mutate(id)
         }}
         deleteIsPending={deleteMutation.isPending}
       />

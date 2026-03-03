@@ -398,7 +398,7 @@ export default function JobTable({
           <TableRow>
             <TableHead>{t('jobs.id')}</TableHead>
             <TableHead>{t('jobs.model')}</TableHead>
-            <TableHead>{t('jobs.backend')}</TableHead>
+            <TableHead>{t('jobs.provider')}</TableHead>
             <TableHead>{t('jobs.apiKey')}</TableHead>
             <TableHead>{t('jobs.endpoint')}</TableHead>
             <TableHead>{t('jobs.status')}</TableHead>

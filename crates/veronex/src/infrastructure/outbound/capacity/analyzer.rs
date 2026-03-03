@@ -243,7 +243,7 @@ Respond ONLY with valid JSON (no markdown):
     Ok(serde_json::from_str(raw).unwrap_or_default())
 }
 
-// ── Per-backend analysis ──────────────────────────────────────────────────────
+// ── Per-provider analysis ──────────────────────────────────────────────────────
 
 async fn analyze_backend(
     client:              &reqwest::Client,
@@ -368,7 +368,7 @@ async fn analyze_backend(
         slot_map.update_capacity(backend_id, &model.name, recommended as u32);
 
         tracing::info!(
-            backend = %backend_name,
+            provider = %backend_name,
             model   = %model.name,
             slots   = recommended,
             kv_realistic_mb  = kv.realistic,
@@ -383,7 +383,7 @@ async fn analyze_backend(
 // ── Analysis loop ─────────────────────────────────────────────────────────────
 
 /// Spawns a background loop that periodically re-evaluates capacity for all
-/// active Ollama backends.
+/// active Ollama providers.
 ///
 /// The loop checks the DB settings on every tick (30 s) to pick up dynamic
 /// changes to `batch_interval_secs` and `batch_enabled`.  A `manual_trigger`
@@ -435,7 +435,7 @@ pub async fn run_capacity_analysis_loop(
         // `acquire_owned` never fails on a non-closed semaphore, so unwrap is safe here.
         let _permit = analysis_lock.clone().acquire_owned().await.unwrap();
 
-        // Run analysis for all active Ollama backends
+        // Run analysis for all active Ollama providers
         let backends = registry.list_all().await.unwrap_or_default();
         let ollama_backends: Vec<_> = backends
             .into_iter()
@@ -443,12 +443,12 @@ pub async fn run_capacity_analysis_loop(
             .collect();
 
         let mut any_error = false;
-        for backend in ollama_backends {
+        for provider in ollama_backends {
             if let Err(e) = analyze_backend(
                 &client,
-                backend.id,
-                &backend.name,
-                &backend.url,
+                provider.id,
+                &provider.name,
+                &provider.url,
                 &analyzer_url,
                 &settings.analyzer_model,
                 &*capacity_repo,
@@ -459,7 +459,7 @@ pub async fn run_capacity_analysis_loop(
             .await
             {
                 tracing::warn!(
-                    backend = %backend.name,
+                    provider = %provider.name,
                     "capacity analysis failed (non-fatal): {e}"
                 );
                 any_error = true;

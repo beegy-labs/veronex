@@ -1298,7 +1298,7 @@ Shows all backends that have a given model. Searchable + paginated (PAGE_SIZE=8)
 | Actions | Healthcheck · Model selection (ListFilter) · Edit · Delete |
 
 #### ModelSelectionModal (Gemini)
-- Fetches `api.getSelectedModels(backend.id)` → list of `BackendSelectedModel`
+- Fetches `api.getSelectedModels(provider.id)` → list of `BackendSelectedModel`
 - Each row: `model_name` + Switch (`is_enabled`)
 - Uses optimistic mutation (`onMutate` + `onError` rollback)
 - Source: global `gemini_models` pool + `provider_selected_models` overrides

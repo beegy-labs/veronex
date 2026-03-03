@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
+use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::ProviderType;
 
@@ -22,7 +22,7 @@ pub trait ProviderDispatchPort: Send + Sync {
     async fn available_vram_mb(&self, provider: &LlmProvider) -> i64;
 
     /// Build a concrete adapter from a provider DB record.
-    fn build_adapter(&self, provider: &LlmProvider) -> Arc<dyn InferenceBackendPort>;
+    fn build_adapter(&self, provider: &LlmProvider) -> Arc<dyn InferenceProviderPort>;
 
     /// Pick the best provider for the given type and model, then build an adapter.
     ///
@@ -32,7 +32,7 @@ pub trait ProviderDispatchPort: Send + Sync {
         provider_type: &ProviderType,
         model_name: &str,
         tier_filter: Option<&str>,
-    ) -> Result<(Arc<dyn InferenceBackendPort>, Uuid, bool)>;
+    ) -> Result<(Arc<dyn InferenceProviderPort>, Uuid, bool)>;
 
     /// Increment Gemini RPM/RPD rate-limit counters after a successful inference.
     ///

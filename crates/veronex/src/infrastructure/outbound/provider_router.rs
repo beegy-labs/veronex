@@ -10,7 +10,7 @@ use futures::StreamExt as _;
 
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
+use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::{InferenceJob, InferenceResult, LlmProvider};
@@ -25,7 +25,7 @@ use crate::infrastructure::outbound::ollama::OllamaAdapter;
 /// Routes inference calls to the appropriate provider adapter based on
 /// `InferenceJob::provider_type`. Built at startup from a static set of adapters.
 pub struct ProviderRouter {
-    providers: HashMap<ProviderType, Arc<dyn InferenceBackendPort>>,
+    providers: HashMap<ProviderType, Arc<dyn InferenceProviderPort>>,
 }
 
 impl ProviderRouter {
@@ -33,7 +33,7 @@ impl ProviderRouter {
         ProviderRouterBuilder::default()
     }
 
-    fn get(&self, provider_type: &ProviderType) -> Result<&Arc<dyn InferenceBackendPort>> {
+    fn get(&self, provider_type: &ProviderType) -> Result<&Arc<dyn InferenceProviderPort>> {
         self.providers
             .get(provider_type)
             .ok_or_else(|| anyhow::anyhow!("no adapter registered for provider {:?}", provider_type))
@@ -41,7 +41,7 @@ impl ProviderRouter {
 }
 
 #[async_trait]
-impl InferenceBackendPort for ProviderRouter {
+impl InferenceProviderPort for ProviderRouter {
     async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
         self.get(&job.provider_type)?.infer(job).await
     }
@@ -63,14 +63,14 @@ impl InferenceBackendPort for ProviderRouter {
 
 #[derive(Default)]
 pub struct ProviderRouterBuilder {
-    providers: HashMap<ProviderType, Arc<dyn InferenceBackendPort>>,
+    providers: HashMap<ProviderType, Arc<dyn InferenceProviderPort>>,
 }
 
 impl ProviderRouterBuilder {
     pub fn register(
         mut self,
         provider_type: ProviderType,
-        adapter: Arc<dyn InferenceBackendPort>,
+        adapter: Arc<dyn InferenceProviderPort>,
     ) -> Self {
         self.providers.insert(provider_type, adapter);
         self
@@ -126,7 +126,7 @@ impl DynamicProviderRouter {
 }
 
 #[async_trait]
-impl InferenceBackendPort for DynamicProviderRouter {
+impl InferenceProviderPort for DynamicProviderRouter {
     async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
         let cfg = pick_best_provider(&*self.registry, None, self.model_selection_repo.as_deref(), self.ollama_model_repo.as_deref(), &job.provider_type, job.model_name.as_str(), None, None).await?;
         make_adapter(&cfg).as_ref().infer(job).await
@@ -564,7 +564,7 @@ pub async fn get_ollama_available_vram_mb(
 }
 
 /// Build a concrete inference adapter from a provider DB record.
-pub fn make_adapter(cfg: &LlmProvider) -> Arc<dyn InferenceBackendPort> {
+pub fn make_adapter(cfg: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
     match cfg.provider_type {
         ProviderType::Ollama => Arc::new(OllamaAdapter::new(&cfg.url)),
         ProviderType::Gemini => {

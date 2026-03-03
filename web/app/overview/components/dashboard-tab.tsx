@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import type { Backend, GpuServer, DashboardStats, PerformanceStats, UsageAggregate, UsageBreakdown, Job, NodeMetrics, ServerMetricsPoint, ModelBreakdown } from '@/lib/types'
+import type { Provider, GpuServer, DashboardStats, PerformanceStats, UsageAggregate, UsageBreakdown, Job, NodeMetrics, ServerMetricsPoint, ModelBreakdown } from '@/lib/types'
 import StatsCard from '@/components/stats-card'
 import {
   Activity, Zap, ArrowRight, Clock,
@@ -28,7 +28,7 @@ import { useLabSettings } from '@/components/lab-settings-provider'
 // fmtCompact / fmtMs / fmtMsNullable imported from chart-theme
 const fmtDuration = fmtMsNullable
 
-function countByStatus(backends: Backend[], status: string) {
+function countByStatus(backends: Provider[], status: string) {
   return backends.filter(b => b.status === status).length
 }
 
@@ -102,7 +102,7 @@ function ProviderRow({
 }: {
   icon: React.ReactNode
   label: string
-  backends: Backend[]
+  backends: Provider[]
 }) {
   const online   = countByStatus(backends, 'online')
   const degraded = countByStatus(backends, 'degraded')
@@ -180,7 +180,7 @@ function ConnectionDot({ connected, t }: { connected: boolean; t: (k: string) =>
 interface Props {
   stats: DashboardStats | undefined
   statsLoading: boolean
-  backends: Backend[] | undefined
+  backends: Provider[] | undefined
   servers: GpuServer[] | undefined
   serverMetricQueries: Array<{ data: NodeMetrics | undefined }>
   serverHistoryQueries: Array<{ data: ServerMetricsPoint[] | undefined }>
@@ -758,7 +758,7 @@ export function DashboardTab({
               <thead>
                 <tr className="border-b border-border">
                   <th className="h-11 px-4 pl-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.model')}</th>
-                  <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.backend')}</th>
+                  <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.provider')}</th>
                   <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.status')}</th>
                   <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.latency')}</th>
                   <th className="h-11 px-4 pr-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.createdAt')}</th>

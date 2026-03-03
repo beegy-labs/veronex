@@ -193,7 +193,7 @@ while let Some(result) = tasks.join_next().await {
 
 ```rust
 pub async fn run_health_checker_loop(
-    registry: Arc<dyn LlmBackendRegistry>,
+    registry: Arc<dyn LlmProviderRegistry>,
     interval_secs: u64,
     thermal: Arc<ThermalThrottleMap>,
     shutdown: CancellationToken,

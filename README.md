@@ -82,7 +82,7 @@ JWT_SECRET=$(openssl rand -hex 32) docker compose up -d --build
 BOOTSTRAP_SUPER_USER=admin BOOTSTRAP_SUPER_PASS=<pass> docker compose up -d
 ```
 
-### Adding a Backend
+### Adding a Provider
 
 1. Dashboard → **Providers** → Ollama → add backend URL (e.g. `http://host.docker.internal:11434`)
 2. The health-checker (30 s interval) will detect the backend and start routing
@@ -154,7 +154,7 @@ Two Rust crates:
 - **`veronex-analytics`** — OTel ingest + analytics read API (`crates/veronex-analytics/`, port 3003)
 
 Full architecture details: [`.ai/architecture.md`](.ai/architecture.md)
-Backend CDD docs: [`docs/llm/backend/`](docs/llm/backend/)
+Domain CDD docs: [`docs/llm/`](docs/llm/)
 Frontend CDD docs: [`docs/llm/frontend/`](docs/llm/frontend/)
 
 ---

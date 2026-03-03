@@ -15,7 +15,7 @@ pub mod gemini_model_repository;
 pub mod gemini_policy_repository;
 pub mod gemini_sync_config_repository;
 pub mod gpu_server_registry;
-pub mod inference_backend;
+pub mod inference_provider;
 pub mod job_repository;
 pub mod model_manager_port;
 pub mod llm_provider_registry;
