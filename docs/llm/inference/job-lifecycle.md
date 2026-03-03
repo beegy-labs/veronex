@@ -540,8 +540,8 @@ When the job IS still active (`pending` or `running`):
 
 ## Web UI
 
-→ See `docs/llm/frontend/web-jobs.md`
+→ See `docs/llm/frontend/pages/jobs.md`
 
 ## Token Observability
 
-→ See `docs/llm/backend/jobs-analytics.md`
+→ See `docs/llm/inference/job-analytics.md`

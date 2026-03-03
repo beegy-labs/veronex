@@ -107,7 +107,7 @@ Dark status colors: `#34d399` / `#fb7185` / `#fbbf24` / `#60a5fa`
 | Status order | Always: pending → running → completed → failed → cancelled |
 | i18n | All user-visible strings via `t('key')` — no hardcoded English |
 | Terminology | See [`docs/llm/policies/terminology.md`](../policies/terminology.md) — SSOT for all term definitions |
-| Recharts | Import from `web/lib/chart-theme.ts` (SSOT) — never define chart constants in page files. See `frontend/web-charts.md` |
+| Recharts | Import from `web/lib/chart-theme.ts` (SSOT) — never define chart constants in page files. See `frontend/charts.md` |
 | Focus ring | `4px solid var(--theme-focus-ring)`, offset 4px |
 | Font | System font stack only — no Google Fonts (breaks CJK) |
 
@@ -1374,5 +1374,5 @@ Tiers: `< 1s` → `"Xms"` · `1s–59s` → `"X.Xs"` · `1m–59m` → `"Xm Xs"`
 2. Add `section === 'openai'` branch in `providers/page.tsx` → new `<OpenAITab>`
 3. Add i18n key `nav.openai` + tab strings to all 3 message files
 4. Extend `ProviderType` enum in Rust + add adapter in `infrastructure/outbound/`
-5. Update `docs/llm/backend/backends-ollama.md` + `docs/llm/backend/openai.md`
-6. Create `docs/llm/frontend/web-providers.md` section for the new tab
+5. Update `docs/llm/providers/ollama.md` + `docs/llm/inference/openai-compat.md`
+6. Create `docs/llm/frontend/pages/providers.md` section for the new tab

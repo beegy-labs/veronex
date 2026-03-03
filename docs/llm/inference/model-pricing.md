@@ -131,6 +131,6 @@ Insert or `UPDATE` rows directly in `model_pricing`. No application restart requ
 
 ## Related Docs
 
-- Backend jobs SSOT: `docs/llm/backend/jobs.md` — Token Cost Measurement section
-- Frontend cost display: `docs/llm/frontend/web-usage.md` — Cost Tracking section
-- Frontend jobs UI: `docs/llm/frontend/web-jobs.md` — Extended Job Fields section
+- Backend jobs SSOT: `docs/llm/inference/job-lifecycle.md` — Token Cost Measurement section
+- Frontend cost display: `docs/llm/frontend/pages/usage.md` — Cost Tracking section
+- Frontend jobs UI: `docs/llm/frontend/pages/jobs.md` — Extended Job Fields section

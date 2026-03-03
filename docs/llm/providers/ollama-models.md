@@ -252,5 +252,5 @@ Initialized in `main.rs`, wired at composition root.
 
 ## Web UI
 
-→ See `docs/llm/frontend/web-providers.md` → OllamaSyncSection
-→ See `docs/llm/frontend/web-test.md` → Ollama global model pool
+→ See `docs/llm/frontend/pages/providers.md` → OllamaSyncSection
+→ See `docs/llm/frontend/pages/api-test.md` → Ollama global model pool

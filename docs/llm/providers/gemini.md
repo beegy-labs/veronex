@@ -157,4 +157,4 @@ Change via admin web `/providers?s=gemini` — no code change needed.
 
 ## Web UI
 
-→ See `docs/llm/frontend/web-providers.md` → GeminiTab + GeminiSyncSection
+→ See `docs/llm/frontend/pages/providers.md` → GeminiTab + GeminiSyncSection

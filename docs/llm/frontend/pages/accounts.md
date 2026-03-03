@@ -212,7 +212,7 @@ Shared keys also used: `common.loading`, `common.error`, `common.delete`, `commo
 
 ## Related Docs
 
-- Backend auth + session management: `../backend/auth.md`
+- Backend auth + session management: `../../auth/jwt-sessions.md`
 - JWT revocation (Valkey blocklist): see MEMORY — "JWT Sessions"
 - Timezone formatting SSOT: `web/lib/date.ts`
 - DataTable SSOT: `web/components/data-table.tsx`

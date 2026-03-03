@@ -88,7 +88,7 @@ DELETE /v1/inference/{id}         Cancel (idempotent)
 ```
 
 Native + OpenAI endpoints share the same queue and job lifecycle.
-→ See `docs/llm/backend/jobs.md` for job lifecycle.
+→ See `docs/llm/inference/job-lifecycle.md` for job lifecycle.
 
 ### Native Request
 
@@ -108,7 +108,7 @@ GET /docs/swagger        Swagger UI 5 (unpkg CDN)
 GET /docs/redoc          ReDoc latest (jsDelivr CDN)
 ```
 
-Web page `/api-docs` links to all three. → See `docs/llm/frontend/web-test.md`.
+Web page `/api-docs` links to all three. → See `docs/llm/frontend/pages/api-test.md`.
 
 ---
 

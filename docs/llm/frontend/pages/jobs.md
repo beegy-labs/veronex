@@ -349,8 +349,8 @@ Fields added to `JobSummary` (list view) and `JobDetail` (modal) beyond the core
 - Computed at query time via a LATERAL JOIN on `model_pricing` — not stored on the job row.
 - `0.0` for Ollama (self-hosted, always free); `> 0` for Gemini; `null` when no pricing data.
 - UI: shown in the detail modal as "Est. Cost" MetaItem. Rendered as `"$0.00 (self-hosted)"` for Ollama, `"$0.000xxx"` for Gemini with non-zero cost.
-- For cost aggregation across keys and models, see `docs/llm/frontend/web-usage.md`.
-- For pricing table schema and LATERAL JOIN logic, see `docs/llm/backend/model-pricing.md`.
+- For cost aggregation across keys and models, see `docs/llm/frontend/pages/usage.md`.
+- For pricing table schema and LATERAL JOIN logic, see `docs/llm/inference/model-pricing.md`.
 
 ---
 

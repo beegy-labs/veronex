@@ -184,4 +184,4 @@ GROUP BY ts ORDER BY ts
 
 ## Web UI
 
-→ See `docs/llm/frontend/web-backends.md` → ServersTab
+→ See `docs/llm/frontend/pages/servers.md` → ServersTab

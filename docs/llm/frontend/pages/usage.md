@@ -128,7 +128,7 @@ Sourced from PostgreSQL (`inference_jobs` + `model_pricing` LATERAL JOIN). Queri
 
 Token costs are estimated at query time via a LATERAL JOIN on the `model_pricing` PostgreSQL table. No cost is stored on `inference_jobs`.
 
-For full pricing table schema and LATERAL JOIN logic, see: `docs/llm/backend/model-pricing.md`
+For full pricing table schema and LATERAL JOIN logic, see: `docs/llm/inference/model-pricing.md`
 
 ### Cost Fields in `UsageBreakdownResponse`
 
