@@ -238,7 +238,7 @@ docker compose exec postgres psql -U veronex -d veronex \
 
 ## 5. Scaling
 
-### How to Add an Ollama Backend
+### How to Add an Ollama Provider
 
 ```bash
 # Register a new Ollama instance via the API
@@ -437,7 +437,7 @@ curl http://localhost:3001/v1/backends \
 
 | Cause                        | Symptoms                                         | Fix                                                                   |
 |------------------------------|--------------------------------------------------|-----------------------------------------------------------------------|
-| All backends offline          | Backends show `unreachable`/`error` status       | Restore at least one backend; see 6.2                                 |
+| All providers offline          | Backends show `unreachable`/`error` status       | Restore at least one backend; see 6.2                                 |
 | Thermal throttle (Hard)       | Thermal level `critical` in dashboard            | Wait for cooldown (60s hysteresis); reduce load; check cooling        |
 | Concurrency slots exhausted   | Slots all occupied; new jobs queuing             | Add more backends or increase slots via capacity settings             |
 | Traffic spike                 | Sudden queue growth, backends healthy            | Add another Ollama node (see Section 5)                               |
@@ -792,7 +792,7 @@ docker compose ps
 open http://localhost:3002
 ```
 
-### Register an Ollama Backend
+### Register an Ollama Provider
 
 ```bash
 # Get a JWT by logging in

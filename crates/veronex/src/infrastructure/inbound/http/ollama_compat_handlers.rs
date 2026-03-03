@@ -6,7 +6,7 @@
 /// Veronex queue for VRAM-aware dispatch and thermal throttling.
 ///
 /// Management endpoints (`/api/tags`, `/api/show`, `/api/ps`, etc.) proxy
-/// directly to the first active Ollama backend (no queue needed).
+/// directly to the first active Ollama provider (no queue needed).
 ///
 /// Configure any Ollama client:
 /// ```text
@@ -22,6 +22,7 @@ use serde::Deserialize;
 
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{ApiFormat, ProviderType, JobSource};
+use super::cancel_guard::CancelOnDrop;
 use super::state::AppState;
 
 // ── Inference request body types ────────────────────────────────────────────────
@@ -197,11 +198,12 @@ pub async fn generate(
         Ok::<_, std::convert::Infallible>(Bytes::from(format!("{}\n", line)))
     });
 
+    let guarded = CancelOnDrop::new(ndjson, job_id, state.use_case.clone());
     HttpResponse::builder()
         .status(200)
         .header("Content-Type", "application/x-ndjson")
         .header("X-Accel-Buffering", "no")
-        .body(Body::from_stream(ndjson))
+        .body(Body::from_stream(guarded))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
@@ -313,22 +315,23 @@ pub async fn chat(
         Ok::<_, std::convert::Infallible>(Bytes::from(format!("{}\n", line)))
     });
 
+    let guarded = CancelOnDrop::new(ndjson, job_id, state.use_case.clone());
     HttpResponse::builder()
         .status(200)
         .header("Content-Type", "application/x-ndjson")
         .header("X-Accel-Buffering", "no")
-        .body(Body::from_stream(ndjson))
+        .body(Body::from_stream(guarded))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 // ── Management proxy endpoints ────────────────────────────────────────────────
 //
 // These endpoints do not perform inference and are not subject to VRAM/thermal
-// constraints. They proxy directly to the first active Ollama backend.
+// constraints. They proxy directly to the first active Ollama provider.
 
-/// Forward a request to the first active Ollama backend and stream the response back.
+/// Forward a request to the first active Ollama provider and stream the response back.
 async fn proxy(state: &AppState, path: &str, req: Request) -> Response {
-    let backend = match pick_ollama(state).await {
+    let provider = match pick_ollama(state).await {
         Ok(b) => b,
         Err(r) => return r,
     };
@@ -356,7 +359,7 @@ async fn proxy(state: &AppState, path: &str, req: Request) -> Response {
         }
     };
 
-    let url = format!("{}{}", backend.url, path);
+    let url = format!("{}{}", provider.url, path);
     let client = reqwest::Client::new();
     let mut builder = client.request(method, &url).header("Content-Type", &content_type);
     if !body_bytes.is_empty() {
@@ -369,7 +372,7 @@ async fn proxy(state: &AppState, path: &str, req: Request) -> Response {
             tracing::error!("ollama_compat proxy to {url}: {e}");
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": format!("backend error: {e}")})),
+                Json(serde_json::json!({"error": format!("provider error: {e}")})),
             )
                 .into_response();
         }
@@ -407,7 +410,7 @@ pub async fn embeddings(State(state): State<AppState>, req: Request) -> Response
     proxy(&state, "/api/embeddings", req).await
 }
 
-/// `GET /api/ps` — list running models on the backend.
+/// `GET /api/ps` — list running models on the provider.
 pub async fn ps(State(state): State<AppState>, req: Request) -> Response {
     proxy(&state, "/api/ps", req).await
 }
@@ -450,10 +453,10 @@ async fn pick_ollama(state: &AppState) -> Result<LlmProvider, Response> {
         .list_active()
         .await
         .map_err(|e| {
-            tracing::error!("ollama_compat: backend list failed: {e}");
+            tracing::error!("ollama_compat: provider list failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "failed to list backends"})),
+                Json(serde_json::json!({"error": "failed to list providers"})),
             )
                 .into_response()
         })?;
@@ -464,7 +467,7 @@ async fn pick_ollama(state: &AppState) -> Result<LlmProvider, Response> {
         .ok_or_else(|| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "no active Ollama backend"})),
+                Json(serde_json::json!({"error": "no active Ollama provider"})),
             )
                 .into_response()
         })

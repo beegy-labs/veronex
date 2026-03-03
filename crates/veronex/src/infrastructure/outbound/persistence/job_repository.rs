@@ -208,7 +208,7 @@ impl JobRepository for PostgresJobRepository {
     /// Insert or update the full job record (upsert).
     ///
     /// Safe to call on both initial save and subsequent status transitions
-    /// because immutable fields (prompt, model_name, backend, created_at)
+    /// because immutable fields (prompt, model_name, provider, created_at)
     /// are excluded from the ON CONFLICT update clause.
     async fn save(&self, job: &InferenceJob) -> Result<()> {
         let (messages_hash, messages_prefix_hash) = job.messages

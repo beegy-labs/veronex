@@ -3,9 +3,9 @@
 import { useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { backendsQuery, serversQuery, serverMetricsQuery, selectedModelsQuery, ollamaModelsQuery, ollamaSyncStatusQuery, geminiPoliciesQuery, geminiModelsQuery, geminiSyncConfigQuery, capacityQuery, capacitySettingsQuery } from '@/lib/queries'
+import { providersQuery, serversQuery, serverMetricsQuery, selectedModelsQuery, ollamaModelsQuery, ollamaSyncStatusQuery, geminiPoliciesQuery, geminiModelsQuery, geminiSyncConfigQuery, capacityQuery, capacitySettingsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
-import type { Backend, BackendCapacityInfo, BackendSelectedModel, CapacitySettings, GeminiModel, GeminiRateLimitPolicy, GeminiStatusResult, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, ModelCapacityInfo, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, RegisterBackendRequest, UpdateBackendRequest } from '@/lib/types'
+import type { Provider, ProviderCapacityInfo, ProviderSelectedModel, CapacitySettings, GeminiModel, GeminiRateLimitPolicy, GeminiStatusResult, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, ModelCapacityInfo, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, RegisterProviderRequest, UpdateProviderRequest } from '@/lib/types'
 import { Activity, AlertTriangle, Plus, Trash2, RefreshCw, RotateCcw, Server, Key, Wifi, WifiOff, AlertCircle, Pencil, ShieldCheck, Eye, EyeOff, ListFilter, Search, BarChart2, Cpu, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ServerMetricsCompact } from '@/components/server-metrics-cell'
 import { ServerHistoryModal } from '@/components/server-history-modal'
@@ -66,7 +66,7 @@ function fmtMb(mb: number): string {
 
 // ── Status badge ───────────────────────────────────────────────────────────────
 
-function StatusBadge({ status }: { status: Backend['status'] }) {
+function StatusBadge({ status }: { status: Provider['status'] }) {
   const { t } = useTranslation()
   if (status === 'online') return (
     <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 font-medium">
@@ -118,17 +118,17 @@ function VramInput({ valueMb, onChange }: { valueMb: string; onChange: (mb: stri
   )
 }
 
-// ── Edit backend modal ─────────────────────────────────────────────────────────
+// ── Edit provider modal ─────────────────────────────────────────────────────────
 
-function EditModal({ backend, servers, onClose }: { backend: Backend; servers: GpuServer[]; onClose: () => void }) {
+function EditModal({ provider, servers, onClose }: { provider: Provider; servers: GpuServer[]; onClose: () => void }) {
   const { t } = useTranslation()
-  const [name, setName] = useState(backend.name)
-  const [url, setUrl] = useState(backend.url)
+  const [name, setName] = useState(provider.name)
+  const [url, setUrl] = useState(provider.url)
   const [apiKey, setApiKey] = useState('')
-  const [vram, setVram] = useState(backend.total_vram_mb > 0 ? String(backend.total_vram_mb) : '')
-  const [gpuIndex, setGpuIndex] = useState(backend.gpu_index !== null ? String(backend.gpu_index) : 'none')
-  const [serverId, setServerId] = useState<string>(backend.server_id ?? 'none')
-  const [isFreeTier, setIsFreeTier] = useState(backend.is_free_tier)
+  const [vram, setVram] = useState(provider.total_vram_mb > 0 ? String(provider.total_vram_mb) : '')
+  const [gpuIndex, setGpuIndex] = useState(provider.gpu_index !== null ? String(provider.gpu_index) : 'none')
+  const [serverId, setServerId] = useState<string>(provider.server_id ?? 'none')
+  const [isFreeTier, setIsFreeTier] = useState(provider.is_free_tier)
 
   const { data: serverMetrics } = useQuery({
     ...serverMetricsQuery(serverId),
@@ -140,7 +140,7 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
 
   const mutation = useMutation({
     mutationFn: () => {
-      const body: UpdateBackendRequest = {
+      const body: UpdateProviderRequest = {
         name: name.trim(),
         url: backend.backend_type === 'ollama' ? url.trim() : undefined,
         api_key: apiKey.trim() || undefined,
@@ -149,9 +149,9 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
         server_id: serverId !== 'none' ? serverId : null,
         is_free_tier: isFreeTier,
       }
-      return api.updateBackend(backend.id, body)
+      return api.updateProvider(provider.id, body)
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['backends'] }); onClose() },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['providers'] }); onClose() },
   })
 
   return (
@@ -159,33 +159,33 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {backend.backend_type === 'ollama'
-              ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('backends.ollama.editTitle')}</>
-              : <><Key className="h-4 w-4 text-accent-gpu" /> {t('backends.gemini.editTitle')}</>}
+            {provider.backend_type === 'ollama'
+              ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('providers.ollama.editTitle')}</>
+              : <><Key className="h-4 w-4 text-accent-gpu" /> {t('providers.gemini.editTitle')}</>}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="edit-name">{t('backends.ollama.name')} <span className="text-destructive">*</span></Label>
+            <Label htmlFor="edit-name">{t('providers.ollama.name')} <span className="text-destructive">*</span></Label>
             <Input id="edit-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
 
-          {backend.backend_type === 'ollama' && (
+          {provider.backend_type === 'ollama' && (
             <>
               <div className="space-y-1.5">
-                <Label htmlFor="edit-url">{t('backends.ollama.ollamaUrl')}</Label>
+                <Label htmlFor="edit-url">{t('providers.ollama.ollamaUrl')}</Label>
                 <Input id="edit-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} />
               </div>
 
               <div className="space-y-1.5">
                 <Label htmlFor="edit-server">
-                  {t('backends.ollama.gpuServer')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span>
+                  {t('providers.ollama.gpuServer')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span>
                 </Label>
                 <Select value={serverId} onValueChange={setServerId}>
-                  <SelectTrigger id="edit-server"><SelectValue placeholder={t('backends.ollama.noneOption')} /></SelectTrigger>
+                  <SelectTrigger id="edit-server"><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">{t('backends.ollama.noneOption')}</SelectItem>
+                    <SelectItem value="none">{t('providers.ollama.noneOption')}</SelectItem>
                     {servers.map((s) => (
                       <SelectItem key={s.id} value={s.id}>
                         {s.name}{s.node_exporter_url ? ` (${extractHost(s.node_exporter_url)})` : ''}
@@ -196,12 +196,12 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
               </div>
 
               <div className="space-y-1.5">
-                <Label>{t('backends.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span></Label>
+                <Label>{t('providers.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                 {gpuCards.length > 0 ? (
                   <Select value={gpuIndex} onValueChange={setGpuIndex}>
-                    <SelectTrigger><SelectValue placeholder={t('backends.ollama.noneOption')} /></SelectTrigger>
+                    <SelectTrigger><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">{t('backends.ollama.noneOption')}</SelectItem>
+                      <SelectItem value="none">{t('providers.ollama.noneOption')}</SelectItem>
                       {gpuCards.map((gpu, i) => (
                         <SelectItem key={gpu.card} value={String(i)}>
                           GPU {i} ({gpu.card})
@@ -221,10 +221,10 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <Label>{t('backends.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span></Label>
+                  <Label>{t('providers.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                   {serverMemTotalMb != null && serverMemTotalMb > 0 && (
                     <span className="text-[11px] text-muted-foreground tabular-nums">
-                      {t('backends.ollama.serverRam')}: <span className="font-semibold text-text-dim">{fmtMb(serverMemTotalMb)}</span>
+                      {t('providers.ollama.serverRam')}: <span className="font-semibold text-text-dim">{fmtMb(serverMemTotalMb)}</span>
                     </span>
                   )}
                 </div>
@@ -233,29 +233,29 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
 
               <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
                 <div>
-                  <p className="text-sm font-medium">{t('backends.ollama.freeTier')}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{t('backends.ollama.freeTierDesc')}</p>
+                  <p className="text-sm font-medium">{t('providers.ollama.freeTier')}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{t('providers.ollama.freeTierDesc')}</p>
                 </div>
                 <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} />
               </div>
             </>
           )}
 
-          {backend.backend_type === 'gemini' && (
+          {provider.backend_type === 'gemini' && (
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="edit-apikey">
-                  {t('backends.gemini.apiKey')} <span className="text-muted-foreground font-normal">— {t('backends.gemini.keepExistingKey')}</span>
+                  {t('providers.gemini.apiKey')} <span className="text-muted-foreground font-normal">— {t('providers.gemini.keepExistingKey')}</span>
                 </Label>
                 <Input id="edit-apikey" type="password" value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)} placeholder="AIza…" />
-                <p className="text-xs text-muted-foreground">{t('backends.gemini.apiKeyHint')}</p>
+                <p className="text-xs text-muted-foreground">{t('providers.gemini.apiKeyHint')}</p>
               </div>
 
               <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
                 <div>
-                  <p className="text-sm font-medium">{t('backends.gemini.freeTier')}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{t('backends.gemini.freeTierDesc')}</p>
+                  <p className="text-sm font-medium">{t('providers.gemini.freeTier')}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{t('providers.gemini.freeTierDesc')}</p>
                 </div>
                 <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} />
               </div>
@@ -280,7 +280,7 @@ function EditModal({ backend, servers, onClose }: { backend: Backend; servers: G
   )
 }
 
-// ── Register backend modal ─────────────────────────────────────────────────────
+// ── Register provider modal ─────────────────────────────────────────────────────
 
 function RegisterModal({
   servers,
@@ -310,7 +310,7 @@ function RegisterModal({
 
   const mutation = useMutation({
     mutationFn: () => {
-      const body: RegisterBackendRequest = {
+      const body: RegisterProviderRequest = {
         name: name.trim(),
         backend_type: initialType,
         ...(initialType === 'ollama' && {
@@ -324,9 +324,9 @@ function RegisterModal({
           is_free_tier: isFreeTier,
         }),
       }
-      return api.registerBackend(body)
+      return api.registerProvider(body)
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['backends'] }); onClose() },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['providers'] }); onClose() },
   })
 
   const isValid = name.trim() && (initialType === 'ollama' ? url.trim() : apiKey.trim())
@@ -337,34 +337,34 @@ function RegisterModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {initialType === 'ollama'
-              ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('backends.ollama.registerTitle')}</>
-              : <><Key className="h-4 w-4 text-accent-gpu" /> {t('backends.gemini.registerTitle')}</>}
+              ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('providers.ollama.registerTitle')}</>
+              : <><Key className="h-4 w-4 text-accent-gpu" /> {t('providers.gemini.registerTitle')}</>}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="backend-name">{t('backends.ollama.name')} <span className="text-destructive">*</span></Label>
-            <Input id="backend-name" value={name} onChange={(e) => setName(e.target.value)}
+            <Label htmlFor="provider-name">{t('providers.ollama.name')} <span className="text-destructive">*</span></Label>
+            <Input id="provider-name" value={name} onChange={(e) => setName(e.target.value)}
               placeholder={initialType === 'ollama' ? 'e.g. gpu-server-1' : 'e.g. gemini-prod'} />
           </div>
 
           {initialType === 'ollama' && (
             <>
               <div className="space-y-1.5">
-                <Label htmlFor="backend-url">{t('backends.ollama.ollamaUrl')} <span className="text-destructive">*</span></Label>
-                <Input id="backend-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)}
+                <Label htmlFor="provider-url">{t('providers.ollama.ollamaUrl')} <span className="text-destructive">*</span></Label>
+                <Input id="provider-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)}
                   placeholder="http://192.168.1.10:11434" />
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="backend-server">
-                  {t('backends.ollama.gpuServer')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span>
+                <Label htmlFor="provider-server">
+                  {t('providers.ollama.gpuServer')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span>
                 </Label>
                 <Select value={serverId} onValueChange={setServerId}>
-                  <SelectTrigger id="backend-server"><SelectValue placeholder={t('backends.ollama.noneOption')} /></SelectTrigger>
+                  <SelectTrigger id="provider-server"><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">{t('backends.ollama.noneOption')}</SelectItem>
+                    <SelectItem value="none">{t('providers.ollama.noneOption')}</SelectItem>
                     {servers.map((s) => (
                       <SelectItem key={s.id} value={s.id}>
                         {s.name}{s.node_exporter_url ? ` (${extractHost(s.node_exporter_url)})` : ''}
@@ -372,16 +372,16 @@ function RegisterModal({
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{t('backends.ollama.gpuServerHint')}</p>
+                <p className="text-xs text-muted-foreground">{t('providers.ollama.gpuServerHint')}</p>
               </div>
 
               <div className="space-y-1.5">
-                <Label>{t('backends.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span></Label>
+                <Label>{t('providers.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                 {gpuCards.length > 0 ? (
                   <Select value={gpuIndex} onValueChange={setGpuIndex}>
-                    <SelectTrigger><SelectValue placeholder={t('backends.ollama.noneOption')} /></SelectTrigger>
+                    <SelectTrigger><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">{t('backends.ollama.noneOption')}</SelectItem>
+                      <SelectItem value="none">{t('providers.ollama.noneOption')}</SelectItem>
                       {gpuCards.map((gpu, i) => (
                         <SelectItem key={gpu.card} value={String(i)}>
                           GPU {i} ({gpu.card})
@@ -401,10 +401,10 @@ function RegisterModal({
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <Label>{t('backends.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('backends.servers.nodeExporterOptional')}</span></Label>
+                  <Label>{t('providers.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                   {serverMemTotalMb != null && serverMemTotalMb > 0 && (
                     <span className="text-[11px] text-muted-foreground tabular-nums">
-                      {t('backends.ollama.serverRam')}: <span className="font-semibold text-text-dim">{fmtMb(serverMemTotalMb)}</span>
+                      {t('providers.ollama.serverRam')}: <span className="font-semibold text-text-dim">{fmtMb(serverMemTotalMb)}</span>
                     </span>
                   )}
                 </div>
@@ -416,16 +416,16 @@ function RegisterModal({
           {initialType === 'gemini' && (
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <Label htmlFor="backend-apikey">{t('backends.gemini.apiKey')} <span className="text-destructive">*</span></Label>
-                <Input id="backend-apikey" type="password" value={apiKey}
+                <Label htmlFor="provider-apikey">{t('providers.gemini.apiKey')} <span className="text-destructive">*</span></Label>
+                <Input id="provider-apikey" type="password" value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)} placeholder="AIza…" />
-                <p className="text-xs text-muted-foreground">{t('backends.gemini.apiKeyHint')}</p>
+                <p className="text-xs text-muted-foreground">{t('providers.gemini.apiKeyHint')}</p>
               </div>
 
               <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
                 <div>
-                  <p className="text-sm font-medium">{t('backends.gemini.freeTier')}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{t('backends.gemini.freeTierDesc')}</p>
+                  <p className="text-sm font-medium">{t('providers.gemini.freeTier')}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{t('providers.gemini.freeTierDesc')}</p>
                 </div>
                 <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} />
               </div>
@@ -475,24 +475,24 @@ function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPolicy; o
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-accent-gpu" />
-            {t('backends.gemini.editPolicyTitle')}
+            {t('providers.gemini.editPolicyTitle')}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-1 mb-1">
-          <p className="text-sm text-muted-foreground">{t('backends.gemini.model')}</p>
+          <p className="text-sm text-muted-foreground">{t('providers.gemini.model')}</p>
           <p className="font-mono text-sm font-semibold text-text-bright">
-            {policy.model_name === '*' ? `* (${t('backends.gemini.globalDefault')})` : policy.model_name}
+            {policy.model_name === '*' ? `* (${t('providers.gemini.globalDefault')})` : policy.model_name}
           </p>
         </div>
 
         <div className="space-y-4">
           <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
             <div>
-              <p className="text-sm font-medium">{t('backends.gemini.availableOnFreeTier')}</p>
+              <p className="text-sm font-medium">{t('providers.gemini.availableOnFreeTier')}</p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {availableOnFreeTier
-                  ? t('backends.gemini.freeTierRouting')
-                  : t('backends.gemini.paidOnlyRouting')}
+                  ? t('providers.gemini.freeTierRouting')
+                  : t('providers.gemini.paidOnlyRouting')}
               </p>
             </div>
             <Switch checked={availableOnFreeTier} onCheckedChange={setAvailableOnFreeTier} />
@@ -511,7 +511,7 @@ function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPolicy; o
                   onChange={(e) => setRpd(e.target.value)} placeholder="e.g. 250" className="h-8 text-sm" />
               </div>
               <p className="col-span-2 text-[11px] text-muted-foreground -mt-1">
-                {t('backends.gemini.freeLimitsHint')}
+                {t('providers.gemini.freeLimitsHint')}
               </p>
             </div>
           )}
@@ -519,7 +519,7 @@ function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPolicy; o
 
         {mutation.error && (
           <p className="text-sm text-destructive">
-            {mutation.error instanceof Error ? mutation.error.message : t('backends.gemini.failedToSave')}
+            {mutation.error instanceof Error ? mutation.error.message : t('providers.gemini.failedToSave')}
           </p>
         )}
         <DialogFooter className="gap-3">
@@ -540,8 +540,8 @@ function ApiKeyCell({ backendId, masked }: { backendId: string; masked: string |
   const [revealed, setRevealed] = useState(false)
 
   const { data, isFetching, refetch } = useQuery({
-    queryKey: ['backend-key', backendId],
-    queryFn: () => api.backendKey(backendId),
+    queryKey: ['provider-key', providerId],
+    queryFn: () => api.providerKey(backendId),
     enabled: false,
   })
 
@@ -573,19 +573,19 @@ function ApiKeyCell({ backendId, masked }: { backendId: string; masked: string |
 
 // ── Model selection modal ──────────────────────────────────────────────────────
 
-function ModelSelectionModal({ backend, onClose }: { backend: Backend; onClose: () => void }) {
+function ModelSelectionModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
-  const { data, isLoading } = useQuery(selectedModelsQuery(backend.id))
+  const { data, isLoading } = useQuery(selectedModelsQuery(provider.id))
 
   const toggleMutation = useMutation({
     mutationFn: ({ modelName, isEnabled }: { modelName: string; isEnabled: boolean }) =>
-      api.setModelEnabled(backend.id, modelName, isEnabled),
+      api.setModelEnabled(provider.id, modelName, isEnabled),
     onMutate: async ({ modelName, isEnabled }) => {
-      await queryClient.cancelQueries({ queryKey: ['selected-models', backend.id] })
-      const prev = queryClient.getQueryData<{ models: BackendSelectedModel[] }>(['selected-models', backend.id])
-      queryClient.setQueryData<{ models: BackendSelectedModel[] }>(['selected-models', backend.id], (old) => {
+      await queryClient.cancelQueries({ queryKey: ['selected-models', provider.id] })
+      const prev = queryClient.getQueryData<{ models: ProviderSelectedModel[] }>(['selected-models', provider.id])
+      queryClient.setQueryData<{ models: ProviderSelectedModel[] }>(['selected-models', provider.id], (old) => {
         if (!old) return old
         return {
           models: old.models.map((m) =>
@@ -597,11 +597,11 @@ function ModelSelectionModal({ backend, onClose }: { backend: Backend; onClose: 
     },
     onError: (_err, _vars, context) => {
       if (context?.prev) {
-        queryClient.setQueryData(['selected-models', backend.id], context.prev)
+        queryClient.setQueryData(['selected-models', provider.id], context.prev)
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, backend.id] })
+      queryClient.invalidateQueries({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, provider.id] })
     },
   })
 
@@ -614,13 +614,13 @@ function ModelSelectionModal({ backend, onClose }: { backend: Backend; onClose: 
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ListFilter className="h-4 w-4 text-accent-gpu" />
-            {t('backends.gemini.modelSelection')}
-            <span className="text-muted-foreground font-normal text-sm">— {backend.name}</span>
+            {t('providers.gemini.modelSelection')}
+            <span className="text-muted-foreground font-normal text-sm">— {provider.name}</span>
           </DialogTitle>
         </DialogHeader>
 
         <p className="text-xs text-muted-foreground -mt-1">
-          {t('backends.gemini.modelSelectionDesc')}
+          {t('providers.gemini.modelSelectionDesc')}
         </p>
 
         {isLoading && (
@@ -631,7 +631,7 @@ function ModelSelectionModal({ backend, onClose }: { backend: Backend; onClose: 
 
         {!isLoading && models.length === 0 && (
           <p className="text-sm text-muted-foreground py-4 text-center">
-            {t('backends.gemini.noGlobalModels')}
+            {t('providers.gemini.noGlobalModels')}
           </p>
         )}
 
@@ -655,7 +655,7 @@ function ModelSelectionModal({ backend, onClose }: { backend: Backend; onClose: 
 
         {models.length > 0 && (
           <p className="text-xs text-muted-foreground text-right">
-            {t('backends.gemini.modelsCount', { enabled: enabledCount, total: models.length })}
+            {t('providers.gemini.modelsCount', { enabled: enabledCount, total: models.length })}
           </p>
         )}
 
@@ -688,20 +688,20 @@ function SetSyncKeyModal({ current, onClose }: { current: string | null; onClose
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Key className="h-4 w-4 text-accent-gpu" />
-            {t('backends.gemini.setSyncKey')}
+            {t('providers.gemini.setSyncKey')}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           {current && (
             <p className="text-xs text-muted-foreground">
-              {t('backends.gemini.syncKey')}: <span className="font-mono text-text-dim">{current}</span>
+              {t('providers.gemini.syncKey')}: <span className="font-mono text-text-dim">{current}</span>
             </p>
           )}
           <div className="space-y-1.5">
-            <Label htmlFor="sync-key">{t('backends.gemini.syncKey')} <span className="text-destructive">*</span></Label>
+            <Label htmlFor="sync-key">{t('providers.gemini.syncKey')} <span className="text-destructive">*</span></Label>
             <Input id="sync-key" type="password" value={apiKey}
               onChange={(e) => setApiKey(e.target.value)} placeholder="AIza…" />
-            <p className="text-xs text-muted-foreground">{t('backends.gemini.syncKeyHint')}</p>
+            <p className="text-xs text-muted-foreground">{t('providers.gemini.syncKeyHint')}</p>
           </div>
         </div>
         {mutation.error && (
@@ -729,7 +729,7 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
 
-  const { data, isLoading } = useQuery<{ backends: OllamaBackendForModel[] }>({
+  const { data, isLoading } = useQuery<{ backends: OllamaProviderForModel[] }>({
     queryKey: ['ollama-model-backends', modelName],
     queryFn: () => api.ollamaModelBackends(modelName),
     staleTime: 30_000,
@@ -778,7 +778,7 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
           <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground/60 pointer-events-none" />
           <Input
             className="pl-8 h-8 text-sm"
-            placeholder={t('backends.ollama.searchServers')}
+            placeholder={t('providers.ollama.searchServers')}
             value={search}
             onChange={(e) => handleSearch(e.target.value)}
           />
@@ -786,7 +786,7 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
 
         {!isLoading && allBackends.length > 0 && (
           <p className="text-xs text-muted-foreground -mt-1">
-            {filtered.length} / {allBackends.length} {t('backends.ollama.serversWithModel')}
+            {filtered.length} / {allBackends.length} {t('providers.ollama.serversWithModel')}
             {search ? ` — "${search}"` : ''}
           </p>
         )}
@@ -797,13 +797,13 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
 
         {!isLoading && allBackends.length === 0 && (
           <p className="text-sm text-muted-foreground py-4 text-center italic">
-            {t('backends.ollama.noBackendsSynced')}
+            {t('providers.ollama.noBackendsSynced')}
           </p>
         )}
 
         {!isLoading && filtered.length === 0 && search && (
           <p className="text-sm text-muted-foreground py-3 text-center italic">
-            {t('backends.ollama.noServersMatch')} &ldquo;{search}&rdquo;
+            {t('providers.ollama.noServersMatch')} &ldquo;{search}&rdquo;
           </p>
         )}
 
@@ -855,21 +855,21 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
   )
 }
 
-// ── OllamaBackendModelsModal ───────────────────────────────────────────────────
+// ── OllamaProviderModelsModal ───────────────────────────────────────────────────
 
-function OllamaBackendModelsModal({ backend, onClose }: { backend: Backend; onClose: () => void }) {
+function OllamaProviderModelsModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
-  const { data, isLoading } = useQuery(selectedModelsQuery(backend.id))
+  const { data, isLoading } = useQuery(selectedModelsQuery(provider.id))
 
   const toggleMutation = useMutation({
     mutationFn: ({ modelName, isEnabled }: { modelName: string; isEnabled: boolean }) =>
-      api.setModelEnabled(backend.id, modelName, isEnabled),
+      api.setModelEnabled(provider.id, modelName, isEnabled),
     onMutate: async ({ modelName, isEnabled }) => {
-      await queryClient.cancelQueries({ queryKey: ['selected-models', backend.id] })
-      const prev = queryClient.getQueryData<{ models: BackendSelectedModel[] }>(['selected-models', backend.id])
-      queryClient.setQueryData<{ models: BackendSelectedModel[] }>(['selected-models', backend.id], (old) => {
+      await queryClient.cancelQueries({ queryKey: ['selected-models', provider.id] })
+      const prev = queryClient.getQueryData<{ models: ProviderSelectedModel[] }>(['selected-models', provider.id])
+      queryClient.setQueryData<{ models: ProviderSelectedModel[] }>(['selected-models', provider.id], (old) => {
         if (!old) return old
         return {
           models: old.models.map((m) =>
@@ -881,11 +881,11 @@ function OllamaBackendModelsModal({ backend, onClose }: { backend: Backend; onCl
     },
     onError: (_err, _vars, context) => {
       if (context?.prev) {
-        queryClient.setQueryData(['selected-models', backend.id], context.prev)
+        queryClient.setQueryData(['selected-models', provider.id], context.prev)
       }
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['selected-models', backend.id] })
+      queryClient.invalidateQueries({ queryKey: ['selected-models', provider.id] })
     },
   })
 
@@ -898,13 +898,13 @@ function OllamaBackendModelsModal({ backend, onClose }: { backend: Backend; onCl
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ListFilter className="h-4 w-4 text-accent-gpu" />
-            {t('backends.ollama.modelSelection')}
-            <span className="text-muted-foreground font-normal text-sm">— {backend.name}</span>
+            {t('providers.ollama.modelSelection')}
+            <span className="text-muted-foreground font-normal text-sm">— {provider.name}</span>
           </DialogTitle>
         </DialogHeader>
 
         <p className="text-xs text-muted-foreground -mt-1">
-          {t('backends.ollama.modelSelectionDesc')}
+          {t('providers.ollama.modelSelectionDesc')}
         </p>
 
         {isLoading && (
@@ -915,7 +915,7 @@ function OllamaBackendModelsModal({ backend, onClose }: { backend: Backend; onCl
 
         {!isLoading && models.length === 0 && (
           <p className="text-sm text-muted-foreground py-4 text-center">
-            {t('backends.ollama.noBackendModels')}
+            {t('providers.ollama.noBackendModels')}
           </p>
         )}
 
@@ -939,7 +939,7 @@ function OllamaBackendModelsModal({ backend, onClose }: { backend: Backend; onCl
 
         {models.length > 0 && (
           <p className="text-xs text-muted-foreground text-right">
-            {t('backends.ollama.enabledCount', { enabled: enabledCount, total: models.length })}
+            {t('providers.ollama.enabledCount', { enabled: enabledCount, total: models.length })}
           </p>
         )}
 
@@ -991,7 +991,7 @@ function OllamaSyncSection() {
     <div className="space-y-3">
       <h2 className="text-base font-semibold text-text-bright flex items-center gap-2">
         <RotateCcw className="h-4 w-4 text-accent-gpu" />
-        {t('backends.ollama.ollamaSyncSection')}
+        {t('providers.ollama.ollamaSyncSection')}
       </h2>
 
       <Card>
@@ -999,7 +999,7 @@ function OllamaSyncSection() {
           <div className="flex items-center gap-3">
             <Button size="sm" onClick={() => syncMutation.mutate()} disabled={isRunning} className="gap-1.5">
               <RotateCcw className={isRunning ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-              {isRunning ? t('backends.ollama.ollamaSyncing') : t('backends.ollama.ollamaSyncAll')}
+              {isRunning ? t('providers.ollama.ollamaSyncing') : t('providers.ollama.ollamaSyncAll')}
             </Button>
             {syncJob?.status === 'running' && (
               <span className="text-xs text-muted-foreground">
@@ -1007,12 +1007,12 @@ function OllamaSyncSection() {
               </span>
             )}
             {syncJob?.status === 'completed' && !syncMutation.isPending && (
-              <span className="text-xs text-status-success-fg">✓ {t('backends.ollama.ollamaSyncDone')}</span>
+              <span className="text-xs text-status-success-fg">✓ {t('providers.ollama.ollamaSyncDone')}</span>
             )}
           </div>
 
           {allModels.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">{t('backends.ollama.ollamaNoSync')}</p>
+            <p className="text-xs text-muted-foreground italic">{t('providers.ollama.ollamaNoSync')}</p>
           )}
 
           {allModels.length > 0 && (
@@ -1021,21 +1021,21 @@ function OllamaSyncSection() {
                 <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground/60 pointer-events-none" />
                 <Input
                   className="pl-8 h-8 text-sm"
-                  placeholder={t('backends.ollama.ollamaSearchModels')}
+                  placeholder={t('providers.ollama.ollamaSearchModels')}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
               <div className="flex items-center justify-between">
                 <p className="text-xs font-medium text-muted-foreground">
-                  {t('backends.ollama.ollamaAvailableModels')}
+                  {t('providers.ollama.ollamaAvailableModels')}
                 </p>
                 <span className="text-xs text-muted-foreground">{filteredModels.length}/{allModels.length}</span>
               </div>
               <div className="divide-y divide-border rounded-md border border-border overflow-hidden">
                 {filteredModels.length === 0 && (
                   <p className="text-xs text-muted-foreground italic py-3 px-3">
-                    {t('backends.ollama.noModelsMatch')} &ldquo;{search}&rdquo;
+                    {t('providers.ollama.noModelsMatch')} &ldquo;{search}&rdquo;
                   </p>
                 )}
                 {filteredModels.map((m) => (
@@ -1071,17 +1071,17 @@ function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
   const { t } = useTranslation()
   if (state === 'hard') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-error/15 text-status-error-fg border border-status-error/30">
-      <AlertTriangle className="h-2.5 w-2.5" />{t('backends.capacity.thermal.hard')}
+      <AlertTriangle className="h-2.5 w-2.5" />{t('providers.capacity.thermal.hard')}
     </span>
   )
   if (state === 'soft') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-warn/15 text-status-warn-fg border border-status-warn/30">
-      <AlertTriangle className="h-2.5 w-2.5" />{t('backends.capacity.thermal.soft')}
+      <AlertTriangle className="h-2.5 w-2.5" />{t('providers.capacity.thermal.soft')}
     </span>
   )
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-success/10 text-status-success-fg border border-status-success/30">
-      <span className="h-1.5 w-1.5 rounded-full bg-status-success" />{t('backends.capacity.thermal.normal')}
+      <span className="h-1.5 w-1.5 rounded-full bg-status-success" />{t('providers.capacity.thermal.normal')}
     </span>
   )
 }
@@ -1145,7 +1145,7 @@ function OllamaCapacitySection() {
   const availableModels = settings?.available_models ?? []
 
   function fmtRelativeTime(iso: string | null) {
-    if (!iso) return t('backends.capacity.never')
+    if (!iso) return t('providers.capacity.never')
     const diff = Date.now() - new Date(iso).getTime()
     const mins = Math.floor(diff / 60_000)
     if (mins < 1) return '< 1 min ago'
@@ -1157,21 +1157,21 @@ function OllamaCapacitySection() {
     <div className="space-y-3">
       <h2 className="text-base font-semibold text-text-bright flex items-center gap-2">
         <Activity className="h-4 w-4 text-accent-gpu" />
-        {t('backends.capacity.title')}
+        {t('providers.capacity.title')}
       </h2>
 
       {/* Settings card */}
       <Card>
         <CardContent className="p-4 space-y-4">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <p className="text-sm font-medium text-text-bright">{t('backends.capacity.settings')}</p>
+            <p className="text-sm font-medium text-text-bright">{t('providers.capacity.settings')}</p>
             <div className="flex items-center gap-2">
               {lastRunAt && (
                 <span className="text-xs text-muted-foreground">
-                  {t('backends.capacity.lastRun')}: {fmtRelativeTime(lastRunAt)}
+                  {t('providers.capacity.lastRun')}: {fmtRelativeTime(lastRunAt)}
                   {lastRunStatus && (
                     <span className={`ml-1.5 font-medium ${lastRunStatus === 'ok' ? 'text-status-success-fg' : 'text-status-error-fg'}`}>
-                      · {lastRunStatus === 'ok' ? t('backends.capacity.statusOk') : t('backends.capacity.statusError')}
+                      · {lastRunStatus === 'ok' ? t('providers.capacity.statusOk') : t('providers.capacity.statusError')}
                     </span>
                   )}
                 </span>
@@ -1184,17 +1184,17 @@ function OllamaCapacitySection() {
                 className="gap-1.5 shrink-0"
               >
                 <RefreshCw className={syncMutation.isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-                {syncMutation.isPending ? t('backends.capacity.syncing') : t('backends.capacity.syncNow')}
+                {syncMutation.isPending ? t('providers.capacity.syncing') : t('providers.capacity.syncNow')}
               </Button>
               {syncMutation.isSuccess && !syncMutation.isPending && (
-                <span className="text-xs text-status-success-fg">✓ {t('backends.capacity.triggered')}</span>
+                <span className="text-xs text-status-success-fg">✓ {t('providers.capacity.triggered')}</span>
               )}
             </div>
           </div>
 
           <div className="flex items-end gap-3 flex-wrap">
             <div className="space-y-1 min-w-44">
-              <Label className="text-xs text-muted-foreground">{t('backends.capacity.analyzerModel')}</Label>
+              <Label className="text-xs text-muted-foreground">{t('providers.capacity.analyzerModel')}</Label>
               <Select value={analyzerModel} onValueChange={setAnalyzerModel}>
                 <SelectTrigger className="h-8 text-sm">
                   <SelectValue placeholder={analyzerModel || '—'} />
@@ -1208,7 +1208,7 @@ function OllamaCapacitySection() {
             </div>
 
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">{t('backends.capacity.interval')}</Label>
+              <Label className="text-xs text-muted-foreground">{t('providers.capacity.interval')}</Label>
               <Input
                 type="number"
                 min={60}
@@ -1226,7 +1226,7 @@ function OllamaCapacitySection() {
                 onCheckedChange={setBatchEnabled}
               />
               <Label htmlFor="cap-auto" className="text-sm cursor-pointer">
-                {t('backends.capacity.autoAnalysis')}
+                {t('providers.capacity.autoAnalysis')}
               </Label>
             </div>
 
@@ -1236,7 +1236,7 @@ function OllamaCapacitySection() {
               disabled={saveMutation.isPending}
               className="pb-0.5"
             >
-              {saveMutation.isPending ? t('backends.capacity.saving') : t('common.save')}
+              {saveMutation.isPending ? t('providers.capacity.saving') : t('common.save')}
             </Button>
           </div>
         </CardContent>
@@ -1251,48 +1251,48 @@ function OllamaCapacitySection() {
         <Card className="border-dashed">
           <CardContent className="p-6 text-center text-sm text-muted-foreground">
             <Activity className="h-8 w-8 mx-auto mb-2 opacity-25" />
-            {t('backends.capacity.noData')}
+            {t('providers.capacity.noData')}
           </CardContent>
         </Card>
       )}
 
-      {backends.map((backend) => (
-        <Card key={backend.provider_id}>
+      {providers.map((provider) => (
+        <Card key={provider.provider_id}>
           <CardContent className="p-0">
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
               <Server className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              <span className="text-sm font-semibold text-text-bright">{backend.provider_name}</span>
-              <ThermalBadge state={backend.thermal_state} />
-              {backend.temp_c !== null && (
-                <span className="text-xs text-muted-foreground ml-1">{backend.temp_c.toFixed(1)}°C</span>
+              <span className="text-sm font-semibold text-text-bright">{provider.provider_name}</span>
+              <ThermalBadge state={provider.thermal_state} />
+              {provider.temp_c !== null && (
+                <span className="text-xs text-muted-foreground ml-1">{provider.temp_c.toFixed(1)}°C</span>
               )}
             </div>
 
-            {backend.models.length === 0 ? (
-              <p className="px-4 py-4 text-xs text-muted-foreground italic">{t('backends.capacity.noData')}</p>
+            {provider.models.length === 0 ? (
+              <p className="px-4 py-4 text-xs text-muted-foreground italic">{t('providers.capacity.noData')}</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
                       <th className="px-4 py-2 text-left font-medium text-muted-foreground">Model</th>
-                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('backends.capacity.recommended')}</th>
-                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('backends.capacity.slots')}</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('backends.capacity.vramModel')}</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('backends.capacity.kvPerSlot')}</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('backends.capacity.avgTps')}</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('backends.capacity.p95')}</th>
+                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('providers.capacity.recommended')}</th>
+                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('providers.capacity.slots')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.vramModel')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.kvPerSlot')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.avgTps')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.p95')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {backend.models.map((m) => (
+                    {provider.models.map((m) => (
                       <>
                         <tr key={m.model_name} className="hover:bg-muted/20 transition-colors">
                           <td className="px-4 py-2.5">
                             <span className="font-mono font-medium text-text-bright">{m.model_name}</span>
                             {m.sample_count > 0 && (
                               <span className="ml-2 text-[10px] text-muted-foreground/70">
-                                {t('backends.capacity.sampleCount', { n: m.sample_count })}
+                                {t('providers.capacity.sampleCount', { n: m.sample_count })}
                               </span>
                             )}
                           </td>
@@ -1321,7 +1321,7 @@ function OllamaCapacitySection() {
                           <tr key={`${m.model_name}-concern`} className="bg-status-warn/5">
                             <td colSpan={7} className="px-4 py-1.5">
                               <span className="text-[10px] font-semibold text-status-warn-fg uppercase tracking-wide mr-2">
-                                {t('backends.capacity.concern')}
+                                {t('providers.capacity.concern')}
                               </span>
                               <span className="text-xs text-muted-foreground">{m.llm_concern}</span>
                               {m.llm_reason && (
@@ -1368,7 +1368,7 @@ function GeminiStatusSyncSection() {
   const syncMutation = useMutation({
     mutationFn: () => api.syncGeminiStatus(),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['backends'] })
+      queryClient.invalidateQueries({ queryKey: ['providers'] })
     },
   })
 
@@ -1379,27 +1379,27 @@ function GeminiStatusSyncSection() {
     <div className="space-y-3">
       <h2 className="text-base font-semibold text-text-bright flex items-center gap-2">
         <RefreshCw className="h-4 w-4 text-accent-gpu" />
-        {t('backends.gemini.statusSyncSection')}
+        {t('providers.gemini.statusSyncSection')}
       </h2>
 
       <Card>
         <CardContent className="p-4 space-y-4">
-          <p className="text-sm text-muted-foreground">{t('backends.gemini.statusSyncDesc')}</p>
+          <p className="text-sm text-muted-foreground">{t('providers.gemini.statusSyncDesc')}</p>
 
           <div className="flex items-center gap-3">
             <Button size="sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} className="gap-1.5">
               <RefreshCw className={syncMutation.isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-              {syncMutation.isPending ? t('backends.gemini.syncingStatus') : t('backends.gemini.syncStatus')}
+              {syncMutation.isPending ? t('providers.gemini.syncingStatus') : t('providers.gemini.syncStatus')}
             </Button>
             {syncMutation.isSuccess && !syncMutation.isPending && (
               <span className="text-xs text-status-success-fg">
-                ✓ {t('backends.gemini.statusSyncDone')} — {onlineCount}/{results.length} {t('common.online').toLowerCase()}
+                ✓ {t('providers.gemini.statusSyncDone')} — {onlineCount}/{results.length} {t('common.online').toLowerCase()}
               </span>
             )}
           </div>
 
           {syncMutation.isSuccess && results.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">{t('backends.gemini.noStatusResults')}</p>
+            <p className="text-xs text-muted-foreground italic">{t('providers.gemini.noStatusResults')}</p>
           )}
 
           {results.length > 0 && (
@@ -1439,7 +1439,7 @@ function GeminiSyncSection() {
   function refreshGeminiData() {
     queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.models })
     queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.policies })
-    // Also refresh per-backend model selections so ModelSelectionModal picks up new models
+    // Also refresh per-provider model selections so ModelSelectionModal picks up new models
     queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.selectedModels })
   }
 
@@ -1486,22 +1486,22 @@ function GeminiSyncSection() {
       <div>
         <h2 className="text-base font-semibold text-text-bright flex items-center gap-2">
           <RotateCcw className="h-4 w-4 text-accent-gpu" />
-          {t('backends.gemini.syncSection')}
+          {t('providers.gemini.syncSection')}
         </h2>
-        <p className="text-sm text-muted-foreground mt-0.5">{t('backends.gemini.syncSectionDesc')}</p>
+        <p className="text-sm text-muted-foreground mt-0.5">{t('providers.gemini.syncSectionDesc')}</p>
       </div>
 
       <Card>
         <CardContent className="p-4 space-y-4">
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-sm font-medium">{t('backends.gemini.syncKey')}</p>
+              <p className="text-sm font-medium">{t('providers.gemini.syncKey')}</p>
               <p className="font-mono text-xs text-muted-foreground mt-0.5 truncate">
-                {syncConfig?.api_key_masked ?? <span className="italic">{t('backends.gemini.noSyncKey')}</span>}
+                {syncConfig?.api_key_masked ?? <span className="italic">{t('providers.gemini.noSyncKey')}</span>}
               </p>
             </div>
             <Button size="sm" variant="outline" onClick={() => setShowSetKey(true)} className="shrink-0">
-              {syncConfig?.api_key_masked ? t('common.edit') : t('backends.gemini.setSyncKey')}
+              {syncConfig?.api_key_masked ? t('common.edit') : t('providers.gemini.setSyncKey')}
             </Button>
           </div>
 
@@ -1510,7 +1510,7 @@ function GeminiSyncSection() {
               disabled={syncMutation.isPending || !syncConfig?.api_key_masked}
               className="gap-1.5">
               <RotateCcw className={syncMutation.isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-              {syncMutation.isPending ? t('common.syncing') : t('backends.gemini.syncNow')}
+              {syncMutation.isPending ? t('common.syncing') : t('providers.gemini.syncNow')}
             </Button>
             <Button size="sm" variant="outline" onClick={refreshGeminiData}
               disabled={isRefreshing || syncMutation.isPending}
@@ -1520,12 +1520,12 @@ function GeminiSyncSection() {
             </Button>
             {lastSynced && (
               <span className="text-xs text-muted-foreground">
-                {t('backends.gemini.lastSynced')}: {lastSynced}
+                {t('providers.gemini.lastSynced')}: {lastSynced}
               </span>
             )}
             {syncMutation.data && (
               <span className="text-xs text-status-success-fg">
-                ✓ {syncMutation.data.count} {t('backends.gemini.globalModels').toLowerCase()}
+                ✓ {syncMutation.data.count} {t('providers.gemini.globalModels').toLowerCase()}
               </span>
             )}
           </div>
@@ -1535,11 +1535,11 @@ function GeminiSyncSection() {
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-accent-gpu" />
-          <h3 className="text-sm font-semibold text-text-bright">{t('backends.gemini.rateLimitPolicies')}</h3>
+          <h3 className="text-sm font-semibold text-text-bright">{t('providers.gemini.rateLimitPolicies')}</h3>
         </div>
         <p className="text-sm text-muted-foreground">
-          {t('backends.gemini.rateLimitDesc')}
-          {' '}{t('backends.gemini.globalFallbackHint')}
+          {t('providers.gemini.rateLimitDesc')}
+          {' '}{t('providers.gemini.globalFallbackHint')}
         </p>
 
         {tableLoading && (
@@ -1551,7 +1551,7 @@ function GeminiSyncSection() {
         {!tableLoading && !hasContent && (
           <Card className="border-dashed">
             <CardContent className="p-6 text-center text-muted-foreground text-sm">
-              {t('backends.gemini.noGlobalModels')}
+              {t('providers.gemini.noGlobalModels')}
             </CardContent>
           </Card>
         )}
@@ -1560,11 +1560,11 @@ function GeminiSyncSection() {
           <DataTable minWidth="600px">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>{t('backends.gemini.model')}</TableHead>
-                <TableHead className="w-36">{t('backends.gemini.onFreeTier')}</TableHead>
-                <TableHead className="w-24 text-right">{t('backends.gemini.rpm')}</TableHead>
-                <TableHead className="w-24 text-right">{t('backends.gemini.rpd')}</TableHead>
-                <TableHead className="w-40">{t('backends.gemini.lastUpdated')}</TableHead>
+                <TableHead>{t('providers.gemini.model')}</TableHead>
+                <TableHead className="w-36">{t('providers.gemini.onFreeTier')}</TableHead>
+                <TableHead className="w-24 text-right">{t('providers.gemini.rpm')}</TableHead>
+                <TableHead className="w-24 text-right">{t('providers.gemini.rpd')}</TableHead>
+                <TableHead className="w-40">{t('providers.gemini.lastUpdated')}</TableHead>
                 <TableHead className="text-right w-20">{t('common.edit')}</TableHead>
               </TableRow>
             </TableHeader>
@@ -1580,14 +1580,14 @@ function GeminiSyncSection() {
                     </TableCell>
                     <TableCell>
                       {isInherited ? (
-                        <span className="text-xs text-muted-foreground italic">{t('backends.gemini.globalDefault')}</span>
+                        <span className="text-xs text-muted-foreground italic">{t('providers.gemini.globalDefault')}</span>
                       ) : displayPolicy?.available_on_free_tier ? (
                         <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
-                          {t('backends.gemini.enabled')}
+                          {t('providers.gemini.enabled')}
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="bg-surface-code text-muted-foreground/70 border-border text-[10px] px-1.5 py-0">
-                          {t('backends.gemini.paidOnly')}
+                          {t('providers.gemini.paidOnly')}
                         </Badge>
                       )}
                     </TableCell>
@@ -1608,7 +1608,7 @@ function GeminiSyncSection() {
                       <Button variant="ghost" size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-status-info-fg hover:bg-status-info/10"
                         onClick={() => setEditingPolicy(makeEditablePolicy(m.model_name))}
-                        title={t('backends.gemini.editPolicyTitle')}>
+                        title={t('providers.gemini.editPolicyTitle')}>
                         <Pencil className="h-4 w-4" />
                       </Button>
                     </TableCell>
@@ -1647,12 +1647,12 @@ function OllamaTab({
   onDelete,
   deleteIsPending,
 }: {
-  backends: Backend[] | undefined
+  backends: Provider[] | undefined
   servers: GpuServer[]
   isLoading: boolean
   error: Error | null
   onRegister: () => void
-  onEdit: (b: Backend) => void
+  onEdit: (b: Provider) => void
   onHealthcheck: (id: string) => void
   healthcheckIsPending: boolean
   onSyncModels: (id: string) => void
@@ -1668,7 +1668,7 @@ function OllamaTab({
   const onlineCount   = ollama.filter((b) => b.status === 'online').length
   const offlineCount  = ollama.filter((b) => b.status === 'offline').length
   const degradedCount = ollama.filter((b) => b.status === 'degraded').length
-  const [viewModelsBackend, setViewModelsBackend] = useState<Backend | null>(null)
+  const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null)
   const [historyServer, setHistoryServer] = useState<GpuServer | null>(null)
   const [page, setPage] = useState(1)
   const totalPages = Math.max(1, Math.ceil(ollama.length / PAGE_SIZE))
@@ -1684,7 +1684,7 @@ function OllamaTab({
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
               <Server className="h-3 w-3 shrink-0" />
               <span className="tabular-nums">{ollama.length}</span>
-              <span>{t('backends.servers.registered')}</span>
+              <span>{t('providers.servers.registered')}</span>
             </div>
             {onlineCount > 0 && (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-success/10 border border-status-success/30 text-xs font-medium text-status-success-fg">
@@ -1713,20 +1713,20 @@ function OllamaTab({
         )}
 
         <Button onClick={onRegister} className="shrink-0">
-          <Plus className="h-4 w-4 mr-2" />{t('backends.ollama.registerBackend')}
+          <Plus className="h-4 w-4 mr-2" />{t('providers.ollama.registerProvider')}
         </Button>
       </div>
 
       {isLoading && (
         <div className="flex h-48 items-center justify-center text-muted-foreground text-sm animate-pulse">
-          {t('backends.ollama.loadingBackends')}
+          {t('providers.ollama.loadingBackends')}
         </div>
       )}
 
       {error && (
         <Card className="border-destructive/40 bg-destructive/5">
           <CardContent className="p-5 text-destructive">
-            <p className="font-semibold">{t('backends.ollama.failedBackends')}</p>
+            <p className="font-semibold">{t('providers.ollama.failedBackends')}</p>
             <p className="text-sm mt-1 opacity-75">
               {error instanceof Error ? error.message : t('common.unknownError')}
             </p>
@@ -1738,8 +1738,8 @@ function OllamaTab({
         <Card className="border-dashed">
           <CardContent className="p-10 text-center text-muted-foreground">
             <Server className="h-10 w-10 mx-auto mb-3 opacity-25" />
-            <p className="font-medium">{t('backends.ollama.noBackends')}</p>
-            <p className="text-sm mt-1">{t('backends.ollama.noBackendsHint')}</p>
+            <p className="font-medium">{t('providers.ollama.noBackends')}</p>
+            <p className="text-sm mt-1">{t('providers.ollama.noBackendsHint')}</p>
           </CardContent>
         </Card>
       )}
@@ -1768,11 +1768,11 @@ function OllamaTab({
         >
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead>{t('backends.ollama.name')}</TableHead>
-              <TableHead>{t('backends.ollama.server')}</TableHead>
-              <TableHead className="min-w-52">{t('backends.servers.liveMetrics')}</TableHead>
-              <TableHead className="w-28">{t('backends.ollama.status')}</TableHead>
-              <TableHead className="w-32">{t('backends.servers.registeredAt')}</TableHead>
+              <TableHead>{t('providers.ollama.name')}</TableHead>
+              <TableHead>{t('providers.ollama.server')}</TableHead>
+              <TableHead className="min-w-52">{t('providers.servers.liveMetrics')}</TableHead>
+              <TableHead className="w-28">{t('providers.ollama.status')}</TableHead>
+              <TableHead className="w-32">{t('providers.servers.registeredAt')}</TableHead>
               <TableHead className="text-right w-44">{t('keys.actions')}</TableHead>
             </TableRow>
           </TableHeader>
@@ -1786,7 +1786,7 @@ function OllamaTab({
                           <span className="font-semibold text-text-bright">{b.name}</span>
                           {b.is_free_tier && (
                             <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
-                              {t('backends.ollama.freeTier')}
+                              {t('providers.ollama.freeTier')}
                             </Badge>
                           )}
                         </div>
@@ -1803,7 +1803,7 @@ function OllamaTab({
                               <span className="font-medium">{linkedServer.name}</span>
                             </div>
                           ) : (
-                            <span className="text-text-faint italic text-xs">{t('backends.ollama.noServerLinked')}</span>
+                            <span className="text-text-faint italic text-xs">{t('providers.ollama.noServerLinked')}</span>
                           )}
                           <div className="flex items-center gap-3 text-muted-foreground pl-0.5">
                             {b.gpu_index !== null && (
@@ -1819,7 +1819,7 @@ function OllamaTab({
                               </span>
                             )}
                             {b.gpu_index === null && b.total_vram_mb === 0 && linkedServer && (
-                              <span className="text-text-faint italic">{t('backends.servers.notConfigured')}</span>
+                              <span className="text-text-faint italic">{t('providers.servers.notConfigured')}</span>
                             )}
                           </div>
                         </div>
@@ -1846,7 +1846,7 @@ function OllamaTab({
                             <Button variant="ghost" size="icon"
                               className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
                               onClick={() => setHistoryServer(linkedServer)}
-                              title={t('backends.servers.history')}>
+                              title={t('providers.servers.history')}>
                               <BarChart2 className="h-4 w-4" />
                             </Button>
                           )}
@@ -1854,14 +1854,14 @@ function OllamaTab({
                             className="h-8 w-8 text-muted-foreground hover:text-foreground"
                             onClick={() => onHealthcheck(b.id)}
                             disabled={healthcheckIsPending}
-                            title={t('backends.runHealthcheck')}>
+                            title={t('providers.runHealthcheck')}>
                             <RefreshCw className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-foreground"
                             onClick={() => onSyncModels(b.id)}
                             disabled={syncModelsPending && syncModelsVars === b.id}
-                            title={t('backends.syncModelList')}>
+                            title={t('providers.syncModelList')}>
                             <RotateCcw className={
                               syncModelsPending && syncModelsVars === b.id
                                 ? 'h-4 w-4 animate-spin' : 'h-4 w-4'
@@ -1869,19 +1869,19 @@ function OllamaTab({
                           </Button>
                           <Button variant="ghost" size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
-                            onClick={() => setViewModelsBackend(b)}
-                            title={t('backends.ollama.modelSelection')}>
+                            onClick={() => setViewModelsProvider(b)}
+                            title={t('providers.ollama.modelSelection')}>
                             <ListFilter className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                            onClick={() => onEdit(b)} title={t('backends.ollama.editTitle')}>
+                            onClick={() => onEdit(b)} title={t('providers.ollama.editTitle')}>
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="icon"
                             className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
                             onClick={() => onDelete(b.id, b.name)}
-                            disabled={deleteIsPending} title={t('backends.removeBackend')}>
+                            disabled={deleteIsPending} title={t('providers.removeProvider')}>
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
@@ -1897,10 +1897,10 @@ function OllamaTab({
 
       <OllamaCapacitySection />
 
-      {viewModelsBackend && (
-        <OllamaBackendModelsModal
-          backend={viewModelsBackend}
-          onClose={() => setViewModelsBackend(null)}
+      {viewModelsProvider && (
+        <OllamaProviderModelsModal
+          provider={viewModelsProvider}
+          onClose={() => setViewModelsProvider(null)}
         />
       )}
       {historyServer && (
@@ -1925,14 +1925,14 @@ function GeminiTab({
   onDelete,
   deleteIsPending,
 }: {
-  backends: Backend[] | undefined
+  backends: Provider[] | undefined
   isLoading: boolean
   error: Error | null
   onRegister: () => void
-  onEdit: (b: Backend) => void
+  onEdit: (b: Provider) => void
   onHealthcheck: (id: string) => void
   healthcheckIsPending: boolean
-  onToggleActive: (b: Backend) => void
+  onToggleActive: (b: Provider) => void
   toggleActivePending: boolean
   onDelete: (id: string, name: string) => void
   deleteIsPending: boolean
@@ -1944,7 +1944,7 @@ function GeminiTab({
   const activeCount   = gemini.filter((b) => b.is_active).length
   const degradedCount = gemini.filter((b) => b.status === 'degraded').length
   const offlineCount  = gemini.filter((b) => b.status === 'offline').length
-  const [modelSelectionBackend, setModelSelectionBackend] = useState<Backend | null>(null)
+  const [modelSelectionProvider, setModelSelectionProvider] = useState<Provider | null>(null)
   const [geminiPage, setGeminiPage] = useState(1)
   const geminiTotalPages = Math.max(1, Math.ceil(gemini.length / PAGE_SIZE))
   const geminiSafePage = Math.min(geminiPage, geminiTotalPages)
@@ -1956,13 +1956,13 @@ function GeminiTab({
       <div className="space-y-4">
         <div className="flex items-start justify-between">
           <div>
-            <h2 className="text-base font-semibold text-text-bright">{t('backends.gemini.title')}</h2>
+            <h2 className="text-base font-semibold text-text-bright">{t('providers.gemini.title')}</h2>
             {backends ? (
               <div className="flex items-center gap-2 flex-wrap mt-1.5">
                 <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
                   <Key className="h-3 w-3 shrink-0" />
                   <span className="tabular-nums">{gemini.length}</span>
-                  <span>{t('backends.servers.registered')}</span>
+                  <span>{t('providers.servers.registered')}</span>
                 </div>
                 {activeCount > 0 && (
                   <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/30 text-xs font-medium text-primary">
@@ -1998,20 +1998,20 @@ function GeminiTab({
             )}
           </div>
           <Button onClick={onRegister} className="shrink-0">
-            <Plus className="h-4 w-4 mr-2" />{t('backends.gemini.registerBackend')}
+            <Plus className="h-4 w-4 mr-2" />{t('providers.gemini.registerProvider')}
           </Button>
         </div>
 
         {isLoading && (
           <div className="flex h-32 items-center justify-center text-muted-foreground text-sm animate-pulse">
-            {t('backends.gemini.loadingBackends')}
+            {t('providers.gemini.loadingBackends')}
           </div>
         )}
 
         {error && (
           <Card className="border-destructive/40 bg-destructive/5">
             <CardContent className="p-5 text-destructive">
-              <p className="font-semibold">{t('backends.gemini.failedBackends')}</p>
+              <p className="font-semibold">{t('providers.gemini.failedBackends')}</p>
               <p className="text-sm mt-1 opacity-75">
                 {error instanceof Error ? error.message : t('common.unknownError')}
               </p>
@@ -2023,8 +2023,8 @@ function GeminiTab({
           <Card className="border-dashed">
             <CardContent className="p-10 text-center text-muted-foreground">
               <Key className="h-10 w-10 mx-auto mb-3 opacity-25" />
-              <p className="font-medium text-text-dim">{t('backends.gemini.noBackends')}</p>
-              <p className="text-sm mt-1 text-muted-foreground/70">{t('backends.gemini.noBackendsHint')}</p>
+              <p className="font-medium text-text-dim">{t('providers.gemini.noBackends')}</p>
+              <p className="text-sm mt-1 text-muted-foreground/70">{t('providers.gemini.noBackendsHint')}</p>
             </CardContent>
           </Card>
         )}
@@ -2053,12 +2053,12 @@ function GeminiTab({
           >
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>{t('backends.gemini.name')}</TableHead>
-                <TableHead>{t('backends.gemini.apiKey')}</TableHead>
-                <TableHead className="w-24">{t('backends.gemini.freeTier')}</TableHead>
-                <TableHead className="w-24">{t('backends.gemini.activeToggle')}</TableHead>
-                <TableHead className="w-28">{t('backends.gemini.status')}</TableHead>
-                <TableHead className="w-32">{t('backends.servers.registeredAt')}</TableHead>
+                <TableHead>{t('providers.gemini.name')}</TableHead>
+                <TableHead>{t('providers.gemini.apiKey')}</TableHead>
+                <TableHead className="w-24">{t('providers.gemini.freeTier')}</TableHead>
+                <TableHead className="w-24">{t('providers.gemini.activeToggle')}</TableHead>
+                <TableHead className="w-28">{t('providers.gemini.status')}</TableHead>
+                <TableHead className="w-32">{t('providers.servers.registeredAt')}</TableHead>
                 <TableHead className="text-right w-28">{t('keys.actions')}</TableHead>
               </TableRow>
             </TableHeader>
@@ -2074,11 +2074,11 @@ function GeminiTab({
                   <TableCell>
                     {b.is_free_tier ? (
                       <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
-                        {t('backends.gemini.freeTier')}
+                        {t('providers.gemini.freeTier')}
                       </Badge>
                     ) : (
                       <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-1.5 py-0">
-                        {t('backends.gemini.paid')}
+                        {t('providers.gemini.paid')}
                       </Badge>
                     )}
                   </TableCell>
@@ -2087,7 +2087,7 @@ function GeminiTab({
                       checked={b.is_active}
                       onCheckedChange={() => onToggleActive(b)}
                       disabled={toggleActivePending}
-                      title={b.is_active ? t('backends.disableBackend') : t('backends.enableBackend')}
+                      title={b.is_active ? t('providers.disableProvider') : t('providers.enableProvider')}
                     />
                   </TableCell>
                   <TableCell>
@@ -2102,26 +2102,26 @@ function GeminiTab({
                         className="h-8 w-8 text-muted-foreground hover:text-text-bright"
                         onClick={() => onHealthcheck(b.id)}
                         disabled={healthcheckIsPending}
-                        title={t('backends.runHealthcheck')}>
+                        title={t('providers.runHealthcheck')}>
                         <RefreshCw className="h-4 w-4" />
                       </Button>
                       {!b.is_free_tier && (
                         <Button variant="ghost" size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
-                          onClick={() => setModelSelectionBackend(b)}
-                          title={t('backends.gemini.modelSelection')}>
+                          onClick={() => setModelSelectionProvider(b)}
+                          title={t('providers.gemini.modelSelection')}>
                           <ListFilter className="h-4 w-4" />
                         </Button>
                       )}
                       <Button variant="ghost" size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                        onClick={() => onEdit(b)} title={t('backends.gemini.editTitle')}>
+                        onClick={() => onEdit(b)} title={t('providers.gemini.editTitle')}>
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
                         onClick={() => onDelete(b.id, b.name)}
-                        disabled={deleteIsPending} title={t('backends.removeBackend')}>
+                        disabled={deleteIsPending} title={t('providers.removeProvider')}>
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
@@ -2137,10 +2137,10 @@ function GeminiTab({
 
       <GeminiSyncSection />
 
-      {modelSelectionBackend && (
+      {modelSelectionProvider && (
         <ModelSelectionModal
-          backend={modelSelectionBackend}
-          onClose={() => setModelSelectionBackend(null)}
+          provider={modelSelectionProvider}
+          onClose={() => setModelSelectionProvider(null)}
         />
       )}
     </div>
@@ -2158,37 +2158,37 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'ollama' : sectionParam
 
   const [registerBackendType, setRegisterBackendType] = useState<'ollama' | 'gemini' | null>(null)
-  const [editingBackend, setEditingBackend] = useState<Backend | null>(null)
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
 
   // Servers needed for RegisterModal/EditModal dropdowns
   const { data: servers } = useQuery(serversQuery)
 
-  const { data: backends, isLoading: backendsLoading, error: backendsError } = useQuery(backendsQuery)
+  const { data: backends, isLoading: backendsLoading, error: backendsError } = useQuery(providersQuery)
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.deleteBackend(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['backends'] }),
+    mutationFn: (id: string) => api.deleteProvider(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
   })
 
   const toggleActiveMutation = useMutation({
-    mutationFn: (b: Backend) =>
-      api.updateBackend(b.id, {
+    mutationFn: (b: Provider) =>
+      api.updateProvider(b.id, {
         name: b.name,
         is_active: !b.is_active,
         ...(b.backend_type === 'ollama' && { url: b.url, total_vram_mb: b.total_vram_mb, gpu_index: b.gpu_index, server_id: b.server_id }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['backends'] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
   })
 
   const healthcheckMutation = useMutation({
-    mutationFn: (id: string) => api.healthcheckBackend(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['backends'] }),
+    mutationFn: (id: string) => api.healthcheckProvider(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
   })
 
   const syncModelsMutation = useMutation({
-    mutationFn: (id: string) => api.syncBackendModels(id),
+    mutationFn: (id: string) => api.syncProviderModels(id),
     onSuccess: (_data, id) => {
-      queryClient.invalidateQueries({ queryKey: ['backend-models', id] })
+      queryClient.invalidateQueries({ queryKey: ['provider-models', id] })
       queryClient.invalidateQueries({ queryKey: ['selected-models', id] })
       queryClient.invalidateQueries({ queryKey: ['ollama-sync-status'] })
       queryClient.invalidateQueries({ queryKey: ['ollama-models'] })
@@ -2198,8 +2198,8 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t('backends.title')}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{t('backends.description')}</p>
+        <h1 className="text-2xl font-bold tracking-tight">{t('providers.title')}</h1>
+        <p className="text-muted-foreground mt-1 text-sm">{t('providers.description')}</p>
       </div>
 
       {section === 'ollama' && (
@@ -2209,13 +2209,13 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
           isLoading={backendsLoading}
           error={backendsError as Error | null}
           onRegister={() => setRegisterBackendType('ollama')}
-          onEdit={(b) => setEditingBackend(b)}
+          onEdit={(b) => setEditingProvider(b)}
           onHealthcheck={(id) => healthcheckMutation.mutate(id)}
           healthcheckIsPending={healthcheckMutation.isPending}
           onSyncModels={(id) => syncModelsMutation.mutate(id)}
           syncModelsPending={syncModelsMutation.isPending}
           syncModelsVars={syncModelsMutation.variables}
-          onDelete={(id, name) => { if (confirm(t('backends.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
+          onDelete={(id, name) => { if (confirm(t('providers.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
           deleteIsPending={deleteMutation.isPending}
         />
       )}
@@ -2226,12 +2226,12 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
           isLoading={backendsLoading}
           error={backendsError as Error | null}
           onRegister={() => setRegisterBackendType('gemini')}
-          onEdit={(b) => setEditingBackend(b)}
+          onEdit={(b) => setEditingProvider(b)}
           onHealthcheck={(id) => healthcheckMutation.mutate(id)}
           healthcheckIsPending={healthcheckMutation.isPending}
           onToggleActive={(b) => toggleActiveMutation.mutate(b)}
           toggleActivePending={toggleActiveMutation.isPending}
-          onDelete={(id, name) => { if (confirm(t('backends.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
+          onDelete={(id, name) => { if (confirm(t('providers.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
           deleteIsPending={deleteMutation.isPending}
         />
       )}
@@ -2243,11 +2243,11 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
           onClose={() => setRegisterBackendType(null)}
         />
       )}
-      {editingBackend && (
+      {editingProvider && (
         <EditModal
-          backend={editingBackend}
+          provider={editingProvider}
           servers={servers ?? []}
-          onClose={() => setEditingBackend(null)}
+          onClose={() => setEditingProvider(null)}
         />
       )}
     </div>

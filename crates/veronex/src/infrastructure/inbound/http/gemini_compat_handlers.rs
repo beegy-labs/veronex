@@ -1,7 +1,7 @@
 /// Gemini API-compatible gateway endpoint.
 ///
 /// Allows Gemini CLI and any client using `GOOGLE_GEMINI_BASE_URL` to route
-/// requests through Veronex to any active Ollama backend.
+/// requests through Veronex to any active Ollama provider.
 ///
 /// Supports:
 /// - `POST /v1beta/models/{model}:streamGenerateContent`  (SSE streaming)
@@ -27,6 +27,7 @@ use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::enums::{ApiFormat, JobSource};
+use super::cancel_guard::CancelOnDrop;
 use super::state::AppState;
 
 type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
@@ -270,7 +271,7 @@ async fn stream_generate(
 
     let token_stream = state.use_case.stream(&job_id);
 
-    let sse_stream: SseStream = Box::pin(token_stream.map(|result| -> Result<Event, Infallible> {
+    let sse_stream: SseStream = Box::pin(CancelOnDrop::new(token_stream.map(|result| -> Result<Event, Infallible> {
         match result {
             Ok(token) if token.is_final => {
                 let resp = GeminiResponse {
@@ -305,7 +306,7 @@ async fn stream_generate(
                 Ok(Event::default().data(serde_json::to_string(&err).unwrap_or_default()))
             }
         }
-    }));
+    }), job_id, state.use_case.clone()));
 
     (
         [("X-Accel-Buffering", "no")],
@@ -553,10 +554,10 @@ fn gemini_error(http: StatusCode, code: u32, status: &str, message: &str) -> Res
 /// `GET /v1beta/models` — list available models.
 ///
 /// Returns only Ollama models that are explicitly **enabled** on at least one
-/// active backend (via the model selection feature in the Providers page).
+/// active provider (via the model selection feature in the Providers page).
 /// This is the "selected models" subset of the full synchronized model list.
 pub async fn list_models(State(state): State<AppState>) -> Response {
-    // Gather all active Ollama backends
+    // Gather all active Ollama providers
     let backends = match state.provider_registry.list_active().await {
         Ok(b) => b,
         Err(e) => {
@@ -564,12 +565,12 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
         }
     };
 
-    // Collect enabled models across all Ollama backends (deduplicated)
+    // Collect enabled models across all Ollama providers (deduplicated)
     let mut seen = std::collections::HashSet::new();
     let mut model_names: Vec<String> = Vec::new();
 
-    for backend in backends.iter().filter(|b| b.provider_type == crate::domain::enums::ProviderType::Ollama) {
-        if let Ok(enabled) = state.model_selection_repo.list_enabled(backend.id).await {
+    for provider in backends.iter().filter(|b| b.provider_type == crate::domain::enums::ProviderType::Ollama) {
+        if let Ok(enabled) = state.model_selection_repo.list_enabled(provider.id).await {
             for name in enabled {
                 if seen.insert(name.clone()) {
                     model_names.push(name);

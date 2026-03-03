@@ -392,7 +392,7 @@ pub async fn usage_breakdown(
         })
         .collect();
 
-    // ── By model + backend ────────────────────────────────────────────
+    // ── By model + provider ────────────────────────────────────────────
     let total_requests: i64 = by_providers.iter().map(|b| b.request_count).sum();
 
     let model_rows = sqlx::query(&format!(

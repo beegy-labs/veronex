@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-/// Port for per-backend circuit breaker state.
+/// Port for per-provider circuit breaker state.
 ///
 /// Abstracts `CircuitBreakerMap` so the application use-case layer is
 /// decoupled from the concrete failure isolation implementation.

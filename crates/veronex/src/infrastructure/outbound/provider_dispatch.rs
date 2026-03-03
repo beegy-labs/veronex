@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
+use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::LlmProvider;
@@ -46,7 +46,7 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
         get_ollama_available_vram_mb(provider, self.valkey_pool.as_ref()).await
     }
 
-    fn build_adapter(&self, provider: &LlmProvider) -> Arc<dyn InferenceBackendPort> {
+    fn build_adapter(&self, provider: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
         make_adapter(provider)
     }
 
@@ -55,7 +55,7 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
         provider_type: &ProviderType,
         model_name: &str,
         tier_filter: Option<&str>,
-    ) -> Result<(Arc<dyn InferenceBackendPort>, Uuid, bool)> {
+    ) -> Result<(Arc<dyn InferenceProviderPort>, Uuid, bool)> {
         let cfg = pick_best_provider(
             &*self.registry,
             self.gemini_policy_repo.as_deref(),

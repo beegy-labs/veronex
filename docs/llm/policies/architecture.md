@@ -204,7 +204,7 @@ All events flow through Redpanda as the single message bus.  ClickHouse is a con
 
 | Port | Adapter | Notes |
 |------|---------|-------|
-| `InferenceBackendPort` | `OllamaAdapter`, `GeminiAdapter` | SSE streaming |
+| `InferenceProviderPort` | `OllamaAdapter`, `GeminiAdapter` | SSE streaming |
 | `LlmProviderRegistry` | `PostgresProviderRegistry` (DB) + `CachingProviderRegistry` (5s TTL decorator, used in production) | CRUD + health + update |
 | `GpuServerRegistry` | `PostgresGpuServerRegistry` | Physical server + node-exporter |
 | `JobRepository` | `PostgresJobRepository` | UPSERT on conflict |

@@ -73,11 +73,11 @@ impl Prompt {
 pub struct StreamToken {
     pub value: String,
     pub is_final: bool,
-    /// Actual prompt token count from the backend's usage metadata.
-    /// Only populated on the final token when the backend reports real counts.
+    /// Actual prompt token count from the provider's usage metadata.
+    /// Only populated on the final token when the provider reports real counts.
     pub prompt_tokens: Option<u32>,
-    /// Actual completion token count from the backend's usage metadata.
-    /// Only populated on the final token when the backend reports real counts.
+    /// Actual completion token count from the provider's usage metadata.
+    /// Only populated on the final token when the provider reports real counts.
     pub completion_tokens: Option<u32>,
     /// Tokens served from cache (Gemini `cachedContentTokenCount`).
     /// Only populated on the final token; `None` for Ollama.

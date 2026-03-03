@@ -1,14 +1,14 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import type { Backend } from '@/lib/types'
+import type { Provider } from '@/lib/types'
 import { queueDepthQuery } from '@/lib/queries'
 import { useInferenceStream } from '@/hooks/use-inference-stream'
 import { ProviderFlowPanel } from './provider-flow-panel'
 import { LiveFeed } from './live-feed'
 
 interface Props {
-  backends: Backend[]
+  backends: Provider[]
 }
 
 export function NetworkFlowTab({ backends }: Props) {

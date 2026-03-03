@@ -1,28 +1,28 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 
-// ── LLM backends list ─────────────────────────────────────────────────────────
+// ── LLM providers list ─────────────────────────────────────────────────────────
 
-export const backendsQuery = queryOptions({
-  queryKey: ['backends'] as const,
-  queryFn: () => api.backends(),
+export const providersQuery = queryOptions({
+  queryKey: ['providers'] as const,
+  queryFn: () => api.providers(),
   staleTime: 29_000,
   refetchInterval: 30_000,
   refetchIntervalInBackground: false,
 })
 
-// ── Backend-specific ──────────────────────────────────────────────────────────
+// ── Provider-specific ──────────────────────────────────────────────────────────
 
-export const backendModelsQuery = (backendId: string) => queryOptions({
-  queryKey: ['backend-models', backendId] as const,
-  queryFn: () => api.backendModels(backendId),
+export const providerModelsQuery = (providerId: string) => queryOptions({
+  queryKey: ['provider-models', backendId] as const,
+  queryFn: () => api.providerModels(providerId),
   staleTime: 59_000,
   retry: false,
 })
 
-export const selectedModelsQuery = (backendId: string) => queryOptions({
+export const selectedModelsQuery = (providerId: string) => queryOptions({
   queryKey: ['selected-models', backendId] as const,
-  queryFn: () => api.getSelectedModels(backendId),
+  queryFn: () => api.getSelectedModels(providerId),
   staleTime: 59_000,
   retry: false,
 })

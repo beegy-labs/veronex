@@ -30,7 +30,7 @@ use veronex::infrastructure::outbound::provider_dispatch::ConcreteProviderDispat
 use veronex::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap;
 use veronex::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use veronex::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
-use veronex::infrastructure::outbound::health_checker::{check_backend, run_health_checker_loop};
+use veronex::infrastructure::outbound::health_checker::{check_provider, run_health_checker_loop};
 use veronex::infrastructure::outbound::model_manager::OllamaModelManager;
 use veronex::infrastructure::outbound::observability::{HttpAuditAdapter, HttpObservabilityAdapter};
 use veronex::infrastructure::outbound::persistence::account_repository::PostgresAccountRepository;
@@ -315,7 +315,7 @@ async fn main() -> Result<()> {
                 status: veronex::domain::enums::LlmProviderStatus::Offline,
                 registered_at: chrono::Utc::now(),
             };
-            let initial_status = check_backend(&http_client, &ollama_provider).await;
+            let initial_status = check_provider(&http_client, &ollama_provider).await;
             let ollama_provider = veronex::domain::entities::LlmProvider {
                 status: initial_status,
                 ..ollama_provider
@@ -345,7 +345,7 @@ async fn main() -> Result<()> {
                     status: veronex::domain::enums::LlmProviderStatus::Offline,
                     registered_at: chrono::Utc::now(),
                 };
-                let initial_status = check_backend(&http_client, &gemini_provider).await;
+                let initial_status = check_provider(&http_client, &gemini_provider).await;
                 let gemini_provider = veronex::domain::entities::LlmProvider {
                     status: initial_status,
                     ..gemini_provider

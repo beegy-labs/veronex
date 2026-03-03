@@ -525,7 +525,7 @@ API key (`X-API-Key`) is **not** accepted for cancel — dashboard-only operatio
 
 ```rust
 // application/use_cases/inference.rs
-if entry.status == JobStatus::Completed || entry.status == JobStatus::Failed {
+if entry.status == JobStatus::Completed || entry.status == JobStatus::Failed || entry.status == JobStatus::Cancelled {
     return Ok(()); // don't override — DB untouched
 }
 ```
@@ -535,6 +535,24 @@ When the job IS still active (`pending` or `running`):
 2. `run_job` select! `biased` cancel branch fires immediately — drops the stream
 3. Dropping the stream closes the TCP connection to Ollama (broken-pipe → Ollama stops)
 4. DB: `cancel_job(job_id, Utc::now())` → `UPDATE inference_jobs SET status = 'cancelled', cancelled_at = $2 WHERE id = $1 AND status NOT IN ('completed', 'failed')`
+
+### CancelOnDrop — Client Disconnect Cancellation
+
+SSE/NDJSON streams on submit-and-stream endpoints are wrapped in `CancelOnDrop<S>` (`infrastructure/inbound/http/cancel_guard.rs`). When the client disconnects (Axum drops the response body), `CancelGuard::drop()` fires `use_case.cancel(job_id)` via `tokio::spawn`.
+
+**Wrapped endpoints** (1:1 client↔job — submit and stream in same request):
+
+| Handler file | Endpoints |
+|-------------|-----------|
+| `openai_handlers.rs` | `ollama_chat_proxy`, `legacy_queue_chat` |
+| `gemini_compat_handlers.rs` | `stream_generate` |
+| `ollama_compat_handlers.rs` | `generate`, `chat` |
+| `test_handlers.rs` | `stream_as_openai_sse`, `stream_test_job`, `stream_as_ollama_chat_ndjson`, `stream_as_ollama_generate_ndjson`, `stream_as_gemini_sse` |
+
+**NOT wrapped** (read-only replay — multiple clients may share one job):
+- `handlers.rs` → `stream_inference`, `stream_job_openai`
+
+The cancel is safe: `cancel()` no-ops for terminal states (Completed, Failed, Cancelled), so normal completions are unaffected.
 
 ---
 

@@ -15,7 +15,7 @@ use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegis
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
-use crate::infrastructure::outbound::health_checker::check_backend;
+use crate::infrastructure::outbound::health_checker::check_provider;
 
 use super::state::AppState;
 
@@ -53,17 +53,17 @@ fn models_cache_key(id: Uuid) -> String {
     format!("veronex:models:{id}")
 }
 
-/// Fetch the list of available models directly from the backend (bypasses cache).
+/// Fetch the list of available models directly from the provider (bypasses cache).
 ///
 /// * Ollama → `GET {url}/api/tags`
 /// * Gemini → `GET https://generativelanguage.googleapis.com/v1beta/models?key={api_key}`
 ///   filtered to models that support `generateContent`.
-async fn fetch_models_live(backend: &LlmProvider) -> Result<Vec<String>> {
+async fn fetch_models_live(provider: &LlmProvider) -> Result<Vec<String>> {
     let client = reqwest::Client::new();
 
-    match backend.provider_type {
+    match provider.provider_type {
         ProviderType::Ollama => {
-            let url = format!("{}/api/tags", backend.url.trim_end_matches('/'));
+            let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
             let json: serde_json::Value = client
                 .get(&url)
                 .send()
@@ -86,7 +86,7 @@ async fn fetch_models_live(backend: &LlmProvider) -> Result<Vec<String>> {
         }
 
         ProviderType::Gemini => {
-            let api_key = backend
+            let api_key = provider
                 .api_key_encrypted
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("gemini provider has no api key stored"))?;
@@ -178,7 +178,7 @@ pub struct RegisterBackendRequest {
     pub total_vram_mb: Option<i64>,
     /// GPU index on the host (0-based). For metric correlation.
     pub gpu_index: Option<i16>,
-    /// FK → gpu_servers. Optional; Gemini backends leave this null.
+    /// FK → gpu_servers. Optional; Gemini providers leave this null.
     pub server_id: Option<Uuid>,
     /// veronex-agent URL (Phase 2, reserved). E.g. `"http://192.168.1.10:9091"`.
     pub agent_url: Option<String>,
@@ -187,7 +187,7 @@ pub struct RegisterBackendRequest {
     pub is_free_tier: Option<bool>,
 }
 
-/// Update request for `PATCH /v1/backends/{id}`.
+/// Update request for `PATCH /v1/providers/{id}`.
 ///
 /// The web UI pre-fills all current values before submission, so every field
 /// is always present.  `gpu_index` / `server_id` = `null` explicitly clears them.
@@ -203,7 +203,7 @@ pub struct UpdateBackendRequest {
     pub gpu_index: Option<i16>,
     pub server_id: Option<Uuid>,
     pub is_free_tier: Option<bool>,
-    /// Enable or disable the backend for routing.
+    /// Enable or disable the provider for routing.
     pub is_active: Option<bool>,
 }
 
@@ -285,10 +285,10 @@ fn parse_provider_type(s: &str) -> Option<ProviderType> {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-/// `POST /v1/backends` — register a new Ollama or Gemini backend.
+/// `POST /v1/providers` — register a new Ollama or Gemini provider.
 ///
 /// Immediately runs a health check and sets the initial status.
-pub async fn register_backend(
+pub async fn register_provider(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(req): Json<RegisterBackendRequest>,
@@ -341,7 +341,7 @@ pub async fn register_backend(
 
     // Health check before persisting.
     let client = reqwest::Client::new();
-    let initial_status = check_backend(&client, &provider).await;
+    let initial_status = check_provider(&client, &provider).await;
     let provider = LlmProvider {
         status: initial_status.clone(),
         ..provider
@@ -372,8 +372,8 @@ pub async fn register_backend(
     );
 
     let resource_type = match provider.provider_type {
-        ProviderType::Ollama => "ollama_backend",
-        ProviderType::Gemini => "gemini_backend",
+        ProviderType::Ollama => "ollama_provider",
+        ProviderType::Gemini => "gemini_provider",
     };
     emit_audit(&state, &claims, "create", resource_type, &provider.id.to_string(), &provider.name,
         &format!("Provider '{}' registered (type: {}, initial_status: {})",
@@ -389,8 +389,8 @@ pub async fn register_backend(
         .into_response()
 }
 
-/// `GET /v1/backends` — list all registered providers.
-pub async fn list_backends(State(state): State<AppState>) -> impl IntoResponse {
+/// `GET /v1/providers` — list all registered providers.
+pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
     match provider_registry(&state).list_all().await {
         Ok(providers) => {
             let summaries: Vec<BackendSummary> = providers.into_iter().map(Into::into).collect();
@@ -407,8 +407,8 @@ pub async fn list_backends(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-/// `DELETE /v1/backends/{id}` — soft-delete (deactivate) a backend.
-pub async fn delete_backend(
+/// `DELETE /v1/providers/{id}` — soft-delete (deactivate) a provider.
+pub async fn delete_provider(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -418,7 +418,7 @@ pub async fn delete_backend(
 
     match provider_registry(&state).deactivate(id).await {
         Ok(()) => {
-            emit_audit(&state, &claims, "delete", "ollama_backend", &id.to_string(), &name,
+            emit_audit(&state, &claims, "delete", "ollama_provider", &id.to_string(), &name,
                 &format!("Provider '{}' ({}) deactivated (soft-deleted, no longer routed)", name, id)).await;
             StatusCode::NO_CONTENT.into_response()
         }
@@ -433,8 +433,8 @@ pub async fn delete_backend(
     }
 }
 
-/// `POST /v1/backends/{id}/healthcheck` — manually trigger a health check.
-pub async fn healthcheck_backend(
+/// `POST /v1/providers/{id}/healthcheck` — manually trigger a health check.
+pub async fn healthcheck_provider(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -445,7 +445,7 @@ pub async fn healthcheck_backend(
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "backend not found"})),
+                Json(serde_json::json!({"error": "provider not found"})),
             )
                 .into_response();
         }
@@ -460,7 +460,7 @@ pub async fn healthcheck_backend(
     };
 
     let client = reqwest::Client::new();
-    let new_status = check_backend(&client, &provider).await;
+    let new_status = check_provider(&client, &provider).await;
 
     if let Err(e) = registry.update_status(id, new_status.clone()).await {
         tracing::warn!(%id, "failed to persist healthcheck result: {e}");
@@ -479,11 +479,11 @@ pub async fn healthcheck_backend(
         .into_response()
 }
 
-/// `PATCH /v1/backends/{id}` — update mutable fields of a backend.
+/// `PATCH /v1/providers/{id}` — update mutable fields of a provider.
 ///
 /// All fields are optional; only provided (non-null) fields are applied.
 /// Passing `api_key: ""` leaves the existing key unchanged.
-pub async fn update_backend(
+pub async fn update_provider(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -491,17 +491,17 @@ pub async fn update_backend(
 ) -> impl IntoResponse {
     let registry = provider_registry(&state);
 
-    let mut backend = match registry.get(id).await {
+    let mut provider = match registry.get(id).await {
         Ok(Some(b)) => b,
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "backend not found"})),
+                Json(serde_json::json!({"error": "provider not found"})),
             )
                 .into_response();
         }
         Err(e) => {
-            tracing::error!(%id, "update_backend: db error: {e}");
+            tracing::error!(%id, "update_provider: db error: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "database error"})),
@@ -517,22 +517,22 @@ pub async fn update_backend(
         )
             .into_response();
     }
-    backend.name = req.name.trim().to_string();
+    provider.name = req.name.trim().to_string();
     if let Some(url) = req.url {
-        backend.url = url;
+        provider.url = url;
     }
     // Empty / absent api_key = keep existing stored value.
     if let Some(key) = req.api_key.filter(|s| !s.is_empty()) {
-        backend.api_key_encrypted = Some(key);
+        provider.api_key_encrypted = Some(key);
     }
-    backend.total_vram_mb = req.total_vram_mb.unwrap_or(backend.total_vram_mb);
-    backend.gpu_index = req.gpu_index;   // null clears the field
-    backend.server_id = req.server_id;  // null clears the field
-    if let Some(v) = req.is_free_tier { backend.is_free_tier = v; }
-    if let Some(v) = req.is_active { backend.is_active = v; }
+    provider.total_vram_mb = req.total_vram_mb.unwrap_or(provider.total_vram_mb);
+    provider.gpu_index = req.gpu_index;   // null clears the field
+    provider.server_id = req.server_id;  // null clears the field
+    if let Some(v) = req.is_free_tier { provider.is_free_tier = v; }
+    if let Some(v) = req.is_active { provider.is_active = v; }
 
-    if let Err(e) = registry.update(&backend).await {
-        tracing::error!(%id, "update_backend: failed: {e}");
+    if let Err(e) = registry.update(&provider).await {
+        tracing::error!(%id, "update_provider: failed: {e}");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "database error"})),
@@ -540,14 +540,14 @@ pub async fn update_backend(
             .into_response();
     }
 
-    let resource_type = match backend.provider_type {
-        ProviderType::Ollama => "ollama_backend",
-        ProviderType::Gemini => "gemini_backend",
+    let resource_type = match provider.provider_type {
+        ProviderType::Ollama => "ollama_provider",
+        ProviderType::Gemini => "gemini_provider",
     };
-    emit_audit(&state, &claims, "update", resource_type, &id.to_string(), &backend.name,
-        &format!("Provider '{}' ({}) configuration updated", backend.name, id)).await;
+    emit_audit(&state, &claims, "update", resource_type, &id.to_string(), &provider.name,
+        &format!("Provider '{}' ({}) configuration updated", provider.name, id)).await;
     tracing::info!(%id, "provider updated");
-    (StatusCode::OK, Json(BackendSummary::from(backend))).into_response()
+    (StatusCode::OK, Json(BackendSummary::from(provider))).into_response()
 }
 
 // ── Unit tests ─────────────────────────────────────────────────────────────────
@@ -621,12 +621,12 @@ mod tests {
     }
 }
 
-/// `GET /v1/backends/{id}/models` — list models available on a backend.
+/// `GET /v1/providers/{id}/models` — list models available on a provider.
 ///
 /// Returns the cached model list if available (TTL: 1 h).
 /// On cache miss, fetches live from Ollama (`/api/tags`) or the Gemini models API,
 /// stores the result in Valkey, and returns it.
-pub async fn list_backend_models(
+pub async fn list_provider_models(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -634,7 +634,7 @@ pub async fn list_backend_models(
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "backend not found"})),
+                Json(serde_json::json!({"error": "provider not found"})),
             )
                 .into_response();
         }
@@ -658,28 +658,28 @@ pub async fn list_backend_models(
         }
     }
 
-    // ── Cache miss: return empty — use POST /v1/backends/{id}/models/sync to populate ──
+    // ── Cache miss: return empty — use POST /v1/providers/{id}/models/sync to populate ──
     (StatusCode::OK, Json(serde_json::json!({"models": []}))).into_response()
 }
 
-/// `GET /v1/backends/{id}/key` — return the stored (plain-text PoC) API key for a Gemini backend.
+/// `GET /v1/providers/{id}/key` — return the stored (plain-text PoC) API key for a Gemini provider.
 ///
 /// Requires admin auth. Returns `{"key": "AIza..."}`.
-pub async fn reveal_backend_key(
+pub async fn reveal_provider_key(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let backend = match provider_registry(&state).get(id).await {
+    let provider = match provider_registry(&state).get(id).await {
         Ok(Some(b)) => b,
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "backend not found"})),
+                Json(serde_json::json!({"error": "provider not found"})),
             )
                 .into_response();
         }
         Err(e) => {
-            tracing::error!(%id, "reveal_backend_key: db error: {e}");
+            tracing::error!(%id, "reveal_provider_key: db error: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "database error"})),
@@ -688,7 +688,7 @@ pub async fn reveal_backend_key(
         }
     };
 
-    match backend.api_key_encrypted {
+    match provider.api_key_encrypted {
         Some(key) => (StatusCode::OK, Json(serde_json::json!({"key": key}))).into_response(),
         None => (
             StatusCode::NOT_FOUND,
@@ -706,12 +706,12 @@ pub async fn sync_provider_models(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let backend = match provider_registry(&state).get(id).await {
+    let provider = match provider_registry(&state).get(id).await {
         Ok(Some(b)) => b,
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "backend not found"})),
+                Json(serde_json::json!({"error": "provider not found"})),
             )
                 .into_response();
         }
@@ -726,7 +726,7 @@ pub async fn sync_provider_models(
     };
 
     // Gemini model sync is global — direct the caller to the correct endpoint.
-    if matches!(backend.provider_type, ProviderType::Gemini) {
+    if matches!(provider.provider_type, ProviderType::Gemini) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -736,7 +736,7 @@ pub async fn sync_provider_models(
             .into_response();
     }
 
-    match fetch_models_live(&backend).await {
+    match fetch_models_live(&provider).await {
         Ok(models) => {
             let cache_key = models_cache_key(id);
             if let Some(ref pool) = state.valkey_pool {
@@ -777,9 +777,9 @@ struct SelectedModelDto {
     synced_at: DateTime<Utc>,
 }
 
-/// `GET /v1/backends/{id}/selected-models` — list models with per-backend enabled state.
+/// `GET /v1/providers/{id}/selected-models` — list models with per-provider enabled state.
 ///
-/// **Ollama**: merges per-backend `ollama_models` with `backend_selected_models`.
+/// **Ollama**: merges per-provider `ollama_models` with `backend_selected_models`.
 ///   New models default to `is_enabled = true`.
 /// **Gemini**: merges the global `gemini_models` pool with `backend_selected_models`.
 ///   New models default to `is_enabled = false`.
@@ -788,12 +788,12 @@ pub async fn list_selected_models(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     // Resolve the provider to branch by type.
-    let backend = match state.provider_registry.get(id).await {
+    let provider = match state.provider_registry.get(id).await {
         Ok(Some(b)) => b,
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "backend not found"})),
+                Json(serde_json::json!({"error": "provider not found"})),
             )
                 .into_response();
         }
@@ -807,7 +807,7 @@ pub async fn list_selected_models(
         }
     };
 
-    // Per-backend selections (enabled/disabled overrides).
+    // Per-provider selections (enabled/disabled overrides).
     let selections = match state.model_selection_repo.list(id).await {
         Ok(s) => s,
         Err(e) => {
@@ -824,9 +824,9 @@ pub async fn list_selected_models(
         .map(|s| (s.model_name, s.is_enabled))
         .collect();
 
-    match backend.provider_type {
+    match provider.provider_type {
         ProviderType::Ollama => {
-            // Use per-backend synced model list; default is_enabled = true.
+            // Use per-provider synced model list; default is_enabled = true.
             let models = match state.ollama_model_repo.models_for_provider(id).await {
                 Ok(m) => m,
                 Err(e) => {
@@ -886,7 +886,7 @@ pub struct SetModelEnabledRequest {
     pub is_enabled: bool,
 }
 
-/// `PATCH /v1/backends/{id}/selected-models/{model_name}` — toggle a model's enabled state.
+/// `PATCH /v1/providers/{id}/selected-models/{model_name}` — toggle a model's enabled state.
 pub async fn set_model_enabled(
     State(state): State<AppState>,
     Path((id, model_name)): Path<(Uuid, String)>,

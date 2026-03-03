@@ -91,7 +91,7 @@ To migrate: create `error.rs` above → change handler return types to `Result<T
 // ✅ Recommended: query_as! + FromRow
 // Requires DATABASE_URL in .env at compile time
 #[derive(sqlx::FromRow)]
-struct BackendRow {
+struct ProviderRow {
     id: Uuid,
     name: String,
     backend_type: String,
@@ -99,7 +99,7 @@ struct BackendRow {
 }
 
 let row = sqlx::query_as!(
-    BackendRow,
+    ProviderRow,
     "SELECT id, name, provider_type FROM llm_providers WHERE id = $1",
     id
 )
@@ -143,7 +143,7 @@ use tracing::{info, error, instrument};
 pub async fn get_backend(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<BackendSummary>, AppError> {
+) -> Result<Json<ProviderSummary>, AppError> {
     info!("fetching backend");
     let b = state.backend_registry.get(id).await?
         .ok_or(AppError::NotFound)?;
@@ -308,7 +308,7 @@ Each background loop accepts a `CancellationToken` and uses `select!` to exit cl
 
 ```rust
 pub async fn run_health_checker_loop(
-    registry: Arc<dyn LlmBackendRegistry>,
+    registry: Arc<dyn LlmProviderRegistry>,
     interval_secs: u64,
     valkey_pool: Option<Pool>,
     thermal: Arc<ThermalThrottleMap>,
@@ -455,7 +455,7 @@ const { data } = useQuery({
 ```typescript
 // CORRECT — onSettled runs on both success and error
 const mutation = useMutation({
-  mutationFn: (id: string) => api.deleteBackend(id),
+  mutationFn: (id: string) => api.deleteProvider(id),
   onSettled: () => queryClient.invalidateQueries({ queryKey: ['backends'] }),
   onError: (e: Error) => console.error(e.message),
 })
@@ -504,22 +504,22 @@ const mutation = useMutation({
 import { z } from 'zod'
 
 // Define schema first, infer type from it
-export const BackendSchema = z.object({
+export const ProviderSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   backend_type: z.enum(['ollama', 'gemini']),
   status: z.enum(['online', 'offline', 'degraded']),
   is_active: z.boolean(),
 })
-export type Backend = z.infer<typeof BackendSchema>
+export type Provider = z.infer<typeof ProviderSchema>
 
 // Use safeParse to handle errors gracefully (no throws)
-const result = BackendSchema.safeParse(apiResponse)
+const result = ProviderSchema.safeParse(apiResponse)
 if (!result.success) console.error(result.error.issues)
 
 // Branded types prevent wrong-ID bugs
-const BackendIdSchema = z.string().uuid().brand<'BackendId'>()
-type BackendId = z.infer<typeof BackendIdSchema>
+const ProviderIdSchema = z.string().uuid().brand<'BackendId'>()
+type ProviderId = z.infer<typeof ProviderIdSchema>
 ```
 
 Apply Zod at entry points: API responses, form inputs, env vars.

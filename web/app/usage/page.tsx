@@ -171,7 +171,7 @@ function FinishReasonsCard({ data }: { data: AnalyticsStats }) {
   )
 }
 
-/* ─── Backend breakdown section ───────────────────────────── */
+/* ─── Provider breakdown section ───────────────────────────── */
 function BackendBreakdownSection({ data }: { data: UsageBreakdown }) {
   const { t } = useTranslation()
   if (data.by_providers.length === 0) return (

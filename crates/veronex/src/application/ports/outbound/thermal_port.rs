@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::domain::enums::ThrottleLevel;
 
-/// Port for reading per-backend thermal throttle state.
+/// Port for reading per-provider thermal throttle state.
 ///
 /// Abstracts `ThermalThrottleMap` so the application use-case layer is
 /// decoupled from the concrete thermal monitoring implementation.

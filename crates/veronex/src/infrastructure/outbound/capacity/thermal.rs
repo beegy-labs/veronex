@@ -31,7 +31,7 @@ impl ThermalThrottleMap {
         }
     }
 
-    /// Update thermal state for a backend and return the new level.
+    /// Update thermal state for a provider and return the new level.
     ///
     /// Should be called by the health checker after reading hw_metrics.
     pub fn update(&self, backend_id: Uuid, temp_c: f32) -> ThrottleLevel {
@@ -82,7 +82,7 @@ impl ThermalThrottleMap {
         next
     }
 
-    /// Current throttle level for a backend (Normal if no state recorded).
+    /// Current throttle level for a provider (Normal if no state recorded).
     pub fn get(&self, backend_id: Uuid) -> ThrottleLevel {
         self.states
             .get(&backend_id)
@@ -90,7 +90,7 @@ impl ThermalThrottleMap {
             .unwrap_or(ThrottleLevel::Normal)
     }
 
-    /// Last recorded temperature for a backend.
+    /// Last recorded temperature for a provider.
     pub fn temp_c(&self, backend_id: Uuid) -> Option<f32> {
         self.states.get(&backend_id).map(|s| s.temp_c)
     }

@@ -24,14 +24,14 @@ interface OpenAIChunk {
   error?: { message?: string }
 }
 
-type BackendOption = { value: string; label: string; isGemini: boolean }
+type ProviderOption = { value: string; label: string; isGemini: boolean }
 type StreamStatus = 'idle' | 'streaming' | 'done' | 'error'
 
 interface Run {
   id: number
   prompt: string
   model: string
-  backend: string
+  provider_type: string
   status: StreamStatus
   tokens: string[]
   errorMsg: string
@@ -80,7 +80,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const authUser = getAuthUser()
 
   // ── Shared form state ─────────────────────────────────────────────────────────
-  const [backend, setBackend] = useState('ollama')
+  const [providerType, setProviderType] = useState("ollama")
   const [model, setModel] = useState('')
   const [prompt, setPrompt] = useState('')
 
@@ -94,14 +94,14 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
 
   // ── Backends ──────────────────────────────────────────────────────────────────
   const { data: backends } = useQuery({
-    queryKey: ['backends'],
-    queryFn: () => api.backends(),
+    queryKey: ['providers'],
+    queryFn: () => api.providers(),
     staleTime: 60_000,
   })
 
-  const availableOptions = useMemo((): BackendOption[] => {
+  const availableOptions = useMemo((): ProviderOption[] => {
     if (!backends) return [{ value: 'ollama', label: 'Ollama', isGemini: false }]
-    const opts: BackendOption[] = []
+    const opts: ProviderOption[] = []
     if (backends.some((b) => b.is_active && b.backend_type === 'ollama')) {
       opts.push({ value: 'ollama', label: 'Ollama', isGemini: false })
     }
@@ -114,47 +114,47 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     return opts.length > 0 ? opts : [{ value: 'ollama', label: 'Ollama', isGemini: false }]
   }, [backends, t])
 
-  const isGeminiBackend = availableOptions.find((o) => o.value === backend)?.isGemini ?? false
+  const isGeminiProvider = availableOptions.find((o) => o.value === providerType)?.isGemini ?? false
 
   useEffect(() => {
     if (!backends) return
-    if (!availableOptions.find((o) => o.value === backend)) {
-      setBackend(availableOptions[0].value)
+    if (!availableOptions.find((o) => o.value === providerType)) {
+      setProviderType(availableOptions[0].value)
       setModel('')
     }
-  }, [availableOptions, backend, backends])
+  }, [availableOptions, providerType, backends])
 
   // ── Models ────────────────────────────────────────────────────────────────────
   const { data: ollamaModelsData } = useQuery({
     queryKey: ['ollama-models'],
     queryFn: () => api.ollamaModels(),
-    enabled: !isGeminiBackend,
+    enabled: !isGeminiProvider,
     staleTime: 30_000,
   })
 
   const { data: geminiModelsData } = useQuery({
     queryKey: ['gemini-models'],
     queryFn: () => api.geminiModels(),
-    enabled: isGeminiBackend,
+    enabled: isGeminiProvider,
     staleTime: 5 * 60_000,
   })
 
   const { data: geminiPolicies } = useQuery({
     queryKey: ['gemini-policies'],
     queryFn: () => api.geminiPolicies(),
-    enabled: isGeminiBackend,
+    enabled: isGeminiProvider,
     staleTime: 5 * 60_000,
   })
 
   const availableModels = useMemo(() => {
-    if (!isGeminiBackend) return ollamaModelsData?.models.map((m) => m.model_name) ?? []
+    if (!isGeminiProvider) return ollamaModelsData?.models.map((m) => m.model_name) ?? []
     const allModels = geminiModelsData?.models.map((m) => m.model_name) ?? []
-    if (backend !== 'gemini-free') return allModels
+    if (providerType !== "gemini-free") return allModels
     const policyMap = new Map(
       (geminiPolicies ?? []).filter((p) => p.model_name !== '*').map((p) => [p.model_name, p])
     )
     return allModels.filter((name) => policyMap.get(name)?.available_on_free_tier === true)
-  }, [isGeminiBackend, backend, geminiModelsData, geminiPolicies, ollamaModelsData?.models])
+  }, [isGeminiProvider, providerType, geminiModelsData, geminiPolicies, ollamaModelsData?.models])
 
   useEffect(() => {
     if (availableModels.length > 0 && !availableModels.includes(model)) {
@@ -166,7 +166,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   useEffect(() => {
     if (!retryParams) return
     setPrompt(retryParams.prompt)
-    setBackend(retryParams.provider_type)
+    setProviderType(retryParams.provider_type)
     if (availableModels.includes(retryParams.model)) {
       setModel(retryParams.model)
     }
@@ -254,7 +254,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
       id: runId,
       prompt: prompt.trim(),
       model,
-      backend,
+      providerType,
       status: 'streaming',
       tokens: [],
       errorMsg: '',
@@ -274,7 +274,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
         body: JSON.stringify({
           model,
           messages: [{ role: 'user', content: prompt.trim() }],
-          provider_type: backend,
+          provider_type: providerType,
           stream: true,
         }),
       })
@@ -322,13 +322,13 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
 
         {/* ── Top: form ────────────────────────────────────────────────────────── */}
         <form onSubmit={(e) => { e.preventDefault(); handleRun() }} className="space-y-4 pb-4">
-          {/* Backend + Model */}
+          {/* Provider + Model */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label>{t('test.backend')}</Label>
+              <Label>{t('test.provider')}</Label>
               <Select
-                value={backend}
-                onValueChange={(v) => { setBackend(v); setModel('') }}
+                value={providerType}
+                onValueChange={(v) => { setProviderType(v); setModel('') }}
                 disabled={isAnyStreaming}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -349,7 +349,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
                 <SelectTrigger>
                   <SelectValue placeholder={
                     availableModels.length === 0
-                      ? (isGeminiBackend ? t('test.geminiModelEmpty') : t('test.ollamaTestNoModels'))
+                      ? (isGeminiProvider ? t('test.geminiModelEmpty') : t('test.ollamaTestNoModels'))
                       : t('test.modelSelect')
                   } />
                 </SelectTrigger>
@@ -461,7 +461,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
                       variant="outline"
                       onClick={() => {
                         setPrompt(activeRun.prompt)
-                        setBackend(activeRun.backend)
+                        setProviderType(activeRun.provider_type)
                         setModel(activeRun.model)
                         handleRun()
                       }}

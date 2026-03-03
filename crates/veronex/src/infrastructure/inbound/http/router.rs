@@ -8,7 +8,7 @@ use tower_http::trace::TraceLayer;
 use super::account_handlers;
 use super::audit_handlers;
 use super::auth_handlers;
-use super::backend_handlers;
+use super::provider_handlers;
 use super::dashboard_handlers;
 use super::docs_handlers;
 use super::gemini_compat_handlers;
@@ -50,7 +50,7 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/v1/chat/completions", post(openai_handlers::chat_completions))
 
         // ── Ollama native API (OLLAMA_HOST=http://veronex:3001) ─────────
-        // /api/tags uses Veronex-synchronized models; everything else proxies to backend.
+        // /api/tags uses Veronex-synchronized models; everything else proxies to provider.
         .route("/api/tags",        get(ollama_compat_handlers::list_local_models))
         .route("/api/version",     get(ollama_compat_handlers::version))
         .route("/api/ps",          get(ollama_compat_handlers::ps))
@@ -130,14 +130,14 @@ fn build_jwt_router() -> Router<AppState> {
         )
         .route("/v1/dashboard/performance", get(dashboard_handlers::get_performance))
         // Backend management
-        .route("/v1/backends", get(backend_handlers::list_backends).post(backend_handlers::register_backend))
-        .route("/v1/backends/{id}", delete(backend_handlers::delete_backend).patch(backend_handlers::update_backend))
-        .route("/v1/backends/{id}/healthcheck", post(backend_handlers::healthcheck_backend))
-        .route("/v1/backends/{id}/models", get(backend_handlers::list_backend_models))
-        .route("/v1/backends/{id}/models/sync", post(backend_handlers::sync_provider_models))
-        .route("/v1/backends/{id}/key", get(backend_handlers::reveal_backend_key))
-        .route("/v1/backends/{id}/selected-models", get(backend_handlers::list_selected_models))
-        .route("/v1/backends/{id}/selected-models/{model_name}", patch(backend_handlers::set_model_enabled))
+        .route("/v1/providers", get(provider_handlers::list_providers).post(provider_handlers::register_provider))
+        .route("/v1/providers/{id}", delete(provider_handlers::delete_provider).patch(provider_handlers::update_provider))
+        .route("/v1/providers/{id}/healthcheck", post(provider_handlers::healthcheck_provider))
+        .route("/v1/providers/{id}/models", get(provider_handlers::list_provider_models))
+        .route("/v1/providers/{id}/models/sync", post(provider_handlers::sync_provider_models))
+        .route("/v1/providers/{id}/key", get(provider_handlers::reveal_provider_key))
+        .route("/v1/providers/{id}/selected-models", get(provider_handlers::list_selected_models))
+        .route("/v1/providers/{id}/selected-models/{model_name}", patch(provider_handlers::set_model_enabled))
         // GPU server management
         .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers).post(gpu_server_handlers::register_gpu_server))
         .route(
@@ -155,10 +155,10 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/gemini/sync-status", post(gemini_model_handlers::sync_status))
         // Ollama
         .route("/v1/ollama/models", get(ollama_model_handlers::list_models))
-        .route("/v1/ollama/models/sync", post(ollama_model_handlers::sync_all_backends))
+        .route("/v1/ollama/models/sync", post(ollama_model_handlers::sync_all_providers))
         .route("/v1/ollama/sync/status", get(ollama_model_handlers::get_sync_status))
-        .route("/v1/ollama/models/{model_name}/backends", get(ollama_model_handlers::list_model_backends))
-        .route("/v1/ollama/providers/{provider_id}/models", get(ollama_model_handlers::list_backend_models))
+        .route("/v1/ollama/models/{model_name}/providers", get(ollama_model_handlers::list_model_providers))
+        .route("/v1/ollama/providers/{provider_id}/models", get(ollama_model_handlers::list_provider_models))
         // Capacity
         .route("/v1/dashboard/capacity", get(dashboard_handlers::get_capacity))
         .route(

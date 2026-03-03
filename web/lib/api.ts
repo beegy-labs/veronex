@@ -1,4 +1,4 @@
-import type { Account, AnalyticsStats, ApiKey, AuditEvent, Backend, BackendSelectedModel, CapacityResponse, CapacitySettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaBackendForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterBackendRequest, RegisterBackendResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateBackendRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, CapacitySettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { apiClient } from './api-client'
 
 const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
@@ -114,36 +114,36 @@ export const api = {
   serverMetricsHistory: (id: string, hours = 1) =>
     apiClient.get<ServerMetricsPoint[]>(`/v1/servers/${id}/metrics/history?hours=${hours}`),
 
-  // ── Backends (JWT-protected) ──────────────────────────────────────────────
-  backends: () =>
-    apiClient.get<Backend[]>('/v1/backends'),
+  // ── Providers (JWT-protected) ──────────────────────────────────────────────
+  providers: () =>
+    apiClient.get<Provider[]>('/v1/providers'),
 
-  registerBackend: (body: RegisterBackendRequest) =>
-    apiClient.post<RegisterBackendResponse>('/v1/backends', body),
+  registerProvider: (body: RegisterProviderRequest) =>
+    apiClient.post<RegisterProviderResponse>('/v1/providers', body),
 
-  deleteBackend: (id: string) =>
-    apiClient.delete<void>(`/v1/backends/${id}`),
+  deleteProvider: (id: string) =>
+    apiClient.delete<void>(`/v1/providers/${id}`),
 
-  updateBackend: (id: string, body: UpdateBackendRequest) =>
-    apiClient.patch<Backend>(`/v1/backends/${id}`, body),
+  updateProvider: (id: string, body: UpdateProviderRequest) =>
+    apiClient.patch<Provider>(`/v1/providers/${id}`, body),
 
-  healthcheckBackend: (id: string) =>
-    apiClient.post<{ id: string; status: string }>(`/v1/backends/${id}/healthcheck`),
+  healthcheckProvider: (id: string) =>
+    apiClient.post<{ id: string; status: string }>(`/v1/providers/${id}/healthcheck`),
 
-  backendModels: (id: string) =>
-    apiClient.get<{ models: string[] }>(`/v1/backends/${id}/models`),
+  providerModels: (id: string) =>
+    apiClient.get<{ models: string[] }>(`/v1/providers/${id}/models`),
 
-  syncBackendModels: (id: string) =>
-    apiClient.post<{ models: string[]; synced: boolean }>(`/v1/backends/${id}/models/sync`),
+  syncProviderModels: (id: string) =>
+    apiClient.post<{ models: string[]; synced: boolean }>(`/v1/providers/${id}/models/sync`),
 
-  backendKey: (id: string) =>
-    apiClient.get<{ key: string }>(`/v1/backends/${id}/key`),
+  providerKey: (id: string) =>
+    apiClient.get<{ key: string }>(`/v1/providers/${id}/key`),
 
-  getSelectedModels: (backendId: string) =>
-    apiClient.get<{ models: BackendSelectedModel[] }>(`/v1/backends/${backendId}/selected-models`),
+  getSelectedModels: (providerId: string) =>
+    apiClient.get<{ models: ProviderSelectedModel[] }>(`/v1/providers/${backendId}/selected-models`),
 
-  setModelEnabled: (backendId: string, modelName: string, isEnabled: boolean) =>
-    apiClient.patch<void>(`/v1/backends/${backendId}/selected-models/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
+  setModelEnabled: (providerId: string, modelName: string, isEnabled: boolean) =>
+    apiClient.patch<void>(`/v1/providers/${backendId}/selected-models/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
 
   // ── Gemini (JWT-protected) ────────────────────────────────────────────────
   geminiPolicies: () =>
@@ -178,9 +178,9 @@ export const api = {
     apiClient.get<OllamaSyncJob>('/v1/ollama/sync/status'),
 
   ollamaModelBackends: (modelName: string) =>
-    apiClient.get<{ backends: OllamaBackendForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/backends`),
+    apiClient.get<{ providers: OllamaProviderForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/backends`),
 
-  ollamaBackendModels: (backendId: string) =>
+  ollamaBackendModels: (providerId: string) =>
     apiClient.get<{ models: string[] }>(`/v1/ollama/backends/${backendId}/models`),
 
   // ── Setup (public — no auth, first-run only) ──────────────────────────────

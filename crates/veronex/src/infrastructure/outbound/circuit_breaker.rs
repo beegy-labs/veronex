@@ -26,7 +26,7 @@ impl BackendCircuit {
     }
 }
 
-/// Thread-safe per-backend circuit breaker map.
+/// Thread-safe per-provider circuit breaker map.
 ///
 /// Transitions:
 /// - Closed → Open when N consecutive failures are recorded.
@@ -42,7 +42,7 @@ impl CircuitBreakerMap {
         Self { inner: Mutex::new(HashMap::new()) }
     }
 
-    /// Returns true if requests are allowed for this backend.
+    /// Returns true if requests are allowed for this provider.
     pub fn is_allowed(&self, backend_id: Uuid) -> bool {
         let mut map = self.inner.lock().expect("circuit breaker lock poisoned");
         let entry = map.entry(backend_id).or_insert_with(BackendCircuit::new);
@@ -54,7 +54,7 @@ impl CircuitBreakerMap {
                     entry.state = CircuitState::HalfOpen;
                     tracing::info!(
                         backend_id = %backend_id,
-                        "circuit breaker half-open — probing backend"
+                        "circuit breaker half-open — probing provider"
                     );
                     true
                 } else {
@@ -64,14 +64,14 @@ impl CircuitBreakerMap {
         }
     }
 
-    /// Call after a successful inference on this backend.
+    /// Call after a successful inference on this provider.
     pub fn on_success(&self, backend_id: Uuid) {
         let mut map = self.inner.lock().expect("circuit breaker lock poisoned");
         if let Some(entry) = map.get_mut(&backend_id) {
             if entry.state != CircuitState::Closed {
                 tracing::info!(
                     backend_id = %backend_id,
-                    "circuit breaker closed — backend recovered"
+                    "circuit breaker closed — provider recovered"
                 );
             }
             entry.state = CircuitState::Closed;
@@ -79,7 +79,7 @@ impl CircuitBreakerMap {
         }
     }
 
-    /// Call after a failed inference on this backend.
+    /// Call after a failed inference on this provider.
     pub fn on_failure(&self, backend_id: Uuid) {
         let mut map = self.inner.lock().expect("circuit breaker lock poisoned");
         let entry = map.entry(backend_id).or_insert_with(BackendCircuit::new);
@@ -91,7 +91,7 @@ impl CircuitBreakerMap {
             entry.consecutive_failures = 0;
             tracing::warn!(
                 backend_id = %backend_id,
-                "circuit breaker opened — backend isolated for {}s",
+                "circuit breaker opened — provider isolated for {}s",
                 COOLDOWN.as_secs()
             );
         }

@@ -40,7 +40,7 @@ impl HwMetrics {
 
 // ── Valkey helpers ─────────────────────────────────────────────────────────────
 
-/// Read cached hardware metrics for a backend from Valkey.
+/// Read cached hardware metrics for a provider from Valkey.
 /// Returns `None` on cache miss, parse failure, or Valkey error.
 pub async fn load_hw_metrics(
     pool: &fred::clients::Pool,
@@ -52,7 +52,7 @@ pub async fn load_hw_metrics(
     serde_json::from_str(&cached?).ok()
 }
 
-/// Write hardware metrics for a backend to Valkey (TTL = 60 s).
+/// Write hardware metrics for a provider to Valkey (TTL = 60 s).
 /// Errors are logged as warnings and ignored.
 pub async fn store_hw_metrics(
     pool: &fred::clients::Pool,

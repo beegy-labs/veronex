@@ -33,6 +33,7 @@ use crate::domain::enums::{ApiFormat, JobSource};
 use crate::domain::value_objects::JobId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 
+use super::cancel_guard::CancelOnDrop;
 use super::state::AppState;
 
 type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
@@ -173,7 +174,11 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
     let done_stream =
         futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
 
-    let sse_stream: SseStream = Box::pin(content_stream.chain(done_stream));
+    let sse_stream: SseStream = Box::pin(CancelOnDrop::new(
+        content_stream.chain(done_stream),
+        job_id,
+        state.use_case.clone(),
+    ));
 
     (
         [("X-Accel-Buffering", "no")],
@@ -223,7 +228,11 @@ pub async fn stream_test_job(
     let done_stream =
         futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
 
-    let sse_stream: SseStream = Box::pin(content_stream.chain(done_stream));
+    let sse_stream: SseStream = Box::pin(CancelOnDrop::new(
+        content_stream.chain(done_stream),
+        jid,
+        state.use_case.clone(),
+    ));
 
     (
         [("X-Accel-Buffering", "no")],
@@ -378,11 +387,12 @@ fn stream_as_ollama_chat_ndjson(state: AppState, job_id: JobId, model: String) -
         Ok::<_, std::convert::Infallible>(Bytes::from(format!("{}\n", line)))
     });
 
+    let guarded = CancelOnDrop::new(ndjson, job_id, state.use_case.clone());
     HttpResponse::builder()
         .status(200)
         .header("Content-Type", "application/x-ndjson")
         .header("X-Accel-Buffering", "no")
-        .body(Body::from_stream(ndjson))
+        .body(Body::from_stream(guarded))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
@@ -418,11 +428,12 @@ fn stream_as_ollama_generate_ndjson(state: AppState, job_id: JobId, model: Strin
         Ok::<_, std::convert::Infallible>(Bytes::from(format!("{}\n", line)))
     });
 
+    let guarded = CancelOnDrop::new(ndjson, job_id, state.use_case.clone());
     HttpResponse::builder()
         .status(200)
         .header("Content-Type", "application/x-ndjson")
         .header("X-Accel-Buffering", "no")
-        .body(Body::from_stream(ndjson))
+        .body(Body::from_stream(guarded))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
@@ -549,11 +560,12 @@ fn stream_as_gemini_sse(state: AppState, job_id: JobId, model: String) -> Respon
         ))
     });
 
+    let guarded = CancelOnDrop::new(sse_bytes, job_id, state.use_case.clone());
     HttpResponse::builder()
         .status(200)
         .header("Content-Type", "text/event-stream")
         .header("Cache-Control", "no-cache")
         .header("X-Accel-Buffering", "no")
-        .body(Body::from_stream(sse_bytes))
+        .body(Body::from_stream(guarded))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }

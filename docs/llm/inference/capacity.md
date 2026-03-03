@@ -9,7 +9,7 @@ VRAM-aware, thermally-safe dynamic concurrency system.
 
 | Component | Implementation | Location |
 |-----------|---------------|----------|
-| `ConcurrencySlotMap` | `(provider_id, model_name)` → `Arc<Semaphore>` | `infrastructure/outbound/capacity/slot_map.rs` |
+| `ConcurrencySlotMap` | `(provider_id, model_name)` → `Arc<SlotState>` (AtomicU32 active + max) | `infrastructure/outbound/capacity/slot_map.rs` |
 | `ThermalThrottleMap` | `provider_id` → `ThrottleLevel` + cooldown | `infrastructure/outbound/capacity/thermal.rs` |
 | `CapacityAnalyzer` | 5-min background loop | `infrastructure/outbound/capacity/analyzer.rs` |
 
@@ -18,12 +18,24 @@ VRAM-aware, thermally-safe dynamic concurrency system.
 ```
 [Request dispatch — ~0.1ms, NO LLM]
   BLPOP → thermal.get() → slot_map.try_acquire() → spawn run_job(permit)
-    ↑ DashMap read       ↑ Semaphore try_acquire (non-blocking)
+    ↑ DashMap read       ↑ AtomicU32 CAS loop (non-blocking, lock-free)
 
 [Background analysis — every N minutes]
   Ollama /api/ps + /api/show → PostgreSQL throughput stats
   → qwen2.5:3b recommends slots → slot_map.update_capacity() + DB upsert
 ```
+
+### Why AtomicU32 (not Semaphore)
+
+The old implementation used `Arc<Semaphore>` and replaced the entry on every `update_capacity()` call.
+This **orphaned in-flight permits** — they decremented the old semaphore while the new semaphore started
+fresh at `max`, causing over-admission and stuck pending jobs.
+
+The current design uses `SlotState { active: Arc<AtomicU32>, max: AtomicU32 }`:
+- `update_capacity()` only writes to `max` via `and_modify()`, never replaces the entry
+- `try_acquire()` uses a CAS loop: `compare_exchange(cur, cur+1)` only if `cur < max`
+- `SlotPermit` (RAII): holds `Arc<AtomicU32>`, calls `fetch_sub(1)` on Drop
+- In-flight permits always point at the **same** active counter — no orphaning possible
 
 ## Thermal Throttle States
 

@@ -4,7 +4,7 @@ import { useQuery, useQueries } from '@tanstack/react-query'
 import {
   dashboardStatsQuery, recentJobsQuery, performanceQuery,
   usageAggregateQuery, usageBreakdownQuery,
-  backendsQuery, serversQuery, serverMetricsQuery, serverMetricsHistoryQuery,
+  providersQuery, serversQuery, serverMetricsQuery, serverMetricsHistoryQuery,
 } from '@/lib/queries'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
@@ -14,7 +14,7 @@ export default function OverviewPage() {
   const { t } = useTranslation()
 
   const { data: stats, isLoading: statsLoading, error: statsError } = useQuery(dashboardStatsQuery)
-  const { data: backends } = useQuery(backendsQuery)
+  const { data: backends } = useQuery(providersQuery)
   const { data: servers } = useQuery(serversQuery)
 
   const serverMetricQueries = useQueries({

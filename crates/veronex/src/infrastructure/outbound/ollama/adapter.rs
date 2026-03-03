@@ -7,7 +7,7 @@ use futures::Stream;
 use futures::StreamExt as _;
 use serde::Deserialize;
 
-use crate::application::ports::outbound::inference_backend::InferenceBackendPort;
+use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
 use crate::domain::value_objects::StreamToken;
@@ -85,7 +85,7 @@ struct ChatChunkMessage {
 }
 
 #[async_trait]
-impl InferenceBackendPort for OllamaAdapter {
+impl InferenceProviderPort for OllamaAdapter {
     async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
         let start = Instant::now();
 

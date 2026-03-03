@@ -10,7 +10,7 @@
  *
  * 3-phase bidirectional flow:
  *   Enqueue  (API → Queue):      new job placed in Valkey queue
- *   Dispatch (Queue → Provider): job dequeued, sent to backend
+ *   Dispatch (Queue → Provider): job dequeued, sent to provider
  *   Response (Provider → API):   result returned, bypasses Queue
  *
  * Animation: CSS offset-path + @keyframes bee-fly (GPU-composited)
@@ -20,7 +20,7 @@
 
 import { useEffect, useRef, useReducer, useMemo } from 'react'
 import { useTranslation } from '@/i18n'
-import type { Backend } from '@/lib/types'
+import type { Provider } from '@/lib/types'
 import type { FlowEvent } from '@/hooks/use-inference-stream'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useLabSettings } from '@/components/lab-settings-provider'
@@ -88,7 +88,7 @@ function statusColor(status: string): string {
   }
 }
 
-function providerStroke(backends: Backend[]): string {
+function providerStroke(backends: Provider[]): string {
   if (backends.length === 0)                        return 'var(--theme-border)'
   if (backends.some(b => b.status === 'online'))    return 'var(--theme-status-success)'
   if (backends.some(b => b.status === 'degraded'))  return 'var(--theme-status-warning)'
@@ -125,7 +125,7 @@ function beeReducer(state: Bee[], action: Action): Bee[] {
 
 /* ─── Panel ──────────────────────────────────────────────────── */
 interface Props {
-  backends: Backend[]
+  backends: Provider[]
   events: FlowEvent[]
   queueDepth?: number
 }

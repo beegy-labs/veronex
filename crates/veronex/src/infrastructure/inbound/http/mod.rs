@@ -1,7 +1,8 @@
 pub mod account_handlers;
 pub mod audit_handlers;
 pub mod auth_handlers;
-pub mod backend_handlers;
+pub mod cancel_guard;
+pub mod provider_handlers;
 pub mod docs_handlers;
 pub mod dashboard_handlers;
 pub mod gemini_compat_handlers;

@@ -3,15 +3,15 @@ use async_trait::async_trait;
 
 /// Outbound port for GPU model lifecycle management.
 ///
-/// Tracks which models are loaded on each backend, enforces an LRU eviction
+/// Tracks which models are loaded on each provider, enforces an LRU eviction
 /// policy, and proactively unloads stale models so that the requested model
 /// can be loaded without running out of memory.
 ///
-/// Only Ollama backends require active management; Gemini is API-based and
+/// Only Ollama providers require active management; Gemini is API-based and
 /// has no local model state.
 #[async_trait]
 pub trait ModelManagerPort: Send + Sync {
-    /// Ensure `model_name` is ready to serve inference on this manager's backend.
+    /// Ensure `model_name` is ready to serve inference on this manager's provider.
     ///
     /// - If the model is already loaded, updates the LRU order and returns.
     /// - If a different model is loaded and `max_loaded` would be exceeded,
