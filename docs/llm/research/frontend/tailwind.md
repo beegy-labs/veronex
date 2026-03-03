@@ -164,7 +164,7 @@ Recharts tooltips must use CSS vars for theme correctness:
 />
 ```
 
-**SSOT:** `docs/llm/frontend/web-charts.md` (chart-theme.ts constants)
+**SSOT:** `docs/llm/frontend/charts.md` (chart-theme.ts constants)
 
 ---
 

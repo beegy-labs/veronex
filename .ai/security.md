@@ -7,9 +7,9 @@
 | Action | Read |
 |--------|------|
 | Core security policy | `SECURITY.md` (root) |
-| Backend security specs | `docs/llm/backend/security.md` |
-| Authentication | `docs/llm/backend/auth.md` |
-| API Keys | `docs/llm/backend/api_keys.md` |
+| Backend security specs | `docs/llm/auth/security.md` |
+| Authentication | `docs/llm/auth/jwt-sessions.md` |
+| API Keys | `docs/llm/auth/api-keys.md` |
 
 ## Current Security Features
 
@@ -26,9 +26,9 @@
 
 | Priority | Task | Path |
 |----------|------|------|
-| P0 | Secret management (Vault) | docs/llm/backend/security.md |
-| P1 | DDoS protection | docs/llm/backend/security.md |
-| P1 | Security headers (XSS, CSP) | docs/llm/backend/security.md |
+| P0 | Secret management (Vault) | docs/llm/auth/security.md |
+| P1 | DDoS protection | docs/llm/auth/security.md |
+| P1 | Security headers (XSS, CSP) | docs/llm/auth/security.md |
 
 ## Reporting
 

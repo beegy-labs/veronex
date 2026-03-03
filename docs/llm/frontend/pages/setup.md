@@ -164,6 +164,6 @@ Hardcoded strings:
 
 ## Related Docs
 
-- Auth token storage and refresh: `../backend/auth.md`
+- Auth token storage and refresh: `../../auth/jwt-sessions.md`
 - Login page (post-setup flow): `web/app/login/page.tsx`
-- API auth handler: `../backend/auth.md`
+- API auth handler: `../../auth/jwt-sessions.md`

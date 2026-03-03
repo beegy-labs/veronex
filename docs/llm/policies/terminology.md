@@ -47,7 +47,7 @@ Every doc, component, and i18n key MUST follow these definitions.
 
 ## References
 
-- Nav structure: [`docs/llm/frontend/web.md`](../frontend/web.md) — Nav Sidebar section
-- Providers page spec: [`docs/llm/frontend/web-providers.md`](../frontend/web-providers.md)
-- Servers page spec: [`docs/llm/frontend/web-servers.md`](../frontend/web-servers.md)
+- Nav structure: [`docs/llm/frontend/design-system.md`](../frontend/web.md) — Nav Sidebar section
+- Providers page spec: [`docs/llm/frontend/pages/providers.md`](../frontend/pages/providers.md)
+- Servers page spec: [`docs/llm/frontend/pages/servers.md`](../frontend/pages/servers.md)
 - Architecture overview: [`docs/llm/policies/architecture.md`](./architecture.md)

@@ -149,7 +149,7 @@ OLLAMA_NUM_PARALLEL=1   # mirrors the Ollama StatefulSet env var
 
 The Capacity Control panel is part of the **Providers page** (`/providers?s=ollama`), rendered as `OllamaCapacitySection` after `OllamaSyncSection`.
 
-See `docs/llm/frontend/web-providers.md` → **OllamaCapacitySection** for full UI spec.
+See `docs/llm/frontend/pages/providers.md` → **OllamaCapacitySection** for full UI spec.
 
 Summary:
 - **Settings card**: analyzer model selector (lists Ollama's available models), auto-analysis toggle, interval field, Save + Sync Now buttons, last-run timestamp/status

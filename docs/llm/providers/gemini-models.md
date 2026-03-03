@@ -145,4 +145,4 @@ Initialized in `main.rs`, wired at composition root.
 
 ## Web UI
 
-→ See `docs/llm/frontend/web-providers.md` → GeminiSyncSection + ModelSelectionModal
+→ See `docs/llm/frontend/pages/providers.md` → GeminiSyncSection + ModelSelectionModal

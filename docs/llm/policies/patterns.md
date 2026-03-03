@@ -397,7 +397,7 @@ Strict order to respect hexagonal dependency rule:
 6. main.rs                                    ← init + inject into AppState
 7. infrastructure/inbound/http/new_handlers.rs ← use Result<T, AppError>
 8. infrastructure/inbound/http/router.rs      ← register routes inside auth middleware
-9. docs/llm/backend/new_feature.md            ← CDD doc
+9. docs/llm/{domain}/new_feature.md            ← CDD doc
 ```
 
 ---
@@ -561,5 +561,5 @@ const STATUS_COLOR: Record<JobStatus, string> = {
 6. web/messages/en.json           ← add i18n keys (source of truth)
 7. web/messages/ko.json           ← Korean translation
 8. web/messages/ja.json           ← Japanese translation
-9. docs/llm/frontend/web-*.md     ← update CDD doc
+9. docs/llm/frontend/pages/*.md     ← update CDD doc
 ```

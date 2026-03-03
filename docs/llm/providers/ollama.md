@@ -117,7 +117,7 @@ POST /v1/ollama/models/sync    → 202 { job_id, status: "running" }       // as
 GET  /v1/ollama/sync/status    → OllamaSyncJob (progress + per-provider results)
 ```
 
-→ See `docs/llm/backend/backends-ollama-models.md` for full spec.
+→ See `docs/llm/providers/ollama-models.md` for full spec.
 
 ### Request Structs
 
@@ -202,13 +202,13 @@ Concurrency slots (ConcurrencySlotMap):
   Updated every ~5 min by capacity analyzer using Ollama /api/ps + /api/show + throughput stats
   Range: 1–8 slots; updated atomically (Semaphore replacement; in-flight permits unaffected)
 
-→ Full concurrency + thermal spec: `docs/llm/backend/capacity.md`
+→ Full concurrency + thermal spec: `docs/llm/inference/capacity.md`
 
 Model selection filter (pick_best_provider):
   After VRAM candidate list: list_enabled(provider_id) from model_selection_repo
   Non-empty list + model not in list → skip provider (disabled)
   Empty list or error → include provider (backward compat — no restriction)
-→ Full model selection spec: `docs/llm/backend/backends-ollama-models.md`
+→ Full model selection spec: `docs/llm/providers/ollama-models.md`
 ```
 
 ---
@@ -342,4 +342,4 @@ Without this fix, the stream terminates prematurely with empty output.
 
 ## Web UI
 
-→ See `docs/llm/frontend/web-providers.md` → OllamaTab + OllamaSyncSection
+→ See `docs/llm/frontend/pages/providers.md` → OllamaTab + OllamaSyncSection

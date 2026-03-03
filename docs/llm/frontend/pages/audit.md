@@ -195,6 +195,6 @@ Shared keys also used: `common.loading`, `common.error`, `common.refresh`.
 
 ## Related Docs
 
-- Analytics / observability pipeline (where audit events originate): `../backend/observability.md`
-- Auth and session model: `../backend/auth.md`
+- Analytics / observability pipeline (where audit events originate): `../../infra/otel-pipeline.md`
+- Auth and session model: `../../auth/jwt-sessions.md`
 - DataTable SSOT: `web/components/data-table.tsx`

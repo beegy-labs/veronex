@@ -41,7 +41,7 @@ veronex ──→ veronex-analytics ──→ GET /internal/* ──→ ClickHou
 - **veronex-analytics** = internal write+read service; veronex has no direct Redpanda/ClickHouse dependency
 - `docker/clickhouse/init.sql` — all tables: MergeTree targets first, then Kafka Engine + Materialized Views
 
-→ Full pipeline spec: `docs/llm/backend/infrastructure-otel.md`
+→ Full pipeline spec: `docs/llm/infra/otel-pipeline.md`
 
 ## Services
 
@@ -246,7 +246,7 @@ ALTER TABLE otel_metrics_gauge MODIFY TTL toDate(TimeUnix) + INTERVAL 14 DAY;
 ALTER TABLE node_metrics MODIFY TTL toDate(ts) + INTERVAL 14 DAY;
 ```
 
-→ See `docs/llm/backend/infrastructure-otel.md` for OTel pipeline details.
+→ See `docs/llm/infra/otel-pipeline.md` for OTel pipeline details.
 
 ---
 

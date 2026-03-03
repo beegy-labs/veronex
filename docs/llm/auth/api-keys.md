@@ -208,4 +208,4 @@ Fail-open: Valkey error → skip rate limit check, job proceeds.
 
 ## Web UI
 
-→ See `docs/llm/frontend/web-keys.md`
+→ See `docs/llm/frontend/pages/keys.md`

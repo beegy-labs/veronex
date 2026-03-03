@@ -20,19 +20,13 @@ and a Next.js admin dashboard. Two Rust crates:
 | Git & commits | `.ai/git-flow.md` |
 | Full docs index | `docs/llm/README.md` |
 
-## Key Docs by Area
+## Key Docs by Domain
 
-**Backend** (Rust) → `docs/llm/backend/`
-- Inference + queue: `jobs.md`, `openai.md`, `backends-ollama.md`, `backends-gemini.md`
-- Auth + security: `auth.md`, `api_keys.md`, `security.md`
-- Infra + deploy: `infrastructure.md` (env, ports, migrations, Helm), `infrastructure-otel.md`
-- Capacity + routing: `capacity.md`, `backends-ollama-models.md`, `backends-gemini-models.md`
-- Data + pricing: `jobs-analytics.md`, `model-pricing.md`, `lab_features.md`, `hardware.md`
-
-**Frontend** (Next.js) → `docs/llm/frontend/`
-- Design system + brand: `web.md` (tokens, i18n, nav, theme)
-- Pages: `web-servers.md`, `web-providers.md`, `web-jobs.md`, `web-usage.md`,
-  `web-performance.md`, `web-keys.md`, `web-test.md`, `web-charts.md`,
-  `web-accounts.md`, `web-audit.md`, `web-setup.md`
-
-**Research** (2026 best practices) → `docs/llm/research/`
+| Domain | Path | Content |
+|--------|------|---------|
+| Auth | `docs/llm/auth/` | jwt-sessions, api-keys, security |
+| Inference | `docs/llm/inference/` | job-lifecycle, job-analytics, openai-compat, capacity, model-pricing, lab-features |
+| Providers | `docs/llm/providers/` | ollama, ollama-models, gemini, gemini-models, hardware |
+| Infra | `docs/llm/infra/` | deploy, otel-pipeline |
+| Frontend | `docs/llm/frontend/` | design-system, charts, pages/* |
+| Research | `docs/llm/research/` | 2026 best practices (frontend, backend, infra, security) |
