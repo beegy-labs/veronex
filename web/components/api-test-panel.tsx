@@ -151,7 +151,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     if (availableModels.length > 0 && !availableModels.includes(model)) {
       setModel(availableModels[0])
     }
-  }, [availableModels]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [availableModels, model])
 
   // ── Retry params ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -162,7 +162,10 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
       setModel(retryParams.model)
     }
     onRetryConsumed?.()
-  }, [retryParams]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Only trigger on retryParams change — availableModels/onRetryConsumed are
+    // read but must not re-fire this effect (would cause duplicate retries).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [retryParams])
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────────
   useEffect(() => {

@@ -32,8 +32,11 @@ pub async fn rate_limiter(
         return next.run(req).await;
     };
 
-    // Valkey unavailable → fail-closed (503 Service Unavailable)
+    // Valkey unavailable → fail-closed (503).
+    // Security rationale: fail-open would allow unlimited requests during outage.
+    // Auth endpoints use fail-open (login attempts) because blocking logins is worse.
     let Some(ref pool) = state.valkey_pool else {
+        tracing::warn!(key_id = %api_key.id, "rate limiter: Valkey unavailable, fail-closed");
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error": "rate limiting service unavailable"})),
