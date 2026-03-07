@@ -105,7 +105,7 @@ impl AccountRepository for PostgresAccountRepository {
         .await
         .context("failed to list accounts")?;
 
-        rows.iter().map(|r| row_to_account(r)).collect()
+        rows.iter().map(row_to_account).collect()
     }
 
     async fn update(&self, account: &Account) -> Result<()> {

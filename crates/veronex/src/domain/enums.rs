@@ -42,7 +42,9 @@ impl std::str::FromStr for AccountRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum JobSource {
+    #[default]
     Api,
     Test,
 }
@@ -54,8 +56,10 @@ pub enum JobSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ApiFormat {
     /// POST /v1/chat/completions (OpenAI SDK, qwen-code, etc.)
+    #[default]
     OpenaiCompat,
     /// POST /api/chat or /api/generate (OLLAMA_HOST=veronex clients)
     OllamaNative,
@@ -89,11 +93,6 @@ impl std::str::FromStr for ApiFormat {
     }
 }
 
-impl Default for ApiFormat {
-    fn default() -> Self {
-        Self::OpenaiCompat
-    }
-}
 
 impl JobSource {
     pub fn as_str(&self) -> &'static str {
@@ -115,11 +114,6 @@ impl std::str::FromStr for JobSource {
     }
 }
 
-impl Default for JobSource {
-    fn default() -> Self {
-        JobSource::Api
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
@@ -254,8 +248,10 @@ pub enum ThrottleLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum KeyTier {
     Free,
+    #[default]
     Paid,
 }
 
@@ -268,11 +264,6 @@ impl KeyTier {
     }
 }
 
-impl Default for KeyTier {
-    fn default() -> Self {
-        Self::Paid
-    }
-}
 
 impl std::fmt::Display for KeyTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -295,7 +286,9 @@ impl std::str::FromStr for KeyTier {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum KeyType {
+    #[default]
     Standard,
     Test,
 }
@@ -313,11 +306,6 @@ impl KeyType {
     }
 }
 
-impl Default for KeyType {
-    fn default() -> Self {
-        Self::Standard
-    }
-}
 
 impl std::fmt::Display for KeyType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

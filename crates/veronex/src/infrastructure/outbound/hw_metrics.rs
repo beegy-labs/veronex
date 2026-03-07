@@ -281,7 +281,7 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
             "node_hwmon_temp_celsius" => {
                 if let Some(chip) = get_label(metric_part, "chip") {
                     let is_amdgpu = chip.contains("amdgpu")
-                        || chip_name_map.get(chip).map_or(false, |n| n == "amdgpu");
+                        || chip_name_map.get(chip).is_some_and(|n| n == "amdgpu");
                     if is_amdgpu {
                         // Take the lowest-numbered sensor as the representative temp.
                         hwmon_temp.entry(chip.to_string()).or_insert(value);
@@ -294,7 +294,7 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
             "node_hwmon_power_average_watts" | "node_hwmon_power_average_watt" => {
                 if let Some(chip) = get_label(metric_part, "chip") {
                     let is_amdgpu = chip.contains("amdgpu")
-                        || chip_name_map.get(chip).map_or(false, |n| n == "amdgpu");
+                        || chip_name_map.get(chip).is_some_and(|n| n == "amdgpu");
                     if is_amdgpu {
                         hwmon_power.entry(chip.to_string()).or_insert(value);
                         amdgpu_chips.insert(chip.to_string());

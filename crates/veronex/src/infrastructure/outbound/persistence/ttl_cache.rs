@@ -41,20 +41,18 @@ impl<K: Eq + Hash, V: Clone> TtlCache<K, V> {
         // Fast path: read lock.
         {
             let cache = self.inner.read().await;
-            if let Some((v, ts)) = cache.get(&key) {
-                if ts.elapsed() < self.ttl {
+            if let Some((v, ts)) = cache.get(&key)
+                && ts.elapsed() < self.ttl {
                     return Ok(v.clone());
                 }
-            }
         }
 
         // Slow path: write lock with re-check.
         let mut cache = self.inner.write().await;
-        if let Some((v, ts)) = cache.get(&key) {
-            if ts.elapsed() < self.ttl {
+        if let Some((v, ts)) = cache.get(&key)
+            && ts.elapsed() < self.ttl {
                 return Ok(v.clone());
             }
-        }
         let value = fetch.await?;
         cache.insert(key, (value.clone(), Instant::now()));
         Ok(value)

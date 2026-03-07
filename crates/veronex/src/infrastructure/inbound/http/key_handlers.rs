@@ -212,7 +212,7 @@ pub async fn toggle_key(
 
     // Validate all input before any writes to avoid partial updates.
     let tier = match req.tier {
-        Some(ref s) => Some(s.parse::<KeyTier>().map_err(|e| AppError::BadRequest(e))?),
+        Some(ref s) => Some(s.parse::<KeyTier>().map_err(AppError::BadRequest)?),
         None => None,
     };
 

@@ -74,7 +74,7 @@ impl SessionRepository for PostgresSessionRepository {
         .await
         .context("failed to list active sessions")?;
 
-        rows.iter().map(|r| row_to_session(r)).collect()
+        rows.iter().map(row_to_session).collect()
     }
 
     async fn get_by_refresh_hash(&self, hash: &str) -> Result<Option<Session>> {

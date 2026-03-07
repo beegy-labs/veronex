@@ -158,6 +158,7 @@ const ACCESS_COOKIE: &str = "veronex_access_token";
 const REFRESH_COOKIE: &str = "veronex_refresh_token";
 
 /// Build `Set-Cookie` headers for both access and refresh tokens.
+#[allow(clippy::unwrap_used)]
 fn set_auth_cookies(headers: &mut HeaderMap, access_token: &str, refresh_token: &str) {
     use super::constants::{ACCESS_TOKEN_MAX_AGE, REFRESH_TOKEN_MAX_AGE};
     // Access token: sent on every request.
@@ -181,6 +182,7 @@ fn set_auth_cookies(headers: &mut HeaderMap, access_token: &str, refresh_token: 
 }
 
 /// Build `Set-Cookie` headers that expire (clear) both auth cookies.
+#[allow(clippy::unwrap_used)]
 fn clear_auth_cookies(headers: &mut HeaderMap) {
     headers.append(
         SET_COOKIE,

@@ -382,7 +382,7 @@ pub async fn list_jobs(
     let pool = &state.pg_pool;
 
     // Cap pagination to prevent abuse
-    let limit = params.limit.max(1).min(1000);
+    let limit = params.limit.clamp(1, 1000);
     let offset = params.offset.max(0);
 
     let status_filter = params.status.as_deref().filter(|s| !s.is_empty());
@@ -503,13 +503,11 @@ pub async fn get_performance(
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<PerformanceMetrics>, AppError> {
-    if let Some(repo) = state.analytics_repo.as_ref() {
-        if let Ok(metrics) = repo.performance(params.hours).await {
-            if metrics.total_requests > 0 {
+    if let Some(repo) = state.analytics_repo.as_ref()
+        && let Ok(metrics) = repo.performance(params.hours).await
+            && metrics.total_requests > 0 {
                 return Ok(Json(metrics));
             }
-        }
-    }
     Ok(Json(pg_performance(&state.pg_pool, params.hours).await?))
 }
 

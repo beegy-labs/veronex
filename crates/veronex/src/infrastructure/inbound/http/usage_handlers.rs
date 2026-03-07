@@ -69,13 +69,11 @@ pub async fn aggregate_usage(
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<UsageAggregate>, AppError> {
     validate_hours(params.hours)?;
-    if let Some(repo) = state.analytics_repo.as_ref() {
-        if let Ok(result) = repo.aggregate_usage(params.hours).await {
-            if result.request_count > 0 {
+    if let Some(repo) = state.analytics_repo.as_ref()
+        && let Ok(result) = repo.aggregate_usage(params.hours).await
+            && result.request_count > 0 {
                 return Ok(Json(result));
             }
-        }
-    }
     Ok(Json(pg_aggregate_usage(&state.pg_pool, params.hours).await?))
 }
 
@@ -90,13 +88,11 @@ pub async fn key_usage(
     validate_hours(params.hours)?;
     let uuid = super::handlers::parse_uuid(&key_id)?;
     verify_key_ownership(&state, &claims, &uuid).await?;
-    if let Some(repo) = state.analytics_repo.as_ref() {
-        if let Ok(rows) = repo.key_usage_hourly(&uuid, params.hours).await {
-            if !rows.is_empty() {
+    if let Some(repo) = state.analytics_repo.as_ref()
+        && let Ok(rows) = repo.key_usage_hourly(&uuid, params.hours).await
+            && !rows.is_empty() {
                 return Ok(Json(rows));
             }
-        }
-    }
     Ok(Json(pg_key_usage_hourly(&state.pg_pool, &uuid, params.hours).await?))
 }
 
@@ -108,13 +104,11 @@ pub async fn get_analytics(
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<AnalyticsSummary>, AppError> {
     validate_hours(params.hours)?;
-    if let Some(repo) = state.analytics_repo.as_ref() {
-        if let Ok(summary) = repo.analytics_summary(params.hours).await {
-            if !summary.models.is_empty() {
+    if let Some(repo) = state.analytics_repo.as_ref()
+        && let Ok(summary) = repo.analytics_summary(params.hours).await
+            && !summary.models.is_empty() {
                 return Ok(Json(summary));
             }
-        }
-    }
     Ok(Json(pg_analytics_summary(&state.pg_pool, params.hours).await?))
 }
 
@@ -129,13 +123,11 @@ pub async fn key_usage_jobs(
     validate_hours(params.hours)?;
     let uuid = super::handlers::parse_uuid(&key_id)?;
     verify_key_ownership(&state, &claims, &uuid).await?;
-    if let Some(repo) = state.analytics_repo.as_ref() {
-        if let Ok(jobs) = repo.key_usage_jobs(&uuid, params.hours).await {
-            if !jobs.is_empty() {
+    if let Some(repo) = state.analytics_repo.as_ref()
+        && let Ok(jobs) = repo.key_usage_jobs(&uuid, params.hours).await
+            && !jobs.is_empty() {
                 return Ok(Json(jobs));
             }
-        }
-    }
     Ok(Json(pg_key_usage_jobs(&state.pg_pool, &uuid, params.hours).await?))
 }
 

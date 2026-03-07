@@ -24,6 +24,7 @@ pub struct GeminiAdapter {
 }
 
 impl GeminiAdapter {
+    #[allow(clippy::expect_used)]
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
@@ -307,14 +308,13 @@ impl InferenceProviderPort for GeminiAdapter {
             let line = buf.trim().to_string();
             if let Some(s) = line.strip_prefix("data:") {
                 let s = s.trim();
-                if !s.is_empty() {
-                    if let Ok(parsed) = serde_json::from_str::<GenerateResponse>(s) {
+                if !s.is_empty()
+                    && let Ok(parsed) = serde_json::from_str::<GenerateResponse>(s) {
                         let text = extract_text(&parsed.candidates);
                         let (prompt_tokens, completion_tokens, cached_tokens) = extract_usage(&parsed);
                         yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None };
                         return;
                     }
-                }
             }
 
             // Stream ended without a finishReason event — emit empty done marker

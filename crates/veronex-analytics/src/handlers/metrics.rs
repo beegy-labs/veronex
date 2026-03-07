@@ -41,7 +41,7 @@ pub async fn get_server_metrics_history(
     Path(server_id): Path<Uuid>,
     Query(params): Query<MetricsHistoryQuery>,
 ) -> Result<Json<Vec<ServerMetricsPoint>>, StatusCode> {
-    let hours = params.hours.unwrap_or(1).max(1).min(1440);
+    let hours = params.hours.unwrap_or(1).clamp(1, 1440);
     let server_id_str = server_id.to_string();
 
     let bucket_interval = if hours <= 24 {

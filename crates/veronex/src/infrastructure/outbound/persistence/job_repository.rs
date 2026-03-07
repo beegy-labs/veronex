@@ -123,7 +123,7 @@ impl JobRepository for PostgresJobRepository {
             (Some(h), Some(p)) => (Some(h.clone()), Some(p.clone())),
             _ => job.messages
                 .as_ref()
-                .and_then(|m| compute_message_hashes(m))
+                .and_then(compute_message_hashes)
                 .map(|(h, p)| (Some(h), Some(p)))
                 .unwrap_or((None, None)),
         };
@@ -238,6 +238,6 @@ impl JobRepository for PostgresJobRepository {
         .await
         .context("failed to list pending jobs")?;
 
-        rows.iter().map(|r| row_to_job(r)).collect()
+        rows.iter().map(row_to_job).collect()
     }
 }

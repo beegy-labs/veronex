@@ -236,13 +236,11 @@ fn validate_provider_url(url: &str) -> Result<(), AppError> {
             return Err(AppError::BadRequest("metadata endpoints are not allowed".into()));
         }
         // Block IPv4-mapped IPv6 link-local (e.g. ::ffff:169.254.169.254).
-        if let std::net::IpAddr::V6(v6) = ip {
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                if mapped.is_link_local() {
+        if let std::net::IpAddr::V6(v6) = ip
+            && let Some(mapped) = v6.to_ipv4_mapped()
+                && mapped.is_link_local() {
                     return Err(AppError::BadRequest("metadata endpoints are not allowed".into()));
                 }
-            }
-        }
     }
     Ok(())
 }
@@ -445,11 +443,10 @@ pub async fn update_provider(
     }
     provider.name = req.name.trim().to_string();
     if let Some(ref url) = req.url {
-        if !url.is_empty() {
-            if let Err(e) = validate_provider_url(url) {
+        if !url.is_empty()
+            && let Err(e) = validate_provider_url(url) {
                 return e.into_response();
             }
-        }
         provider.url = url.clone();
     }
     // Empty / absent api_key = keep existing stored value.
@@ -614,11 +611,10 @@ pub async fn list_provider_models(
     let cache_key = models_cache_key(id);
 
     // ── Cache hit ────────────────────────────────────────────────────────────────
-    if let Some(ref pool) = state.valkey_pool {
-        if let Some(models) = load_models_cache(pool, &cache_key).await {
+    if let Some(ref pool) = state.valkey_pool
+        && let Some(models) = load_models_cache(pool, &cache_key).await {
             return (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response();
         }
-    }
 
     // ── Cache miss: return empty — use POST /v1/providers/{id}/models/sync to populate ──
     (StatusCode::OK, Json(serde_json::json!({"models": []}))).into_response()

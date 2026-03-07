@@ -181,23 +181,24 @@ fn build_jwt_router() -> Router<AppState> {
 }
 
 /// Set security headers on every response (H2 fix).
+#[allow(clippy::expect_used)]
 async fn security_headers(mut response: axum::response::Response) -> axum::response::Response {
     let headers = response.headers_mut();
     headers.insert(
         axum::http::header::STRICT_TRANSPORT_SECURITY,
-        "max-age=31536000; includeSubDomains".parse().expect("static header value"),
+        "max-age=31536000; includeSubDomains".parse().expect("static"),
     );
     headers.insert(
         axum::http::header::X_CONTENT_TYPE_OPTIONS,
-        "nosniff".parse().expect("static header value"),
+        "nosniff".parse().expect("static"),
     );
     headers.insert(
         axum::http::header::X_FRAME_OPTIONS,
-        "DENY".parse().expect("static header value"),
+        "DENY".parse().expect("static"),
     );
     headers.insert(
         axum::http::header::REFERRER_POLICY,
-        "strict-origin-when-cross-origin".parse().expect("static header value"),
+        "strict-origin-when-cross-origin".parse().expect("static"),
     );
     response
 }
@@ -225,8 +226,9 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
             // forbidden by the CORS spec when credentials are included.
             // Default to localhost:3000 (Next.js dev server) when no origins
             // are configured; production MUST set CORS_ALLOWED_ORIGINS.
+            #[allow(clippy::expect_used)]
             base.allow_origin(AllowOrigin::list([
-                "http://localhost:3000".parse::<HeaderValue>().expect("static CORS origin"),
+                "http://localhost:3000".parse::<HeaderValue>().expect("static"),
             ]))
         } else {
             base.allow_origin(AllowOrigin::list(cors_origins))

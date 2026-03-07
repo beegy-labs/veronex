@@ -145,11 +145,10 @@ async fn find_gpu_card() -> Option<(u8, &'static str)> {
         match vendor {
             "amd" => {
                 let vram_path = format!("{SYSFS_DRM}/{name_str}/device/mem_info_vram_total");
-                if let Some(v) = read_u64(&vram_path).await {
-                    if v > 0 {
+                if let Some(v) = read_u64(&vram_path).await
+                    && v > 0 {
                         return Some((idx, vendor));
                     }
-                }
             }
             "nvidia" => {
                 // NVIDIA sysfs exists but VRAM is read differently.
