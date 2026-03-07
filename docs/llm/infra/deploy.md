@@ -111,11 +111,13 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 | `veronex:throttle:{provider_id}` | Thermal Hard throttle (TTL 90s) |
 | `veronex:hw:{provider_id}` | hw_metrics JSON (TTL ~60s) |
 | `veronex:heartbeat:{instance_id}` | Instance heartbeat (EX 30s, refreshed every 10s) |
-| `veronex:vram:{provider_id}` | Distributed VRAM reservation state HASH |
+| `veronex:slots:{provider_id}:{model}` | Distributed slot counts HASH (`{instance_id}` → count, `__max__` → max) |
+| `veronex:slot_leases:{provider_id}:{model}` | Slot lease ZSET for crash recovery (score = expiry ts) |
 | `veronex:job:owner:{job_id}` | Job ownership key (EX 300s) |
 | `veronex:stream:tokens:{job_id}` | Cross-instance token relay (Valkey Streams) |
 | `veronex:pubsub:job_events` | Pub/sub channel for job status events |
 | `veronex:pubsub:cancel:{job_id}` | Pub/sub channel for cancellation signals |
+| `veronex:pubsub:cancel:*` | PSUBSCRIBE pattern for all cancel channels |
 
 > SSOT for all key patterns: `crates/veronex/src/infrastructure/outbound/valkey_keys.rs`
 

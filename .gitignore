@@ -31,3 +31,6 @@ web/tsconfig.tsbuildinfo
 
 # ts-rs auto-generated bindings
 web/lib/generated/
+
+# Helm dependency charts (downloaded by helm dependency build)
+deploy/helm/*/charts/*.tgz
