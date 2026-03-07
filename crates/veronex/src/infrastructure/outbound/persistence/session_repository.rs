@@ -7,6 +7,10 @@ use uuid::Uuid;
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::domain::entities::Session;
 
+/// Column list shared by all SELECT queries on account_sessions.
+const SESSION_COLS: &str = "id, account_id, jti, refresh_token_hash, ip_address, \
+    created_at, last_used_at, expires_at, revoked_at";
+
 pub struct PostgresSessionRepository {
     pool: PgPool,
 }
@@ -63,13 +67,8 @@ impl SessionRepository for PostgresSessionRepository {
     }
 
     async fn list_active(&self, account_id: &Uuid) -> Result<Vec<Session>> {
-        let rows = sqlx::query(
-            "SELECT id, account_id, jti, refresh_token_hash, ip_address,
-                    created_at, last_used_at, expires_at, revoked_at
-             FROM account_sessions
-             WHERE account_id = $1 AND revoked_at IS NULL
-             ORDER BY created_at DESC",
-        )
+        let sql = format!("SELECT {SESSION_COLS} FROM account_sessions WHERE account_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC");
+        let rows = sqlx::query(&sql)
         .bind(account_id)
         .fetch_all(&self.pool)
         .await
@@ -79,16 +78,26 @@ impl SessionRepository for PostgresSessionRepository {
     }
 
     async fn get_by_refresh_hash(&self, hash: &str) -> Result<Option<Session>> {
-        let row = sqlx::query(
-            "SELECT id, account_id, jti, refresh_token_hash, ip_address,
-                    created_at, last_used_at, expires_at, revoked_at
-             FROM account_sessions
-             WHERE refresh_token_hash = $1 AND revoked_at IS NULL",
-        )
+        let sql = format!("SELECT {SESSION_COLS} FROM account_sessions WHERE refresh_token_hash = $1 AND revoked_at IS NULL");
+        let row = sqlx::query(&sql)
         .bind(hash)
         .fetch_optional(&self.pool)
         .await
         .context("failed to get session by refresh hash")?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_session(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_by_id(&self, session_id: &Uuid) -> Result<Option<Session>> {
+        let sql = format!("SELECT {SESSION_COLS} FROM account_sessions WHERE id = $1");
+        let row = sqlx::query(&sql)
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to get session by id")?;
 
         match row {
             Some(r) => Ok(Some(row_to_session(&r)?)),

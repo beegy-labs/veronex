@@ -17,7 +17,7 @@ const RedocWrapper = dynamic(
   },
 )
 
-const API_URL = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
+import { BASE_API_URL as API_URL } from '@/lib/constants'
 
 export default function RedocPage() {
   const { t, i18n } = useTranslation()

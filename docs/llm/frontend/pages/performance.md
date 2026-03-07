@@ -1,4 +1,4 @@
-> **SSOT** | **Tier 2** | Last Updated: 2026-03-02
+> **SSOT** | **Tier 2** | Last Updated: 2026-03-05
 
 # Web — Performance Page
 
@@ -28,18 +28,20 @@ Chart: Error Rate / Hour (LineChart 0–100%)
 
 ## Data Sources
 
-| Section | Source | Requires ClickHouse |
-|---------|--------|---------------------|
-| KPI cards (P50/P95/P99) | `performanceQuery` → `GET /v1/dashboard/performance` | ✅ Yes |
-| Analytics KPIs (TPS) | `analyticsQuery` → `GET /v1/dashboard/analytics` | ✅ Yes |
-| Model latency table | `usageBreakdownQuery.by_model` (avg_latency_ms) + `analyticsQuery.models` (success_rate) | Partial |
-| Key performance table | `usageBreakdownQuery.by_key` | ❌ No |
-| Hourly charts | `performanceQuery.hourly` | ✅ Yes |
+| Section | Source | Requires ClickHouse | PG Fallback |
+|---------|--------|---------------------|-------------|
+| KPI cards (P50/P95/P99) | `performanceQuery` → `GET /v1/dashboard/performance` | ✅ Yes | ✅ `PERCENTILE_CONT` on `inference_jobs` |
+| Analytics KPIs (TPS) | `analyticsQuery` → `GET /v1/dashboard/analytics` | ✅ Yes | ✅ aggregates from `inference_jobs` |
+| Model latency table | `usageBreakdownQuery.by_model` (avg_latency_ms) + `analyticsQuery.models` (success_rate) | Partial | ✅ |
+| Key performance table | `usageBreakdownQuery.by_key` | ❌ No | N/A (always PG) |
+| Hourly charts | `performanceQuery.hourly` | ✅ Yes | ✅ hourly GROUP BY on `inference_jobs` |
+
+All ClickHouse-dependent endpoints use **ClickHouse primary + PG fallback**: if ClickHouse returns empty results (`total_requests == 0`) or errors, the handler falls back to PostgreSQL `inference_jobs`.
 
 ## Model Performance Merge Logic
 
 `modelPerfData` merges two sources:
-- `usageBreakdownQuery.by_model[]` → `avg_latency_ms`, `request_count`, `backend`
+- `usageBreakdownQuery.by_model[]` → `avg_latency_ms`, `request_count`, `provider_type`
 - `analyticsQuery.models[]` → `success_rate` (matched by `model_name`)
 
 Sorted ascending by `avg_latency_ms` (fastest first).

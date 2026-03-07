@@ -1,3 +1,4 @@
 pub mod analyzer;
-pub mod slot_map;
+pub mod distributed_vram_pool;
+pub mod vram_pool;
 pub mod thermal;

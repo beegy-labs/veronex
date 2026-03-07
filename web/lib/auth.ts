@@ -1,10 +1,9 @@
 import type { LoginResponse } from './types'
 
-const ACCESS_TOKEN_KEY  = 'veronex_access_token'
-const REFRESH_TOKEN_KEY = 'veronex_refresh_token'
-const USERNAME_KEY      = 'veronex_username'
-const ROLE_KEY          = 'veronex_role'
-const ACCOUNT_ID_KEY    = 'veronex_account_id'
+const SESSION_KEY    = 'veronex_session'
+const USERNAME_KEY   = 'veronex_username'
+const ROLE_KEY       = 'veronex_role'
+const ACCOUNT_ID_KEY = 'veronex_account_id'
 
 // ── Cookie helpers (same pattern as timezone-provider.tsx) ─────────────────
 
@@ -25,39 +24,34 @@ function deleteCookie(name: string): void {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
-export function getAccessToken(): string | null {
-  return readCookie(ACCESS_TOKEN_KEY)
+/**
+ * Store non-sensitive session indicator cookies after a successful login/setup.
+ *
+ * Auth tokens (access_token, refresh_token) are now set as HttpOnly cookies
+ * by the backend — they are never accessible to JavaScript.
+ */
+export function setSession(resp: LoginResponse): void {
+  writeCookie(SESSION_KEY,    '1')
+  writeCookie(USERNAME_KEY,   resp.username)
+  writeCookie(ROLE_KEY,       resp.role)
+  writeCookie(ACCOUNT_ID_KEY, resp.account_id)
 }
 
-export function getRefreshToken(): string | null {
-  return readCookie(REFRESH_TOKEN_KEY)
-}
-
-export function setTokens(resp: LoginResponse): void {
-  writeCookie(ACCESS_TOKEN_KEY, resp.access_token)
-  writeCookie(USERNAME_KEY,     resp.username)
-  writeCookie(ROLE_KEY,         resp.role)
-  writeCookie(ACCOUNT_ID_KEY,   resp.account_id)
-  if (resp.refresh_token) {
-    writeCookie(REFRESH_TOKEN_KEY, resp.refresh_token)
-  }
-}
-
-export function setAccessToken(token: string): void {
-  writeCookie(ACCESS_TOKEN_KEY, token)
-}
-
-export function clearTokens(): void {
-  deleteCookie(ACCESS_TOKEN_KEY)
-  deleteCookie(REFRESH_TOKEN_KEY)
+/**
+ * Clear all client-side session indicator cookies.
+ *
+ * NOTE: The HttpOnly auth cookies (access_token, refresh_token) are cleared
+ * by the backend via Set-Cookie headers on the logout response.
+ */
+export function clearSession(): void {
+  deleteCookie(SESSION_KEY)
   deleteCookie(USERNAME_KEY)
   deleteCookie(ROLE_KEY)
   deleteCookie(ACCOUNT_ID_KEY)
 }
 
 export function getAuthUser(): { username: string; role: string; accountId: string } | null {
-  const token = getAccessToken()
-  if (!token) return null
+  if (!isLoggedIn()) return null
   const username  = readCookie(USERNAME_KEY)
   const role      = readCookie(ROLE_KEY)
   const accountId = readCookie(ACCOUNT_ID_KEY)
@@ -65,6 +59,13 @@ export function getAuthUser(): { username: string; role: string; accountId: stri
   return { username, role, accountId }
 }
 
+/**
+ * Check whether the user has an active session indicator.
+ *
+ * This reads the non-HttpOnly `veronex_session` cookie which is set by JS
+ * on login success.  The actual auth tokens are HttpOnly and cannot be read
+ * by JavaScript — the browser sends them automatically.
+ */
 export function isLoggedIn(): boolean {
-  return !!getAccessToken()
+  return readCookie(SESSION_KEY) === '1'
 }

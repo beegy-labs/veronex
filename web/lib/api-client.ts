@@ -1,31 +1,38 @@
 /**
  * ApiClient — HTTP transport layer for JWT-protected API calls.
  *
+ * Auth tokens are HttpOnly cookies — the browser sends them automatically
+ * when `credentials: 'include'` is set.  No Authorization header needed.
+ *
  * Auth flow (refresh mutex, redirect) is owned by auth-guard.ts — not here.
- * This module only handles: attach token → fetch → handle 401 via auth-guard.
+ * This module only handles: fetch with credentials → handle 401 via auth-guard.
  */
 
-import { getAccessToken } from './auth'
 import { tryRefresh, redirectToLogin } from './auth-guard'
-
-const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
+import { BASE_API_URL as BASE } from './constants'
 
 class ApiClient {
-  private async fetchWithToken(path: string, init?: RequestInit): Promise<Response> {
-    const token = getAccessToken()
-    return fetch(`${BASE}${path}`, {
-      ...init,
-      headers: {
-        Authorization: token ? `Bearer ${token}` : '',
-        'Content-Type': 'application/json',
-        ...init?.headers,
-      },
-      cache: 'no-store',
-    })
+  private async fetchWithCredentials(path: string, init?: RequestInit): Promise<Response> {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 30_000)
+    try {
+      return await fetch(`${BASE}${path}`, {
+        ...init,
+        headers: {
+          'Content-Type': 'application/json',
+          ...init?.headers,
+        },
+        credentials: 'include',
+        signal: controller.signal,
+        cache: 'no-store',
+      })
+    } finally {
+      clearTimeout(timeoutId)
+    }
   }
 
   async request<T>(path: string, init?: RequestInit): Promise<T> {
-    let res = await this.fetchWithToken(path, init)
+    let res = await this.fetchWithCredentials(path, init)
 
     if (res.status === 401) {
       const refreshed = await tryRefresh()
@@ -33,7 +40,7 @@ class ApiClient {
         redirectToLogin()
         throw new Error('Unauthorized')
       }
-      res = await this.fetchWithToken(path, init)
+      res = await this.fetchWithCredentials(path, init)
     }
 
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)

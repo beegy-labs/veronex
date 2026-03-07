@@ -1,6 +1,6 @@
-# API Keys — Backend: Auth & Rate Limiting
+# API Keys — Server-Side: Auth & Rate Limiting
 
-> SSOT | **Last Updated**: 2026-03-02 (rev2: DashboardStats SQL scoped to tenant_id='default' — prevents cross-tenant count inflation)
+> SSOT | **Last Updated**: 2026-03-04
 
 ## Task Guide
 
@@ -10,9 +10,9 @@
 | Change auth rejection logic | `persistence/api_key_repository.rs` → `get_by_hash()` WHERE clause |
 | Add new rate limit type (e.g. requests/day) | `middleware/rate_limiter.rs` → add new Valkey check before handler |
 | Change RPM window duration | `middleware/rate_limiter.rs` → `RPM_WINDOW_MS` constant + `RATE_LIMIT_SCRIPT` Lua body |
-| Change bootstrap key behavior | `main.rs` → bootstrap key creation block |
+| Change bootstrap key behavior | `main.rs` → bootstrap key creation block (planned, not yet implemented) |
 | Add field to CreateKeyRequest | `key_handlers.rs` → `CreateKeyRequest` struct + `create_key()` handler |
-| Auto-create test key for new account | `account_handlers.rs` → `create_account()` | key_type="test", is_test_key=true |
+| Auto-create test key for new account | `account_handlers.rs` → `create_account()` | key_type="test" |
 
 ## Key Files
 
@@ -23,7 +23,7 @@
 | `crates/veronex/src/infrastructure/outbound/persistence/api_key_repository.rs` | `PostgresApiKeyRepository` impl |
 | `crates/veronex/src/infrastructure/inbound/http/key_handlers.rs` | CRUD handlers |
 | `crates/veronex/src/infrastructure/inbound/http/middleware/rate_limiter.rs` | RPM/TPM middleware |
-| `crates/veronex/src/main.rs` | Bootstrap key creation on startup |
+| `crates/veronex/src/main.rs` | Bootstrap key creation on startup (planned) |
 
 ---
 
@@ -40,15 +40,15 @@ pub struct ApiKey {
     pub is_active: bool,
     pub rate_limit_rpm: i32,                 // 0 = unlimited
     pub rate_limit_tpm: i32,                 // 0 = unlimited
-    pub key_type: String,                    // "standard" | "test" — internal only (migration 000033)
-    pub tier: String,                        // "free" | "paid" — billing tier (migration 000038)
-    pub account_id: Option<Uuid>,            // FK → accounts (migration 000035; NULL for pre-auth keys)
-    pub is_test_key: bool,                   // true = auto-created per-account test key (migration 000035)
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,   // NULL = active, NOT NULL = soft-deleted
+    pub key_type: KeyType,                   // Standard | Test — domain enum (migration 000033)
+    pub tier: KeyTier,                       // Free | Paid — domain enum (migration 000038)
 }
 ```
+
+> **Status: Planned** — `account_id` and `is_test_key` are planned DB columns (migration 000035) but are NOT yet implemented in the Rust `ApiKey` entity. Migration exists but entity does not use these columns yet. The entity uses `key_type` to distinguish test keys.
 
 ### Key Type vs Tier
 
@@ -73,8 +73,8 @@ CREATE TABLE api_keys (
     rate_limit_tpm  INTEGER      NOT NULL DEFAULT 0,
     key_type        TEXT         NOT NULL DEFAULT 'standard', -- migration 000033
     tier            TEXT         NOT NULL DEFAULT 'paid',     -- migration 000038
-    account_id      UUID REFERENCES accounts(id),            -- migration 000035 (NULL for pre-auth keys)
-    is_test_key     BOOLEAN      NOT NULL DEFAULT false,      -- migration 000035 (true = per-account test key)
+    -- account_id UUID REFERENCES accounts(id),          -- (planned, migration 000035, not yet in Rust entity)
+    -- is_test_key BOOLEAN NOT NULL DEFAULT false,       -- (planned, migration 000035, not yet in Rust entity)
     expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
     deleted_at      TIMESTAMPTZ  -- migration 000021
@@ -82,10 +82,10 @@ CREATE TABLE api_keys (
 
 -- No unique index on name. Names are labels; uniqueness is provided by `id` (UUIDv7).
 -- (migration 000032 added uq_api_keys_tenant_name; migration 000040 dropped it)
--- One test key per account: uq_api_keys_account_test ON (account_id) WHERE is_test_key=true AND deleted_at IS NULL
+-- (planned) One test key per account: uq_api_keys_account_test ON (account_id) WHERE is_test_key=true AND deleted_at IS NULL
 ```
 
-- migrations: 000001 CREATE, 000021 deleted_at, 000033 key_type column, 000035 account_id + is_test_key, 000038 tier column, 000040 drop name unique index
+- migrations: 000001 CREATE, 000021 deleted_at, 000033 key_type column, 000035 account_id + is_test_key (planned -- not yet in entity), 000038 tier column, 000040 drop name unique index
 
 ---
 
@@ -96,7 +96,7 @@ POST   /v1/keys        CreateKeyRequest → CreateKeyResponse (plaintext shown o
                        Names are non-unique labels; unique id = UUIDv7
 GET    /v1/keys        → Vec<KeySummary> (excludes soft-deleted; excludes key_type = 'test')
 DELETE /v1/keys/{id}   → 204 (soft-delete: sets deleted_at = NOW())
-PATCH  /v1/keys/{id}   ToggleKeyRequest { is_active: bool } → 204
+PATCH  /v1/keys/{id}   PatchKeyRequest { is_active?, tier? } → 204
 ```
 
 `GET /v1/keys` filters out test keys (`key_type = 'test'`) server-side and is scoped to `tenant_id = 'default'` via `list_by_tenant("default")`. These scopes must match the `DashboardStats` SQL.
@@ -106,10 +106,12 @@ PATCH  /v1/keys/{id}   ToggleKeyRequest { is_active: bool } → 204
 ```rust
 // key_handlers.rs
 pub struct CreateKeyRequest {
-    pub tenant_id: String,           // default: "default"
+    pub tenant_id: String,
     pub name: String,
-    pub rate_limit_rpm: Option<i32>, // 0 = unlimited
-    pub rate_limit_tpm: Option<i32>,
+    #[serde(default)]
+    pub rate_limit_rpm: i32,         // 0 = unlimited
+    #[serde(default)]
+    pub rate_limit_tpm: i32,
     #[serde(default = "default_tier")]
     pub tier: String,                // "free" | "paid" — default "paid"
     pub expires_at: Option<DateTime<Utc>>,
@@ -118,23 +120,28 @@ pub struct CreateKeyRequest {
 
 pub struct CreateKeyResponse {
     pub id: Uuid,
-    pub key: String,        // Full plaintext — shown ONCE
-    pub key_prefix: String, // "vnx_abc123de…"
+    pub key: String,                         // Full plaintext — shown ONCE
+    pub key_prefix: String,                  // "iq_01ARZ3NDEK…"
     pub tenant_id: String,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
+}
+
+pub struct PatchKeyRequest {
+    pub is_active: Option<bool>,
+    pub tier: Option<String>,                // "free" | "paid"
 }
 
 pub struct KeySummary {
-    pub id: String,
+    pub id: Uuid,
     pub key_prefix: String,
     pub tenant_id: String,
     pub name: String,
     pub is_active: bool,
     pub rate_limit_rpm: i32,
     pub rate_limit_tpm: i32,
-    pub tier: String,               // "free" | "paid"
-    pub expires_at: Option<String>,
-    pub created_at: String,
+    pub tier: String,                        // "free" | "paid"
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
 }
 ```
 
@@ -167,32 +174,40 @@ WHERE source != 'test'
 
 ## Authentication Flow
 
-Every protected endpoint reads `X-API-Key` header:
+Middleware accepts three header formats:
+
+1. `X-API-Key: <key>`
+2. `Authorization: Bearer <key>` (OpenAI SDK compatible)
+3. `x-goog-api-key: <key>` (Gemini CLI compatible)
 
 ```
-1. Extract header value
-2. BLAKE2b-256 hash → lookup WHERE key_hash = ?
-3. Reject if: not found | deleted_at IS NOT NULL | is_active = false | expires_at < now()
-4. Pass ApiKey to handler (id stored in job record as api_key_id)
+1. Extract key from headers (X-API-Key → Authorization: Bearer → x-goog-api-key)
+2. BLAKE2b-256 hash → lookup WHERE key_hash = ? AND deleted_at IS NULL
+3. Reject if: not found | is_active = false | expires_at < now()
+4. Pass ApiKey entity to handler via extensions (id stored in job record as api_key_id)
 ```
 
-**Bootstrap key**: `BOOTSTRAP_API_KEY` env var (default: `veronex-bootstrap-admin-key`) —
-auto-created at startup if not found. No rate limits. `tier = "paid"`, `key_type = "standard"`.
+Note: `deleted_at` filtering happens at the SQL query level (`WHERE deleted_at IS NULL`), not in middleware logic.
+
+**Refresh token hashing**: Uses domain-separated BLAKE2b with `veronex-refresh-token-v1:` prefix to prevent cross-protocol hash collisions.
+
+**Bootstrap key** — **Status: Planned** — `BOOTSTRAP_API_KEY` env var support is not yet implemented in `main.rs`. The Helm chart defines the env var but the Rust code does not read or use it.
 
 ---
 
 ## Rate Limiting (middleware/rate_limiter.rs)
 
 ```
-RPM: Sorted set  veronex:ratelimit:rpm:{key_id}:{minute}
+RPM: Sorted set  veronex:ratelimit:rpm:{key_id}
      ZADD now() uuid; ZCOUNT window=60s → count ≥ rpm_limit → 429
+     Valkey TTL = 62s (2s buffer for clock skew)
 
 TPM: Counter     veronex:ratelimit:tpm:{key_id}:{minute}
      INCR; EXPIRE 120s → count + estimated_tokens ≥ tpm_limit → 429
      TPM incremented AFTER job completes (actual completion_tokens)
 ```
 
-Fail-open: Valkey error → skip rate limit check, job proceeds.
+Fail-closed: Valkey error → returns 503 Service Unavailable, job rejected.
 
 ---
 
@@ -203,6 +218,10 @@ Fail-open: Valkey error → skip rate limit check, job proceeds.
 - Rejected at auth check
 - Historical jobs preserved: `inference_jobs.api_key_id` → NULL on hard delete (FK ON DELETE SET NULL)
 - ClickHouse `inference_logs.api_key_id` is String (UUID), preserved after soft-delete
+
+### Cascade Delete
+
+When an account is soft-deleted, all associated API keys are automatically soft-deleted via `soft_delete_by_tenant(tenant_id)`.
 
 ---
 

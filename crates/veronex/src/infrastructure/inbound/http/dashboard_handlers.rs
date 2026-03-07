@@ -1,50 +1,27 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::pin::Pin;
-use std::time::Duration;
 
 use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
-use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::sse::Event;
 use axum::response::IntoResponse;
 use axum::Json;
-use chrono::{NaiveDate, Utc};
-use futures::Stream;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
-use crate::application::ports::outbound::audit_port::AuditEvent;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
+use crate::application::ports::outbound::analytics_repository::{HourlyThroughput, PerformanceMetrics};
+use crate::domain::enums::AccountRole;
+use crate::infrastructure::outbound::valkey_keys::{QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID, QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_TEST as QUEUE_KEY_TEST};
+use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSuper};
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
+use super::audit_helpers::emit_audit;
+use super::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
+use super::error::AppError;
+use super::handlers::SseStream;
 use super::state::AppState;
 use super::usage_handlers::UsageQuery;
-
-async fn emit_audit(
-    state: &AppState,
-    actor: &Claims,
-    action: &str,
-    resource_type: &str,
-    resource_id: &str,
-    resource_name: &str,
-    details: &str,
-) {
-    if let Some(ref port) = state.audit_port {
-        port.record(AuditEvent {
-            event_time: Utc::now(),
-            account_id: actor.sub,
-            account_name: actor.sub.to_string(),
-            action: action.to_string(),
-            resource_type: resource_type.to_string(),
-            resource_id: resource_id.to_string(),
-            resource_name: resource_name.to_string(),
-            ip_address: None,
-            details: Some(details.to_string()),
-        })
-        .await;
-    }
-}
 
 // ── Query parameters ───────────────────────────────────────────────
 
@@ -128,12 +105,64 @@ fn compute_tps(
     }
 }
 
+/// Common fields extracted from an `inference_jobs` row.
+/// Both `JobSummary` (list) and `JobDetail` (single) share these columns.
+struct JobRowCommon {
+    id: uuid::Uuid,
+    model_name: String,
+    provider_type: String,
+    status: String,
+    source: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    latency_ms: Option<i32>,
+    ttft_ms: Option<i32>,
+    prompt_tokens: Option<i32>,
+    completion_tokens: Option<i32>,
+    cached_tokens: Option<i32>,
+    api_key_name: Option<String>,
+    account_name: Option<String>,
+    request_path: Option<String>,
+    estimated_cost_usd: Option<f64>,
+}
+
+impl JobRowCommon {
+    // Note: unwrap_or_default used intentionally for dashboard resilience.
+    // Individual row corruption should not break the dashboard list view.
+    // Schema mismatches will surface as empty/default values in the UI.
+    fn from_row(row: &sqlx::postgres::PgRow) -> Self {
+        use sqlx::Row;
+        Self {
+            id:                row.try_get("id").unwrap_or_default(),
+            model_name:        row.try_get("model_name").unwrap_or_default(),
+            provider_type:     row.try_get("provider_type").unwrap_or_default(),
+            status:            row.try_get("status").unwrap_or_default(),
+            source:            row.try_get("source").unwrap_or_else(|_| "api".to_string()),
+            created_at:        row.try_get("created_at").unwrap_or_default(),
+            completed_at:      row.try_get("completed_at").unwrap_or(None),
+            latency_ms:        row.try_get("latency_ms").unwrap_or(None),
+            ttft_ms:           row.try_get("ttft_ms").unwrap_or(None),
+            prompt_tokens:     row.try_get("prompt_tokens").unwrap_or(None),
+            completion_tokens: row.try_get("completion_tokens").unwrap_or(None),
+            cached_tokens:     row.try_get("cached_tokens").unwrap_or(None),
+            api_key_name:      row.try_get("api_key_name").unwrap_or(None),
+            account_name:      row.try_get("account_name").unwrap_or(None),
+            request_path:      row.try_get("request_path").unwrap_or(None),
+            estimated_cost_usd: row.try_get("estimated_cost_usd").unwrap_or(None),
+        }
+    }
+
+    fn tps(&self) -> Option<f64> {
+        compute_tps(self.latency_ms, self.ttft_ms, self.completion_tokens)
+    }
+}
+
 // ── Handlers ───────────────────────────────────────────────────────
 
 /// GET /v1/dashboard/stats — Overview statistics.
 pub async fn get_stats(
     State(state): State<AppState>,
-) -> Result<Json<DashboardStats>, StatusCode> {
+) -> Result<Json<DashboardStats>, AppError> {
     let pool = &state.pg_pool;
 
     // Key counts (standard keys only — exclude test keys)
@@ -144,8 +173,7 @@ pub async fn get_stats(
          FROM api_keys",
     )
     .fetch_one(pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .await?;
 
     use sqlx::Row;
     let total_keys: i64 = key_row.try_get("total_keys").unwrap_or(0);
@@ -160,8 +188,7 @@ pub async fn get_stats(
          WHERE source != 'test'",
     )
     .fetch_one(pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .await?;
 
     let total_jobs: i64 = job_row.try_get("total_jobs").unwrap_or(0);
     let jobs_last_24h: i64 = job_row.try_get("jobs_last_24h").unwrap_or(0);
@@ -174,13 +201,13 @@ pub async fn get_stats(
          GROUP BY status",
     )
     .fetch_all(pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .await?;
 
-    let mut jobs_by_status: HashMap<String, i64> = HashMap::new();
-    for s in &["pending", "running", "completed", "failed", "cancelled"] {
-        jobs_by_status.insert(s.to_string(), 0);
-    }
+    let mut jobs_by_status: HashMap<String, i64> =
+        ["pending", "running", "completed", "failed", "cancelled"]
+            .into_iter()
+            .map(|s| (s.to_owned(), 0i64))
+            .collect();
     for row in status_rows {
         let status: String = row.try_get("status").unwrap_or_default();
         let cnt: i64 = row.try_get("cnt").unwrap_or(0);
@@ -232,11 +259,15 @@ pub struct JobDetail {
     pub estimated_cost_usd: Option<f64>,
 }
 
-/// GET /v1/dashboard/jobs/{id} — Full job detail.
+/// GET /v1/dashboard/jobs/{id} — Full job detail (tenant-scoped).
+///
+/// Super admins can view any job. Regular users can only view jobs
+/// belonging to their own account (matched via `account_id` on the job).
 pub async fn get_job_detail(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
-) -> Result<Json<JobDetail>, StatusCode> {
+) -> Result<Json<JobDetail>, AppError> {
     use sqlx::Row;
     let pool = &state.pg_pool;
 
@@ -249,7 +280,9 @@ pub async fn get_job_detail(
                 j.messages_json,
                 COALESCE(jsonb_array_length(j.messages_json), 0) AS message_count,
                 k.name AS api_key_name,
+                k.tenant_id AS key_tenant_id,
                 a.name AS account_name,
+                j.account_id,
                 CASE
                     WHEN j.provider_type = 'ollama' THEN 0.0
                     WHEN pricing.input_per_1m IS NOT NULL
@@ -274,37 +307,29 @@ pub async fn get_job_detail(
     )
     .bind(id)
     .fetch_optional(pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::NOT_FOUND)?;
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("job {id} not found")))?;
 
-    let id_val: uuid::Uuid = row.try_get("id").unwrap_or_default();
-    let model_name: String = row.try_get("model_name").unwrap_or_default();
-    let provider_type: String = row.try_get("provider_type").unwrap_or_default();
-    let status: String = row.try_get("status").unwrap_or_default();
-    let source: String = row.try_get("source").unwrap_or_else(|_| "api".to_string());
-    let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at").unwrap_or_default();
+    // Tenant verification: non-super users can only view their own jobs.
+    if claims.role != AccountRole::Super {
+        let job_account_id: Option<uuid::Uuid> = row.try_get("account_id").unwrap_or(None);
+        if job_account_id != Some(claims.sub) {
+            return Err(AppError::Forbidden("access denied".into()));
+        }
+    }
+
+    let c = JobRowCommon::from_row(&row);
+    let tps = c.tps();
     let started_at: Option<chrono::DateTime<chrono::Utc>> =
         row.try_get("started_at").unwrap_or(None);
-    let completed_at: Option<chrono::DateTime<chrono::Utc>> =
-        row.try_get("completed_at").unwrap_or(None);
-    let latency_ms: Option<i32> = row.try_get("latency_ms").unwrap_or(None);
-    let ttft_ms: Option<i32> = row.try_get("ttft_ms").unwrap_or(None);
-    let prompt_tokens: Option<i32> = row.try_get("prompt_tokens").unwrap_or(None);
-    let completion_tokens: Option<i32> = row.try_get("completion_tokens").unwrap_or(None);
-    let cached_tokens: Option<i32> = row.try_get("cached_tokens").unwrap_or(None);
-    let api_key_name: Option<String> = row.try_get("api_key_name").unwrap_or(None);
-    let account_name: Option<String> = row.try_get("account_name").unwrap_or(None);
     let prompt: String = row.try_get("prompt").unwrap_or_default();
     let result_text: Option<String> = row.try_get("result_text").unwrap_or(None);
     let error: Option<String> = row.try_get("error").unwrap_or(None);
-    let request_path: Option<String> = row.try_get("request_path").unwrap_or(None);
     let tool_calls_json: Option<serde_json::Value> = row.try_get("tool_calls_json").unwrap_or(None);
     // messages_json: DB stores NULL for new jobs (S3 is authoritative).
     // Fall back to DB value for old jobs migrated before S3 was introduced.
     let db_messages: Option<serde_json::Value> = row.try_get("messages_json").unwrap_or(None);
     let message_count: Option<i32> = row.try_get("message_count").unwrap_or(None);
-    let estimated_cost_usd: Option<f64> = row.try_get("estimated_cost_usd").unwrap_or(None);
 
     // Resolve messages: S3 first (authoritative for new jobs), DB fallback for old jobs
     let messages_json = if let Some(ref store) = state.message_store {
@@ -320,33 +345,31 @@ pub async fn get_job_detail(
         db_messages
     };
 
-    let tps = compute_tps(latency_ms, ttft_ms, completion_tokens);
-
     Ok(Json(JobDetail {
-        id: id_val.to_string(),
-        model_name,
-        provider_type,
-        status,
-        source,
-        created_at: created_at.to_rfc3339(),
+        id: c.id.to_string(),
+        model_name: c.model_name,
+        provider_type: c.provider_type,
+        status: c.status,
+        source: c.source,
+        created_at: c.created_at.to_rfc3339(),
         started_at: started_at.map(|dt| dt.to_rfc3339()),
-        completed_at: completed_at.map(|dt| dt.to_rfc3339()),
-        latency_ms: latency_ms.map(|v| v as i64),
-        ttft_ms: ttft_ms.map(|v| v as i64),
-        prompt_tokens: prompt_tokens.map(|v| v as i64),
-        completion_tokens: completion_tokens.map(|v| v as i64),
-        cached_tokens: cached_tokens.map(|v| v as i64),
+        completed_at: c.completed_at.map(|dt| dt.to_rfc3339()),
+        latency_ms: c.latency_ms.map(|v| v as i64),
+        ttft_ms: c.ttft_ms.map(|v| v as i64),
+        prompt_tokens: c.prompt_tokens.map(|v| v as i64),
+        completion_tokens: c.completion_tokens.map(|v| v as i64),
+        cached_tokens: c.cached_tokens.map(|v| v as i64),
         tps,
-        api_key_name,
-        account_name,
+        api_key_name: c.api_key_name,
+        account_name: c.account_name,
         prompt,
         result_text,
         error,
-        request_path,
+        request_path: c.request_path,
         tool_calls_json,
         messages_json,
         message_count: message_count.map(|v| v as i64),
-        estimated_cost_usd,
+        estimated_cost_usd: c.estimated_cost_usd,
     }))
 }
 
@@ -354,9 +377,13 @@ pub async fn get_job_detail(
 pub async fn list_jobs(
     State(state): State<AppState>,
     Query(params): Query<JobsQuery>,
-) -> Result<Json<JobsResponse>, StatusCode> {
+) -> Result<Json<JobsResponse>, AppError> {
     use sqlx::Row;
     let pool = &state.pg_pool;
+
+    // Cap pagination to prevent abuse
+    let limit = params.limit.max(1).min(1000);
+    let offset = params.offset.max(0);
 
     let status_filter = params.status.as_deref().filter(|s| !s.is_empty());
     let source_filter = params.source.as_deref().filter(|s| !s.is_empty());
@@ -378,8 +405,7 @@ pub async fn list_jobs(
     .bind(search_like.as_deref())
     .bind(source_filter)
     .fetch_one(pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .await?
     .try_get("cnt")
     .unwrap_or(0);
 
@@ -419,55 +445,37 @@ pub async fn list_jobs(
     .bind(status_filter)
     .bind(search_like.as_deref())
     .bind(source_filter)
-    .bind(params.limit)
-    .bind(params.offset)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .await?;
 
     let jobs: Vec<JobSummary> = rows
         .iter()
         .map(|row| {
-            let id: uuid::Uuid = row.try_get("id").unwrap_or_default();
-            let model_name: String = row.try_get("model_name").unwrap_or_default();
-            let provider_type: String = row.try_get("provider_type").unwrap_or_default();
-            let status: String = row.try_get("status").unwrap_or_default();
-            let source: String = row.try_get("source").unwrap_or_else(|_| "api".to_string());
-            let created_at: chrono::DateTime<chrono::Utc> =
-                row.try_get("created_at").unwrap_or_default();
-            let completed_at: Option<chrono::DateTime<chrono::Utc>> =
-                row.try_get("completed_at").unwrap_or(None);
-            let latency_ms: Option<i32> = row.try_get("latency_ms").unwrap_or(None);
-            let ttft_ms: Option<i32> = row.try_get("ttft_ms").unwrap_or(None);
-            let prompt_tokens: Option<i32> = row.try_get("prompt_tokens").unwrap_or(None);
-            let completion_tokens: Option<i32> = row.try_get("completion_tokens").unwrap_or(None);
-            let cached_tokens: Option<i32> = row.try_get("cached_tokens").unwrap_or(None);
-            let api_key_name: Option<String> = row.try_get("api_key_name").unwrap_or(None);
-            let account_name: Option<String> = row.try_get("account_name").unwrap_or(None);
-            let request_path: Option<String> = row.try_get("request_path").unwrap_or(None);
+            let c = JobRowCommon::from_row(row);
+            let tps = c.tps();
             let has_tool_calls: bool = row.try_get("has_tool_calls").unwrap_or(false);
-            let estimated_cost_usd: Option<f64> = row.try_get("estimated_cost_usd").unwrap_or(None);
-            let tps = compute_tps(latency_ms, ttft_ms, completion_tokens);
 
             JobSummary {
-                id: id.to_string(),
-                model_name,
-                provider_type,
-                status,
-                source,
-                created_at: created_at.to_rfc3339(),
-                completed_at: completed_at.map(|dt| dt.to_rfc3339()),
-                latency_ms: latency_ms.map(|v| v as i64),
-                ttft_ms: ttft_ms.map(|v| v as i64),
-                prompt_tokens: prompt_tokens.map(|v| v as i64),
-                completion_tokens: completion_tokens.map(|v| v as i64),
-                cached_tokens: cached_tokens.map(|v| v as i64),
+                id: c.id.to_string(),
+                model_name: c.model_name,
+                provider_type: c.provider_type,
+                status: c.status,
+                source: c.source,
+                created_at: c.created_at.to_rfc3339(),
+                completed_at: c.completed_at.map(|dt| dt.to_rfc3339()),
+                latency_ms: c.latency_ms.map(|v| v as i64),
+                ttft_ms: c.ttft_ms.map(|v| v as i64),
+                prompt_tokens: c.prompt_tokens.map(|v| v as i64),
+                completion_tokens: c.completion_tokens.map(|v| v as i64),
+                cached_tokens: c.cached_tokens.map(|v| v as i64),
                 tps,
-                api_key_name,
-                account_name,
-                request_path,
+                api_key_name: c.api_key_name,
+                account_name: c.account_name,
+                request_path: c.request_path,
                 has_tool_calls,
-                estimated_cost_usd,
+                estimated_cost_usd: c.estimated_cost_usd,
             }
         })
         .collect();
@@ -479,86 +487,166 @@ pub async fn list_jobs(
 pub async fn cancel_job(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, AppError> {
     use crate::domain::value_objects::JobId;
     let jid = JobId(id);
     state
         .use_case
         .cancel(&jid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
     Ok(StatusCode::OK)
 }
 
 /// GET /v1/dashboard/performance — Latency percentiles + hourly throughput.
+/// ClickHouse primary, PostgreSQL fallback.
 pub async fn get_performance(
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
-) -> Result<Json<PerformanceMetrics>, StatusCode> {
-    let repo = state
-        .analytics_repo
-        .as_ref()
-        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+) -> Result<Json<PerformanceMetrics>, AppError> {
+    if let Some(repo) = state.analytics_repo.as_ref() {
+        if let Ok(metrics) = repo.performance(params.hours).await {
+            if metrics.total_requests > 0 {
+                return Ok(Json(metrics));
+            }
+        }
+    }
+    Ok(Json(pg_performance(&state.pg_pool, params.hours).await?))
+}
 
-    let metrics = repo
-        .performance(params.hours)
-        .await
-        .map_err(|e| {
-            tracing::warn!("performance query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+// ── PostgreSQL fallback for performance ─────────────────────────────
 
-    Ok(Json(metrics))
+async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<PerformanceMetrics, AppError> {
+    use sqlx::Row;
+    let interval = format!("{hours} hours");
+
+    // Percentiles + aggregates from completed jobs
+    let agg = sqlx::query(&format!(
+        "SELECT
+            COALESCE(AVG(latency_ms)::float8, 0) AS avg_latency_ms,
+            COALESCE(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY latency_ms)::float8, 0) AS p50,
+            COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms)::float8, 0) AS p95,
+            COALESCE(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY latency_ms)::float8, 0) AS p99,
+            COUNT(*) AS total_requests,
+            COUNT(*) FILTER (WHERE status = 'completed') AS success_count,
+            COALESCE(SUM(COALESCE(prompt_tokens,0) + COALESCE(completion_tokens,0)), 0) AS total_tokens
+         FROM inference_jobs
+         WHERE created_at >= NOW() - INTERVAL '{interval}'
+           AND latency_ms IS NOT NULL AND latency_ms > 0"
+    ))
+    .fetch_one(pool)
+    .await?;
+
+    let total_requests: i64 = agg.try_get("total_requests").unwrap_or(0);
+    let success_count: i64 = agg.try_get("success_count").unwrap_or(0);
+    let success_rate = if total_requests > 0 {
+        (success_count as f64 / total_requests as f64 * 1000.0).round() / 10.0
+    } else {
+        0.0
+    };
+
+    // Hourly throughput
+    let hourly_rows = sqlx::query(&format!(
+        "SELECT
+            TO_CHAR(DATE_TRUNC('hour', created_at), 'YYYY-MM-DD\"T\"HH24:00:00\"Z\"') AS hour,
+            COUNT(*) AS request_count,
+            COUNT(*) FILTER (WHERE status = 'completed') AS success_count,
+            COALESCE(AVG(latency_ms) FILTER (WHERE latency_ms > 0), 0)::float8 AS avg_latency_ms,
+            COALESCE(SUM(COALESCE(prompt_tokens,0) + COALESCE(completion_tokens,0)), 0) AS total_tokens
+         FROM inference_jobs
+         WHERE created_at >= NOW() - INTERVAL '{interval}'
+         GROUP BY DATE_TRUNC('hour', created_at)
+         ORDER BY hour"
+    ))
+    .fetch_all(pool)
+    .await?;
+
+    let hourly: Vec<HourlyThroughput> = hourly_rows.iter().map(|r| HourlyThroughput {
+        hour:          r.try_get("hour").unwrap_or_default(),
+        request_count: r.try_get::<i64, _>("request_count").unwrap_or(0) as u64,
+        success_count: r.try_get::<i64, _>("success_count").unwrap_or(0) as u64,
+        avg_latency_ms: r.try_get("avg_latency_ms").unwrap_or(0.0),
+        total_tokens:  r.try_get::<i64, _>("total_tokens").unwrap_or(0) as u64,
+    }).collect();
+
+    Ok(PerformanceMetrics {
+        avg_latency_ms: agg.try_get("avg_latency_ms").unwrap_or(0.0),
+        p50_latency_ms: agg.try_get("p50").unwrap_or(0.0),
+        p95_latency_ms: agg.try_get("p95").unwrap_or(0.0),
+        p99_latency_ms: agg.try_get("p99").unwrap_or(0.0),
+        total_requests: total_requests as u64,
+        success_rate,
+        total_tokens: agg.try_get::<i64, _>("total_tokens").unwrap_or(0) as u64,
+        hourly,
+    })
 }
 
 // ── Capacity API response types ─────────────────────────────────────
 
 #[derive(Serialize)]
-pub struct ModelCapacityInfo {
-    pub model_name:           String,
-    pub recommended_slots:    i16,
-    pub active_slots:         u32,
-    pub available_slots:      u32,
-    pub vram_model_mb:        i32,
-    pub vram_kv_per_slot_mb:  i32,
-    pub avg_tokens_per_sec:   f64,
-    pub avg_prefill_tps:      f64,
-    pub p95_latency_ms:       f64,
-    pub sample_count:         i32,
-    pub llm_concern:          Option<String>,
-    pub llm_reason:           Option<String>,
-    pub updated_at:           String,
+pub struct LoadedModelInfo {
+    pub model_name:        String,
+    pub weight_mb:         i32,
+    pub kv_per_request_mb: i32,
+    pub active_requests:   u32,
+    pub max_concurrent:    u32,
+    pub llm_concern:       Option<String>,
+    pub llm_reason:        Option<String>,
 }
 
 #[derive(Serialize)]
-pub struct BackendCapacityInfo {
-    pub provider_id:   String,
-    pub provider_name: String,
-    pub thermal_state: String,
-    pub temp_c:        Option<f32>,
-    pub models:        Vec<ModelCapacityInfo>,
+pub struct ProviderVramInfo {
+    pub provider_id:     String,
+    pub provider_name:   String,
+    pub total_vram_mb:   u32,
+    pub used_vram_mb:    u32,
+    pub available_vram_mb: u32,
+    pub thermal_state:   String,
+    pub temp_c:          Option<f32>,
+    pub loaded_models:   Vec<LoadedModelInfo>,
 }
 
 #[derive(Serialize)]
 pub struct CapacityResponse {
-    pub providers: Vec<BackendCapacityInfo>,
+    pub providers: Vec<ProviderVramInfo>,
 }
 
 #[derive(Serialize)]
-pub struct CapacitySettingsResponse {
-    pub analyzer_model:      String,
-    pub batch_enabled:       bool,
-    pub batch_interval_secs: i32,
-    pub last_run_at:         Option<String>,
-    pub last_run_status:     Option<String>,
-    pub available_models:    Vec<String>,
+pub struct SyncSettingsResponse {
+    pub analyzer_model:     String,
+    pub sync_enabled:       bool,
+    pub sync_interval_secs: i32,
+    pub probe_permits:      i32,
+    pub probe_rate:         i32,
+    pub last_run_at:        Option<String>,
+    pub last_run_status:    Option<String>,
+    pub available_models:   Vec<String>,
+}
+
+impl SyncSettingsResponse {
+    fn from_settings(
+        settings: crate::application::ports::outbound::capacity_settings_repository::CapacitySettings,
+        available_models: Vec<String>,
+    ) -> Self {
+        Self {
+            analyzer_model:     settings.analyzer_model,
+            sync_enabled:       settings.sync_enabled,
+            sync_interval_secs: settings.sync_interval_secs,
+            probe_permits:      settings.probe_permits,
+            probe_rate:         settings.probe_rate,
+            last_run_at:        settings.last_run_at.map(|t| t.to_rfc3339()),
+            last_run_status:    settings.last_run_status,
+            available_models,
+        }
+    }
 }
 
 #[derive(Deserialize)]
-pub struct PatchCapacitySettings {
-    pub analyzer_model:      Option<String>,
-    pub batch_enabled:       Option<bool>,
-    pub batch_interval_secs: Option<i32>,
+pub struct PatchSyncSettings {
+    pub analyzer_model:     Option<String>,
+    pub sync_enabled:       Option<bool>,
+    pub sync_interval_secs: Option<i32>,
+    pub probe_permits:      Option<i32>,
+    pub probe_rate:         Option<i32>,
 }
 
 // ── GET /v1/dashboard/capacity ──────────────────────────────────────
@@ -572,8 +660,8 @@ pub async fn get_capacity(State(state): State<AppState>) -> impl axum::response:
         }
     };
 
-    let backends_list = state.provider_registry.list_all().await.unwrap_or_default();
-    let provider_name_map: HashMap<uuid::Uuid, String> = backends_list
+    let providers_list = state.provider_registry.list_all().await.unwrap_or_default();
+    let provider_name_map: HashMap<uuid::Uuid, String> = providers_list
         .iter()
         .map(|b| (b.id, b.name.clone()))
         .collect();
@@ -584,7 +672,7 @@ pub async fn get_capacity(State(state): State<AppState>) -> impl axum::response:
         by_provider.entry(entry.provider_id).or_default().push(entry);
     }
 
-    let mut result: Vec<BackendCapacityInfo> = Vec::new();
+    let mut result: Vec<ProviderVramInfo> = Vec::new();
     for (provider_id, models) in by_provider {
         let thermal_level = state.thermal.get(provider_id);
         let temp_c = state.thermal.temp_c(provider_id);
@@ -594,38 +682,35 @@ pub async fn get_capacity(State(state): State<AppState>) -> impl axum::response:
             ThrottleLevel::Hard   => "hard",
         };
 
-        let model_infos: Vec<ModelCapacityInfo> = models
+        let loaded_models: Vec<LoadedModelInfo> = models
             .into_iter()
             .map(|e| {
-                let active    = state.slot_map.active_slots(provider_id, &e.model_name);
-                let available = state.slot_map.available_slots(provider_id, &e.model_name);
-                ModelCapacityInfo {
-                    model_name:          e.model_name,
-                    recommended_slots:   e.recommended_slots,
-                    active_slots:        active,
-                    available_slots:     available,
-                    vram_model_mb:       e.vram_model_mb,
-                    vram_kv_per_slot_mb: e.vram_kv_per_slot_mb,
-                    avg_tokens_per_sec:  e.avg_tokens_per_sec,
-                    avg_prefill_tps:     e.avg_prefill_tps,
-                    p95_latency_ms:      e.p95_latency_ms,
-                    sample_count:        e.sample_count,
-                    llm_concern:         e.llm_concern,
-                    llm_reason:          e.llm_reason,
-                    updated_at:          e.updated_at.to_rfc3339(),
+                let active = state.vram_pool.active_requests(provider_id, &e.model_name);
+                let max_conc = state.vram_pool.max_concurrent(provider_id, &e.model_name);
+                LoadedModelInfo {
+                    model_name:        e.model_name,
+                    weight_mb:         e.weight_mb,
+                    kv_per_request_mb: e.kv_per_request_mb,
+                    active_requests:   active,
+                    max_concurrent:    max_conc,
+                    llm_concern:       e.llm_concern,
+                    llm_reason:        e.llm_reason,
                 }
             })
             .collect();
 
-        result.push(BackendCapacityInfo {
-            provider_id:   provider_id.to_string(),
-            provider_name: provider_name_map
+        result.push(ProviderVramInfo {
+            provider_id:     provider_id.to_string(),
+            provider_name:   provider_name_map
                 .get(&provider_id)
                 .cloned()
                 .unwrap_or_else(|| provider_id.to_string()),
-            thermal_state: thermal_state.to_string(),
+            total_vram_mb:   state.vram_pool.total_vram_mb(provider_id),
+            used_vram_mb:    state.vram_pool.used_vram_mb(provider_id),
+            available_vram_mb: state.vram_pool.available_vram_mb(provider_id),
+            thermal_state:   thermal_state.to_string(),
             temp_c,
-            models: model_infos,
+            loaded_models,
         });
     }
 
@@ -640,50 +725,36 @@ pub async fn get_capacity_settings(
     let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
 
     // Fetch available models from Ollama /api/tags
-    let available_models = fetch_ollama_tags(&state.analyzer_url).await;
+    let available_models = fetch_ollama_tags(&state.http_client, &state.analyzer_url).await;
 
-    Json(CapacitySettingsResponse {
-        analyzer_model:      settings.analyzer_model,
-        batch_enabled:       settings.batch_enabled,
-        batch_interval_secs: settings.batch_interval_secs,
-        last_run_at:         settings.last_run_at.map(|t| t.to_rfc3339()),
-        last_run_status:     settings.last_run_status,
-        available_models,
-    })
-    .into_response()
+    Json(SyncSettingsResponse::from_settings(settings, available_models)).into_response()
 }
 
 // ── PATCH /v1/dashboard/capacity/settings ──────────────────────────
 
 pub async fn patch_capacity_settings(
-    Extension(claims): Extension<Claims>,
+    RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
-    Json(body): Json<PatchCapacitySettings>,
+    Json(body): Json<PatchSyncSettings>,
 ) -> impl axum::response::IntoResponse {
     let updated = state
         .capacity_settings_repo
         .update_settings(
             body.analyzer_model.as_deref(),
-            body.batch_enabled,
-            body.batch_interval_secs,
+            body.sync_enabled,
+            body.sync_interval_secs,
+            body.probe_permits,
+            body.probe_rate,
         )
         .await;
 
     match updated {
         Ok(settings) => {
             emit_audit(&state, &claims, "update", "capacity_settings", "capacity_settings", "capacity_settings",
-                &format!("Capacity analyzer settings updated: model={:?}, batch_enabled={:?}, batch_interval_secs={:?}",
-                    body.analyzer_model, body.batch_enabled, body.batch_interval_secs)).await;
-            let available_models = fetch_ollama_tags(&state.analyzer_url).await;
-            Json(CapacitySettingsResponse {
-                analyzer_model:      settings.analyzer_model,
-                batch_enabled:       settings.batch_enabled,
-                batch_interval_secs: settings.batch_interval_secs,
-                last_run_at:         settings.last_run_at.map(|t| t.to_rfc3339()),
-                last_run_status:     settings.last_run_status,
-                available_models,
-            })
-            .into_response()
+                &format!("Sync settings updated: model={:?}, sync_enabled={:?}, sync_interval_secs={:?}",
+                    body.analyzer_model, body.sync_enabled, body.sync_interval_secs)).await;
+            let available_models = fetch_ollama_tags(&state.http_client, &state.analyzer_url).await;
+            Json(SyncSettingsResponse::from_settings(settings, available_models)).into_response()
         }
         Err(e) => {
             tracing::warn!("patch_capacity_settings failed: {e}");
@@ -695,40 +766,38 @@ pub async fn patch_capacity_settings(
 // ── POST /v1/dashboard/capacity/sync ───────────────────────────────
 
 pub async fn trigger_capacity_sync(
-    Extension(claims): Extension<Claims>,
+    RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
-    // Prevent concurrent triggers — return 409 if analysis is already running.
-    if state.capacity_analysis_lock.available_permits() == 0 {
+    if state.sync_lock.available_permits() == 0 {
         return (
             StatusCode::CONFLICT,
-            Json(serde_json::json!({ "message": "capacity analysis already in progress" })),
+            Json(serde_json::json!({ "message": "sync already in progress" })),
         )
             .into_response();
     }
-    state.capacity_manual_trigger.notify_one();
-    emit_audit(&state, &claims, "trigger", "capacity_settings", "capacity_settings", "capacity_sync",
-        "Manual capacity analysis triggered by admin").await;
+    state.sync_trigger.notify_one();
+    emit_audit(&state, &claims, "trigger", "capacity_settings", "capacity_settings", "provider_sync",
+        "Manual provider sync triggered by admin").await;
     (
         StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "message": "capacity analysis triggered" })),
+        Json(serde_json::json!({ "message": "provider sync triggered" })),
     )
         .into_response()
 }
 
 // ── Helper: fetch Ollama model tags ────────────────────────────────
 
-async fn fetch_ollama_tags(analyzer_url: &str) -> Vec<String> {
+async fn fetch_ollama_tags(client: &reqwest::Client, analyzer_url: &str) -> Vec<String> {
     #[derive(serde::Deserialize)]
     struct TagsResponse { models: Vec<TagModel> }
     #[derive(serde::Deserialize)]
     struct TagModel { name: String }
 
-    let client = reqwest::Client::new();
     let url = format!("{}/api/tags", analyzer_url.trim_end_matches('/'));
     match client
         .get(&url)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
         .send()
         .await
     {
@@ -761,9 +830,9 @@ pub async fn get_queue_depth(State(state): State<AppState>) -> impl axum::respon
     use fred::prelude::*;
 
     let (paid, api, test): (i64, i64, i64) = tokio::join!(
-        async { pool.llen::<i64, _>("veronex:queue:jobs:paid").await.unwrap_or(0) },
-        async { pool.llen::<i64, _>("veronex:queue:jobs").await.unwrap_or(0) },
-        async { pool.llen::<i64, _>("veronex:queue:jobs:test").await.unwrap_or(0) },
+        async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or(0) },
+        async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or(0) },
+        async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or(0) },
     );
 
     Json(QueueDepth {
@@ -782,12 +851,10 @@ pub async fn get_queue_depth(State(state): State<AppState>) -> impl axum::respon
 // (pending → running → completed/failed/cancelled).
 // JWT Bearer auth enforced by the dashboard router middleware.
 
-type SseJobStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
-
-pub async fn job_events_sse(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Response {
     let mut rx = state.job_event_tx.subscribe();
 
-    let stream: SseJobStream = Box::pin(async_stream::stream! {
+    let stream: SseStream = Box::pin(async_stream::stream! {
         loop {
             match rx.recv().await {
                 Ok(event) => {
@@ -801,10 +868,7 @@ pub async fn job_events_sse(State(state): State<AppState>) -> impl IntoResponse 
         }
     });
 
-    (
-        [("X-Accel-Buffering", "no")],
-        Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(20))),
-    )
+    super::handlers::sse_response(stream)
 }
 
 // ── Lab feature settings ─────────────────────────────────────────────
@@ -841,7 +905,7 @@ pub struct PatchLabSettingsBody {
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
 pub async fn patch_lab_settings(
-    Extension(claims): Extension<Claims>,
+    RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
     Json(body): Json<PatchLabSettingsBody>,
 ) -> impl axum::response::IntoResponse {

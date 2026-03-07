@@ -66,6 +66,10 @@ struct GpuInfo {
     gpu_util_pct: u8,
     power_w: f32,
     temp_c: f32,
+    /// GPU vendor: "amd", "nvidia", or "unknown".
+    /// Detected from sysfs `/sys/class/drm/cardN/device/vendor`.
+    #[serde(default)]
+    gpu_vendor: String,
 }
 
 #[derive(Serialize, Default)]
@@ -102,8 +106,21 @@ async fn read_u64(path: &str) -> Option<u64> {
         .ok()
 }
 
-/// Find the first AMD GPU card index (vendor == 0x1002, non-zero VRAM).
-async fn find_amd_card() -> Option<u8> {
+/// Vendor string from PCI vendor ID.
+fn vendor_name(vendor_id: &str) -> &'static str {
+    match vendor_id.trim() {
+        "0x1002" => "amd",
+        "0x10de" => "nvidia",
+        _ => "unknown",
+    }
+}
+
+/// Find the first GPU card index and its vendor from sysfs.
+///
+/// Checks AMD (0x1002) and NVIDIA (0x10de) vendors.
+/// For AMD: requires non-zero `mem_info_vram_total`.
+/// For NVIDIA: requires the vendor file to exist (VRAM read via nvidia-smi).
+async fn find_gpu_card() -> Option<(u8, &'static str)> {
     let mut dir = fs::read_dir(SYSFS_DRM).await.ok()?;
     loop {
         let entry = match dir.next_entry().await {
@@ -120,18 +137,26 @@ async fn find_amd_card() -> Option<u8> {
             Err(_) => continue,
         };
         let vendor_path = format!("{SYSFS_DRM}/{name_str}/device/vendor");
-        if let Ok(vendor) = fs::read_to_string(&vendor_path).await {
-            if vendor.trim() != "0x1002" {
-                continue;
+        let vendor_id = match fs::read_to_string(&vendor_path).await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let vendor = vendor_name(&vendor_id);
+        match vendor {
+            "amd" => {
+                let vram_path = format!("{SYSFS_DRM}/{name_str}/device/mem_info_vram_total");
+                if let Some(v) = read_u64(&vram_path).await {
+                    if v > 0 {
+                        return Some((idx, vendor));
+                    }
+                }
             }
-        } else {
-            continue;
-        }
-        let vram_path = format!("{SYSFS_DRM}/{name_str}/device/mem_info_vram_total");
-        if let Some(v) = read_u64(&vram_path).await {
-            if v > 0 {
-                return Some(idx);
+            "nvidia" => {
+                // NVIDIA sysfs exists but VRAM is read differently.
+                // Card detection is enough — metrics collected via nvidia-smi fallback.
+                return Some((idx, vendor));
             }
+            _ => continue,
         }
     }
     None
@@ -147,27 +172,33 @@ async fn find_hwmon(card: &str) -> Option<String> {
     }
 }
 
-async fn collect_gpu(card_idx: Option<u8>) -> GpuInfo {
-    let Some(idx) = card_idx else {
+async fn collect_gpu(card: Option<(u8, &str)>) -> GpuInfo {
+    let Some((idx, vendor)) = card else {
         return GpuInfo::default();
     };
-    let card = format!("card{idx}");
-    let dev = format!("{SYSFS_DRM}/{card}/device");
+    let card_name = format!("card{idx}");
+    let dev = format!("{SYSFS_DRM}/{card_name}/device");
 
-    let vram_used = read_u64(&format!("{dev}/mem_info_vram_used"))
-        .await
-        .map(|v| (v / 1_048_576) as u32)
-        .unwrap_or(0);
-    let vram_total = read_u64(&format!("{dev}/mem_info_vram_total"))
-        .await
-        .map(|v| (v / 1_048_576) as u32)
-        .unwrap_or(0);
-    let gpu_util = read_u64(&format!("{dev}/gpu_busy_percent"))
-        .await
-        .unwrap_or(0)
-        .min(100) as u8;
+    // AMD sysfs VRAM paths. NVIDIA uses different mechanism (nvidia-smi).
+    let (vram_used, vram_total, gpu_util) = if vendor == "amd" {
+        let used = read_u64(&format!("{dev}/mem_info_vram_used"))
+            .await
+            .map(|v| (v / 1_048_576) as u32)
+            .unwrap_or(0);
+        let total = read_u64(&format!("{dev}/mem_info_vram_total"))
+            .await
+            .map(|v| (v / 1_048_576) as u32)
+            .unwrap_or(0);
+        let util = read_u64(&format!("{dev}/gpu_busy_percent"))
+            .await
+            .unwrap_or(0)
+            .min(100) as u8;
+        (used, total, util)
+    } else {
+        (0, 0, 0)
+    };
 
-    let (power_w, temp_c) = if let Some(hwmon) = find_hwmon(&card).await {
+    let (power_w, temp_c) = if let Some(hwmon) = find_hwmon(&card_name).await {
         let p = read_u64(&format!("{hwmon}/power1_average")).await.unwrap_or(0);
         let t = read_u64(&format!("{hwmon}/temp1_input")).await.unwrap_or(0);
         (p as f32 / 1_000_000.0, t as f32 / 1_000.0)
@@ -175,7 +206,14 @@ async fn collect_gpu(card_idx: Option<u8>) -> GpuInfo {
         (0.0, 0.0)
     };
 
-    GpuInfo { vram_used_mb: vram_used, vram_total_mb: vram_total, gpu_util_pct: gpu_util, power_w, temp_c }
+    GpuInfo {
+        vram_used_mb: vram_used,
+        vram_total_mb: vram_total,
+        gpu_util_pct: gpu_util,
+        power_w,
+        temp_c,
+        gpu_vendor: vendor.to_string(),
+    }
 }
 
 // ── /proc/meminfo ──────────────────────────────────────────────────────────────
@@ -248,12 +286,10 @@ struct AppState {
 }
 
 async fn handler_metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Discover AMD card on first call (cheap — cached by find_amd_card caller
-    // in a real deployment; fine to re-discover every 30 s polling interval).
-    let card_idx = find_amd_card().await;
+    let card = find_gpu_card().await;
 
     let (gpu, memory, ollama) = tokio::join!(
-        collect_gpu(card_idx),
+        collect_gpu(card),
         collect_memory(),
         collect_ollama(&state.ollama_url, &state.http),
     );

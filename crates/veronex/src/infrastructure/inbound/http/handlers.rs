@@ -1,23 +1,128 @@
 use std::convert::Infallible;
 use std::pin::Pin;
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::enums::{ApiFormat, JobSource};
+use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
+use crate::domain::enums::{ApiFormat, JobSource, ProviderType};
 use crate::domain::value_objects::JobId;
 
+use super::constants::{GEMINI_TIER_FREE, PROVIDER_GEMINI, PROVIDER_OLLAMA, SSE_KEEP_ALIVE, SSE_MAX_CONNECTIONS, SSE_TIMEOUT};
+use super::error::AppError;
+use super::openai_sse_types::CompletionChunk;
 use super::state::AppState;
 
-/// Type alias for a boxed SSE event stream.
-type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
+/// Type alias for a boxed SSE event stream.  Re-exported for use by sibling handler modules.
+pub(super) type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
+
+/// Sanitize error message for SSE output: strip internal details and escape CRLF.
+///
+/// Uses a whitelist approach — only known-safe error categories produce a
+/// descriptive message. Everything else gets a generic "inference failed"
+/// to prevent leaking internal implementation details to clients.
+pub(super) fn sanitize_sse_error(e: &anyhow::Error) -> String {
+    let msg = e.to_string();
+    let safe = if msg.contains("database") || msg.contains("sqlx") || msg.contains("postgres") {
+        "internal processing error".to_string()
+    } else if msg.contains("reqwest") || msg.contains("connect") || msg.contains("timeout") {
+        "provider communication error".to_string()
+    } else if msg.contains("capacity") || msg.contains("slot") {
+        "service at capacity".to_string()
+    } else if msg.contains("cancelled") || msg.contains("canceled") {
+        "request cancelled".to_string()
+    } else if msg.contains("token") && msg.contains("limit") {
+        "token limit exceeded".to_string()
+    } else {
+        "inference failed".to_string()
+    };
+    // Escape CRLF to prevent SSE frame injection
+    safe.replace('\r', "\\r").replace('\n', "\\n")
+}
+
+/// RAII guard that decrements the SSE connection counter on drop.
+pub(super) struct SseDropGuard(pub(super) Arc<AtomicU32>);
+
+impl Drop for SseDropGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// Wrap an SSE stream with a hard timeout. After `SSE_TIMEOUT` elapses from
+/// the first poll, the stream emits a final "timeout" event and terminates.
+pub(super) fn with_sse_timeout(stream: SseStream) -> SseStream {
+    let deadline = tokio::time::Instant::now() + SSE_TIMEOUT;
+    Box::pin(async_stream::stream! {
+        tokio::pin!(stream);
+        loop {
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline) => {
+                    yield Ok(Event::default().event("error").data("stream timeout"));
+                    break;
+                }
+                item = futures::StreamExt::next(&mut stream) => {
+                    match item {
+                        Some(event) => yield event,
+                        None => break,
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Try to acquire an SSE connection slot. Returns 429 on exhaustion.
+pub(super) fn try_acquire_sse(counter: &Arc<AtomicU32>) -> Result<SseDropGuard, Response> {
+    let prev = counter.fetch_add(1, Ordering::Acquire);
+    if prev >= SSE_MAX_CONNECTIONS {
+        counter.fetch_sub(1, Ordering::Release);
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "too many concurrent SSE connections"})),
+        ).into_response());
+    }
+    Ok(SseDropGuard(counter.clone()))
+}
+
+/// Build a fully-formed SSE response with timeout, keep-alive, and `X-Accel-Buffering: no`.
+pub(super) fn sse_response(stream: SseStream) -> Response {
+    (
+        [("X-Accel-Buffering", "no")],
+        Sse::new(with_sse_timeout(stream)).keep_alive(KeepAlive::new().interval(SSE_KEEP_ALIVE)),
+    ).into_response()
+}
+
+/// Parse a UUID string, returning `AppError::BadRequest` on failure.
+pub(super) fn parse_uuid(s: &str) -> Result<Uuid, AppError> {
+    Uuid::parse_str(s).map_err(|_| AppError::BadRequest(format!("invalid UUID: {s}")))
+}
+
+/// Validate a username: non-empty, ≤64 chars, ASCII alphanumeric + `_` `.` `-`.
+pub(super) fn validate_username(username: &str) -> Result<(), AppError> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest("username must not be empty".into()));
+    }
+    if trimmed.len() > 64 {
+        return Err(AppError::BadRequest("username too long".into()));
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-') {
+        return Err(AppError::BadRequest(
+            "username must contain only alphanumeric characters, underscores, dots, or hyphens".into(),
+        ));
+    }
+    Ok(())
+}
 
 // ── Request / Response types ───────────────────────────────────────
 
@@ -30,7 +135,7 @@ pub struct SubmitRequest {
 }
 
 fn default_provider_type() -> String {
-    "ollama".to_string()
+    PROVIDER_OLLAMA.to_string()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,12 +156,38 @@ pub async fn submit_inference(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
     Json(req): Json<SubmitRequest>,
-) -> Result<Json<SubmitResponse>, StatusCode> {
+) -> Result<Json<SubmitResponse>, AppError> {
+    if let Err(e) = super::inference_helpers::validate_content_length(req.prompt.len()) {
+        return Err(AppError::BadRequest(e.into()));
+    }
+    if let Err(e) = super::inference_helpers::validate_model_name(&req.model) {
+        return Err(AppError::BadRequest(e.into()));
+    }
+
+    let (provider_type, gemini_tier) = match req.provider_type.as_str() {
+        "gemini-free" => (ProviderType::Gemini, Some(GEMINI_TIER_FREE.to_string())),
+        PROVIDER_GEMINI => (ProviderType::Gemini, None),
+        _ => (ProviderType::Ollama, None),
+    };
+
     let job_id = state
         .use_case
-        .submit(&req.prompt, &req.model, &req.provider_type, Some(api_key.id), None, JobSource::Api, ApiFormat::VeronexNative, None, None, Some("/v1/inference".to_string()), None, Some(api_key.tier.clone()))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .submit(SubmitJobRequest {
+            prompt: req.prompt,
+            model_name: req.model,
+            provider_type,
+            gemini_tier,
+            api_key_id: Some(api_key.id),
+            account_id: None,
+            source: JobSource::Api,
+            api_format: ApiFormat::VeronexNative,
+            messages: None,
+            tools: None,
+            request_path: Some("/v1/inference".to_string()),
+            conversation_id: None,
+            key_tier: Some(api_key.tier),
+        })
+        .await?;
 
     Ok(Json(SubmitResponse {
         job_id: job_id.to_string(),
@@ -67,22 +198,30 @@ pub async fn submit_inference(
 pub async fn stream_inference(
     Path(job_id): Path<String>,
     State(state): State<AppState>,
-) -> impl IntoResponse {
+) -> Response {
+    let guard = match try_acquire_sse(&state.sse_connections) {
+        Ok(g) => g,
+        Err(resp) => return resp,
+    };
+
     let sse_stream: SseStream = match Uuid::parse_str(&job_id) {
         Ok(uuid) => {
             let jid = JobId(uuid);
             let token_stream = state.use_case.stream(&jid);
 
-            Box::pin(token_stream.map(|result| match result {
-                Ok(token) => {
-                    if token.is_final {
-                        Ok::<_, Infallible>(Event::default().event("done").data(""))
-                    } else {
-                        Ok::<_, Infallible>(Event::default().event("token").data(token.value))
+            Box::pin(token_stream.map(move |result| {
+                let _ = &guard; // hold guard alive for stream lifetime
+                match result {
+                    Ok(token) => {
+                        if token.is_final {
+                            Ok::<_, Infallible>(Event::default().event("done").data(""))
+                        } else {
+                            Ok::<_, Infallible>(Event::default().event("token").data(token.value))
+                        }
                     }
-                }
-                Err(e) => {
-                    Ok::<_, Infallible>(Event::default().event("error").data(e.to_string()))
+                    Err(e) => {
+                        Ok::<_, Infallible>(Event::default().event("error").data(sanitize_sse_error(&e)))
+                    }
                 }
             }))
         }
@@ -91,30 +230,23 @@ pub async fn stream_inference(
         })),
     };
 
-    (
-        [("X-Accel-Buffering", "no")],
-        Sse::new(sse_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
-    )
+    sse_response(sse_stream)
 }
 
 /// GET /v1/inference/:job_id/status - Get job status.
 pub async fn get_status(
     Path(job_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<StatusResponse>, StatusCode> {
-    let uuid = Uuid::parse_str(&job_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<Json<StatusResponse>, AppError> {
+    let uuid = parse_uuid(&job_id)?;
     let jid = JobId(uuid);
 
     let status = state
         .use_case
         .get_status(&jid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
 
-    let status_str = serde_json::to_value(status)
-        .ok()
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_else(|| format!("{:?}", status).to_lowercase());
+    let status_str = status.as_str().to_string();
 
     Ok(Json(StatusResponse {
         job_id: job_id.to_string(),
@@ -130,25 +262,11 @@ pub async fn stream_job_openai(
     Path(job_id): Path<Uuid>,
     State(state): State<AppState>,
     axum::extract::Extension(_api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
-) -> impl IntoResponse {
-    #[derive(serde::Serialize)]
-    struct DeltaContent {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        content: Option<String>,
-    }
-    #[derive(serde::Serialize)]
-    struct ChunkChoice {
-        index: u32,
-        delta: DeltaContent,
-        finish_reason: Option<&'static str>,
-    }
-    #[derive(serde::Serialize)]
-    struct CompletionChunk {
-        id: String,
-        object: &'static str,
-        created: i64,
-        choices: Vec<ChunkChoice>,
-    }
+) -> Response {
+    let guard = match try_acquire_sse(&state.sse_connections) {
+        Ok(g) => g,
+        Err(resp) => return resp,
+    };
 
     let jid = JobId(job_id);
     let chunk_id = format!("chatcmpl-{}", job_id);
@@ -156,31 +274,14 @@ pub async fn stream_job_openai(
     let token_stream = state.use_case.stream(&jid);
 
     let content_stream = token_stream.map(move |result| -> Result<Event, std::convert::Infallible> {
+        let _ = &guard; // hold guard alive for stream lifetime
         match result {
             Ok(token) if token.is_final => {
-                let stop_chunk = CompletionChunk {
-                    id: chunk_id.clone(),
-                    object: "chat.completion.chunk",
-                    created,
-                    choices: vec![ChunkChoice {
-                        index: 0,
-                        delta: DeltaContent { content: None },
-                        finish_reason: Some("stop"),
-                    }],
-                };
-                Ok(Event::default().data(serde_json::to_string(&stop_chunk).unwrap_or_default()))
+                let chunk = CompletionChunk::stop(chunk_id.clone(), created, None);
+                Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
             }
             Ok(token) => {
-                let chunk = CompletionChunk {
-                    id: chunk_id.clone(),
-                    object: "chat.completion.chunk",
-                    created,
-                    choices: vec![ChunkChoice {
-                        index: 0,
-                        delta: DeltaContent { content: Some(token.value) },
-                        finish_reason: None,
-                    }],
-                };
+                let chunk = CompletionChunk::content(chunk_id.clone(), created, None, token.value);
                 Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
             }
             Err(e) => {
@@ -196,26 +297,21 @@ pub async fn stream_job_openai(
     });
     let sse_stream: SseStream = Box::pin(content_stream.chain(done_stream));
 
-    (
-        [("X-Accel-Buffering", "no")],
-        axum::response::sse::Sse::new(sse_stream)
-            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
-    )
+    sse_response(sse_stream)
 }
 
 /// DELETE /v1/inference/:job_id - Cancel a job.
 pub async fn cancel_inference(
     Path(job_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    let uuid = Uuid::parse_str(&job_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<StatusCode, AppError> {
+    let uuid = parse_uuid(&job_id)?;
     let jid = JobId(uuid);
 
     state
         .use_case
         .cancel(&jid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
 
     Ok(StatusCode::OK)
 }
@@ -237,7 +333,7 @@ mod tests {
     use crate::application::ports::outbound::ollama_sync_job_repository::{OllamaSyncJob, OllamaSyncJobRepository};
     use crate::application::ports::outbound::session_repository::SessionRepository;
     use crate::domain::entities::{Account, ApiKey, GeminiRateLimitPolicy, GpuServer, LlmProvider, Session};
-    use crate::domain::enums::{JobSource, JobStatus, LlmProviderStatus};
+    use crate::domain::enums::{JobStatus, KeyTier, KeyType, LlmProviderStatus};
     use crate::domain::value_objects::StreamToken;
     use crate::infrastructure::inbound::http::router;
     use anyhow::Result;
@@ -256,21 +352,7 @@ mod tests {
 
     #[async_trait]
     impl InferenceUseCase for MockUseCase {
-        async fn submit(
-            &self,
-            _prompt: &str,
-            _model_name: &str,
-            _backend_type: &str,
-            _api_key_id: Option<Uuid>,
-            _account_id: Option<Uuid>,
-            _source: JobSource,
-            _api_format: ApiFormat,
-            _messages: Option<serde_json::Value>,
-            _tools: Option<serde_json::Value>,
-            _request_path: Option<String>,
-            _conversation_id: Option<String>,
-            _key_tier: Option<String>,
-        ) -> Result<JobId> {
+        async fn submit(&self, _req: SubmitJobRequest) -> Result<JobId> {
             Ok(JobId::new())
         }
 
@@ -320,10 +402,16 @@ mod tests {
         async fn create(&self, _key: &ApiKey) -> Result<()> {
             Ok(())
         }
+        async fn get_by_id(&self, _key_id: &Uuid) -> Result<Option<ApiKey>> {
+            Ok(None)
+        }
         async fn get_by_hash(&self, _key_hash: &str) -> Result<Option<ApiKey>> {
             Ok(None)
         }
         async fn list_by_tenant(&self, _tenant_id: &str) -> Result<Vec<ApiKey>> {
+            Ok(vec![])
+        }
+        async fn list_all(&self) -> Result<Vec<ApiKey>> {
             Ok(vec![])
         }
         async fn revoke(&self, _key_id: &Uuid) -> Result<()> {
@@ -335,8 +423,14 @@ mod tests {
         async fn soft_delete(&self, _key_id: &Uuid) -> Result<()> {
             Ok(())
         }
-        async fn set_tier(&self, _key_id: &Uuid, _tier: &str) -> Result<()> {
+        async fn set_tier(&self, _key_id: &Uuid, _tier: &KeyTier) -> Result<()> {
             Ok(())
+        }
+        async fn update_fields(&self, _key_id: &Uuid, _is_active: Option<bool>, _tier: Option<&KeyTier>) -> Result<()> {
+            Ok(())
+        }
+        async fn soft_delete_by_tenant(&self, _tenant_id: &str) -> Result<u64> {
+            Ok(0)
         }
     }
 
@@ -431,6 +525,7 @@ mod tests {
         async fn list_all(&self) -> Result<Vec<Account>> { Ok(vec![]) }
         async fn update(&self, _account: &Account) -> Result<()> { Ok(()) }
         async fn soft_delete(&self, _id: &Uuid) -> Result<()> { Ok(()) }
+        async fn soft_delete_cascade(&self, _account_id: &Uuid, _tenant_id: &str) -> Result<u64> { Ok(0) }
         async fn set_active(&self, _id: &Uuid, _is_active: bool) -> Result<()> { Ok(()) }
         async fn update_last_login(&self, _id: &Uuid) -> Result<()> { Ok(()) }
         async fn set_password_hash(&self, _id: &Uuid, _hash: &str) -> Result<()> { Ok(()) }
@@ -440,9 +535,10 @@ mod tests {
 
     #[async_trait]
     impl crate::application::ports::outbound::model_capacity_repository::ModelCapacityRepository for MockCapacityRepo {
-        async fn upsert(&self, _: &crate::application::ports::outbound::model_capacity_repository::ModelCapacityEntry) -> Result<()> { Ok(()) }
-        async fn get(&self, _: uuid::Uuid, _: &str) -> Result<Option<crate::application::ports::outbound::model_capacity_repository::ModelCapacityEntry>> { Ok(None) }
-        async fn list_all(&self) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelCapacityEntry>> { Ok(vec![]) }
+        async fn upsert(&self, _: &crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry) -> Result<()> { Ok(()) }
+        async fn get(&self, _: uuid::Uuid, _: &str) -> Result<Option<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(None) }
+        async fn list_all(&self) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(vec![]) }
+        async fn list_by_provider(&self, _: uuid::Uuid) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(vec![]) }
         async fn compute_throughput_stats(&self, _: uuid::Uuid, _: &str, _: u32) -> Result<Option<crate::application::ports::outbound::model_capacity_repository::ThroughputStats>> { Ok(None) }
     }
 
@@ -453,7 +549,7 @@ mod tests {
         async fn get(&self) -> Result<crate::application::ports::outbound::capacity_settings_repository::CapacitySettings> {
             Ok(crate::application::ports::outbound::capacity_settings_repository::CapacitySettings::default())
         }
-        async fn update_settings(&self, _: Option<&str>, _: Option<bool>, _: Option<i32>) -> Result<crate::application::ports::outbound::capacity_settings_repository::CapacitySettings> {
+        async fn update_settings(&self, _: Option<&str>, _: Option<bool>, _: Option<i32>, _: Option<i32>, _: Option<i32>) -> Result<crate::application::ports::outbound::capacity_settings_repository::CapacitySettings> {
             Ok(crate::application::ports::outbound::capacity_settings_repository::CapacitySettings::default())
         }
         async fn record_run(&self, _: &str) -> Result<()> { Ok(()) }
@@ -479,6 +575,7 @@ mod tests {
         async fn list_active(&self, _account_id: &Uuid) -> Result<Vec<Session>> { Ok(vec![]) }
         async fn get_by_refresh_hash(&self, _hash: &str) -> Result<Option<Session>> { Ok(None) }
         async fn revoke(&self, _session_id: &Uuid) -> Result<()> { Ok(()) }
+        async fn get_by_id(&self, _session_id: &Uuid) -> Result<Option<Session>> { Ok(None) }
         async fn revoke_all_for_account(&self, _account_id: &Uuid) -> Result<()> { Ok(()) }
         async fn update_last_used(&self, _jti: &Uuid) -> Result<()> { Ok(()) }
     }
@@ -496,13 +593,14 @@ mod tests {
             expires_at: None,
             deleted_at: None,
             created_at: chrono::Utc::now(),
-            key_type: "standard".to_string(),
-            tier: "paid".to_string(),
+            key_type: KeyType::Standard,
+            tier: KeyTier::Paid,
         };
         let pg_pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://test:test@localhost/test")
             .expect("lazy pool creation should not fail");
         let state = AppState {
+            http_client: reqwest::Client::new(),
             use_case: Arc::new(MockUseCase),
             api_key_repo: Arc::new(MockApiKeyRepo),
             account_repo: Arc::new(MockAccountRepo),
@@ -521,18 +619,19 @@ mod tests {
             session_repo: Arc::new(MockSessionRepo),
             pg_pool,
             cpu_snapshot_cache: Arc::new(dashmap::DashMap::new()),
-            slot_map: Arc::new(crate::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap::new()),
+            vram_pool: Arc::new(crate::infrastructure::outbound::capacity::vram_pool::VramPool::new()) as Arc<dyn crate::application::ports::outbound::concurrency_port::VramPoolPort>,
             thermal: Arc::new(crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap::new(60)),
             capacity_repo: Arc::new(MockCapacityRepo),
             capacity_settings_repo: Arc::new(MockCapacitySettingsRepo),
-            capacity_manual_trigger: Arc::new(tokio::sync::Notify::new()),
+            sync_trigger: Arc::new(tokio::sync::Notify::new()),
             analyzer_url: String::new(),
             job_event_tx: Arc::new(tokio::sync::broadcast::channel(1).0),
             circuit_breaker: Arc::new(crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap::new()),
             message_store: None,
             session_grouping_lock: Arc::new(tokio::sync::Semaphore::new(1)),
-            capacity_analysis_lock: Arc::new(tokio::sync::Semaphore::new(1)),
+            sync_lock: Arc::new(tokio::sync::Semaphore::new(1)),
             lab_settings_repo: Arc::new(MockLabSettingsRepo),
+            sse_connections: Arc::new(AtomicU32::new(0)),
         };
         // Inject a fake ApiKey extension so handlers that extract it work in tests.
         router::build_api_router()

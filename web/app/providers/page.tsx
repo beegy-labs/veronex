@@ -1,13 +1,13 @@
 'use client'
 
-import { useState, Suspense } from 'react'
+import { useState, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { providersQuery, serversQuery, serverMetricsQuery, selectedModelsQuery, ollamaModelsQuery, ollamaSyncStatusQuery, geminiPoliciesQuery, geminiModelsQuery, geminiSyncConfigQuery, capacityQuery, capacitySettingsQuery } from '@/lib/queries'
+import { providersQuery, serversQuery, serverMetricsQuery, selectedModelsQuery, ollamaModelsQuery, ollamaSyncStatusQuery, geminiPoliciesQuery, geminiModelsQuery, geminiSyncConfigQuery, capacityQuery, syncSettingsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
-import type { Provider, ProviderCapacityInfo, ProviderSelectedModel, CapacitySettings, GeminiModel, GeminiRateLimitPolicy, GeminiStatusResult, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, ModelCapacityInfo, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, RegisterProviderRequest, UpdateProviderRequest } from '@/lib/types'
+import type { Provider, ProviderVramInfo, ProviderSelectedModel, SyncSettings, GeminiModel, GeminiRateLimitPolicy, GeminiStatusResult, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, LoadedModelInfo, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchSyncSettings, RegisterProviderRequest, UpdateProviderRequest } from '@/lib/types'
 import { Activity, AlertTriangle, Plus, Trash2, RefreshCw, RotateCcw, Server, Key, Wifi, WifiOff, AlertCircle, Pencil, ShieldCheck, Eye, EyeOff, ListFilter, Search, BarChart2, Cpu, ChevronLeft, ChevronRight } from 'lucide-react'
-import { ServerMetricsCompact } from '@/components/server-metrics-cell'
+import { ServerMetricsCompact, fmtMb } from '@/components/server-metrics-cell'
 import { ServerHistoryModal } from '@/components/server-history-modal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -37,32 +37,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { fmtDateOnly, fmtDatetimeShort } from '@/lib/date'
 
-// ── SSOT: Gemini query keys ────────────────────────────────────────────────────
-// Single source of truth for all Gemini-related React Query keys.
-// All invalidations must go through refreshGeminiData() in GeminiSyncSection.
-const GEMINI_QUERY_KEYS = {
-  syncConfig:     ['gemini-sync-config'],
-  models:         ['gemini-models'],
-  policies:       ['gemini-policies'],
-  selectedModels: ['selected-models'], // prefix — matches all ['selected-models', backendId]
-} as const
+// SSOT: Gemini query keys imported from central definitions.
+import { GEMINI_QUERY_KEYS } from '@/lib/queries/providers'
+import {
+  PROVIDER_OLLAMA, PROVIDER_GEMINI,
+  PROVIDER_STATUS_DOT, PROVIDER_STATUS_DOT_ALT,
+  PROVIDER_STATUS_BADGE, PROVIDER_STATUS_TEXT, PROVIDER_STATUS_I18N,
+} from '@/lib/constants'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function extractHost(url: string): string {
   try { return new URL(url).host } catch { return url }
 }
-
-function fmtMb(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GiB`
-  return `${mb} MiB`
-}
-
 
 // ── Status badge ───────────────────────────────────────────────────────────────
 
@@ -142,7 +140,7 @@ function EditModal({ provider, servers, onClose }: { provider: Provider; servers
     mutationFn: () => {
       const body: UpdateProviderRequest = {
         name: name.trim(),
-        url: backend.backend_type === 'ollama' ? url.trim() : undefined,
+        url: provider.provider_type === PROVIDER_OLLAMA ? url.trim() : undefined,
         api_key: apiKey.trim() || undefined,
         total_vram_mb: vram ? parseInt(vram, 10) : 0,
         gpu_index: gpuIndex !== 'none' && gpuIndex !== '' ? parseInt(gpuIndex, 10) : null,
@@ -151,7 +149,7 @@ function EditModal({ provider, servers, onClose }: { provider: Provider; servers
       }
       return api.updateProvider(provider.id, body)
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['providers'] }); onClose() },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['providers'] }); onClose() },
   })
 
   return (
@@ -159,7 +157,7 @@ function EditModal({ provider, servers, onClose }: { provider: Provider; servers
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {provider.backend_type === 'ollama'
+            {provider.provider_type === PROVIDER_OLLAMA
               ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('providers.ollama.editTitle')}</>
               : <><Key className="h-4 w-4 text-accent-gpu" /> {t('providers.gemini.editTitle')}</>}
           </DialogTitle>
@@ -171,7 +169,7 @@ function EditModal({ provider, servers, onClose }: { provider: Provider; servers
             <Input id="edit-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
 
-          {provider.backend_type === 'ollama' && (
+          {provider.provider_type === PROVIDER_OLLAMA && (
             <>
               <div className="space-y-1.5">
                 <Label htmlFor="edit-url">{t('providers.ollama.ollamaUrl')}</Label>
@@ -241,7 +239,7 @@ function EditModal({ provider, servers, onClose }: { provider: Provider; servers
             </>
           )}
 
-          {provider.backend_type === 'gemini' && (
+          {provider.provider_type === PROVIDER_GEMINI && (
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="edit-apikey">
@@ -312,7 +310,7 @@ function RegisterModal({
     mutationFn: () => {
       const body: RegisterProviderRequest = {
         name: name.trim(),
-        backend_type: initialType,
+        provider_type: initialType,
         ...(initialType === 'ollama' && {
           url: url.trim(),
           total_vram_mb: vram ? parseInt(vram, 10) : undefined,
@@ -326,7 +324,7 @@ function RegisterModal({
       }
       return api.registerProvider(body)
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['providers'] }); onClose() },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['providers'] }); onClose() },
   })
 
   const isValid = name.trim() && (initialType === 'ollama' ? url.trim() : apiKey.trim())
@@ -466,7 +464,7 @@ function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPolicy; o
         rpd_limit: rpd ? parseInt(rpd, 10) : 0,
         available_on_free_tier: availableOnFreeTier,
       }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['gemini-policies'] }); onClose() },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['gemini-policies'] }); onClose() },
   })
 
   return (
@@ -535,13 +533,13 @@ function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPolicy; o
 
 // ── Key reveal cell ────────────────────────────────────────────────────────────
 
-function ApiKeyCell({ backendId, masked }: { backendId: string; masked: string | null }) {
+function ApiKeyCell({ providerId, masked }: { providerId: string; masked: string | null }) {
   const { t } = useTranslation()
   const [revealed, setRevealed] = useState(false)
 
   const { data, isFetching, refetch } = useQuery({
     queryKey: ['provider-key', providerId],
-    queryFn: () => api.providerKey(backendId),
+    queryFn: () => api.providerKey(providerId),
     enabled: false,
   })
 
@@ -676,7 +674,7 @@ function SetSyncKeyModal({ current, onClose }: { current: string | null; onClose
 
   const mutation = useMutation({
     mutationFn: () => api.setGeminiSyncConfig(apiKey.trim()),
-    onSuccess: () => {
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.syncConfig })
       onClose()
     },
@@ -720,48 +718,39 @@ function SetSyncKeyModal({ current, onClose }: { current: string | null; onClose
   )
 }
 
-// ── OllamaModelBackendsModal ───────────────────────────────────────────────────
+// ── OllamaModelProvidersModal ───────────────────────────────────────────────────
 
-const BACKENDS_PAGE_SIZE = 8
+const PROVIDERS_PAGE_SIZE = 8
 
-function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; onClose: () => void }) {
+function OllamaModelProvidersModal({ modelName, onClose }: { modelName: string; onClose: () => void }) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
 
-  const { data, isLoading } = useQuery<{ backends: OllamaProviderForModel[] }>({
-    queryKey: ['ollama-model-backends', modelName],
-    queryFn: () => api.ollamaModelBackends(modelName),
+  const { data, isLoading } = useQuery<{ providers: OllamaProviderForModel[] }>({
+    queryKey: ['ollama-model-providers', modelName],
+    queryFn: () => api.ollamaModelProviders(modelName),
     staleTime: 30_000,
   })
 
-  const allBackends = data?.backends ?? []
-  const filtered = allBackends.filter((b) =>
+  const allProviders = data?.providers ?? []
+  const filtered = allProviders.filter((b) =>
     b.name.toLowerCase().includes(search.toLowerCase()) ||
     b.url.toLowerCase().includes(search.toLowerCase())
   )
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / BACKENDS_PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PROVIDERS_PAGE_SIZE))
   const safePage = Math.min(page, totalPages)
-  const pageStart = (safePage - 1) * BACKENDS_PAGE_SIZE
-  const pageItems = filtered.slice(pageStart, pageStart + BACKENDS_PAGE_SIZE)
+  const pageStart = (safePage - 1) * PROVIDERS_PAGE_SIZE
+  const pageItems = filtered.slice(pageStart, pageStart + PROVIDERS_PAGE_SIZE)
 
   const handleSearch = (v: string) => { setSearch(v); setPage(1) }
 
-  function statusDot(s: string) {
-    if (s === 'online')   return 'h-2 w-2 rounded-full bg-status-success shrink-0'
-    if (s === 'degraded') return 'h-2 w-2 rounded-full bg-status-warn shrink-0'
-    return 'h-2 w-2 rounded-full bg-status-error shrink-0'
-  }
-  function statusBadgeCls(s: string) {
-    if (s === 'online')   return 'text-status-success-fg border-status-success/40 text-[10px]'
-    if (s === 'degraded') return 'text-status-warn-fg border-status-warn/40 text-[10px]'
-    return 'text-status-error-fg border-status-error/40 text-[10px]'
-  }
+  function statusDot(s: string) { return PROVIDER_STATUS_DOT[s] ?? PROVIDER_STATUS_DOT.offline }
+  function statusBadgeCls(s: string) { return PROVIDER_STATUS_BADGE[s] ?? PROVIDER_STATUS_BADGE.offline }
   function statusLabel(s: string) {
-    if (s === 'online')   return t('common.online')
-    if (s === 'degraded') return t('common.degraded')
-    return t('common.offline')
+    const key = PROVIDER_STATUS_I18N[s] ?? PROVIDER_STATUS_I18N.offline
+    return t(key)
   }
 
   return (
@@ -784,9 +773,9 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
           />
         </div>
 
-        {!isLoading && allBackends.length > 0 && (
+        {!isLoading && allProviders.length > 0 && (
           <p className="text-xs text-muted-foreground -mt-1">
-            {filtered.length} / {allBackends.length} {t('providers.ollama.serversWithModel')}
+            {filtered.length} / {allProviders.length} {t('providers.ollama.serversWithModel')}
             {search ? ` — "${search}"` : ''}
           </p>
         )}
@@ -795,7 +784,7 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
           <p className="text-sm text-muted-foreground py-4 text-center animate-pulse">{t('common.loading')}</p>
         )}
 
-        {!isLoading && allBackends.length === 0 && (
+        {!isLoading && allProviders.length === 0 && (
           <p className="text-sm text-muted-foreground py-4 text-center italic">
             {t('providers.ollama.noBackendsSynced')}
           </p>
@@ -827,7 +816,7 @@ function OllamaModelBackendsModal({ modelName, onClose }: { modelName: string; o
         {totalPages > 1 && (
           <div className="flex items-center justify-between pt-1">
             <span className="text-xs text-muted-foreground">
-              {pageStart + 1}–{Math.min(pageStart + BACKENDS_PAGE_SIZE, filtered.length)} / {filtered.length}
+              {pageStart + 1}–{Math.min(pageStart + PROVIDERS_PAGE_SIZE, filtered.length)} / {filtered.length}
             </span>
             <div className="flex items-center gap-1">
               <Button variant="outline" size="icon" className="h-7 w-7"
@@ -975,7 +964,7 @@ function OllamaSyncSection() {
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncOllamaModels(),
-    onSuccess: () => {
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['ollama-sync-status'] })
       queryClient.invalidateQueries({ queryKey: ['ollama-models'] })
     },
@@ -1059,7 +1048,7 @@ function OllamaSyncSection() {
       </Card>
 
       {selectedModel && (
-        <OllamaModelBackendsModal modelName={selectedModel} onClose={() => setSelectedModel(null)} />
+        <OllamaModelProvidersModal modelName={selectedModel} onClose={() => setSelectedModel(null)} />
       )}
     </div>
   )
@@ -1086,10 +1075,20 @@ function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
   )
 }
 
-function fmtMbShort(mb: number) {
-  if (mb === 0) return '—'
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
-  return `${mb} MB`
+import { fmtMbShort } from '@/lib/chart-theme'
+
+function VramBar({ used, total }: { used: number; total: number }) {
+  if (total === 0) return <span className="text-xs text-muted-foreground italic">unknown</span>
+  const pct = Math.min(100, Math.round((used / total) * 100))
+  const color = pct > 90 ? 'bg-status-error' : pct > 70 ? 'bg-status-warn' : 'bg-status-success'
+  return (
+    <div className="flex items-center gap-2 min-w-32">
+      <div className="flex-1 h-2 rounded-full bg-muted/60 overflow-hidden">
+        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs text-muted-foreground tabular-nums shrink-0">{pct}%</span>
+    </div>
+  )
 }
 
 function OllamaCapacitySection() {
@@ -1097,49 +1096,56 @@ function OllamaCapacitySection() {
   const queryClient = useQueryClient()
 
   const { data: capacityData, isLoading: capacityLoading } = useQuery(capacityQuery)
-  const { data: settings } = useQuery(capacitySettingsQuery)
+  const { data: settings } = useQuery(syncSettingsQuery)
 
   const [analyzerModel, setAnalyzerModel] = useState<string>('')
-  const [batchEnabled, setBatchEnabled] = useState<boolean>(true)
+  const [syncEnabled, setSyncEnabled] = useState<boolean>(true)
   const [intervalSecs, setIntervalSecs] = useState<string>('')
+  const [probePermits, setProbePermits] = useState<string>('1')
+  const [probeRate, setProbeRate] = useState<string>('3')
 
   // Sync local form state when settings load
-  const settingsKey = settings?.analyzer_model ?? ''
-  const [initialized, setInitialized] = useState(false)
-  if (settings && !initialized) {
+  const prevSettingsRef = useRef<typeof settings>(null)
+  if (settings && prevSettingsRef.current !== settings) {
+    prevSettingsRef.current = settings
     setAnalyzerModel(settings.analyzer_model)
-    setBatchEnabled(settings.batch_enabled)
-    setIntervalSecs(String(settings.batch_interval_secs))
-    setInitialized(true)
+    setSyncEnabled(settings.sync_enabled)
+    setIntervalSecs(String(settings.sync_interval_secs))
+    setProbePermits(String(settings.probe_permits))
+    setProbeRate(String(settings.probe_rate))
   }
 
   const saveMutation = useMutation({
-    mutationFn: (body: PatchCapacitySettings) => api.patchCapacitySettings(body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['capacity-settings'] })
+    mutationFn: (body: PatchSyncSettings) => api.patchSyncSettings(body),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['sync-settings'] })
     },
   })
 
   const syncMutation = useMutation({
-    mutationFn: () => api.triggerCapacitySync(),
-    onSuccess: () => {
+    mutationFn: () => api.syncAllProviders(),
+    onSettled: () => {
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['capacity'] })
-        queryClient.invalidateQueries({ queryKey: ['capacity-settings'] })
+        queryClient.invalidateQueries({ queryKey: ['sync-settings'] })
+        queryClient.invalidateQueries({ queryKey: ['providers'] })
+        queryClient.invalidateQueries({ queryKey: ['ollama-models'] })
       }, 3000)
     },
   })
 
   const handleSave = () => {
-    const body: PatchCapacitySettings = {
+    const body: PatchSyncSettings = {
       analyzer_model: analyzerModel || undefined,
-      batch_enabled: batchEnabled,
-      batch_interval_secs: intervalSecs ? Number(intervalSecs) : undefined,
+      sync_enabled: syncEnabled,
+      sync_interval_secs: intervalSecs ? Number(intervalSecs) : undefined,
+      probe_permits: probePermits !== '' ? Number(probePermits) : undefined,
+      probe_rate: probeRate !== '' ? Number(probeRate) : undefined,
     }
     saveMutation.mutate(body)
   }
 
-  const backends = capacityData?.providers ?? []
+  const providers = capacityData?.providers ?? []
   const lastRunAt = settings?.last_run_at
   const lastRunStatus = settings?.last_run_status
   const availableModels = settings?.available_models ?? []
@@ -1215,15 +1221,36 @@ function OllamaCapacitySection() {
                 className="h-8 text-sm w-24"
                 value={intervalSecs}
                 onChange={(e) => setIntervalSecs(e.target.value)}
-                disabled={!batchEnabled}
+                disabled={!syncEnabled}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Probe Permits</Label>
+              <Input
+                type="number"
+                className="h-8 text-sm w-20"
+                value={probePermits}
+                onChange={(e) => setProbePermits(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Probe Rate</Label>
+              <Input
+                type="number"
+                min={0}
+                className="h-8 text-sm w-20"
+                value={probeRate}
+                onChange={(e) => setProbeRate(e.target.value)}
               />
             </div>
 
             <div className="flex items-center gap-2 pb-0.5">
               <Switch
                 id="cap-auto"
-                checked={batchEnabled}
-                onCheckedChange={setBatchEnabled}
+                checked={syncEnabled}
+                onCheckedChange={setSyncEnabled}
               />
               <Label htmlFor="cap-auto" className="text-sm cursor-pointer">
                 {t('providers.capacity.autoAnalysis')}
@@ -1242,12 +1269,12 @@ function OllamaCapacitySection() {
         </CardContent>
       </Card>
 
-      {/* Capacity table */}
+      {/* VRAM pool view */}
       {capacityLoading && (
         <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>
       )}
 
-      {!capacityLoading && backends.length === 0 && (
+      {!capacityLoading && providers.length === 0 && (
         <Card className="border-dashed">
           <CardContent className="p-6 text-center text-sm text-muted-foreground">
             <Activity className="h-8 w-8 mx-auto mb-2 opacity-25" />
@@ -1266,9 +1293,15 @@ function OllamaCapacitySection() {
               {provider.temp_c !== null && (
                 <span className="text-xs text-muted-foreground ml-1">{provider.temp_c.toFixed(1)}°C</span>
               )}
+              <div className="ml-auto flex items-center gap-2">
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {fmtMbShort(provider.used_vram_mb)} / {fmtMbShort(provider.total_vram_mb)}
+                </span>
+                <VramBar used={provider.used_vram_mb} total={provider.total_vram_mb} />
+              </div>
             </div>
 
-            {provider.models.length === 0 ? (
+            {provider.loaded_models.length === 0 ? (
               <p className="px-4 py-4 text-xs text-muted-foreground italic">{t('providers.capacity.noData')}</p>
             ) : (
               <div className="overflow-x-auto">
@@ -1276,50 +1309,31 @@ function OllamaCapacitySection() {
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
                       <th className="px-4 py-2 text-left font-medium text-muted-foreground">Model</th>
-                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('providers.capacity.recommended')}</th>
-                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('providers.capacity.slots')}</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.vramModel')}</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.kvPerSlot')}</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.avgTps')}</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.p95')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">Weight</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">KV/req</th>
+                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">Active / Limit</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {provider.models.map((m) => (
+                    {provider.loaded_models.map((m) => (
                       <>
                         <tr key={m.model_name} className="hover:bg-muted/20 transition-colors">
                           <td className="px-4 py-2.5">
                             <span className="font-mono font-medium text-text-bright">{m.model_name}</span>
-                            {m.sample_count > 0 && (
-                              <span className="ml-2 text-[10px] text-muted-foreground/70">
-                                {t('providers.capacity.sampleCount', { n: m.sample_count })}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary font-bold text-xs">
-                              {m.recommended_slots}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2.5 text-center text-muted-foreground tabular-nums">
-                            {m.active_slots}/{m.recommended_slots}
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">
-                            {fmtMbShort(m.vram_model_mb)}
+                            {fmtMbShort(m.weight_mb)}
                           </td>
                           <td className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">
-                            {fmtMbShort(m.vram_kv_per_slot_mb)}
+                            {fmtMbShort(m.kv_per_request_mb)}
                           </td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
-                            {m.avg_tokens_per_sec > 0 ? m.avg_tokens_per_sec.toFixed(1) : '—'}
-                          </td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
-                            {m.p95_latency_ms > 0 ? `${Math.round(m.p95_latency_ms)}ms` : '—'}
+                          <td className="px-3 py-2.5 text-center tabular-nums text-muted-foreground">
+                            {m.active_requests}{m.max_concurrent > 0 ? `/${m.max_concurrent}` : ''}
                           </td>
                         </tr>
                         {m.llm_concern && (
                           <tr key={`${m.model_name}-concern`} className="bg-status-warn/5">
-                            <td colSpan={7} className="px-4 py-1.5">
+                            <td colSpan={4} className="px-4 py-1.5">
                               <span className="text-[10px] font-semibold text-status-warn-fg uppercase tracking-wide mr-2">
                                 {t('providers.capacity.concern')}
                               </span>
@@ -1345,20 +1359,11 @@ function OllamaCapacitySection() {
 
 // ── Gemini Status Sync Section ─────────────────────────────────────────────────
 
-function statusDotCls(s: string) {
-  if (s === 'online')   return 'h-2 w-2 rounded-full bg-status-success shrink-0'
-  if (s === 'degraded') return 'h-2 w-2 rounded-full bg-status-warn shrink-0'
-  return 'h-2 w-2 rounded-full bg-muted-foreground/40 shrink-0'
-}
-function statusResultCls(s: string) {
-  if (s === 'online')   return 'text-status-success-fg'
-  if (s === 'degraded') return 'text-status-warn-fg'
-  return 'text-muted-foreground'
-}
+function statusDotCls(s: string) { return PROVIDER_STATUS_DOT_ALT[s] ?? PROVIDER_STATUS_DOT_ALT.offline }
+function statusResultCls(s: string) { return PROVIDER_STATUS_TEXT[s] ?? PROVIDER_STATUS_TEXT.offline }
 function statusResultLabel(s: string, t: (k: string) => string) {
-  if (s === 'online')   return t('common.online')
-  if (s === 'degraded') return t('common.degraded')
-  return t('common.offline')
+  const key = PROVIDER_STATUS_I18N[s] ?? PROVIDER_STATUS_I18N.offline
+  return t(key)
 }
 
 function GeminiStatusSyncSection() {
@@ -1367,7 +1372,7 @@ function GeminiStatusSyncSection() {
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncGeminiStatus(),
-    onSuccess: () => {
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
     },
   })
@@ -1451,7 +1456,7 @@ function GeminiSyncSection() {
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncGeminiModels(),
-    onSuccess: () => refreshGeminiData(),
+    onSettled: () => refreshGeminiData(),
   })
 
   const isRefreshing = (modelsFetching || policiesFetching) && !syncMutation.isPending
@@ -1630,44 +1635,44 @@ function GeminiSyncSection() {
   )
 }
 
-// ── Tab: Ollama backends ───────────────────────────────────────────────────────
+// ── Tab: Ollama providers ───────────────────────────────────────────────────────
 
 function OllamaTab({
-  backends,
+  providers,
   servers,
   isLoading,
   error,
   onRegister,
   onEdit,
-  onHealthcheck,
-  healthcheckIsPending,
-  onSyncModels,
-  syncModelsPending,
-  syncModelsVars,
+  onSync,
+  syncPending,
+  syncVars,
   onDelete,
   deleteIsPending,
 }: {
-  backends: Provider[] | undefined
+  providers: Provider[] | undefined
   servers: GpuServer[]
   isLoading: boolean
   error: Error | null
   onRegister: () => void
   onEdit: (b: Provider) => void
-  onHealthcheck: (id: string) => void
-  healthcheckIsPending: boolean
-  onSyncModels: (id: string) => void
-  syncModelsPending: boolean
-  syncModelsVars: string | undefined
+  onSync: (id: string) => void
+  syncPending: boolean
+  syncVars: string | undefined
   onDelete: (id: string, name: string) => void
   deleteIsPending: boolean
 }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const ollama = backends?.filter((b) => b.backend_type === 'ollama') ?? []
+  const ollama = providers?.filter((b) => b.provider_type === PROVIDER_OLLAMA) ?? []
   const serverMap = new Map(servers.map((s) => [s.id, s]))
-  const onlineCount   = ollama.filter((b) => b.status === 'online').length
-  const offlineCount  = ollama.filter((b) => b.status === 'offline').length
-  const degradedCount = ollama.filter((b) => b.status === 'degraded').length
+  const ollamaCounts = ollama.reduce((acc, b) => {
+    acc[b.status] = (acc[b.status] ?? 0) + 1
+    return acc
+  }, {} as Record<string, number>)
+  const onlineCount = ollamaCounts['online'] ?? 0
+  const offlineCount = ollamaCounts['offline'] ?? 0
+  const degradedCount = ollamaCounts['degraded'] ?? 0
   const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null)
   const [historyServer, setHistoryServer] = useState<GpuServer | null>(null)
   const [page, setPage] = useState(1)
@@ -1679,7 +1684,7 @@ function OllamaTab({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        {backends ? (
+        {providers ? (
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
               <Server className="h-3 w-3 shrink-0" />
@@ -1841,50 +1846,67 @@ function OllamaTab({
                       </TableCell>
 
                       <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {linkedServer && (
-                            <Button variant="ghost" size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
-                              onClick={() => setHistoryServer(linkedServer)}
-                              title={t('providers.servers.history')}>
-                              <BarChart2 className="h-4 w-4" />
-                            </Button>
-                          )}
-                          <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                            onClick={() => onHealthcheck(b.id)}
-                            disabled={healthcheckIsPending}
-                            title={t('providers.runHealthcheck')}>
-                            <RefreshCw className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                            onClick={() => onSyncModels(b.id)}
-                            disabled={syncModelsPending && syncModelsVars === b.id}
-                            title={t('providers.syncModelList')}>
-                            <RotateCcw className={
-                              syncModelsPending && syncModelsVars === b.id
-                                ? 'h-4 w-4 animate-spin' : 'h-4 w-4'
-                            } />
-                          </Button>
-                          <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
-                            onClick={() => setViewModelsProvider(b)}
-                            title={t('providers.ollama.modelSelection')}>
-                            <ListFilter className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                            onClick={() => onEdit(b)} title={t('providers.ollama.editTitle')}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
-                            onClick={() => onDelete(b.id, b.name)}
-                            disabled={deleteIsPending} title={t('providers.removeProvider')}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
+                        <TooltipProvider delayDuration={200}>
+                          <div className="flex items-center justify-end gap-1">
+                            {linkedServer && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button variant="ghost" size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                                    onClick={() => setHistoryServer(linkedServer)}>
+                                    <BarChart2 className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>{t('providers.servers.history')}</TooltipContent>
+                              </Tooltip>
+                            )}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                  onClick={() => onSync(b.id)}
+                                  disabled={syncPending && syncVars === b.id}>
+                                  <RefreshCw className={
+                                    syncPending && syncVars === b.id
+                                      ? 'h-4 w-4 animate-spin' : 'h-4 w-4'
+                                  } />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Sync</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                                  onClick={() => setViewModelsProvider(b)}>
+                                  <ListFilter className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>{t('providers.ollama.modelSelection')}</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                                  onClick={() => onEdit(b)}>
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>{t('providers.ollama.editTitle')}</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button variant="ghost" size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                                  onClick={() => onDelete(b.id, b.name)}
+                                  disabled={deleteIsPending}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>{t('providers.removeProvider')}</TooltipContent>
+                            </Tooltip>
+                          </div>
+                        </TooltipProvider>
                       </TableCell>
                     </TableRow>
                   )
@@ -1910,28 +1932,28 @@ function OllamaTab({
   )
 }
 
-// ── Tab: Gemini backends + policies ───────────────────────────────────────────
+// ── Tab: Gemini providers + policies ───────────────────────────────────────────
 
 function GeminiTab({
-  backends,
+  providers,
   isLoading,
   error,
   onRegister,
   onEdit,
-  onHealthcheck,
-  healthcheckIsPending,
+  onSync,
+  syncPending,
   onToggleActive,
   toggleActivePending,
   onDelete,
   deleteIsPending,
 }: {
-  backends: Provider[] | undefined
+  providers: Provider[] | undefined
   isLoading: boolean
   error: Error | null
   onRegister: () => void
   onEdit: (b: Provider) => void
-  onHealthcheck: (id: string) => void
-  healthcheckIsPending: boolean
+  onSync: (id: string) => void
+  syncPending: boolean
   onToggleActive: (b: Provider) => void
   toggleActivePending: boolean
   onDelete: (id: string, name: string) => void
@@ -1939,11 +1961,16 @@ function GeminiTab({
 }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const gemini = backends?.filter((b) => b.backend_type === 'gemini') ?? []
-  const onlineCount   = gemini.filter((b) => b.status === 'online').length
-  const activeCount   = gemini.filter((b) => b.is_active).length
-  const degradedCount = gemini.filter((b) => b.status === 'degraded').length
-  const offlineCount  = gemini.filter((b) => b.status === 'offline').length
+  const gemini = providers?.filter((b) => b.provider_type === PROVIDER_GEMINI) ?? []
+  const geminiCounts = gemini.reduce((acc, b) => {
+    acc[b.status] = (acc[b.status] ?? 0) + 1
+    if (b.is_active) acc['_active'] = (acc['_active'] ?? 0) + 1
+    return acc
+  }, {} as Record<string, number>)
+  const onlineCount = geminiCounts['online'] ?? 0
+  const activeCount = geminiCounts['_active'] ?? 0
+  const degradedCount = geminiCounts['degraded'] ?? 0
+  const offlineCount = geminiCounts['offline'] ?? 0
   const [modelSelectionProvider, setModelSelectionProvider] = useState<Provider | null>(null)
   const [geminiPage, setGeminiPage] = useState(1)
   const geminiTotalPages = Math.max(1, Math.ceil(gemini.length / PAGE_SIZE))
@@ -1957,7 +1984,7 @@ function GeminiTab({
         <div className="flex items-start justify-between">
           <div>
             <h2 className="text-base font-semibold text-text-bright">{t('providers.gemini.title')}</h2>
-            {backends ? (
+            {providers ? (
               <div className="flex items-center gap-2 flex-wrap mt-1.5">
                 <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
                   <Key className="h-3 w-3 shrink-0" />
@@ -2069,7 +2096,7 @@ function GeminiTab({
                     <div className="font-semibold text-text-bright">{b.name}</div>
                   </TableCell>
                   <TableCell>
-                    <ApiKeyCell backendId={b.id} masked={b.api_key_masked} />
+                    <ApiKeyCell providerId={b.id} masked={b.api_key_masked} />
                   </TableCell>
                   <TableCell>
                     {b.is_free_tier ? (
@@ -2097,34 +2124,54 @@ function GeminiTab({
                     {fmtDateOnly(b.registered_at, tz)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <Button variant="ghost" size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-text-bright"
-                        onClick={() => onHealthcheck(b.id)}
-                        disabled={healthcheckIsPending}
-                        title={t('providers.runHealthcheck')}>
-                        <RefreshCw className="h-4 w-4" />
-                      </Button>
-                      {!b.is_free_tier && (
-                        <Button variant="ghost" size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
-                          onClick={() => setModelSelectionProvider(b)}
-                          title={t('providers.gemini.modelSelection')}>
-                          <ListFilter className="h-4 w-4" />
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                        onClick={() => onEdit(b)} title={t('providers.gemini.editTitle')}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
-                        onClick={() => onDelete(b.id, b.name)}
-                        disabled={deleteIsPending} title={t('providers.removeProvider')}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    <TooltipProvider delayDuration={200}>
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-text-bright"
+                              onClick={() => onSync(b.id)}
+                              disabled={syncPending}>
+                              <RefreshCw className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Sync</TooltipContent>
+                        </Tooltip>
+                        {!b.is_free_tier && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                                onClick={() => setModelSelectionProvider(b)}>
+                                <ListFilter className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t('providers.gemini.modelSelection')}</TooltipContent>
+                          </Tooltip>
+                        )}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              onClick={() => onEdit(b)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('providers.gemini.editTitle')}</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                              onClick={() => onDelete(b.id, b.name)}
+                              disabled={deleteIsPending}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('providers.removeProvider')}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </TooltipProvider>
                   </TableCell>
                 </TableRow>
               ))}
@@ -2157,17 +2204,17 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   // Fall back to 'ollama' when Gemini is disabled and the URL says ?s=gemini
   const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'ollama' : sectionParam
 
-  const [registerBackendType, setRegisterBackendType] = useState<'ollama' | 'gemini' | null>(null)
+  const [registerProviderType, setRegisterProviderType] = useState<'ollama' | 'gemini' | null>(null)
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
 
   // Servers needed for RegisterModal/EditModal dropdowns
   const { data: servers } = useQuery(serversQuery)
 
-  const { data: backends, isLoading: backendsLoading, error: backendsError } = useQuery(providersQuery)
+  const { data: providers, isLoading: providersLoading, error: providersError } = useQuery(providersQuery)
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteProvider(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
   })
 
   const toggleActiveMutation = useMutation({
@@ -2175,23 +2222,20 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
       api.updateProvider(b.id, {
         name: b.name,
         is_active: !b.is_active,
-        ...(b.backend_type === 'ollama' && { url: b.url, total_vram_mb: b.total_vram_mb, gpu_index: b.gpu_index, server_id: b.server_id }),
+        ...(b.provider_type === PROVIDER_OLLAMA && { url: b.url, total_vram_mb: b.total_vram_mb, gpu_index: b.gpu_index, server_id: b.server_id }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
   })
 
-  const healthcheckMutation = useMutation({
-    mutationFn: (id: string) => api.healthcheckProvider(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
-  })
-
-  const syncModelsMutation = useMutation({
-    mutationFn: (id: string) => api.syncProviderModels(id),
-    onSuccess: (_data, id) => {
+  const syncProviderMutation = useMutation({
+    mutationFn: (id: string) => api.syncProvider(id),
+    onSettled: (_data, _error, id) => {
+      queryClient.invalidateQueries({ queryKey: ['providers'] })
       queryClient.invalidateQueries({ queryKey: ['provider-models', id] })
       queryClient.invalidateQueries({ queryKey: ['selected-models', id] })
       queryClient.invalidateQueries({ queryKey: ['ollama-sync-status'] })
       queryClient.invalidateQueries({ queryKey: ['ollama-models'] })
+      queryClient.invalidateQueries({ queryKey: ['capacity'] })
     },
   })
 
@@ -2204,17 +2248,15 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
 
       {section === 'ollama' && (
         <OllamaTab
-          backends={backends}
+          providers={providers}
           servers={servers ?? []}
-          isLoading={backendsLoading}
-          error={backendsError as Error | null}
-          onRegister={() => setRegisterBackendType('ollama')}
+          isLoading={providersLoading}
+          error={providersError as Error | null}
+          onRegister={() => setRegisterProviderType('ollama')}
           onEdit={(b) => setEditingProvider(b)}
-          onHealthcheck={(id) => healthcheckMutation.mutate(id)}
-          healthcheckIsPending={healthcheckMutation.isPending}
-          onSyncModels={(id) => syncModelsMutation.mutate(id)}
-          syncModelsPending={syncModelsMutation.isPending}
-          syncModelsVars={syncModelsMutation.variables}
+          onSync={(id) => syncProviderMutation.mutate(id)}
+          syncPending={syncProviderMutation.isPending}
+          syncVars={syncProviderMutation.variables}
           onDelete={(id, name) => { if (confirm(t('providers.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
           deleteIsPending={deleteMutation.isPending}
         />
@@ -2222,13 +2264,13 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
 
       {section === 'gemini' && (
         <GeminiTab
-          backends={backends}
-          isLoading={backendsLoading}
-          error={backendsError as Error | null}
-          onRegister={() => setRegisterBackendType('gemini')}
+          providers={providers}
+          isLoading={providersLoading}
+          error={providersError as Error | null}
+          onRegister={() => setRegisterProviderType('gemini')}
           onEdit={(b) => setEditingProvider(b)}
-          onHealthcheck={(id) => healthcheckMutation.mutate(id)}
-          healthcheckIsPending={healthcheckMutation.isPending}
+          onSync={(id) => syncProviderMutation.mutate(id)}
+          syncPending={syncProviderMutation.isPending}
           onToggleActive={(b) => toggleActiveMutation.mutate(b)}
           toggleActivePending={toggleActiveMutation.isPending}
           onDelete={(id, name) => { if (confirm(t('providers.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
@@ -2236,11 +2278,11 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
         />
       )}
 
-      {registerBackendType && (
+      {registerProviderType && (
         <RegisterModal
           servers={servers ?? []}
-          initialType={registerBackendType}
-          onClose={() => setRegisterBackendType(null)}
+          initialType={registerProviderType}
+          onClose={() => setRegisterProviderType(null)}
         />
       )}
       {editingProvider && (

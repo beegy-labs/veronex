@@ -7,12 +7,16 @@ use futures::Stream;
 use futures::StreamExt as _;
 use serde::{Deserialize, Serialize};
 
-use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
+use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::domain::constants::PROVIDER_REQUEST_TIMEOUT;
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
 use crate::domain::value_objects::StreamToken;
 
-const BASE_URL: &str = "https://generativelanguage.googleapis.com";
+pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
+
+/// Maximum bytes allowed in the SSE line buffer before aborting.
+const MAX_LINE_BUFFER: usize = 1_048_576; // 1 MB
 
 pub struct GeminiAdapter {
     api_key: String,
@@ -23,7 +27,10 @@ impl GeminiAdapter {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(PROVIDER_REQUEST_TIMEOUT)
+                .build()
+                .expect("failed to build HTTP client"),
         }
     }
 }
@@ -173,14 +180,14 @@ impl InferenceProviderPort for GeminiAdapter {
         let start = Instant::now();
         let model = job.model_name.as_str();
         let url = format!(
-            "{BASE_URL}/v1beta/models/{model}:generateContent?key={}",
-            self.api_key
+            "{GEMINI_BASE_URL}/v1beta/models/{model}:generateContent"
         );
 
         let body = GenerateRequest::new(job.prompt.as_str());
         let resp: GenerateResponse = self
             .client
             .post(&url)
+            .header("x-goog-api-key", &self.api_key)
             .json(&body)
             .send()
             .await?
@@ -220,7 +227,7 @@ impl InferenceProviderPort for GeminiAdapter {
             }
 
             let url = format!(
-                "{BASE_URL}/v1beta/models/{model}:streamGenerateContent?key={api_key}&alt=sse"
+                "{GEMINI_BASE_URL}/v1beta/models/{model}:streamGenerateContent?alt=sse"
             );
             let body = GenerateRequest::new(&prompt);
 
@@ -228,6 +235,7 @@ impl InferenceProviderPort for GeminiAdapter {
             // and returns Ok(response) on success, preserving it for byte streaming.
             let response = client
                 .post(&url)
+                .header("x-goog-api-key", &api_key)
                 .json(&body)
                 .send()
                 .await?
@@ -239,6 +247,9 @@ impl InferenceProviderPort for GeminiAdapter {
 
             while let Some(chunk) = byte_stream.next().await {
                 let bytes = chunk.map_err(|e| anyhow::anyhow!(e))?;
+                if buf.len() + bytes.len() > MAX_LINE_BUFFER {
+                    Err(anyhow::anyhow!("response line exceeds 1 MB limit"))?;
+                }
                 buf.push_str(&String::from_utf8_lossy(&bytes));
 
                 // Process complete lines from the SSE stream.
@@ -309,7 +320,7 @@ impl InferenceProviderPort for GeminiAdapter {
             // Stream ended without a finishReason event — emit empty done marker
             // so run_job marks the job as completed and the SSE client receives
             // a 'done' event.
-            yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None };
+            yield StreamToken::done();
         })
     }
 }

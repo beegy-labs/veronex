@@ -22,13 +22,8 @@ import { fmtDatetime, fmtNumber } from '@/lib/date'
 
 // ── Status styling ─────────────────────────────────────────────────────────────
 
-const STATUS_EXTRA: Record<string, string> = {
-  completed: 'bg-status-success/15 text-status-success-fg border-status-success/30',
-  failed:    'bg-status-error/15 text-status-error-fg border-status-error/30',
-  cancelled: 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30',
-  pending:   'bg-status-warning/15 text-status-warning-fg border-status-warning/30',
-  running:   'bg-status-info/15 text-status-info-fg border-status-info/30',
-}
+import { STATUS_STYLES, ROLE_STYLES } from '@/lib/constants'
+const STATUS_EXTRA = STATUS_STYLES
 
 function StatusBadge({ status }: { status: string }) {
   return (
@@ -54,13 +49,6 @@ const formatDuration = fmtMsNullable
 
 // ── Role badge styling ──────────────────────────────────────────────────────────
 
-const ROLE_STYLE: Record<string, string> = {
-  system:    'bg-muted text-muted-foreground border-border',
-  user:      'bg-status-info/10 text-status-info-fg border-status-info/30',
-  assistant: 'bg-status-success/10 text-status-success-fg border-status-success/30',
-  tool:      'bg-status-warning/10 text-status-warning-fg border-status-warning/30',
-}
-
 function ConversationHistory({ messages }: { messages: ChatMessage[] }) {
   const [open, setOpen] = useState(false)
   const { t } = useTranslation()
@@ -77,7 +65,7 @@ function ConversationHistory({ messages }: { messages: ChatMessage[] }) {
       {open && (
         <div className="px-6 pb-4 space-y-2 max-h-80 overflow-y-auto">
           {messages.map((msg, i) => (
-            <div key={i} className={`rounded-md border px-3 py-2 ${ROLE_STYLE[msg.role] ?? ROLE_STYLE.system}`}>
+            <div key={i} className={`rounded-md border px-3 py-2 ${ROLE_STYLES[msg.role] ?? ROLE_STYLES.system}`}>
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-[10px] font-mono font-bold uppercase tracking-wider">{msg.role}</span>
                 {msg.name && (
@@ -136,8 +124,9 @@ function JobDetailModal({
 
   const cancelMutation = useMutation({
     mutationFn: () => api.cancelJob(jobId!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard-jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['recent-jobs'] })
       queryClient.invalidateQueries({ queryKey: ['job-detail', jobId] })
     },
   })

@@ -10,29 +10,34 @@ use tokio::sync::{broadcast, Notify};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
-use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
+use crate::application::ports::inbound::inference_use_case::{InferenceUseCase, SubmitJobRequest};
+use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::message_store::MessageStore;
 use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPort;
-use crate::application::ports::outbound::concurrency_port::ConcurrencyPort;
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::observability_port::{InferenceEvent, ObservabilityPort};
 use crate::application::ports::outbound::thermal_port::ThermalPort;
+use crate::application::ports::outbound::valkey_port::ValkeyPort;
+use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
+use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::domain::entities::InferenceJob;
-use crate::domain::enums::{ApiFormat, ProviderType, FinishReason, JobSource, JobStatus, ThrottleLevel};
+use crate::domain::enums::{ProviderType, FinishReason, JobSource, JobStatus, KeyTier, ThrottleLevel};
 use crate::domain::value_objects::{JobId, JobStatusEvent, ModelName, Prompt, StreamToken};
-
-// ── Queue keys ─────────────────────────────────────────────────────────────────
-
-/// Paid-tier API-client jobs — highest priority (BLPOP polled first).
-const QUEUE_KEY_API_PAID: &str = "veronex:queue:jobs:paid";
-/// Standard / free-tier API-client jobs — medium priority (BLPOP polled second).
-const QUEUE_KEY_API: &str = "veronex:queue:jobs";
-/// Test-panel jobs — lowest priority (BLPOP polled third).
-const QUEUE_KEY_TEST: &str = "veronex:queue:jobs:test";
+use crate::domain::constants::{
+    TPM_ESTIMATED_TOKENS, JOB_CLEANUP_DELAY, OWNERSHIP_LOST_CLEANUP_DELAY,
+    QUEUE_POLL_INTERVAL, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
+    JOB_OWNER_TTL_SECS, OWNER_REFRESH_INTERVAL, INITIAL_TOKEN_CAPACITY,
+    MAX_TOKENS_PER_JOB, MODEL_LOCALITY_BONUS_MB,
+    GEMINI_TIER_FREE,
+    QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID,
+    QUEUE_JOBS as QUEUE_KEY_API,
+    QUEUE_JOBS_TEST as QUEUE_KEY_TEST,
+    QUEUE_PROCESSING,
+};
 
 // ── In-memory job store ────────────────────────────────────────────────────────
 
@@ -48,9 +53,12 @@ struct JobEntry {
     cancel_notify: Arc<Notify>,
     /// Gemini tier routing preference: "free" = free-tier only, None = auto (free→paid fallback).
     gemini_tier: Option<String>,
-    /// API key billing tier: `Some("paid")` → QUEUE_KEY_API_PAID; `None`/`Some("free")` → QUEUE_KEY_API.
+    /// API key billing tier: `Some(KeyTier::Paid)` → QUEUE_KEY_API_PAID; else → QUEUE_KEY_API.
     /// Lost on server restart — recovered jobs fall back to the standard queue.
-    key_tier: Option<String>,
+    key_tier: Option<KeyTier>,
+    /// The minute bucket (Unix timestamp / 60) when TPM tokens were reserved by the rate limiter.
+    /// Used by `record_tpm` to adjust the correct Valkey counter, avoiding cross-minute drift.
+    tpm_reservation_minute: Option<i64>,
 }
 
 // ── Use-case implementation ────────────────────────────────────────────────────
@@ -60,14 +68,14 @@ pub struct InferenceUseCaseImpl {
     /// Used by queue_dispatcher_loop for VRAM-aware routing.
     registry: Arc<dyn LlmProviderRegistry>,
     job_repo: Arc<dyn JobRepository>,
-    valkey_pool: Option<fred::clients::Pool>,
+    valkey: Option<Arc<dyn ValkeyPort>>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
     /// DashMap: 64 independent shard RwLocks — different UUIDs never contend.
     jobs: Arc<DashMap<Uuid, JobEntry>>,
-    /// Dynamic concurrency control — VRAM-aware semaphores per (provider, model).
-    /// Updated by the capacity analyzer every 5 minutes.
-    slot_map: Arc<dyn ConcurrencyPort>,
+    /// VRAM pool — per-provider global VRAM reservation.
+    /// Updated by the sync loop.
+    vram_pool: Arc<dyn VramPoolPort>,
     /// Thermal throttle state — updated by health_checker every 30 s.
     thermal: Arc<dyn ThermalPort>,
     /// Per-provider circuit breaker — isolates providers after consecutive failures.
@@ -80,35 +88,102 @@ pub struct InferenceUseCaseImpl {
     /// S3-compatible object store for conversation contexts. When set, messages_json
     /// is uploaded to S3 on submit() and DB column stays NULL for new jobs.
     message_store: Option<Arc<dyn MessageStore>>,
+    /// Ollama model repository — for filtering providers that have the requested model.
+    ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
+    /// Provider model selection — for filtering disabled models in queue dispatcher.
+    model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
+    /// Unique per-process instance ID for multi-instance coordination.
+    instance_id: Arc<str>,
+    /// Shared map of cancel notifiers — used by cross-instance cancel subscriber.
+    cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
 }
 
 impl InferenceUseCaseImpl {
     pub fn new(
         registry: Arc<dyn LlmProviderRegistry>,
         job_repo: Arc<dyn JobRepository>,
-        valkey_pool: Option<fred::clients::Pool>,
+        valkey: Option<Arc<dyn ValkeyPort>>,
         observability: Option<Arc<dyn ObservabilityPort>>,
         model_manager: Option<Arc<dyn ModelManagerPort>>,
-        slot_map: Arc<dyn ConcurrencyPort>,
+        vram_pool: Arc<dyn VramPoolPort>,
         thermal: Arc<dyn ThermalPort>,
         circuit_breaker: Arc<dyn CircuitBreakerPort>,
         provider_dispatch: Arc<dyn ProviderDispatchPort>,
         event_tx: broadcast::Sender<JobStatusEvent>,
         message_store: Option<Arc<dyn MessageStore>>,
+        ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
+        model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
+        instance_id: Arc<str>,
     ) -> Self {
         Self {
             registry,
             job_repo,
-            valkey_pool,
+            valkey,
             observability,
             model_manager,
             jobs: Arc::new(DashMap::new()),
-            slot_map,
+            vram_pool,
             thermal,
             circuit_breaker,
             provider_dispatch,
             event_tx,
             message_store,
+            ollama_model_repo,
+            model_selection_repo,
+            instance_id,
+            cancel_notifiers: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Access the cancel notifiers map (for wiring with the cancel subscriber).
+    pub fn cancel_notifiers(&self) -> Arc<DashMap<Uuid, Arc<Notify>>> {
+        self.cancel_notifiers.clone()
+    }
+
+    /// Periodically remove orphaned DashMap entries that have been Pending for too long.
+    ///
+    /// In multi-instance mode, instance A may submit a job whose DashMap entry lives on A,
+    /// but instance B's dispatcher picks it up and runs it. Instance A's entry is never
+    /// cleaned by `run_job` (which runs on B). This sweeper catches those orphans.
+    pub fn start_job_sweeper(
+        &self,
+        shutdown: CancellationToken,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let jobs = self.jobs.clone();
+        let cancel_notifiers = self.cancel_notifiers.clone();
+
+        async move {
+            const SWEEP_INTERVAL: std::time::Duration = crate::domain::constants::PENDING_JOB_SWEEP_INTERVAL;
+            const MAX_PENDING_AGE: chrono::Duration = chrono::Duration::minutes(10);
+
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => break,
+                    _ = tokio::time::sleep(SWEEP_INTERVAL) => {}
+                }
+
+                let now = chrono::Utc::now();
+                let mut swept = 0u32;
+                let stale_ids: Vec<Uuid> = jobs
+                    .iter()
+                    .filter(|e| {
+                        e.status == JobStatus::Pending
+                            && now.signed_duration_since(e.job.created_at) > MAX_PENDING_AGE
+                    })
+                    .map(|e| *e.key())
+                    .collect();
+
+                for id in stale_ids {
+                    jobs.remove(&id);
+                    cancel_notifiers.remove(&id);
+                    swept += 1;
+                }
+
+                if swept > 0 {
+                    tracing::info!(swept, "job sweeper: removed stale Pending entries from DashMap");
+                }
+            }
         }
     }
 
@@ -125,21 +200,25 @@ impl InferenceUseCaseImpl {
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
         use futures::FutureExt as _;
 
-        let Some(ref pool) = self.valkey_pool else {
+        let Some(ref valkey) = self.valkey else {
             return futures::future::ready(()).boxed();
         };
 
         let jobs = self.jobs.clone();
         let registry = self.registry.clone();
         let job_repo = self.job_repo.clone();
-        let valkey_pool = pool.clone();
+        let valkey = valkey.clone();
         let observability = self.observability.clone();
         let model_manager = self.model_manager.clone();
-        let slot_map = self.slot_map.clone();
+        let vram_pool = self.vram_pool.clone();
         let thermal = self.thermal.clone();
         let circuit_breaker = self.circuit_breaker.clone();
         let provider_dispatch = self.provider_dispatch.clone();
         let event_tx = self.event_tx.clone();
+        let instance_id = self.instance_id.clone();
+        let cancel_notifiers = self.cancel_notifiers.clone();
+        let ollama_model_repo = self.ollama_model_repo.clone();
+        let model_selection_repo = self.model_selection_repo.clone();
 
         tracing::info!("multi-provider queue dispatcher started (VRAM-aware routing)");
 
@@ -148,14 +227,18 @@ impl InferenceUseCaseImpl {
                 jobs,
                 registry,
                 job_repo,
-                valkey_pool,
+                valkey,
                 observability,
                 model_manager,
-                slot_map,
+                vram_pool,
                 thermal,
                 circuit_breaker,
                 provider_dispatch,
                 event_tx,
+                instance_id,
+                cancel_notifiers,
+                ollama_model_repo,
+                model_selection_repo,
                 shutdown,
             )
             .await;
@@ -168,7 +251,7 @@ impl InferenceUseCaseImpl {
     /// Running jobs are reset to Pending so they start fresh (in-flight token streams
     /// were lost on restart).  No-op when Valkey is not configured.
     pub async fn recover_pending_jobs(&self) -> anyhow::Result<()> {
-        let Some(ref pool) = self.valkey_pool else {
+        let Some(ref valkey) = self.valkey else {
             return Ok(());
         };
 
@@ -179,7 +262,6 @@ impl InferenceUseCaseImpl {
 
         tracing::info!("recovering {} pending/running jobs", jobs_list.len());
 
-        use fred::prelude::*;
         for mut job in jobs_list {
             let uuid = job.id.0;
 
@@ -199,17 +281,20 @@ impl InferenceUseCaseImpl {
             self.jobs.entry(uuid).or_insert_with(|| JobEntry {
                 job: job.clone(),
                 status: job.status,
-                tokens: Vec::with_capacity(256),
+                tokens: Vec::with_capacity(INITIAL_TOKEN_CAPACITY),
                 done: false,
-                api_key_id: None,
+                api_key_id: job.api_key_id,
                 notify: Arc::new(Notify::new()),
                 cancel_notify: Arc::new(Notify::new()),
-                gemini_tier: None, // tier preference is lost on restart → auto-routing
-                key_tier: None,    // tier preference is lost on restart → standard queue
+                gemini_tier: None, // auto-routing on restart (original route hint not persisted)
+                key_tier: None,    // queue priority downgraded to standard on restart
+                tpm_reservation_minute: None,
             });
 
+            // Recovered jobs go to standard queue (key_tier not persisted).
+            // Paid-tier priority is best-effort: jobs are re-dispatched promptly regardless.
             let queue_key = if job.source == JobSource::Test { QUEUE_KEY_TEST } else { QUEUE_KEY_API };
-            if let Err(e) = pool.rpush::<i64, _, _>(queue_key, uuid.to_string()).await {
+            if let Err(e) = valkey.queue_push(queue_key, uuid).await {
                 tracing::warn!(%uuid, "failed to re-enqueue recovered job: {e}");
             } else {
                 tracing::info!(%uuid, "recovered job re-enqueued");
@@ -222,34 +307,19 @@ impl InferenceUseCaseImpl {
 
 #[async_trait]
 impl InferenceUseCase for InferenceUseCaseImpl {
-    async fn submit(
-        &self,
-        prompt: &str,
-        model_name: &str,
-        backend_type: &str,
-        api_key_id: Option<Uuid>,
-        account_id: Option<Uuid>,
-        source: JobSource,
-        api_format: ApiFormat,
-        messages: Option<serde_json::Value>,
-        tools: Option<serde_json::Value>,
-        request_path: Option<String>,
-        conversation_id: Option<String>,
-        key_tier: Option<String>,
-    ) -> Result<JobId> {
+    async fn submit(&self, req: SubmitJobRequest) -> Result<JobId> {
+        let SubmitJobRequest {
+            prompt, model_name, provider_type, gemini_tier, api_key_id,
+            account_id, source, api_format, messages, tools, request_path,
+            conversation_id, key_tier,
+        } = req;
+
         let job_id = JobId::new();
-        // Parse provider string: "gemini-free" routes to free-tier Gemini only;
-        // "gemini" uses auto-routing (free-first, paid-fallback).
-        let (provider_type, gemini_tier) = match backend_type {
-            "gemini-free" => (ProviderType::Gemini, Some("free".to_string())),
-            "gemini" => (ProviderType::Gemini, None),
-            _ => (ProviderType::Ollama, None),
-        };
 
         let job = InferenceJob {
             id: job_id.clone(),
-            prompt: Prompt::new(prompt)?,
-            model_name: ModelName::new(model_name)?,
+            prompt: Prompt::new(&prompt)?,
+            model_name: ModelName::new(&model_name)?,
             status: JobStatus::Pending,
             provider_type,
             created_at: chrono::Utc::now(),
@@ -274,6 +344,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             cancelled_at: None,
             conversation_id,
             tool_calls_json: None,
+            messages_hash: None,
+            messages_prefix_hash: None,
         };
 
         // Upload conversation context to S3 (authoritative store for messages_json).
@@ -287,44 +359,48 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         let job_for_db = InferenceJob { messages: None, ..job.clone() };
         self.job_repo.save(&job_for_db).await?;
 
+        let cancel_notify = Arc::new(Notify::new());
+        self.cancel_notifiers.insert(job_id.0, cancel_notify.clone());
+
         self.jobs.insert(
             job_id.0,
             JobEntry {
                 job: job.clone(), // original: retains messages for dispatch
                 status: JobStatus::Pending,
-                tokens: Vec::with_capacity(256),
+                tokens: Vec::with_capacity(INITIAL_TOKEN_CAPACITY),
                 done: false,
                 api_key_id,
                 notify: Arc::new(Notify::new()),
-                cancel_notify: Arc::new(Notify::new()),
+                cancel_notify,
                 gemini_tier: gemini_tier.clone(),
                 key_tier: key_tier.clone(),
+                tpm_reservation_minute: Some(chrono::Utc::now().timestamp() / 60),
             },
         );
 
         let uuid = job_id.0;
 
         // Broadcast enqueue event before job is moved — network flow UI picks this up immediately.
-        let _ = self.event_tx.send(JobStatusEvent {
+        let pending_event = JobStatusEvent {
             id: uuid.to_string(),
             status: "pending".to_string(),
             model_name: job.model_name.as_str().to_string(),
-            provider_type: match job.provider_type { ProviderType::Ollama => "ollama", ProviderType::Gemini => "gemini" }.to_string(),
+            provider_type: job.provider_type.as_str().to_string(),
             latency_ms: None,
-        });
+        };
+        broadcast_event(&self.event_tx, &self.valkey, &self.instance_id, &pending_event).await;
 
-        if let Some(ref pool) = self.valkey_pool {
+        if let Some(ref valkey) = self.valkey {
             // Persistent queue: RPUSH job UUID — dispatcher picks it up.
             // Priority order: paid-tier API > free/standard API > test.
-            use fred::prelude::*;
             let queue_key = if source == JobSource::Test {
                 QUEUE_KEY_TEST
-            } else if key_tier.as_deref() == Some("paid") {
+            } else if key_tier == Some(KeyTier::Paid) {
                 QUEUE_KEY_API_PAID
             } else {
                 QUEUE_KEY_API
             };
-            match pool.rpush::<i64, _, _>(queue_key, uuid.to_string()).await {
+            match valkey.queue_push(queue_key, uuid).await {
                 Ok(_) => {
                     tracing::debug!(%uuid, "job enqueued to Valkey queue");
                 }
@@ -333,10 +409,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     spawn_job_direct(
                         self.jobs.clone(),
                         self.job_repo.clone(),
-                        self.valkey_pool.clone(),
+                        self.valkey.clone(),
                         self.observability.clone(),
                         self.model_manager.clone(),
-                        self.slot_map.clone(),
+                        self.vram_pool.clone(),
                         self.thermal.clone(),
                         self.circuit_breaker.clone(),
                         self.provider_dispatch.clone(),
@@ -344,6 +420,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                         job,
                         gemini_tier,
                         self.event_tx.clone(),
+                        self.instance_id.clone(),
+                        self.cancel_notifiers.clone(),
                     );
                 }
             }
@@ -355,7 +433,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 None,
                 self.observability.clone(),
                 self.model_manager.clone(),
-                self.slot_map.clone(),
+                self.vram_pool.clone(),
                 self.thermal.clone(),
                 self.circuit_breaker.clone(),
                 self.provider_dispatch.clone(),
@@ -363,6 +441,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 job,
                 gemini_tier,
                 self.event_tx.clone(),
+                self.instance_id.clone(),
+                self.cancel_notifiers.clone(),
             );
         }
 
@@ -371,7 +451,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
     async fn process(&self, job_id: &JobId) -> Result<()> {
         let uuid = job_id.0;
-        let (job, api_key_id, gemini_tier) = {
+        let (job, gemini_tier) = {
             let entry = self.jobs
                 .get(&uuid)
                 .ok_or_else(|| anyhow::anyhow!("job not found: {uuid}"))?;
@@ -383,10 +463,9 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 return Ok(());
             }
 
-            (entry.job.clone(), entry.api_key_id, entry.gemini_tier.clone())
+            (entry.job.clone(), entry.gemini_tier.clone())
             // Ref dropped here — before any await
         };
-        let _ = api_key_id; // used in spawned path; process() ignores it
 
         // For process(), pick the best available provider now.
         let (adapter, provider_id, provider_is_free_tier) = match self
@@ -402,7 +481,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             self.jobs.clone(),
             adapter,
             self.job_repo.clone(),
-            self.valkey_pool.clone(),
+            self.valkey.clone(),
             self.observability.clone(),
             self.model_manager.clone(),
             self.provider_dispatch.clone(),
@@ -411,6 +490,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             Some(provider_id),
             provider_is_free_tier,
             self.event_tx.clone(),
+            self.instance_id.clone(),
+            self.cancel_notifiers.clone(),
         )
         .await
     }
@@ -432,10 +513,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     Some(job) if job.status == JobStatus::Completed => {
                         if let Some(text) = job.result_text {
                             if !text.is_empty() {
-                                yield StreamToken { value: text, is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None };
+                                yield StreamToken::text(text);
                             }
                         }
-                        yield StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None };
+                        yield StreamToken::done();
                         return;
                     }
                     Some(job) if job.status == JobStatus::Failed => {
@@ -499,10 +580,9 @@ impl InferenceUseCase for InferenceUseCaseImpl {
     }
 
     async fn cancel(&self, job_id: &JobId) -> Result<()> {
+        let is_local = self.jobs.contains_key(&job_id.0);
+
         let is_already_final = if let Some(mut entry) = self.jobs.get_mut(&job_id.0) {
-            // Don't override a job that has already reached a terminal state.
-            // This prevents a tab-close cleanup from flipping a completed job
-            // to cancelled after the stream has naturally finished.
             if entry.status == JobStatus::Completed || entry.status == JobStatus::Failed || entry.status == JobStatus::Cancelled {
                 true
             } else {
@@ -510,9 +590,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 entry.done = true;
                 let notify = entry.notify.clone();
                 let cancel_notify = entry.cancel_notify.clone();
-                drop(entry); // drop RefMut before calling notify
+                drop(entry);
                 notify.notify_one();
-                // Wake up run_job's tokio::select! so the stream is dropped immediately.
                 cancel_notify.notify_one();
                 false
             }
@@ -525,6 +604,17 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 .cancel_job(job_id, chrono::Utc::now())
                 .await?;
         }
+
+        // If job is not local, broadcast cancel via pub/sub for cross-instance reach.
+        if !is_local {
+            if let Some(ref valkey) = self.valkey {
+                valkey.publish_cancel(job_id.0).await;
+            }
+        }
+
+        // Clean up cancel notifier.
+        self.cancel_notifiers.remove(&job_id.0);
+
         Ok(())
     }
 }
@@ -534,10 +624,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 fn spawn_job_direct(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
     job_repo: Arc<dyn JobRepository>,
-    valkey_pool: Option<fred::clients::Pool>,
+    valkey: Option<Arc<dyn ValkeyPort>>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
-    slot_map: Arc<dyn ConcurrencyPort>,
+    vram_pool: Arc<dyn VramPoolPort>,
     thermal: Arc<dyn ThermalPort>,
     circuit_breaker: Arc<dyn CircuitBreakerPort>,
     provider_dispatch: Arc<dyn ProviderDispatchPort>,
@@ -545,6 +635,8 @@ fn spawn_job_direct(
     job: InferenceJob,
     gemini_tier: Option<String>,
     event_tx: broadcast::Sender<JobStatusEvent>,
+    instance_id: Arc<str>,
+    cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
 ) {
     tokio::spawn(async move {
         let (adapter, provider_id, provider_is_free_tier) = match provider_dispatch
@@ -571,21 +663,27 @@ fn spawn_job_direct(
                 return;
             }
             ThrottleLevel::Soft => {
-                if slot_map.active_slots(provider_id, job.model_name.as_str()) > 0 {
-                    tracing::debug!(job_id = %uuid, "direct spawn skipped — soft throttle, already busy");
+                if vram_pool.provider_active_requests(provider_id) > 0 {
+                    tracing::debug!(job_id = %uuid, "direct spawn skipped — soft throttle, provider busy");
                     return;
                 }
             }
             ThrottleLevel::Normal => {}
         }
 
-        let permit = slot_map.try_acquire(provider_id, job.model_name.as_str());
+        let permit = match vram_pool.try_reserve(provider_id, job.model_name.as_str()) {
+            Some(p) => p,
+            None => {
+                tracing::warn!(job_id = %uuid, %provider_id, "direct spawn skipped — VRAM unavailable");
+                return;
+            }
+        };
 
         match run_job(
             jobs,
             adapter,
             job_repo,
-            valkey_pool,
+            valkey,
             observability,
             model_manager,
             provider_dispatch,
@@ -594,6 +692,8 @@ fn spawn_job_direct(
             Some(provider_id),
             provider_is_free_tier,
             event_tx,
+            instance_id,
+            cancel_notifiers,
         )
         .await
         {
@@ -603,7 +703,7 @@ fn spawn_job_direct(
                 circuit_breaker.on_failure(provider_id);
             }
         }
-        drop(permit); // RAII: slot auto-released
+        drop(permit); // RAII: KV cache released
     });
 }
 
@@ -625,43 +725,44 @@ async fn queue_dispatcher_loop(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
     registry: Arc<dyn LlmProviderRegistry>,
     job_repo: Arc<dyn JobRepository>,
-    valkey_pool: fred::clients::Pool,
+    valkey: Arc<dyn ValkeyPort>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
-    slot_map: Arc<dyn ConcurrencyPort>,
+    vram_pool: Arc<dyn VramPoolPort>,
     thermal: Arc<dyn ThermalPort>,
     circuit_breaker: Arc<dyn CircuitBreakerPort>,
     provider_dispatch: Arc<dyn ProviderDispatchPort>,
     event_tx: broadcast::Sender<JobStatusEvent>,
+    instance_id: Arc<str>,
+    cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
+    ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
+    model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
     shutdown: CancellationToken,
 ) {
-    use fred::prelude::*;
-
     tracing::info!(
         "queue dispatcher loop started — priority: {QUEUE_KEY_API_PAID} > {QUEUE_KEY_API} > {QUEUE_KEY_TEST}"
     );
 
+    let source_queues: &[&str] = &[QUEUE_KEY_API_PAID, QUEUE_KEY_API, QUEUE_KEY_TEST];
+
     loop {
-        // BLPOP blocks for up to 5 s; returns None on timeout.
-        // Priority order: paid-API > standard-API > test (BLPOP checks keys in order).
-        let queue_keys: Vec<String> = vec![
-            QUEUE_KEY_API_PAID.to_string(),
-            QUEUE_KEY_API.to_string(),
-            QUEUE_KEY_TEST.to_string(),
-        ];
-        let result: Result<Option<(String, String)>, _> = tokio::select! {
+        // Priority pop via Lua: try paid → standard → test → processing list.
+        let result = tokio::select! {
             biased;
             _ = shutdown.cancelled() => break,
-            r = valkey_pool.blpop(queue_keys, 5.0) => r,
+            r = valkey.queue_priority_pop(&source_queues, QUEUE_PROCESSING) => r,
         };
 
         let payload = match result {
-            Ok(None) => continue,
-            Ok(Some((_key, value))) => value,
-            Err(e) if matches!(e.kind(), fred::error::ErrorKind::Timeout) => continue,
+            Ok(None) => {
+                // All queues empty — sleep briefly to avoid busy-spinning.
+                tokio::time::sleep(QUEUE_POLL_INTERVAL).await;
+                continue;
+            }
+            Ok(Some(value)) => value,
             Err(e) => {
-                tracing::error!("dispatcher BLPOP error: {e}");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                tracing::error!("dispatcher priority-pop error: {e}");
+                tokio::time::sleep(QUEUE_ERROR_BACKOFF).await;
                 continue;
             }
         };
@@ -687,13 +788,14 @@ async fn queue_dispatcher_loop(
                     jobs.entry(uuid).or_insert_with(|| JobEntry {
                         job: j.clone(),
                         status: j.status,
-                        tokens: Vec::with_capacity(256),
+                        tokens: Vec::with_capacity(INITIAL_TOKEN_CAPACITY),
                         done: false,
                         api_key_id: None,
                         notify: Arc::new(Notify::new()),
                         cancel_notify: Arc::new(Notify::new()),
                         gemini_tier: None,
                         key_tier: None, // tier lost on restart; recovered jobs use standard queue
+                        tpm_reservation_minute: None,
                     });
                     (j, None, None)
                 }
@@ -715,17 +817,82 @@ async fn queue_dispatcher_loop(
             .filter(|b| {
                 b.is_active && b.provider_type == job.provider_type
                     && match gemini_tier.as_deref() {
-                        Some("free") => b.is_free_tier,
+                        Some(GEMINI_TIER_FREE) => b.is_free_tier,
                         _ => true,
                     }
             })
             .collect();
 
+        // Filter Ollama candidates to providers that have the requested model.
+        let model_str = job.model_name.as_str();
+        let candidates = if job.provider_type == ProviderType::Ollama && !model_str.is_empty() {
+            if let Some(ref repo) = ollama_model_repo {
+                match repo.providers_for_model(model_str).await {
+                    Ok(ids) if !ids.is_empty() => {
+                        let id_set: std::collections::HashSet<Uuid> =
+                            ids.into_iter().collect();
+                        let filtered: Vec<_> = candidates
+                            .iter()
+                            .filter(|b| id_set.contains(&b.id))
+                            .cloned()
+                            .collect();
+                        if filtered.is_empty() { candidates } else { filtered }
+                    }
+                    _ => candidates,
+                }
+            } else {
+                candidates
+            }
+        } else {
+            candidates
+        };
+
+        // Filter by model selection: skip providers where this model is disabled.
+        let candidates = if job.provider_type == ProviderType::Ollama && !model_str.is_empty() {
+            if let Some(ref repo) = model_selection_repo {
+                let mut result = Vec::new();
+                for b in candidates {
+                    match repo.list_enabled(b.id).await {
+                        Ok(enabled) if !enabled.is_empty() => {
+                            let set: std::collections::HashSet<&str> =
+                                enabled.iter().map(|s| s.as_str()).collect();
+                            if set.contains(model_str) {
+                                result.push(b);
+                            } else {
+                                tracing::debug!(
+                                    provider_id = %b.id,
+                                    model = %model_str,
+                                    "model disabled on provider, skipping in queue"
+                                );
+                            }
+                        }
+                        // No rows or error → no restriction.
+                        _ => result.push(b),
+                    }
+                }
+                result
+            } else {
+                candidates
+            }
+        } else {
+            candidates
+        };
+
         // Collect VRAM availability for each candidate.
+        // Model stickiness: providers with the requested model already loaded get a
+        // large bonus, favoring consecutive requests on the same provider over switching.
         let mut availability: Vec<(crate::domain::entities::LlmProvider, i64)> = Vec::new();
         for b in candidates {
             let avail = match b.provider_type {
-                ProviderType::Ollama => provider_dispatch.available_vram_mb(&b).await,
+                ProviderType::Ollama => {
+                    let base = provider_dispatch.available_vram_mb(&b).await;
+                    let loaded = vram_pool.loaded_model_names(b.id);
+                    if loaded.iter().any(|m| m == model_str) {
+                        base.saturating_add(MODEL_LOCALITY_BONUS_MB) // large bonus for model locality
+                    } else {
+                        base
+                    }
+                }
                 ProviderType::Gemini => i64::MAX, // no VRAM constraint
             };
             availability.push((b, avail));
@@ -734,15 +901,15 @@ async fn queue_dispatcher_loop(
         // Paid-tier jobs prefer non-free-tier Ollama providers; free-tier jobs prefer free-tier ones.
         availability.sort_by(|a, b| {
             if job.provider_type == ProviderType::Ollama {
-                let a_preferred = match key_tier.as_deref() {
-                    Some("paid") => !a.0.is_free_tier, // paid → prefer non-free-tier
-                    Some("free") => a.0.is_free_tier,  // free → prefer free-tier
-                    _ => false,
+                let a_preferred = match key_tier {
+                    Some(KeyTier::Paid) => !a.0.is_free_tier, // paid → prefer non-free-tier
+                    Some(KeyTier::Free) => a.0.is_free_tier,  // free → prefer free-tier
+                    None => false,
                 };
-                let b_preferred = match key_tier.as_deref() {
-                    Some("paid") => !b.0.is_free_tier,
-                    Some("free") => b.0.is_free_tier,
-                    _ => false,
+                let b_preferred = match key_tier {
+                    Some(KeyTier::Paid) => !b.0.is_free_tier,
+                    Some(KeyTier::Free) => b.0.is_free_tier,
+                    None => false,
                 };
                 match b_preferred.cmp(&a_preferred) {
                     std::cmp::Ordering::Equal => b.1.cmp(&a.1),
@@ -759,7 +926,7 @@ async fn queue_dispatcher_loop(
             .into_iter()
             .filter(|(_b, avail)| *avail > 0)
             .find_map(|(provider, _)| {
-                // Circuit breaker gate — skip open backends.
+                // Circuit breaker gate — skip open providers.
                 if !circuit_breaker.is_allowed(provider.id) {
                     tracing::debug!(
                         provider_id = %provider.id,
@@ -772,16 +939,16 @@ async fn queue_dispatcher_loop(
                 match thermal.get_level(provider.id) {
                     ThrottleLevel::Hard => return None,
                     ThrottleLevel::Soft => {
-                        // Soft throttle: allow only if no active slots (cap=1 effect)
-                        if slot_map.active_slots(provider.id, job.model_name.as_str()) > 0 {
+                        // Soft throttle: allow only if no active requests on entire provider
+                        if vram_pool.provider_active_requests(provider.id) > 0 {
                             return None;
                         }
                     }
                     ThrottleLevel::Normal => {}
                 }
-                // Non-blocking semaphore acquire
-                slot_map
-                    .try_acquire(provider.id, job.model_name.as_str())
+                // Non-blocking VRAM reserve
+                vram_pool
+                    .try_reserve(provider.id, job.model_name.as_str())
                     .map(|permit| (provider, permit))
             });
 
@@ -798,14 +965,21 @@ async fn queue_dispatcher_loop(
                     "dispatching job to provider"
                 );
 
+                // Set job owner (this instance) in Valkey with 300s TTL.
+                let owner_key = crate::infrastructure::outbound::valkey_keys::job_owner(uuid);
+                let _ = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await;
+
                 let jobs_c = jobs.clone();
                 let job_repo_c = job_repo.clone();
-                let valkey_c = valkey_pool.clone();
+                let valkey_c = valkey.clone();
                 let obs_c = observability.clone();
                 let mm_c = model_manager.clone();
                 let ev_c = event_tx.clone();
                 let cb_c = circuit_breaker.clone();
                 let pd_c = provider_dispatch.clone();
+                let uuid_str = uuid.to_string();
+                let iid_c = instance_id.clone();
+                let cn_c = cancel_notifiers.clone();
 
                 tokio::spawn(async move {
                     let _permit = permit; // RAII: dropped when task finishes
@@ -813,7 +987,7 @@ async fn queue_dispatcher_loop(
                         jobs_c,
                         adapter,
                         job_repo_c,
-                        Some(valkey_c),
+                        Some(valkey_c.clone()),
                         obs_c,
                         mm_c,
                         pd_c,
@@ -822,6 +996,8 @@ async fn queue_dispatcher_loop(
                         Some(provider_id),
                         provider_is_free_tier,
                         ev_c,
+                        iid_c,
+                        cn_c,
                     )
                     .await
                     {
@@ -831,26 +1007,28 @@ async fn queue_dispatcher_loop(
                             cb_c.on_failure(provider_id);
                         }
                     }
-                    tracing::debug!(%provider_id, "slot released");
+                    // ACK: remove from processing list + delete owner key.
+                    let _ = valkey_c.list_remove(QUEUE_PROCESSING, &uuid_str).await;
+                    let _ = valkey_c.kv_del(&owner_key).await;
+                    tracing::debug!(%provider_id, "slot released, job acked");
                 });
             }
             None => {
-                // No provider available → put job back at front of its original queue and wait.
+                // No provider available → remove from processing, put back at front of source queue.
                 tracing::debug!(%uuid, "no available provider, re-queuing");
+                let uuid_str = uuid.to_string();
+                let _ = valkey.list_remove(QUEUE_PROCESSING, &uuid_str).await;
                 let requeue_key = if job.source == JobSource::Test {
                     QUEUE_KEY_TEST
-                } else if key_tier.as_deref() == Some("paid") {
+                } else if key_tier == Some(KeyTier::Paid) {
                     QUEUE_KEY_API_PAID
                 } else {
                     QUEUE_KEY_API
                 };
-                if let Err(e) = valkey_pool
-                    .lpush::<i64, _, _>(requeue_key, uuid.to_string())
-                    .await
-                {
+                if let Err(e) = valkey.queue_push_front(requeue_key, uuid).await {
                     tracing::error!(%uuid, "failed to re-queue job: {e}");
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(NO_PROVIDER_BACKOFF).await;
             }
         }
     }
@@ -865,7 +1043,7 @@ async fn run_job(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
     provider: Arc<dyn InferenceProviderPort>,
     job_repo: Arc<dyn JobRepository>,
-    valkey_pool: Option<fred::clients::Pool>,
+    valkey: Option<Arc<dyn ValkeyPort>>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
     provider_dispatch: Arc<dyn ProviderDispatchPort>,
@@ -874,6 +1052,8 @@ async fn run_job(
     provider_id: Option<Uuid>,
     provider_is_free_tier: bool,
     event_tx: broadcast::Sender<JobStatusEvent>,
+    instance_id: Arc<str>,
+    cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
 ) -> Result<()> {
     // ── Model manager: ensure model is loaded (Ollama only) ──────────
     if job.provider_type == ProviderType::Ollama {
@@ -886,17 +1066,17 @@ async fn run_job(
 
     // ── Running ──────────────────────────────────────────────────────
     let started_at = chrono::Utc::now();
-    let api_key_id = if let Some(mut entry) = jobs.get_mut(&uuid) {
+    let (api_key_id, tpm_reservation_minute) = if let Some(mut entry) = jobs.get_mut(&uuid) {
         if entry.status == JobStatus::Cancelled {
             return Ok(());
         }
         entry.status = JobStatus::Running;
         entry.job.status = JobStatus::Running;
         entry.job.started_at = Some(started_at);
-        entry.api_key_id
+        (entry.api_key_id, entry.tpm_reservation_minute)
         // RefMut dropped here — before the await below
     } else {
-        None
+        (None, None)
     };
 
     job.status = JobStatus::Running;
@@ -913,13 +1093,14 @@ async fn run_job(
         tracing::warn!(job_id = %uuid, "failed to persist running state: {e}");
     }
 
-    let _ = event_tx.send(JobStatusEvent {
+    let running_event = JobStatusEvent {
         id: uuid.to_string(),
         status: "running".to_string(),
         model_name: job.model_name.as_str().to_string(),
-        provider_type: match job.provider_type { ProviderType::Ollama => "ollama", ProviderType::Gemini => "gemini" }.to_string(),
+        provider_type: job.provider_type.as_str().to_string(),
         latency_ms: None,
-    });
+    };
+    broadcast_event(&event_tx, &valkey, &instance_id, &running_event).await;
 
     // ── Stream tokens ────────────────────────────────────────────────
     // Clone cancel_notify before entering the loop so we can select! on it
@@ -935,6 +1116,8 @@ async fn run_job(
     job.messages = None;
     let mut token_count: u64 = 0;
     let mut accumulated_text = String::new();
+    // Track last owner refresh for periodic renewal (prevents false reaper re-enqueue).
+    let mut last_owner_refresh = std::time::Instant::now();
     // Collected tool calls from all StreamToken.tool_calls across this job.
     // Stored as JSONB in inference_jobs.tool_calls_json for training data / dashboard.
     let mut accumulated_tool_calls: Vec<serde_json::Value> = Vec::new();
@@ -955,6 +1138,7 @@ async fn run_job(
             biased;
             _ = cancel_notify.notified() => {
                 tracing::info!(%uuid, "job cancelled — dropping Ollama stream");
+                schedule_cleanup(&jobs, uuid, JOB_CLEANUP_DELAY);
                 return Ok(());
             }
             item = token_stream.next() => item,
@@ -984,7 +1168,10 @@ async fn run_job(
                 // can query tool_name / arguments without parsing result_text.
                 if let Some(ref tc) = token.tool_calls {
                     match tc {
-                        serde_json::Value::Array(arr) => accumulated_tool_calls.extend(arr.iter().cloned()),
+                        serde_json::Value::Array(arr) => {
+                            accumulated_tool_calls.reserve(arr.len());
+                            accumulated_tool_calls.extend(arr.iter().cloned());
+                        }
                         other => accumulated_tool_calls.push(other.clone()),
                     }
                 }
@@ -1003,18 +1190,39 @@ async fn run_job(
                             .max(0) as i32,
                     );
                 }
+                // Guard: enforce token budget to prevent unbounded memory growth.
+                if entry.tokens.len() > MAX_TOKENS_PER_JOB {
+                    entry.done = true;
+                    entry.status = JobStatus::Failed;
+                    entry.job.status = JobStatus::Failed;
+                    entry.job.error = Some("token budget exceeded".into());
+                    let notify = entry.notify.clone();
+                    drop(entry);
+                    notify.notify_one();
+                    tracing::warn!(job_id = %uuid, "token budget exceeded, terminating job");
+                    break;
+                }
                 // If the final token carries text, split it into a text token
                 // followed by a separate done marker so the SSE handler never
                 // discards text that arrives on the same chunk as is_final=true.
                 if token.is_final && !token.value.is_empty() {
-                    entry.tokens.push(StreamToken { value: token.value, is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None });
-                    entry.tokens.push(StreamToken { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None });
+                    entry.tokens.push(StreamToken::text(token.value));
+                    entry.tokens.push(StreamToken::done());
                 } else {
                     entry.tokens.push(token);
                 }
                 let notify = entry.notify.clone();
                 drop(entry); // drop RefMut before notify_one (not strictly required, but safe)
                 notify.notify_one();
+
+                // Refresh job_owner TTL every 60s to prevent false reaper re-enqueue.
+                if last_owner_refresh.elapsed() >= OWNER_REFRESH_INTERVAL {
+                    if let Some(ref vk) = valkey {
+                        let owner_key = crate::infrastructure::outbound::valkey_keys::job_owner(uuid);
+                        let _ = vk.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, true).await;
+                    }
+                    last_owner_refresh = std::time::Instant::now();
+                }
             }
             Err(e) => {
                 let error_msg = e.to_string();
@@ -1053,6 +1261,14 @@ async fn run_job(
                 )
                 .await;
 
+                // ── Refund TPM reservation (failed = 0 actual tokens) ────────
+                if let (Some(vk), Some(key_id)) = (&valkey, api_key_id) {
+                    if let Err(tpm_err) = record_tpm(vk.as_ref(), key_id, 0, tpm_reservation_minute).await {
+                        tracing::warn!(job_id = %uuid, "failed to refund TPM reservation: {tpm_err}");
+                    }
+                }
+
+                schedule_cleanup(&jobs, uuid, JOB_CLEANUP_DELAY);
                 return Err(e);
             }
         }
@@ -1089,14 +1305,33 @@ async fn run_job(
         Some(serde_json::Value::Array(accumulated_tool_calls))
     };
 
-    let stored_latency_ms = completed_at
+    let latency_ms_raw = completed_at
         .signed_duration_since(started_at)
         .num_milliseconds()
-        .max(0) as i32;
+        .max(0);
+    let stored_latency_ms = latency_ms_raw as i32;
 
     let stored_completion_tokens = actual_completion_tokens
         .map(|v| v as i32)
         .or_else(|| if token_count > 0 { Some(token_count as i32) } else { None });
+
+    // ── Ownership guard: verify we still own this job before writing results ──
+    // Prevents double-write when the reaper re-enqueued our job to another instance.
+    if let Some(ref vk) = valkey {
+        let owner_key = crate::infrastructure::outbound::valkey_keys::job_owner(uuid);
+        let owner: Option<String> = vk.kv_get(&owner_key).await.unwrap_or(None);
+        if let Some(ref id) = owner {
+            if id != instance_id.as_ref() {
+                tracing::warn!(%uuid, current_owner = %id, "ownership lost — aborting to prevent double write");
+                if let Some(mut entry) = jobs.get_mut(&uuid) {
+                    entry.done = true;
+                }
+                cancel_notifiers.remove(&uuid);
+                schedule_cleanup(&jobs, uuid, OWNERSHIP_LOST_CLEANUP_DELAY);
+                return Ok(());
+            }
+        }
+    }
 
     // Mutate job fields directly for the final save — avoids cloning all 16+ fields.
     job.status = JobStatus::Completed;
@@ -1112,7 +1347,7 @@ async fn run_job(
         tracing::warn!(job_id = %uuid, "failed to persist completed state: {e}");
     }
 
-    let _ = event_tx.send(JobStatusEvent {
+    let completed_event = JobStatusEvent {
         id: uuid.to_string(),
         status: match final_status {
             JobStatus::Cancelled => "cancelled",
@@ -1120,9 +1355,13 @@ async fn run_job(
             _ => "completed",
         }.to_string(),
         model_name: job.model_name.as_str().to_string(),
-        provider_type: match job.provider_type { ProviderType::Ollama => "ollama", ProviderType::Gemini => "gemini" }.to_string(),
+        provider_type: job.provider_type.as_str().to_string(),
         latency_ms: Some(stored_latency_ms),
-    });
+    };
+    broadcast_event(&event_tx, &valkey, &instance_id, &completed_event).await;
+
+    // Clean up cancel notifier for this job.
+    cancel_notifiers.remove(&uuid);
 
     // ── Model manager: record LRU usage (Ollama only) ────────────────
     if job.provider_type == ProviderType::Ollama {
@@ -1132,8 +1371,8 @@ async fn run_job(
     }
 
     // ── Record TPM ───────────────────────────────────────────────────
-    if let (Some(pool), Some(key_id)) = (&valkey_pool, api_key_id) {
-        if let Err(e) = record_tpm(pool, key_id, token_count).await {
+    if let (Some(vk), Some(key_id)) = (&valkey, api_key_id) {
+        if let Err(e) = record_tpm(vk.as_ref(), key_id, token_count, tpm_reservation_minute).await {
             tracing::warn!(job_id = %uuid, "failed to record TPM usage: {e}");
         }
     }
@@ -1150,11 +1389,6 @@ async fn run_job(
     }
 
     // ── Record observability event (completed / cancelled) ───────────
-    let latency_ms = completed_at
-        .signed_duration_since(started_at)
-        .num_milliseconds()
-        .max(0) as u32;
-
     let (finish_reason, status_str) = match final_status {
         JobStatus::Cancelled => (FinishReason::Cancelled, "cancelled".to_string()),
         _ => (FinishReason::Stop, "completed".to_string()),
@@ -1167,14 +1401,43 @@ async fn run_job(
         &job,
         actual_prompt_tokens.unwrap_or(0),
         actual_completion_tokens.unwrap_or(token_count as u32),
-        latency_ms,
+        latency_ms_raw as u32,
         finish_reason,
         status_str,
         None,
     )
     .await;
 
+    // ── Deferred cleanup: remove JobEntry from DashMap after 60 s ─────
+    // Keeps tokens available for late-connecting SSE clients, then frees memory.
+    schedule_cleanup(&jobs, uuid, JOB_CLEANUP_DELAY);
+
     Ok(())
+}
+
+// ── Common helpers ──────────────────────────────────────────────────────────────
+
+/// Broadcast a job status event to local subscribers and (if Valkey is available)
+/// to other instances via pub/sub.
+async fn broadcast_event(
+    event_tx: &broadcast::Sender<JobStatusEvent>,
+    valkey: &Option<Arc<dyn ValkeyPort>>,
+    instance_id: &str,
+    event: &JobStatusEvent,
+) {
+    let _ = event_tx.send(event.clone());
+    if let Some(vk) = valkey {
+        vk.publish_job_event(event, instance_id).await;
+    }
+}
+
+/// Schedule deferred DashMap cleanup after a given delay.
+fn schedule_cleanup(jobs: &Arc<DashMap<Uuid, JobEntry>>, uuid: Uuid, delay: std::time::Duration) {
+    let cleanup_jobs = jobs.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        cleanup_jobs.remove(&uuid);
+    });
 }
 
 // ── Observability helper ───────────────────────────────────────────────────────
@@ -1193,10 +1456,7 @@ async fn emit_inference_event(
     error_msg: Option<String>,
 ) {
     if let Some(obs) = observability {
-        let backend_str = match job.provider_type {
-            ProviderType::Ollama => "ollama".to_string(),
-            ProviderType::Gemini => "gemini".to_string(),
-        };
+        let provider_str = job.provider_type.as_str().to_string();
 
         let event = InferenceEvent {
             event_time: chrono::Utc::now(),
@@ -1204,7 +1464,7 @@ async fn emit_inference_event(
             api_key_id,
             tenant_id: String::new(),
             model_name: job.model_name.as_str().to_string(),
-            provider_type: backend_str,
+            provider_type: provider_str,
             prompt_tokens,
             completion_tokens,
             latency_ms,
@@ -1226,22 +1486,29 @@ async fn emit_inference_event(
 ///
 /// Key pattern: `veronex:ratelimit:tpm:{key_id}:{minute}`
 /// TTL is set to 2 minutes so stale keys are cleaned up automatically.
+/// Adjust TPM counter after job completion: add actual tokens minus the
+/// reservation that was already made at admission by the rate limiter.
+///
+/// If actual > estimated: counter goes up by the difference.
+/// If actual < estimated: counter goes down (corrects the over-estimate).
+///
+/// Uses the reservation minute (when the rate limiter reserved tokens) so the
+/// adjustment targets the same Valkey key, preventing cross-minute drift.
 pub async fn record_tpm(
-    pool: &fred::clients::Pool,
+    valkey: &dyn ValkeyPort,
     api_key_id: Uuid,
     tokens: u64,
+    reservation_minute: Option<i64>,
 ) -> anyhow::Result<()> {
-    use fred::prelude::*;
-
-    if tokens == 0 {
+    let adjustment = tokens as i64 - TPM_ESTIMATED_TOKENS;
+    if adjustment == 0 {
         return Ok(());
     }
 
-    let minute = chrono::Utc::now().timestamp() / 60;
-    let key = format!("veronex:ratelimit:tpm:{}:{}", api_key_id, minute);
+    let minute = reservation_minute.unwrap_or_else(|| chrono::Utc::now().timestamp() / 60);
+    let key = crate::infrastructure::outbound::valkey_keys::ratelimit_tpm(api_key_id, minute);
 
-    let _: i64 = pool.incr_by(&key, tokens as i64).await?;
-    let _: bool = pool.expire(&key, 120, None).await?;
+    valkey.incr_by(&key, adjustment).await?;
 
     Ok(())
 }

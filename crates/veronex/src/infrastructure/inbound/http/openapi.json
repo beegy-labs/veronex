@@ -26,7 +26,7 @@
         "type": "string",
         "enum": ["pending", "running", "completed", "failed", "cancelled"]
       },
-      "BackendType": {
+      "ProviderType": {
         "type": "string",
         "enum": ["ollama", "gemini"]
       },
@@ -36,7 +36,7 @@
         "properties": {
           "model": { "type": "string", "example": "llama3.2:3b" },
           "prompt": { "type": "string", "example": "Explain hexagonal architecture." },
-          "backend": { "$ref": "#/components/schemas/BackendType" },
+          "provider_type": { "$ref": "#/components/schemas/ProviderType" },
           "stream": { "type": "boolean", "default": false }
         }
       },
@@ -46,7 +46,7 @@
           "job_id": { "type": "string", "format": "uuid" },
           "status": { "$ref": "#/components/schemas/JobStatus" },
           "model": { "type": "string" },
-          "backend": { "$ref": "#/components/schemas/BackendType" },
+          "provider_type": { "$ref": "#/components/schemas/ProviderType" },
           "result": { "type": "string", "nullable": true },
           "error": { "type": "string", "nullable": true },
           "prompt_tokens": { "type": "integer", "nullable": true },
@@ -96,12 +96,12 @@
           }
         ]
       },
-      "RegisterBackendRequest": {
+      "RegisterProviderRequest": {
         "type": "object",
-        "required": ["name", "backend_type", "url"],
+        "required": ["name", "provider_type", "url"],
         "properties": {
           "name": { "type": "string" },
-          "backend_type": { "$ref": "#/components/schemas/BackendType" },
+          "provider_type": { "$ref": "#/components/schemas/ProviderType" },
           "url": { "type": "string", "format": "uri" },
           "api_key": { "type": "string", "nullable": true },
           "total_vram_mb": { "type": "integer", "nullable": true },
@@ -109,7 +109,7 @@
           "server_id": { "type": "string", "format": "uuid", "nullable": true }
         }
       },
-      "UpdateBackendRequest": {
+      "UpdateProviderRequest": {
         "type": "object",
         "properties": {
           "name": { "type": "string" },
@@ -120,12 +120,12 @@
           "server_id": { "type": "string", "format": "uuid", "nullable": true }
         }
       },
-      "BackendResponse": {
+      "ProviderResponse": {
         "type": "object",
         "properties": {
           "id": { "type": "string", "format": "uuid" },
           "name": { "type": "string" },
-          "backend_type": { "$ref": "#/components/schemas/BackendType" },
+          "provider_type": { "$ref": "#/components/schemas/ProviderType" },
           "url": { "type": "string" },
           "is_active": { "type": "boolean" },
           "total_vram_mb": { "type": "integer", "nullable": true },
@@ -310,7 +310,7 @@
     { "name": "inference", "description": "Submit and track LLM inference jobs" },
     { "name": "openai", "description": "OpenAI-compatible chat completions" },
     { "name": "keys", "description": "API key management" },
-    { "name": "backends", "description": "LLM backend registration and routing" },
+    { "name": "providers", "description": "LLM provider registration and routing" },
     { "name": "servers", "description": "GPU server registration and metrics" },
     { "name": "usage", "description": "Token and request usage analytics" },
     { "name": "dashboard", "description": "Cluster-wide statistics and job history" },
@@ -645,73 +645,73 @@
         }
       }
     },
-    "/v1/backends": {
+    "/v1/providers": {
       "post": {
-        "tags": ["backends"],
-        "summary": "Register LLM backend",
-        "operationId": "registerBackend",
+        "tags": ["providers"],
+        "summary": "Register LLM provider",
+        "operationId": "registerProvider",
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterBackendRequest" } } }
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterProviderRequest" } } }
         },
         "responses": {
           "201": {
-            "description": "Backend registered",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackendResponse" } } }
+            "description": "Provider registered",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProviderResponse" } } }
           },
           "401": { "description": "Unauthorized" }
         }
       },
       "get": {
-        "tags": ["backends"],
-        "summary": "List LLM backends",
-        "operationId": "listBackends",
+        "tags": ["providers"],
+        "summary": "List LLM providers",
+        "operationId": "listProviders",
         "responses": {
           "200": {
-            "description": "List of backends",
-            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/BackendResponse" } } } }
+            "description": "List of providers",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ProviderResponse" } } } }
           },
           "401": { "description": "Unauthorized" }
         }
       }
     },
-    "/v1/backends/{id}": {
+    "/v1/providers/{id}": {
       "delete": {
-        "tags": ["backends"],
-        "summary": "Delete LLM backend",
-        "operationId": "deleteBackend",
+        "tags": ["providers"],
+        "summary": "Delete LLM provider",
+        "operationId": "deleteProvider",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
         "responses": {
-          "204": { "description": "Backend deleted" },
+          "204": { "description": "Provider deleted" },
           "401": { "description": "Unauthorized" },
           "404": { "description": "Not found" }
         }
       },
       "patch": {
-        "tags": ["backends"],
-        "summary": "Update LLM backend",
-        "operationId": "updateBackend",
+        "tags": ["providers"],
+        "summary": "Update LLM provider",
+        "operationId": "updateProvider",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateBackendRequest" } } }
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateProviderRequest" } } }
         },
         "responses": {
-          "200": { "description": "Backend updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackendResponse" } } } },
+          "200": { "description": "Provider updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProviderResponse" } } } },
           "401": { "description": "Unauthorized" },
           "404": { "description": "Not found" }
         }
       }
     },
-    "/v1/backends/{id}/healthcheck": {
+    "/v1/providers/{id}/healthcheck": {
       "post": {
-        "tags": ["backends"],
-        "summary": "Run backend health check",
-        "operationId": "healthcheckBackend",
+        "tags": ["providers"],
+        "summary": "Run provider health check",
+        "operationId": "healthcheckProvider",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
@@ -722,11 +722,11 @@
         }
       }
     },
-    "/v1/backends/{id}/models": {
+    "/v1/providers/{id}/models": {
       "get": {
-        "tags": ["backends"],
-        "summary": "List models available on a backend",
-        "operationId": "listBackendModels",
+        "tags": ["providers"],
+        "summary": "List models available on a provider",
+        "operationId": "listProviderModels",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
@@ -739,11 +739,11 @@
         }
       }
     },
-    "/v1/backends/{id}/models/sync": {
+    "/v1/providers/{id}/models/sync": {
       "post": {
-        "tags": ["backends"],
+        "tags": ["providers"],
         "summary": "Force-refresh model list cache",
-        "operationId": "syncBackendModels",
+        "operationId": "syncProviderModels",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],
@@ -753,11 +753,11 @@
         }
       }
     },
-    "/v1/backends/{id}/key": {
+    "/v1/providers/{id}/key": {
       "get": {
-        "tags": ["backends"],
-        "summary": "Reveal backend API key",
-        "operationId": "revealBackendKey",
+        "tags": ["providers"],
+        "summary": "Reveal provider API key",
+        "operationId": "revealProviderKey",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
         ],

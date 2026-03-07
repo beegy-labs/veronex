@@ -20,14 +20,20 @@ use axum::Json;
 use futures::StreamExt as _;
 use serde::Deserialize;
 
+use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{ApiFormat, ProviderType, JobSource};
 use super::cancel_guard::CancelOnDrop;
+use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
+use super::handlers::sanitize_sse_error;
+use super::inference_helpers::{validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
 use super::state::AppState;
 
 // ── Inference request body types ────────────────────────────────────────────────
 
+/// Fields deserialized for Ollama API compatibility but not all are forwarded.
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct OllamaGenerateBody {
     model: String,
     prompt: String,
@@ -55,6 +61,7 @@ pub struct OllamaGenerateBody {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct OllamaChatBody {
     model: String,
     messages: Vec<serde_json::Value>,
@@ -85,7 +92,7 @@ pub async fn list_local_models(State(state): State<AppState>) -> Response {
             tracing::error!("ollama_compat /api/tags: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
+                Json(serde_json::json!({"error": "failed to list models"})),
             )
                 .into_response();
         }
@@ -127,7 +134,21 @@ pub async fn generate(
     headers: axum::http::HeaderMap,
     Json(req): Json<OllamaGenerateBody>,
 ) -> Response {
-    let conversation_id = headers.get("x-conversation-id").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let conversation_id = extract_conversation_id(&headers);
+    if validate_model_name(&req.model).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": ERR_MODEL_INVALID})),
+        )
+            .into_response();
+    }
+    if validate_content_length(req.prompt.len()).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": ERR_PROMPT_TOO_LARGE})),
+        )
+            .into_response();
+    }
     if req.prompt.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -140,20 +161,21 @@ pub async fn generate(
 
     let job_id = match state
         .use_case
-        .submit(
-            &req.prompt,
-            &model,
-            "ollama",
-            Some(api_key.id),
-            None,
-            JobSource::Api,
-            ApiFormat::OllamaNative,
-            None,
-            None, // no tools for /api/generate
-            Some("/api/generate".to_string()),
+        .submit(SubmitJobRequest {
+            prompt: req.prompt,
+            model_name: model.clone(),
+            provider_type: ProviderType::Ollama,
+            gemini_tier: None,
+            api_key_id: Some(api_key.id),
+            account_id: None,
+            source: JobSource::Api,
+            api_format: ApiFormat::OllamaNative,
+            messages: None,
+            tools: None,
+            request_path: Some("/api/generate".to_string()),
             conversation_id,
-            Some(api_key.tier.clone()),
-        )
+            key_tier: Some(api_key.tier),
+        })
         .await
     {
         Ok(id) => id,
@@ -191,7 +213,7 @@ pub async fn generate(
                 "done": false,
             }),
             Err(e) => serde_json::json!({
-                "error": e.to_string(),
+                "error": sanitize_sse_error(&e),
                 "done": true,
             }),
         };
@@ -217,24 +239,37 @@ pub async fn chat(
     headers: axum::http::HeaderMap,
     Json(req): Json<OllamaChatBody>,
 ) -> Response {
-    let conversation_id = headers.get("x-conversation-id").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let conversation_id = extract_conversation_id(&headers);
+    if validate_model_name(&req.model).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": ERR_MODEL_INVALID})),
+        )
+            .into_response();
+    }
+    // Validate total message content length.
+    let total_content_len: usize = req.messages.iter()
+        .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
+        .map(|s| s.len())
+        .sum();
+    if validate_content_length(total_content_len).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": ERR_PROMPT_TOO_LARGE})),
+        )
+            .into_response();
+    }
     // Extract last user message as display prompt (required by InferenceJob).
-    let prompt = req
-        .messages
-        .iter()
-        .rev()
-        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-        .and_then(|m| m.get("content").and_then(|c| c.as_str()))
-        .unwrap_or("")
-        .to_string();
-
-    if prompt.is_empty() {
+    // For native Ollama API, a user message is required.
+    let has_user_msg = req.messages.iter().any(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"));
+    if !has_user_msg {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "no user message found in messages array"})),
         )
             .into_response();
     }
+    let prompt = extract_last_user_prompt(&req.messages).to_string();
 
     let model = req.model.clone();
     let messages = serde_json::Value::Array(req.messages);
@@ -242,20 +277,21 @@ pub async fn chat(
 
     let job_id = match state
         .use_case
-        .submit(
-            &prompt,
-            &model,
-            "ollama",
-            Some(api_key.id),
-            None,
-            JobSource::Api,
-            ApiFormat::OllamaNative,
-            Some(messages),
+        .submit(SubmitJobRequest {
+            prompt,
+            model_name: model.clone(),
+            provider_type: ProviderType::Ollama,
+            gemini_tier: None,
+            api_key_id: Some(api_key.id),
+            account_id: None,
+            source: JobSource::Api,
+            api_format: ApiFormat::OllamaNative,
+            messages: Some(messages),
             tools,
-            Some("/api/chat".to_string()),
+            request_path: Some("/api/chat".to_string()),
             conversation_id,
-            Some(api_key.tier.clone()),
-        )
+            key_tier: Some(api_key.tier),
+        })
         .await
     {
         Ok(id) => id,
@@ -308,7 +344,7 @@ pub async fn chat(
                 "done": false,
             }),
             Err(e) => serde_json::json!({
-                "error": e.to_string(),
+                "error": sanitize_sse_error(&e),
                 "done": true,
             }),
         };
@@ -351,16 +387,17 @@ async fn proxy(state: &AppState, path: &str, req: Request) -> Response {
     let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
         Ok(b) => b,
         Err(e) => {
+            tracing::error!("ollama_compat proxy: failed to read body: {e}");
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("failed to read body: {e}")})),
+                Json(serde_json::json!({"error": "failed to read request body"})),
             )
                 .into_response();
         }
     };
 
     let url = format!("{}{}", provider.url, path);
-    let client = reqwest::Client::new();
+    let client = state.http_client.clone();
     let mut builder = client.request(method, &url).header("Content-Type", &content_type);
     if !body_bytes.is_empty() {
         builder = builder.body(body_bytes.to_vec());
@@ -372,7 +409,7 @@ async fn proxy(state: &AppState, path: &str, req: Request) -> Response {
             tracing::error!("ollama_compat proxy to {url}: {e}");
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": format!("provider error: {e}")})),
+                Json(serde_json::json!({"error": "provider communication error"})),
             )
                 .into_response();
         }
@@ -445,10 +482,10 @@ pub async fn create(State(state): State<AppState>, req: Request) -> Response {
     proxy(&state, "/api/create", req).await
 }
 
-// ── Backend selection ────────────────────────────────────────────────────────────
+// ── Provider selection ───────────────────────────────────────────────────────────
 
 async fn pick_ollama(state: &AppState) -> Result<LlmProvider, Response> {
-    let backends = state
+    let providers = state
         .provider_registry
         .list_active()
         .await
@@ -461,7 +498,7 @@ async fn pick_ollama(state: &AppState) -> Result<LlmProvider, Response> {
                 .into_response()
         })?;
 
-    backends
+    providers
         .into_iter()
         .find(|b| b.provider_type == ProviderType::Ollama)
         .ok_or_else(|| {

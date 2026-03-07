@@ -37,32 +37,10 @@ import {
 import { DataTable } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
 import { KeyUsageModal } from '@/components/key-usage-modal'
-import { TIME_OPTIONS, TimeRangeSelector } from '@/components/time-range-selector'
+import { TIME_LABEL_MAP, TimeRangeSelector } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
-
-const fmtLatency = fmtMs
-
-const BACKEND_COLORS: Record<string, string> = {
-  ollama: 'var(--theme-primary)',
-  gemini: 'var(--theme-status-info)',
-}
-const BACKEND_BADGE: Record<string, string> = {
-  ollama: 'bg-primary/10 text-primary border-primary/30',
-  gemini: 'bg-status-info/10 text-status-info-fg border-status-info/30',
-}
-const FINISH_COLORS: Record<string, string> = {
-  stop:      'var(--theme-status-success)',
-  length:    'var(--theme-status-warning)',
-  error:     'var(--theme-status-error)',
-  cancelled: 'var(--theme-text-secondary)',
-}
-const FINISH_BG: Record<string, string> = {
-  stop:      'bg-status-success/15 text-status-success-fg border-status-success/30',
-  length:    'bg-status-warning/15 text-status-warning-fg border-status-warning/30',
-  error:     'bg-status-error/15 text-status-error-fg border-status-error/30',
-  cancelled: 'bg-muted text-muted-foreground border-border',
-}
+import { PROVIDER_BADGE, PROVIDER_COLORS, FINISH_COLORS, FINISH_BG } from '@/lib/constants'
 
 /* ─── Token composition donut ─────────────────────────────── */
 function TokenDonut({ prompt, completion }: { prompt: number; completion: number }) {
@@ -172,7 +150,7 @@ function FinishReasonsCard({ data }: { data: AnalyticsStats }) {
 }
 
 /* ─── Provider breakdown section ───────────────────────────── */
-function BackendBreakdownSection({ data }: { data: UsageBreakdown }) {
+function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
   const { t } = useTranslation()
   if (data.by_providers.length === 0) return (
     <div className="py-12 text-center text-muted-foreground text-sm">{t('usage.noData')}</div>
@@ -183,13 +161,13 @@ function BackendBreakdownSection({ data }: { data: UsageBreakdown }) {
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {data.by_providers.map((b) => {
         const pct = total > 0 ? Math.round((b.request_count / total) * 100) : 0
-        const color = BACKEND_COLORS[b.provider_type] ?? 'var(--theme-primary)'
+        const color = PROVIDER_COLORS[b.provider_type] ?? 'var(--theme-primary)'
         const totalTok = b.prompt_tokens + b.completion_tokens
         return (
           <Card key={b.provider_type} className="overflow-hidden">
             <CardContent className="p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <Badge variant="outline" className={`text-xs font-mono ${BACKEND_BADGE[b.provider_type] ?? ''}`}>
+                <Badge variant="outline" className={`text-xs font-mono ${PROVIDER_BADGE[b.provider_type] ?? ''}`}>
                   {b.provider_type}
                 </Badge>
                 <span className="text-2xl font-bold tabular-nums">{fmtCompact(b.request_count)}</span>
@@ -361,12 +339,12 @@ function ModelBreakdownTable({
       <TableBody>
         {filtered.map((m, i) => {
           const totalTok = m.prompt_tokens + m.completion_tokens
-          const color = BACKEND_COLORS[m.provider_type] ?? 'var(--theme-primary)'
+          const color = PROVIDER_COLORS[m.provider_type] ?? 'var(--theme-primary)'
           return (
             <TableRow key={`${m.model_name}-${m.provider_type}-${i}`}>
               <TableCell className="font-mono font-medium text-sm">{m.model_name}</TableCell>
               <TableCell>
-                <Badge variant="outline" className={`text-xs ${BACKEND_BADGE[m.provider_type] ?? ''}`}>
+                <Badge variant="outline" className={`text-xs ${PROVIDER_BADGE[m.provider_type] ?? ''}`}>
                   {m.provider_type}
                 </Badge>
               </TableCell>
@@ -382,7 +360,7 @@ function ModelBreakdownTable({
                 </div>
               </TableCell>
               <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
-                {m.avg_latency_ms > 0 ? fmtLatency(m.avg_latency_ms) : '—'}
+                {m.avg_latency_ms > 0 ? fmtMs(m.avg_latency_ms) : '—'}
               </TableCell>
               <TableCell className="text-right tabular-nums text-muted-foreground text-sm">{fmtCompact(totalTok)}</TableCell>
               <TableCell className="text-right tabular-nums text-sm font-mono">
@@ -410,7 +388,7 @@ function ModelLatencyChart({ data }: { data: ModelBreakdown[] }) {
     .map((m) => ({
       name: m.model_name.length > 24 ? m.model_name.slice(0, 23) + '…' : m.model_name,
       latency: Math.round(m.avg_latency_ms),
-      color: BACKEND_COLORS[m.provider_type] ?? 'var(--theme-primary)',
+      color: PROVIDER_COLORS[m.provider_type] ?? 'var(--theme-primary)',
     }))
 
   if (chartData.length === 0) return null
@@ -483,7 +461,7 @@ export default function UsagePage() {
     tokens:   h.total_tokens,
   })) ?? []
 
-  const currentLabel = TIME_OPTIONS.find(o => o.hours === hours)?.label ?? `${hours}h`
+  const currentLabel = TIME_LABEL_MAP.get(hours) ?? `${hours}h`
 
   return (
     <div className="space-y-6">
@@ -810,12 +788,12 @@ export default function UsagePage() {
                           <TableBody>
                             {keyModels.map((m, i) => {
                               const totalTok = m.prompt_tokens + m.completion_tokens
-                              const color = BACKEND_COLORS[m.provider_type] ?? 'var(--theme-primary)'
+                              const color = PROVIDER_COLORS[m.provider_type] ?? 'var(--theme-primary)'
                               return (
                                 <TableRow key={`${m.model_name}-${i}`}>
                                   <TableCell className="font-mono font-medium text-sm">{m.model_name}</TableCell>
                                   <TableCell>
-                                    <Badge variant="outline" className={`text-xs ${BACKEND_BADGE[m.provider_type] ?? ''}`}>
+                                    <Badge variant="outline" className={`text-xs ${PROVIDER_BADGE[m.provider_type] ?? ''}`}>
                                       {m.provider_type}
                                     </Badge>
                                   </TableCell>
@@ -831,7 +809,7 @@ export default function UsagePage() {
                                     </div>
                                   </TableCell>
                                   <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
-                                    {m.avg_latency_ms > 0 ? fmtLatency(m.avg_latency_ms) : '—'}
+                                    {m.avg_latency_ms > 0 ? fmtMs(m.avg_latency_ms) : '—'}
                                   </TableCell>
                                   <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
                                     {fmtCompact(totalTok)}
@@ -905,7 +883,7 @@ export default function UsagePage() {
             {!breakdown && (
               <div className="flex h-32 items-center justify-center text-muted-foreground text-sm">{t('common.loading')}</div>
             )}
-            {breakdown && <BackendBreakdownSection data={breakdown} />}
+            {breakdown && <ProviderBreakdownSection data={breakdown} />}
           </div>
         </TabsContent>
       </Tabs>

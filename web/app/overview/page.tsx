@@ -14,7 +14,7 @@ export default function OverviewPage() {
   const { t } = useTranslation()
 
   const { data: stats, isLoading: statsLoading, error: statsError } = useQuery(dashboardStatsQuery)
-  const { data: backends } = useQuery(providersQuery)
+  const { data: providers } = useQuery(providersQuery)
   const { data: servers } = useQuery(serversQuery)
 
   const serverMetricQueries = useQueries({
@@ -55,7 +55,7 @@ export default function OverviewPage() {
       <DashboardTab
         stats={stats}
         statsLoading={statsLoading}
-        backends={backends}
+        providers={providers}
         servers={servers}
         serverMetricQueries={serverMetricQueries}
         serverHistoryQueries={serverHistoryQueries}

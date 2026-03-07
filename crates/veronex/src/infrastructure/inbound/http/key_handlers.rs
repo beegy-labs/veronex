@@ -5,33 +5,16 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::application::ports::outbound::audit_port::AuditEvent;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 
-async fn emit_audit(
-    state: &super::state::AppState,
-    actor: &Claims,
-    action: &str,
-    resource_type: &str,
-    resource_id: &str,
-    resource_name: &str,
-    details: &str,
-) {
-    if let Some(ref port) = state.audit_port {
-        port.record(AuditEvent {
-            event_time: Utc::now(),
-            account_id: actor.sub,
-            account_name: actor.sub.to_string(),
-            action: action.to_string(),
-            resource_type: resource_type.to_string(),
-            resource_id: resource_id.to_string(),
-            resource_name: resource_name.to_string(),
-            ip_address: None,
-            details: Some(details.to_string()),
-        })
-        .await;
-    }
-}
+use super::audit_helpers::emit_audit;
+use super::error::AppError;
+
+use crate::domain::entities::ApiKey;
+use crate::domain::enums::{KeyTier, KeyType};
+use crate::domain::services::api_key_generator::generate_api_key;
+
+use super::state::AppState;
 
 #[derive(Deserialize)]
 pub struct PatchKeyRequest {
@@ -39,11 +22,6 @@ pub struct PatchKeyRequest {
     /// Billing tier: `"paid"` | `"free"`.
     pub tier: Option<String>,
 }
-
-use crate::domain::entities::ApiKey;
-use crate::domain::services::api_key_generator::generate_api_key;
-
-use super::state::AppState;
 
 // ── Request / Response types ───────────────────────────────────────
 
@@ -56,13 +34,9 @@ pub struct CreateKeyRequest {
     #[serde(default)]
     pub rate_limit_tpm: i32,
     pub expires_at: Option<chrono::DateTime<Utc>>,
-    /// Billing tier: `"free"` or `"paid"` (default).
-    #[serde(default = "default_tier")]
-    pub tier: String,
-}
-
-fn default_tier() -> String {
-    "paid".to_string()
+    /// Billing tier: free or paid (default).
+    #[serde(default)]
+    pub tier: KeyTier,
 }
 
 #[derive(Serialize)]
@@ -85,8 +59,8 @@ pub struct KeySummary {
     pub rate_limit_tpm: i32,
     pub expires_at: Option<chrono::DateTime<Utc>>,
     pub created_at: chrono::DateTime<Utc>,
-    /// Billing tier: `"free"` or `"paid"`.
-    pub tier: String,
+    /// Billing tier: free or paid.
+    pub tier: KeyTier,
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
@@ -98,7 +72,14 @@ pub async fn create_key(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(req): Json<CreateKeyRequest>,
-) -> Result<Json<CreateKeyResponse>, StatusCode> {
+) -> Result<Json<CreateKeyResponse>, AppError> {
+    if req.rate_limit_rpm < 0 {
+        return Err(AppError::BadRequest("rate_limit_rpm must be non-negative".into()));
+    }
+    if req.rate_limit_tpm < 0 {
+        return Err(AppError::BadRequest("rate_limit_tpm must be non-negative".into()));
+    }
+
     let (id, plaintext, key_hash, key_prefix) = generate_api_key();
     let now = Utc::now();
 
@@ -114,15 +95,14 @@ pub async fn create_key(
         expires_at: req.expires_at,
         created_at: now,
         deleted_at: None,
-        key_type: "standard".to_string(),
+        key_type: KeyType::Standard,
         tier: req.tier,
     };
 
     state
         .api_key_repo
         .create(&api_key)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
 
     emit_audit(&state, &claims, "create", "api_key", &id.to_string(), &api_key.name,
         &format!("API key '{}' created for tenant '{}' (tier: {}, rpm_limit: {}, tpm_limit: {})",
@@ -138,23 +118,29 @@ pub async fn create_key(
     }))
 }
 
-/// GET /v1/keys — List all keys for the authenticated tenant.
+/// Resolve the tenant_id (username) for the authenticated user.
+pub(super) async fn resolve_tenant_id(state: &AppState, claims: &Claims) -> Result<String, AppError> {
+    let account = state
+        .account_repo
+        .get_by_id(&claims.sub)
+        .await?
+        .ok_or_else(|| AppError::Forbidden("account not found".into()))?;
+    Ok(account.username)
+}
+
+/// GET /v1/keys — List keys for the authenticated tenant.
 ///
 /// Returns key prefix only — never the hash or plaintext.
 pub async fn list_keys(
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
-) -> Result<Json<Vec<KeySummary>>, StatusCode> {
-    // Extract tenant from the authenticated API key in extensions
-    // For now, list all keys (admin endpoint)
-    let keys = state
-        .api_key_repo
-        .list_by_tenant("default")
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> Result<Json<Vec<KeySummary>>, AppError> {
+    let tenant_id = resolve_tenant_id(&state, &claims).await?;
+    let keys = state.api_key_repo.list_by_tenant(&tenant_id).await?;
 
     let summaries: Vec<KeySummary> = keys
         .into_iter()
-        .filter(|k| k.key_type != "test")
+        .filter(|k| !k.key_type.is_test())
         .map(|k| KeySummary {
             id: k.id,
             key_prefix: k.key_prefix,
@@ -177,14 +163,20 @@ pub async fn delete_key(
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
     State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<StatusCode, AppError> {
+    let uuid = super::handlers::parse_uuid(&id)?;
+    let tenant_id = resolve_tenant_id(&state, &claims).await?;
+
+    let key = state.api_key_repo.get_by_id(&uuid).await?
+        .ok_or_else(|| AppError::NotFound("key not found".into()))?;
+    if key.tenant_id != tenant_id {
+        return Err(AppError::Forbidden("not your key".into()));
+    }
 
     state
         .api_key_repo
         .soft_delete(&uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
 
     emit_audit(&state, &claims, "delete", "api_key", &id, &id,
         &format!("API key {id} soft-deleted (access permanently revoked)")).await;
@@ -198,8 +190,15 @@ pub async fn toggle_key(
     Path(id): Path<String>,
     State(state): State<AppState>,
     Json(req): Json<PatchKeyRequest>,
-) -> Result<StatusCode, StatusCode> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<StatusCode, AppError> {
+    let uuid = super::handlers::parse_uuid(&id)?;
+    let tenant_id = resolve_tenant_id(&state, &claims).await?;
+
+    let key = state.api_key_repo.get_by_id(&uuid).await?
+        .ok_or_else(|| AppError::NotFound("key not found".into()))?;
+    if key.tenant_id != tenant_id {
+        return Err(AppError::Forbidden("not your key".into()));
+    }
 
     // Build audit description before consuming req fields.
     let mut changes = Vec::new();
@@ -211,24 +210,13 @@ pub async fn toggle_key(
         format!("API key {id} updated — {}", changes.join(", "))
     };
 
-    if let Some(active) = req.is_active {
-        state
-            .api_key_repo
-            .set_active(&uuid, active)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    // Validate all input before any writes to avoid partial updates.
+    let tier = match req.tier {
+        Some(ref s) => Some(s.parse::<KeyTier>().map_err(|e| AppError::BadRequest(e))?),
+        None => None,
+    };
 
-    if let Some(tier) = req.tier {
-        if tier != "paid" && tier != "free" {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        state
-            .api_key_repo
-            .set_tier(&uuid, &tier)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    state.api_key_repo.update_fields(&uuid, req.is_active, tier.as_ref()).await?;
 
     emit_audit(&state, &claims, "update", "api_key", &id, &id, &details).await;
 
@@ -295,7 +283,7 @@ mod tests {
             rate_limit_tpm: 0,
             expires_at: None,
             created_at: Utc::now(),
-            tier: "paid".to_string(),
+            tier: KeyTier::Paid,
         };
         let json = serde_json::to_value(&summary).unwrap();
         assert!(json.get("id").is_some());

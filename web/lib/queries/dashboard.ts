@@ -1,13 +1,14 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { STALE_TIME_FAST, REFETCH_INTERVAL_FAST } from '@/lib/constants'
 
 // ── Dashboard stats (KPI cards) ───────────────────────────────────────────────
 
 export const dashboardStatsQuery = queryOptions({
   queryKey: ['dashboard-stats'] as const,
   queryFn: () => api.stats(),
-  staleTime: 29_000,
-  refetchInterval: 30_000,
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: REFETCH_INTERVAL_FAST,
   refetchIntervalInBackground: false,
 })
 
@@ -16,8 +17,8 @@ export const dashboardStatsQuery = queryOptions({
 export const recentJobsQuery = queryOptions({
   queryKey: ['recent-jobs'] as const,
   queryFn: () => api.jobs('limit=10'),
-  staleTime: 29_000,
-  refetchInterval: 30_000,
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: REFETCH_INTERVAL_FAST,
   refetchIntervalInBackground: false,
 })
 
@@ -45,8 +46,8 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
     if (p.query.trim()) qs.set('q', p.query.trim())
     return api.jobs(qs.toString())
   },
-  staleTime: 29_000,
-  refetchInterval: 30_000,
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: REFETCH_INTERVAL_FAST,
   refetchIntervalInBackground: false,
 })
 

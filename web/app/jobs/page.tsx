@@ -85,7 +85,7 @@ function GroupSessionsPanel() {
             {loading ? t('jobs.grouping') : t('jobs.groupNow')}
           </Button>
           {message && (
-            <span className={`text-sm ${message.type === 'success' ? 'text-green-600 dark:text-green-400' : 'text-destructive'}`}>
+            <span className={`text-sm ${message.type === 'success' ? 'text-status-success-fg' : 'text-destructive'}`}>
               {message.text}
             </span>
           )}
@@ -251,7 +251,7 @@ export default function JobsPage() {
   const [activeTab, setActiveTab] = useState<'api' | 'test' | 'flow'>('api')
   const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
 
-  const { data: backends } = useQuery(providersQuery)
+  const { data: providers } = useQuery(providersQuery)
 
   function handleRetry(params: RetryParams) {
     setRetryParams(params)
@@ -300,7 +300,7 @@ export default function JobsPage() {
 
         {/* ── Network Flow tab ──────────────────────────────────────────────── */}
         <TabsContent value="flow" className="mt-6">
-          <NetworkFlowTab backends={backends ?? []} />
+          <NetworkFlowTab providers={providers ?? []} />
         </TabsContent>
       </Tabs>
     </div>

@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::domain::entities::ApiKey;
+use crate::domain::enums::KeyTier;
 
 /// Outbound port for API key persistence.
 #[async_trait]
@@ -10,11 +11,17 @@ pub trait ApiKeyRepository: Send + Sync {
     /// Persist a new API key.
     async fn create(&self, key: &ApiKey) -> Result<()>;
 
+    /// Look up a key by its UUID.
+    async fn get_by_id(&self, key_id: &Uuid) -> Result<Option<ApiKey>>;
+
     /// Look up a key by its BLAKE2b hash.
     async fn get_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>>;
 
     /// List all keys belonging to a tenant.
     async fn list_by_tenant(&self, tenant_id: &str) -> Result<Vec<ApiKey>>;
+
+    /// List all non-deleted keys across all tenants (admin use).
+    async fn list_all(&self) -> Result<Vec<ApiKey>>;
 
     /// Revoke (soft-delete) a key by setting is_active = false.
     async fn revoke(&self, key_id: &Uuid) -> Result<()>;
@@ -22,16 +29,23 @@ pub trait ApiKeyRepository: Send + Sync {
     /// Toggle is_active without hiding the key.
     async fn set_active(&self, key_id: &Uuid, active: bool) -> Result<()>;
 
-    /// Update billing tier: `"paid"` | `"free"`.
-    async fn set_tier(&self, key_id: &Uuid, tier: &str) -> Result<()>;
+    /// Update billing tier.
+    async fn set_tier(&self, key_id: &Uuid, tier: &KeyTier) -> Result<()>;
+
+    /// Atomically update mutable fields (is_active and/or tier) in a single transaction.
+    async fn update_fields(&self, key_id: &Uuid, is_active: Option<bool>, tier: Option<&KeyTier>) -> Result<()>;
 
     /// Soft-delete: set deleted_at so the key disappears from list and cannot authenticate.
     async fn soft_delete(&self, key_id: &Uuid) -> Result<()>;
+
+    /// Soft-delete all active keys belonging to a tenant. Returns the number of keys affected.
+    async fn soft_delete_by_tenant(&self, tenant_id: &str) -> Result<u64>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::enums::KeyType;
     use chrono::Utc;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -55,6 +69,14 @@ mod tests {
             Ok(())
         }
 
+        async fn get_by_id(&self, key_id: &Uuid) -> Result<Option<ApiKey>> {
+            let keys = self.keys.lock().await;
+            Ok(keys
+                .iter()
+                .find(|k| k.id == *key_id && k.deleted_at.is_none())
+                .cloned())
+        }
+
         async fn get_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>> {
             let keys = self.keys.lock().await;
             Ok(keys
@@ -70,6 +92,11 @@ mod tests {
                 .filter(|k| k.tenant_id == tenant_id && k.deleted_at.is_none())
                 .cloned()
                 .collect())
+        }
+
+        async fn list_all(&self) -> Result<Vec<ApiKey>> {
+            let keys = self.keys.lock().await;
+            Ok(keys.iter().filter(|k| k.deleted_at.is_none()).cloned().collect())
         }
 
         async fn revoke(&self, key_id: &Uuid) -> Result<()> {
@@ -88,10 +115,19 @@ mod tests {
             Ok(())
         }
 
-        async fn set_tier(&self, key_id: &Uuid, tier: &str) -> Result<()> {
+        async fn set_tier(&self, key_id: &Uuid, tier: &KeyTier) -> Result<()> {
             let mut keys = self.keys.lock().await;
             if let Some(key) = keys.iter_mut().find(|k| k.id == *key_id) {
-                key.tier = tier.to_string();
+                key.tier = *tier;
+            }
+            Ok(())
+        }
+
+        async fn update_fields(&self, key_id: &Uuid, is_active: Option<bool>, tier: Option<&KeyTier>) -> Result<()> {
+            let mut keys = self.keys.lock().await;
+            if let Some(key) = keys.iter_mut().find(|k| k.id == *key_id) {
+                if let Some(active) = is_active { key.is_active = active; }
+                if let Some(t) = tier { key.tier = *t; }
             }
             Ok(())
         }
@@ -102,6 +138,17 @@ mod tests {
                 key.deleted_at = Some(chrono::Utc::now());
             }
             Ok(())
+        }
+
+        async fn soft_delete_by_tenant(&self, tenant_id: &str) -> Result<u64> {
+            let mut keys = self.keys.lock().await;
+            let now = chrono::Utc::now();
+            let mut count = 0u64;
+            for key in keys.iter_mut().filter(|k| k.tenant_id == tenant_id && k.deleted_at.is_none()) {
+                key.deleted_at = Some(now);
+                count += 1;
+            }
+            Ok(count)
         }
     }
 
@@ -118,8 +165,8 @@ mod tests {
             expires_at: None,
             deleted_at: None,
             created_at: Utc::now(),
-            key_type: "standard".to_string(),
-            tier: "paid".to_string(),
+            key_type: KeyType::Standard,
+            tier: KeyTier::Paid,
         }
     }
 

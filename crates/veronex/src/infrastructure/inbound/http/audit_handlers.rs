@@ -1,11 +1,10 @@
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::application::ports::outbound::analytics_repository::AuditFilters;
+use crate::infrastructure::inbound::http::error::AppError;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 use crate::infrastructure::inbound::http::state::AppState;
 
@@ -38,11 +37,11 @@ pub async fn list_audit_events(
     RequireSuper(_claims): RequireSuper,
     State(state): State<AppState>,
     Query(q): Query<AuditQuery>,
-) -> Result<Json<Vec<AuditEventResponse>>, StatusCode> {
+) -> Result<Json<Vec<AuditEventResponse>>, AppError> {
     let repo = state
         .analytics_repo
         .as_ref()
-        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        .ok_or_else(|| AppError::ServiceUnavailable("analytics not configured".into()))?;
 
     let filters = AuditFilters {
         limit: q.limit.unwrap_or(100).min(1000),
@@ -53,11 +52,7 @@ pub async fn list_audit_events(
 
     let rows = repo
         .audit_events(filters)
-        .await
-        .map_err(|e| {
-            tracing::warn!("audit_events failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .await?;
 
     let events = rows
         .into_iter()

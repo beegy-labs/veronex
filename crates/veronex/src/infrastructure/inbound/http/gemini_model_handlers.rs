@@ -1,4 +1,4 @@
-use axum::extract::{Extension, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -6,36 +6,16 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::application::ports::outbound::audit_port::AuditEvent;
-use crate::domain::enums::{ProviderType, LlmProviderStatus};
-use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
+use crate::domain::enums::ProviderType;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 use crate::infrastructure::outbound::health_checker::check_provider;
 
+use super::audit_helpers::emit_audit;
+use super::error::AppError;
+use super::gemini_helpers;
 use super::state::AppState;
 
-async fn emit_audit(
-    state: &AppState,
-    actor: &Claims,
-    action: &str,
-    resource_id: &str,
-    resource_name: &str,
-    details: &str,
-) {
-    if let Some(ref port) = state.audit_port {
-        port.record(AuditEvent {
-            event_time: Utc::now(),
-            account_id: actor.sub,
-            account_name: actor.sub.to_string(),
-            action: action.to_string(),
-            resource_type: "gemini_backend".to_string(),
-            resource_id: resource_id.to_string(),
-            resource_name: resource_name.to_string(),
-            ip_address: None,
-            details: Some(details.to_string()),
-        })
-        .await;
-    }
-}
+type HandlerResult<T> = Result<T, AppError>;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
 
@@ -62,163 +42,75 @@ pub struct SyncModelsResponse {
     pub count: usize,
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-fn mask_key(key: &str) -> String {
-    if key.len() <= 8 {
-        "****".to_string()
-    } else {
-        format!("{}...{}", &key[..4], &key[key.len() - 4..])
-    }
-}
-
-/// Fetch the list of Gemini models that support `generateContent` using `api_key`.
-async fn fetch_gemini_models(api_key: &str) -> anyhow::Result<Vec<String>> {
-    let client = reqwest::Client::new();
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-    );
-
-    let json: serde_json::Value = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("cannot reach gemini api: {e}"))?
-        .error_for_status()
-        .map_err(|e| anyhow::anyhow!("gemini api returned error: {e}"))?
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to parse gemini response: {e}"))?;
-
-    let models = json["models"]
-        .as_array()
-        .unwrap_or(&vec![])
-        .iter()
-        .filter(|m| {
-            m["supportedGenerationMethods"]
-                .as_array()
-                .map(|methods| {
-                    methods
-                        .iter()
-                        .any(|method| method.as_str() == Some("generateContent"))
-                })
-                .unwrap_or(false)
-        })
-        .filter_map(|m| {
-            m["name"]
-                .as_str()
-                .map(|s| s.strip_prefix("models/").unwrap_or(s).to_string())
-        })
-        .collect();
-
-    Ok(models)
-}
-
 // ── Handlers ───────────────────────────────────────────────────────────────────
 
 /// `GET /v1/gemini/sync-config` — return the masked admin API key (or null).
-pub async fn get_sync_config(State(state): State<AppState>) -> impl IntoResponse {
-    match state.gemini_sync_config_repo.get_api_key().await {
-        Ok(key) => {
-            let masked = key.as_deref().map(mask_key);
-            (StatusCode::OK, Json(SyncConfigResponse { api_key_masked: masked })).into_response()
-        }
-        Err(e) => {
-            tracing::error!("get_sync_config: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
-        }
-    }
+pub async fn get_sync_config(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<Json<SyncConfigResponse>> {
+    let key = state.gemini_sync_config_repo.get_api_key().await.map_err(|e| {
+        tracing::error!("get_sync_config: {e}");
+        AppError::Internal(anyhow::anyhow!("database error"))
+    })?;
+    let masked = key.as_deref().map(gemini_helpers::mask_api_key);
+    Ok(Json(SyncConfigResponse { api_key_masked: masked }))
 }
 
 /// `PUT /v1/gemini/sync-config` — store (or replace) the admin API key.
 pub async fn set_sync_config(
-    Extension(claims): Extension<Claims>,
+    RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
     Json(req): Json<SetSyncConfigRequest>,
-) -> impl IntoResponse {
+) -> HandlerResult<StatusCode> {
     if req.api_key.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "api_key must not be empty"})),
-        )
-            .into_response();
+        return Err(AppError::BadRequest("api_key must not be empty".into()));
     }
 
-    match state.gemini_sync_config_repo.set_api_key(req.api_key.trim()).await {
-        Ok(()) => {
-            emit_audit(&state, &claims, "update", "gemini_sync_config", "gemini_sync_config",
-                "Gemini admin API key replaced (used for global model list sync)").await;
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Err(e) => {
-            tracing::error!("set_sync_config: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
-        }
-    }
+    state.gemini_sync_config_repo.set_api_key(req.api_key.trim()).await.map_err(|e| {
+        tracing::error!("set_sync_config: {e}");
+        AppError::Internal(anyhow::anyhow!("database error"))
+    })?;
+
+    emit_audit(&state, &claims, "update", "gemini_provider", "gemini_sync_config", "gemini_sync_config",
+        "Gemini admin API key replaced (used for global model list sync)").await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `POST /v1/gemini/models/sync` — fetch the global Gemini model list and persist it.
 ///
 /// Uses the stored admin API key. Returns `400` if no key is configured.
 pub async fn sync_models(
-    Extension(claims): Extension<Claims>,
+    RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
-) -> impl IntoResponse {
+) -> HandlerResult<Json<SyncModelsResponse>> {
     let api_key = match state.gemini_sync_config_repo.get_api_key().await {
         Ok(Some(k)) => k,
         Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "No admin API key configured. Use PUT /v1/gemini/sync-config first."
-                })),
-            )
-                .into_response();
+            return Err(AppError::BadRequest(
+                "No admin API key configured. Use PUT /v1/gemini/sync-config first.".into(),
+            ));
         }
         Err(e) => {
             tracing::error!("sync_models: failed to fetch config: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
+            return Err(AppError::Internal(anyhow::anyhow!("database error")));
         }
     };
 
-    let models = match fetch_gemini_models(&api_key).await {
-        Ok(m) => m,
-        Err(e) => {
+    let models = gemini_helpers::fetch_gemini_models(&state.http_client, &api_key)
+        .await
+        .map_err(|e| {
             tracing::error!("sync_models: gemini api error: {e}");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
-    };
+            AppError::BadGateway(e.to_string())
+        })?;
 
-    if let Err(e) = state.gemini_model_repo.sync_models(&models).await {
+    state.gemini_model_repo.sync_models(&models).await.map_err(|e| {
         tracing::error!("sync_models: failed to persist: {e}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "database error"})),
-        )
-            .into_response();
-    }
+        AppError::Internal(anyhow::anyhow!("database error"))
+    })?;
 
     let count = models.len();
     tracing::info!(count, "global gemini model list synced");
-    emit_audit(&state, &claims, "sync", &format!("{count} models"), "gemini_models",
+    emit_audit(&state, &claims, "sync", "gemini_provider", &format!("{count} models"), "gemini_models",
         &format!("Global Gemini model list synced from API: {count} models discovered")).await;
-    (StatusCode::OK, Json(SyncModelsResponse { models, count })).into_response()
+    Ok(Json(SyncModelsResponse { models, count }))
 }
 
 // ── Status sync ────────────────────────────────────────────────────────────────
@@ -237,42 +129,29 @@ pub struct GeminiSyncStatusResponse {
     pub results: Vec<GeminiStatusResult>,
 }
 
-/// `POST /v1/gemini/sync-status` — check all active Gemini backends and update their status.
+/// `POST /v1/gemini/sync-status` — check all active Gemini providers and update their status.
 ///
 /// Runs synchronously (fast — just one lightweight API call per provider).
 /// Returns the updated status for each provider.
-pub async fn sync_status(State(state): State<AppState>) -> impl IntoResponse {
-    let backends = match state.provider_registry.list_all().await {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!("gemini sync_status: failed to list providers: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
-        }
-    };
+pub async fn sync_status(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<Json<GeminiSyncStatusResponse>> {
+    let providers = state.provider_registry.list_all().await.map_err(|e| {
+        tracing::error!("gemini sync_status: failed to list providers: {e}");
+        AppError::Internal(anyhow::anyhow!("database error"))
+    })?;
 
-    let gemini_active: Vec<_> = backends
+    let gemini_active: Vec<_> = providers
         .into_iter()
-        .filter(|b| b.is_active && matches!(b.provider_type, ProviderType::Gemini))
+        .filter(|p| p.is_active && matches!(p.provider_type, ProviderType::Gemini))
         .collect();
 
-    let client = reqwest::Client::new();
     let mut results = Vec::with_capacity(gemini_active.len());
 
     for provider in gemini_active {
-        let new_status = check_provider(&client, &provider).await;
-        let status_str = match new_status {
-            LlmProviderStatus::Online => "online",
-            LlmProviderStatus::Offline => "offline",
-            LlmProviderStatus::Degraded => "degraded",
-        }
-        .to_string();
+        let new_status = check_provider(&state.http_client, &provider).await;
+        let status_str = new_status.as_str().to_string();
 
         if let Err(e) = state.provider_registry.update_status(provider.id, new_status).await {
-            tracing::warn!(backend_id = %provider.id, "gemini sync_status: failed to persist status: {e}");
+            tracing::warn!(provider_id = %provider.id, "gemini sync_status: failed to persist status: {e}");
         }
 
         results.push(GeminiStatusResult {
@@ -284,36 +163,24 @@ pub async fn sync_status(State(state): State<AppState>) -> impl IntoResponse {
     }
 
     tracing::info!(count = results.len(), "gemini status sync completed");
-    (
-        StatusCode::OK,
-        Json(GeminiSyncStatusResponse {
-            synced_at: Utc::now(),
-            results,
-        }),
-    )
-        .into_response()
+    Ok(Json(GeminiSyncStatusResponse {
+        synced_at: Utc::now(),
+        results,
+    }))
 }
 
 /// `GET /v1/gemini/models` — list the global Gemini model pool.
-pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
-    match state.gemini_model_repo.list().await {
-        Ok(rows) => {
-            let dtos: Vec<GeminiModelDto> = rows
-                .into_iter()
-                .map(|m| GeminiModelDto {
-                    model_name: m.model_name,
-                    synced_at: m.synced_at,
-                })
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("list_models: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
-        }
-    }
+pub async fn list_models(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<impl IntoResponse> {
+    let rows = state.gemini_model_repo.list().await.map_err(|e| {
+        tracing::error!("list_models: {e}");
+        AppError::Internal(anyhow::anyhow!("database error"))
+    })?;
+    let dtos: Vec<GeminiModelDto> = rows
+        .into_iter()
+        .map(|m| GeminiModelDto {
+            model_name: m.model_name,
+            synced_at: m.synced_at,
+        })
+        .collect();
+    Ok(Json(serde_json::json!({"models": dtos})))
 }

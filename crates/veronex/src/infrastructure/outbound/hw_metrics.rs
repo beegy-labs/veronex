@@ -7,8 +7,8 @@ use uuid::Uuid;
 /// Valkey TTL for hardware metrics cache (seconds).
 pub const HW_METRICS_TTL: i64 = 60;
 
-pub fn hw_metrics_key(backend_id: Uuid) -> String {
-    format!("veronex:hw:{backend_id}")
+pub fn hw_metrics_key(provider_id: Uuid) -> String {
+    super::valkey_keys::hw_metrics(provider_id)
 }
 
 // ── Agent-based metrics (Phase 2) ──────────────────────────────────────────────
@@ -24,6 +24,9 @@ pub struct HwMetrics {
     pub mem_used_mb: u32,
     pub mem_total_mb: u32,
     pub loaded_model_count: u8,
+    /// GPU vendor from sysfs: "amd", "nvidia", or empty.
+    #[serde(default)]
+    pub gpu_vendor: String,
 }
 
 impl HwMetrics {
@@ -44,10 +47,10 @@ impl HwMetrics {
 /// Returns `None` on cache miss, parse failure, or Valkey error.
 pub async fn load_hw_metrics(
     pool: &fred::clients::Pool,
-    backend_id: Uuid,
+    provider_id: Uuid,
 ) -> Option<HwMetrics> {
     use fred::prelude::*;
-    let key = hw_metrics_key(backend_id);
+    let key = hw_metrics_key(provider_id);
     let cached: Option<String> = pool.get(&key).await.unwrap_or(None);
     serde_json::from_str(&cached?).ok()
 }
@@ -56,11 +59,11 @@ pub async fn load_hw_metrics(
 /// Errors are logged as warnings and ignored.
 pub async fn store_hw_metrics(
     pool: &fred::clients::Pool,
-    backend_id: Uuid,
+    provider_id: Uuid,
     metrics: &HwMetrics,
 ) {
     use fred::prelude::*;
-    let key = hw_metrics_key(backend_id);
+    let key = hw_metrics_key(provider_id);
     let Ok(json) = serde_json::to_string(metrics) else {
         return;
     };
@@ -68,7 +71,7 @@ pub async fn store_hw_metrics(
         .set::<String, _, _>(key, json, Some(Expiration::EX(HW_METRICS_TTL)), None, false)
         .await
     {
-        tracing::warn!(backend_id = %backend_id, "hw_metrics: failed to cache: {e}");
+        tracing::warn!(provider_id = %provider_id, "hw_metrics: failed to cache: {e}");
     }
 }
 
@@ -130,7 +133,7 @@ pub async fn fetch_node_metrics(
     let url = format!("{}/metrics", node_exporter_url.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(crate::domain::constants::NODE_EXPORTER_TIMEOUT)
         .build()?;
 
     let text = client.get(&url).send().await?.text().await?;

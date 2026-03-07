@@ -24,6 +24,7 @@ import type { Provider } from '@/lib/types'
 import type { FlowEvent } from '@/hooks/use-inference-stream'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useLabSettings } from '@/components/lab-settings-provider'
+import { PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
 
 /* ─── viewport ──────────────────────────────────────────────── */
 const VIEW_W = 540
@@ -88,10 +89,10 @@ function statusColor(status: string): string {
   }
 }
 
-function providerStroke(backends: Provider[]): string {
-  if (backends.length === 0)                        return 'var(--theme-border)'
-  if (backends.some(b => b.status === 'online'))    return 'var(--theme-status-success)'
-  if (backends.some(b => b.status === 'degraded'))  return 'var(--theme-status-warning)'
+function providerStroke(providers: Provider[]): string {
+  if (providers.length === 0)                        return 'var(--theme-border)'
+  if (providers.some(b => b.status === 'online'))    return 'var(--theme-status-success)'
+  if (providers.some(b => b.status === 'degraded'))  return 'var(--theme-status-warning)'
   return 'var(--theme-status-error)'
 }
 
@@ -125,12 +126,12 @@ function beeReducer(state: Bee[], action: Action): Bee[] {
 
 /* ─── Panel ──────────────────────────────────────────────────── */
 interface Props {
-  backends: Provider[]
+  providers: Provider[]
   events: FlowEvent[]
   queueDepth?: number
 }
 
-export function ProviderFlowPanel({ backends, events, queueDepth = 0 }: Props) {
+export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) {
   const { t } = useTranslation()
   const { labSettings } = useLabSettings()
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
@@ -140,10 +141,10 @@ export function ProviderFlowPanel({ backends, events, queueDepth = 0 }: Props) {
   const [scale,  setScale]  = useReducer((_: number, v: number) => v, 1)
   const [bees,   dispatch]  = useReducer(beeReducer, [])
 
-  const localBs = useMemo(() => backends.filter(b => b.backend_type === 'ollama'), [backends])
+  const localBs = useMemo(() => providers.filter(b => b.provider_type === PROVIDER_OLLAMA), [providers])
   const apiBs   = useMemo(
-    () => geminiEnabled ? backends.filter(b => b.backend_type === 'gemini') : [],
-    [backends, geminiEnabled],
+    () => geminiEnabled ? providers.filter(b => b.provider_type === PROVIDER_GEMINI) : [],
+    [providers, geminiEnabled],
   )
 
   // Responsive scaling
@@ -169,10 +170,10 @@ export function ProviderFlowPanel({ backends, events, queueDepth = 0 }: Props) {
       if (e.phase === 'enqueue') {
         newBees.push({ id: `${e.id}-eq`, pathD: PATH_API_QUEUE, color: ENQUEUE_COLOR, phase: 'enqueue', delay: 0 })
       } else if (e.phase === 'dispatch') {
-        const pathD = e.provider === 'gemini' ? PATH_QUEUE_GEMINI : PATH_QUEUE_OLLAMA
+        const pathD = e.provider === PROVIDER_GEMINI ? PATH_QUEUE_GEMINI : PATH_QUEUE_OLLAMA
         newBees.push({ id: `${e.id}-qp`, pathD, color, phase: 'dispatch', delay: 0 })
       } else {
-        const pathD = e.provider === 'gemini' ? PATH_GEMINI_API : PATH_OLLAMA_API
+        const pathD = e.provider === PROVIDER_GEMINI ? PATH_GEMINI_API : PATH_OLLAMA_API
         newBees.push({ id: `${e.id}-pa`, pathD, color, phase: 'response', delay: 0 })
       }
     }
@@ -332,7 +333,7 @@ export function ProviderFlowPanel({ backends, events, queueDepth = 0 }: Props) {
                 style={{ fill: 'var(--theme-text-secondary)', fontSize: 8 }}>
                 {localBs.length > 0
                   ? `${localBs.filter(b => b.status === 'online').length}/${localBs.length} online`
-                  : 'no backends'}
+                  : 'no providers'}
               </text>
 
               {/* ── Node 3b: Gemini — octagon (lab-gated) ───────────── */}
@@ -355,7 +356,7 @@ export function ProviderFlowPanel({ backends, events, queueDepth = 0 }: Props) {
                     style={{ fill: 'var(--theme-text-secondary)', fontSize: 8 }}>
                     {apiBs.length > 0
                       ? `${apiBs.filter(b => b.status === 'online').length}/${apiBs.length} online`
-                      : 'no backends'}
+                      : 'no providers'}
                   </text>
                 </>
               )}

@@ -1,13 +1,11 @@
-/// Capacity analysis loop — runs every N minutes in the background.
+/// Unified sync loop — runs in the background, combines:
+/// 1. Health check (GET /api/version)
+/// 2. Model sync (GET /api/tags → DB + Valkey cache)
+/// 3. VRAM probing (GET /api/ps + POST /api/show → VramPool update)
+/// 4. LLM analysis (qwen2.5:3b) for concern/reason
 ///
-/// 1. Polls Ollama /api/ps for currently loaded models + their VRAM footprint.
-/// 2. Fetches /api/show architecture parameters for precise KV cache calculation.
-/// 3. Aggregates throughput stats from inference_jobs (PostgreSQL).
-/// 4. Optionally calls an LLM (qwen2.5:3b by default) to recommend slot count.
-/// 5. Updates ConcurrencySlotMap and persists ModelCapacityEntry to DB.
-///
-/// This loop is completely separated from the request dispatch path — no LLM
-/// calls happen during job dispatching.
+/// Replaces the old separate health_checker (Ollama portion), model sync,
+/// and capacity analysis loops.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,12 +17,18 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::application::ports::outbound::capacity_settings_repository::CapacitySettingsRepository;
-use crate::application::ports::outbound::model_capacity_repository::{
-    ModelCapacityEntry, ModelCapacityRepository, ThroughputStats,
-};
+use crate::application::ports::outbound::concurrency_port::{ModelVramProfile, VramPoolPort};
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
-use crate::domain::enums::ProviderType;
-use crate::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap;
+use crate::application::ports::outbound::model_capacity_repository::{
+    ModelVramProfileEntry, ModelCapacityRepository, ThroughputStats,
+};
+use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
+use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
+use crate::domain::constants::{
+    LLM_ANALYSIS_TIMEOUT, LLM_BATCH_ANALYSIS_TIMEOUT, OLLAMA_HEALTH_CHECK_TIMEOUT,
+    OLLAMA_METADATA_TIMEOUT,
+};
+use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::outbound::hw_metrics::load_hw_metrics;
 
 // ── Ollama API response types ─────────────────────────────────────────────────
@@ -46,67 +50,80 @@ struct ShowResponse {
     parameters: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct TagsResponse {
+    models: Vec<TagModel>,
+}
+
+#[derive(Deserialize)]
+struct TagModel {
+    name: String,
+}
+
 // ── Architecture profile from /api/show ──────────────────────────────────────
 
 #[derive(Default, Debug, Clone)]
 struct ModelArchProfile {
-    num_layers:     u32, // block_count
-    num_kv_heads:   u32, // attention.head_count_kv
-    head_dim:       u32, // attention.key_length
-    max_ctx:        u32, // context_length
-    configured_ctx: u32, // from parameters field: "num_ctx 4096"
+    num_layers:     u32,
+    num_kv_heads:   u32,
+    head_dim:       u32,
+    max_ctx:        u32,
+    configured_ctx: u32,
 }
 
 // ── KV cache estimation ───────────────────────────────────────────────────────
 
-struct KvPerSlot {
-    worst_case: i32, // kv_bytes × num_ctx → MB (upper bound)
-    realistic:  i32, // kv_bytes × avg_tokens → MB (typical usage)
-}
-
-fn compute_kv_per_slot_mb(
-    arch:               &ModelArchProfile,
-    stats:              &ThroughputStats,
-    bytes_per_element:  u64, // 1 = q8_0/q4, 2 = bf16/fp16
-) -> KvPerSlot {
+fn compute_kv_per_request_mb(
+    arch:              &ModelArchProfile,
+    stats:             &ThroughputStats,
+    bytes_per_element: u64,
+) -> u32 {
     if arch.num_layers == 0 {
-        // No architecture info — conservative fallback
-        return KvPerSlot { worst_case: 256, realistic: 128 };
+        return 128; // conservative fallback
     }
 
-    // KV cache per token: 2 (K+V) × layers × kv_heads × head_dim × bytes_per_element
     let kv_bytes_per_token = 2u64
         * arch.num_layers as u64
         * arch.num_kv_heads as u64
         * arch.head_dim as u64
         * bytes_per_element;
 
-    // Fix: clamp to the model's native maximum.
-    // If OLLAMA_CONTEXT_LENGTH (e.g. 204800) exceeds the model's actual max_ctx
-    // (e.g. 32768 for qwen2.5:7b), using configured_ctx would over-estimate
-    // KV cache by 6× and cause the slot calculator to under-allocate.
     let effective_ctx = match (arch.configured_ctx, arch.max_ctx) {
         (c, m) if c > 0 && m > 0 => c.min(m),
-        (c, _) if c > 0           => c,
-        (_, m) if m > 0           => m,
-        _                          => 4_096,
+        (c, _) if c > 0          => c,
+        (_, m) if m > 0          => m,
+        _                         => 4_096,
     };
 
     let avg_tokens = (stats.avg_prompt_tokens + stats.avg_output_tokens).max(128.0) as u64;
+    // Use average token count but clamp to effective context
+    let tokens = avg_tokens.min(effective_ctx as u64);
+    let result = ((kv_bytes_per_token * tokens) / 1_048_576).max(32) as u32;
 
-    KvPerSlot {
-        worst_case: ((kv_bytes_per_token * effective_ctx as u64) / 1_048_576).max(64) as i32,
-        realistic:  ((kv_bytes_per_token * avg_tokens)           / 1_048_576).max(32) as i32,
-    }
+    result
 }
 
 // ── LLM analysis response ─────────────────────────────────────────────────────
 
 #[derive(Deserialize, Default)]
 struct LlmCapacityAnalysis {
-    recommended_slots: Option<u8>,
-    concern:           Option<String>,
-    reason:            Option<String>,
+    concern: Option<String>,
+    reason:  Option<String>,
+}
+
+/// LLM batch recommendation: per-model concurrency + overall reasoning.
+#[derive(Deserialize, Default, Debug)]
+struct LlmBatchRecommendation {
+    #[serde(default)]
+    models: Vec<LlmModelRecommendation>,
+    #[serde(default)]
+    reasoning: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct LlmModelRecommendation {
+    model: String,
+    recommended_max_concurrent: u32,
 }
 
 // ── Architecture fetch ────────────────────────────────────────────────────────
@@ -122,7 +139,7 @@ async fn fetch_model_arch_profile(
     let resp: ShowResponse = client
         .post(format!("{ollama_url}/api/show"))
         .json(&ShowReq { name: model_name })
-        .timeout(Duration::from_secs(10))
+        .timeout(OLLAMA_METADATA_TIMEOUT)
         .send()
         .await?
         .json()
@@ -130,8 +147,6 @@ async fn fetch_model_arch_profile(
 
     let info = resp.model_info.unwrap_or_default();
 
-    // Fields are prefixed by model family ("llama.", "qwen2.", "gemma3.", etc.)
-    // Search by suffix to be family-agnostic.
     let find = |suffix: &str| -> u32 {
         info.iter()
             .find(|(k, _)| k.ends_with(suffix))
@@ -139,7 +154,22 @@ async fn fetch_model_arch_profile(
             .unwrap_or(0) as u32
     };
 
-    // Parse "num_ctx 4096" from the parameters text blob
+    let block_count = find("block_count");
+
+    // Hybrid Mamba+Attention models (e.g. qwen3next) have `full_attention_interval`
+    // meaning only every Nth layer uses attention (rest are SSM/Mamba).
+    let attn_interval = find("full_attention_interval");
+    let attn_layers = if attn_interval > 1 {
+        // Only count attention layers for KV computation.
+        (block_count + attn_interval - 1) / attn_interval
+    } else {
+        block_count
+    };
+
+    // head_count_kv can be null (JSON) for hybrid models → fall back to head_count.
+    let kv_heads = find("attention.head_count_kv");
+    let kv_heads = if kv_heads > 0 { kv_heads } else { find("attention.head_count") };
+
     let configured_ctx = resp
         .parameters
         .as_deref()
@@ -152,60 +182,50 @@ async fn fetch_model_arch_profile(
         .unwrap_or(0u32);
 
     Ok(ModelArchProfile {
-        num_layers:     find("block_count"),
-        num_kv_heads:   find("attention.head_count_kv"),
+        num_layers:     attn_layers,
+        num_kv_heads:   kv_heads,
         head_dim:       find("attention.key_length").max(128),
         max_ctx:        find("context_length"),
         configured_ctx,
     })
 }
 
-// ── LLM slot recommendation (background only) ─────────────────────────────────
+// ── LLM analysis (background only) ─────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
-async fn call_llm_capacity_analysis(
+async fn call_llm_analysis(
     client:         &reqwest::Client,
     ollama_url:     &str,
-    model:          &str,
-    backend_name:   &str,
+    analyzer_model: &str,
+    provider_name:  &str,
     model_name:     &str,
-    loaded_vram_mb: i32,
-    vram_total_mb:  i32,
+    weight_mb:      i32,
+    vram_total_mb:  u32,
     temp_c:         Option<f32>,
     arch:           &ModelArchProfile,
-    kv:             &KvPerSlot,
+    kv_per_req_mb:  u32,
     stats:          &ThroughputStats,
-    math_slots:     i32,
 ) -> Result<LlmCapacityAnalysis> {
     let prompt = format!(
-        r#"GPU capacity analysis. Respond with JSON only.
+        r#"GPU VRAM analysis. Respond with JSON only.
 
-Backend: {backend_name}, Model: {model_name}
-Architecture: {layers} layers, {kv_heads} KV heads, {head_dim} head_dim (GQA={gqa})
-VRAM: {vram_total}MB total, {loaded}MB model loaded, available={avail}MB
-KV cache: {kv_worst}MB/slot (worst, ctx={ctx}), {kv_real}MB/slot (avg {avg_tok:.0} tokens)
+Provider: {provider_name}, Model: {model_name}
+Architecture: {layers} layers, {kv_heads} KV heads, {head_dim} head_dim
+VRAM: {vram_total}MB total, {weight}MB model weight, KV/request={kv_req}MB
 Temperature: {temp}
 Stats ({samples} jobs/1h): {tps:.1} tok/s, p95={p95:.0}ms
-Math estimate: {math} slots
 
-Respond ONLY with valid JSON (no markdown):
-{{"recommended_slots":<1-8>,"concern":<null or "string">,"reason":"<brief>"}}"#,
+Is there a concern? Respond ONLY with valid JSON:
+{{"concern":<null or "string">,"reason":"<brief>"}}"#,
         layers    = arch.num_layers,
         kv_heads  = arch.num_kv_heads,
         head_dim  = arch.head_dim,
-        gqa       = arch.num_kv_heads < 32,
         vram_total = vram_total_mb,
-        loaded    = loaded_vram_mb,
-        avail     = vram_total_mb - loaded_vram_mb - 512,
-        ctx       = if arch.configured_ctx > 0 { arch.configured_ctx } else { arch.max_ctx.min(4096) },
-        kv_worst  = kv.worst_case,
-        kv_real   = kv.realistic,
-        avg_tok   = stats.avg_prompt_tokens + stats.avg_output_tokens,
+        weight    = weight_mb,
+        kv_req    = kv_per_req_mb,
         temp      = temp_c.map_or("?".to_string(), |t| format!("{t:.1}")),
         samples   = stats.sample_count,
         tps       = stats.avg_tokens_per_sec,
         p95       = stats.p95_latency_ms,
-        math      = math_slots,
     );
 
     #[derive(Serialize)]
@@ -221,12 +241,12 @@ Respond ONLY with valid JSON (no markdown):
     let resp: Resp = client
         .post(format!("{ollama_url}/api/generate"))
         .json(&Req {
-            model,
+            model: analyzer_model,
             prompt: &prompt,
             stream: false,
             options: serde_json::json!({ "num_ctx": 512, "temperature": 0.0 }),
         })
-        .timeout(Duration::from_secs(30))
+        .timeout(LLM_ANALYSIS_TIMEOUT)
         .send()
         .await?
         .json()
@@ -243,169 +263,469 @@ Respond ONLY with valid JSON (no markdown):
     Ok(serde_json::from_str(raw).unwrap_or_default())
 }
 
-// ── Per-provider analysis ──────────────────────────────────────────────────────
+// ── LLM batch analysis (all models on a provider) ───────────────────────────
 
-async fn analyze_backend(
-    client:              &reqwest::Client,
-    backend_id:          Uuid,
-    backend_name:        &str,
-    ollama_url:          &str,
-    analyzer_url:        &str,
-    analyzer_model:      &str,
-    capacity_repo:       &dyn ModelCapacityRepository,
-    slot_map:            &ConcurrencySlotMap,
-    valkey_pool:         Option<&fred::clients::Pool>,
-    ollama_num_parallel: u32,
-) -> Result<()> {
-    // 1. Ollama /api/ps — currently loaded models + their VRAM
-    let ps: OllamaProcessStatus = client
-        .get(format!("{ollama_url}/api/ps"))
-        .timeout(Duration::from_secs(10))
+/// Collected per-model data for batch LLM analysis.
+struct ModelSnapshot {
+    name:          String,
+    weight_mb:     u32,
+    kv_per_req_mb: u32,
+    tps:           f64,
+    p95_ms:        f64,
+    samples:       i64,
+    max_concurrent: u32,
+}
+
+
+async fn call_llm_batch_analysis(
+    client:         &reqwest::Client,
+    analyzer_url:   &str,
+    analyzer_model: &str,
+    provider_name:  &str,
+    vram_total_mb:  u32,
+    temp_c:         Option<f32>,
+    models:         &[ModelSnapshot],
+) -> Result<LlmBatchRecommendation> {
+    if models.is_empty() {
+        return Ok(LlmBatchRecommendation::default());
+    }
+
+    // Build model summary table
+    let mut model_lines = String::new();
+    let mut total_weight = 0u32;
+    for m in models {
+        total_weight += m.weight_mb;
+        model_lines.push_str(&format!(
+            "- {name}: weight={w}MB, kv/req={kv}MB, tps={tps:.1}, p95={p95:.0}ms, samples={s}, current_limit={lim}\n",
+            name = m.name,
+            w    = m.weight_mb,
+            kv   = m.kv_per_req_mb,
+            tps  = m.tps,
+            p95  = m.p95_ms,
+            s    = m.samples,
+            lim  = m.max_concurrent,
+        ));
+    }
+
+    let prompt = format!(
+        r#"You are an Ollama GPU capacity optimizer. Analyze all loaded models on this provider and recommend optimal max_concurrent for each model.
+
+Provider: {provider_name}
+VRAM: {vram_total}MB total, {used}MB used by loaded models ({count} models)
+Temperature: {temp}
+
+Loaded models:
+{model_lines}
+Rules:
+1. Larger models need fewer concurrent requests (VRAM + compute contention)
+2. If a model has very few samples (<5), recommend conservative limit (1-2)
+3. If throughput is high with current limit, recommend keeping or increasing slightly
+4. Consider the COMBINED VRAM of all loaded models — total weight must fit in VRAM
+5. Consider model combinations: running many small models together is fine, but 1 large + 1 medium may compete
+6. Weight-based heuristic: <5GB→8, 5-20GB→4, 20-50GB→2, >50GB→1 — use as upper bound reference
+
+Respond ONLY with valid JSON:
+{{"models":[{{"model":"<name>","recommended_max_concurrent":<int>}}],"reasoning":"<brief explanation>"}}"#,
+        vram_total = vram_total_mb,
+        used = total_weight,
+        count = models.len(),
+        temp = temp_c.map_or("unknown".to_string(), |t| format!("{t:.1}°C")),
+    );
+
+    #[derive(Serialize)]
+    struct Req<'a> { model: &'a str, prompt: &'a str, stream: bool, options: serde_json::Value }
+    #[derive(Deserialize)]
+    struct Resp { response: String }
+
+    let resp: Resp = client
+        .post(format!("{analyzer_url}/api/generate"))
+        .json(&Req {
+            model: analyzer_model,
+            prompt: &prompt,
+            stream: false,
+            options: serde_json::json!({ "num_ctx": 1024, "temperature": 0.0 }),
+        })
+        .timeout(LLM_BATCH_ANALYSIS_TIMEOUT)
         .send()
         .await?
         .json()
         .await?;
 
-    if ps.models.is_empty() {
-        return Ok(());
+    let raw = resp
+        .response
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    Ok(serde_json::from_str(raw).unwrap_or_default())
+}
+
+// ── Per-provider unified sync ────────────────────────────────────────────────
+
+pub async fn sync_provider(
+    client:          &reqwest::Client,
+    provider_id:     Uuid,
+    provider_name:   &str,
+    ollama_url:      &str,
+    provider_total_vram_mb: i64,
+    analyzer_model:  &str,
+    capacity_repo:   &dyn ModelCapacityRepository,
+    vram_pool:       &dyn VramPoolPort,
+    valkey_pool:     Option<&fred::clients::Pool>,
+    registry:        &dyn LlmProviderRegistry,
+    ollama_model_repo: &dyn OllamaModelRepository,
+    model_selection_repo: &dyn ProviderModelSelectionRepository,
+) -> Result<()> {
+    // 1. Health check: GET /api/version
+    let health_ok = client
+        .get(format!("{ollama_url}/api/version"))
+        .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+
+    let new_status = if health_ok {
+        LlmProviderStatus::Online
+    } else {
+        LlmProviderStatus::Offline
+    };
+    registry.update_status(provider_id, new_status).await.ok();
+
+    if !health_ok {
+        return Ok(()); // Skip further sync if offline
     }
 
-    // 2. hw_metrics from Valkey → total GPU VRAM
+    // 2. Model sync: GET /api/tags
+    let tags: TagsResponse = client
+        .get(format!("{ollama_url}/api/tags"))
+        .timeout(OLLAMA_METADATA_TIMEOUT)
+        .send()
+        .await?
+        .json()
+        .await?;
+    let model_names: Vec<String> = tags.models.into_iter().map(|m| m.name).collect();
+
+    // Persist to DB
+    ollama_model_repo.sync_provider_models(provider_id, &model_names).await.ok();
+    model_selection_repo.upsert_models(provider_id, &model_names).await.ok();
+
+    // Update Valkey cache
+    if let Some(pool) = valkey_pool {
+        use fred::prelude::*;
+        let cache_key = format!("veronex:models:{provider_id}");
+        let json = serde_json::to_string(&model_names).unwrap_or_default();
+        let ttl = crate::infrastructure::inbound::http::constants::MODELS_CACHE_TTL;
+        let _: Result<(), _> = pool.set(&cache_key, &json, Some(Expiration::EX(ttl as i64)), None, false).await;
+    }
+
+    // 3. VRAM probing: GET /api/ps
+    let ps: OllamaProcessStatus = client
+        .get(format!("{ollama_url}/api/ps"))
+        .timeout(OLLAMA_METADATA_TIMEOUT)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    // hw_metrics from Valkey → total GPU VRAM, fallback to provider DB field
     let hw = if let Some(pool) = valkey_pool {
-        load_hw_metrics(pool, backend_id).await
+        load_hw_metrics(pool, provider_id).await
     } else {
         None
     };
-    let vram_total_mb = hw.as_ref().map(|h| h.vram_total_mb as i32).unwrap_or(0);
+    let vram_total_mb = hw.as_ref().map(|h| h.vram_total_mb)
+        .filter(|&v| v > 0)
+        .unwrap_or_else(|| {
+            if provider_total_vram_mb > 0 { provider_total_vram_mb as u32 } else { 0 }
+        });
     let temp_c = hw.as_ref().map(|h| h.temp_c);
 
-    for model in &ps.models {
-        let loaded_vram_mb = (model.size_vram / 1_048_576) as i32;
+    // Set total VRAM on the pool
+    if vram_total_mb > 0 {
+        vram_pool.set_total_vram(provider_id, vram_total_mb);
+    }
 
-        // 3. Architecture params from /api/show
+    // Mark loaded models + unload models no longer in /api/ps
+    let ps_names: std::collections::HashSet<&str> =
+        ps.models.iter().map(|m| m.name.as_str()).collect();
+    for name in vram_pool.loaded_model_names(provider_id) {
+        if !ps_names.contains(name.as_str()) {
+            vram_pool.mark_model_unloaded(provider_id, &name);
+            tracing::info!(provider = %provider_name, model = %name, "model unloaded (no longer in /api/ps)");
+        }
+    }
+    for model in &ps.models {
+        let weight_mb = (model.size_vram / 1_048_576) as u32;
+        vram_pool.mark_model_loaded(provider_id, &model.name, weight_mb);
+    }
+
+    // 4. Architecture analysis + KV cache for each loaded model
+    let mut model_snapshots: Vec<ModelSnapshot> = Vec::new();
+
+    for model in &ps.models {
+        let weight_mb = (model.size_vram / 1_048_576) as i32;
+
         let arch = fetch_model_arch_profile(client, ollama_url, &model.name)
             .await
             .unwrap_or_default();
 
-        // 4. Throughput stats (last 1 hour)
-        let stats = capacity_repo
-            .compute_throughput_stats(backend_id, &model.name, 1)
+        let stats = match capacity_repo
+            .compute_throughput_stats(provider_id, &model.name, 1)
             .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-
-        // 5. KV cache per slot (accurate formula).
-        //    OLLAMA_KV_CACHE_TYPE=q8_0 → 1 byte per element (not BF16's 2).
-        //    Ollama uses q8_0 by default on this deployment, so we match it.
-        let kv = compute_kv_per_slot_mb(&arch, &stats, 1 /* q8_0 = 1 byte */);
-
-        // 6. Math-based slot estimate.
-        //    Upper bound is OLLAMA_NUM_PARALLEL — Ollama won't process more
-        //    requests concurrently than that regardless of VRAM headroom.
-        let vram_buffer  = 512i32;
-        let available_mb = vram_total_mb - loaded_vram_mb - vram_buffer;
-        let math_slots = if available_mb > 0 && kv.realistic > 0 {
-            let by_realistic = available_mb / kv.realistic;
-            let by_worst     = available_mb / kv.worst_case.max(1);
-            // Use realistic estimate but cap at 2× worst-case for safety,
-            // and never exceed OLLAMA_NUM_PARALLEL (Ollama's hard ceiling).
-            (1 + by_realistic.min(by_worst * 2)).clamp(1, ollama_num_parallel as i32)
-        } else {
-            1
+        {
+            Ok(Some(s)) => s,
+            Ok(None) => ThroughputStats::default(),
+            Err(e) => {
+                tracing::warn!(model = %model.name, "throughput stats query failed: {e:#}");
+                ThroughputStats::default()
+            }
         };
 
-        // 7. LLM interpretation (qwen2.5:3b) — fallback to math_slots on error
-        let llm = call_llm_capacity_analysis(
+        // q8_0 = 1 byte per element
+        let kv_per_req = compute_kv_per_request_mb(&arch, &stats, 1);
+
+        // 5. LLM analysis
+        let llm = call_llm_analysis(
             client,
-            analyzer_url,
+            ollama_url,  // Use provider's Ollama URL for LLM analysis
             analyzer_model,
-            backend_name,
+            provider_name,
             &model.name,
-            loaded_vram_mb,
+            weight_mb,
             vram_total_mb,
             temp_c,
             &arch,
-            &kv,
+            kv_per_req,
             &stats,
-            math_slots,
         )
         .await
         .unwrap_or_default();
 
-        let recommended = llm
-            .recommended_slots
-            .map(|s| s as i16)
-            .unwrap_or(math_slots as i16)
-            .clamp(1, 8);
+        // 6. Update VramPool profile
+        vram_pool.set_model_profile(
+            provider_id,
+            &model.name,
+            ModelVramProfile {
+                weight_mb: weight_mb as u32,
+                weight_estimated: false,
+                kv_per_request_mb: kv_per_req,
+                num_layers: arch.num_layers as u16,
+                num_kv_heads: arch.num_kv_heads as u16,
+                head_dim: arch.head_dim as u16,
+                configured_ctx: arch.configured_ctx,
+                failure_count: 0,
+                llm_concern: llm.concern.clone(),
+                llm_reason: llm.reason.clone(),
+            },
+        );
 
-        // 8. Persist + update slot map
+        // 7. Adaptive concurrency (AIMD)
+        let current_tps_x100 = (stats.avg_tokens_per_sec * 100.0) as u32;
+        let baseline = vram_pool.baseline_tps(provider_id, &model.name);
+        let current_limit = vram_pool.max_concurrent(provider_id, &model.name);
+
+        if baseline == 0 {
+            // First data point → set baseline + initial limit from weight
+            if stats.sample_count > 0 {
+                vram_pool.set_baseline_tps(provider_id, &model.name, current_tps_x100);
+                let initial = initial_max_concurrent(weight_mb as u32);
+                vram_pool.set_max_concurrent(provider_id, &model.name, initial);
+                if stats.p95_latency_ms > 0.0 {
+                    vram_pool.set_baseline_p95_ms(provider_id, &model.name, stats.p95_latency_ms as u32);
+                }
+            }
+        } else if stats.sample_count >= 3 {
+            let ratio = current_tps_x100 as f64 / baseline as f64;
+            let baseline_p95 = vram_pool.baseline_p95_ms(provider_id, &model.name);
+            let current_p95 = stats.p95_latency_ms as u32;
+            // p95 spike: tail latency doubled from baseline → force decrease
+            let p95_spike = baseline_p95 > 0 && current_p95 > baseline_p95 * 2;
+
+            let new_limit = if ratio < 0.7 || p95_spike {
+                // Throughput 30%+ drop or p95 doubled → multiplicative decrease
+                (current_limit * 3 / 4).max(1)
+            } else if ratio >= 0.9 {
+                // Throughput maintained + p95 stable → additive increase
+                vram_pool.set_baseline_tps(
+                    provider_id,
+                    &model.name,
+                    baseline.max(current_tps_x100),
+                );
+                if baseline_p95 > 0 {
+                    vram_pool.set_baseline_p95_ms(
+                        provider_id,
+                        &model.name,
+                        baseline_p95.min(current_p95),
+                    );
+                }
+                current_limit.saturating_add(1)
+            } else {
+                current_limit
+            };
+            if new_limit != current_limit {
+                vram_pool.set_max_concurrent(provider_id, &model.name, new_limit);
+                tracing::info!(
+                    provider = %provider_name,
+                    model = %model.name,
+                    old = current_limit,
+                    new = new_limit,
+                    tps = stats.avg_tokens_per_sec,
+                    baseline_tps = baseline as f64 / 100.0,
+                    p95_ms = stats.p95_latency_ms,
+                    ?p95_spike,
+                    "adaptive concurrency limit updated"
+                );
+            }
+        }
+
+        // Persist to DB
         capacity_repo
-            .upsert(&ModelCapacityEntry {
-                provider_id: backend_id,
-                model_name:          model.name.clone(),
-                vram_model_mb:       loaded_vram_mb,
-                vram_total_mb,
-                arch_num_layers:     arch.num_layers as i32,
-                arch_num_kv_heads:   arch.num_kv_heads as i32,
-                arch_head_dim:       arch.head_dim as i32,
-                arch_configured_ctx: arch.configured_ctx as i32,
-                vram_kv_per_slot_mb:   kv.realistic,
-                vram_kv_worst_case_mb: kv.worst_case,
-                recommended_slots:   recommended,
-                avg_tokens_per_sec:  stats.avg_tokens_per_sec,
-                avg_prefill_tps:     stats.avg_prefill_tps,
-                avg_prompt_tokens:   stats.avg_prompt_tokens,
-                avg_output_tokens:   stats.avg_output_tokens,
-                p95_latency_ms:      stats.p95_latency_ms,
-                sample_count:        stats.sample_count as i32,
-                llm_concern:         llm.concern,
-                llm_reason:          llm.reason,
-                updated_at:          Utc::now(),
+            .upsert(&ModelVramProfileEntry {
+                provider_id,
+                model_name:        model.name.clone(),
+                weight_mb,
+                weight_estimated:  false,
+                kv_per_request_mb: kv_per_req as i32,
+                num_layers:        arch.num_layers as i16,
+                num_kv_heads:      arch.num_kv_heads as i16,
+                head_dim:          arch.head_dim as i16,
+                configured_ctx:    arch.configured_ctx as i32,
+                failure_count:     0,
+                llm_concern:       llm.concern,
+                llm_reason:        llm.reason,
+                max_concurrent:    vram_pool.max_concurrent(provider_id, &model.name) as i32,
+                baseline_tps:      vram_pool.baseline_tps(provider_id, &model.name) as i32,
+                baseline_p95_ms:   vram_pool.baseline_p95_ms(provider_id, &model.name) as i32,
+                updated_at:        Utc::now(),
             })
             .await?;
 
-        slot_map.update_capacity(backend_id, &model.name, recommended as u32);
+        // Collect snapshot for batch LLM analysis
+        model_snapshots.push(ModelSnapshot {
+            name:           model.name.clone(),
+            weight_mb:      weight_mb as u32,
+            kv_per_req_mb:  kv_per_req,
+            tps:            stats.avg_tokens_per_sec,
+            p95_ms:         stats.p95_latency_ms,
+            samples:        stats.sample_count,
+            max_concurrent: vram_pool.max_concurrent(provider_id, &model.name),
+        });
 
         tracing::info!(
-            provider = %backend_name,
+            provider = %provider_name,
             model   = %model.name,
-            slots   = recommended,
-            kv_realistic_mb  = kv.realistic,
-            kv_worst_mb      = kv.worst_case,
-            "capacity updated"
+            weight_mb,
+            kv_per_req,
+            "vram profile updated"
         );
+    }
+
+    // 8. LLM batch analysis — recommend optimal max_concurrent per model
+    //    Only runs when there's enough data (total samples >= 10 across all models).
+    let total_samples: i64 = model_snapshots.iter().map(|m| m.samples).sum();
+    tracing::info!(
+        provider = %provider_name,
+        total_samples,
+        model_count = model_snapshots.len(),
+        "batch analysis check"
+    );
+    if total_samples >= 10 && !model_snapshots.is_empty() {
+        match call_llm_batch_analysis(
+            client,
+            ollama_url,  // Use provider's Ollama URL for LLM analysis
+            analyzer_model,
+            provider_name,
+            vram_total_mb,
+            temp_c,
+            &model_snapshots,
+        )
+        .await
+        {
+            Ok(rec) => {
+                for mr in &rec.models {
+                    if mr.recommended_max_concurrent == 0 {
+                        continue; // LLM returned 0 = no opinion
+                    }
+                    // Clamp to weight-based upper bound and ±2 from current for stability
+                    let snap = model_snapshots.iter().find(|s| s.name == mr.model);
+                    let upper = snap.map_or(8, |s| weight_based_max_concurrent(s.weight_mb) * 2);
+                    let current = vram_pool.max_concurrent(provider_id, &mr.model);
+                    let change_floor = current.saturating_sub(2).max(1);
+                    let change_ceil = current.saturating_add(2);
+                    let recommended = mr.recommended_max_concurrent
+                        .min(upper)
+                        .clamp(change_floor, change_ceil)
+                        .max(1);
+
+                    if recommended != current {
+                        vram_pool.set_max_concurrent(provider_id, &mr.model, recommended);
+                        // Re-persist with LLM-recommended limit
+                        if let Ok(Some(mut entry)) = capacity_repo.get(provider_id, &mr.model).await {
+                            entry.max_concurrent = recommended as i32;
+                            capacity_repo.upsert(&entry).await.ok();
+                        }
+                        tracing::info!(
+                            provider = %provider_name,
+                            model = %mr.model,
+                            old = current,
+                            new = recommended,
+                            "LLM batch analysis updated max_concurrent"
+                        );
+                    }
+                }
+                if let Some(reasoning) = &rec.reasoning {
+                    tracing::info!(provider = %provider_name, reasoning, "LLM batch analysis reasoning");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(provider = %provider_name, "LLM batch analysis failed: {e:#}");
+            }
+        }
     }
 
     Ok(())
 }
 
-// ── Analysis loop ─────────────────────────────────────────────────────────────
+/// Initial max_concurrent: conservative cold-start = 1.
+/// Requests only 1 concurrent per model until LLM batch analysis recommends otherwise.
+fn initial_max_concurrent(_weight_mb: u32) -> u32 {
+    1
+}
 
-/// Spawns a background loop that periodically re-evaluates capacity for all
-/// active Ollama providers.
-///
-/// The loop checks the DB settings on every tick (30 s) to pick up dynamic
-/// changes to `batch_interval_secs` and `batch_enabled`.  A `manual_trigger`
-/// Notify bypasses the interval check for immediate on-demand analysis.
-pub async fn run_capacity_analysis_loop(
-    registry:            Arc<dyn LlmProviderRegistry>,
-    capacity_repo:       Arc<dyn ModelCapacityRepository>,
-    settings_repo:       Arc<dyn CapacitySettingsRepository>,
-    slot_map:            Arc<ConcurrencySlotMap>,
-    valkey_pool:         Option<fred::clients::Pool>,
-    analyzer_url:        String,
-    manual_trigger:      Arc<Notify>,
-    analysis_lock:       Arc<tokio::sync::Semaphore>,
-    base_tick:           Duration,
-    shutdown:            CancellationToken,
-    ollama_num_parallel: u32,
+/// Weight-based heuristic used as LLM analysis fallback.
+fn weight_based_max_concurrent(weight_mb: u32) -> u32 {
+    match weight_mb {
+        0..5120 => 8,
+        5120..20480 => 4,
+        20480..51200 => 2,
+        _ => 1,
+    }
+}
+
+// ── Sync loop ─────────────────────────────────────────────────────────────────
+
+/// Background loop that periodically syncs all active Ollama providers.
+pub async fn run_sync_loop(
+    registry:              Arc<dyn LlmProviderRegistry>,
+    capacity_repo:         Arc<dyn ModelCapacityRepository>,
+    settings_repo:         Arc<dyn CapacitySettingsRepository>,
+    vram_pool:             Arc<dyn VramPoolPort>,
+    valkey_pool:           Option<fred::clients::Pool>,
+    manual_trigger:        Arc<Notify>,
+    sync_lock:             Arc<tokio::sync::Semaphore>,
+    base_tick:             Duration,
+    shutdown:              CancellationToken,
+    client:                reqwest::Client,
+    ollama_model_repo:     Arc<dyn OllamaModelRepository>,
+    model_selection_repo:  Arc<dyn ProviderModelSelectionRepository>,
 ) {
-    let client = reqwest::Client::new();
     let mut ticker = tokio::time::interval(base_tick);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    tracing::info!("capacity analysis loop started (tick={}s)", base_tick.as_secs());
+    tracing::info!("sync loop started (tick={}s)", base_tick.as_secs());
 
     loop {
         let is_manual = tokio::select! {
@@ -417,50 +737,51 @@ pub async fn run_capacity_analysis_loop(
 
         let settings = settings_repo.get().await.unwrap_or_default();
 
+        // Push probe config to VramPool
+        vram_pool.set_probe_config(settings.probe_permits, settings.probe_rate);
+
         if !is_manual {
-            if !settings.batch_enabled {
+            if !settings.sync_enabled {
                 continue;
             }
-            // Check whether enough time has passed since last run
             let elapsed_secs = settings
                 .last_run_at
                 .map(|t| Utc::now().signed_duration_since(t).num_seconds())
                 .unwrap_or(i64::MAX);
-            if elapsed_secs < settings.batch_interval_secs as i64 {
+            if elapsed_secs < settings.sync_interval_secs as i64 {
                 continue;
             }
         }
 
-        // Acquire the analysis lock — prevents concurrent runs (e.g. rapid POST /sync spam).
-        // `acquire_owned` never fails on a non-closed semaphore, so unwrap is safe here.
-        let _permit = analysis_lock.clone().acquire_owned().await.unwrap();
+        let _permit = sync_lock.clone().acquire_owned().await.unwrap();
 
-        // Run analysis for all active Ollama providers
-        let backends = registry.list_all().await.unwrap_or_default();
-        let ollama_backends: Vec<_> = backends
+        let all_providers = registry.list_all().await.unwrap_or_default();
+        let ollama_providers: Vec<_> = all_providers
             .into_iter()
-            .filter(|b| b.is_active && b.provider_type == ProviderType::Ollama)
+            .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
             .collect();
 
         let mut any_error = false;
-        for provider in ollama_backends {
-            if let Err(e) = analyze_backend(
+        for provider in ollama_providers {
+            if let Err(e) = sync_provider(
                 &client,
                 provider.id,
                 &provider.name,
                 &provider.url,
-                &analyzer_url,
+                provider.total_vram_mb,
                 &settings.analyzer_model,
                 &*capacity_repo,
-                &slot_map,
+                &*vram_pool,
                 valkey_pool.as_ref(),
-                ollama_num_parallel,
+                &*registry,
+                &*ollama_model_repo,
+                &*model_selection_repo,
             )
             .await
             {
                 tracing::warn!(
                     provider = %provider.name,
-                    "capacity analysis failed (non-fatal): {e}"
+                    "sync failed (non-fatal): {e}"
                 );
                 any_error = true;
             }
@@ -468,8 +789,7 @@ pub async fn run_capacity_analysis_loop(
 
         let status = if any_error { "partial" } else { "ok" };
         settings_repo.record_run(status).await.ok();
-        // `_permit` dropped here — releases the lock
     }
 
-    tracing::info!("capacity analysis loop stopped");
+    tracing::info!("sync loop stopped");
 }

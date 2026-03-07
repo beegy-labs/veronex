@@ -9,7 +9,7 @@ pub struct AuditEvent {
     pub account_name: String,
     /// `"create"` | `"update"` | `"delete"` | `"login"` | `"logout"` | `"reset_password"` | `"sync"` | `"trigger"`
     pub action: String,
-    /// `"api_key"` | `"ollama_backend"` | `"gemini_backend"` | `"account"` | `"gpu_server"` | `"session"` | `"lab_settings"` | `"capacity_settings"`
+    /// `"api_key"` | `"ollama_provider"` | `"gemini_provider"` | `"account"` | `"gpu_server"` | `"session"` | `"lab_settings"` | `"capacity_settings"`
     pub resource_type: String,
     pub resource_id: String,
     pub resource_name: String,

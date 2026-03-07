@@ -1,13 +1,15 @@
-import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, CapacitySettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchCapacitySettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { apiClient } from './api-client'
+import { BASE_API_URL } from './constants'
 
-const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
+export const BASE = BASE_API_URL
 
-/** Plain fetch for public routes (setup, auth) — no auth header. */
+/** Plain fetch for public routes (setup, auth) — credentials included for HttpOnly cookies. */
 async function fetchPublic<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
+    credentials: 'include',
     cache: 'no-store',
   })
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
@@ -45,14 +47,11 @@ export const api = {
   capacity: () =>
     apiClient.get<CapacityResponse>('/v1/dashboard/capacity'),
 
-  capacitySettings: () =>
-    apiClient.get<CapacitySettings>('/v1/dashboard/capacity/settings'),
+  syncSettings: () =>
+    apiClient.get<SyncSettings>('/v1/dashboard/capacity/settings'),
 
-  patchCapacitySettings: (body: PatchCapacitySettings) =>
-    apiClient.patch<CapacitySettings>('/v1/dashboard/capacity/settings', body),
-
-  triggerCapacitySync: () =>
-    apiClient.post<{ message: string }>('/v1/dashboard/capacity/sync', {}),
+  patchSyncSettings: (body: PatchSyncSettings) =>
+    apiClient.patch<SyncSettings>('/v1/dashboard/capacity/settings', body),
 
   triggerSessionGrouping: (beforeDate?: string) =>
     apiClient.post<{ message: string }>('/v1/dashboard/session-grouping/trigger', {
@@ -127,23 +126,23 @@ export const api = {
   updateProvider: (id: string, body: UpdateProviderRequest) =>
     apiClient.patch<Provider>(`/v1/providers/${id}`, body),
 
-  healthcheckProvider: (id: string) =>
-    apiClient.post<{ id: string; status: string }>(`/v1/providers/${id}/healthcheck`),
+  syncProvider: (id: string) =>
+    apiClient.post<{ message: string }>(`/v1/providers/${id}/sync`),
+
+  syncAllProviders: () =>
+    apiClient.post<{ message: string }>('/v1/providers/sync'),
 
   providerModels: (id: string) =>
     apiClient.get<{ models: string[] }>(`/v1/providers/${id}/models`),
-
-  syncProviderModels: (id: string) =>
-    apiClient.post<{ models: string[]; synced: boolean }>(`/v1/providers/${id}/models/sync`),
 
   providerKey: (id: string) =>
     apiClient.get<{ key: string }>(`/v1/providers/${id}/key`),
 
   getSelectedModels: (providerId: string) =>
-    apiClient.get<{ models: ProviderSelectedModel[] }>(`/v1/providers/${backendId}/selected-models`),
+    apiClient.get<{ models: ProviderSelectedModel[] }>(`/v1/providers/${providerId}/selected-models`),
 
   setModelEnabled: (providerId: string, modelName: string, isEnabled: boolean) =>
-    apiClient.patch<void>(`/v1/providers/${backendId}/selected-models/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
+    apiClient.patch<void>(`/v1/providers/${providerId}/selected-models/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
 
   // ── Gemini (JWT-protected) ────────────────────────────────────────────────
   geminiPolicies: () =>
@@ -177,11 +176,11 @@ export const api = {
   ollamaSyncStatus: () =>
     apiClient.get<OllamaSyncJob>('/v1/ollama/sync/status'),
 
-  ollamaModelBackends: (modelName: string) =>
-    apiClient.get<{ providers: OllamaProviderForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/backends`),
+  ollamaModelProviders: (modelName: string) =>
+    apiClient.get<{ providers: OllamaProviderForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers`),
 
-  ollamaBackendModels: (providerId: string) =>
-    apiClient.get<{ models: string[] }>(`/v1/ollama/backends/${backendId}/models`),
+  ollamaProviderModels: (providerId: string) =>
+    apiClient.get<{ models: string[] }>(`/v1/ollama/providers/${providerId}/models`),
 
   // ── Setup (public — no auth, first-run only) ──────────────────────────────
   setupStatus: () =>
@@ -200,10 +199,9 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  logout: (refresh_token: string) =>
+  logout: () =>
     fetchPublic<void>('/v1/auth/logout', {
       method: 'POST',
-      body: JSON.stringify({ refresh_token }),
     }),
 
   // ── Accounts (JWT-protected) ──────────────────────────────────────────────
@@ -237,8 +235,8 @@ export const api = {
   // ── Audit (JWT-protected) ─────────────────────────────────────────────────
   auditEvents: (params?: { limit?: number; offset?: number; action?: string; resource_type?: string }) => {
     const qs = new URLSearchParams()
-    if (params?.limit) qs.set('limit', String(params.limit))
-    if (params?.offset) qs.set('offset', String(params.offset))
+    if (params?.limit != null) qs.set('limit', String(params.limit))
+    if (params?.offset != null) qs.set('offset', String(params.offset))
     if (params?.action) qs.set('action', params.action)
     if (params?.resource_type) qs.set('resource_type', params.resource_type)
     const q = qs.toString()

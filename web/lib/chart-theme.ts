@@ -110,3 +110,19 @@ export function fmtMsNullable(n: number | null | undefined): string {
   if (n == null) return '—'
   return fmtMs(n)
 }
+
+// ── Percentage formatter ──────────────────────────────────────────────────────
+
+/** Format a 0..1 ratio as a rounded percentage string. Example: 0.956 → "96%" */
+export function fmtPct(n: number): string {
+  return `${Math.round(n * 100)}%`
+}
+
+// ── Memory size formatter ─────────────────────────────────────────────────────
+
+/** Format megabytes as a short string. Example: 2048 → "2.0 GB", 512 → "512 MB", 0 → "—" */
+export function fmtMbShort(mb: number): string {
+  if (mb === 0) return '—'
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
+  return `${mb} MB`
+}

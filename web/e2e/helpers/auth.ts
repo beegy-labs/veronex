@@ -1,8 +1,9 @@
 import { Page } from '@playwright/test'
+import { T_DEFAULT, TEST_USERNAME, TEST_PASSWORD } from './constants'
 
 export const TEST_CREDENTIALS = {
-  username: process.env.E2E_USERNAME ?? 'admin',
-  password: process.env.E2E_PASSWORD ?? 'changeme',
+  username: TEST_USERNAME,
+  password: TEST_PASSWORD,
 }
 
 export async function login(page: Page) {
@@ -13,7 +14,7 @@ export async function login(page: Page) {
   await page.getByLabel('Password').fill(TEST_CREDENTIALS.password)
   await page.getByRole('button', { name: /sign in/i }).click()
   // After login the router pushes to '/' which redirects to /overview
-  await page.waitForURL('**/overview', { timeout: 10_000 })
+  await page.waitForURL('**/overview', { timeout: T_DEFAULT })
 }
 
 export async function logout(page: Page) {

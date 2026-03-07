@@ -5,7 +5,7 @@ extensions:
 receivers:
   # Scrape node-exporter instances deployed alongside Ollama servers.
   # Targets are fetched dynamically from veronex via Prometheus HTTP SD.
-  # Register node-exporter URLs in the veronex admin → Backends page.
+  # Register node-exporter URLs in the veronex admin → Providers page.
   prometheus:
     config:
       scrape_configs:

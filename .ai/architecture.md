@@ -1,6 +1,5 @@
 # Architecture
-
-> CDD Tier 1 — Hexagonal Architecture pointer (≤50 lines) | **Last Updated**: 2026-03-03
+> CDD Tier 1 — Hexagonal Architecture pointer (≤50 lines) | **Last Updated**: 2026-03-07
 
 ## Structure
 
@@ -25,28 +24,26 @@ infrastructure → application → domain
 (Never reverse. Domain knows nothing outside itself.)
 ```
 
-## Key Ports
+## Key Ports (subset — full list in SSOT)
 
 | Port | Direction | Adapter |
 | ---- | --------- | ------- |
 | `InferenceUseCase` | Inbound | HTTP handlers |
 | `InferenceProviderPort` | Outbound | OllamaAdapter, GeminiAdapter |
+| `ProviderDispatchPort` | Outbound | ConcreteProviderDispatch |
 | `LlmProviderRegistry` | Outbound | CachingProviderRegistry (5s TTL) |
 | `JobRepository` | Outbound | PostgresJobRepository |
 | `ApiKeyRepository` | Outbound | PostgresApiKeyRepository |
-| `AccountRepository` | Outbound | PostgresAccountRepository |
 | `AuditPort` | Outbound | HttpAuditAdapter (fail-open) |
 | `ObservabilityPort` | Outbound | HttpObservabilityAdapter (fail-open) |
-| `QueuePort` | Outbound | Valkey (BLPOP/RPUSH) |
-| `MessageStore` | Outbound | S3MessageStore (MinIO/AWS) |
 
 ## Background Loops
 
 | Loop | Interval | Purpose |
 |------|----------|---------|
-| `health_checker` | 30 s | Backend online/offline + thermal |
-| `capacity_analysis` | 30 s tick | KV cache calc + slot recommendation |
-| `queue_dispatcher` | BLPOP 5s | VRAM-sorted job dispatch |
+| `sync_loop` | base tick 30s (per-provider sync_interval ~300s) | Unified: health + model sync + VRAM probe + LLM analysis |
+| `health_checker` | 30 s | Provider health + agent metrics + thermal auto-detect |
+| `queue_dispatcher` | Lua priority pop | 3-queue dispatch + model filter + stickiness + gate chain |
 | `session_grouping` | 24 h | Batch conversation_id assignment |
 
 **SSOT**: `docs/llm/policies/architecture.md`

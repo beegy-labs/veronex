@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { STALE_TIME_FAST } from '@/lib/constants'
 
 // ── Accounts list ─────────────────────────────────────────────────────────────
 
@@ -15,6 +16,6 @@ export const accountSessionsQuery = (accountId: string | null, open: boolean) =>
   queryKey: ['sessions', accountId] as const,
   queryFn: () => api.accountSessions(accountId!),
   enabled: open && !!accountId,
-  staleTime: 30_000,
+  staleTime: STALE_TIME_FAST,
   retry: false,
 })

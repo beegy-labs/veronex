@@ -4,8 +4,13 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::SOFT_DELETE;
 use crate::application::ports::outbound::account_repository::AccountRepository;
 use crate::domain::entities::Account;
+use crate::domain::enums::AccountRole;
+
+/// Column list shared by all SELECT queries on accounts.
+const ACCOUNT_COLS: &str = "id, username, password_hash, name, email, role, department, position, is_active, created_by, last_login_at, created_at, deleted_at";
 
 pub struct PostgresAccountRepository {
     pool: PgPool,
@@ -26,7 +31,8 @@ fn row_to_account(row: &sqlx::postgres::PgRow) -> Result<Account> {
         password_hash: row.try_get("password_hash").context("password_hash")?,
         name: row.try_get("name").context("name")?,
         email: row.try_get("email").context("email")?,
-        role: row.try_get("role").context("role")?,
+        role: row.try_get::<String, _>("role").context("role")?
+            .parse::<AccountRole>().map_err(|e| anyhow::anyhow!(e))?,
         department: row.try_get("department").context("department")?,
         position: row.try_get("position").context("position")?,
         is_active: row.try_get("is_active").context("is_active")?,
@@ -51,7 +57,7 @@ impl AccountRepository for PostgresAccountRepository {
         .bind(&account.password_hash)
         .bind(&account.name)
         .bind(&account.email)
-        .bind(&account.role)
+        .bind(account.role.as_str())
         .bind(&account.department)
         .bind(&account.position)
         .bind(account.is_active)
@@ -65,12 +71,8 @@ impl AccountRepository for PostgresAccountRepository {
     }
 
     async fn get_by_id(&self, id: &Uuid) -> Result<Option<Account>> {
-        let row = sqlx::query(
-            "SELECT id, username, password_hash, name, email, role, department, position,
-                    is_active, created_by, last_login_at, created_at, deleted_at
-             FROM accounts
-             WHERE id = $1 AND deleted_at IS NULL",
-        )
+        let sql = format!("SELECT {ACCOUNT_COLS} FROM accounts WHERE id = $1 AND {SOFT_DELETE}");
+        let row = sqlx::query(&sql)
         .bind(id)
         .fetch_optional(&self.pool)
         .await
@@ -83,12 +85,8 @@ impl AccountRepository for PostgresAccountRepository {
     }
 
     async fn get_by_username(&self, username: &str) -> Result<Option<Account>> {
-        let row = sqlx::query(
-            "SELECT id, username, password_hash, name, email, role, department, position,
-                    is_active, created_by, last_login_at, created_at, deleted_at
-             FROM accounts
-             WHERE username = $1 AND deleted_at IS NULL",
-        )
+        let sql = format!("SELECT {ACCOUNT_COLS} FROM accounts WHERE username = $1 AND {SOFT_DELETE}");
+        let row = sqlx::query(&sql)
         .bind(username)
         .fetch_optional(&self.pool)
         .await
@@ -101,13 +99,8 @@ impl AccountRepository for PostgresAccountRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<Account>> {
-        let rows = sqlx::query(
-            "SELECT id, username, password_hash, name, email, role, department, position,
-                    is_active, created_by, last_login_at, created_at, deleted_at
-             FROM accounts
-             WHERE deleted_at IS NULL
-             ORDER BY created_at ASC",
-        )
+        let sql = format!("SELECT {ACCOUNT_COLS} FROM accounts WHERE {SOFT_DELETE} ORDER BY created_at ASC");
+        let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await
         .context("failed to list accounts")?;
@@ -141,6 +134,28 @@ impl AccountRepository for PostgresAccountRepository {
             .context("failed to soft-delete account")?;
 
         Ok(())
+    }
+
+    async fn soft_delete_cascade(&self, account_id: &Uuid, tenant_id: &str) -> Result<u64> {
+        let mut tx = self.pool.begin().await.context("failed to begin transaction")?;
+
+        let keys_deleted = sqlx::query(
+            &format!("UPDATE api_keys SET deleted_at = NOW() WHERE tenant_id = $1 AND {SOFT_DELETE}"),
+        )
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to soft-delete api keys in cascade")?
+        .rows_affected();
+
+        sqlx::query("UPDATE accounts SET deleted_at = NOW() WHERE id = $1")
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await
+            .context("failed to soft-delete account in cascade")?;
+
+        tx.commit().await.context("failed to commit cascade delete")?;
+        Ok(keys_deleted)
     }
 
     async fn set_active(&self, id: &Uuid, is_active: bool) -> Result<()> {

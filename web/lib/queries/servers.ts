@@ -1,12 +1,13 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { STALE_TIME_SLOW, STALE_TIME_FAST, REFETCH_INTERVAL_FAST } from '@/lib/constants'
 
 // ── GPU servers list ──────────────────────────────────────────────────────────
 
 export const serversQuery = queryOptions({
   queryKey: ['servers'] as const,
   queryFn: () => api.servers(),
-  staleTime: 59_000,
+  staleTime: STALE_TIME_SLOW,
   refetchInterval: 60_000,
   refetchIntervalInBackground: false,
   retry: false,
@@ -17,8 +18,8 @@ export const serversQuery = queryOptions({
 export const serverMetricsQuery = (serverId: string) => queryOptions({
   queryKey: ['server-metrics', serverId] as const,
   queryFn: () => api.serverMetrics(serverId),
-  staleTime: 29_000,
-  refetchInterval: 30_000,
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: REFETCH_INTERVAL_FAST,
   refetchIntervalInBackground: false,
   retry: false,
 })

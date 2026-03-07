@@ -8,6 +8,11 @@ export const TIME_OPTIONS = [
   { label: '30d', hours: 720 },
 ] as const
 
+/** O(1) hours → label lookup. */
+export const TIME_LABEL_MAP = new Map<number, string>(
+  TIME_OPTIONS.map(o => [o.hours, o.label]),
+)
+
 interface TimeRangeSelectorProps {
   value: number
   onChange: (value: number) => void

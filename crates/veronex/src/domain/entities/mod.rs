@@ -9,14 +9,16 @@ pub use api_key::*;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use super::enums::{
-    ApiFormat, FinishReason, JobSource, JobStatus, LlmProviderStatus, ModelStatus, ProviderType,
+    ApiFormat, FinishReason, JobSource, JobStatus, LlmProviderStatus, ProviderType,
 };
 use super::value_objects::{JobId, ModelName, Prompt};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct InferenceJob {
     pub id: JobId,
     pub prompt: Prompt,
@@ -108,17 +110,14 @@ pub struct InferenceJob {
     /// Populated when the model made at least one tool call; None for text-only responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls_json: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Model {
-    pub name: ModelName,
-    pub provider_id: Uuid,
-    pub provider_type: ProviderType,
-    pub vram_mb: i64,
-    pub status: ModelStatus,
-    pub last_used_at: Option<DateTime<Utc>>,
-    pub active_calls: i32,
+    /// Blake2b-256 hex hash of the full messages array.
+    /// Used for session grouping (conversation chain detection).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages_hash: Option<String>,
+    /// Blake2b-256 hex hash of messages[0..n-1] (all turns except last).
+    /// Empty string = first turn (no parent). Used to link child → parent in a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages_prefix_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,7 +139,8 @@ pub struct InferenceResult {
 ///
 /// `node_exporter_url` is the only connection point to the hardware.
 /// CPU / memory / GPU metrics are fetched live from that endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct GpuServer {
     pub id: Uuid,
     pub name: String,
@@ -149,7 +149,8 @@ pub struct GpuServer {
     pub registered_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct LlmProvider {
     pub id: Uuid,
     pub name: String,
@@ -231,6 +232,8 @@ mod tests {
             cancelled_at: None,
             conversation_id: None,
             tool_calls_json: None,
+            messages_hash: None,
+            messages_prefix_hash: None,
         }
     }
 
@@ -249,18 +252,6 @@ mod tests {
             is_free_tier: false,
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),
-        }
-    }
-
-    fn make_model() -> Model {
-        Model {
-            name: ModelName::new("llama3.2").unwrap(),
-            provider_id: Uuid::now_v7(),
-            provider_type: ProviderType::Ollama,
-            vram_mb: 8192,
-            status: ModelStatus::Loaded,
-            last_used_at: Some(Utc::now()),
-            active_calls: 2,
         }
     }
 
@@ -319,6 +310,8 @@ mod tests {
             cancelled_at: None,
             conversation_id: None,
             tool_calls_json: None,
+            messages_hash: None,
+            messages_prefix_hash: None,
             tools: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
@@ -345,23 +338,6 @@ mod tests {
         provider.api_key_encrypted = Some("encrypted_key_data".to_string());
         assert!(provider.api_key_encrypted.is_some());
         assert_eq!(provider.provider_type, ProviderType::Gemini);
-    }
-
-    #[test]
-    fn model_creation() {
-        let model = make_model();
-        assert_eq!(model.name.as_str(), "llama3.2");
-        assert_eq!(model.provider_type, ProviderType::Ollama);
-        assert_eq!(model.vram_mb, 8192);
-        assert_eq!(model.status, ModelStatus::Loaded);
-        assert!(model.last_used_at.is_some());
-        assert_eq!(model.active_calls, 2);
-    }
-
-    #[test]
-    fn model_provider_id_is_uuidv7() {
-        let model = make_model();
-        assert_eq!(model.provider_id.get_version_num(), 7);
     }
 
     #[test]
@@ -414,19 +390,6 @@ mod tests {
         assert_eq!(deserialized.url, provider.url);
         assert_eq!(deserialized.is_active, provider.is_active);
         assert_eq!(deserialized.status, provider.status);
-    }
-
-    #[test]
-    fn model_serde_roundtrip() {
-        let model = make_model();
-        let json = serde_json::to_string(&model).unwrap();
-        let deserialized: Model = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.name.as_str(), model.name.as_str());
-        assert_eq!(deserialized.provider_id, model.provider_id);
-        assert_eq!(deserialized.provider_type, model.provider_type);
-        assert_eq!(deserialized.vram_mb, model.vram_mb);
-        assert_eq!(deserialized.status, model.status);
-        assert_eq!(deserialized.active_calls, model.active_calls);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 
 use dashmap::DashMap;
 
@@ -25,7 +26,7 @@ use crate::application::ports::outbound::model_capacity_repository::ModelCapacit
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository;
 use crate::application::ports::outbound::session_repository::SessionRepository;
-use crate::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap;
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use crate::infrastructure::outbound::hw_metrics::CpuSnapshot;
@@ -33,6 +34,9 @@ use crate::infrastructure::outbound::hw_metrics::CpuSnapshot;
 /// Shared application state passed to all HTTP handlers via Axum's State extractor.
 #[derive(Clone)]
 pub struct AppState {
+    /// Shared `reqwest::Client` — reuse across handlers and background tasks.
+    /// `reqwest::Client` is `Clone + Arc` internally; cloning is cheap.
+    pub http_client: reqwest::Client,
     pub use_case: Arc<dyn InferenceUseCase>,
     pub api_key_repo: Arc<dyn ApiKeyRepository>,
     pub account_repo: Arc<dyn AccountRepository>,
@@ -55,17 +59,17 @@ pub struct AppState {
     /// Per-server CPU counter snapshots for delta-based usage calculation.
     /// Keyed by GpuServer ID; updated on every metrics scrape.
     pub cpu_snapshot_cache: Arc<DashMap<Uuid, CpuSnapshot>>,
-    // ── Dynamic concurrency + thermal ──────────────────────────────
-    /// Per-(provider, model) concurrency semaphores — updated by capacity analyzer.
-    pub slot_map: Arc<ConcurrencySlotMap>,
+    // ── VRAM pool + thermal ──────────────────────────────────────────
+    /// Per-provider VRAM pool — updated by sync loop.
+    pub vram_pool: Arc<dyn VramPoolPort>,
     /// Thermal throttle state — updated by health_checker.
     pub thermal: Arc<ThermalThrottleMap>,
     /// Capacity analysis results — persisted VRAM + throughput stats.
     pub capacity_repo: Arc<dyn ModelCapacityRepository>,
     /// Capacity analysis settings (singleton row in DB).
     pub capacity_settings_repo: Arc<dyn CapacitySettingsRepository>,
-    /// Fire to trigger an immediate capacity analysis run (bypasses batch interval).
-    pub capacity_manual_trigger: Arc<Notify>,
+    /// Fire to trigger an immediate sync run (bypasses sync interval).
+    pub sync_trigger: Arc<Notify>,
     /// Ollama URL used by the capacity analyzer (CAPACITY_ANALYZER_OLLAMA_URL).
     pub analyzer_url: String,
     /// Broadcast channel sender for real-time job status events.
@@ -81,7 +85,10 @@ pub struct AppState {
     /// Mutex (1-permit semaphore) that prevents concurrent session grouping runs.
     /// Held for the duration of each run — manual trigger returns 409 if locked.
     pub session_grouping_lock: Arc<tokio::sync::Semaphore>,
-    /// Mutex (1-permit semaphore) that prevents concurrent capacity analysis runs.
+    /// Mutex (1-permit semaphore) that prevents concurrent sync runs.
     /// Held for the duration of each run — POST /sync returns 409 if locked.
-    pub capacity_analysis_lock: Arc<tokio::sync::Semaphore>,
+    pub sync_lock: Arc<tokio::sync::Semaphore>,
+    /// Global concurrent SSE connection counter.
+    /// Prevents resource exhaustion from too many open SSE streams.
+    pub sse_connections: Arc<AtomicU32>,
 }

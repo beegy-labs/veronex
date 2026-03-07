@@ -6,6 +6,8 @@ import { keysQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, CreateKeyResponse } from '@/lib/types'
 import { Plus, Trash2, Copy, Check, BarChart2 } from 'lucide-react'
+import { CopyButton } from '@/components/copy-button'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -31,26 +33,10 @@ import {
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
 import { KeyUsageModal } from '@/components/key-usage-modal'
+import { useApiMutation } from '@/hooks/use-api-mutation'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
-
-function CopyButton({ text }: { text: string }) {
-  const { t } = useTranslation()
-  const [copied, setCopied] = useState(false)
-
-  async function handleCopy() {
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  return (
-    <Button variant="ghost" size="icon" onClick={handleCopy} title={t('common.copy')}>
-      {copied ? <Check className="h-4 w-4 text-status-success-fg" /> : <Copy className="h-4 w-4" />}
-    </Button>
-  )
-}
 
 function CreateKeyModal({
   onClose,
@@ -174,44 +160,12 @@ function KeyCreatedModal({ resp, onClose }: { resp: CreateKeyResponse; onClose: 
         </div>
 
         <div className="rounded-lg bg-muted p-3 flex items-center gap-2">
-          <code className="flex-1 font-mono text-sm text-status-success-fg break-all">{resp.key}</code>
+          <code className="flex-1 font-mono text-sm text-status-success-fg break-all select-all">{resp.key}</code>
           <CopyButton text={resp.key} />
         </div>
 
         <DialogFooter>
           <Button onClick={onClose}>{t('common.done')}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function DeleteConfirmModal({
-  keyName,
-  onConfirm,
-  onClose,
-  isPending,
-}: {
-  keyName: string
-  onConfirm: () => void
-  onClose: () => void
-  isPending: boolean
-}) {
-  const { t } = useTranslation()
-  return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>{t('keys.deleteTitle')}</DialogTitle>
-        </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          {t('keys.deleteConfirm', { name: keyName })}
-        </p>
-        <DialogFooter className="gap-3">
-          <Button variant="outline" onClick={onClose} disabled={isPending}>{t('common.cancel')}</Button>
-          <Button variant="destructive" onClick={onConfirm} disabled={isPending}>
-            {isPending ? t('keys.deleting') : t('common.delete')}
-          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -229,25 +183,20 @@ export default function KeysPage() {
 
   const { data: keys, isLoading, error } = useQuery(keysQuery)
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.deleteKey(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['keys'] })
-      setDeleteTarget(null)
-    },
-  })
+  const deleteMutation = useApiMutation(
+    (id: string) => api.deleteKey(id),
+    { invalidateKey: ['keys'], onSuccess: () => setDeleteTarget(null) },
+  )
 
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
-      api.toggleKeyActive(id, is_active),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
-  })
+  const toggleMutation = useApiMutation(
+    (vars: { id: string; is_active: boolean }) => api.toggleKeyActive(vars.id, vars.is_active),
+    { invalidateKey: ['keys'] },
+  )
 
-  const tierMutation = useMutation({
-    mutationFn: ({ id, tier }: { id: string; tier: 'free' | 'paid' }) =>
-      api.updateKeyTier(id, tier),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
-  })
+  const tierMutation = useApiMutation(
+    (vars: { id: string; tier: 'free' | 'paid' }) => api.updateKeyTier(vars.id, vars.tier),
+    { invalidateKey: ['keys'] },
+  )
 
   function handleCreated(resp: CreateKeyResponse) {
     setShowCreate(false)
@@ -400,11 +349,14 @@ export default function KeysPage() {
       )}
 
       {deleteTarget && (
-        <DeleteConfirmModal
-          keyName={deleteTarget.name}
+        <ConfirmDialog
+          open
+          title={t('keys.deleteTitle')}
+          description={t('keys.deleteConfirm', { name: deleteTarget.name })}
+          confirmLabel={deleteMutation.isPending ? t('keys.deleting') : t('common.delete')}
           onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
           onClose={() => setDeleteTarget(null)}
-          isPending={deleteMutation.isPending}
+          isLoading={deleteMutation.isPending}
         />
       )}
 

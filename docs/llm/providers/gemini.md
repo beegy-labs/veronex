@@ -1,6 +1,6 @@
 # Providers — Gemini: Rate Limiting & Tier Routing
 
-> SSOT | **Last Updated**: 2026-03-03
+> SSOT | **Last Updated**: 2026-03-04
 
 ## Task Guide
 
@@ -9,19 +9,19 @@
 | Change default RPM/RPD for a model | API: `PUT /v1/gemini/policies/{model}` | Or edit seed in init migration |
 | Add new Gemini tier routing logic | `crates/veronex/src/infrastructure/outbound/provider_router.rs` | `pick_gemini_provider()` function |
 | Change `available_on_free_tier` behavior | `provider_router.rs` | `pick_gemini_provider()` → early return block |
-| Add new Valkey counter key | `crates/veronex/src/infrastructure/inbound/http/backend_handlers.rs` | rate counter increment after job |
-| Add field to GeminiRateLimitPolicy | `domain/entities/` + migration + `persistence/` + `backend_handlers.rs` `UpsertGeminiPolicyRequest` |
+| Add new Valkey counter key | `crates/veronex/src/infrastructure/inbound/http/provider_handlers.rs` | rate counter increment after job |
+| Add field to GeminiRateLimitPolicy | `domain/entities/` + migration + `persistence/` + `provider_handlers.rs` `UpsertGeminiPolicyRequest` |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `crates/veronex/src/domain/entities/gemini_rate_limit_policy.rs` | `GeminiRateLimitPolicy` entity |
+| `crates/veronex/src/domain/entities/mod.rs` | `GeminiRateLimitPolicy` entity |
 | `crates/veronex/src/application/ports/outbound/` | `GeminiPolicyRepository` trait |
 | `crates/veronex/src/infrastructure/outbound/persistence/` | `PostgresGeminiPolicyRepository` |
 | `crates/veronex/src/infrastructure/outbound/gemini/adapter.rs` | `GeminiAdapter` (streaming) |
 | `crates/veronex/src/infrastructure/outbound/provider_router.rs` | `pick_gemini_provider()` |
-| `crates/veronex/src/infrastructure/inbound/http/backend_handlers.rs` | Policy CRUD handlers |
+| `crates/veronex/src/infrastructure/inbound/http/provider_handlers.rs` | Policy CRUD handlers |
 
 ---
 

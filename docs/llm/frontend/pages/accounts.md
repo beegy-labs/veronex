@@ -1,14 +1,14 @@
-# Web — Accounts Page (/accounts)
+# Web -- Accounts Page (/accounts)
 
-> **SSOT** | **Tier 2** | Last Updated: 2026-03-02
+> **SSOT** | **Tier 2** | Last Updated: 2026-03-04
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add field to CreateAccountModal | `web/app/accounts/page.tsx` form + `web/lib/api.ts` `createAccount()` + backend `account_handlers.rs` `CreateAccountRequest` | Form field → API body → Rust struct → DB migration if new column |
+| Add field to CreateAccountModal | `web/app/accounts/page.tsx` form + `web/lib/api.ts` `createAccount()` + backend `account_handlers.rs` `CreateAccountRequest` | Form field -> API body -> Rust struct -> DB migration if new column |
 | Add column to accounts table | `web/app/accounts/page.tsx` table + `web/lib/types.ts` `Account` | Add `TableHead` + `TableCell` + extend type |
-| Change session stale time | `web/lib/queries/accounts.ts` `accountSessionsQuery` `staleTime` | Adjust milliseconds (default: 30 000) |
+| Change session stale time | `web/lib/queries/accounts.ts` `accountSessionsQuery` `staleTime` | Adjust ms (default: 30 000) |
 | Add role option | `web/app/accounts/page.tsx` `CreateAccountModal` role `<select>` | Add `<option>` value; align with backend role enum |
 
 ## Key Files
@@ -16,56 +16,37 @@
 | File | Purpose |
 |------|---------|
 | `web/app/accounts/page.tsx` | Accounts management page (table + modals) |
-| `web/lib/api.ts` | `api.accounts()`, `api.createAccount()`, `api.deleteAccount()`, `api.setAccountActive()`, `api.createResetLink()`, `api.accountSessions()`, `api.revokeSession()`, `api.revokeAllSessions()` |
-| `web/lib/queries/accounts.ts` | `accountsQuery`, `accountSessionsQuery` TanStack Query definitions |
+| `web/lib/api.ts` | `api.accounts()`, `createAccount()`, `deleteAccount()`, `setAccountActive()`, `createResetLink()`, `accountSessions()`, `revokeSession()`, `revokeAllSessions()` |
+| `web/lib/queries/accounts.ts` | `accountsQuery`, `accountSessionsQuery` TanStack Query defs |
 | `web/lib/types.ts` | `Account`, `CreateAccountRequest`, `CreateAccountResponse`, `SessionRecord` |
 | `web/messages/en.json` | i18n keys under `accounts.*` |
 
----
-
 ## Page Layout
 
-```
-Title: "Accounts"  Subtitle: description                    [+ Create Account]
+| Element | Detail |
+|---------|--------|
+| Header | Title + description + `[+ Create Account]` button |
+| Banner | Conditional reset-token banner (shown after `createResetLink` succeeds) |
+| Table | Columns: Username, Name, Role, Department, Status, Last Login, Actions |
+| Role badge | `super` -> `variant="default"`; `admin` -> `variant="secondary"` |
+| Status | `Switch` toggle -> `PATCH /v1/accounts/{id}/active` |
+| Actions | Shield (sessions modal), Link (reset-link), Trash2 (delete) |
 
-[Reset token banner — conditional, shown after createResetLink succeeds]
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ Username   Name    Role    Department  Status   Last Login   Actions          │
-│ alice      Alice   super   Eng         ◉ on     Mar 1 10:00  🛡 🔗 🗑         │
-│ bob        Bob     admin   Ops         ◉ on     Mar 2 08:30  🛡 🔗 🗑         │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-- `DataTable minWidth="700px"` — SSOT wrapper; never raw `<Table>`.
-- **Role badge**: `super` → `variant="default"` (filled); `admin` → `variant="secondary"` (muted).
-- **Status**: `Switch` — toggling calls `PATCH /v1/accounts/{id}/active`.
-- **Actions per row** (three icon buttons):
-  - `Shield` → opens `AccountSessionsModal` for that account.
-  - `Link` → calls `POST /v1/accounts/{id}/reset-link`; shows reset token banner inline on the page.
-  - `Trash2` → calls `DELETE /v1/accounts/{id}` (soft-delete assumed).
-
----
+Table wrapped in `DataTable minWidth="700px"`.
 
 ## Access Control
 
-Requires JWT Bearer. No explicit role guard in the frontend component — access is enforced by the backend routes. The page is only reachable through the authenticated nav (super/admin role required).
-
----
+Requires JWT Bearer. No frontend role guard -- enforced by server routes. Page reachable only through authenticated nav (super/admin).
 
 ## Component Structure
 
 ### `AccountsPage` (default export)
 
-State:
-
-```ts
-const [showCreate, setShowCreate]             = useState(false)       // CreateAccountModal open
-const [resetToken, setResetToken]             = useState<string|null>(null) // inline reset token banner
-const [sessionsAccountId, setSessionsAccountId] = useState<string|null>(null) // SessionsModal target
-```
-
-Queries / mutations:
+| State | Type | Purpose |
+|-------|------|---------|
+| `showCreate` | `boolean` | CreateAccountModal open |
+| `resetToken` | `string\|null` | Inline reset token banner |
+| `sessionsAccountId` | `string\|null` | SessionsModal target |
 
 | Hook | Query key | Endpoint |
 |------|-----------|----------|
@@ -77,142 +58,63 @@ Queries / mutations:
 ### `CreateAccountModal`
 
 Two-phase dialog:
+1. **Form** -- Username (req), Full name (req), Password (req), Email (opt), Role (`admin` default / `super`), Department (opt), Position (opt). Submit disabled while `mutation.isPending`.
+2. **Success** -- Shows `CreateAccountResponse.test_api_key` with `CopyButton` + warning "Save the test API key -- never shown again."
 
-1. **Form phase** — fields: Username (required), Full name (required), Password (required), Email (optional), Role (`admin` default | `super`), Department (optional), Position (optional).
-2. **Success phase** — shows `CreateAccountResponse.test_api_key` with `CopyButton` and warning "Save the test API key — it will never be shown again."
-
-Required fields for submit: `username`, `password`, `name`. Submit disabled while `mutation.isPending`.
-
-Closing resets all form state to defaults. Query invalidation: `['accounts']`.
+Closing resets form state. Invalidates `['accounts']`.
 
 ### `AccountSessionsModal`
 
-Opened per-account via the `Shield` icon button.
-
-- Fetches `GET /v1/accounts/{id}/sessions` (enabled only when modal is open).
-- Each session row shows: `ip_address`, `last_used_at`, `created_at`; individual `Trash2` revoke button.
-- Footer: **Revoke All** (`DELETE /v1/accounts/{accountId}/sessions`) shown only when sessions exist; **Close** button always shown.
-- Query invalidation on revoke: `['sessions', accountId]`.
+Opened per-account via Shield icon. Fetches `GET /v1/accounts/{id}/sessions` (enabled only when modal open). Each row: `ip_address`, `last_used_at`, `created_at` + revoke button. Footer: **Revoke All** (shown when sessions exist) + **Close**. Invalidates `['sessions', accountId]`.
 
 ### `CopyButton`
 
-Inline utility component. Copies text to clipboard; shows `Check` icon for 2 s, then reverts to `Copy`.
-
----
+Copies text to clipboard; shows Check icon for 2s, reverts to Copy.
 
 ## API Endpoints
 
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| `GET` | `/v1/accounts` | JWT | List all accounts |
-| `POST` | `/v1/accounts` | JWT | Create account → returns `CreateAccountResponse` (includes `test_api_key`) |
-| `DELETE` | `/v1/accounts/{id}` | JWT | Delete account |
-| `PATCH` | `/v1/accounts/{id}/active` | JWT | Toggle `is_active` |
-| `POST` | `/v1/accounts/{id}/reset-link` | JWT | Generate password reset token |
-| `GET` | `/v1/accounts/{id}/sessions` | JWT | List active sessions for an account |
-| `DELETE` | `/v1/sessions/{sessionId}` | JWT | Revoke a single session |
-| `DELETE` | `/v1/accounts/{accountId}/sessions` | JWT | Revoke all sessions for an account |
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/v1/accounts` | List all accounts |
+| `POST` | `/v1/accounts` | Create account (returns `test_api_key`) |
+| `DELETE` | `/v1/accounts/{id}` | Delete account |
+| `PATCH` | `/v1/accounts/{id}/active` | Toggle `is_active` |
+| `POST` | `/v1/accounts/{id}/reset-link` | Generate password reset token |
+| `GET` | `/v1/accounts/{id}/sessions` | List active sessions |
+| `DELETE` | `/v1/sessions/{sessionId}` | Revoke single session |
+| `DELETE` | `/v1/accounts/{accountId}/sessions` | Revoke all sessions |
 
----
+All endpoints require JWT auth.
 
 ## Data Types
 
-```ts
-interface Account {
-  id: string               // UUIDv7 — unique identifier
-  username: string
-  name: string
-  email: string | null
-  role: 'super' | 'admin'
-  department: string | null
-  position: string | null
-  is_active: boolean
-  last_login_at: string | null  // ISO 8601 UTC
-  created_at: string            // ISO 8601 UTC
-}
+**Account**: `id` (UUIDv7), `username`, `name`, `email?`, `role` (`super`/`admin`), `department?`, `position?`, `is_active` (bool), `last_login_at?` (ISO 8601), `created_at` (ISO 8601). Nullable fields marked with `?`.
 
-interface CreateAccountRequest {
-  username: string
-  password: string
-  name: string
-  email?: string
-  role?: string             // default 'admin'
-  department?: string
-  position?: string
-}
+**CreateAccountRequest**: `username` (req), `password` (req), `name` (req), `email`, `role` (default `admin`), `department`, `position`. All optional fields are `string`.
 
-interface CreateAccountResponse {
-  id: string
-  username: string
-  role: string
-  test_api_key: string      // shown once — never retrievable again
-  created_at: string
-}
+**CreateAccountResponse**: `id`, `username`, `role`, `test_api_key` (shown once, never retrievable), `created_at`.
 
-interface SessionRecord {
-  id: string
-  ip_address: string | null
-  created_at: string
-  last_used_at: string | null
-  expires_at: string
-}
-```
+**SessionRecord**: `id`, `ip_address?`, `created_at`, `last_used_at?`, `expires_at`.
 
----
+## TanStack Query Config
 
-## TanStack Query Configuration
-
-```ts
-// accounts list — staleTime: Infinity (invalidated explicitly on mutations)
-accountsQuery = queryOptions({ queryKey: ['accounts'], queryFn: () => api.accounts(), staleTime: Infinity })
-
-// sessions per account — enabled only while modal is open
-accountSessionsQuery(accountId, open) = queryOptions({
-  queryKey: ['sessions', accountId],
-  queryFn: () => api.accountSessions(accountId!),
-  enabled: open && !!accountId,
-  staleTime: 30_000,
-  retry: false,
-})
-```
-
----
+| Query | Key | staleTime | Notes |
+|-------|-----|-----------|-------|
+| `accountsQuery` | `['accounts']` | `Infinity` | Invalidated on mutations |
+| `accountSessionsQuery(id, open)` | `['sessions', id]` | `30_000` | `enabled: open && !!id`, `retry: false` |
 
 ## Date Formatting
 
 All timestamps use `fmtDatetime(value, tz)` from `web/lib/date.ts` with `useTimezone()`. Never call `.toLocaleString()` directly.
 
----
+## i18n Keys
 
-## i18n Keys (`accounts.*`)
+Namespace: `accounts.*` -- `title`, `description`, `createAccount`, `username`, `name`, `role`, `department`, `status`, `lastLogin`, `actions`, `sessions`, `noSessions`, `lastUsed`, `revokeSession`, `revokeAll`, `resetLink`, `noAccounts`.
 
-```
-accounts.title
-accounts.description
-accounts.createAccount
-accounts.username
-accounts.name
-accounts.role
-accounts.department
-accounts.status
-accounts.lastLogin
-accounts.actions
-accounts.sessions
-accounts.noSessions
-accounts.lastUsed
-accounts.revokeSession
-accounts.revokeAll
-accounts.resetLink
-accounts.noAccounts
-```
-
-Shared keys also used: `common.loading`, `common.error`, `common.delete`, `common.close`, `common.never`, `common.created`.
-
----
+Shared: `common.loading`, `common.error`, `common.delete`, `common.close`, `common.never`, `common.created`.
 
 ## Related Docs
 
-- Backend auth + session management: `../../auth/jwt-sessions.md`
-- JWT revocation (Valkey blocklist): see MEMORY — "JWT Sessions"
+- Backend auth + sessions: `../../auth/jwt-sessions.md`
 - Timezone formatting SSOT: `web/lib/date.ts`
 - DataTable SSOT: `web/components/data-table.tsx`

@@ -14,23 +14,20 @@
 /// - Gemini `generationConfig` ↔ Ollama `options`
 ///
 /// Auth: `x-goog-api-key` header (or standard `X-API-Key` / `Authorization: Bearer`).
-use std::convert::Infallible;
-use std::pin::Pin;
-use std::time::Duration;
-
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::sse::Event;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use crate::domain::enums::{ApiFormat, JobSource};
-use super::cancel_guard::CancelOnDrop;
+use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
+use crate::domain::enums::{ApiFormat, JobSource, ProviderType};
+use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
+use super::handlers::sanitize_sse_error;
+use super::inference_helpers::{build_sse_response, validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
 use super::state::AppState;
-
-type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
 
 // ── Gemini API request types ────────────────────────────────────────────────────
 
@@ -166,7 +163,7 @@ pub async fn handle_request(
     Path(path): Path<String>,
     Json(req): Json<GeminiGenerateRequest>,
 ) -> Response {
-    let conversation_id = headers.get("x-conversation-id").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let conversation_id = extract_conversation_id(&headers);
 
     // ── Lab: function calling gate ───────────────────────────────────
     // If the request carries tool declarations, check whether the
@@ -191,14 +188,23 @@ pub async fn handle_request(
     //   → model  = "qwen3-coder:latest"
     //   → action = "streamGenerateContent"
     let mut parts = path.rsplitn(2, ':');
-    let action = parts.next().unwrap_or("").to_string();
+    let action = parts.next().unwrap_or("");
     let model = parts.next().unwrap_or("").to_string();
 
-    if model.is_empty() {
-        return gemini_error(StatusCode::BAD_REQUEST, 400, "INVALID_ARGUMENT", "invalid model path");
+    if validate_model_name(&model).is_err() {
+        return gemini_error(StatusCode::BAD_REQUEST, 400, "INVALID_ARGUMENT", ERR_MODEL_INVALID);
     }
 
-    match action.as_str() {
+    // Validate total content length across all parts.
+    let total_content_len: usize = req.contents.iter().flat_map(|c| &c.parts).map(|p| match p {
+        GeminiPart::Text { text } => text.len(),
+        _ => 0,
+    }).sum();
+    if validate_content_length(total_content_len).is_err() {
+        return gemini_error(StatusCode::BAD_REQUEST, 400, "INVALID_ARGUMENT", ERR_PROMPT_TOO_LARGE);
+    }
+
+    match action {
         "streamGenerateContent" => stream_generate(state, api_key, model, req, conversation_id).await,
         "generateContent" => generate_content(state, api_key, model, req, conversation_id).await,
         _ => gemini_error(
@@ -226,35 +232,30 @@ async fn stream_generate(
 ) -> Response {
     let messages = contents_to_ollama(req.system_instruction, req.contents);
 
-    // Extract last user message as display prompt (required by InferenceJob).
-    let prompt = messages
-        .iter()
-        .rev()
-        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-        .and_then(|m| m.get("content").and_then(|c| c.as_str()))
-        .unwrap_or("chat")
-        .to_string();
+    let prompt = extract_last_user_prompt(&messages).to_string();
 
     let messages_json = serde_json::Value::Array(messages);
     // Tools already passed the lab gate in handle_request; convert here.
     let tools = gemini_tools_to_ollama(req.tools);
 
+    let request_path = format!("/v1beta/models/{}:streamGenerateContent", model);
     let job_id = match state
         .use_case
-        .submit(
-            &prompt,
-            &model,
-            "ollama",
-            Some(api_key.id),
-            None,
-            JobSource::Api,
-            ApiFormat::GeminiNative,
-            Some(messages_json),
+        .submit(SubmitJobRequest {
+            prompt,
+            model_name: model.clone(),
+            provider_type: ProviderType::Ollama,
+            gemini_tier: None,
+            api_key_id: Some(api_key.id),
+            account_id: None,
+            source: JobSource::Api,
+            api_format: ApiFormat::GeminiNative,
+            messages: Some(messages_json),
             tools,
-            Some(format!("/v1beta/models/{}:streamGenerateContent", model)),
+            request_path: Some(request_path),
             conversation_id,
-            Some(api_key.tier.clone()),
-        )
+            key_tier: Some(api_key.tier),
+        })
         .await
     {
         Ok(id) => id,
@@ -269,9 +270,7 @@ async fn stream_generate(
         }
     };
 
-    let token_stream = state.use_case.stream(&job_id);
-
-    let sse_stream: SseStream = Box::pin(CancelOnDrop::new(token_stream.map(|result| -> Result<Event, Infallible> {
+    build_sse_response(&state, job_id, false, move |result| {
         match result {
             Ok(token) if token.is_final => {
                 let resp = GeminiResponse {
@@ -285,7 +284,7 @@ async fn stream_generate(
                         candidates_token_count: token.completion_tokens.unwrap_or(0),
                     }),
                 };
-                Ok(Event::default().data(serde_json::to_string(&resp).unwrap_or_default()))
+                Event::default().data(serde_json::to_string(&resp).unwrap_or_default())
             }
             Ok(token) => {
                 let resp = GeminiResponse {
@@ -299,20 +298,14 @@ async fn stream_generate(
                     }],
                     usage_metadata: None,
                 };
-                Ok(Event::default().data(serde_json::to_string(&resp).unwrap_or_default()))
+                Event::default().data(serde_json::to_string(&resp).unwrap_or_default())
             }
             Err(e) => {
-                let err = serde_json::json!({"error": {"message": e.to_string()}});
-                Ok(Event::default().data(serde_json::to_string(&err).unwrap_or_default()))
+                let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
+                Event::default().data(serde_json::to_string(&err).unwrap_or_default())
             }
         }
-    }), job_id, state.use_case.clone()));
-
-    (
-        [("X-Accel-Buffering", "no")],
-        Sse::new(sse_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
-    )
-        .into_response()
+    })
 }
 
 // ── Non-streaming ───────────────────────────────────────────────────────────────
@@ -330,33 +323,29 @@ async fn generate_content(
 ) -> Response {
     let messages = contents_to_ollama(req.system_instruction, req.contents);
 
-    let prompt = messages
-        .iter()
-        .rev()
-        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-        .and_then(|m| m.get("content").and_then(|c| c.as_str()))
-        .unwrap_or("chat")
-        .to_string();
+    let prompt = extract_last_user_prompt(&messages).to_string();
 
     let messages_json = serde_json::Value::Array(messages);
     let tools = gemini_tools_to_ollama(req.tools);
 
+    let request_path = format!("/v1beta/models/{}:generateContent", model);
     let job_id = match state
         .use_case
-        .submit(
-            &prompt,
-            &model,
-            "ollama",
-            Some(api_key.id),
-            None,
-            JobSource::Api,
-            ApiFormat::GeminiNative,
-            Some(messages_json),
+        .submit(SubmitJobRequest {
+            prompt,
+            model_name: model.clone(),
+            provider_type: ProviderType::Ollama,
+            gemini_tier: None,
+            api_key_id: Some(api_key.id),
+            account_id: None,
+            source: JobSource::Api,
+            api_format: ApiFormat::GeminiNative,
+            messages: Some(messages_json),
             tools,
-            Some(format!("/v1beta/models/{}:generateContent", model)),
+            request_path: Some(request_path),
             conversation_id,
-            Some(api_key.tier.clone()),
-        )
+            key_tier: Some(api_key.tier),
+        })
         .await
     {
         Ok(id) => id,
@@ -389,7 +378,7 @@ async fn generate_content(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     500,
                     "INTERNAL",
-                    &e.to_string(),
+                    &sanitize_sse_error(&e),
                 );
             }
         }
@@ -558,10 +547,11 @@ fn gemini_error(http: StatusCode, code: u32, status: &str, message: &str) -> Res
 /// This is the "selected models" subset of the full synchronized model list.
 pub async fn list_models(State(state): State<AppState>) -> Response {
     // Gather all active Ollama providers
-    let backends = match state.provider_registry.list_active().await {
-        Ok(b) => b,
+    let providers = match state.provider_registry.list_active().await {
+        Ok(p) => p,
         Err(e) => {
-            return gemini_error(StatusCode::INTERNAL_SERVER_ERROR, 500, "INTERNAL", &e.to_string());
+            tracing::error!("gemini_compat list_models: {e}");
+            return gemini_error(StatusCode::INTERNAL_SERVER_ERROR, 500, "INTERNAL", "failed to list models");
         }
     };
 
@@ -569,7 +559,7 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
     let mut seen = std::collections::HashSet::new();
     let mut model_names: Vec<String> = Vec::new();
 
-    for provider in backends.iter().filter(|b| b.provider_type == crate::domain::enums::ProviderType::Ollama) {
+    for provider in providers.iter().filter(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama) {
         if let Ok(enabled) = state.model_selection_repo.list_enabled(provider.id).await {
             for name in enabled {
                 if seen.insert(name.clone()) {

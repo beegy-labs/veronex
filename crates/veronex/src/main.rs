@@ -1,3 +1,8 @@
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,19 +24,19 @@ use veronex::application::ports::outbound::model_manager_port::ModelManagerPort;
 use veronex::application::ports::outbound::observability_port::ObservabilityPort;
 use veronex::application::ports::outbound::session_repository::SessionRepository;
 use veronex::application::use_cases::InferenceUseCaseImpl;
-use veronex::domain::enums::ProviderType;
+use veronex::domain::enums::AccountRole;
 use veronex::domain::value_objects::JobStatusEvent;
 use veronex::infrastructure::inbound::http::router::build_app;
 use veronex::infrastructure::inbound::http::state::AppState;
+use veronex::infrastructure::outbound::valkey_adapter::ValkeyAdapter;
 use veronex::infrastructure::outbound::analytics::HttpAnalyticsClient;
-use veronex::infrastructure::outbound::capacity::analyzer::run_capacity_analysis_loop;
+use veronex::infrastructure::outbound::capacity::analyzer::run_sync_loop;
 use veronex::infrastructure::outbound::session_grouping::run_session_grouping_loop;
 use veronex::infrastructure::outbound::provider_dispatch::ConcreteProviderDispatch;
-use veronex::infrastructure::outbound::capacity::slot_map::ConcurrencySlotMap;
+use veronex::infrastructure::outbound::capacity::vram_pool::VramPool;
 use veronex::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use veronex::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
-use veronex::infrastructure::outbound::health_checker::{check_provider, run_health_checker_loop};
-use veronex::infrastructure::outbound::model_manager::OllamaModelManager;
+use veronex::infrastructure::outbound::health_checker::run_health_checker_loop;
 use veronex::infrastructure::outbound::observability::{HttpAuditAdapter, HttpObservabilityAdapter};
 use veronex::infrastructure::outbound::persistence::account_repository::PostgresAccountRepository;
 use veronex::infrastructure::outbound::persistence::api_key_repository::PostgresApiKeyRepository;
@@ -46,6 +51,8 @@ use veronex::infrastructure::outbound::persistence::gemini_sync_config::Postgres
 use veronex::infrastructure::outbound::persistence::gpu_server_registry::PostgresGpuServerRegistry;
 use veronex::infrastructure::outbound::persistence::job_repository::PostgresJobRepository;
 use veronex::infrastructure::outbound::persistence::model_capacity_repository::PostgresModelCapacityRepository;
+use veronex::infrastructure::outbound::persistence::caching_model_selection::CachingModelSelection;
+use veronex::infrastructure::outbound::persistence::caching_ollama_model_repo::CachingOllamaModelRepo;
 use veronex::infrastructure::outbound::persistence::ollama_model_repository::PostgresOllamaModelRepository;
 use veronex::infrastructure::outbound::persistence::ollama_sync_job_repository::PostgresOllamaSyncJobRepository;
 use veronex::infrastructure::outbound::persistence::session_repository::PostgresSessionRepository;
@@ -60,18 +67,17 @@ async fn main() -> Result<()> {
 
     // ── Config ─────────────────────────────────────────────────────
     let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://veronex:veronex@localhost:5433/veronex".to_string());
+        .expect("DATABASE_URL env var is required");
 
     let valkey_url = std::env::var("VALKEY_URL").ok();
 
     let analytics_url = std::env::var("ANALYTICS_URL").ok();
-    let analytics_secret = std::env::var("ANALYTICS_SECRET")
-        .unwrap_or_else(|_| "veronex-analytics-internal-secret".to_string());
+    let analytics_secret = std::env::var("ANALYTICS_SECRET").ok();
 
     let ollama_url = std::env::var("OLLAMA_URL")
         .unwrap_or_else(|_| "http://localhost:11434".to_string());
 
-    let gemini_api_key = std::env::var("GEMINI_API_KEY").ok();
+    let _gemini_api_key = std::env::var("GEMINI_API_KEY").ok();
 
     let jwt_secret = std::env::var("JWT_SECRET")
         .expect("JWT_SECRET env var is required — generate with: openssl rand -hex 32");
@@ -83,19 +89,21 @@ async fn main() -> Result<()> {
 
     // Optional: set both to pre-seed a super account (CI/automated deployments).
     // When not set, the first-run setup flow (POST /v1/setup) is used instead.
-    let bootstrap_super_user = std::env::var("BOOTSTRAP_SUPER_USER").ok();
-    let bootstrap_super_pass = std::env::var("BOOTSTRAP_SUPER_PASS").ok();
+    let bootstrap_super_user = std::env::var("BOOTSTRAP_SUPER_USER").ok().filter(|s| !s.is_empty());
+    let bootstrap_super_pass = std::env::var("BOOTSTRAP_SUPER_PASS").ok().filter(|s| !s.is_empty());
 
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
 
-    let cors_raw = std::env::var("CORS_ALLOWED_ORIGINS").unwrap_or_else(|_| "*".to_string());
+    let cors_raw = std::env::var("CORS_ALLOWED_ORIGINS")
+        .expect("CORS_ALLOWED_ORIGINS env var is required (use comma-separated origins or 'none')");
     let cors_origins = parse_cors_origins(&cors_raw);
 
     // ── PostgreSQL ─────────────────────────────────────────────────
-    tracing::info!("connecting to postgres at {database_url}");
+    let masked_db_url = mask_database_url(&database_url);
+    tracing::info!("connecting to postgres at {masked_db_url}");
     let pg_pool = database::connect(&database_url).await?;
     sqlx::migrate!().run(&pg_pool).await?;
     tracing::info!("postgres ready, migrations applied");
@@ -114,43 +122,67 @@ async fn main() -> Result<()> {
         None
     };
 
+    // ── Valkey port (application-layer abstraction) ───────────────
+    let valkey_port: Option<Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>> =
+        valkey_pool.as_ref().map(|pool| {
+            Arc::new(ValkeyAdapter::new(pool.clone())) as Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>
+        });
+
+    // ── Shared HTTP client ──────────────────────────────────────────
+    let http_client = reqwest::Client::new();
+
     // ── Observability adapter (HTTP → veronex-analytics) ───────────
     let observability: Option<Arc<dyn ObservabilityPort>> =
-        if let Some(ref url) = analytics_url {
-            tracing::info!("http observability adapter enabled (analytics: {url})");
-            Some(Arc::new(HttpObservabilityAdapter::new(url, &analytics_secret)))
-        } else {
-            tracing::warn!("ANALYTICS_URL not set — inference events will not be recorded");
-            None
+        match (&analytics_url, &analytics_secret) {
+            (Some(url), Some(secret)) => {
+                tracing::info!("http observability adapter enabled (analytics: {url})");
+                Some(Arc::new(HttpObservabilityAdapter::new(http_client.clone(), url, secret)))
+            }
+            (Some(_), None) => {
+                tracing::warn!("ANALYTICS_URL set but ANALYTICS_SECRET missing — observability disabled");
+                None
+            }
+            _ => {
+                tracing::warn!("ANALYTICS_URL not set — inference events will not be recorded");
+                None
+            }
         };
 
     // ── Audit adapter (HTTP → veronex-analytics) ───────────────────
     let audit_port: Option<Arc<dyn AuditPort>> =
-        if let Some(ref url) = analytics_url {
-            tracing::info!("http audit adapter enabled");
-            Some(Arc::new(HttpAuditAdapter::new(url, &analytics_secret)))
-        } else {
-            tracing::warn!("ANALYTICS_URL not set — audit events will not be recorded");
-            None
+        match (&analytics_url, &analytics_secret) {
+            (Some(url), Some(secret)) => {
+                tracing::info!("http audit adapter enabled");
+                Some(Arc::new(HttpAuditAdapter::new(http_client.clone(), url, secret)))
+            }
+            (Some(_), None) => None, // already warned above
+            _ => {
+                tracing::warn!("ANALYTICS_URL not set — audit events will not be recorded");
+                None
+            }
         };
 
     // ── Analytics repository (HTTP → veronex-analytics) ───────────
     let analytics_repo: Option<Arc<dyn AnalyticsRepository>> =
-        if let Some(ref url) = analytics_url {
-            tracing::info!("analytics repository enabled (analytics: {url})");
-            Some(Arc::new(HttpAnalyticsClient::new(url, &analytics_secret)))
-        } else {
-            tracing::warn!("ANALYTICS_URL not set — usage/performance/audit queries disabled");
-            None
+        match (&analytics_url, &analytics_secret) {
+            (Some(url), Some(secret)) => {
+                tracing::info!("analytics repository enabled (analytics: {url})");
+                Some(Arc::new(HttpAnalyticsClient::new(http_client.clone(), url, secret)))
+            }
+            (Some(_), None) => None, // already warned above
+            _ => {
+                tracing::warn!("ANALYTICS_URL not set — usage/performance/audit queries disabled");
+                None
+            }
         };
 
     // ── S3 / MinIO message store ───────────────────────────────────
     let s3_endpoint = std::env::var("S3_ENDPOINT").ok();
     let message_store: Option<Arc<dyn MessageStore>> = if let Some(ref endpoint) = s3_endpoint {
         let access_key = std::env::var("S3_ACCESS_KEY")
-            .unwrap_or_else(|_| "veronex".to_string());
+            .expect("S3_ACCESS_KEY is required");
         let secret_key = std::env::var("S3_SECRET_KEY")
-            .unwrap_or_else(|_| "veronex123".to_string());
+            .expect("S3_SECRET_KEY is required");
         let bucket = std::env::var("S3_BUCKET")
             .unwrap_or_else(|_| "veronex-messages".to_string());
         let region = std::env::var("S3_REGION")
@@ -181,9 +213,11 @@ async fn main() -> Result<()> {
     };
 
     // ── Model manager ──────────────────────────────────────────────
-    let model_manager: Option<Arc<dyn ModelManagerPort>> =
-        Some(Arc::new(OllamaModelManager::new(&ollama_url, 1)));
-    tracing::info!("model manager enabled (max_loaded=1)");
+    // Model manager disabled: VramPool + Ollama's OLLAMA_KEEP_ALIVE=-1 handle model
+    // lifecycle. OllamaModelManager's ensure_loaded() sends keep_alive=0 which physically
+    // unloads models, destroying multi-model co-residence.
+    let model_manager: Option<Arc<dyn ModelManagerPort>> = None;
+    tracing::info!("model manager disabled — VramPool manages model lifecycle");
 
     // ── Repositories ───────────────────────────────────────────────
     let account_repo: Arc<dyn AccountRepository> =
@@ -193,7 +227,7 @@ async fn main() -> Result<()> {
     let provider_registry: Arc<dyn LlmProviderRegistry> = Arc::new(
         CachingProviderRegistry::new(
             Arc::new(PostgresProviderRegistry::new(pg_pool.clone())),
-            Duration::from_secs(5),
+            veronex::domain::constants::PROVIDER_REGISTRY_CACHE_TTL,
         )
     );
     let gpu_server_registry: Arc<dyn veronex::application::ports::outbound::gpu_server_registry::GpuServerRegistry> =
@@ -201,13 +235,17 @@ async fn main() -> Result<()> {
     let gemini_policy_repo: Arc<dyn veronex::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository> =
         Arc::new(PostgresGeminiPolicyRepository::new(pg_pool.clone()));
     let model_selection_repo: Arc<dyn veronex::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository> =
-        Arc::new(PostgresProviderModelSelectionRepository::new(pg_pool.clone()));
+        Arc::new(CachingModelSelection::new(
+            Arc::new(PostgresProviderModelSelectionRepository::new(pg_pool.clone())),
+        ));
     let gemini_sync_config_repo: Arc<dyn veronex::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository> =
         Arc::new(PostgresGeminiSyncConfigRepository::new(pg_pool.clone()));
     let gemini_model_repo: Arc<dyn veronex::application::ports::outbound::gemini_model_repository::GeminiModelRepository> =
         Arc::new(PostgresGeminiModelRepository::new(pg_pool.clone()));
     let ollama_model_repo: Arc<dyn veronex::application::ports::outbound::ollama_model_repository::OllamaModelRepository> =
-        Arc::new(PostgresOllamaModelRepository::new(pg_pool.clone()));
+        Arc::new(CachingOllamaModelRepo::new(
+            Arc::new(PostgresOllamaModelRepository::new(pg_pool.clone())),
+        ));
     let ollama_sync_job_repo: Arc<dyn veronex::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository> =
         Arc::new(PostgresOllamaSyncJobRepository::new(pg_pool.clone()));
     let session_repo: Arc<dyn SessionRepository> =
@@ -219,6 +257,10 @@ async fn main() -> Result<()> {
     // When BOOTSTRAP_SUPER_USER + BOOTSTRAP_SUPER_PASS are set, a super account
     // is pre-seeded on startup. Otherwise, use POST /v1/setup for first-run setup.
     if let (Some(user), Some(pass)) = (bootstrap_super_user, bootstrap_super_pass) {
+        assert!(
+            pass.len() >= 16,
+            "BOOTSTRAP_SUPER_PASS must be at least 16 characters"
+        );
         match account_repo.get_by_username(&user).await {
             Ok(Some(_)) => tracing::debug!("bootstrap super account already exists"),
             Ok(None) => {
@@ -238,7 +280,7 @@ async fn main() -> Result<()> {
                             password_hash: hash,
                             name: "Super Admin".to_string(),
                             email: None,
-                            role: "super".to_string(),
+                            role: AccountRole::Super,
                             department: None,
                             position: None,
                             is_active: true,
@@ -263,23 +305,46 @@ async fn main() -> Result<()> {
     let analyzer_url = std::env::var("CAPACITY_ANALYZER_OLLAMA_URL")
         .unwrap_or_else(|_| ollama_url.clone());
 
-    // OLLAMA_NUM_PARALLEL caps the slot ceiling in the capacity analyzer.
-    // Must match the Ollama StatefulSet env var (default: 1 for AMD APU).
-    let ollama_num_parallel: u32 = std::env::var("OLLAMA_NUM_PARALLEL")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
+    // ── Instance identity (multi-instance coordination) ──────────────
+    let instance_id: Arc<str> = Arc::from(uuid::Uuid::new_v4().to_string());
+    tracing::info!(instance_id = %instance_id, "instance identity generated");
 
     // ── Capacity infrastructure ─────────────────────────────────────
     let capacity_repo: Arc<dyn ModelCapacityRepository> =
         Arc::new(PostgresModelCapacityRepository::new(pg_pool.clone()));
     let capacity_settings_repo: Arc<dyn CapacitySettingsRepository> =
         Arc::new(PostgresCapacitySettingsRepository::new(pg_pool.clone()));
-    let slot_map        = Arc::new(ConcurrencySlotMap::new());
+    use veronex::application::ports::outbound::concurrency_port::VramPoolPort;
+    let vram_pool: Arc<dyn VramPoolPort> = if let Some(ref pool) = valkey_pool {
+        Arc::new(veronex::infrastructure::outbound::capacity::distributed_vram_pool::DistributedVramPool::new(
+            pool.clone(),
+            instance_id.clone(),
+        ))
+    } else {
+        Arc::new(VramPool::new())
+    };
+    // Restore learned max_concurrent / baseline_tps from DB into VramPool.
+    if let Ok(profiles) = capacity_repo.list_all().await {
+        for p in &profiles {
+            if p.max_concurrent > 0 {
+                vram_pool.set_max_concurrent(p.provider_id, &p.model_name, p.max_concurrent as u32);
+            }
+            if p.baseline_tps > 0 {
+                vram_pool.set_baseline_tps(p.provider_id, &p.model_name, p.baseline_tps as u32);
+            }
+            if p.baseline_p95_ms > 0 {
+                vram_pool.set_baseline_p95_ms(p.provider_id, &p.model_name, p.baseline_p95_ms as u32);
+            }
+        }
+        if !profiles.is_empty() {
+            tracing::info!(count = profiles.len(), "restored AIMD profiles from DB");
+        }
+    }
+
     let thermal         = Arc::new(ThermalThrottleMap::new(60)); // 60s cooldown
     let circuit_breaker = Arc::new(CircuitBreakerMap::new());
-    let capacity_manual_trigger = Arc::new(tokio::sync::Notify::new());
-    let capacity_analysis_lock  = Arc::new(tokio::sync::Semaphore::new(1));
+    let sync_trigger = Arc::new(tokio::sync::Notify::new());
+    let sync_lock    = Arc::new(tokio::sync::Semaphore::new(1));
 
     // ── Shutdown token + task set ───────────────────────────────────
     let shutdown = CancellationToken::new();
@@ -292,88 +357,27 @@ async fn main() -> Result<()> {
         valkey_pool.clone(),
         thermal.clone(),
         shutdown.child_token(),
+        http_client.clone(),
     ));
 
-    // ── Auto-seed providers ─────────────────────────────────────────
-    let http_client = reqwest::Client::new();
-    {
-        let existing = provider_registry.list_all().await.unwrap_or_default();
-        let has_ollama = existing.iter().any(|b| matches!(b.provider_type, ProviderType::Ollama));
-        if !has_ollama {
-            let ollama_provider = veronex::domain::entities::LlmProvider {
-                id: uuid::Uuid::now_v7(),
-                name: "local-ollama".to_string(),
-                provider_type: ProviderType::Ollama,
-                url: ollama_url.clone(),
-                api_key_encrypted: None,
-                is_active: true,
-                total_vram_mb: 0,
-                gpu_index: None,
-                server_id: None,
-                agent_url: None,
-                is_free_tier: false,
-                status: veronex::domain::enums::LlmProviderStatus::Offline,
-                registered_at: chrono::Utc::now(),
-            };
-            let initial_status = check_provider(&http_client, &ollama_provider).await;
-            let ollama_provider = veronex::domain::entities::LlmProvider {
-                status: initial_status,
-                ..ollama_provider
-            };
-            if let Err(e) = provider_registry.register(&ollama_provider).await {
-                tracing::warn!("failed to auto-register ollama provider: {e}");
-            } else {
-                tracing::info!("auto-registered ollama provider at {ollama_url}");
-            }
-        }
+    // Providers are registered manually via API — no auto-seeding.
 
-        if let Some(ref key) = gemini_api_key {
-            let has_gemini = existing.iter().any(|b| matches!(b.provider_type, ProviderType::Gemini));
-            if !has_gemini {
-                let gemini_provider = veronex::domain::entities::LlmProvider {
-                    id: uuid::Uuid::now_v7(),
-                    name: "gemini".to_string(),
-                    provider_type: ProviderType::Gemini,
-                    url: String::new(),
-                    api_key_encrypted: Some(key.clone()),
-                    is_active: true,
-                    total_vram_mb: 0,
-                    gpu_index: None,
-                    server_id: None,
-                    agent_url: None,
-                    is_free_tier: false,
-                    status: veronex::domain::enums::LlmProviderStatus::Offline,
-                    registered_at: chrono::Utc::now(),
-                };
-                let initial_status = check_provider(&http_client, &gemini_provider).await;
-                let gemini_provider = veronex::domain::entities::LlmProvider {
-                    status: initial_status,
-                    ..gemini_provider
-                };
-                if let Err(e) = provider_registry.register(&gemini_provider).await {
-                    tracing::warn!("failed to auto-register gemini provider: {e}");
-                } else {
-                    tracing::info!("auto-registered gemini provider");
-                }
-            }
-        }
-    }
-
-    // ── Capacity analysis loop (5-min background) ──────────────────
-    tasks.spawn(run_capacity_analysis_loop(
+    // ── Sync loop (unified: health + models + VRAM) ──────────────────
+    tasks.spawn(run_sync_loop(
         provider_registry.clone(),
         capacity_repo.clone(),
         capacity_settings_repo.clone(),
-        slot_map.clone(),
+        vram_pool.clone(),
         valkey_pool.clone(),
-        analyzer_url.clone(),
-        capacity_manual_trigger.clone(),
-        capacity_analysis_lock.clone(),
-        Duration::from_secs(30), // base tick (checks DB settings each tick)
+        sync_trigger.clone(),
+        sync_lock.clone(),
+        veronex::domain::constants::SYNC_LOOP_BASE_TICK,
         shutdown.child_token(),
-        ollama_num_parallel,
+        http_client.clone(),
+        ollama_model_repo.clone(),
+        model_selection_repo.clone(),
     ));
-    tracing::info!("capacity analysis loop started (analyzer: {analyzer_url})");
+    tracing::info!("sync loop started (analyzer: {analyzer_url})");
 
     // ── Session grouping loop (daily background) ────────────────────
     // Groups inference_jobs into conversations via messages_prefix_hash chaining.
@@ -405,25 +409,83 @@ async fn main() -> Result<()> {
     let use_case_impl = Arc::new(InferenceUseCaseImpl::new(
         provider_registry.clone(),
         job_repo,
-        valkey_pool.clone(),
+        valkey_port,
         observability,
         model_manager,
-        slot_map.clone(),
+        vram_pool.clone(),
         thermal.clone(),
         circuit_breaker.clone(),
         provider_dispatch,
         (*job_event_tx).clone(),
         message_store.clone(),
+        Some(ollama_model_repo.clone()),
+        Some(model_selection_repo.clone()),
+        instance_id.clone(),
     ));
 
     if let Err(e) = use_case_impl.recover_pending_jobs().await {
         tracing::warn!("job recovery failed (non-fatal): {e}");
     }
     tasks.spawn(use_case_impl.start_queue_worker(shutdown.child_token()));
+    tasks.spawn(use_case_impl.start_job_sweeper(shutdown.child_token()));
+
+    // ── Multi-instance pub/sub + reaper (when Valkey is available) ──
+    if let Some(ref pool) = valkey_pool {
+        use fred::clients::SubscriberClient;
+        use fred::interfaces::ClientLike;
+        use veronex::infrastructure::outbound::pubsub::{reaper, relay};
+
+        // Job event subscriber: forwards events from other instances to local broadcast.
+        let event_sub_config = fred::types::config::Config::from_url(
+            &std::env::var("VALKEY_URL").unwrap_or_default(),
+        ).unwrap();
+        let event_subscriber = SubscriberClient::new(event_sub_config, None, None, None);
+        event_subscriber.init().await.ok();
+        let event_tx_clone = (*job_event_tx).clone();
+        let iid = instance_id.clone();
+        tasks.spawn(relay::run_job_event_subscriber(
+            event_subscriber,
+            event_tx_clone,
+            iid,
+            shutdown.child_token(),
+        ));
+
+        // Cancel subscriber: fires cancel_notify on local jobs via pub/sub.
+        let cancel_sub_config = fred::types::config::Config::from_url(
+            &std::env::var("VALKEY_URL").unwrap_or_default(),
+        ).unwrap();
+        let cancel_subscriber = SubscriberClient::new(cancel_sub_config, None, None, None);
+        cancel_subscriber.init().await.ok();
+        let cancel_notifiers = use_case_impl.cancel_notifiers();
+        tasks.spawn(relay::run_cancel_subscriber(
+            cancel_subscriber,
+            cancel_notifiers,
+            shutdown.child_token(),
+        ));
+
+        // Reaper: heartbeat + VRAM lease reaping + orphaned job re-enqueue.
+        let distributed_vram_pool = {
+            Some(Arc::new(
+                veronex::infrastructure::outbound::capacity::distributed_vram_pool::DistributedVramPool::new(
+                    pool.clone(),
+                    instance_id.clone(),
+                )
+            ))
+        };
+        tasks.spawn(reaper::run_reaper_loop(
+            pool.clone(),
+            instance_id.clone(),
+            distributed_vram_pool,
+            shutdown.child_token(),
+        ));
+
+        tracing::info!("multi-instance coordination enabled (pub/sub + reaper)");
+    }
 
     let use_case: Arc<dyn InferenceUseCase> = use_case_impl;
 
     let state = AppState {
+        http_client,
         use_case,
         api_key_repo,
         account_repo,
@@ -442,18 +504,19 @@ async fn main() -> Result<()> {
         session_repo,
         pg_pool,
         cpu_snapshot_cache: Arc::new(dashmap::DashMap::new()),
-        slot_map,
+        vram_pool,
         thermal,
         capacity_repo,
         capacity_settings_repo,
-        capacity_manual_trigger,
+        sync_trigger,
         analyzer_url,
         job_event_tx,
         lab_settings_repo,
         circuit_breaker,
         message_store,
         session_grouping_lock,
-        capacity_analysis_lock,
+        sync_lock,
+        sse_connections: Arc::new(std::sync::atomic::AtomicU32::new(0)),
     };
 
     let app = build_app(state, cors_origins);
@@ -462,7 +525,7 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("veronex listening on {addr}");
     let shutdown_clone = shutdown.clone();
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
             tokio::select! {
                 _ = shutdown_signal() => {}
@@ -558,6 +621,26 @@ fn parse_cors_origins(raw: &str) -> Vec<axum::http::HeaderValue> {
             axum::http::HeaderValue::from_str(s).ok()
         })
         .collect()
+}
+
+/// Mask the password in a database URL for safe logging.
+///
+/// `postgres://user:secret@host:5432/db` → `postgres://user:***@host:5432/db`
+fn mask_database_url(url: &str) -> String {
+    // Find `://user:password@` and replace the password portion with `***`.
+    if let Some(scheme_end) = url.find("://") {
+        let after_scheme = &url[scheme_end + 3..];
+        if let Some(at_pos) = after_scheme.find('@') {
+            let userinfo = &after_scheme[..at_pos];
+            if let Some(colon) = userinfo.find(':') {
+                let user = &userinfo[..colon];
+                let host_onward = &after_scheme[at_pos..];
+                return format!("{}://{}:***{}", &url[..scheme_end], user, host_onward);
+            }
+        }
+    }
+    // No password found — return as-is (no credentials to leak).
+    url.to_string()
 }
 
 fn build_otlp_tracer(endpoint: &str) -> anyhow::Result<opentelemetry_sdk::trace::Tracer> {

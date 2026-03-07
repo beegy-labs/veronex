@@ -1,7 +1,7 @@
 # TanStack Query v5 — Research
 
 > **Last Researched**: 2026-03-02 | **Source**: Official docs + web search + implementation
-> **Status**: ✅ Verified — patterns used across all 13 pages
+> **Status**: verified — patterns used across all 13 pages
 
 ---
 
@@ -37,11 +37,7 @@ const { data: jobs } = useQuery(jobsQuery('status=completed'))
 await queryClient.prefetchQuery(dashboardStatsQuery)
 ```
 
-**Benefits over inline `useQuery` calls:**
-- Single place to change `staleTime`, `retry`, `gcTime` for an endpoint
-- Type-safe query key sharing (no string duplication)
-- Reuse in `prefetchQuery` without duplicating config
-- Works with `useSuspenseQuery` without extra setup
+Benefits: single config SSOT, type-safe key sharing, reusable in `prefetchQuery`/`useSuspenseQuery`.
 
 ---
 
@@ -59,13 +55,13 @@ web/lib/queries/
 └── capacity.ts         # capacity, capacity settings
 ```
 
-**Current state:** This directory does not yet exist. All queries are inline in page components. **Phase 3** of the optimization plan will create this structure.
+**Status:** Not yet created. All queries currently inline in page components.
 
 ---
 
 ## staleTime + refetchInterval Co-location
 
-Always define `staleTime` and `refetchInterval` together to avoid "stale flash" on each poll tick:
+Always pair `staleTime` with `refetchInterval` to avoid stale flash between polls:
 
 ```ts
 // CORRECT — staleTime slightly less than refetchInterval prevents stale UI between polls
@@ -77,11 +73,6 @@ queryOptions({
   refetchIntervalInBackground: false,  // pause when tab hidden
 })
 
-// WRONG — staleTime 0 causes "stale" indicator to flash between polls
-queryOptions({
-  staleTime: 0,
-  refetchInterval: 5_000,
-})
 ```
 
 ---
@@ -109,20 +100,13 @@ onSettled: () => queryClient.invalidateQueries({ queryKey: ['dashboard'] })
 onSettled: () => queryClient.invalidateQueries({ queryKey: ['keys'], exact: true })
 ```
 
-**Always use `onSettled`** (not `onSuccess`) for cache invalidation — it runs whether the mutation succeeded or failed, ensuring the UI always reconciles.
-
-```ts
-useMutation({
-  mutationFn: api.deleteKey,
-  onSettled: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
-})
-```
+**Rule:** Always use `onSettled` (not `onSuccess`) — runs on both success and failure, ensuring reconciliation.
 
 ---
 
 ## Optimistic Updates Pattern
 
-For toggle mutations (key active/inactive, backend enable/disable):
+For toggle mutations (key active/inactive, provider enable/disable):
 
 ```ts
 useMutation({
@@ -161,13 +145,9 @@ useMutation({
 
 ## `useQueries` for Parallel Queries
 
-Avoid looping `useQuery` — use `useQueries` for dynamic parallel fetches:
+Use `useQueries` for dynamic parallel fetches (never `useQuery` in a loop):
 
 ```ts
-// WRONG — hooks in loops are forbidden in React
-backends.map(b => useQuery({ queryKey: ['metrics', b.id], ... }))
-
-// CORRECT — useQueries for dynamic parallel fetches
 const results = useQueries({
   queries: backends.map(b => ({
     queryKey: ['server-metrics', b.id],
@@ -215,6 +195,5 @@ const results = useQueries({
 
 ## Sources
 
-- TanStack Query v5 docs: https://tanstack.com/query/v5/docs
-- `queryOptions` API: https://tanstack.com/query/v5/docs/react/reference/queryOptions
+- TanStack Query v5 docs, `queryOptions` API reference
 - Verified: `web/hooks/use-inference-stream.ts`, all pages in `web/app/`

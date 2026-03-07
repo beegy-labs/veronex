@@ -1,6 +1,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::domain::errors::DomainError;
@@ -16,7 +17,8 @@ pub struct JobStatusEvent {
     pub latency_ms: Option<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct JobId(pub Uuid);
 
 impl fmt::Display for JobId {
@@ -37,7 +39,8 @@ impl Default for JobId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct ModelName(String);
 
 impl ModelName {
@@ -53,7 +56,8 @@ impl ModelName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct Prompt(String);
 
 impl Prompt {
@@ -86,4 +90,13 @@ pub struct StreamToken {
     /// When Some, this token carries tool call data instead of text content.
     /// Handlers must convert to the appropriate wire format (OpenAI vs Ollama NDJSON).
     pub tool_calls: Option<serde_json::Value>,
+}
+
+impl StreamToken {
+    pub fn text(value: String) -> Self {
+        Self { value, is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None }
+    }
+    pub fn done() -> Self {
+        Self { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None }
+    }
 }

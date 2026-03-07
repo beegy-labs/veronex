@@ -1,7 +1,18 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-03 (rev: RBAC, capacity control, thermal throttle, analytics service)
+> SSOT | **Last Updated**: 2026-03-07
 > Code patterns and templates → `policies/patterns.md`
+
+## Vision
+
+Veronex is an **autonomous intelligence scheduler/gateway** for N Ollama servers:
+
+- **Cluster-wide optimization**: maximize total throughput across all servers, not individual server performance
+- **Dynamic model allocation**: compute optimal "model combination + concurrent request count" per server in real-time
+- **Multi-model co-residence**: when VRAM allows, load multiple models simultaneously for parallel processing; when insufficient, FIFO + model locality to minimize switching cost
+- **3-phase adaptive learning**: Cold Start (limit=1) → AIMD (TPS+p95 per model) → LLM Batch (all-model combination tuning)
+- **Thermal protection**: auto decelerate → block → cooldown → gradual recovery (per-provider thresholds, auto-detected from GPU vendor)
+- **Self-healing**: circuit breaker per provider, crash recovery via Valkey, queue reaper for orphaned jobs
 
 ## Overview
 
@@ -14,6 +25,8 @@ crates/veronex/src/
 ├── domain/
 │   ├── entities/        # InferenceJob, LlmProvider, GpuServer, ApiKey, …
 │   ├── enums/           # JobStatus, ProviderType, LlmProviderStatus, …
+│   ├── services/        # Pure domain logic (message_hashing, api_key_generator)
+│   ├── constants.rs     # SSOT for domain-layer constants (TPM, job lifecycle, queue timing)
 │   └── value_objects/   # JobId, Prompt, ModelName
 │
 ├── application/
@@ -30,10 +43,12 @@ crates/veronex/src/
 │       ├── gemini/      # GeminiAdapter
 │       ├── provider_router.rs  # DynamicProviderRouter (VRAM-aware)
 │       ├── health_checker.rs   # 30s background health checker (+ thermal throttle update)
-│       ├── model_manager.rs    # OllamaModelManager (LRU eviction)
+│       ├── model_manager/      # OllamaModelManager (disabled — VramPool manages lifecycle)
 │       ├── observability/      # HttpObservabilityAdapter + HttpAuditAdapter (fail-open → veronex-analytics)
 │       ├── analytics/          # HttpAnalyticsClient (GET from veronex-analytics)
-│       └── capacity/           # ConcurrencySlotMap, ThermalThrottleMap, CapacityAnalyzer (5-min loop)
+│       ├── pubsub/             # Cross-instance relay (Valkey Streams + Pub/Sub) + reaper (crash recovery)
+│       ├── valkey_keys.rs      # SSOT for all `veronex:*` key patterns (queues, leases, rate limits)
+│       └── capacity/           # VramPool, DistributedVramPool, ThermalThrottleMap, CapacityAnalyzer
 │
 └── main.rs              # Composition root — wires all adapters
 ```
@@ -52,134 +67,67 @@ Violation = compile error (Rust enforces this naturally).
 
 ## Layers
 
-### Domain Layer
-
-- No external dependencies, no async, no I/O
-- Pure Rust structs and enums
-
-### Application Layer
-
-- Depends only on `domain`
-- Defines all port traits using `#[async_trait]`
-- Contains use case trait + impl
-
-### Infrastructure Layer
-
-- Implements port traits (adapters)
-- Never contains business logic
-- Depends on `application` to implement ports
+| Layer | Rules |
+|-------|-------|
+| Domain | No dependencies, no async, no I/O. Pure structs/enums |
+| Application | Depends only on `domain`. Defines port traits (`#[async_trait]`) + use case impl |
+| Infrastructure | Implements ports (adapters). No business logic |
 
 ## Composition Root (main.rs)
 
-```rust
-let pg_pool = database::connect(&database_url).await?;
+Wires all `Arc<dyn Port>` adapters into `AppState`, then passes to `build_app()`.
+Notable: `CachingProviderRegistry` decorates `PostgresProviderRegistry` (5s TTL) since `list_all()` runs on every job dequeue.
 
-let api_key_repo: Arc<dyn ApiKeyRepository> =
-    Arc::new(PostgresApiKeyRepository::new(pg_pool.clone()));
-
-// Decorator pattern: CachingProviderRegistry wraps PostgresProviderRegistry
-// list_all() is called on every job dequeue — 5s TTL avoids repeated DB hits
-let provider_registry: Arc<dyn LlmProviderRegistry> = Arc::new(
-    CachingProviderRegistry::new(
-        Arc::new(PostgresProviderRegistry::new(pg_pool.clone())),
-        Duration::from_secs(5),
-    )
-);
-// ... repeat for every port
-
-let state = AppState { use_case, api_key_repo, provider_registry, /* ... */ };
-let app = build_app(state);
-axum::serve(listener, app).await?;
-```
-
-## Multi-Provider Routing
+## Multi-Provider Routing (Intelligence Scheduler)
 
 ```
 Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → RPUSH veronex:queue:jobs
       OR POST /v1/test/completions  (Bearer JWT, source=Test)  → RPUSH veronex:queue:jobs:test
-       → queue_dispatcher_loop: BLPOP [veronex:queue:jobs, veronex:queue:jobs:test] 5.0
-         (API queue always polled first — BLPOP key-order priority guarantee)
-         → DynamicProviderRouter::dispatch
-           → list_active() → VRAM check → pick best provider
-           → thermal.get(provider_id) → skip if Hard; cap if Soft+active>0
-           → slot_map.try_acquire(provider_id, model)  ← OwnedSemaphorePermit (RAII)
-           → tokio::spawn run_job(permit)
-             → OllamaAdapter | GeminiAdapter → SSE tokens
-             → permit dropped (auto) → slot released
-             → ObservabilityPort::record_inference → HttpObservabilityAdapter
-               → POST /internal/ingest/inference (veronex-analytics)
-               → OTel LogRecord → OTel Collector → Redpanda → ClickHouse
+       → queue_dispatcher_loop: Lua priority pop [paid, jobs, test] → processing list
+         → 2-stage model filter:
+           1. providers_for_model() → has the model installed?
+           2. list_enabled() → model enabled on this provider?
+         → VRAM sort + model stickiness (+100GB bonus for loaded model)
+         → tier sort (paid→non-free-tier, free→free-tier)
+         → gate chain:
+           circuit_breaker → thermal (per-provider, auto-detected GPU/CPU profile)
+           → concurrency limit (AIMD-learned max_concurrent)
+           → vram_pool.try_reserve() → VramPermit or re-enqueue
+         → tokio::spawn run_job(permit)
+           → OllamaAdapter | GeminiAdapter → SSE tokens
+           → permit dropped (auto) → KV cache returned, weight stays
+           → ObservabilityPort → veronex-analytics → ClickHouse
+
+Direct path (dev mode, no Valkey):
+  pick_and_build() → gate chain → try_reserve() → None = skip (VRAM unavailable)
 
 Reconnect:
   GET /v1/jobs/{id}/stream      (X-API-Key)  → SSE replay
   GET /v1/test/jobs/{id}/stream (Bearer JWT) → SSE replay
 
 Background loops:
-  health_checker (30s): provider online/offline + thermal.update(temp_c)
-  run_capacity_analysis_loop (30s tick, checks DB batch_interval_secs):
-    → Ollama /api/ps + /api/show → compute KV cache → qwen2.5:3b recommendation
-    → slot_map.update_capacity() + model_capacity upsert
+  health_checker (30s):
+    → provider health (Ollama/Gemini)
+    → agent metrics poll → Valkey cache (HwMetrics with gpu_vendor)
+    → thermal.set_thresholds(gpu_vendor) + thermal.update(temp_c)
+  run_sync_loop (base tick 30s, per-provider sync_interval ~300s):
+    → per Ollama provider: /api/version + /api/tags + /api/ps + /api/show
+    → model sync + VRAM probe + KV compute
+    → AIMD: TPS ratio + p95 spike → max_concurrent adjustment
+    → LLM Batch: all-model combination analysis → ±2 clamp auto-applied
+    → DB persist (model_vram_profiles)
 ```
 
 ## AppState
 
-```rust
-// infrastructure/inbound/http/state.rs
-pub struct AppState {
-    // Inference core
-    pub use_case:                  Arc<dyn InferenceUseCase>,
-    pub job_repo:                  Arc<dyn JobRepository>,
-    pub api_key_repo:              Arc<dyn ApiKeyRepository>,
-    // Provider routing
-    pub provider_registry:         Arc<dyn LlmProviderRegistry>,
-    pub gpu_server_registry:       Arc<dyn GpuServerRegistry>,
-    pub ollama_model_repo:         Arc<dyn OllamaModelRepository>,
-    pub ollama_sync_job_repo:      Arc<dyn OllamaSyncJobRepository>,
-    pub gemini_policy_repo:        Arc<dyn GeminiPolicyRepository>,
-    pub gemini_sync_config_repo:   Arc<dyn GeminiSyncConfigRepository>,
-    pub gemini_model_repo:         Arc<dyn GeminiModelRepository>,
-    pub model_selection_repo:      Arc<dyn ProviderModelSelectionRepository>,
-    // Auth / RBAC
-    pub account_repo:              Arc<dyn AccountRepository>,
-    pub session_repo:              Arc<dyn SessionRepository>,
-    pub jwt_secret:                String,
-    // Observability + analytics (all fail-open)
-    pub audit_port:                Arc<dyn AuditPort>,
-    pub observability:             Arc<dyn ObservabilityPort>,
-    pub analytics_repo:            Arc<dyn AnalyticsRepository>,
-    // Dynamic concurrency + thermal throttle
-    pub slot_map:                  Arc<ConcurrencySlotMap>,
-    pub thermal:                   Arc<ThermalThrottleMap>,
-    pub capacity_repo:             Arc<dyn ModelCapacityRepository>,
-    pub capacity_settings_repo:    Arc<dyn CapacitySettingsRepository>,
-    pub capacity_manual_trigger:   Arc<tokio::sync::Notify>,
-    pub analyzer_url:              String,
-    // Infrastructure
-    pub cpu_snapshot_cache:        Arc<DashMap<Uuid, CpuSnapshot>>, // GPU snapshot per server (DashMap; no lock)
-    pub valkey_pool:               Option<fred::clients::Pool>,
-    pub pg_pool:                   sqlx::PgPool,
-}
-```
+> Defined in `infrastructure/inbound/http/state.rs`. Field categories: `infra/deploy.md` -- AppState.
+> All fields are `Arc<dyn Port>` -- wired in `main.rs` composition root.
 
-## Message Bus — Redpanda / Kafka
+## Message Bus
 
-All events flow through Redpanda as the single message bus.  ClickHouse is a consumer only (Kafka Engine → Materialized View).
-
-```
-[Before] Rust ──→ ClickHouse (direct INSERT)
-         OTel ──→ ClickHouse (direct) + Redpanda (fan-out)
-
-[After]  Rust ──→ Redpanda [inference]    ──→ ClickHouse (Kafka Engine → MV → inference_logs)
-         OTel ──→ Redpanda [otel-metrics]  ──→ ClickHouse (Kafka Engine → MV → otel_metrics_gauge)
-                  Redpanda [otel-traces]   ──→ ClickHouse (Kafka Engine → MV → otel_traces_raw)
-```
-
-| Principle | Detail |
-|-----------|--------|
-| Redpanda = Kafka 100% compatible | Swap `kafka_broker_list` address in ClickHouse + `REDPANDA_URL` in Rust to migrate to Kafka cluster — zero code changes |
-| docker-compose Redpanda | `--memory=512M --smp=1` — intentional low-resource dev config |
-| ClickHouse is consumer-only | All writes go through Kafka Engine tables; ClickHouse MergeTree tables are the read layer |
-| Observability fail-open | If Redpanda is unreachable at startup, `observability = None` — inference continues unrecorded |
+> Redpanda = single message bus. ClickHouse = read layer only (Kafka Engine → MV → MergeTree).
+> Observability is fail-open: if unreachable, inference continues unrecorded.
+> Full pipeline spec: `infra/otel-pipeline.md`.
 
 ## Key Design Decisions
 
@@ -198,28 +146,34 @@ All events flow through Redpanda as the single message bus.  ClickHouse is a con
 
 | Port | Methods |
 |------|---------|
-| `InferenceUseCase` | `submit`, `stream`, `get_status`, `cancel`, `recover_pending_jobs`, `start_queue_worker` |
+| `InferenceUseCase` | `submit`, `process`, `stream`, `get_status`, `cancel` |
 
 ### Outbound
 
 | Port | Adapter | Notes |
 |------|---------|-------|
 | `InferenceProviderPort` | `OllamaAdapter`, `GeminiAdapter` | SSE streaming |
-| `LlmProviderRegistry` | `PostgresProviderRegistry` (DB) + `CachingProviderRegistry` (5s TTL decorator, used in production) | CRUD + health + update |
-| `GpuServerRegistry` | `PostgresGpuServerRegistry` | Physical server + node-exporter |
+| `ProviderDispatchPort` | `ConcreteProviderDispatch` | Provider selection, adapter build, Gemini rate-limit counters |
+| `LlmProviderRegistry` | `CachingProviderRegistry` → `PostgresProviderRegistry` | 5s TTL decorator |
+| `GpuServerRegistry` | `PostgresGpuServerRegistry` | Server + node-exporter |
 | `JobRepository` | `PostgresJobRepository` | UPSERT on conflict |
 | `ApiKeyRepository` | `PostgresApiKeyRepository` | BLAKE2b hash lookup |
-| `ObservabilityPort` | `HttpObservabilityAdapter` | POST /internal/ingest/inference → veronex-analytics (fail-open) |
-| `AuditPort` | `HttpAuditAdapter` | POST /internal/ingest/audit → veronex-analytics (fail-open) |
-| `AnalyticsRepository` | `HttpAnalyticsClient` | GET /internal/* from veronex-analytics |
-| `AccountRepository` | `PostgresAccountRepository` | Argon2id password, soft-delete, RBAC |
-| `SessionRepository` | `PostgresSessionRepository` | jti + refresh_token_hash (BLAKE2b), rolling sessions |
-| `ModelCapacityRepository` | `PostgresModelCapacityRepository` | VRAM/KV stats, slot recommendation, PERCENTILE_CONT throughput |
-| `CapacitySettingsRepository` | `PostgresCapacitySettingsRepository` | Capacity analyzer config singleton (id=1) |
-| `ModelManagerPort` | `OllamaModelManager` | LRU eviction, max_loaded=1 |
-| `OllamaModelRepository` | `PostgresOllamaModelRepository` | Global Ollama model pool (model-aware routing) |
-| `OllamaSyncJobRepository` | `PostgresOllamaSyncJobRepository` | Async sync job tracking (JSONB results) |
+| `ObservabilityPort` | `HttpObservabilityAdapter` | fail-open → veronex-analytics |
+| `AuditPort` | `HttpAuditAdapter` | fail-open → veronex-analytics |
+| `AnalyticsRepository` | `HttpAnalyticsClient` | GET from veronex-analytics |
+| `AccountRepository` | `PostgresAccountRepository` | Argon2id, soft-delete, RBAC |
+| `SessionRepository` | `PostgresSessionRepository` | jti + BLAKE2b refresh hash |
+| `ModelCapacityRepository` | `PostgresModelCapacityRepository` | VRAM profiles (weight, KV, arch params) |
+| `CapacitySettingsRepository` | `PostgresCapacitySettingsRepository` | Singleton (id=1) |
+| `OllamaModelRepository` | `PostgresOllamaModelRepository` | Model-aware routing |
+| `OllamaSyncJobRepository` | `PostgresOllamaSyncJobRepository` | Async sync (JSONB) |
 | `GeminiPolicyRepository` | `PostgresGeminiPolicyRepository` | UPSERT + `*` fallback |
 | `GeminiSyncConfigRepository` | `PostgresGeminiSyncConfigRepository` | Singleton admin key |
 | `GeminiModelRepository` | `PostgresGeminiModelRepository` | Global model pool |
-| `ProviderModelSelectionRepository` | `PostgresProviderModelSelectionRepository` | Per-paid-provider model filter |
+| `ProviderModelSelectionRepository` | `PostgresProviderModelSelectionRepository` | Per-provider model filter |
+| `VramPoolPort` | `VramPool`, `DistributedVramPool` | Per-provider VRAM pool: try_reserve → VramPermit (RAII, KV-only release) |
+| `CircuitBreakerPort` | `CircuitBreakerMap` | Per-provider failure isolation (Closed→Open→HalfOpen) |
+| `ThermalPort` | `ThermalThrottleMap` | Per-provider GPU thermal throttle level (Normal/Soft/Hard) |
+| `LabSettingsRepository` | `PostgresLabSettingsRepository` | Feature flags (gemini_function_calling) |
+| `ValkeyPort`             | `ValkeyAdapter`          | Queue (push/pop/priority), KV (set/get/del), counters, pub/sub |
+| `MessageStore` | `S3MessageStore` | MinIO/AWS S3 message storage |

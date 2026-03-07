@@ -11,11 +11,11 @@ Every doc, component, and i18n key MUST follow these definitions.
 
 | Term | Definition | Where Used |
 |------|------------|------------|
-| **Provider** | An inference service provider type (Ollama, Gemini). A provider configuration record stores the URL, API key, and routing metadata for one service account. | Nav sidebar, `/providers` page, usage breakdown UI, i18n keys under `backends.*` |
+| **Provider** | An inference service provider type (Ollama, Gemini). A provider configuration record stores the URL, API key, and routing metadata for one service account. | Nav sidebar, `/providers` page, usage breakdown UI, i18n keys under `providers.*` |
 | **Server** | A GPU hardware node registered with a `node_exporter_url` for live metrics scraping. Providers may be linked to a server via `server_id`. | `/servers` page, nav sidebar |
 | **API Key** | A bearer token that authenticates inference requests, enforces RPM/TPM rate limits, and tracks per-key usage. | `/keys` page, `X-API-Key` header |
 | **Job** | A single inference request lifecycle record: pending → running → completed/failed/cancelled. | `/jobs` page, `inference_jobs` table |
-| **Backend** | Retired term — fully replaced by **Provider** at all layers. Maps to the `llm_providers` DB table and `/v1/providers` API routes. **Fully removed from codebase - all layers use Provider.** | (historical reference only) |
+| **Backend** | Retired term — replaced by **Provider**. Maps to the `llm_providers` DB table and `/v1/providers` API routes. Legacy references may still exist in OpenAPI spec and comments. | (historical reference only) |
 | **Tenant** | A logical grouping owner of API keys. Not exposed in the UI today; reserved for multi-tenant mode. | `api_keys.tenant_id` DB column |
 
 ---
@@ -47,7 +47,7 @@ Every doc, component, and i18n key MUST follow these definitions.
 
 ## References
 
-- Nav structure: [`docs/llm/frontend/design-system.md`](../frontend/web.md) — Nav Sidebar section
+- Nav structure: [`docs/llm/frontend/design-system.md`](../frontend/design-system.md) — Nav Sidebar section
 - Providers page spec: [`docs/llm/frontend/pages/providers.md`](../frontend/pages/providers.md)
 - Servers page spec: [`docs/llm/frontend/pages/servers.md`](../frontend/pages/servers.md)
 - Architecture overview: [`docs/llm/policies/architecture.md`](./architecture.md)

@@ -8,16 +8,17 @@
 |------|------|----------------|
 | Add new metric to live node-exporter response | `infrastructure/outbound/hw_metrics.rs` → `fetch_node_metrics()` parsing + `NodeMetrics` struct |
 | Add new metric to history chart | `gpu_server_handlers.rs` → `metrics_history()` ClickHouse SQL + `ServerMetricsPoint` struct |
-| Add GPU server DB column | `migrations/` + `domain/entities/gpu_server.rs` + `persistence/gpu_server_registry.rs` |
+| Add GPU server DB column | `migrations/` + `domain/entities/mod.rs` + `persistence/gpu_server_registry.rs` |
 | Change Prometheus HTTP SD response format | `gpu_server_handlers.rs` → `metrics_targets()` |
 | Change history query bucket size | `gpu_server_handlers.rs` → `toStartOfInterval` SQL arg |
 | Support new GPU vendor (e.g. NVIDIA) | `hw_metrics.rs` → add metric parsing branch alongside existing AMD section |
+| Change thermal thresholds | `capacity/thermal.rs` → `ThermalThresholds` presets or `set_thresholds()` API |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `crates/veronex/src/domain/entities/gpu_server.rs` | `GpuServer` entity |
+| `crates/veronex/src/domain/entities/mod.rs` | `GpuServer` entity |
 | `crates/veronex/src/application/ports/outbound/gpu_server_registry.rs` | `GpuServerRegistry` trait |
 | `crates/veronex/src/infrastructure/outbound/persistence/gpu_server_registry.rs` | Postgres impl |
 | `crates/veronex/src/infrastructure/outbound/hw_metrics.rs` | `fetch_node_metrics()` — node-exporter parsing |
@@ -41,7 +42,7 @@ llm_providers (1 Ollama process = 1 GPU)
 ## GpuServer Entity
 
 ```rust
-// domain/entities/gpu_server.rs
+// domain/entities/mod.rs
 pub struct GpuServer {
     pub id: Uuid,
     pub name: String,
@@ -147,6 +148,22 @@ pub struct ServerMetricsPoint {
 
 **AMD APU note (Ryzen AI Max+ 395)**: `chip` label is PCI address format (`0000:00:08_1_…`).
 Identify via `node_hwmon_chip_names{chip_name="amdgpu"}`. Two-step query in `hw_metrics.rs`.
+
+## veronex-agent GPU Vendor Detection
+
+The agent detects GPU vendor from sysfs `/sys/class/drm/cardN/device/vendor`:
+
+| Vendor ID | `gpu_vendor` | Thermal Profile |
+|-----------|-------------|-----------------|
+| `0x1002` | `"amd"` | CPU (75/82/90°C) — Ryzen AI 395+ = APU/iGPU |
+| `0x10de` | `"nvidia"` | GPU (80/88/93°C) |
+| other/none | `"unknown"` | CPU (default) |
+
+The `gpu_vendor` field is included in `GET /api/metrics` response and cached in `HwMetrics`. The health_checker reads it every 30s cycle and calls `thermal.set_thresholds()` to configure per-provider thermal limits.
+
+**Agent GPU metrics by vendor**:
+- **AMD**: Full sysfs support — `mem_info_vram_used`, `mem_info_vram_total`, `gpu_busy_percent`, hwmon temp/power
+- **NVIDIA**: Card detection only via sysfs vendor ID. Detailed VRAM/temp metrics require nvidia-smi integration (future)
 
 ---
 

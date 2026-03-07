@@ -5,8 +5,7 @@ import { FileJson, BookOpen, Layers, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
-
-const API_URL = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
+import { BASE_API_URL as API_URL } from '@/lib/constants'
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 

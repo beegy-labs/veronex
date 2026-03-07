@@ -1,13 +1,28 @@
 FROM rust:1-alpine AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /app
-COPY crates/inferq-agent/Cargo.toml crates/inferq-agent/Cargo.lock* ./crates/inferq-agent/
-COPY crates/inferq-agent/src ./crates/inferq-agent/src
-RUN cargo build --release --manifest-path crates/inferq-agent/Cargo.toml
+
+# Copy workspace root manifests
+COPY Cargo.toml Cargo.lock ./
+COPY crates/veronex/Cargo.toml ./crates/veronex/
+COPY crates/veronex-agent/Cargo.toml ./crates/veronex-agent/
+COPY crates/veronex-analytics/Cargo.toml ./crates/veronex-analytics/
+
+# Dummy source for dependency caching
+RUN mkdir -p crates/veronex/src crates/veronex-agent/src crates/veronex-analytics/src && \
+    echo "fn main() {}" > crates/veronex/src/main.rs && \
+    echo "fn main() {}" > crates/veronex-agent/src/main.rs && \
+    echo "fn main() {}" > crates/veronex-analytics/src/main.rs
+RUN cargo build --release -p veronex-agent 2>/dev/null || true
+
+# Real source
+COPY crates/veronex-agent/src ./crates/veronex-agent/src
+RUN touch crates/veronex-agent/src/main.rs && \
+    cargo build --release -p veronex-agent
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
-COPY --from=builder /app/crates/inferq-agent/target/release/inferq-agent ./
+COPY --from=builder /app/target/release/veronex-agent ./
 EXPOSE 9091
-CMD ["./inferq-agent"]
+CMD ["./veronex-agent"]

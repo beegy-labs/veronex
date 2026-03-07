@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers/auth'
+import { testId, T_DEFAULT } from './helpers/constants'
 
 test.describe('API Keys', () => {
   test.beforeEach(async ({ page }) => {
@@ -13,7 +14,7 @@ test.describe('API Keys', () => {
 
     // CreateKeyModal opens — form has Label htmlFor="key-name" with text "Name"
     const nameInput = page.getByLabel('Name')
-    await nameInput.fill(`e2e-test-key-${Date.now()}`)
+    await nameInput.fill(`e2e-test-key-${testId()}`)
 
     // Submit via the dialog's Create Key button (the last "Create Key" button in DOM)
     await page.getByRole('button', { name: 'Create Key' }).last().click()
@@ -22,12 +23,12 @@ test.describe('API Keys', () => {
     // and the warning "Save this key now"
     await expect(
       page.getByText(/save this key now/i)
-    ).toBeVisible({ timeout: 10_000 })
+    ).toBeVisible({ timeout: T_DEFAULT })
 
     // The key itself is rendered in a <code> element
     await expect(
       page.locator('code').filter({ hasText: /sk-/ })
         .or(page.getByText(/sk-/))
-    ).toBeVisible({ timeout: 10_000 })
+    ).toBeVisible({ timeout: T_DEFAULT })
   })
 })

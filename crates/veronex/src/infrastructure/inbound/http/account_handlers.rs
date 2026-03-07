@@ -1,7 +1,3 @@
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
-    Argon2,
-};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -9,11 +5,16 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::application::ports::outbound::audit_port::AuditEvent;
 use crate::domain::entities::{Account, ApiKey};
+use crate::domain::enums::{AccountRole, KeyTier, KeyType};
 use crate::domain::services::api_key_generator::generate_api_key;
+use crate::domain::services::password_hashing;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 use crate::infrastructure::inbound::http::state::AppState;
+use crate::infrastructure::outbound::valkey_keys;
+
+use super::audit_helpers::emit_audit;
+use super::error::AppError;
 
 // ── Request / Response types ───────────────────────────────────────────────────
 
@@ -24,13 +25,13 @@ pub struct CreateAccountRequest {
     pub name: String,
     pub email: Option<String>,
     #[serde(default = "default_role")]
-    pub role: String,
+    pub role: AccountRole,
     pub department: Option<String>,
     pub position: Option<String>,
 }
 
-fn default_role() -> String {
-    "admin".to_string()
+fn default_role() -> AccountRole {
+    AccountRole::Admin
 }
 
 #[derive(Deserialize)]
@@ -52,7 +53,7 @@ pub struct AccountSummary {
     pub username: String,
     pub name: String,
     pub email: Option<String>,
-    pub role: String,
+    pub role: AccountRole,
     pub department: Option<String>,
     pub position: Option<String>,
     pub is_active: bool,
@@ -64,7 +65,7 @@ pub struct AccountSummary {
 pub struct CreateAccountResponse {
     pub id: Uuid,
     pub username: String,
-    pub role: String,
+    pub role: AccountRole,
     /// Plaintext test API key (shown once).
     pub test_api_key: String,
     pub created_at: chrono::DateTime<Utc>,
@@ -76,14 +77,6 @@ pub struct ResetLinkResponse {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-
-fn hash_password(password: &str) -> Result<String, StatusCode> {
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|h| h.to_string())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
 
 fn to_summary(a: Account) -> AccountSummary {
     AccountSummary {
@@ -100,42 +93,16 @@ fn to_summary(a: Account) -> AccountSummary {
     }
 }
 
-async fn emit_audit(
-    state: &AppState,
-    actor: &crate::infrastructure::inbound::http::middleware::jwt_auth::Claims,
-    action: &str,
-    resource_type: &str,
-    resource_id: &str,
-    resource_name: &str,
-    details: &str,
-) {
-    if let Some(ref port) = state.audit_port {
-        port.record(AuditEvent {
-            event_time: Utc::now(),
-            account_id: actor.sub,
-            account_name: actor.sub.to_string(),
-            action: action.to_string(),
-            resource_type: resource_type.to_string(),
-            resource_id: resource_id.to_string(),
-            resource_name: resource_name.to_string(),
-            ip_address: None,
-            details: Some(details.to_string()),
-        })
-        .await;
-    }
-}
-
 // ── GET /v1/accounts ──────────────────────────────────────────────────────────
 
 pub async fn list_accounts(
     RequireSuper(_claims): RequireSuper,
     State(state): State<AppState>,
-) -> Result<Json<Vec<AccountSummary>>, StatusCode> {
+) -> Result<Json<Vec<AccountSummary>>, AppError> {
     let accounts = state
         .account_repo
         .list_all()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
 
     Ok(Json(accounts.into_iter().map(to_summary).collect()))
 }
@@ -146,12 +113,11 @@ pub async fn create_account(
     RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
     Json(req): Json<CreateAccountRequest>,
-) -> Result<Json<CreateAccountResponse>, StatusCode> {
-    if req.role != "super" && req.role != "admin" {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+) -> Result<Json<CreateAccountResponse>, AppError> {
+    super::handlers::validate_username(&req.username)?;
 
-    let password_hash = hash_password(&req.password)?;
+    let password_hash = password_hashing::hash_password(&req.password)
+        .map_err(AppError::Internal)?;
     let now = Utc::now();
     let account = Account {
         id: Uuid::now_v7(),
@@ -159,7 +125,7 @@ pub async fn create_account(
         password_hash,
         name: req.name.clone(),
         email: req.email.clone(),
-        role: req.role.clone(),
+        role: req.role,
         department: req.department.clone(),
         position: req.position.clone(),
         is_active: true,
@@ -183,8 +149,8 @@ pub async fn create_account(
         expires_at: None,
         created_at: now,
         deleted_at: None,
-        key_type: "test".to_string(),
-        tier: "paid".to_string(),
+        key_type: KeyType::Test,
+        tier: KeyTier::Paid,
     };
 
     // Create account in DB
@@ -195,9 +161,9 @@ pub async fn create_account(
         .map_err(|e| {
             let msg = e.to_string();
             if msg.contains("unique") || msg.contains("duplicate") {
-                StatusCode::CONFLICT
+                AppError::Conflict("username already exists".into())
             } else {
-                StatusCode::INTERNAL_SERVER_ERROR
+                AppError::Internal(e)
             }
         })?;
 
@@ -225,15 +191,14 @@ pub async fn update_account(
     Path(id): Path<String>,
     State(state): State<AppState>,
     Json(req): Json<UpdateAccountRequest>,
-) -> Result<StatusCode, StatusCode> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<StatusCode, AppError> {
+    let uuid = super::handlers::parse_uuid(&id)?;
 
     let mut account = state
         .account_repo
         .get_by_id(&uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("account {id} not found")))?;
 
     if let Some(name) = req.name {
         account.name = name;
@@ -245,8 +210,7 @@ pub async fn update_account(
     state
         .account_repo
         .update(&account)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
 
     emit_audit(&state, &claims, "update", "account", &id, &account.username,
         &format!("Account '{}' ({}) profile updated (name/email/department/position)",
@@ -261,25 +225,24 @@ pub async fn delete_account(
     RequireSuper(claims): RequireSuper,
     Path(id): Path<String>,
     State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<StatusCode, AppError> {
+    let uuid = super::handlers::parse_uuid(&id)?;
 
     let account = state
         .account_repo
         .get_by_id(&uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("account {id} not found")))?;
 
-    state
+    // Cascade: soft-delete account + all its API keys in a single transaction
+    let keys_deleted = state
         .account_repo
-        .soft_delete(&uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .soft_delete_cascade(&uuid, &account.username)
+        .await?;
 
     emit_audit(&state, &claims, "delete", "account", &id, &account.username,
-        &format!("Account '{}' ({}) soft-deleted (login disabled, data retained)",
-            account.username, id)).await;
+        &format!("Account '{}' ({}) soft-deleted (login disabled, data retained, {} API key(s) revoked)",
+            account.username, id, keys_deleted)).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -291,14 +254,13 @@ pub async fn set_account_active(
     Path(id): Path<String>,
     State(state): State<AppState>,
     Json(req): Json<SetActiveRequest>,
-) -> Result<StatusCode, StatusCode> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<StatusCode, AppError> {
+    let uuid = super::handlers::parse_uuid(&id)?;
 
     state
         .account_repo
         .set_active(&uuid, req.is_active)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
 
     emit_audit(&state, &claims, "update", "account", &id, &id,
         &format!("Account {} is_active set to {} (login {})",
@@ -322,14 +284,13 @@ pub async fn list_account_sessions(
     RequireSuper(_claims): RequireSuper,
     Path(id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<Vec<SessionSummary>>, StatusCode> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<Json<Vec<SessionSummary>>, AppError> {
+    let uuid = super::handlers::parse_uuid(&id)?;
 
     let sessions = state
         .session_repo
         .list_active(&uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
 
     let summaries = sessions
         .into_iter()
@@ -351,13 +312,20 @@ pub async fn revoke_session(
     RequireSuper(claims): RequireSuper,
     Path(session_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    let uuid = Uuid::parse_str(&session_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<StatusCode, AppError> {
+    let uuid = super::handlers::parse_uuid(&session_id)?;
+    // Fetch the session first to get jti + expires_at for Valkey blocklist.
+    let session = state
+        .session_repo
+        .get_by_id(&uuid)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("session {session_id} not found")))?;
     state
         .session_repo
         .revoke(&uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
+    // Add JTI to Valkey blocklist so the JWT is rejected immediately.
+    super::auth_handlers::revoke_jti(&state, session.jti, session.expires_at).await;
     emit_audit(&state, &claims, "delete", "session", &session_id, &session_id,
         &format!("Session {} manually revoked by admin", session_id)).await;
     Ok(StatusCode::NO_CONTENT)
@@ -369,15 +337,23 @@ pub async fn revoke_all_account_sessions(
     RequireSuper(claims): RequireSuper,
     Path(id): Path<String>,
     State(state): State<AppState>,
-) -> Result<StatusCode, StatusCode> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<StatusCode, AppError> {
+    let uuid = super::handlers::parse_uuid(&id)?;
+    // Fetch active sessions before revoking so we can blocklist each JTI.
+    let sessions = state
+        .session_repo
+        .list_active(&uuid)
+        .await?;
     state
         .session_repo
         .revoke_all_for_account(&uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .await?;
+    // Add each JTI to the Valkey blocklist so JWTs are rejected immediately.
+    for session in &sessions {
+        super::auth_handlers::revoke_jti(&state, session.jti, session.expires_at).await;
+    }
     emit_audit(&state, &claims, "delete", "session", &id, &format!("all_sessions:{id}"),
-        &format!("All active sessions for account {} force-revoked by admin", id)).await;
+        &format!("All active sessions for account {} force-revoked by admin ({} session(s) blocklisted)", id, sessions.len())).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -387,22 +363,21 @@ pub async fn create_reset_link(
     RequireSuper(claims): RequireSuper,
     Path(id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<ResetLinkResponse>, StatusCode> {
-    let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> Result<Json<ResetLinkResponse>, AppError> {
+    let uuid = super::handlers::parse_uuid(&id)?;
 
     // Ensure account exists
     let account = state
         .account_repo
         .get_by_id(&uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("account {id} not found")))?;
 
     let token = Uuid::new_v4().to_string();
 
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
-        let key = format!("veronex:pwreset:{token}");
+        let key = valkey_keys::password_reset(&token);
         let _: Result<(), _> = pool
             .set(key, uuid.to_string(), Some(fred::types::Expiration::EX(24 * 3600)), None, false)
             .await;

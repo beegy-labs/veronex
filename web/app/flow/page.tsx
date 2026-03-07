@@ -8,7 +8,7 @@ import { NetworkFlowTab } from '@/app/overview/components/network-flow-tab'
 export default function FlowPage() {
   const { t } = useTranslation()
 
-  const { data: backends } = useQuery(providersQuery)
+  const { data: providers } = useQuery(providersQuery)
 
   return (
     <div className="space-y-6">
@@ -17,7 +17,7 @@ export default function FlowPage() {
         <p className="text-muted-foreground mt-1 text-sm">{t('overview.networkFlowDesc')}</p>
       </div>
 
-      <NetworkFlowTab backends={backends ?? []} />
+      <NetworkFlowTab providers={providers ?? []} />
     </div>
   )
 }

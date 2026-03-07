@@ -1,565 +1,370 @@
-# Code Patterns — 2026 Reference
+# Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-02 (rev: DashMap concurrent map pattern; Lua eval atomic Valkey ops)
-> Rust Edition 2024 · Axum 0.8 · sqlx 0.8 · Next.js 16 · React 19 · TanStack Query v5
+> SSOT | **Last Updated**: 2026-03-07
+> Rust Edition 2024 · Axum 0.8 · sqlx 0.8
+> Frontend patterns -> `policies/patterns-frontend.md`
 
----
-
-## Rust: Axum 0.8 Handler Signature
-
-Every handler follows this exact signature pattern:
+## Axum 0.8 Handler Signature
 
 ```rust
-// Read — returns single resource
+// Read
 pub async fn get_thing(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+  State(state): State<AppState>, Path(id): Path<Uuid>,
 ) -> Result<Json<ThingSummary>, AppError> {
-    let thing = state.thing_repo.get(id).await?
-        .ok_or(AppError::NotFound)?;
-    Ok(Json(to_summary(&thing)))
+  let thing = state.thing_repo.get(id).await?.ok_or(AppError::NotFound)?;
+  Ok(Json(to_summary(&thing)))
 }
-
-// Create — returns 201 + body
+// Create -- returns 201
 pub async fn create_thing(
-    State(state): State<AppState>,
-    Json(req): Json<CreateThingRequest>,
+  State(state): State<AppState>, Json(req): Json<CreateThingRequest>,
 ) -> Result<(StatusCode, Json<ThingSummary>), AppError> {
-    let thing = state.thing_repo.create(req.into()).await?;
-    Ok((StatusCode::CREATED, Json(to_summary(&thing))))
+  Ok((StatusCode::CREATED, Json(to_summary(&state.thing_repo.create(req.into()).await?))))
 }
-
-// Delete — returns 204 No Content
+// Delete -- returns 204
 pub async fn delete_thing(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+  State(state): State<AppState>, Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    state.thing_repo.delete(id).await?;
-    Ok(StatusCode::NO_CONTENT)
+  state.thing_repo.delete(id).await?;
+  Ok(StatusCode::NO_CONTENT)
 }
 ```
 
----
+## AppError (thiserror v2)
 
-## Rust: Error Handling — AppError (thiserror v2)
-
-2026 standard: define domain errors with `thiserror` → implement `IntoResponse` → handlers use `?` cleanly.
-
-> `thiserror = "2"` is already in `Cargo.toml` but not yet fully adopted. All new handlers should use this pattern.
+`thiserror` errors + `IntoResponse` impl; handlers use `?`.
+Full definition: `infrastructure/inbound/http/error.rs`
 
 ```rust
-// infrastructure/inbound/http/error.rs  ← create this file
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    #[error("not found")]
-    NotFound,
-    #[error("bad request: {0}")]
-    BadRequest(String),
-    #[error("unauthorized")]
-    Unauthorized,
-    #[error(transparent)]
-    Internal(#[from] anyhow::Error),
+  NotFound(String),        // 404
+  BadRequest(String),      // 400
+  Unauthorized(String),    // 401
+  Forbidden(String),       // 403
+  Conflict(String),        // 409
+  TooManyRequests { retry_after: u64 }, // 429
+  BadGateway(String),      // 502
+  ServiceUnavailable(String), // 503
+  UnprocessableEntity(String), // 422
+  NotImplemented(String),  // 501
+  Internal(anyhow::Error), // 500
 }
-
-impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        let (status, msg) = match &self {
-            Self::NotFound      => (StatusCode::NOT_FOUND, self.to_string()),
-            Self::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
-            Self::Unauthorized  => (StatusCode::UNAUTHORIZED, self.to_string()),
-            Self::Internal(e)   => {
-                tracing::error!("internal: {e:#}"); // preserve context, hide from client
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
-            }
-        };
-        (status, Json(json!({ "error": msg }))).into_response()
-    }
-}
-
-// Optional type alias
-pub type ApiResult<T> = Result<Json<T>, AppError>;
 ```
 
-**Current codebase**: handlers use `impl IntoResponse` + manual `StatusCode` tuples (~50 repetitions).
-To migrate: create `error.rs` above → change handler return types to `Result<T, AppError>`.
-
----
-
-## Rust: sqlx — Compile-Time SQL Verification
+## sqlx -- Compile-Time SQL
 
 ```rust
-// ✅ Recommended: query_as! + FromRow
-// Requires DATABASE_URL in .env at compile time
 #[derive(sqlx::FromRow)]
-struct ProviderRow {
-    id: Uuid,
-    name: String,
-    backend_type: String,
-    // ... one field per DB column
-}
-
-let row = sqlx::query_as!(
-    ProviderRow,
-    "SELECT id, name, provider_type FROM llm_providers WHERE id = $1",
-    id
-)
-.fetch_optional(&self.pool)
-.await?;
-
-// ⚠️ Never use SELECT * — column order breaks with JOINs
-
-// Current codebase: uses query() + manual row_to_entity() mapping.
-// New repositories should use query_as! pattern.
+struct ProviderRow { id: Uuid, name: String, provider_type: String }
+let row = sqlx::query_as!(ProviderRow,
+  "SELECT id, name, provider_type FROM llm_providers WHERE id = $1", id
+).fetch_optional(&self.pool).await?;
+// Never SELECT * -- column order breaks with JOINs
 ```
 
----
+## async-trait (Required)
 
-## Rust: async-trait (Required — Do Not Remove)
+`#[async_trait]` still required for `Arc<dyn Trait>`. Rust 1.75+ async fn in trait is object-safe with `impl Trait` only, not `dyn Trait`.
 
 ```rust
-// #[async_trait] is STILL required for Arc<dyn Trait> (trait objects)
-// Rust 1.75+ async fn in trait is only object-safe with `impl Trait`, not `dyn Trait`
-// This project uses Arc<dyn ApiKeyRepository> → keep #[async_trait]
-
 #[async_trait]
 pub trait ApiKeyRepository: Send + Sync {
-    async fn get_by_hash(&self, hash: &str) -> anyhow::Result<Option<ApiKey>>;
+  async fn get_by_hash(&self, hash: &str) -> anyhow::Result<Option<ApiKey>>;
 }
-
-// ❌ Removing #[async_trait] breaks Arc<dyn ApiKeyRepository> at compile time
 ```
 
----
-
-## Rust: tracing + OpenTelemetry
-
-2026 standard: `tracing` crate is the de facto Rust instrumentation standard. Combine with OTel for distributed traces.
+## tracing + OpenTelemetry
 
 ```rust
-use tracing::{info, error, instrument};
-
-// Add #[instrument] to important handlers and background tasks
-#[instrument(skip(state), fields(backend_id = %id))]
-pub async fn get_backend(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<ProviderSummary>, AppError> {
-    info!("fetching backend");
-    let b = state.backend_registry.get(id).await?
-        .ok_or(AppError::NotFound)?;
-    Ok(Json(to_summary(&b)))
-}
-
+#[instrument(skip(state), fields(provider_id = %id))]
+pub async fn get_provider(
+  State(state): State<AppState>, Path(id): Path<Uuid>,
+) -> Result<Json<ProviderSummary>, AppError> { ... }
 // Propagate span into spawned tasks
 let span = tracing::info_span!("run_job", job_id = %job_id);
 tokio::spawn(async move { run_job(state, job_id).await }.instrument(span));
-
-// OTEL_EXPORTER_OTLP_ENDPOINT env → enables gRPC exporter → traces to ClickHouse
 ```
 
----
-
-## Rust: Concurrent Maps — DashMap (not `Mutex<HashMap>`)
-
-Use `dashmap::DashMap` for any map shared across async tasks.
-`dashmap = "6"` is already in `Cargo.toml`.
+## DashMap (not `Mutex<HashMap>`)
 
 ```rust
-// ✅ DashMap — 64 shards, different keys never contend
-use dashmap::DashMap;
 let jobs: Arc<DashMap<Uuid, JobEntry>> = Arc::new(DashMap::new());
-
-// Insert — no lock, no await
 jobs.insert(id, entry);
-
-// Read — returns Ref<'_, K, V>, must be dropped before .await
-let value = jobs.get(&id).map(|r| r.clone());  // clone what you need
-
-// Mutate — RefMut must be dropped before .await or notify calls
+let value = jobs.get(&id).map(|r| r.clone());  // clone, drop Ref before .await
 let notify = {
-    let mut entry = jobs.get_mut(&id).ok_or(NotFound)?;
-    entry.tokens.push(token);
-    entry.notify.clone()                        // clone before drop
-};                                              // RefMut dropped here ← critical
+  let mut entry = jobs.get_mut(&id).ok_or(NotFound)?;
+  entry.tokens.push(token);
+  entry.notify.clone()
+};  // RefMut dropped here
 notify.notify_one();
 ```
 
-**Rule**: never hold a `Ref`/`RefMut` across an `.await` point or a `yield` — it locks the shard.
+Never hold `Ref`/`RefMut` across `.await` -- it locks the shard.
+
+## Valkey Key Registry
+
+All `veronex:*` key patterns MUST be defined in `infrastructure/outbound/valkey_keys.rs`.
+This is the single source of truth — never hardcode key strings elsewhere.
+
+## Valkey Lua Eval
+
+Multi-step Valkey ops must be atomic. Single `EVAL` instead of multiple round-trips.
 
 ```rust
-// ❌ Wrong — RefMut alive across notify (which internally .awaits on Notify::notified)
-let mut entry = jobs.get_mut(&id)?;
-entry.tokens.push(token);
-entry.notify.notify_one();
-some_async_fn().await;   // shard still locked
-```
-
-`std::sync::Mutex<HashMap>` serialises all concurrent accesses on a single lock — avoid it
-for maps used in async hot paths. DashMap shards by key hash, so independent keys never block.
-
----
-
-## Rust: Atomic Valkey/Redis Ops — Lua Eval
-
-Multi-step Valkey operations (read-modify-write) must be atomic to avoid races.
-Use a single `EVAL` instead of multiple round-trips.
-
-`fred = "9"` requires feature `i-scripts` for `LuaInterface`:
-
-```toml
-# Cargo.toml
-fred = { version = "9", features = ["serde-json", "i-scripts"] }
-```
-
-```rust
-use fred::interfaces::LuaInterface as _;
-
-// Sliding-window RPM check: 4 commands → 1 atomic round-trip
 const RATE_LIMIT_SCRIPT: &str = r#"
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
 redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
 redis.call('EXPIRE', KEYS[1], 62)
 return redis.call('ZCARD', KEYS[1])
 "#;
-
-// pool.next() → Arc<RedisClient> which implements LuaInterface
-let count: u64 = pool
-    .next()
-    .eval(
-        RATE_LIMIT_SCRIPT,
-        vec![key.to_string()],
-        vec![window_start.to_string(), now_ms.to_string(), member.to_string()],
-    )
-    .await?;
+let count: u64 = pool.next()
+  .eval(RATE_LIMIT_SCRIPT, vec![key], vec![window_start, now_ms, member]).await?;
 ```
 
-- `pool.next()` round-robins across pool clients; it does **not** pin to a slot.
-- Lua scripts run atomically on the Valkey server — no interleaved commands from other clients.
-- Fail-open pattern: wrap in `match` and log on error, let the request through.
+## Performance Patterns
 
----
+> Full research: `research/backend/rust-perf-2026.md`
 
-## Rust: Background Tasks — JoinSet + CancellationToken
-
-> Full research: `research/backend/rust-axum.md` (Background Tasks section)
-
-### Current State (this codebase)
-
-Three background loops are launched as fire-and-forget `tokio::spawn`:
+**Enum `as_str()`** -- zero-allocation. Never `format!("{:?}", e).to_lowercase()`.
 
 ```rust
-// main.rs — current pattern (no graceful shutdown)
-start_health_checker(registry.clone(), 30, valkey_pool.clone(), thermal.clone());
-tokio::spawn(run_capacity_analysis_loop(...));
-use_case_impl.start_queue_worker();   // spawns internally
-axum::serve(listener, app).await?;   // process dies on SIGTERM/Ctrl+C
-```
-
-**Problem:** On SIGTERM, tokio drops the runtime immediately. Background tasks cannot flush in-flight state, drain the queue, or release locks.
-
-### 2026 Best Practice — `JoinSet` + `CancellationToken`
-
-`JoinSet` (tokio 1.17+, already in `tokio = "full"`) scopes spawned tasks.
-`CancellationToken` (requires adding `tokio-util`) propagates shutdown signals.
-
-```rust
-// Cargo.toml — add:
-// tokio-util = { version = "0.7", features = ["rt"] }
-
-use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let shutdown = CancellationToken::new();
-    let mut tasks = JoinSet::new();
-
-    // Pass child tokens — cancel() on parent propagates to all children
-    tasks.spawn(run_health_checker_loop(
-        registry.clone(), 30, valkey_pool.clone(), thermal.clone(),
-        shutdown.child_token(),
-    ));
-    tasks.spawn(run_capacity_analysis_loop(
-        ..., shutdown.child_token(),
-    ));
-    tasks.spawn(run_queue_dispatcher_loop(
-        ..., shutdown.child_token(),
-    ));
-
-    // Axum graceful shutdown — waits for in-flight requests to drain
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown.clone().cancelled_owned())
-        .await?;
-
-    // Signal all background tasks to stop
-    shutdown.cancel();
-
-    // Wait for all loops to exit cleanly
-    while let Some(res) = tasks.join_next().await {
-        if let Err(e) = res { tracing::warn!("background task panicked: {e}"); }
-    }
-    Ok(())
+impl FinishReason {
+  pub fn as_str(&self) -> &'static str {
+    match self { Self::Stop => "stop", Self::Length => "length", ... }
+  }
 }
 ```
 
-### Loop Signature Convention
-
-Each background loop accepts a `CancellationToken` and uses `select!` to exit cleanly:
+**Streaming hash** -- `io::Write` adapter for digest, zero intermediate allocation:
 
 ```rust
-pub async fn run_health_checker_loop(
-    registry: Arc<dyn LlmProviderRegistry>,
-    interval_secs: u64,
-    valkey_pool: Option<Pool>,
-    thermal: Arc<ThermalThrottleMap>,
-    shutdown: CancellationToken,          // ← added parameter
-) {
-    let interval = Duration::from_secs(interval_secs);
-    tracing::info!("health checker started");
+struct HashWriter<D: Digest>(D);
+impl<D: Digest> io::Write for HashWriter<D> {
+  fn write(&mut self, buf: &[u8]) -> io::Result<usize> { self.0.update(buf); Ok(buf.len()) }
+  fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
+// serde_json::to_writer(&mut w, &value)
+```
 
-    loop {
-        tokio::select! {
-            _ = shutdown.cancelled() => {
-                tracing::info!("health checker shutting down");
-                break;
-            }
-            _ = tokio::time::sleep(interval) => {
-                // run health check cycle...
-            }
-        }
+**`Vec::reserve()`** before extend: `accumulated.reserve(arr.len())` then `extend`.
+
+## Domain Services
+
+Pure functions in `domain/services/` — no I/O, no async:
+
+| Service | Function | Purpose |
+|---------|----------|---------|
+| `password_hashing` | `hash_password(password) → Result<String>` | Argon2id hashing (hexagonal: infra calls domain, not the reverse) |
+| `message_hashing` | `hash_messages(msgs) → String` | SHA-256 content hash for deduplication |
+
+## VramPool CAS Safety
+
+`try_reserve()` uses compare-and-swap with `MAX_CAS_RETRIES = 16`:
+
+```rust
+for _ in 0..MAX_CAS_RETRIES {
+    let current = active_kv.load(Ordering::Acquire);
+    if current + kv > kv_budget { return None; }
+    if active_kv.compare_exchange_weak(current, current + kv, ...).is_ok() {
+        return Some(permit);
     }
 }
 ```
 
-### BLPOP Loop (queue dispatcher) — select! pattern
+## Timeout & TTL Constants
 
-BLPOP with a timeout is already cancellation-friendly:
+All timeouts and TTLs are centralized as named constants — never hardcode `Duration::from_secs(N)`.
+
+**Domain layer** (`domain/constants.rs` — importable from all layers):
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `PROVIDER_REQUEST_TIMEOUT` | 300s | Inference request to Ollama/Gemini |
+| `OLLAMA_METADATA_TIMEOUT` | 10s | Ollama `/api/show`, `/api/tags`, `/api/ps` |
+| `OLLAMA_HEALTH_CHECK_TIMEOUT` | 5s | Ollama `/api/version` in analyzer |
+| `LLM_ANALYSIS_TIMEOUT` | 30s | Single-model LLM analysis |
+| `LLM_BATCH_ANALYSIS_TIMEOUT` | 60s | Batch model LLM analysis |
+| `NODE_EXPORTER_TIMEOUT` | 5s | Node-exporter metrics fetch |
+| `CANCEL_TIMEOUT` | 5s | Job cancellation in CancelGuard |
+| `OLLAMA_MODEL_CACHE_TTL` | 10s | Provider-for-model lookup cache |
+| `MODEL_SELECTION_CACHE_TTL` | 30s | Provider model-selection enabled list cache |
+
+**Health checker** (`health_checker.rs` — health check specific):
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `OLLAMA_HEALTH_TIMEOUT` | 5s | Ollama `/api/version` health check |
+| `GEMINI_HEALTH_TIMEOUT` | 10s | Gemini API key validation |
+| `AGENT_METRICS_TIMEOUT` | 5s | veronex-agent `/api/metrics` poll |
+
+## Background Tasks -- JoinSet + CancellationToken
 
 ```rust
-loop {
-    tokio::select! {
-        _ = shutdown.cancelled() => { break; }
-        result = blpop(&pool, &["queue:jobs", "queue:test"], 5.0) => {
-            // process job...
-        }
+let shutdown = CancellationToken::new();
+let mut tasks = JoinSet::new();
+tasks.spawn(run_health_checker_loop(..., shutdown.child_token()));
+axum::serve(listener, app)
+  .with_graceful_shutdown(shutdown.clone().cancelled_owned()).await?;
+shutdown.cancel();
+while let Some(res) = tasks.join_next().await {
+  if let Err(e) = res { tracing::warn!("task panicked: {e}"); }
+}
+```
+
+Loop convention: accept `CancellationToken`, use `select!` to exit cleanly.
+
+## Pool Configuration
+
+```rust
+PgPoolOptions::new()
+  .max_connections(10).min_connections(2)
+  .acquire_timeout(Duration::from_secs(5))
+  .idle_timeout(Duration::from_secs(600))
+  .max_lifetime(Duration::from_secs(1800))
+  .connect(url).await?
+```
+
+## Adding a New Port + Adapter
+
+| Step | File | Action |
+|------|------|--------|
+| 1 | `domain/entities/new_entity.rs` | Pure struct, no I/O |
+| 2 | `application/ports/outbound/new_port.rs` | `#[async_trait]` trait; add to mod.rs |
+| 3 | `migrations/YYYYMMDDHHMMSS_*.sql` | DB migration |
+| 4 | `infrastructure/outbound/persistence/new.rs` | Impl trait; add to mod.rs |
+| 5 | `infrastructure/inbound/http/state.rs` | `Arc<dyn NewPort>` field |
+| 6 | `main.rs` | Init + inject into AppState |
+| 7 | `infrastructure/inbound/http/new_handlers.rs` | `Result<T, AppError>` |
+| 8 | `infrastructure/inbound/http/router.rs` | Register routes inside auth middleware |
+| 9 | `docs/llm/{domain}/new_feature.md` | CDD doc |
+
+## Domain Enum Patterns
+
+Domain enums (`ProviderType`, `JobStatus`, `JobSource`, `ApiFormat`, `KeyTier`) implement conversion methods directly — no wrapper functions in the infrastructure layer.
+
+```rust
+// as_str() — zero-allocation display
+impl ProviderType {
+    pub fn as_str(&self) -> &'static str {
+        match self { Self::Ollama => "ollama", Self::Gemini => "gemini" }
+    }
+}
+
+// FromStr — used by repositories and handlers
+impl std::str::FromStr for ProviderType { ... }
+
+// resource_type() — audit resource identifiers
+impl ProviderType {
+    pub fn resource_type(&self) -> &'static str {
+        match self { Self::Ollama => "ollama_provider", Self::Gemini => "gemini_provider" }
     }
 }
 ```
 
-### Migration Plan (Phase 4)
+Repositories use `.as_str()` for INSERT/UPDATE and `.parse::<EnumType>()` for SELECT.
+Handlers use `.resource_type()` for audit events instead of `match` blocks.
 
-1. Add `tokio-util = { version = "0.7", features = ["rt"] }` to `Cargo.toml`
-2. Refactor `start_health_checker` → `run_health_checker_loop(shutdown: CancellationToken)`
-3. Add `shutdown: CancellationToken` parameter to `run_capacity_analysis_loop`
-4. Refactor `start_queue_worker` / `queue_dispatcher_loop` → accept `CancellationToken`
-5. Update `main.rs`: `JoinSet` + `axum::serve(...).with_graceful_shutdown(...)`
+## SQL Column Constants
 
----
+Each repository defines a `const *_COLS: &str` for SELECT column lists to avoid duplication:
+- `API_KEY_COLS` in `api_key_repository.rs`
+- `ACCOUNT_COLS` in `account_repository.rs`
+- `PROVIDER_COLS` in `provider_registry.rs`
+- `JOB_COLS` in `job_repository.rs`
+- `SESSION_COLS` in `session_repository.rs`
 
-## Rust: sqlx — Pool Configuration for Production
+Use `format!("SELECT {COLS} FROM table WHERE ...")` for queries.
+
+## Shared Persistence Helpers
+
+Reusable constants and functions in `persistence/mod.rs`:
+
+| Item | Type | Purpose |
+|------|------|---------|
+| `SOFT_DELETE` | `const &str` | `"AND deleted_at IS NULL"` — appended to WHERE clauses |
+| `parse_db_enum::<T>(val, col)` | `fn` | Parse DB string → domain enum via `FromStr`, returns `anyhow::Error` with column context |
+
+## SQL Fragment Constants
+
+Repeated SQL fragments (JOINs, subqueries) are extracted as `const` strings:
+- `PRICING_LATERAL` in `usage_handlers.rs` — model pricing LATERAL JOIN used by 3 breakdown queries
 
 ```rust
-// database.rs — production-ready pool options
-use sqlx::postgres::PgPoolOptions;
-
-pub async fn connect(url: &str) -> Result<PgPool> {
-    PgPoolOptions::new()
-        .max_connections(10)                           // default: 10
-        .min_connections(2)                            // keep 2 warm connections
-        .acquire_timeout(Duration::from_secs(5))       // fail fast on pool exhaustion
-        .idle_timeout(Duration::from_secs(600))        // release idle after 10m
-        .max_lifetime(Duration::from_secs(1800))       // recycle connections every 30m
-        .connect(url)
-        .await
-        .context("failed to connect to postgres")
-}
+const PRICING_LATERAL: &str = "LEFT JOIN LATERAL (...) pricing ON true";
+// Used in: key breakdown, model breakdown, per-key model breakdown
+format!("SELECT ... FROM inference_jobs j {PRICING_LATERAL} WHERE ...")
 ```
 
-**Current codebase:** `database::connect()` uses default pool options. Explicit settings prevent connection pool exhaustion under load.
+## SQL Interval Parameterization
 
-On shutdown:
+Never interpolate user-controlled intervals as strings. Use `make_interval()`:
+
 ```rust
-pg_pool.close().await;  // drain pool gracefully before process exits
+// CORRECT — parameterized
+"j.created_at >= NOW() - make_interval(hours => $1)"
+// WRONG — SQL injection risk
+format!("j.created_at >= NOW() - INTERVAL '{interval}'")
 ```
 
----
+## Input Validation
 
-## Rust: Adding a New Port + Adapter
+All handlers validate input lengths before processing:
+- Prompt/message content: `MAX_PROMPT_BYTES` (1MB) in `constants.rs`
+- Model name: `MAX_MODEL_NAME_BYTES` (256) in `constants.rs`
+- Error messages: `ERR_MODEL_INVALID`, `ERR_PROMPT_TOO_LARGE` in `constants.rs` — shared across all API formats
+- Password: `MIN_PASSWORD_LEN` (8) in `auth_handlers.rs`
+- Validation applied per API format (native, OpenAI, Gemini, Ollama)
 
-Strict order to respect hexagonal dependency rule:
+Shared validation functions in `inference_helpers.rs`:
+- `validate_content_length(messages)` — checks total content bytes against `MAX_PROMPT_BYTES`
+- `validate_model_name(model)` — checks model name length against `MAX_MODEL_NAME_BYTES`
 
-```
-1. domain/entities/new_entity.rs              ← pure struct, no I/O
-2. application/ports/outbound/new_port.rs     ← #[async_trait] trait; add to mod.rs
-3. migrations/YYYYMMDDHHMMSS_description.sql  ← DB migration
-4. infrastructure/outbound/persistence/new.rs ← impl the trait; add to mod.rs
-5. infrastructure/inbound/http/state.rs       ← add Arc<dyn NewPort> field
-6. main.rs                                    ← init + inject into AppState
-7. infrastructure/inbound/http/new_handlers.rs ← use Result<T, AppError>
-8. infrastructure/inbound/http/router.rs      ← register routes inside auth middleware
-9. docs/llm/{domain}/new_feature.md            ← CDD doc
-```
+Native `submit_inference()` in `handlers.rs` delegates to these helpers. Format-specific handlers (OpenAI, Gemini, Ollama) call them directly.
 
----
+## Shared Handler Helpers
 
-## Frontend: TanStack Query v5
+Reusable functions in the HTTP handler layer to avoid duplication:
 
-> Full research: `research/frontend/tanstack-query.md`
+| Function | File | Purpose |
+|----------|------|---------|
+| `validate_username()` | `handlers.rs` | Alphanumeric + `_.-`, max 64 chars |
+| `validate_content_length()` | `inference_helpers.rs` | Content size validation (SSOT) |
+| `validate_model_name()` | `inference_helpers.rs` | Model name length validation (SSOT) |
+| `resolve_tenant_id()` | `key_handlers.rs` | Account lookup → username (pub(super)) |
+| `convert_tool_call()` | `openai_handlers.rs` | Tool call JSON for streaming + non-streaming |
+| `SyncSettingsResponse::from_settings()` | `dashboard_handlers.rs` | Capacity settings → response |
+| `filter_by_model_selection()` | `provider_router.rs` | HashSet-based O(1) model filtering (DRY) |
 
-### `queryOptions()` Factory — SSOT Pattern (2026)
+## Cookie TTL Constants
 
-Define query configuration **once** in `web/lib/queries/` and reuse across components:
+Auth cookie Max-Age values are centralized in `constants.rs`:
 
-```typescript
-// web/lib/queries/dashboard.ts
-import { queryOptions } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+| Constant | Value | Must match |
+|----------|-------|------------|
+| `ACCESS_TOKEN_MAX_AGE` | 3600s (1h) | JWT access token expiry |
+| `REFRESH_TOKEN_MAX_AGE` | 604800s (7d) | Session expiry |
 
-export const dashboardStatsQuery = queryOptions({
-  queryKey: ['dashboard', 'stats'],
-  queryFn: () => api.stats(),
-  staleTime: 30_000,
-  retry: false,
-})
+Used by `set_auth_cookies()` in `auth_handlers.rs`. Never hardcode cookie TTLs.
 
-export const jobsQuery = (params?: string) => queryOptions({
-  queryKey: ['dashboard', 'jobs', params],
-  queryFn: () => api.jobs(params),
-  staleTime: 4_900,
-  refetchInterval: 5_000,
-  refetchIntervalInBackground: false,
-})
-```
+## Provider URL Validation (SSRF)
 
-```typescript
-// In a page component — use the factory
-const { data } = useQuery(dashboardStatsQuery)
-const { data: jobs } = useQuery(jobsQuery('status=completed'))
-```
+`validate_provider_url()` in `provider_handlers.rs` blocks:
+- Non-HTTP schemes (file://, ftp://, gopher://)
+- Cloud metadata endpoints (GCP `metadata.google.internal`)
+- IPv4 link-local (`169.254.0.0/16` — AWS metadata)
+- IPv6 link-local (`fe80::/10`)
+- IPv4-mapped IPv6 (`::ffff:169.254.169.254`)
+- IPv6 bracket notation parsed correctly (`[::ffff:...]:port`)
 
-Benefits: single place to change staleTime/retry, type-safe key sharing, reuse in `prefetchQuery`.
+Called on provider register and update. See `auth/security.md` for full SSRF details.
 
-### Inline `useQuery` (fallback for one-off, modal-only fetches)
+## SSE Error Sanitization
 
-```typescript
-// Conditional fetch — only when prerequisites are met (modal, etc.)
-const { data } = useQuery({
-  queryKey: ['job-detail', jobId],
-  queryFn: () => api.jobDetail(jobId!),
-  enabled: !!jobId && open,   // fetch only when modal is open
-})
-```
+Use `sanitize_sse_error()` from `handlers.rs` for all SSE/NDJSON error output:
+- Replaces database/network details with generic messages
+- Escapes `\r\n` to prevent SSE frame injection
+- Truncates to 200 characters
 
-### Mutation — use `onSettled` for cache invalidation
-
-```typescript
-// CORRECT — onSettled runs on both success and error
-const mutation = useMutation({
-  mutationFn: (id: string) => api.deleteProvider(id),
-  onSettled: () => queryClient.invalidateQueries({ queryKey: ['backends'] }),
-  onError: (e: Error) => console.error(e.message),
-})
-mutation.mutate(id)            // fire-and-forget
-await mutation.mutateAsync(id) // await inside async handler
-
-// WRONG — onSuccess skips invalidation on error (stale UI)
-onSuccess: () => queryClient.invalidateQueries(...)
-```
-
----
-
-## Frontend: React 19 — useOptimistic
-
-2026 standard: apply optimistic updates to all toggle/switch mutations for perceived speed.
-
-```typescript
-import { useOptimistic } from 'react'
-
-// useOptimistic(currentValue, updater)
-const [optimisticEnabled, setOptimistic] = useOptimistic(
-  model.is_enabled,
-  (_, newValue: boolean) => newValue
-)
-
-const mutation = useMutation({
-  mutationFn: (v: boolean) => api.setModelEnabled(backendId, model.model_name, v),
-  onError: () => setOptimistic(model.is_enabled), // auto-revert on failure
-})
-
-<Switch
-  checked={optimisticEnabled}
-  onCheckedChange={(v) => { setOptimistic(v); mutation.mutate(v) }}
-/>
-// UI responds instantly → server syncs in background → reverts if error
-```
-
----
-
-## Frontend: TypeScript + Zod (API Boundary Validation)
-
-2026 standard: TypeScript enforces compile-time types; Zod validates untrusted API responses at runtime.
-
-```typescript
-// web/lib/types.ts
-import { z } from 'zod'
-
-// Define schema first, infer type from it
-export const ProviderSchema = z.object({
-  id: z.string().uuid(),
-  name: z.string(),
-  backend_type: z.enum(['ollama', 'gemini']),
-  status: z.enum(['online', 'offline', 'degraded']),
-  is_active: z.boolean(),
-})
-export type Provider = z.infer<typeof ProviderSchema>
-
-// Use safeParse to handle errors gracefully (no throws)
-const result = ProviderSchema.safeParse(apiResponse)
-if (!result.success) console.error(result.error.issues)
-
-// Branded types prevent wrong-ID bugs
-const ProviderIdSchema = z.string().uuid().brand<'BackendId'>()
-type ProviderId = z.infer<typeof ProviderIdSchema>
-```
-
-Apply Zod at entry points: API responses, form inputs, env vars.
-
----
-
-## Frontend: Tailwind v4 Color Rules
-
-```tsx
-// ✅ Use @theme-generated utilities (from tokens.css @theme inline block)
-<div className="bg-bg-card text-text-primary border border-border rounded-md p-4">
-
-// ✅ Inline dynamic values via CSS vars
-<span style={{ color: 'var(--theme-text-secondary)' }}>
-
-// ✅ Status colors (per design spec, both modes)
-const STATUS_COLOR: Record<JobStatus, string> = {
-  completed: 'text-emerald-400',  // #34d399
-  failed:    'text-rose-400',     // #fb7185
-  pending:   'text-amber-400',    // #fbbf24
-  running:   'text-blue-400',     // #60a5fa
-  cancelled: 'text-slate-400',
-}
-
-// ❌ Never: hardcoded hex in style prop
-// ❌ Never: non-theme Tailwind color classes (text-slate-700 etc.)
-```
-
----
-
-## Frontend: Adding a New Page
-
-```
-1. web/lib/types.ts               ← add TypeScript types (+ Zod schema if untrusted data)
-2. web/lib/api.ts                 ← add API functions to the api object
-3. web/lib/queries/domain.ts      ← add queryOptions factory (SSOT for queryKey + staleTime)
-4. web/app/new-page/page.tsx      ← 'use client' + useQuery(domainQuery) + UI
-5. web/components/nav.tsx         ← add navItems entry
-6. web/messages/en.json           ← add i18n keys (source of truth)
-7. web/messages/ko.json           ← Korean translation
-8. web/messages/ja.json           ← Japanese translation
-9. docs/llm/frontend/pages/*.md     ← update CDD doc
+```rust
+let err = json!({"error": {"message": sanitize_sse_error(&e)}});
 ```

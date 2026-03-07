@@ -3,17 +3,19 @@
  *
  * Owns:
  *   PUBLIC_PATHS     — pages that suppress redirect-to-login
- *   tryRefresh()     — token refresh with Promise mutex (deduplicates concurrent 401s)
- *   redirectToLogin()— clear tokens + navigate; no-op when already on a public path
+ *   tryRefresh()     — token refresh via HttpOnly cookie (deduplicates concurrent 401s)
+ *   redirectToLogin()— clear session + navigate; no-op when already on a public path
  *
  * api-client.ts delegates here.
  * nav.tsx logout should call redirectToLogin() instead of rolling its own.
  * Never duplicate refresh or redirect logic elsewhere.
+ *
+ * Auth tokens are HttpOnly — JavaScript never touches them.
+ * The browser sends them automatically via credentials: 'include'.
  */
 
-import { clearTokens, getRefreshToken, setAccessToken } from './auth'
-
-const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
+import { clearSession } from './auth'
+import { BASE_API_URL as BASE } from './constants'
 
 // ── Public paths ───────────────────────────────────────────────────────────────
 // Add any route that is accessible without authentication.
@@ -33,18 +35,17 @@ export function isPublicPath(pathname: string): boolean {
 let refreshMutex: Promise<boolean> | null = null
 
 async function doRefresh(): Promise<boolean> {
-  const rt = getRefreshToken()
-  if (!rt) return false
   try {
+    // The refresh token is in an HttpOnly cookie scoped to /v1/auth —
+    // the browser sends it automatically when credentials: 'include' is set.
     const r = await fetch(`${BASE}/v1/auth/refresh`, {
       method: 'POST',
-      body: JSON.stringify({ refresh_token: rt }),
-      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       cache: 'no-store',
     })
     if (!r.ok) return false
-    const { access_token } = await r.json()
-    setAccessToken(access_token)
+    // The new access token is set as an HttpOnly cookie via Set-Cookie header.
+    // Nothing to read from the response body.
     return true
   } catch {
     return false
@@ -70,7 +71,7 @@ export function tryRefresh(): Promise<boolean> {
 let redirecting = false
 
 /**
- * Redirect to /login after clearing all auth cookies.
+ * Redirect to /login after clearing all session cookies.
  *
  * No-op when:
  *   - Already redirecting (prevents duplicate full-page reloads)
@@ -81,6 +82,6 @@ export function redirectToLogin(): void {
   if (typeof window === 'undefined') return
   if (isPublicPath(window.location.pathname)) return
   redirecting = true
-  clearTokens()
+  clearSession()
   window.location.href = '/login'
 }
