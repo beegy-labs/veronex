@@ -16,6 +16,9 @@ spec:
         {{- include "veronex.labels" . | nindent 8 }}
         {{- include "veronex.analytics.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
       containers:
         - name: veronex-analytics
           image: "{{ .Values.veronexAnalytics.image.repository }}:{{ .Values.veronexAnalytics.image.tag }}"
@@ -40,7 +43,10 @@ spec:
             - name: PORT
               value: "{{ .Values.veronexAnalytics.service.port }}"
             - name: ANALYTICS_SECRET
-              value: {{ .Values.veronex.analytics.secret | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "veronex.secretName" . }}
+                  key: ANALYTICS_SECRET
             - name: CLICKHOUSE_URL
               value: {{ include "veronex.clickhouseUrl" . | quote }}
             - name: CLICKHOUSE_USER
@@ -55,3 +61,5 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          resources:
+            {{- toYaml .Values.veronexAnalytics.resources | nindent 12 }}

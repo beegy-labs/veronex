@@ -16,6 +16,9 @@ spec:
         {{- include "veronex.labels" . | nindent 8 }}
         {{- include "veronex.api.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
       containers:
         - name: veronex
           image: "{{ .Values.veronex.image.repository }}:{{ .Values.veronex.image.tag }}"
@@ -36,35 +39,34 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+          envFrom:
+            - secretRef:
+                name: {{ include "veronex.secretName" . }}
           env:
             - name: PORT
               value: "{{ .Values.veronex.service.port }}"
-            - name: DATABASE_URL
-              value: {{ include "veronex.postgresUrl" . | quote }}
             - name: VALKEY_URL
               value: {{ include "veronex.valkeyUrl" . | quote }}
             - name: ANALYTICS_URL
               value: "http://{{ .Release.Name }}-veronex-analytics:{{ .Values.veronexAnalytics.service.port }}"
-            - name: ANALYTICS_SECRET
-              value: {{ .Values.veronex.analytics.secret | quote }}
             - name: S3_ENDPOINT
               value: {{ include "veronex.s3Endpoint" . | quote }}
-            - name: S3_ACCESS_KEY
-              value: {{ include "veronex.s3AccessKey" . | quote }}
-            - name: S3_SECRET_KEY
-              value: {{ include "veronex.s3SecretKey" . | quote }}
             - name: S3_BUCKET
               value: {{ include "veronex.s3Bucket" . | quote }}
             - name: S3_REGION
               value: {{ include "veronex.s3Region" . | quote }}
-            - name: JWT_SECRET
-              value: {{ .Values.veronex.jwt.secret | quote }}
             - name: CORS_ALLOWED_ORIGINS
               value: {{ .Values.veronex.cors.allowedOrigins | quote }}
             - name: OLLAMA_URL
               value: {{ .Values.veronex.ollama.url | quote }}
-            - name: BOOTSTRAP_API_KEY
-              value: {{ .Values.veronex.bootstrapAdminKey | quote }}
+            {{- if .Values.veronex.capacityAnalyzerOllamaUrl }}
+            - name: CAPACITY_ANALYZER_OLLAMA_URL
+              value: {{ .Values.veronex.capacityAnalyzerOllamaUrl | quote }}
+            {{- end }}
+            {{- if .Values.veronex.sessionGroupingIntervalSecs }}
+            - name: SESSION_GROUPING_INTERVAL_SECS
+              value: {{ .Values.veronex.sessionGroupingIntervalSecs | quote }}
+            {{- end }}
             {{- if .Values.veronex.bootstrapSuperUser }}
             - name: BOOTSTRAP_SUPER_USER
               value: {{ .Values.veronex.bootstrapSuperUser | quote }}
@@ -72,10 +74,6 @@ spec:
             {{- if .Values.veronex.bootstrapSuperPass }}
             - name: BOOTSTRAP_SUPER_PASS
               value: {{ .Values.veronex.bootstrapSuperPass | quote }}
-            {{- end }}
-            {{- if .Values.veronex.geminiApiKey }}
-            - name: GEMINI_API_KEY
-              value: {{ .Values.veronex.geminiApiKey | quote }}
             {{- end }}
             {{- if .Values.otelCollector.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -88,3 +86,5 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          resources:
+            {{- toYaml .Values.veronex.resources | nindent 12 }}

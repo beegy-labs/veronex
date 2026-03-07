@@ -16,6 +16,9 @@ spec:
         {{- include "veronex.labels" . | nindent 8 }}
         {{- include "veronex.web.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
       containers:
         - name: veronex-web
           image: "{{ .Values.veronexWeb.image.repository }}:{{ .Values.veronexWeb.image.tag }}"
@@ -39,9 +42,9 @@ spec:
           env:
             - name: NEXT_PUBLIC_VERONEX_API_URL
               value: "http://{{ .Release.Name }}-veronex:{{ .Values.veronex.service.port }}"
-            - name: NEXT_PUBLIC_VERONEX_ADMIN_KEY
-              value: {{ .Values.veronex.bootstrapAdminKey | quote }}
             {{- range $k, $v := .Values.veronexWeb.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          resources:
+            {{- toYaml .Values.veronexWeb.resources | nindent 12 }}

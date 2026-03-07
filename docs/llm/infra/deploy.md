@@ -1,6 +1,6 @@
 # Infrastructure -- Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-03-04 (rev5: trimmed -- cross-refs to otel-pipeline.md and architecture.md)
+> SSOT | **Last Updated**: 2026-03-07 (rev6: Helm chart overhaul — secrets mgmt, external infra, DaemonSet agent)
 
 ## Task Guide
 
@@ -174,30 +174,80 @@ Categories of `Arc<dyn Port>` fields wired in `main.rs` composition root:
 
 Chart location: `deploy/helm/veronex/`
 
+### Quick Start
+
 ```bash
 # First-time setup
 helm repo add bitnami https://charts.bitnami.com/bitnami
 helm repo add redpanda https://charts.redpanda.com
 helm repo update
-helm dependency update deploy/helm/veronex/
+helm dependency build deploy/helm/veronex/
 
 # Install (all subcharts enabled by default)
 helm install veronex deploy/helm/veronex/ \
-  --set veronex.jwt.secret="$(openssl rand -hex 32)" \
+  --set postgresql.auth.password="<pg-pass>" \
+  --set postgresql.auth.username=veronex \
+  --set postgresql.auth.database=veronex \
   --set veronex.cors.allowedOrigins="https://app.example.com"
 ```
 
-Disable subcharts to use external services:
+> Secrets (`JWT_SECRET`, `ANALYTICS_SECRET`, `DATABASE_URL`, S3 keys) are managed via a chart-created K8s Secret by default. Passwords are **not** defaulted — you must provide them via `--set` or a values override file.
+
+### External Infrastructure
+
+Disable subcharts to use pre-existing services:
 
 | Subchart | Disable flag | External config prefix |
 |----------|-------------|------------------------|
-| `postgresql` | `postgresql.enabled=false` | `externalPostgresql.{host,username,password,database}` |
-| `valkey` | `valkey.enabled=false` | `externalValkey.host` |
+| `postgresql` | `postgresql.enabled=false` | `externalPostgresql.{host,port,username,password,database}` |
+| `valkey` | `valkey.enabled=false` | `externalValkey.{host,port,password}` |
 | `minio` | `minio.enabled=false` | `externalMinio.{endpoint,accessKey,secretKey,bucket,region}` |
-| `clickhouse` | `clickhouse.enabled=false` | -- |
-| `redpanda` | `redpanda.enabled=false` | -- |
+| `clickhouse` | `clickhouse.enabled=false` | `externalClickhouse.{host,port,username,password,database}` |
+| `redpanda` | `redpandaEnabled=false` | `externalRedpanda.brokers` |
 
-Ingress (optional):
+> **Note**: Redpanda uses top-level `redpandaEnabled` (not `redpanda.enabled`) due to Redpanda chart JSON schema restrictions.
+
+### Secret Management
+
+Three modes for production secret injection (mutually exclusive):
+
+| Mode | Enable | How it works |
+|------|--------|-------------|
+| **Chart-managed** (default) | No extra config | Renders `secret.yaml` with `stringData` from values |
+| **External Secrets Operator** | `externalSecrets.eso.enabled=true` | Renders `ExternalSecret` CR; ESO syncs from vault |
+| **CSI Secrets Store** | `externalSecrets.csi.enabled=true` | Renders `SecretProviderClass`; CSI driver mounts secrets |
+| **Pre-existing Secret** | `externalSecrets.existingSecretName=<name>` | Deployments reference your existing K8s Secret directly |
+
+ESO example:
+```bash
+helm install veronex deploy/helm/veronex/ \
+  --set externalSecrets.eso.enabled=true \
+  --set externalSecrets.eso.secretStoreRef.name=aws-secrets \
+  --set externalSecrets.eso.remoteRefs.jwtSecret=prod/veronex/jwt-secret \
+  --set externalSecrets.eso.remoteRefs.analyticsSecret=prod/veronex/analytics-secret \
+  --set externalSecrets.eso.remoteRefs.databaseUrl=prod/veronex/database-url \
+  --set externalSecrets.eso.remoteRefs.s3AccessKey=prod/veronex/s3-access-key \
+  --set externalSecrets.eso.remoteRefs.s3SecretKey=prod/veronex/s3-secret-key
+```
+
+### Components
+
+| Template | Resource | Notes |
+|----------|----------|-------|
+| `veronex-deployment.yaml` | Deployment | API server, `envFrom` secretRef |
+| `veronex-analytics-deployment.yaml` | Deployment | ClickHouse analytics service |
+| `veronex-web-deployment.yaml` | Deployment | Next.js dashboard |
+| `veronex-agent-daemonset.yaml` | DaemonSet | Per-node HW metrics agent (hostPath `/sys`, `/proc/meminfo`) |
+| `otel-collector-deployment.yaml` | Deployment | OTel Collector (optional) |
+| `clickhouse-init-job.yaml` | Job (hook) | Applies ClickHouse schema on install/upgrade |
+| `secret.yaml` | Secret | Chart-managed (skipped when ESO/CSI/existing) |
+| `external-secret.yaml` | ExternalSecret | ESO mode |
+| `secret-provider-class.yaml` | SecretProviderClass | CSI mode |
+| `serviceaccount.yaml` | ServiceAccount | Optional (`serviceAccount.create`) |
+| `hpa.yaml` | HPA | Optional (`autoscaling.enabled`) |
+| `pdb.yaml` | PDB | Optional (`podDisruptionBudget.enabled`) |
+
+### Ingress
 
 ```bash
 helm install veronex deploy/helm/veronex/ \
