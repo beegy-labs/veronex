@@ -72,12 +72,17 @@ postgres://{{ .Values.externalPostgresql.username }}:{{ .Values.externalPostgres
 
 {{/*
 Valkey VALKEY_URL.
+Supports optional auth password for external Valkey.
 */}}
 {{- define "veronex.valkeyUrl" -}}
 {{- if .Values.valkey.enabled -}}
 redis://{{ .Release.Name }}-valkey-master:6379
 {{- else -}}
+{{- if .Values.externalValkey.password -}}
+redis://:{{ .Values.externalValkey.password }}@{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}
+{{- else -}}
 redis://{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}
+{{- end -}}
 {{- end -}}
 {{- end }}
 
@@ -184,7 +189,7 @@ us-east-1
 Redpanda / Kafka broker address (single broker string).
 */}}
 {{- define "veronex.redpandaBroker" -}}
-{{- if .Values.redpanda.enabled -}}
+{{- if .Values.redpandaEnabled -}}
 {{ .Release.Name }}-redpanda:9092
 {{- else -}}
 {{ .Values.externalRedpanda.brokers }}
@@ -192,7 +197,18 @@ Redpanda / Kafka broker address (single broker string).
 {{- end }}
 
 {{/*
-OTel Collector gRPC endpoint (used by veronex-analytics).
+Secret name — resolves to existing secret, ESO-managed, or chart-managed.
+*/}}
+{{- define "veronex.secretName" -}}
+{{- if .Values.externalSecrets.existingSecretName -}}
+{{ .Values.externalSecrets.existingSecretName }}
+{{- else -}}
+{{ .Release.Name }}-veronex-secrets
+{{- end -}}
+{{- end }}
+
+{{/*
+OTel Collector gRPC endpoint.
 */}}
 {{- define "veronex.otelEndpoint" -}}
 {{- if .Values.otelCollector.enabled -}}
@@ -204,10 +220,13 @@ http://{{ .Release.Name }}-otel-collector:4317
 
 {{/*
 OTel Collector HTTP endpoint (used by veronex-analytics for OTLP HTTP).
+When using external OTel, set veronex.otel.httpEndpoint explicitly.
 */}}
 {{- define "veronex.otelHttpEndpoint" -}}
 {{- if .Values.otelCollector.enabled -}}
 http://{{ .Release.Name }}-otel-collector:4318
+{{- else if .Values.veronex.otel.httpEndpoint -}}
+{{ .Values.veronex.otel.httpEndpoint }}
 {{- else -}}
 {{ .Values.veronex.otel.endpoint | replace ":4317" ":4318" }}
 {{- end -}}

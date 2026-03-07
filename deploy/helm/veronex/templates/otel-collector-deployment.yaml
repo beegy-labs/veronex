@@ -17,6 +17,9 @@ spec:
         {{- include "veronex.labels" . | nindent 8 }}
         {{- include "veronex.otel.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
       containers:
         - name: otel-collector
           image: "{{ .Values.otelCollector.image.repository }}:{{ .Values.otelCollector.image.tag }}"
@@ -49,6 +52,8 @@ spec:
             - name: config
               mountPath: /etc/otel
               readOnly: true
+          resources:
+            {{- toYaml .Values.otelCollector.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:
