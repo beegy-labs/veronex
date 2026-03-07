@@ -121,7 +121,7 @@ impl Default for JobSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderType {
@@ -157,7 +157,7 @@ impl std::str::FromStr for ProviderType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "lowercase")]
 pub enum FinishReason {
@@ -215,7 +215,7 @@ impl std::str::FromStr for JobStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "lowercase")]
 pub enum LlmProviderStatus {
@@ -238,7 +238,7 @@ impl LlmProviderStatus {
 ///
 /// Updated by the health checker every 30 s; read by the queue dispatcher
 /// on every job dispatch to gate concurrency limits.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThrottleLevel {
     /// Temp < 78 °C — full concurrency allowed.
     Normal,

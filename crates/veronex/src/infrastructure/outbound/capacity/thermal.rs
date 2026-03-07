@@ -75,7 +75,7 @@ impl ThermalThrottleMap {
     pub fn update(&self, provider_id: Uuid, temp_c: f32) -> ThrottleLevel {
         let (prev_level, prev_hard_since) = self.states
             .get(&provider_id)
-            .map(|s| (Some(s.level.clone()), s.hard_since))
+            .map(|s| (Some(s.level), s.hard_since))
             .unwrap_or((None, None));
 
         let in_cooldown = prev_hard_since
@@ -126,7 +126,7 @@ impl ThermalThrottleMap {
     pub fn get(&self, provider_id: Uuid) -> ThrottleLevel {
         self.states
             .get(&provider_id)
-            .map(|s| s.level.clone())
+            .map(|s| s.level)
             .unwrap_or(ThrottleLevel::Normal)
     }
 
