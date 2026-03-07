@@ -127,6 +127,18 @@ pub const SYNC_LOOP_BASE_TICK: Duration = Duration::from_secs(30);
 /// Interval between pending-job sweep passes (reaper).
 pub const PENDING_JOB_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 
+// ── Valkey key constructors (used by application layer) ─────────────────
+
+/// Job ownership key — tracks which instance owns a running job.
+pub fn job_owner_key(job_id: uuid::Uuid) -> String {
+    format!("veronex:job:owner:{job_id}")
+}
+
+/// TPM (tokens per minute) counter key for an API key at a given minute epoch.
+pub fn ratelimit_tpm_key(key_id: uuid::Uuid, minute: i64) -> String {
+    format!("veronex:ratelimit:tpm:{key_id}:{minute}")
+}
+
 // ── Circuit breaker / reaper ─────────────────────────────────────────────
 
 /// Cooldown before half-open probe after circuit opens.

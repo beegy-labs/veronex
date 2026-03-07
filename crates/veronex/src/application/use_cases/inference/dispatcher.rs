@@ -284,7 +284,7 @@ pub(super) async fn queue_dispatcher_loop(
                 let adapter = provider_dispatch.build_adapter(&cfg);
                 tracing::info!(%uuid, provider_id = %pid, name = %cfg.name, "dispatching");
 
-                let owner_key = crate::infrastructure::outbound::valkey_keys::job_owner(uuid);
+                let owner_key = crate::domain::constants::job_owner_key(uuid);
                 let _ = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await;
 
                 let (jobs_c, repo_c, vk_c, obs_c, mm_c) = (

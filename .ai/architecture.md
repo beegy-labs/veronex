@@ -10,7 +10,7 @@ crates/veronex/src/
 │   ├── ports/
 │   │   ├── inbound/   # InferenceUseCase
 │   │   └── outbound/  # Repositories, registries, adapters
-│   └── use_cases/
+│   └── use_cases/inference/  # mod, use_case, dispatcher, runner, helpers
 ├── infrastructure/  # Adapters (implements ports)
 │   ├── inbound/http/  # Axum handlers, middleware, router
 │   └── outbound/      # Postgres, Valkey, Ollama, Gemini, OTel

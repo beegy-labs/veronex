@@ -513,12 +513,13 @@ pub async fn get_performance(
 
 // ── PostgreSQL fallback for performance ─────────────────────────────
 
+#[allow(clippy::unwrap_used)]
 async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<PerformanceMetrics, AppError> {
     use sqlx::Row;
-    let interval = format!("{hours} hours");
+    let hours_f64 = hours as f64;
 
     // Percentiles + aggregates from completed jobs
-    let agg = sqlx::query(&format!(
+    let agg = sqlx::query(
         "SELECT
             COALESCE(AVG(latency_ms)::float8, 0) AS avg_latency_ms,
             COALESCE(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY latency_ms)::float8, 0) AS p50,
@@ -528,9 +529,10 @@ async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<PerformanceMe
             COUNT(*) FILTER (WHERE status = 'completed') AS success_count,
             COALESCE(SUM(COALESCE(prompt_tokens,0) + COALESCE(completion_tokens,0)), 0) AS total_tokens
          FROM inference_jobs
-         WHERE created_at >= NOW() - INTERVAL '{interval}'
+         WHERE created_at >= NOW() - make_interval(hours => $1)
            AND latency_ms IS NOT NULL AND latency_ms > 0"
-    ))
+    )
+    .bind(hours_f64)
     .fetch_one(pool)
     .await?;
 
@@ -543,7 +545,7 @@ async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<PerformanceMe
     };
 
     // Hourly throughput
-    let hourly_rows = sqlx::query(&format!(
+    let hourly_rows = sqlx::query(
         "SELECT
             TO_CHAR(DATE_TRUNC('hour', created_at), 'YYYY-MM-DD\"T\"HH24:00:00\"Z\"') AS hour,
             COUNT(*) AS request_count,
@@ -551,10 +553,11 @@ async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<PerformanceMe
             COALESCE(AVG(latency_ms) FILTER (WHERE latency_ms > 0), 0)::float8 AS avg_latency_ms,
             COALESCE(SUM(COALESCE(prompt_tokens,0) + COALESCE(completion_tokens,0)), 0) AS total_tokens
          FROM inference_jobs
-         WHERE created_at >= NOW() - INTERVAL '{interval}'
+         WHERE created_at >= NOW() - make_interval(hours => $1)
          GROUP BY DATE_TRUNC('hour', created_at)
          ORDER BY hour"
-    ))
+    )
+    .bind(hours_f64)
     .fetch_all(pool)
     .await?;
 

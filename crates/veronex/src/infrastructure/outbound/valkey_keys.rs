@@ -19,7 +19,7 @@ pub fn ratelimit_rpm(key_id: Uuid) -> String {
 
 /// TPM (tokens per minute) counter key for an API key at a given minute epoch.
 pub fn ratelimit_tpm(key_id: Uuid, minute: i64) -> String {
-    format!("veronex:ratelimit:tpm:{key_id}:{minute}")
+    crate::domain::constants::ratelimit_tpm_key(key_id, minute)
 }
 
 // ── Auth / session ───────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ pub fn slot_leases(provider_id: Uuid, model: &str) -> String {
 
 /// Tracks which instance owns a running job (EX 300s).
 pub fn job_owner(job_id: Uuid) -> String {
-    format!("veronex:job:owner:{job_id}")
+    crate::domain::constants::job_owner_key(job_id)
 }
 
 /// Valkey Stream key for cross-instance token relay (XADD/XREAD).
