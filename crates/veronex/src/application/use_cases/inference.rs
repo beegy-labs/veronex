@@ -39,6 +39,36 @@ use crate::domain::constants::{
     QUEUE_PROCESSING,
 };
 
+// ── Token stream state ───────────────────────────────────────────────────────
+
+/// Mutable state accumulated while consuming the provider token stream.
+/// Grouped into a struct to reduce local-variable clutter in `run_job`.
+struct TokenStreamState {
+    token_count: u64,
+    accumulated_text: String,
+    last_owner_refresh: std::time::Instant,
+    accumulated_tool_calls: Vec<serde_json::Value>,
+    actual_prompt_tokens: Option<u32>,
+    actual_completion_tokens: Option<u32>,
+    actual_cached_tokens: Option<u32>,
+    ttft_ms: Option<i32>,
+}
+
+impl TokenStreamState {
+    fn new() -> Self {
+        Self {
+            token_count: 0,
+            accumulated_text: String::new(),
+            last_owner_refresh: std::time::Instant::now(),
+            accumulated_tool_calls: Vec::new(),
+            actual_prompt_tokens: None,
+            actual_completion_tokens: None,
+            actual_cached_tokens: None,
+            ttft_ms: None,
+        }
+    }
+}
+
 // ── In-memory job store ────────────────────────────────────────────────────────
 
 struct JobEntry {
@@ -373,7 +403,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 notify: Arc::new(Notify::new()),
                 cancel_notify,
                 gemini_tier: gemini_tier.clone(),
-                key_tier: key_tier.clone(),
+                key_tier,
                 tpm_reservation_minute: Some(chrono::Utc::now().timestamp() / 60),
             },
         );
@@ -707,6 +737,157 @@ fn spawn_job_direct(
     });
 }
 
+// ── Provider filtering helpers ───────────────────────────────────────────────
+
+/// Filter the full provider list down to candidates matching the job's requirements.
+///
+/// Three-stage filter:
+///   1. Active + matching provider_type + optional Gemini tier
+///   2. Ollama: provider has the requested model (ollama_models table)
+///   3. Ollama: model is not disabled on that provider (provider_selected_models)
+async fn filter_provider_candidates(
+    registry: &dyn LlmProviderRegistry,
+    ollama_model_repo: &Option<Arc<dyn OllamaModelRepository>>,
+    model_selection_repo: &Option<Arc<dyn ProviderModelSelectionRepository>>,
+    provider_type: ProviderType,
+    model_str: &str,
+    gemini_tier: Option<&str>,
+) -> Vec<crate::domain::entities::LlmProvider> {
+    let all = registry.list_all().await.unwrap_or_default();
+
+    // Stage 1: active + type + tier
+    let candidates: Vec<_> = all
+        .into_iter()
+        .filter(|b| {
+            b.is_active && b.provider_type == provider_type
+                && match gemini_tier {
+                    Some(GEMINI_TIER_FREE) => b.is_free_tier,
+                    _ => true,
+                }
+        })
+        .collect();
+
+    // Stage 2: Ollama model availability
+    let candidates = if provider_type == ProviderType::Ollama && !model_str.is_empty() {
+        if let Some(repo) = ollama_model_repo {
+            match repo.providers_for_model(model_str).await {
+                Ok(ids) if !ids.is_empty() => {
+                    let id_set: std::collections::HashSet<Uuid> = ids.into_iter().collect();
+                    let filtered: Vec<_> = candidates.iter().filter(|b| id_set.contains(&b.id)).cloned().collect();
+                    if filtered.is_empty() { candidates } else { filtered }
+                }
+                _ => candidates,
+            }
+        } else {
+            candidates
+        }
+    } else {
+        candidates
+    };
+
+    // Stage 3: model selection (disabled models)
+    if provider_type == ProviderType::Ollama && !model_str.is_empty() {
+        if let Some(repo) = model_selection_repo {
+            let mut result = Vec::new();
+            for b in candidates {
+                match repo.list_enabled(b.id).await {
+                    Ok(enabled) if !enabled.is_empty() => {
+                        let set: std::collections::HashSet<&str> = enabled.iter().map(|s| s.as_str()).collect();
+                        if set.contains(model_str) {
+                            result.push(b);
+                        } else {
+                            tracing::debug!(provider_id = %b.id, model = %model_str, "model disabled on provider, skipping");
+                        }
+                    }
+                    _ => result.push(b),
+                }
+            }
+            result
+        } else {
+            candidates
+        }
+    } else {
+        candidates
+    }
+}
+
+/// Score candidates by VRAM availability and claim a slot on the best one.
+///
+/// Applies model-locality bonus, tier-preference sorting, thermal gating,
+/// circuit-breaker filtering, and atomic VRAM reservation.
+async fn score_and_claim_provider(
+    candidates: Vec<crate::domain::entities::LlmProvider>,
+    provider_dispatch: &dyn ProviderDispatchPort,
+    vram_pool: &dyn VramPoolPort,
+    thermal: &dyn ThermalPort,
+    circuit_breaker: &dyn CircuitBreakerPort,
+    model_str: &str,
+    key_tier: Option<&KeyTier>,
+    provider_type: ProviderType,
+) -> Option<(crate::domain::entities::LlmProvider, crate::application::ports::outbound::concurrency_port::VramPermit)> {
+    let mut availability: Vec<(crate::domain::entities::LlmProvider, i64)> = Vec::new();
+    for b in candidates {
+        let avail = match b.provider_type {
+            ProviderType::Ollama => {
+                let base = provider_dispatch.available_vram_mb(&b).await;
+                let loaded = vram_pool.loaded_model_names(b.id);
+                if loaded.iter().any(|m| m == model_str) {
+                    base.saturating_add(MODEL_LOCALITY_BONUS_MB)
+                } else {
+                    base
+                }
+            }
+            ProviderType::Gemini => i64::MAX,
+        };
+        availability.push((b, avail));
+    }
+
+    // Sort: tier preference primary, VRAM descending secondary
+    availability.sort_by(|a, b| {
+        if provider_type == ProviderType::Ollama {
+            let a_preferred = match key_tier {
+                Some(KeyTier::Paid) => !a.0.is_free_tier,
+                Some(KeyTier::Free) => a.0.is_free_tier,
+                None => false,
+            };
+            let b_preferred = match key_tier {
+                Some(KeyTier::Paid) => !b.0.is_free_tier,
+                Some(KeyTier::Free) => b.0.is_free_tier,
+                None => false,
+            };
+            match b_preferred.cmp(&a_preferred) {
+                std::cmp::Ordering::Equal => b.1.cmp(&a.1),
+                ord => ord,
+            }
+        } else {
+            b.1.cmp(&a.1)
+        }
+    });
+
+    // Claim: first provider that passes CB + thermal + VRAM gates
+    availability
+        .into_iter()
+        .filter(|(_b, avail)| *avail > 0)
+        .find_map(|(provider, _)| {
+            if !circuit_breaker.is_allowed(provider.id) {
+                tracing::debug!(provider_id = %provider.id, provider_name = %provider.name, "circuit open — skipping");
+                return None;
+            }
+            match thermal.get_level(provider.id) {
+                ThrottleLevel::Hard => return None,
+                ThrottleLevel::Soft => {
+                    if vram_pool.provider_active_requests(provider.id) > 0 {
+                        return None;
+                    }
+                }
+                ThrottleLevel::Normal => {}
+            }
+            vram_pool
+                .try_reserve(provider.id, model_str)
+                .map(|permit| (provider, permit))
+        })
+}
+
 // ── Multi-provider queue dispatcher ────────────────────────────────────────────
 
 /// Pops jobs from the Valkey queue and dispatches each one to the best available
@@ -779,7 +960,7 @@ async fn queue_dispatcher_loop(
         // Also read gemini_tier and key_tier for routing.
         // Ref is held only in this block and dropped before the await below.
         let (job, gemini_tier, key_tier) = if let Some(entry) = jobs.get(&uuid) {
-            (entry.job.clone(), entry.gemini_tier.clone(), entry.key_tier.clone())
+            (entry.job.clone(), entry.gemini_tier.clone(), entry.key_tier)
             // Ref dropped here
         } else {
             let job_id = crate::domain::value_objects::JobId(uuid);
@@ -810,147 +991,27 @@ async fn queue_dispatcher_loop(
             }
         };
 
-        // ── Find an available provider (VRAM check) and claim it atomically ──
-        let provider_cfg = registry.list_all().await.unwrap_or_default();
-        let candidates: Vec<_> = provider_cfg
-            .into_iter()
-            .filter(|b| {
-                b.is_active && b.provider_type == job.provider_type
-                    && match gemini_tier.as_deref() {
-                        Some(GEMINI_TIER_FREE) => b.is_free_tier,
-                        _ => true,
-                    }
-            })
-            .collect();
-
-        // Filter Ollama candidates to providers that have the requested model.
+        // ── Find an available provider and claim a VRAM slot atomically ──
         let model_str = job.model_name.as_str();
-        let candidates = if job.provider_type == ProviderType::Ollama && !model_str.is_empty() {
-            if let Some(ref repo) = ollama_model_repo {
-                match repo.providers_for_model(model_str).await {
-                    Ok(ids) if !ids.is_empty() => {
-                        let id_set: std::collections::HashSet<Uuid> =
-                            ids.into_iter().collect();
-                        let filtered: Vec<_> = candidates
-                            .iter()
-                            .filter(|b| id_set.contains(&b.id))
-                            .cloned()
-                            .collect();
-                        if filtered.is_empty() { candidates } else { filtered }
-                    }
-                    _ => candidates,
-                }
-            } else {
-                candidates
-            }
-        } else {
-            candidates
-        };
+        let candidates = filter_provider_candidates(
+            registry.as_ref(),
+            &ollama_model_repo,
+            &model_selection_repo,
+            job.provider_type,
+            model_str,
+            gemini_tier.as_deref(),
+        ).await;
 
-        // Filter by model selection: skip providers where this model is disabled.
-        let candidates = if job.provider_type == ProviderType::Ollama && !model_str.is_empty() {
-            if let Some(ref repo) = model_selection_repo {
-                let mut result = Vec::new();
-                for b in candidates {
-                    match repo.list_enabled(b.id).await {
-                        Ok(enabled) if !enabled.is_empty() => {
-                            let set: std::collections::HashSet<&str> =
-                                enabled.iter().map(|s| s.as_str()).collect();
-                            if set.contains(model_str) {
-                                result.push(b);
-                            } else {
-                                tracing::debug!(
-                                    provider_id = %b.id,
-                                    model = %model_str,
-                                    "model disabled on provider, skipping in queue"
-                                );
-                            }
-                        }
-                        // No rows or error → no restriction.
-                        _ => result.push(b),
-                    }
-                }
-                result
-            } else {
-                candidates
-            }
-        } else {
-            candidates
-        };
-
-        // Collect VRAM availability for each candidate.
-        // Model stickiness: providers with the requested model already loaded get a
-        // large bonus, favoring consecutive requests on the same provider over switching.
-        let mut availability: Vec<(crate::domain::entities::LlmProvider, i64)> = Vec::new();
-        for b in candidates {
-            let avail = match b.provider_type {
-                ProviderType::Ollama => {
-                    let base = provider_dispatch.available_vram_mb(&b).await;
-                    let loaded = vram_pool.loaded_model_names(b.id);
-                    if loaded.iter().any(|m| m == model_str) {
-                        base.saturating_add(MODEL_LOCALITY_BONUS_MB) // large bonus for model locality
-                    } else {
-                        base
-                    }
-                }
-                ProviderType::Gemini => i64::MAX, // no VRAM constraint
-            };
-            availability.push((b, avail));
-        }
-        // Sort providers: primary = tier preference, secondary = available VRAM descending.
-        // Paid-tier jobs prefer non-free-tier Ollama providers; free-tier jobs prefer free-tier ones.
-        availability.sort_by(|a, b| {
-            if job.provider_type == ProviderType::Ollama {
-                let a_preferred = match key_tier {
-                    Some(KeyTier::Paid) => !a.0.is_free_tier, // paid → prefer non-free-tier
-                    Some(KeyTier::Free) => a.0.is_free_tier,  // free → prefer free-tier
-                    None => false,
-                };
-                let b_preferred = match key_tier {
-                    Some(KeyTier::Paid) => !b.0.is_free_tier,
-                    Some(KeyTier::Free) => b.0.is_free_tier,
-                    None => false,
-                };
-                match b_preferred.cmp(&a_preferred) {
-                    std::cmp::Ordering::Equal => b.1.cmp(&a.1),
-                    ord => ord,
-                }
-            } else {
-                b.1.cmp(&a.1) // Gemini: VRAM = MAX for all, ordering doesn't matter
-            }
-        });
-
-        // Claim a slot on the best available provider (VRAM-sorted, thermal-filtered,
-        // circuit-breaker-filtered).
-        let claimed = availability
-            .into_iter()
-            .filter(|(_b, avail)| *avail > 0)
-            .find_map(|(provider, _)| {
-                // Circuit breaker gate — skip open providers.
-                if !circuit_breaker.is_allowed(provider.id) {
-                    tracing::debug!(
-                        provider_id = %provider.id,
-                        provider_name = %provider.name,
-                        "circuit open — skipping provider"
-                    );
-                    return None;
-                }
-                // Thermal gate
-                match thermal.get_level(provider.id) {
-                    ThrottleLevel::Hard => return None,
-                    ThrottleLevel::Soft => {
-                        // Soft throttle: allow only if no active requests on entire provider
-                        if vram_pool.provider_active_requests(provider.id) > 0 {
-                            return None;
-                        }
-                    }
-                    ThrottleLevel::Normal => {}
-                }
-                // Non-blocking VRAM reserve
-                vram_pool
-                    .try_reserve(provider.id, job.model_name.as_str())
-                    .map(|permit| (provider, permit))
-            });
+        let claimed = score_and_claim_provider(
+            candidates,
+            provider_dispatch.as_ref(),
+            vram_pool.as_ref(),
+            thermal.as_ref(),
+            circuit_breaker.as_ref(),
+            model_str,
+            key_tier.as_ref(),
+            job.provider_type,
+        ).await;
 
         match claimed {
             Some((provider_cfg, permit)) => {
@@ -1114,20 +1175,7 @@ async fn run_job(
     let mut token_stream = provider.stream_tokens(&job);
     // Clear messages after stream is created — S3 is authoritative; DB saves must omit
     job.messages = None;
-    let mut token_count: u64 = 0;
-    let mut accumulated_text = String::new();
-    // Track last owner refresh for periodic renewal (prevents false reaper re-enqueue).
-    let mut last_owner_refresh = std::time::Instant::now();
-    // Collected tool calls from all StreamToken.tool_calls across this job.
-    // Stored as JSONB in inference_jobs.tool_calls_json for training data / dashboard.
-    let mut accumulated_tool_calls: Vec<serde_json::Value> = Vec::new();
-    // Actual token counts from provider usage metadata (e.g. Gemini usageMetadata).
-    // Set when the final StreamToken carries real counts; None = fall back to token_count.
-    let mut actual_prompt_tokens: Option<u32> = None;
-    let mut actual_completion_tokens: Option<u32> = None;
-    let mut actual_cached_tokens: Option<u32> = None;
-    // Time to first token (ms from started_at to first non-final non-empty token).
-    let mut ttft_ms_value: Option<i32> = None;
+    let mut ts = TokenStreamState::new();
 
     loop {
         // biased: cancel branch is checked first so cancellation fires immediately
@@ -1160,30 +1208,24 @@ async fn run_job(
 
         match result {
             Ok(token) => {
-                token_count += 1;
-                accumulated_text.push_str(&token.value);
-                // Collect tool calls into a structured Vec for JSONB storage.
-                // The SSE handler already forwards them to the client; here we
-                // persist them separately so the dashboard and training exports
-                // can query tool_name / arguments without parsing result_text.
+                ts.token_count += 1;
+                ts.accumulated_text.push_str(&token.value);
                 if let Some(ref tc) = token.tool_calls {
                     match tc {
                         serde_json::Value::Array(arr) => {
-                            accumulated_tool_calls.reserve(arr.len());
-                            accumulated_tool_calls.extend(arr.iter().cloned());
+                            ts.accumulated_tool_calls.reserve(arr.len());
+                            ts.accumulated_tool_calls.extend(arr.iter().cloned());
                         }
-                        other => accumulated_tool_calls.push(other.clone()),
+                        other => ts.accumulated_tool_calls.push(other.clone()),
                     }
                 }
-                // Capture actual token counts from provider usage metadata.
                 if token.prompt_tokens.is_some() || token.completion_tokens.is_some() {
-                    actual_prompt_tokens = token.prompt_tokens;
-                    actual_completion_tokens = token.completion_tokens;
-                    actual_cached_tokens = token.cached_tokens;
+                    ts.actual_prompt_tokens = token.prompt_tokens;
+                    ts.actual_completion_tokens = token.completion_tokens;
+                    ts.actual_cached_tokens = token.cached_tokens;
                 }
-                // Record TTFT on the first non-empty, non-final token.
-                if ttft_ms_value.is_none() && !token.is_final && !token.value.is_empty() {
-                    ttft_ms_value = Some(
+                if ts.ttft_ms.is_none() && !token.is_final && !token.value.is_empty() {
+                    ts.ttft_ms = Some(
                         chrono::Utc::now()
                             .signed_duration_since(started_at)
                             .num_milliseconds()
@@ -1216,12 +1258,12 @@ async fn run_job(
                 notify.notify_one();
 
                 // Refresh job_owner TTL every 60s to prevent false reaper re-enqueue.
-                if last_owner_refresh.elapsed() >= OWNER_REFRESH_INTERVAL {
+                if ts.last_owner_refresh.elapsed() >= OWNER_REFRESH_INTERVAL {
                     if let Some(ref vk) = valkey {
                         let owner_key = crate::infrastructure::outbound::valkey_keys::job_owner(uuid);
                         let _ = vk.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, true).await;
                     }
-                    last_owner_refresh = std::time::Instant::now();
+                    ts.last_owner_refresh = std::time::Instant::now();
                 }
             }
             Err(e) => {
@@ -1252,8 +1294,8 @@ async fn run_job(
                     uuid,
                     api_key_id,
                     &job,
-                    actual_prompt_tokens.unwrap_or(0),
-                    actual_completion_tokens.unwrap_or(token_count as u32),
+                    ts.actual_prompt_tokens.unwrap_or(0),
+                    ts.actual_completion_tokens.unwrap_or(ts.token_count as u32),
                     latency_ms,
                     FinishReason::Error,
                     "failed".to_string(),
@@ -1293,16 +1335,16 @@ async fn run_job(
         JobStatus::Completed
     };
 
-    let result_text = if accumulated_text.is_empty() {
+    let result_text = if ts.accumulated_text.is_empty() {
         None
     } else {
-        Some(accumulated_text)
+        Some(ts.accumulated_text)
     };
 
-    let tool_calls_json = if accumulated_tool_calls.is_empty() {
+    let tool_calls_json = if ts.accumulated_tool_calls.is_empty() {
         None
     } else {
-        Some(serde_json::Value::Array(accumulated_tool_calls))
+        Some(serde_json::Value::Array(ts.accumulated_tool_calls))
     };
 
     let latency_ms_raw = completed_at
@@ -1311,9 +1353,9 @@ async fn run_job(
         .max(0);
     let stored_latency_ms = latency_ms_raw as i32;
 
-    let stored_completion_tokens = actual_completion_tokens
+    let stored_completion_tokens = ts.actual_completion_tokens
         .map(|v| v as i32)
-        .or_else(|| if token_count > 0 { Some(token_count as i32) } else { None });
+        .or_else(|| if ts.token_count > 0 { Some(ts.token_count as i32) } else { None });
 
     // ── Ownership guard: verify we still own this job before writing results ──
     // Prevents double-write when the reaper re-enqueued our job to another instance.
@@ -1339,10 +1381,10 @@ async fn run_job(
     job.result_text = result_text.clone();
     job.tool_calls_json = tool_calls_json;
     job.latency_ms = Some(stored_latency_ms);
-    job.ttft_ms = ttft_ms_value;
-    job.prompt_tokens = actual_prompt_tokens.map(|v| v as i32);
+    job.ttft_ms = ts.ttft_ms;
+    job.prompt_tokens = ts.actual_prompt_tokens.map(|v| v as i32);
     job.completion_tokens = stored_completion_tokens;
-    job.cached_tokens = actual_cached_tokens.map(|v| v as i32);
+    job.cached_tokens = ts.actual_cached_tokens.map(|v| v as i32);
     if let Err(e) = job_repo.save(&job).await {
         tracing::warn!(job_id = %uuid, "failed to persist completed state: {e}");
     }
@@ -1372,7 +1414,7 @@ async fn run_job(
 
     // ── Record TPM ───────────────────────────────────────────────────
     if let (Some(vk), Some(key_id)) = (&valkey, api_key_id) {
-        if let Err(e) = record_tpm(vk.as_ref(), key_id, token_count, tpm_reservation_minute).await {
+        if let Err(e) = record_tpm(vk.as_ref(), key_id, ts.token_count, tpm_reservation_minute).await {
             tracing::warn!(job_id = %uuid, "failed to record TPM usage: {e}");
         }
     }
@@ -1399,8 +1441,8 @@ async fn run_job(
         uuid,
         api_key_id,
         &job,
-        actual_prompt_tokens.unwrap_or(0),
-        actual_completion_tokens.unwrap_or(token_count as u32),
+        ts.actual_prompt_tokens.unwrap_or(0),
+        ts.actual_completion_tokens.unwrap_or(ts.token_count as u32),
         latency_ms_raw as u32,
         finish_reason,
         status_str,

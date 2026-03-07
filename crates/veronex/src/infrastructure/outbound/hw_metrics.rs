@@ -37,7 +37,7 @@ impl HwMetrics {
 
     /// Returns `true` when the GPU temperature is at or above 85 °C.
     pub fn is_overheating(&self) -> bool {
-        self.temp_c > 0.0 && self.temp_c >= 85.0
+        self.temp_c >= 85.0
     }
 }
 

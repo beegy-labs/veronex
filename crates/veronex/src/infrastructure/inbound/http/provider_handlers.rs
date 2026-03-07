@@ -305,7 +305,7 @@ pub async fn register_provider(
     let provider = LlmProvider {
         id: Uuid::now_v7(),
         name: req.name.clone(),
-        provider_type: provider_type.clone(),
+        provider_type,
         url: req.url.unwrap_or_default(),
         api_key_encrypted: req.api_key,
         is_active: true,
@@ -321,7 +321,7 @@ pub async fn register_provider(
     // Health check before persisting.
     let initial_status = check_provider(&state.http_client, &provider).await;
     let provider = LlmProvider {
-        status: initial_status.clone(),
+        status: initial_status,
         ..provider
     };
 
@@ -410,7 +410,7 @@ pub async fn healthcheck_provider(
     let new_status = check_provider(&state.http_client, &provider).await;
 
     let registry = &state.provider_registry;
-    if let Err(e) = registry.update_status(id, new_status.clone()).await {
+    if let Err(e) = registry.update_status(id, new_status).await {
         tracing::warn!(%id, "failed to persist healthcheck result: {e}");
     }
 
