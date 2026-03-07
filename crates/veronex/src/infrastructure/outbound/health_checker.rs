@@ -88,10 +88,11 @@ pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) ->
                 tracing::warn!(provider_id = %provider.id, "Gemini provider has no API key");
                 return LlmProviderStatus::Offline;
             };
-            let url = format!(
-                "{GEMINI_BASE_URL}/v1beta/models?key={key}&pageSize=1"
-            );
-            match client.get(&url).timeout(GEMINI_HEALTH_TIMEOUT).send().await {
+            let url = format!("{GEMINI_BASE_URL}/v1beta/models?pageSize=1");
+            match client.get(&url)
+                .header("x-goog-api-key", key.as_str())
+                .timeout(GEMINI_HEALTH_TIMEOUT)
+                .send().await {
                 Ok(r) if r.status().is_success() => LlmProviderStatus::Online,
                 Ok(r) => {
                     tracing::warn!(

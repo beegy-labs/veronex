@@ -15,14 +15,15 @@ use crate::application::ports::outbound::concurrency_port::{
 use crate::infrastructure::outbound::capacity::vram_pool::VramPool;
 
 /// Publish VRAM reservation to Valkey: HINCRBY + ZADD lease.
-/// ZSET member format: "instance_id:lease_id:kv_mb" (kv_mb for reaper deduction).
+/// ZSET member format: "instance_id|lease_id|kv_mb" (pipe-delimited to avoid
+/// collision with `:` in UUIDs and model names).
 const LUA_VRAM_ACQUIRE: &str = r#"
 local t = redis.call('TIME')
 local now = tonumber(t[1])
 local expiry = now + tonumber(ARGV[3])
 local kv = tonumber(ARGV[4])
 redis.call('HINCRBY', KEYS[1], ARGV[1], kv)
-redis.call('ZADD', KEYS[2], expiry, ARGV[1] .. ':' .. ARGV[2] .. ':' .. kv)
+redis.call('ZADD', KEYS[2], expiry, ARGV[1] .. '|' .. ARGV[2] .. '|' .. kv)
 return 1
 "#;
 
@@ -35,11 +36,12 @@ if cur >= delta then
 else
     redis.call('HSET', KEYS[1], ARGV[1], 0)
 end
-redis.call('ZREM', KEYS[2], ARGV[1] .. ':' .. ARGV[2] .. ':' .. delta)
+redis.call('ZREM', KEYS[2], ARGV[1] .. '|' .. ARGV[2] .. '|' .. delta)
 return 1
 "#;
 
 /// Reap expired leases: ZREM + HINCRBY deduction from reserved HASH.
+/// Members are pipe-delimited: "instance_id|lease_id|kv_mb".
 const LUA_VRAM_REAP: &str = r#"
 local t = redis.call('TIME')
 local now = tonumber(t[1])
@@ -47,9 +49,9 @@ local expired = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now)
 local count = 0
 for _, member in ipairs(expired) do
     redis.call('ZREM', KEYS[2], member)
-    -- Extract instance_id and kv_mb from "instance_id:lease_id:kv_mb"
+    -- Extract instance_id and kv_mb from "instance_id|lease_id|kv_mb"
     local parts = {}
-    for p in member:gmatch('[^:]+') do parts[#parts+1] = p end
+    for p in member:gmatch('[^|]+') do parts[#parts+1] = p end
     if #parts >= 3 then
         local inst = parts[1]
         local kv = tonumber(parts[#parts]) or 0

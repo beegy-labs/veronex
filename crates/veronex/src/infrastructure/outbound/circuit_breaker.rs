@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::Instant;
+use dashmap::DashMap;
 use uuid::Uuid;
 
 use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPort;
@@ -27,26 +26,25 @@ impl ProviderCircuit {
     }
 }
 
-/// Thread-safe per-provider circuit breaker map.
+/// Lock-free per-provider circuit breaker map backed by DashMap.
 ///
 /// Transitions:
 /// - Closed → Open when N consecutive failures are recorded.
-/// - Open → HalfOpen after COOLDOWN_SECS elapses.
+/// - Open → HalfOpen after COOLDOWN elapses.
 /// - HalfOpen → Closed on success.
 /// - HalfOpen → Open on failure (resets cooldown).
 pub struct CircuitBreakerMap {
-    inner: Mutex<HashMap<Uuid, ProviderCircuit>>,
+    inner: DashMap<Uuid, ProviderCircuit>,
 }
 
 impl CircuitBreakerMap {
     pub fn new() -> Self {
-        Self { inner: Mutex::new(HashMap::new()) }
+        Self { inner: DashMap::new() }
     }
 
     /// Returns true if requests are allowed for this provider.
     pub fn is_allowed(&self, provider_id: Uuid) -> bool {
-        let mut map = self.inner.lock().expect("circuit breaker lock poisoned");
-        let entry = map.entry(provider_id).or_insert_with(ProviderCircuit::new);
+        let mut entry = self.inner.entry(provider_id).or_insert_with(ProviderCircuit::new);
         match &entry.state {
             CircuitState::Closed => true,
             CircuitState::HalfOpen => true,
@@ -67,8 +65,7 @@ impl CircuitBreakerMap {
 
     /// Call after a successful inference on this provider.
     pub fn on_success(&self, provider_id: Uuid) {
-        let mut map = self.inner.lock().expect("circuit breaker lock poisoned");
-        if let Some(entry) = map.get_mut(&provider_id) {
+        if let Some(mut entry) = self.inner.get_mut(&provider_id) {
             if entry.state != CircuitState::Closed {
                 tracing::info!(
                     provider_id = %provider_id,
@@ -82,8 +79,7 @@ impl CircuitBreakerMap {
 
     /// Call after a failed inference on this provider.
     pub fn on_failure(&self, provider_id: Uuid) {
-        let mut map = self.inner.lock().expect("circuit breaker lock poisoned");
-        let entry = map.entry(provider_id).or_insert_with(ProviderCircuit::new);
+        let mut entry = self.inner.entry(provider_id).or_insert_with(ProviderCircuit::new);
         entry.consecutive_failures += 1;
         if entry.consecutive_failures >= FAILURE_THRESHOLD
             || entry.state == CircuitState::HalfOpen
@@ -100,10 +96,10 @@ impl CircuitBreakerMap {
 
     /// Returns a snapshot of all open circuits for diagnostics.
     pub fn open_circuits(&self) -> Vec<Uuid> {
-        let map = self.inner.lock().expect("circuit breaker lock poisoned");
-        map.iter()
-            .filter(|(_, c)| matches!(c.state, CircuitState::Open { .. }))
-            .map(|(id, _)| *id)
+        self.inner
+            .iter()
+            .filter(|r| matches!(r.state, CircuitState::Open { .. }))
+            .map(|r| *r.key())
             .collect()
     }
 }

@@ -52,7 +52,7 @@
 ```bash
 # Rust API (veronex)
 DATABASE_URL=postgres://veronex:veronex@localhost:5433/veronex
-VALKEY_URL=redis://localhost:6380
+VALKEY_URL=redis://localhost:6380/0   # DB index recommended when sharing Valkey
 OLLAMA_URL=http://localhost:11434
 GEMINI_API_KEY=<optional legacy>
 BOOTSTRAP_API_KEY=veronex-bootstrap-admin-key
@@ -72,6 +72,8 @@ OLLAMA_NUM_PARALLEL=1                # slot ceiling in capacity analyzer; must m
 SESSION_GROUPING_INTERVAL_SECS=86400 # session grouping loop interval (default: 86400 = 24h)
 ANALYTICS_URL=http://localhost:3003
 ANALYTICS_SECRET=<shared-secret>
+PG_POOL_MAX=10                       # PostgreSQL pool size (default: 10)
+VALKEY_POOL_SIZE=6                   # Valkey connection pool size (default: 6)
 
 # veronex-analytics (internal service)
 CLICKHOUSE_URL=http://localhost:8123

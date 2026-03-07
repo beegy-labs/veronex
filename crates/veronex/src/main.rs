@@ -113,7 +113,14 @@ async fn main() -> Result<()> {
         use fred::prelude::*;
         tracing::info!("connecting to valkey at {url}");
         let config = Config::from_url(url)?;
-        let pool = Pool::new(config, None, None, None, 6)?;
+        // Pool size configurable via VALKEY_POOL_SIZE (default: 6).
+        // Valkey DB index is determined by the URL path (e.g. redis://host:6379/0).
+        // If sharing Valkey with other services, always specify a DB index in the URL.
+        let valkey_pool_size: usize = std::env::var("VALKEY_POOL_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(6);
+        let pool = Pool::new(config, None, None, None, valkey_pool_size)?;
         pool.init().await?;
         tracing::info!("valkey ready");
         Some(pool)
@@ -536,10 +543,15 @@ async fn main() -> Result<()> {
 
     tracing::info!("shutting down background tasks...");
     shutdown.cancel();
-    while let Some(res) = tasks.join_next().await {
-        if let Err(e) = res {
-            tracing::warn!("background task panicked: {e:?}");
+    let drain = async {
+        while let Some(res) = tasks.join_next().await {
+            if let Err(e) = res {
+                tracing::warn!("background task panicked: {e:?}");
+            }
         }
+    };
+    if tokio::time::timeout(Duration::from_secs(30), drain).await.is_err() {
+        tracing::warn!("background tasks did not finish within 30s — forcing exit");
     }
     tracing::info!("shutdown complete");
 
