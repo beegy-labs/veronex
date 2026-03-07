@@ -116,8 +116,7 @@ pub async fn create_account(
 ) -> Result<Json<CreateAccountResponse>, AppError> {
     super::handlers::validate_username(&req.username)?;
 
-    let password_hash = password_hashing::hash_password(&req.password)
-        .map_err(AppError::Internal)?;
+    let password_hash = password_hashing::hash_password(&req.password)?;
     let now = Utc::now();
     let account = Account {
         id: Uuid::now_v7(),

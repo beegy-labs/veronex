@@ -416,8 +416,7 @@ pub async fn reset_password(
         Uuid::parse_str(&account_id_str)
             .map_err(|e| AppError::Internal(anyhow::anyhow!("invalid account id in reset token: {e}")))?;
 
-    let new_hash = password_hashing::hash_password(&req.new_password)
-        .map_err(AppError::Internal)?;
+    let new_hash = password_hashing::hash_password(&req.new_password)?;
 
     state
         .account_repo
@@ -471,8 +470,7 @@ pub async fn setup(
         ));
     }
 
-    let hash = password_hashing::hash_password(&req.password)
-        .map_err(AppError::Internal)?;
+    let hash = password_hashing::hash_password(&req.password)?;
 
     // Use a PG advisory lock to serialise the check-then-insert so two
     // concurrent requests cannot both pass the "no accounts exist" guard.

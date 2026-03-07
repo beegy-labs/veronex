@@ -1,3 +1,4 @@
+use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Method};
 use axum::middleware;
 use axum::routing::{delete, get, patch, post, put};
@@ -280,6 +281,7 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                     api_key_auth,
                 )),
         )
+        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB — reject oversized bodies before deserialization
         .layer(cors)
         .layer(middleware::map_response(security_headers))
         .layer(TraceLayer::new_for_http())
