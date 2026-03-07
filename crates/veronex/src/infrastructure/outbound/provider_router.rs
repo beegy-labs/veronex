@@ -272,12 +272,13 @@ pub async fn increment_gemini_counters(
 ///   - Free-tier providers checked first (registration order).
 ///   - RPD exhausted → skip this provider for today.
 ///   - RPM exhausted but RPD ok → ALL free-tier providers are RPM-limited:
-///       sleep until next minute boundary, then retry (up to MAX_RPM_RETRIES times).
+///     sleep until next minute boundary, then retry (up to MAX_RPM_RETRIES times).
 ///   - All free-tier RPD-exhausted → fall back to paid (unless tier_filter="free").
 ///   - Paid providers: if model_selection_repo has rows for the provider and the
 ///     requested model is NOT enabled, that paid provider is skipped.
 ///
 /// Ollama: picks the server with the most available VRAM.
+#[allow(clippy::too_many_arguments)]
 pub async fn pick_best_provider(
     registry: &dyn LlmProviderRegistry,
     policy_repo: Option<&dyn GeminiPolicyRepository>,
@@ -497,8 +498,8 @@ pub async fn get_ollama_available_vram_mb(
     valkey: Option<&fred::clients::Pool>,
 ) -> i64 {
     // ── 1. Valkey cache (agent data) ─────────────────────────────────────────
-    if let Some(pool) = valkey {
-        if let Some(hw) = load_hw_metrics(pool, provider.id).await {
+    if let Some(pool) = valkey
+        && let Some(hw) = load_hw_metrics(pool, provider.id).await {
             if hw.is_overheating() {
                 tracing::warn!(
                     provider_id = %provider.id,
@@ -512,7 +513,6 @@ pub async fn get_ollama_available_vram_mb(
                 return hw.vram_free_mb();
             }
         }
-    }
 
     // ── 2. No agent data cached → assume full VRAM is available.
     // The health_checker refreshes the cache every ~30s. Between cache misses,

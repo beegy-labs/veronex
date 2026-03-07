@@ -206,7 +206,7 @@ pub async fn get_server_metrics_history(
         AppError::ServiceUnavailable("analytics not configured".into())
     })?;
 
-    let hours = params.hours.unwrap_or(1).max(1).min(1440);
+    let hours = params.hours.unwrap_or(1).clamp(1, 1440);
 
     let points = repo.server_metrics_history(&id, hours).await.map_err(|e| {
         tracing::error!(%id, "metrics history failed: {e}");

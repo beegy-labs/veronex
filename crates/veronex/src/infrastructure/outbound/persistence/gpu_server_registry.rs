@@ -62,7 +62,7 @@ impl GpuServerRegistry for PostgresGpuServerRegistry {
         .await
         .context("failed to list gpu servers")?;
 
-        rows.iter().map(|r| row_to_server(r)).collect()
+        rows.iter().map(row_to_server).collect()
     }
 
     async fn get(&self, id: Uuid) -> Result<Option<GpuServer>> {

@@ -42,6 +42,7 @@ fn model_effective_num_ctx(model: &str) -> u32 {
 }
 
 impl OllamaAdapter {
+    #[allow(clippy::expect_used)]
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
@@ -246,7 +247,7 @@ impl OllamaAdapter {
     ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
         let url = format!("{}/api/chat", self.base_url);
         let client = self.client.clone();
-        let num_ctx = model_effective_num_ctx(&model);
+        let num_ctx = model_effective_num_ctx(model);
         let model = model.to_string();
 
         Box::pin(async_stream::try_stream! {
@@ -311,9 +312,9 @@ impl OllamaAdapter {
                     // When the model calls a tool, content is empty and tool_calls is set.
                     // We emit a dedicated StreamToken carrying the tool_calls so HTTP handlers
                     // can format the response correctly (OpenAI delta vs Ollama NDJSON).
-                    if let Some(ref msg) = chunk.message {
-                        if let Some(ref tc) = msg.tool_calls {
-                            if !emitted_tool_calls {
+                    if let Some(ref msg) = chunk.message
+                        && let Some(ref tc) = msg.tool_calls
+                            && !emitted_tool_calls {
                                 emitted_tool_calls = true;
                                 yield StreamToken {
                                     value: String::new(),
@@ -324,8 +325,6 @@ impl OllamaAdapter {
                                     tool_calls: Some(tc.clone()),
                                 };
                             }
-                        }
-                    }
 
                     // Text content token (normal streaming text).
                     let content = chunk.message.as_ref()

@@ -68,13 +68,11 @@ pub fn validate_tool_call(call: &serde_json::Value) -> bool {
         return false;
     }
     // Validate arguments size (max 64KB)
-    if let Some(args) = func.get("arguments") {
-        if let Ok(s) = serde_json::to_string(args) {
-            if s.len() > 65_536 {
+    if let Some(args) = func.get("arguments")
+        && let Ok(s) = serde_json::to_string(args)
+            && s.len() > 65_536 {
                 return false;
             }
-        }
-    }
     true
 }
 

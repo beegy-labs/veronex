@@ -112,7 +112,7 @@ impl VramPool {
                     return true;
                 }
                 let count = ms.probe_counter.fetch_add(1, Ordering::AcqRel);
-                return count % probe_rate != 0;
+                return !count.is_multiple_of(probe_rate);
             }
             false
         } else if probe_permits < 0 {
@@ -123,7 +123,7 @@ impl VramPool {
             let effective = (limit as i64 + probe_permits as i64).max(1) as u32;
             if active >= effective && probe_rate > 0 {
                 let count = ms.probe_counter.fetch_add(1, Ordering::AcqRel);
-                if count % probe_rate == 0 {
+                if count.is_multiple_of(probe_rate) {
                     return true; // block this one to test lower concurrency
                 }
             }
@@ -289,7 +289,7 @@ impl VramPoolPort for VramPool {
             // CAS failed — another thread won the race; retry.
         }
         tracing::warn!(provider_id = %provider_id, model = %model, "VRAM CAS retries exhausted");
-        return None;
+        None
     }
 
     fn total_vram_mb(&self, provider_id: Uuid) -> u32 {

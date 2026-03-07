@@ -82,6 +82,7 @@ pub(super) fn with_sse_timeout(stream: SseStream) -> SseStream {
 }
 
 /// Try to acquire an SSE connection slot. Returns 429 on exhaustion.
+#[allow(clippy::result_large_err)]
 pub(super) fn try_acquire_sse(counter: &Arc<AtomicU32>) -> Result<SseDropGuard, Response> {
     let prev = counter.fetch_add(1, Ordering::Acquire);
     if prev >= SSE_MAX_CONNECTIONS {

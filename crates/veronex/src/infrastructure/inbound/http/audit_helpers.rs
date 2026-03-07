@@ -35,6 +35,7 @@ pub async fn emit_audit(
 /// like login / password reset where JWT claims are not yet available).
 ///
 /// No-op when the audit port is not configured.
+#[allow(clippy::too_many_arguments)]
 pub async fn emit_audit_raw(
     state: &AppState,
     account_id: Uuid,

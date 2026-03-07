@@ -19,7 +19,7 @@ pub async fn api_key_auth(
     next: Next,
 ) -> Result<Response, AppError> {
     let path = req.uri().path();
-    if EXCLUDED_PATHS.iter().any(|p| path == *p) {
+    if EXCLUDED_PATHS.contains(&path) {
         return Ok(next.run(req).await);
     }
 
@@ -56,11 +56,10 @@ pub async fn api_key_auth(
     if !api_key.is_active {
         return Err(AppError::Unauthorized("API key is disabled".into()));
     }
-    if let Some(expires) = api_key.expires_at {
-        if expires < Utc::now() {
+    if let Some(expires) = api_key.expires_at
+        && expires < Utc::now() {
             return Err(AppError::Unauthorized("API key has expired".into()));
         }
-    }
 
     // RH1: Test keys must not access production inference endpoints.
     // Test routes are JWT-protected, so test API keys are blocked entirely here.

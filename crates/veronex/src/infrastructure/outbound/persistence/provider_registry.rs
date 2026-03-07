@@ -110,7 +110,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .await
         .context("failed to list active providers")?;
 
-        rows.iter().map(|r| row_to_provider(r)).collect()
+        rows.iter().map(row_to_provider).collect()
     }
 
     async fn list_all(&self) -> Result<Vec<LlmProvider>> {
@@ -120,7 +120,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .await
         .context("failed to list all providers")?;
 
-        rows.iter().map(|r| row_to_provider(r)).collect()
+        rows.iter().map(row_to_provider).collect()
     }
 
     async fn get(&self, id: Uuid) -> Result<Option<LlmProvider>> {

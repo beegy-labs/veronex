@@ -98,9 +98,9 @@ fn compute_kv_per_request_mb(
     let avg_tokens = (stats.avg_prompt_tokens + stats.avg_output_tokens).max(128.0) as u64;
     // Use average token count but clamp to effective context
     let tokens = avg_tokens.min(effective_ctx as u64);
-    let result = ((kv_bytes_per_token * tokens) / 1_048_576).max(32) as u32;
+    
 
-    result
+    ((kv_bytes_per_token * tokens) / 1_048_576).max(32) as u32
 }
 
 // ── LLM analysis response ─────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ async fn fetch_model_arch_profile(
     let attn_interval = find("full_attention_interval");
     let attn_layers = if attn_interval > 1 {
         // Only count attention layers for KV computation.
-        (block_count + attn_interval - 1) / attn_interval
+        block_count.div_ceil(attn_interval)
     } else {
         block_count
     };
@@ -192,6 +192,7 @@ async fn fetch_model_arch_profile(
 
 // ── LLM analysis (background only) ─────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn call_llm_analysis(
     client:         &reqwest::Client,
     ollama_url:     &str,
@@ -364,6 +365,7 @@ Respond ONLY with valid JSON:
 
 // ── Per-provider unified sync ────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub async fn sync_provider(
     client:          &reqwest::Client,
     provider_id:     Uuid,
@@ -418,7 +420,7 @@ pub async fn sync_provider(
         let cache_key = format!("veronex:models:{provider_id}");
         let json = serde_json::to_string(&model_names).unwrap_or_default();
         let ttl = crate::infrastructure::inbound::http::constants::MODELS_CACHE_TTL;
-        let _: Result<(), _> = pool.set(&cache_key, &json, Some(Expiration::EX(ttl as i64)), None, false).await;
+        let _: Result<(), _> = pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await;
     }
 
     // 3. VRAM probing: GET /api/ps
@@ -438,7 +440,7 @@ pub async fn sync_provider(
     };
     let vram_total_mb = hw.as_ref().map(|h| h.vram_total_mb)
         .filter(|&v| v > 0)
-        .unwrap_or_else(|| {
+        .unwrap_or({
             if provider_total_vram_mb > 0 { provider_total_vram_mb as u32 } else { 0 }
         });
     let temp_c = hw.as_ref().map(|h| h.temp_c);
@@ -708,6 +710,7 @@ fn weight_based_max_concurrent(weight_mb: u32) -> u32 {
 // ── Sync loop ─────────────────────────────────────────────────────────────────
 
 /// Background loop that periodically syncs all active Ollama providers.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_sync_loop(
     registry:              Arc<dyn LlmProviderRegistry>,
     capacity_repo:         Arc<dyn ModelCapacityRepository>,
@@ -753,6 +756,7 @@ pub async fn run_sync_loop(
             }
         }
 
+        #[allow(clippy::unwrap_used)]
         let _permit = sync_lock.clone().acquire_owned().await.unwrap();
 
         let all_providers = registry.list_all().await.unwrap_or_default();
