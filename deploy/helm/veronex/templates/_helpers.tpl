@@ -58,16 +58,17 @@ postgres://{{ .Values.externalPostgresql.username }}:{{ .Values.externalPostgres
 
 {{/*
 Valkey VALKEY_URL.
-Supports optional auth password for external Valkey.
+Supports optional auth password and DB index for external Valkey.
+Subchart Valkey always uses DB 0.
 */}}
 {{- define "veronex.valkeyUrl" -}}
 {{- if .Values.valkey.enabled -}}
-redis://{{ .Release.Name }}-valkey-master:6379
+redis://{{ .Release.Name }}-valkey-master:6379/0
 {{- else -}}
 {{- if .Values.externalValkey.password -}}
-redis://:{{ .Values.externalValkey.password }}@{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}
+redis://:{{ .Values.externalValkey.password }}@{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}/{{ .Values.externalValkey.db | default 0 }}
 {{- else -}}
-redis://{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}
+redis://{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}/{{ .Values.externalValkey.db | default 0 }}
 {{- end -}}
 {{- end -}}
 {{- end }}

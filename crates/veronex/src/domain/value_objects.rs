@@ -100,3 +100,153 @@ impl StreamToken {
         Self { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None }
     }
 }
+
+// ── Validated value objects (backend-only) ──────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Username(String);
+
+impl Username {
+    pub fn new(s: &str) -> Result<Self, DomainError> {
+        if s.is_empty() {
+            return Err(DomainError::Validation("username cannot be empty".to_string()));
+        }
+        if s.len() > 255 {
+            return Err(DomainError::Validation("username exceeds 255 characters".to_string()));
+        }
+        if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            return Err(DomainError::Validation(
+                "username must contain only alphanumeric characters, underscores, or hyphens".to_string(),
+            ));
+        }
+        Ok(Self(s.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Email(String);
+
+impl Email {
+    pub fn new(s: &str) -> Result<Self, DomainError> {
+        if !s.contains('@') {
+            return Err(DomainError::Validation("email must contain '@'".to_string()));
+        }
+        if s.len() > 254 {
+            return Err(DomainError::Validation("email exceeds 254 characters".to_string()));
+        }
+        Ok(Self(s.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderUrl(String);
+
+impl ProviderUrl {
+    pub fn new(s: &str) -> Result<Self, DomainError> {
+        if !(s.starts_with("http://") || s.starts_with("https://")) {
+            return Err(DomainError::Validation(
+                "provider URL must start with http:// or https://".to_string(),
+            ));
+        }
+        Ok(Self(s.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Username ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn username_valid() {
+        assert!(Username::new("alice").is_ok());
+        assert!(Username::new("bob-123").is_ok());
+        assert!(Username::new("c_d").is_ok());
+    }
+
+    #[test]
+    fn username_empty() {
+        assert!(Username::new("").is_err());
+    }
+
+    #[test]
+    fn username_too_long() {
+        let long = "a".repeat(256);
+        assert!(Username::new(&long).is_err());
+    }
+
+    #[test]
+    fn username_max_length_ok() {
+        let max = "a".repeat(255);
+        assert!(Username::new(&max).is_ok());
+    }
+
+    #[test]
+    fn username_invalid_chars() {
+        assert!(Username::new("no spaces").is_err());
+        assert!(Username::new("bad@char").is_err());
+        assert!(Username::new("hello!").is_err());
+    }
+
+    // ── Email ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn email_valid() {
+        assert!(Email::new("a@b.com").is_ok());
+        assert!(Email::new("user@example.org").is_ok());
+    }
+
+    #[test]
+    fn email_missing_at() {
+        assert!(Email::new("noatsign.com").is_err());
+    }
+
+    #[test]
+    fn email_too_long() {
+        let long = format!("{}@b.com", "a".repeat(250));
+        assert!(Email::new(&long).is_err());
+    }
+
+    #[test]
+    fn email_max_length_ok() {
+        let local = "a".repeat(246);
+        let email = format!("{local}@b.c");
+        assert_eq!(email.len(), 250);
+        assert!(Email::new(&email).is_ok());
+    }
+
+    // ── ProviderUrl ──────────────────────────────────────────────────────
+
+    #[test]
+    fn provider_url_valid_http() {
+        assert!(ProviderUrl::new("http://localhost:11434").is_ok());
+    }
+
+    #[test]
+    fn provider_url_valid_https() {
+        assert!(ProviderUrl::new("https://api.example.com").is_ok());
+    }
+
+    #[test]
+    fn provider_url_missing_scheme() {
+        assert!(ProviderUrl::new("localhost:11434").is_err());
+    }
+
+    #[test]
+    fn provider_url_ftp_rejected() {
+        assert!(ProviderUrl::new("ftp://files.example.com").is_err());
+    }
+}

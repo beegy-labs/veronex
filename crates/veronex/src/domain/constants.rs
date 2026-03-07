@@ -15,6 +15,9 @@ pub const GEMINI_TIER_FREE: &str = "free";
 /// API key billing tier value for paid keys.
 pub const KEY_TIER_PAID: &str = "paid";
 
+/// Prefix prepended to every generated API key plaintext (e.g. `iq_<base62>`).
+pub const API_KEY_PREFIX: &str = "iq_";
+
 // ── TPM rate limiting ────────────────────────────────────────────────────────
 
 /// Estimated tokens reserved per request at admission by the rate limiter.

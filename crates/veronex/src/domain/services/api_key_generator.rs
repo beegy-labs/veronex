@@ -2,10 +2,10 @@ use blake2::{Blake2b, Digest, digest::consts::U32};
 use rand::RngCore as _;
 use uuid::Uuid;
 
+use crate::domain::constants::API_KEY_PREFIX;
+
 /// BLAKE2b with 256-bit output.
 type Blake2b256 = Blake2b<U32>;
-
-const PREFIX: &str = "iq_";
 
 /// Generate a new API key with UUIDv7 ID, cryptographically random plaintext, and BLAKE2b hash.
 ///
@@ -21,7 +21,7 @@ pub fn generate_api_key() -> (Uuid, String, String, String) {
     rand::thread_rng().fill_bytes(&mut random_bytes);
     let random_u128 = u128::from_be_bytes(random_bytes);
     let encoded = base62::encode(random_u128);
-    let plaintext = format!("{PREFIX}{encoded}");
+    let plaintext = format!("{API_KEY_PREFIX}{encoded}");
 
     let mut hasher = Blake2b256::new();
     hasher.update(plaintext.as_bytes());

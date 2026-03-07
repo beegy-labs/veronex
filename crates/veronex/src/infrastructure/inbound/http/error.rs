@@ -91,6 +91,8 @@ impl From<crate::domain::errors::DomainError> for AppError {
             DomainError::Validation(msg) => Self::BadRequest(msg),
             DomainError::NotFound(msg) => Self::NotFound(msg),
             DomainError::Unauthorized(msg) => Self::Unauthorized(msg),
+            DomainError::ExpiredKey(msg) => Self::Unauthorized(msg),
+            DomainError::InvalidKey => Self::Unauthorized("invalid API key".into()),
             DomainError::Forbidden(msg) => Self::Forbidden(msg),
             DomainError::Conflict(msg) => Self::Conflict(msg),
             DomainError::RateLimitExceeded(_) => Self::TooManyRequests { retry_after: 60 },
