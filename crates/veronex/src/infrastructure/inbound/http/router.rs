@@ -129,12 +129,12 @@ fn build_jwt_router() -> Router<AppState> {
             get(dashboard_handlers::get_job_detail).delete(dashboard_handlers::cancel_job),
         )
         .route("/v1/dashboard/performance", get(dashboard_handlers::get_performance))
-        // Backend management
+        // Provider management
         .route("/v1/providers", get(provider_handlers::list_providers).post(provider_handlers::register_provider))
         .route("/v1/providers/{id}", delete(provider_handlers::delete_provider).patch(provider_handlers::update_provider))
-        .route("/v1/providers/{id}/healthcheck", post(provider_handlers::healthcheck_provider))
+        .route("/v1/providers/{id}/sync", post(provider_handlers::sync_single_provider))
         .route("/v1/providers/{id}/models", get(provider_handlers::list_provider_models))
-        .route("/v1/providers/{id}/models/sync", post(provider_handlers::sync_provider_models))
+        .route("/v1/providers/sync", post(provider_handlers::sync_all_providers_handler))
         .route("/v1/providers/{id}/key", get(provider_handlers::reveal_provider_key))
         .route("/v1/providers/{id}/selected-models", get(provider_handlers::list_selected_models))
         .route("/v1/providers/{id}/selected-models/{model_name}", patch(provider_handlers::set_model_enabled))
@@ -158,15 +158,14 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/ollama/models/sync", post(ollama_model_handlers::sync_all_providers))
         .route("/v1/ollama/sync/status", get(ollama_model_handlers::get_sync_status))
         .route("/v1/ollama/models/{model_name}/providers", get(ollama_model_handlers::list_model_providers))
-        .route("/v1/ollama/providers/{provider_id}/models", get(ollama_model_handlers::list_provider_models))
-        // Capacity
+        .route("/v1/ollama/providers/{provider_id}/models", get(provider_handlers::list_provider_models))
+        // Capacity / VRAM pool
         .route("/v1/dashboard/capacity", get(dashboard_handlers::get_capacity))
         .route(
             "/v1/dashboard/capacity/settings",
             get(dashboard_handlers::get_capacity_settings)
                 .patch(dashboard_handlers::patch_capacity_settings),
         )
-        .route("/v1/dashboard/capacity/sync", post(dashboard_handlers::trigger_capacity_sync))
         // Session grouping
         .route(
             "/v1/dashboard/session-grouping/trigger",
@@ -180,6 +179,28 @@ fn build_jwt_router() -> Router<AppState> {
         )
 }
 
+/// Set security headers on every response (H2 fix).
+async fn security_headers(mut response: axum::response::Response) -> axum::response::Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        axum::http::header::STRICT_TRANSPORT_SECURITY,
+        "max-age=31536000; includeSubDomains".parse().expect("static header value"),
+    );
+    headers.insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        "nosniff".parse().expect("static header value"),
+    );
+    headers.insert(
+        axum::http::header::X_FRAME_OPTIONS,
+        "DENY".parse().expect("static header value"),
+    );
+    headers.insert(
+        axum::http::header::REFERRER_POLICY,
+        "strict-origin-when-cross-origin".parse().expect("static header value"),
+    );
+    response
+}
+
 /// Build the full application router with health endpoints and middleware.
 ///
 /// Applies API key auth and rate limiting to all API routes.
@@ -191,9 +212,21 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
     let cors = {
         let base = CorsLayer::new()
             .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS, Method::PATCH])
-            .allow_headers(tower_http::cors::Any);
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::ACCEPT,
+                axum::http::header::HeaderName::from_static("x-conversation-id"),
+            ])
+            .allow_credentials(true);
         if cors_origins.is_empty() {
-            base.allow_origin(tower_http::cors::Any)
+            // credentials:true requires an explicit origin — wildcard (*) is
+            // forbidden by the CORS spec when credentials are included.
+            // Default to localhost:3000 (Next.js dev server) when no origins
+            // are configured; production MUST set CORS_ALLOWED_ORIGINS.
+            base.allow_origin(AllowOrigin::list([
+                "http://localhost:3000".parse::<HeaderValue>().expect("static CORS origin"),
+            ]))
         } else {
             base.allow_origin(AllowOrigin::list(cors_origins))
         }
@@ -248,6 +281,7 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                 )),
         )
         .layer(cors)
+        .layer(middleware::map_response(security_headers))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

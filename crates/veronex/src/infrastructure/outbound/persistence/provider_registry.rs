@@ -8,6 +8,9 @@ use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegis
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 
+/// Column list shared by all SELECT queries on llm_providers.
+const PROVIDER_COLS: &str = "id, name, provider_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, agent_url, is_free_tier, status, registered_at";
+
 pub struct PostgresProviderRegistry {
     pool: PgPool,
 }
@@ -20,27 +23,8 @@ impl PostgresProviderRegistry {
 
 // ── Enum conversions ───────────────────────────────────────────────────────────
 
-fn provider_type_to_str(b: &ProviderType) -> &'static str {
-    match b {
-        ProviderType::Ollama => "ollama",
-        ProviderType::Gemini => "gemini",
-    }
-}
-
-fn str_to_provider_type(s: &str) -> Result<ProviderType> {
-    match s {
-        "ollama" => Ok(ProviderType::Ollama),
-        "gemini" => Ok(ProviderType::Gemini),
-        _ => Err(anyhow::anyhow!("unknown provider type: {s}")),
-    }
-}
-
 fn status_to_str(s: &LlmProviderStatus) -> &'static str {
-    match s {
-        LlmProviderStatus::Online => "online",
-        LlmProviderStatus::Offline => "offline",
-        LlmProviderStatus::Degraded => "degraded",
-    }
+    s.as_str()
 }
 
 fn str_to_status(s: &str) -> LlmProviderStatus {
@@ -58,7 +42,7 @@ fn row_to_provider(row: &sqlx::postgres::PgRow) -> Result<LlmProvider> {
 
     let id: Uuid = row.try_get("id").context("id")?;
     let name: String = row.try_get("name").context("name")?;
-    let backend_type_str: String = row.try_get("provider_type").context("provider_type")?;
+    let provider_type_str: String = row.try_get("provider_type").context("provider_type")?;
     let url: String = row.try_get("url").context("url")?;
     let api_key_encrypted: Option<String> = row.try_get("api_key_encrypted").context("api_key_encrypted")?;
     let is_active: bool = row.try_get("is_active").context("is_active")?;
@@ -73,7 +57,7 @@ fn row_to_provider(row: &sqlx::postgres::PgRow) -> Result<LlmProvider> {
     Ok(LlmProvider {
         id,
         name,
-        provider_type: str_to_provider_type(&backend_type_str)?,
+        provider_type: provider_type_str.parse::<ProviderType>().map_err(|e| anyhow::anyhow!(e))?,
         url,
         api_key_encrypted,
         is_active,
@@ -101,7 +85,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         )
         .bind(provider.id)
         .bind(&provider.name)
-        .bind(provider_type_to_str(&provider.provider_type))
+        .bind(provider.provider_type.as_str())
         .bind(&provider.url)
         .bind(&provider.api_key_encrypted)
         .bind(provider.is_active)
@@ -120,12 +104,8 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn list_active(&self) -> Result<Vec<LlmProvider>> {
-        let rows = sqlx::query(
-            "SELECT id, name, provider_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, agent_url, is_free_tier, status, registered_at
-             FROM llm_providers
-             WHERE is_active = true AND status = 'online'
-             ORDER BY registered_at ASC",
-        )
+        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers WHERE is_active = true AND status = 'online' ORDER BY registered_at ASC");
+        let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await
         .context("failed to list active providers")?;
@@ -134,11 +114,8 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn list_all(&self) -> Result<Vec<LlmProvider>> {
-        let rows = sqlx::query(
-            "SELECT id, name, provider_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, agent_url, is_free_tier, status, registered_at
-             FROM llm_providers
-             ORDER BY registered_at ASC",
-        )
+        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers ORDER BY registered_at ASC");
+        let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await
         .context("failed to list all providers")?;
@@ -147,11 +124,8 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn get(&self, id: Uuid) -> Result<Option<LlmProvider>> {
-        let row = sqlx::query(
-            "SELECT id, name, provider_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, agent_url, is_free_tier, status, registered_at
-             FROM llm_providers
-             WHERE id = $1",
-        )
+        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers WHERE id = $1");
+        let row = sqlx::query(&sql)
         .bind(id)
         .fetch_optional(&self.pool)
         .await
@@ -175,11 +149,11 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn deactivate(&self, id: Uuid) -> Result<()> {
-        sqlx::query("DELETE FROM llm_providers WHERE id = $1")
+        sqlx::query("UPDATE llm_providers SET is_active = false WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await
-            .context("failed to delete provider")?;
+            .context("failed to deactivate provider")?;
 
         Ok(())
     }

@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use crate::domain::enums::ProviderType;
 
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+
 use super::state::AppState;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
@@ -80,17 +82,17 @@ pub async fn list_model_providers(
         .providers_info_for_model(&model_name)
         .await
     {
-        Ok(backends) => {
-            let dtos: Vec<OllamaProviderDto> = backends
+        Ok(providers) => {
+            let dtos: Vec<OllamaProviderDto> = providers
                 .into_iter()
-                .map(|b| OllamaProviderDto {
-                    provider_id: b.provider_id,
-                    name: b.name,
-                    url: b.url,
-                    status: b.status,
+                .map(|p| OllamaProviderDto {
+                    provider_id: p.provider_id,
+                    name: p.name,
+                    url: p.url,
+                    status: p.status,
                 })
                 .collect();
-            (StatusCode::OK, Json(serde_json::json!({"backends": dtos}))).into_response()
+            (StatusCode::OK, Json(serde_json::json!({"providers": dtos}))).into_response()
         }
         Err(e) => {
             tracing::error!("ollama list_model_providers: {e}");
@@ -105,7 +107,7 @@ pub async fn list_model_providers(
 
 /// `GET /v1/ollama/providers/:provider_id/models`
 /// — list model names synced for a specific Ollama provider.
-pub async fn list_backend_models(
+pub async fn list_provider_models(
     State(state): State<AppState>,
     Path(provider_id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -114,7 +116,7 @@ pub async fn list_backend_models(
             (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response()
         }
         Err(e) => {
-            tracing::error!("ollama list_backend_models: {e}");
+            tracing::error!("ollama list_provider_models: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "database error"})),
@@ -128,13 +130,16 @@ pub async fn list_backend_models(
 ///
 /// Returns 202 immediately with the job ID. The sync runs in the background,
 /// processing each provider sequentially without retrying on failure.
-pub async fn sync_all_providers(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn sync_all_providers(
+    RequireSuper(_claims): RequireSuper,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     // List all active Ollama providers.
-    let backends = match state.provider_registry.list_all().await {
+    let providers = match state.provider_registry.list_all().await {
         Ok(all) => {
             let ollama: Vec<_> = all
                 .into_iter()
-                .filter(|b| b.is_active && b.provider_type == ProviderType::Ollama)
+                .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
                 .collect();
             ollama
         }
@@ -148,7 +153,7 @@ pub async fn sync_all_providers(State(state): State<AppState>) -> impl IntoRespo
         }
     };
 
-    if backends.is_empty() {
+    if providers.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "no active Ollama providers registered"})),
@@ -156,7 +161,7 @@ pub async fn sync_all_providers(State(state): State<AppState>) -> impl IntoRespo
             .into_response();
     }
 
-    let total = backends.len() as i32;
+    let total = providers.len() as i32;
     let job_id = match state.ollama_sync_job_repo.create(total).await {
         Ok(id) => id,
         Err(e) => {
@@ -177,7 +182,7 @@ pub async fn sync_all_providers(State(state): State<AppState>) -> impl IntoRespo
     tokio::spawn(async move {
         let client = reqwest::Client::new();
 
-        for provider in backends {
+        for provider in providers {
             let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
 
             let result = async {
@@ -194,7 +199,7 @@ pub async fn sync_all_providers(State(state): State<AppState>) -> impl IntoRespo
 
                 let models: Vec<String> = json["models"]
                     .as_array()
-                    .unwrap_or(&vec![])
+                    .map_or(&[] as &[_], |v| v)
                     .iter()
                     .filter_map(|m| m["name"].as_str().map(String::from))
                     .collect();
@@ -267,7 +272,10 @@ pub async fn sync_all_providers(State(state): State<AppState>) -> impl IntoRespo
 }
 
 /// `GET /v1/ollama/sync/status` — return the latest sync job status.
-pub async fn get_sync_status(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn get_sync_status(
+    RequireSuper(_claims): RequireSuper,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     match state.ollama_sync_job_repo.get_latest().await {
         Ok(Some(job)) => {
             let dto = OllamaSyncJobDto {

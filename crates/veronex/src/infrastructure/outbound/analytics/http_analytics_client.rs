@@ -21,9 +21,9 @@ pub struct HttpAnalyticsClient {
 }
 
 impl HttpAnalyticsClient {
-    pub fn new(base_url: impl Into<String>, secret: impl Into<String>) -> Self {
+    pub fn new(client: reqwest::Client, base_url: impl Into<String>, secret: impl Into<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: client,
             base_url: base_url.into(),
             secret: secret.into(),
         }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures::Stream;
+use pin_project_lite::pin_project;
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
 use crate::domain::value_objects::JobId;
@@ -21,25 +22,35 @@ impl Drop for CancelGuard {
         let job_id = self.job_id.clone();
         let use_case = self.use_case.clone();
         tokio::spawn(async move {
-            if let Err(e) = use_case.cancel(&job_id).await {
-                tracing::warn!(%job_id, "cancel-on-drop failed: {e}");
+            match tokio::time::timeout(
+                crate::domain::constants::CANCEL_TIMEOUT,
+                use_case.cancel(&job_id),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::error!(%job_id, "cancel-on-drop failed: {e}"),
+                Err(_) => tracing::error!(%job_id, "cancel-on-drop timed out"),
             }
         });
     }
 }
 
-/// Stream wrapper that cancels the associated job when dropped.
-///
-/// Wraps SSE/NDJSON streams so that when the client disconnects (Axum
-/// drops the response body), the in-flight inference job is cancelled
-/// and GPU resources are freed.
-///
-/// Only used on submit-and-stream endpoints (1:1 client↔job).
-/// Read-only replay endpoints (`stream_inference`, `stream_job_openai`)
-/// are NOT wrapped because multiple clients may share one job.
-pub struct CancelOnDrop<S> {
-    inner: S,
-    _guard: CancelGuard,
+pin_project! {
+    /// Stream wrapper that cancels the associated job when dropped.
+    ///
+    /// Wraps SSE/NDJSON streams so that when the client disconnects (Axum
+    /// drops the response body), the in-flight inference job is cancelled
+    /// and GPU resources are freed.
+    ///
+    /// Only used on submit-and-stream endpoints (1:1 client↔job).
+    /// Read-only replay endpoints (`stream_inference`, `stream_job_openai`)
+    /// are NOT wrapped because multiple clients may share one job.
+    pub struct CancelOnDrop<S> {
+        #[pin]
+        inner: S,
+        _guard: CancelGuard,
+    }
 }
 
 impl<S> CancelOnDrop<S> {
@@ -51,10 +62,10 @@ impl<S> CancelOnDrop<S> {
     }
 }
 
-impl<S: Stream + Unpin> Stream for CancelOnDrop<S> {
+impl<S: Stream> Stream for CancelOnDrop<S> {
     type Item = S::Item;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.project().inner.poll_next(cx)
     }
 }

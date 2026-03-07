@@ -14,7 +14,7 @@ affecting production inference while development is ongoing.
 
 | Feature | Default | Status |
 |---------|---------|--------|
-| `gemini_function_calling` | `false` | 🔬 In development |
+| `gemini_function_calling` | `false` | In development |
 
 ---
 

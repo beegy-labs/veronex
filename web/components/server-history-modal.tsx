@@ -11,19 +11,13 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { useTranslation } from '@/i18n'
+import { TOOLTIP_STYLE } from '@/lib/chart-theme'
 
 const HIST_HOUR_OPTIONS = [1, 3, 6, 24] as const
 
 function fmtTs(iso: string) {
   const d = new Date(iso)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-const TOOLTIP_STYLE = {
-  background: 'var(--theme-bg-card)',
-  border: '1px solid var(--theme-border)',
-  borderRadius: 6,
-  fontSize: 11,
 }
 
 export function ServerHistoryModal({

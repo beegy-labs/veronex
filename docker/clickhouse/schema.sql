@@ -54,6 +54,43 @@ FROM (
     GROUP BY hour, api_key_id, tenant_id
 );
 
+-- ── Derived MVs: otel_logs → specialized tables ──────────────────────────────
+-- These MVs extract structured events from the unified otel_logs table
+-- into domain-specific MergeTree tables for efficient analytical queries.
+
+-- otel_logs(inference.completed) → inference_logs
+CREATE MATERIALIZED VIEW IF NOT EXISTS otel_inference_logs_mv
+TO inference_logs AS
+SELECT
+    Timestamp                                                        AS event_time,
+    toUUIDOrZero(LogAttributes['api_key_id'])                        AS api_key_id,
+    LogAttributes['tenant_id']                                       AS tenant_id,
+    toUUIDOrZero(LogAttributes['request_id'])                        AS request_id,
+    LogAttributes['model_name']                                      AS model_name,
+    toUInt32OrZero(LogAttributes['prompt_tokens'])                   AS prompt_tokens,
+    toUInt32OrZero(LogAttributes['completion_tokens'])               AS completion_tokens,
+    toUInt32OrZero(LogAttributes['latency_ms'])                      AS latency_ms,
+    LogAttributes['finish_reason']                                   AS finish_reason,
+    LogAttributes['status']                                          AS status
+FROM otel_logs
+WHERE LogAttributes['event.name'] = 'inference.completed';
+
+-- otel_logs(audit.action) → audit_events
+CREATE MATERIALIZED VIEW IF NOT EXISTS otel_audit_events_mv
+TO audit_events AS
+SELECT
+    Timestamp                                                        AS event_time,
+    toUUIDOrZero(LogAttributes['account_id'])                        AS account_id,
+    LogAttributes['account_name']                                    AS account_name,
+    LogAttributes['action']                                          AS action,
+    LogAttributes['resource_type']                                   AS resource_type,
+    LogAttributes['resource_id']                                     AS resource_id,
+    LogAttributes['resource_name']                                   AS resource_name,
+    LogAttributes['ip_address']                                      AS ip_address,
+    LogAttributes['details']                                         AS details
+FROM otel_logs
+WHERE LogAttributes['event.name'] = 'audit.action';
+
 -- OTel metrics gauge — populated by Kafka Engine MV below
 CREATE TABLE IF NOT EXISTS otel_metrics_gauge (
     ResourceAttributes      Map(LowCardinality(String), String),

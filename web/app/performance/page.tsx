@@ -11,7 +11,7 @@ import {
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
   AXIS_TICK, LEGEND_STYLE, CURSOR_FILL, CURSOR_STROKE,
-  fmtMs, fmtMsAxis, fmtCompact,
+  fmtMs, fmtMsAxis, fmtCompact, fmtPct,
 } from '@/lib/chart-theme'
 import { Timer, TrendingUp, CheckCircle, AlertTriangle, Zap, Key, Bot } from 'lucide-react'
 import StatsCard from '@/components/stats-card'
@@ -22,20 +22,10 @@ import {
 } from '@/components/ui/table'
 import { DataTable } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
-import { TIME_OPTIONS, TimeRangeSelector } from '@/components/time-range-selector'
+import { TIME_LABEL_MAP, TimeRangeSelector } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
-
-const ms = fmtMs
-
-const BACKEND_BADGE: Record<string, string> = {
-  ollama: 'bg-primary/10 text-primary border-primary/30',
-  gemini: 'bg-status-info/10 text-status-info-fg border-status-info/30',
-}
-
-function pct(n: number) {
-  return `${Math.round(n * 100)}%`
-}
+import { PROVIDER_BADGE } from '@/lib/constants'
 
 /* ─── Model latency comparison ────────────────────────────── */
 function ModelLatencySection({
@@ -82,13 +72,13 @@ function ModelLatencySection({
                 <TableRow key={`${m.model_name}-${m.provider_type}-${i}`}>
                   <TableCell className="font-mono font-medium text-sm">{m.model_name}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs ${BACKEND_BADGE[m.provider_type] ?? ''}`}>
+                    <Badge variant="outline" className={`text-xs ${PROVIDER_BADGE[m.provider_type] ?? ''}`}>
                       {m.provider_type}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{fmtCompact(m.request_count)}</TableCell>
                   <TableCell className="text-right tabular-nums font-semibold">
-                    {m.avg_latency_ms > 0 ? ms(m.avg_latency_ms) : '—'}
+                    {m.avg_latency_ms > 0 ? fmtMs(m.avg_latency_ms) : '—'}
                   </TableCell>
                   <TableCell className="text-right">
                     {m.success_rate != null ? (
@@ -97,7 +87,7 @@ function ModelLatencySection({
                           : (m.success_rate * 100) >= 70 ? 'text-status-warning-fg'
                           : 'text-status-error-fg'
                       }`}>
-                        {pct(m.success_rate)}
+                        {fmtPct(m.success_rate)}
                       </span>
                     ) : '—'}
                   </TableCell>
@@ -234,7 +224,7 @@ export default function PerformancePage() {
 
   const hasData    = data && data.total_requests > 0
   const errorCount = data ? data.total_requests - Math.round(data.success_rate * data.total_requests) : 0
-  const currentLabel = TIME_OPTIONS.find(o => o.hours === hours)?.label ?? `${hours}h`
+  const currentLabel = TIME_LABEL_MAP.get(hours) ?? `${hours}h`
 
   // Merge analytics model stats (has success_rate) with breakdown model data (has avg_latency_ms)
   const modelPerfData = (() => {
@@ -301,25 +291,25 @@ export default function PerformancePage() {
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-4">
             <StatsCard
               title={t('performance.p50')}
-              value={ms(data.p50_latency_ms)}
+              value={fmtMs(data.p50_latency_ms)}
               subtitle={`${t('common.last')} ${currentLabel}`}
               icon={<Timer className="h-5 w-5" />}
             />
             <StatsCard
               title={t('performance.p95')}
-              value={ms(data.p95_latency_ms)}
+              value={fmtMs(data.p95_latency_ms)}
               subtitle={`${t('common.last')} ${currentLabel}`}
               icon={<TrendingUp className="h-5 w-5" />}
             />
             <StatsCard
               title={t('performance.p99')}
-              value={ms(data.p99_latency_ms)}
-              subtitle={`avg ${ms(data.avg_latency_ms)}`}
+              value={fmtMs(data.p99_latency_ms)}
+              subtitle={`avg ${fmtMs(data.avg_latency_ms)}`}
               icon={<TrendingUp className="h-5 w-5" />}
             />
             <StatsCard
               title={t('performance.successRate')}
-              value={pct(data.success_rate)}
+              value={fmtPct(data.success_rate)}
               subtitle={`${fmtCompact(data.total_requests)} ${t('overview.requests')}`}
               icon={<CheckCircle className="h-5 w-5" />}
             />
@@ -378,7 +368,7 @@ export default function PerformancePage() {
                 <CardHeader>
                   <CardTitle className="text-base">{t('performance.avgLatencyHour')}</CardTitle>
                   <p className="text-xs text-muted-foreground">
-                    P95 reference line: {ms(data.p95_latency_ms)}
+                    P95 reference line: {fmtMs(data.p95_latency_ms)}
                   </p>
                 </CardHeader>
                 <CardContent>
@@ -389,7 +379,7 @@ export default function PerformancePage() {
                       <Tooltip
                         contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}
                         cursor={CURSOR_STROKE}
-                        formatter={(v) => [ms(Number(v)), t('performance.avgLatency')] as [string, string]}
+                        formatter={(v) => [fmtMs(Number(v)), t('performance.avgLatency')] as [string, string]}
                       />
                       <ReferenceLine
                         y={data.p95_latency_ms}

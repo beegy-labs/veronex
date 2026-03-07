@@ -1,8 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
-
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
@@ -10,7 +9,7 @@ use futures::StreamExt as _;
 
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
+use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::{InferenceJob, InferenceResult, LlmProvider};
@@ -19,6 +18,7 @@ use crate::domain::value_objects::StreamToken;
 use crate::infrastructure::outbound::gemini::GeminiAdapter;
 use crate::infrastructure::outbound::hw_metrics::load_hw_metrics;
 use crate::infrastructure::outbound::ollama::OllamaAdapter;
+use crate::infrastructure::outbound::valkey_keys;
 
 // ── Static provider router (kept for tests) ────────────────────────────────────
 
@@ -158,20 +158,52 @@ impl InferenceProviderPort for DynamicProviderRouter {
 
 // ── Provider selection helpers ─────────────────────────────────────────────────
 
+/// Filter providers by model selection: if a provider has selection rows for the
+/// requested model and it is not enabled, skip that provider.
+/// Providers with no selection rows or on repo error are kept (no restriction).
+async fn filter_by_model_selection(
+    candidates: Vec<LlmProvider>,
+    repo: &dyn ProviderModelSelectionRepository,
+    model_name: &str,
+    provider_label: &str,
+) -> Vec<LlmProvider> {
+    let mut result = Vec::with_capacity(candidates.len());
+    for b in candidates {
+        match repo.list_enabled(b.id).await {
+            Ok(enabled) if !enabled.is_empty() => {
+                let set: HashSet<&str> = enabled.iter().map(|s| s.as_str()).collect();
+                if set.contains(model_name) {
+                    result.push(b);
+                } else {
+                    tracing::debug!(
+                        provider_id = %b.id,
+                        name = %b.name,
+                        model_name = %model_name,
+                        "model not enabled on {} provider, skipping", provider_label,
+                    );
+                }
+            }
+            // No rows or error → no restriction, include this provider.
+            _ => result.push(b),
+        }
+    }
+    result
+}
+
 // ── Gemini rate-limit helpers ──────────────────────────────────────────────────
 
 /// Valkey key for per-(provider, model) RPM counter.
 /// Bucketed by minute — TTL=120s so it always expires naturally.
 fn gemini_rpm_key(provider_id: uuid::Uuid, model: &str) -> String {
     let minute = chrono::Utc::now().timestamp() / 60;
-    format!("veronex:gemini:rpm:{}:{}:{}", provider_id, model, minute)
+    valkey_keys::gemini_rpm(provider_id, model, minute)
 }
 
 /// Valkey key for per-(provider, model) RPD counter.
 /// Bucketed by UTC date — TTL=90000s (~25h).
 fn gemini_rpd_key(provider_id: uuid::Uuid, model: &str) -> String {
-    let date = chrono::Utc::now().format("%Y-%m-%d");
-    format!("veronex:gemini:rpd:{}:{}:{}", provider_id, model, date)
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    valkey_keys::gemini_rpd(provider_id, model, &date)
 }
 
 /// Returns `(rpm_exhausted, rpd_exhausted)` for a given free-tier provider + model.
@@ -308,26 +340,7 @@ pub async fn pick_best_provider(
             // and the model is disabled, skip that provider.
             let selection_filtered = if let Some(repo) = model_selection_repo {
                 if !model_name.is_empty() {
-                    let mut result = Vec::new();
-                    for b in filtered_candidates {
-                        match repo.list_enabled(b.id).await {
-                            Ok(enabled) if !enabled.is_empty() => {
-                                if enabled.iter().any(|m| m == model_name) {
-                                    result.push(b);
-                                } else {
-                                    tracing::debug!(
-                                        provider_id = %b.id,
-                                        name = %b.name,
-                                        model_name = %model_name,
-                                        "model disabled on ollama provider, skipping"
-                                    );
-                                }
-                            }
-                            // No rows or error → no restriction, include this provider.
-                            _ => result.push(b),
-                        }
-                    }
-                    result
+                    filter_by_model_selection(filtered_candidates, repo, model_name, "ollama").await
                 } else {
                     filtered_candidates
                 }
@@ -349,9 +362,6 @@ pub async fn pick_best_provider(
         }
     }
 }
-
-/// Maximum times we will wait for an RPM window to reset before giving up.
-const MAX_RPM_RETRIES: u32 = 3;
 
 async fn pick_gemini_provider(
     candidates: Vec<LlmProvider>,
@@ -382,29 +392,11 @@ async fn pick_gemini_provider(
 
     // Filter paid providers by model selection: if a provider has selection rows
     // and the requested model is not enabled, skip that provider.
-    let mut paid_providers: Vec<LlmProvider> = Vec::new();
-    for b in raw_paid_providers {
-        if let Some(repo) = model_selection_repo {
-            match repo.list_enabled(b.id).await {
-                Ok(enabled) if !enabled.is_empty() => {
-                    if enabled.iter().any(|m| m == model_name) {
-                        paid_providers.push(b);
-                    } else {
-                        tracing::debug!(
-                            provider_id = %b.id,
-                            name = %b.name,
-                            model_name = %model_name,
-                            "model not in paid provider's enabled list, skipping"
-                        );
-                    }
-                }
-                // No rows or error → no restriction, include this provider.
-                _ => paid_providers.push(b),
-            }
-        } else {
-            paid_providers.push(b);
-        }
-    }
+    let paid_providers = if let Some(repo) = model_selection_repo {
+        filter_by_model_selection(raw_paid_providers, repo, model_name, "paid gemini").await
+    } else {
+        raw_paid_providers
+    };
 
     // If the model is not available on free tier, skip free-tier providers entirely.
     if !available_on_free_tier {
@@ -429,80 +421,65 @@ async fn pick_gemini_provider(
         ));
     }
 
-    for attempt in 0..=MAX_RPM_RETRIES {
-        let Some(pool) = valkey else {
-            // No Valkey → skip rate-limit checks entirely, use first free or paid.
-            if let Some(b) = free_providers.first() {
-                return Ok(b.clone());
-            }
-            if let Some(b) = paid_providers.first() {
-                return Ok(b.clone());
-            }
-            return Err(anyhow::anyhow!("no active Gemini provider available"));
-        };
-
-        let mut all_rpd_exhausted = !free_providers.is_empty();
-        let mut any_rpm_available = false;
-
-        for b in &free_providers {
-            let (rpm_ex, rpd_ex) =
-                gemini_limit_status(b.id, model_name, rpm_limit, rpd_limit, pool).await;
-
-            if rpd_ex {
-                tracing::info!(provider_id = %b.id, name = %b.name,
-                    "Gemini provider RPD exhausted for today, skipping");
-                continue;
-            }
-
-            // This key still has daily quota.
-            all_rpd_exhausted = false;
-
-            if !rpm_ex {
-                // Found a key with both RPM and RPD available.
-                return Ok(b.clone());
-            }
-
-            // RPM-limited but RPD still ok → flag that we might retry after waiting.
-            any_rpm_available = true;
+    let Some(pool) = valkey else {
+        // No Valkey → skip rate-limit checks entirely, use first free or paid.
+        if let Some(b) = free_providers.first() {
+            return Ok(b.clone());
         }
-
-        // All free keys are RPD-exhausted → fall back to paid.
-        if all_rpd_exhausted {
-            if let Some(paid) = paid_providers.first() {
-                tracing::info!(provider_id = %paid.id, name = %paid.name,
-                    "all Gemini free-tier providers RPD-exhausted, using paid provider");
-                return Ok(paid.clone());
-            }
-            return Err(anyhow::anyhow!(
-                "all Gemini free-tier providers exhausted daily quota and no paid provider configured"
-            ));
+        if let Some(b) = paid_providers.first() {
+            return Ok(b.clone());
         }
+        return Err(anyhow::anyhow!("no active Gemini provider available"));
+    };
 
-        // Some free keys have RPD quota but all are currently RPM-limited.
-        // Wait until the next minute boundary, then retry.
-        if any_rpm_available && attempt < MAX_RPM_RETRIES {
-            let now_secs = chrono::Utc::now().timestamp();
-            let secs_to_next_minute = 60 - (now_secs % 60) + 1; // +1 buffer
-            tracing::info!(
-                wait_secs = secs_to_next_minute,
-                attempt = attempt + 1,
-                "all Gemini free-tier providers RPM-limited, waiting for next minute"
-            );
-            tokio::time::sleep(Duration::from_secs(secs_to_next_minute as u64)).await;
+    let mut all_rpd_exhausted = !free_providers.is_empty();
+
+    for b in &free_providers {
+        let (rpm_ex, rpd_ex) =
+            gemini_limit_status(b.id, model_name, rpm_limit, rpd_limit, pool).await;
+
+        if rpd_ex {
+            tracing::info!(provider_id = %b.id, name = %b.name,
+                "Gemini provider RPD exhausted for today, skipping");
             continue;
         }
 
-        break;
+        // This key still has daily quota.
+        all_rpd_exhausted = false;
+
+        if !rpm_ex {
+            // Found a key with both RPM and RPD available.
+            return Ok(b.clone());
+        }
     }
 
-    // Retries exhausted.
+    // All free keys are RPD-exhausted → fall back to paid.
+    if all_rpd_exhausted {
+        if let Some(paid) = paid_providers.first() {
+            tracing::info!(provider_id = %paid.id, name = %paid.name,
+                "all Gemini free-tier providers RPD-exhausted, using paid provider");
+            return Ok(paid.clone());
+        }
+        return Err(anyhow::anyhow!(
+            "all Gemini free-tier providers exhausted daily quota and no paid provider configured"
+        ));
+    }
+
+    // All free-tier providers are RPM-limited (daily quota still available).
+    // Fall back to paid immediately instead of sleeping in the request handler.
     if let Some(paid) = paid_providers.first() {
-        tracing::warn!(provider_id = %paid.id, "Gemini RPM retries exhausted, falling back to paid");
+        tracing::info!(provider_id = %paid.id, name = %paid.name,
+            "all Gemini free-tier providers RPM-limited, falling back to paid provider");
         return Ok(paid.clone());
     }
 
+    // No paid fallback — return 429-friendly error immediately instead of
+    // blocking the connection with tokio::time::sleep for up to 60s.
+    let now_secs = chrono::Utc::now().timestamp();
+    let secs_to_next_minute = 60 - (now_secs % 60);
     Err(anyhow::anyhow!(
-        "all Gemini free-tier providers are RPM-limited and no paid provider available"
+        "all Gemini free-tier providers are RPM-limited; retry after ~{}s",
+        secs_to_next_minute
     ))
 }
 
@@ -537,39 +514,100 @@ pub async fn get_ollama_available_vram_mb(
         }
     }
 
-    // ── 2. VRAM unknown → treat as unlimited ─────────────────────────────────
+    // ── 2. No agent data cached → assume full VRAM is available.
+    // The health_checker refreshes the cache every ~30s. Between cache misses,
+    // assume the provider has its registered VRAM (or unlimited if 0).
     if provider.total_vram_mb == 0 {
         return i64::MAX;
     }
+    provider.total_vram_mb
+}
 
-    // ── 3. Live /api/ps fallback ─────────────────────────────────────────────
-    let client = reqwest::Client::new();
-    let url = format!("{}/api/ps", provider.url.trim_end_matches('/'));
+/// Validate that a provider URL does not target known-dangerous internal services.
+///
+/// Blocks cloud metadata endpoints (169.254.169.254, metadata.google.internal),
+/// Kubernetes internal services (.svc.cluster.local), and link-local IP addresses.
+/// Localhost/private IPs are intentionally allowed since Ollama commonly runs there.
+fn validate_provider_url(url_str: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(url_str)
+        .map_err(|_| anyhow::anyhow!("invalid provider URL"))?;
 
-    let Ok(resp) = client.get(&url).timeout(Duration::from_secs(3)).send().await else {
-        return 0;
-    };
-    let Ok(json) = resp.json::<serde_json::Value>().await else {
-        return 0;
-    };
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("provider URL has no host"))?;
 
-    let used_bytes: i64 = json["models"]
-        .as_array()
-        .unwrap_or(&vec![])
-        .iter()
-        .filter_map(|m| m["size_vram"].as_i64())
-        .sum();
+    // Block cloud metadata services
+    if host == "169.254.169.254" || host == "metadata.google.internal" {
+        anyhow::bail!("metadata service URLs are not allowed as provider endpoints");
+    }
 
-    provider.total_vram_mb - used_bytes / (1024 * 1024)
+    // Block Kubernetes internal services
+    if host.contains(".svc.cluster.local") {
+        anyhow::bail!("internal Kubernetes service URLs are not allowed as provider endpoints");
+    }
+
+    // Block link-local IP ranges (IPv4 169.254.0.0/16, IPv6 fe80::/10)
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        match ip {
+            IpAddr::V4(v4) => {
+                if v4.is_link_local() {
+                    anyhow::bail!("link-local addresses are not allowed as provider endpoints");
+                }
+            }
+            IpAddr::V6(v6) => {
+                if (v6.segments()[0] & 0xffc0) == 0xfe80 {
+                    anyhow::bail!("IPv6 link-local addresses are not allowed as provider endpoints");
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Build a concrete inference adapter from a provider DB record.
+///
+/// Validates the provider URL against SSRF-dangerous targets before constructing
+/// the adapter. Providers with blocked URLs are logged and return an error adapter
+/// that yields a descriptive failure on every call.
 pub fn make_adapter(cfg: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
     match cfg.provider_type {
-        ProviderType::Ollama => Arc::new(OllamaAdapter::new(&cfg.url)),
+        ProviderType::Ollama => {
+            if let Err(e) = validate_provider_url(&cfg.url) {
+                tracing::warn!(
+                    provider_id = %cfg.id,
+                    name = %cfg.name,
+                    url = %cfg.url,
+                    "SSRF: skipping provider — {e}"
+                );
+                return Arc::new(BlockedAdapter(e.to_string()));
+            }
+            Arc::new(OllamaAdapter::new(&cfg.url))
+        }
         ProviderType::Gemini => {
+            // Gemini uses a fixed Google API host; URL validation is N/A.
             let key = cfg.api_key_encrypted.as_deref().unwrap_or("");
             Arc::new(GeminiAdapter::new(key))
         }
+    }
+}
+
+/// Sentinel adapter returned when a provider's URL fails SSRF validation.
+struct BlockedAdapter(String);
+
+#[async_trait]
+impl InferenceProviderPort for BlockedAdapter {
+    async fn infer(&self, _job: &InferenceJob) -> Result<InferenceResult> {
+        Err(anyhow::anyhow!("provider blocked: {}", self.0))
+    }
+
+    fn stream_tokens(
+        &self,
+        _job: &InferenceJob,
+    ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
+        let msg = self.0.clone();
+        Box::pin(async_stream::stream! {
+            yield Err(anyhow::anyhow!("provider blocked: {}", msg));
+        })
     }
 }

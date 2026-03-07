@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
-import { setTokens } from '@/lib/auth'
+import { setSession } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -33,7 +33,7 @@ export default function SetupPage() {
     setLoading(true)
     try {
       const resp = await api.setup({ username: username.trim(), password })
-      setTokens(resp)
+      setSession(resp)
       router.push('/')
     } catch (err: unknown) {
       if (err instanceof Error && err.message.startsWith('409')) {

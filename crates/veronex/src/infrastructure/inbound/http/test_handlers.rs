@@ -16,27 +16,27 @@
 /// | Ollama native  | `POST /v1/test/api/generate`        | Ollama NDJSON    |
 /// | Gemini native  | `POST /v1/test/v1beta/models/{path}`| Gemini SSE       |
 use std::convert::Infallible;
-use std::pin::Pin;
-use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{Response as HttpResponse, StatusCode};
-use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::sse::Event;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::domain::enums::{ApiFormat, JobSource};
+use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
+use crate::domain::enums::{ApiFormat, JobSource, ProviderType};
+use super::constants::{PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
 use crate::domain::value_objects::JobId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 
 use super::cancel_guard::CancelOnDrop;
+use super::handlers::SseStream;
+use super::openai_sse_types::{ChunkChoice, CompletionChunk, DeltaContent};
 use super::state::AppState;
-
-type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
 
 // ── Shared request types ───────────────────────────────────────────────────────
 
@@ -51,30 +51,6 @@ pub struct TestCompletionRequest {
 pub struct TestChatMessage {
     pub role: String,
     pub content: String,
-}
-
-// ── OpenAI SSE response types ──────────────────────────────────────────────────
-
-#[derive(serde::Serialize)]
-struct DeltaContent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
-}
-
-#[derive(serde::Serialize)]
-struct ChunkChoice {
-    index: u32,
-    delta: DeltaContent,
-    finish_reason: Option<&'static str>,
-}
-
-#[derive(serde::Serialize)]
-struct CompletionChunk {
-    id: String,
-    object: &'static str,
-    created: i64,
-    model: String,
-    choices: Vec<ChunkChoice>,
 }
 
 // ── OpenAI-compat test handler ─────────────────────────────────────────────────
@@ -106,13 +82,31 @@ pub async fn test_completions(
             .into_response();
     }
 
-    let backend_type = req.provider_type.as_deref().unwrap_or("ollama").to_string();
+    let (provider_type, gemini_tier) = match req.provider_type.as_deref().unwrap_or(PROVIDER_OLLAMA) {
+        "gemini-free" => (ProviderType::Gemini, Some(GEMINI_TIER_FREE.to_string())),
+        PROVIDER_GEMINI => (ProviderType::Gemini, None),
+        _ => (ProviderType::Ollama, None),
+    };
     let model = req.model.clone();
     let account_id = Some(claims.sub);
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, &backend_type, None, account_id, JobSource::Test, ApiFormat::OpenaiCompat, None, None, Some("/v1/test/completions".to_string()), None, None)
+        .submit(SubmitJobRequest {
+            prompt,
+            model_name: model.clone(),
+            provider_type,
+            gemini_tier,
+            api_key_id: None,
+            account_id,
+            source: JobSource::Test,
+            api_format: ApiFormat::OpenaiCompat,
+            messages: None,
+            tools: None,
+            request_path: Some("/v1/test/completions".to_string()),
+            conversation_id: None,
+            key_tier: None,
+        })
         .await
     {
         Ok(id) => id,
@@ -141,11 +135,11 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
                     id: chunk_id.clone(),
                     object: "chat.completion.chunk",
                     created,
-                    model: model.clone(),
+                    model: Some(model.clone()),
                     choices: vec![ChunkChoice {
                         index: 0,
-                        delta: DeltaContent { content: None },
-                        finish_reason: Some("stop"),
+                        delta: DeltaContent::default(),
+                        finish_reason: Some("stop".to_string()),
                     }],
                 };
                 Ok(Event::default().data(serde_json::to_string(&stop_chunk).unwrap_or_default()))
@@ -155,10 +149,10 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
                     id: chunk_id.clone(),
                     object: "chat.completion.chunk",
                     created,
-                    model: model.clone(),
+                    model: Some(model.clone()),
                     choices: vec![ChunkChoice {
                         index: 0,
-                        delta: DeltaContent { content: Some(token.value) },
+                        delta: DeltaContent { content: Some(token.value), ..Default::default() },
                         finish_reason: None,
                     }],
                 };
@@ -180,11 +174,7 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
         state.use_case.clone(),
     ));
 
-    (
-        [("X-Accel-Buffering", "no")],
-        Sse::new(sse_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
-    )
-        .into_response()
+    super::handlers::sse_response(sse_stream)
 }
 
 /// `GET /v1/test/jobs/{job_id}/stream` — JWT-authenticated SSE reconnect for test jobs.
@@ -192,7 +182,7 @@ pub async fn stream_test_job(
     Path(job_id): Path<Uuid>,
     State(state): State<AppState>,
     axum::extract::Extension(_claims): axum::extract::Extension<Claims>,
-) -> impl IntoResponse {
+) -> Response {
     let jid = JobId(job_id);
     let chunk_id = format!("chatcmpl-{}", job_id);
     let created = chrono::Utc::now().timestamp();
@@ -234,11 +224,7 @@ pub async fn stream_test_job(
         state.use_case.clone(),
     ));
 
-    (
-        [("X-Accel-Buffering", "no")],
-        axum::response::sse::Sse::new(sse_stream)
-            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
-    )
+    super::handlers::sse_response(sse_stream)
 }
 
 // ── Ollama native test handlers ────────────────────────────────────────────────
@@ -300,7 +286,21 @@ pub async fn test_ollama_chat(
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, "ollama", None, Some(claims.sub), JobSource::Test, ApiFormat::OllamaNative, None, None, Some("/v1/test/api/chat".to_string()), None, None)
+        .submit(SubmitJobRequest {
+            prompt,
+            model_name: model.clone(),
+            provider_type: ProviderType::Ollama,
+            gemini_tier: None,
+            api_key_id: None,
+            account_id: Some(claims.sub),
+            source: JobSource::Test,
+            api_format: ApiFormat::OllamaNative,
+            messages: None,
+            tools: None,
+            request_path: Some("/v1/test/api/chat".to_string()),
+            conversation_id: None,
+            key_tier: None,
+        })
         .await
     {
         Ok(id) => id,
@@ -338,7 +338,21 @@ pub async fn test_ollama_generate(
 
     let job_id = match state
         .use_case
-        .submit(&req.prompt, &model, "ollama", None, Some(claims.sub), JobSource::Test, ApiFormat::OllamaNative, None, None, Some("/v1/test/api/generate".to_string()), None, None)
+        .submit(SubmitJobRequest {
+            prompt: req.prompt,
+            model_name: model.clone(),
+            provider_type: ProviderType::Ollama,
+            gemini_tier: None,
+            api_key_id: None,
+            account_id: Some(claims.sub),
+            source: JobSource::Test,
+            api_format: ApiFormat::OllamaNative,
+            messages: None,
+            tools: None,
+            request_path: Some("/v1/test/api/generate".to_string()),
+            conversation_id: None,
+            key_tier: None,
+        })
         .await
     {
         Ok(id) => id,
@@ -358,14 +372,12 @@ pub async fn test_ollama_generate(
 /// Stream a queued job's tokens as Ollama `/api/chat` NDJSON format.
 fn stream_as_ollama_chat_ndjson(state: AppState, job_id: JobId, model: String) -> Response {
     let token_stream = state.use_case.stream(&job_id);
-    let model_clone = model.clone();
 
     let ndjson = token_stream.map(move |result| {
-        let model = model_clone.clone();
         let created_at = chrono::Utc::now().to_rfc3339();
         let line = match result {
             Ok(token) if token.is_final => serde_json::json!({
-                "model": model,
+                "model": model.as_str(),
                 "created_at": created_at,
                 "message": {"role": "assistant", "content": ""},
                 "done": true,
@@ -374,7 +386,7 @@ fn stream_as_ollama_chat_ndjson(state: AppState, job_id: JobId, model: String) -
                 "eval_count": 0,
             }),
             Ok(token) => serde_json::json!({
-                "model": model,
+                "model": model.as_str(),
                 "created_at": created_at,
                 "message": {"role": "assistant", "content": token.value},
                 "done": false,
@@ -399,14 +411,12 @@ fn stream_as_ollama_chat_ndjson(state: AppState, job_id: JobId, model: String) -
 /// Stream a queued job's tokens as Ollama `/api/generate` NDJSON format.
 fn stream_as_ollama_generate_ndjson(state: AppState, job_id: JobId, model: String) -> Response {
     let token_stream = state.use_case.stream(&job_id);
-    let model_clone = model.clone();
 
     let ndjson = token_stream.map(move |result| {
-        let model = model_clone.clone();
         let created_at = chrono::Utc::now().to_rfc3339();
         let line = match result {
             Ok(token) if token.is_final => serde_json::json!({
-                "model": model,
+                "model": model.as_str(),
                 "created_at": created_at,
                 "response": "",
                 "done": true,
@@ -415,7 +425,7 @@ fn stream_as_ollama_generate_ndjson(state: AppState, job_id: JobId, model: Strin
                 "eval_count": 0,
             }),
             Ok(token) => serde_json::json!({
-                "model": model,
+                "model": model.as_str(),
                 "created_at": created_at,
                 "response": token.value,
                 "done": false,
@@ -510,7 +520,21 @@ pub async fn test_gemini_request(
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, "ollama", None, Some(claims.sub), JobSource::Test, ApiFormat::GeminiNative, None, None, Some("/v1/test/v1beta/models".to_string()), None, None)
+        .submit(SubmitJobRequest {
+            prompt,
+            model_name: model.clone(),
+            provider_type: ProviderType::Ollama,
+            gemini_tier: None,
+            api_key_id: None,
+            account_id: Some(claims.sub),
+            source: JobSource::Test,
+            api_format: ApiFormat::GeminiNative,
+            messages: None,
+            tools: None,
+            request_path: Some("/v1/test/v1beta/models".to_string()),
+            conversation_id: None,
+            key_tier: None,
+        })
         .await
     {
         Ok(id) => id,
@@ -530,10 +554,8 @@ pub async fn test_gemini_request(
 /// Stream a queued job's tokens as Gemini SSE format (`text/event-stream`).
 fn stream_as_gemini_sse(state: AppState, job_id: JobId, model: String) -> Response {
     let token_stream = state.use_case.stream(&job_id);
-    let model_clone = model.clone();
 
     let sse_bytes = token_stream.map(move |result| {
-        let model = model_clone.clone();
         let data = match result {
             Ok(token) if token.is_final => serde_json::json!({
                 "candidates": [{
@@ -541,7 +563,7 @@ fn stream_as_gemini_sse(state: AppState, job_id: JobId, model: String) -> Respon
                     "finishReason": "STOP",
                     "index": 0,
                 }],
-                "modelVersion": model,
+                "modelVersion": model.as_str(),
             }),
             Ok(token) => serde_json::json!({
                 "candidates": [{
@@ -549,7 +571,7 @@ fn stream_as_gemini_sse(state: AppState, job_id: JobId, model: String) -> Respon
                     "finishReason": "",
                     "index": 0,
                 }],
-                "modelVersion": model,
+                "modelVersion": model.as_str(),
             }),
             Err(e) => serde_json::json!({
                 "error": {"message": e.to_string(), "code": 500},

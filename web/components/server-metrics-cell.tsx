@@ -1,8 +1,7 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { api } from '@/lib/api'
-import type { NodeMetrics } from '@/lib/types'
+import { serverMetricsQuery } from '@/lib/queries/servers'
 import { Thermometer, Zap, MemoryStick, WifiOff, RefreshCw, Cpu } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,12 +16,7 @@ export function fmtMb(mb: number): string {
 
 export function ServerMetricsCell({ serverId }: { serverId: string }) {
   const { t } = useTranslation()
-  const { data, isLoading, isError, refetch, isFetching } = useQuery<NodeMetrics>({
-    queryKey: ['server-metrics', serverId],
-    queryFn: () => api.serverMetrics(serverId),
-    refetchInterval: 30_000,
-    retry: false,
-  })
+  const { data, isLoading, isError, refetch, isFetching } = useQuery(serverMetricsQuery(serverId))
 
   if (isLoading) {
     return <span className="text-xs text-muted-foreground animate-pulse">{t('common.loading')}</span>
@@ -115,12 +109,7 @@ export function ServerMetricsCompact({
   gpuIndex: number | null
 }) {
   const { t } = useTranslation()
-  const { data, isError } = useQuery<NodeMetrics>({
-    queryKey: ['server-metrics', serverId],
-    queryFn: () => api.serverMetrics(serverId),
-    refetchInterval: 30_000,
-    retry: false,
-  })
+  const { data, isError } = useQuery(serverMetricsQuery(serverId))
 
   if (isError || (data && !data.scrape_ok)) {
     return <span className="text-[10px] text-status-error-fg italic">{t('providers.servers.unreachable')}</span>

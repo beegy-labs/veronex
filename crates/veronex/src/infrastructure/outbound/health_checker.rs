@@ -8,6 +8,8 @@ use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::outbound::capacity::thermal::{ThermalThrottleMap, ThrottleLevel};
 use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, HwMetrics};
+use crate::infrastructure::outbound::gemini::adapter::GEMINI_BASE_URL;
+use crate::infrastructure::outbound::valkey_keys;
 
 // ── Agent response DTOs ────────────────────────────────────────────────────────
 
@@ -31,6 +33,8 @@ struct AgentGpu {
     power_w: f32,
     #[serde(default)]
     temp_c: f32,
+    #[serde(default)]
+    gpu_vendor: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -47,6 +51,12 @@ struct AgentOllama {
     loaded_model_count: u8,
 }
 
+use crate::domain::constants::{
+    OLLAMA_HEALTH_CHECK_TIMEOUT as OLLAMA_HEALTH_TIMEOUT,
+    GEMINI_HEALTH_CHECK_TIMEOUT as GEMINI_HEALTH_TIMEOUT,
+    AGENT_METRICS_TIMEOUT,
+};
+
 // ── Health check ───────────────────────────────────────────────────────────────
 
 /// Check whether a single provider is reachable.
@@ -57,7 +67,7 @@ pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) ->
     match provider.provider_type {
         ProviderType::Ollama => {
             let url = format!("{}/api/version", provider.url.trim_end_matches('/'));
-            match client.get(&url).timeout(Duration::from_secs(5)).send().await {
+            match client.get(&url).timeout(OLLAMA_HEALTH_TIMEOUT).send().await {
                 Ok(r) if r.status().is_success() => LlmProviderStatus::Online,
                 Ok(r) => {
                     tracing::warn!(
@@ -79,9 +89,9 @@ pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) ->
                 return LlmProviderStatus::Offline;
             };
             let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models?key={key}&pageSize=1"
+                "{GEMINI_BASE_URL}/v1beta/models?key={key}&pageSize=1"
             );
-            match client.get(&url).timeout(Duration::from_secs(10)).send().await {
+            match client.get(&url).timeout(GEMINI_HEALTH_TIMEOUT).send().await {
                 Ok(r) if r.status().is_success() => LlmProviderStatus::Online,
                 Ok(r) => {
                     tracing::warn!(
@@ -116,7 +126,7 @@ async fn poll_agent_metrics(
 
     let url = format!("{}/api/metrics", agent_url.trim_end_matches('/'));
 
-    let resp = match client.get(&url).timeout(Duration::from_secs(5)).send().await {
+    let resp = match client.get(&url).timeout(AGENT_METRICS_TIMEOUT).send().await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(
@@ -145,6 +155,7 @@ async fn poll_agent_metrics(
         gpu_util_pct: 0,
         power_w: 0.0,
         temp_c: 0.0,
+        gpu_vendor: String::new(),
     });
     let mem = agent.memory.unwrap_or(AgentMemory { used_mb: 0, total_mb: 0 });
     let ollama = agent.ollama.unwrap_or(AgentOllama { loaded_model_count: 0 });
@@ -158,6 +169,7 @@ async fn poll_agent_metrics(
         mem_used_mb: mem.used_mb,
         mem_total_mb: mem.total_mb,
         loaded_model_count: ollama.loaded_model_count,
+        gpu_vendor: gpu.gpu_vendor,
     };
 
     tracing::debug!(
@@ -188,8 +200,8 @@ pub async fn run_health_checker_loop(
     valkey_pool: Option<fred::clients::Pool>,
     thermal:     Arc<ThermalThrottleMap>,
     shutdown:    CancellationToken,
+    client:      reqwest::Client,
 ) {
-    let client = reqwest::Client::new();
     let interval = Duration::from_secs(interval_secs);
 
     tracing::info!("provider health checker started (interval={}s)", interval_secs);
@@ -238,6 +250,16 @@ pub async fn run_health_checker_loop(
 
                 // 3. Thermal throttle update from cached hw_metrics
                 if let Some(hw) = load_hw_metrics(pool, provider.id).await {
+                    // Set per-provider thermal profile from agent-reported gpu_vendor.
+                    // NVIDIA discrete GPUs tolerate higher temps; AMD APU (Ryzen AI 395+)
+                    // uses CPU-class thresholds (more conservative).
+                    use crate::infrastructure::outbound::capacity::thermal::ThermalThresholds;
+                    let profile = match hw.gpu_vendor.as_str() {
+                        "nvidia" => ThermalThresholds::GPU,
+                        _ => ThermalThresholds::CPU, // amd (APU/iGPU), unknown, empty
+                    };
+                    thermal.set_thresholds(provider.id, profile);
+
                     let prev  = thermal.get(provider.id);
                     let level = thermal.update(provider.id, hw.temp_c);
 
@@ -253,7 +275,7 @@ pub async fn run_health_checker_loop(
                                 use fred::prelude::*;
                                 let _: () = pool
                                     .set(
-                                        &format!("veronex:throttle:{}", provider.id),
+                                        &valkey_keys::thermal_throttle(provider.id),
                                         "hard",
                                         Some(Expiration::EX(90)),
                                         None,
@@ -277,10 +299,7 @@ pub async fn run_health_checker_loop(
                                 );
                                 use fred::prelude::*;
                                 let _: () = pool
-                                    .del::<(), _>(&format!(
-                                        "veronex:throttle:{}",
-                                        provider.id
-                                    ))
+                                    .del::<(), _>(&valkey_keys::thermal_throttle(provider.id))
                                     .await
                                     .unwrap_or(());
                             }

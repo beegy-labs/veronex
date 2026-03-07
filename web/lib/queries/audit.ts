@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { STALE_TIME_FAST } from '@/lib/constants'
 
 // ── Audit events ──────────────────────────────────────────────────────────────
 
@@ -11,6 +12,6 @@ export const auditQuery = (action: string, resourceType: string) => queryOptions
     action: action !== 'all' ? action : undefined,
     resource_type: resourceType !== 'all' ? resourceType : undefined,
   }),
-  staleTime: 30_000,
+  staleTime: STALE_TIME_FAST,
   retry: false,
 })

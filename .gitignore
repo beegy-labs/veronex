@@ -28,3 +28,6 @@ Thumbs.db
 # Build artifacts
 *.log
 web/tsconfig.tsbuildinfo
+
+# ts-rs auto-generated bindings
+web/lib/generated/

@@ -15,9 +15,13 @@ pub struct HttpAuditAdapter {
 }
 
 impl HttpAuditAdapter {
-    pub fn new(analytics_url: impl Into<String>, secret: impl Into<String>) -> Self {
+    pub fn new(
+        client: reqwest::Client,
+        analytics_url: impl Into<String>,
+        secret: impl Into<String>,
+    ) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: client,
             analytics_url: analytics_url.into(),
             secret: secret.into(),
         }
@@ -53,7 +57,7 @@ impl AuditPort for HttpAuditAdapter {
         };
 
         let url = format!("{}/internal/ingest/audit", self.analytics_url);
-        if let Err(e) = self
+        match self
             .http
             .post(&url)
             .bearer_auth(&self.secret)
@@ -61,7 +65,20 @@ impl AuditPort for HttpAuditAdapter {
             .send()
             .await
         {
-            tracing::warn!("analytics ingest audit failed (non-fatal): {e}");
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    tracing::warn!(
+                        status = %resp.status(),
+                        "analytics ingest audit failed"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "analytics ingest audit transport error"
+                );
+            }
         }
     }
 }

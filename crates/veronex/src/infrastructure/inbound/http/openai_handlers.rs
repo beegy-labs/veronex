@@ -1,19 +1,19 @@
-use std::convert::Infallible;
-use std::pin::Pin;
-use std::time::Duration;
-
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::sse::Event;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use futures::{Stream, StreamExt};
-use serde::{Deserialize, Serialize};
-use crate::domain::enums::{ApiFormat, JobSource};
-use super::cancel_guard::CancelOnDrop;
+use futures::StreamExt;
+use serde::Deserialize;
+use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
+use crate::domain::enums::{ApiFormat, JobSource, ProviderType};
+use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
+use super::handlers::sanitize_sse_error;
+use super::inference_helpers::{build_sse_response, validate_model_name, validate_content_length, extract_last_user_prompt, validate_tool_call, extract_conversation_id};
+use super::openai_sse_types::{
+    ChatCompletion, CompletionChoice, CompletionChunk, CompletionMessage, UsageInfo,
+};
 use super::state::AppState;
-
-type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
 
 // ── Request ────────────────────────────────────────────────────────────────────
 
@@ -102,8 +102,7 @@ impl ChatMessage {
                         .get("function")
                         .and_then(|f| f.get("name"))
                         .and_then(|n| n.as_str())
-                        .unwrap_or("")
-                        .to_string();
+                        .unwrap_or("");
                     // OpenAI arguments is a JSON-encoded string; Ollama wants the object.
                     let arguments: serde_json::Value = c
                         .get("function")
@@ -145,62 +144,59 @@ pub struct ChatCompletionRequest {
     /// Maps to Ollama `options.num_predict`.
     #[serde(default)]
     pub max_tokens: Option<u32>,
-    /// Ignored — the endpoint always streams (SSE).
+    /// Whether to stream the response (SSE). Defaults to `false` per OpenAI spec.
     #[serde(default)]
     pub stream: Option<bool>,
 }
 
-// ── OpenAI SSE response types ───────────────────────────────────────────────────
-
-#[derive(Serialize, Default)]
-struct DeltaContent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Serialize)]
-struct ChunkChoice {
-    index: u32,
-    delta: DeltaContent,
-    finish_reason: Option<String>,
-}
-
-#[derive(Serialize)]
-struct CompletionChunk {
-    id: String,
-    object: &'static str,
-    created: i64,
-    model: String,
-    choices: Vec<ChunkChoice>,
-}
-
 // ── Handler ────────────────────────────────────────────────────────────────────
 
-/// `POST /v1/chat/completions` — OpenAI-compatible streaming chat endpoint.
+/// `POST /v1/chat/completions` — OpenAI-compatible chat endpoint.
 ///
 /// For Ollama providers: proxies the full request (messages, tools, temperature, …)
 /// directly to Ollama's `/api/chat` and streams the response in OpenAI SSE format,
 /// including `tool_calls` deltas for function-calling agents.
 ///
-/// For other backends: falls back to the legacy queue-based single-prompt path.
+/// For other providers: falls back to the legacy queue-based single-prompt path.
 pub async fn chat_completions(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
     headers: axum::http::HeaderMap,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Response {
-    let conversation_id = headers
-        .get("x-conversation-id")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-    let backend_type = req.provider_type.clone().unwrap_or_else(|| "ollama".to_string());
-    match backend_type.as_str() {
-        "ollama" => ollama_chat_proxy(state, api_key, req, conversation_id).await,
-        _ => legacy_queue_chat(state, api_key, req, backend_type, conversation_id).await,
+    if validate_model_name(&req.model).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": {"message": ERR_MODEL_INVALID}})),
+        )
+            .into_response();
+    }
+
+    // Validate total message content length (all messages combined).
+    let total_content_len: usize = req.messages.iter().map(|m| {
+        m.content.as_ref().map_or(0, |c| match c {
+            MessageContent::Text(s) => s.len(),
+            MessageContent::Parts(parts) => parts.iter().map(|p| p.text.as_ref().map_or(0, |t| t.len())).sum(),
+        })
+    }).sum();
+    if validate_content_length(total_content_len).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": {"message": ERR_PROMPT_TOO_LARGE}})),
+        )
+            .into_response();
+    }
+
+    let conversation_id = extract_conversation_id(&headers);
+    let stream = req.stream.unwrap_or(false);
+    let provider_str = req.provider_type.as_deref().unwrap_or(PROVIDER_OLLAMA);
+    match provider_str {
+        PROVIDER_OLLAMA => ollama_chat_proxy(state, api_key, req, conversation_id, stream).await,
+        _ => {
+            // Parse "gemini-free" → (Gemini, Some("free")), "gemini" → (Gemini, None)
+            let (provider_type, gemini_tier) = parse_provider_str(provider_str);
+            legacy_queue_chat(state, api_key, req, provider_type, gemini_tier, conversation_id, stream).await
+        }
     }
 }
 
@@ -216,19 +212,14 @@ async fn ollama_chat_proxy(
     api_key: crate::domain::entities::ApiKey,
     req: ChatCompletionRequest,
     conversation_id: Option<String>,
+    stream: bool,
 ) -> Response {
     // Convert messages to Ollama format (normalise content, convert tool_calls).
     let ollama_messages: Vec<serde_json::Value> =
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
 
     // Extract last user content as display prompt (required by InferenceJob).
-    let prompt = ollama_messages
-        .iter()
-        .rev()
-        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-        .and_then(|m| m.get("content").and_then(|c| c.as_str()))
-        .unwrap_or("chat")
-        .to_string();
+    let prompt = extract_last_user_prompt(&ollama_messages).to_string();
 
     let model = req.model.clone();
     let messages = serde_json::Value::Array(ollama_messages);
@@ -237,20 +228,21 @@ async fn ollama_chat_proxy(
 
     let job_id = match state
         .use_case
-        .submit(
-            &prompt,
-            &model,
-            "ollama",
-            Some(api_key.id),
-            None,
-            JobSource::Api,
-            ApiFormat::OpenaiCompat,
-            Some(messages),
+        .submit(SubmitJobRequest {
+            prompt,
+            model_name: model.clone(),
+            provider_type: ProviderType::Ollama,
+            gemini_tier: None,
+            api_key_id: Some(api_key.id),
+            account_id: None,
+            source: JobSource::Api,
+            api_format: ApiFormat::OpenaiCompat,
+            messages: Some(messages),
             tools,
-            Some("/v1/chat/completions".to_string()),
+            request_path: Some("/v1/chat/completions".to_string()),
             conversation_id,
-            Some(api_key.tier.clone()),
-        )
+            key_tier: Some(api_key.tier),
+        })
         .await
     {
         Ok(id) => id,
@@ -266,15 +258,15 @@ async fn ollama_chat_proxy(
 
     let chunk_id = format!("chatcmpl-{}", job_id.0);
     let created = chrono::Utc::now().timestamp();
-    let token_stream = state.use_case.stream(&job_id);
+
+    if !stream {
+        return collect_completion(&state, job_id, model, chunk_id, created).await;
+    }
 
     let mut saw_tool_calls = false;
-    let content_stream = token_stream.map(move |result| -> Result<Event, Infallible> {
+    build_sse_response(&state, job_id, true, move |result| {
         match result {
             Ok(token) if token.tool_calls.is_some() => {
-                // Model returned tool calls — emit OpenAI delta format.
-                // Ollama format: [{function: {name, arguments: Object}}]
-                // OpenAI format: [{index, id, type, function: {name, arguments: String}}]
                 saw_tool_calls = true;
                 let ollama_calls = token.tool_calls.as_ref()
                     .and_then(|v| v.as_array())
@@ -282,112 +274,157 @@ async fn ollama_chat_proxy(
                     .unwrap_or_default();
 
                 let openai_calls: Vec<serde_json::Value> = ollama_calls
-                    .into_iter()
+                    .iter()
                     .enumerate()
-                    .map(|(i, c)| {
-                        let name = c.get("function")
-                            .and_then(|f| f.get("name"))
-                            .and_then(|n| n.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let args = c.get("function")
-                            .and_then(|f| f.get("arguments"))
-                            .map(|a| serde_json::to_string(a).unwrap_or_default())
-                            .unwrap_or_default();
-                        serde_json::json!({
-                            "index": i,
-                            "id": format!("call_{i}"),
-                            "type": "function",
-                            "function": {"name": name, "arguments": args}
-                        })
-                    })
+                    .filter(|(_, c)| validate_tool_call(c))
+                    .map(|(i, c)| convert_tool_call(i, c))
                     .collect();
 
-                let chunk = CompletionChunk {
-                    id: chunk_id.clone(),
-                    object: "chat.completion.chunk",
-                    created,
-                    model: model.clone(),
-                    choices: vec![ChunkChoice {
-                        index: 0,
-                        delta: DeltaContent {
-                            role: None,
-                            content: None,
-                            tool_calls: Some(openai_calls),
-                        },
-                        finish_reason: None,
-                    }],
-                };
-                Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
+                let chunk = CompletionChunk::tool_calls(chunk_id.clone(), created, Some(model.clone()), openai_calls);
+                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
             }
             Ok(token) if token.is_final => {
-                let finish_reason = if saw_tool_calls { "tool_calls" } else { "stop" };
-                let stop_chunk = CompletionChunk {
-                    id: chunk_id.clone(),
-                    object: "chat.completion.chunk",
-                    created,
-                    model: model.clone(),
-                    choices: vec![ChunkChoice {
-                        index: 0,
-                        delta: DeltaContent::default(),
-                        finish_reason: Some(finish_reason.to_string()),
-                    }],
-                };
-                Ok(Event::default().data(serde_json::to_string(&stop_chunk).unwrap_or_default()))
+                let reason = if saw_tool_calls { "tool_calls" } else { "stop" };
+                let chunk = CompletionChunk::finish(chunk_id.clone(), created, Some(model.clone()), reason);
+                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
             }
             Ok(token) => {
                 if token.value.is_empty() {
-                    // Skip empty non-final, non-tool-call tokens
-                    return Ok(Event::default().data(""));
+                    return Event::default().data("");
                 }
-                let chunk = CompletionChunk {
-                    id: chunk_id.clone(),
-                    object: "chat.completion.chunk",
-                    created,
-                    model: model.clone(),
-                    choices: vec![ChunkChoice {
-                        index: 0,
-                        delta: DeltaContent {
-                            role: None,
-                            content: Some(token.value),
-                            tool_calls: None,
-                        },
-                        finish_reason: None,
-                    }],
-                };
-                Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
+                let chunk = CompletionChunk::content(chunk_id.clone(), created, Some(model.clone()), token.value);
+                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
             }
             Err(e) => {
-                let err = serde_json::json!({"error": {"message": e.to_string()}});
-                Ok(Event::default().data(serde_json::to_string(&err).unwrap_or_default()))
+                let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
+                Event::default().data(serde_json::to_string(&err).unwrap_or_default())
             }
         }
-    });
-
-    let done_stream =
-        futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
-
-    let sse_stream: SseStream = Box::pin(CancelOnDrop::new(
-        content_stream.chain(done_stream),
-        job_id,
-        state.use_case.clone(),
-    ));
-
-    (
-        [("X-Accel-Buffering", "no")],
-        Sse::new(sse_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
-    )
-        .into_response()
+    })
 }
 
-// ── Legacy queue-based path (Gemini / other backends) ─────────────────────────
+/// Convert an Ollama tool call JSON value to OpenAI format.
+fn convert_tool_call(i: usize, c: &serde_json::Value) -> serde_json::Value {
+    let name = c.get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("");
+    let args = c.get("function")
+        .and_then(|f| f.get("arguments"))
+        .map(|a| serde_json::to_string(a).unwrap_or_default())
+        .unwrap_or_default();
+    serde_json::json!({
+        "index": i,
+        "id": format!("call_{i}"),
+        "type": "function",
+        "function": {"name": name, "arguments": args}
+    })
+}
+
+// ── Non-streaming collection ──────────────────────────────────────────────────
+
+/// Collect all tokens and return a non-streaming `ChatCompletion` response.
+async fn collect_completion(
+    state: &AppState,
+    job_id: crate::domain::value_objects::JobId,
+    model: String,
+    id: String,
+    created: i64,
+) -> Response {
+    let mut token_stream = state.use_case.stream(&job_id);
+    let mut content = String::new();
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut prompt_tokens: u32 = 0;
+    let mut completion_tokens: u32 = 0;
+
+    while let Some(result) = token_stream.next().await {
+        match result {
+            Ok(token) if token.tool_calls.is_some() => {
+                if let Some(calls) = token.tool_calls.as_ref().and_then(|v| v.as_array()) {
+                    for (i, c) in calls.iter().enumerate() {
+                        if validate_tool_call(c) {
+                            tool_calls.push(convert_tool_call(i, c));
+                        }
+                    }
+                }
+            }
+            Ok(token) if token.is_final => {
+                prompt_tokens = token.prompt_tokens.unwrap_or(0);
+                completion_tokens = token.completion_tokens.unwrap_or(completion_tokens);
+                break;
+            }
+            Ok(token) => {
+                if !token.value.is_empty() {
+                    content.push_str(&token.value);
+                }
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": {"message": sanitize_sse_error(&e)}})),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    let finish_reason = if tool_calls.is_empty() {
+        "stop"
+    } else {
+        "tool_calls"
+    };
+    let total = prompt_tokens + completion_tokens;
+
+    Json(ChatCompletion {
+        id,
+        object: "chat.completion",
+        created,
+        model,
+        choices: vec![CompletionChoice {
+            index: 0,
+            message: CompletionMessage {
+                role: "assistant",
+                content: if content.is_empty() { None } else { Some(content) },
+                tool_calls: if tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(tool_calls)
+                },
+            },
+            finish_reason: finish_reason.to_string(),
+        }],
+        usage: UsageInfo {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: total,
+        },
+    })
+    .into_response()
+}
+
+// ── Provider string parsing ──────────────────────────────────────────────────
+
+/// Parse a provider type string from the HTTP request into `(ProviderType, Option<String>)`.
+///
+/// "gemini-free" → (Gemini, Some("free")), "gemini" → (Gemini, None), anything else → (Ollama, None).
+fn parse_provider_str(s: &str) -> (ProviderType, Option<String>) {
+    match s {
+        "gemini-free" => (ProviderType::Gemini, Some(GEMINI_TIER_FREE.to_string())),
+        PROVIDER_GEMINI => (ProviderType::Gemini, None),
+        _ => (ProviderType::Ollama, None),
+    }
+}
+
+// ── Legacy queue-based path (Gemini / other providers) ────────────────────────
 
 async fn legacy_queue_chat(
     state: AppState,
     api_key: crate::domain::entities::ApiKey,
     req: ChatCompletionRequest,
-    backend_type: String,
+    provider_type: ProviderType,
+    gemini_tier: Option<String>,
     conversation_id: Option<String>,
+    stream: bool,
 ) -> Response {
     // Extract prompt from the last user message.
     let prompt = req
@@ -410,7 +447,21 @@ async fn legacy_queue_chat(
 
     let job_id = match state
         .use_case
-        .submit(&prompt, &model, &backend_type, Some(api_key.id), None, JobSource::Api, ApiFormat::OpenaiCompat, None, None, Some("/v1/chat/completions".to_string()), conversation_id, Some(api_key.tier.clone()))
+        .submit(SubmitJobRequest {
+            prompt,
+            model_name: model.clone(),
+            provider_type,
+            gemini_tier,
+            api_key_id: Some(api_key.id),
+            account_id: None,
+            source: JobSource::Api,
+            api_format: ApiFormat::OpenaiCompat,
+            messages: None,
+            tools: None,
+            request_path: Some("/v1/chat/completions".to_string()),
+            conversation_id,
+            key_tier: Some(api_key.tier),
+        })
         .await
     {
         Ok(id) => id,
@@ -426,62 +477,26 @@ async fn legacy_queue_chat(
 
     let chunk_id = format!("chatcmpl-{}", job_id.0);
     let created = chrono::Utc::now().timestamp();
-    let token_stream = state.use_case.stream(&job_id);
 
-    let content_stream = token_stream.map(move |result| -> Result<Event, Infallible> {
+    if !stream {
+        return collect_completion(&state, job_id, model, chunk_id, created).await;
+    }
+
+    build_sse_response(&state, job_id, true, move |result| {
         match result {
             Ok(token) if token.is_final => {
-                let stop_chunk = CompletionChunk {
-                    id: chunk_id.clone(),
-                    object: "chat.completion.chunk",
-                    created,
-                    model: model.clone(),
-                    choices: vec![ChunkChoice {
-                        index: 0,
-                        delta: DeltaContent::default(),
-                        finish_reason: Some("stop".to_string()),
-                    }],
-                };
-                Ok(Event::default().data(serde_json::to_string(&stop_chunk).unwrap_or_default()))
+                let chunk = CompletionChunk::stop(chunk_id.clone(), created, Some(model.clone()));
+                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
             }
-            Ok(token) if token.value.is_empty() => Ok(Event::default().data("")),
+            Ok(token) if token.value.is_empty() => Event::default().data(""),
             Ok(token) => {
-                let chunk = CompletionChunk {
-                    id: chunk_id.clone(),
-                    object: "chat.completion.chunk",
-                    created,
-                    model: model.clone(),
-                    choices: vec![ChunkChoice {
-                        index: 0,
-                        delta: DeltaContent {
-                            role: None,
-                            content: Some(token.value),
-                            tool_calls: None,
-                        },
-                        finish_reason: None,
-                    }],
-                };
-                Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
+                let chunk = CompletionChunk::content(chunk_id.clone(), created, Some(model.clone()), token.value);
+                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
             }
             Err(e) => {
-                let err = serde_json::json!({"error": {"message": e.to_string()}});
-                Ok(Event::default().data(serde_json::to_string(&err).unwrap_or_default()))
+                let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
+                Event::default().data(serde_json::to_string(&err).unwrap_or_default())
             }
         }
-    });
-
-    let done_stream =
-        futures::stream::once(async { Ok::<_, Infallible>(Event::default().data("[DONE]")) });
-
-    let sse_stream: SseStream = Box::pin(CancelOnDrop::new(
-        content_stream.chain(done_stream),
-        job_id,
-        state.use_case.clone(),
-    ));
-
-    (
-        [("X-Accel-Buffering", "no")],
-        Sse::new(sse_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))),
-    )
-        .into_response()
+    })
 }

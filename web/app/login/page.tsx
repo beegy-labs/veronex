@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
-import { setTokens } from '@/lib/auth'
+import { setSession } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -72,7 +72,7 @@ export default function LoginPage() {
     setLoading(true)
     try {
       const resp = await api.login({ username, password })
-      setTokens(resp)
+      setSession(resp)
       if (rememberUsername) {
         writeSavedUsername(username)
       } else {

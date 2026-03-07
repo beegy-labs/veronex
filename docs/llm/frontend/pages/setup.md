@@ -6,7 +6,7 @@
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add optional field to setup form | `web/app/setup/page.tsx` form + `web/lib/api.ts` `setup()` + backend `setup_handlers.rs` | Add `<Input>` + include in `api.setup()` body |
+| Add optional field to setup form | `web/app/setup/page.tsx` form + `web/lib/api.ts` `setup()` + `auth_handlers.rs` | Add `<Input>` + include in `api.setup()` body |
 | Change post-setup redirect target | `web/app/setup/page.tsx` `router.push('/')` | Replace `'/'` with desired path |
 | Change password minimum length | `web/app/setup/page.tsx` client validation + `<Input minLength>` | Align with backend constraint |
 | Handle "already set up" differently | `web/app/setup/page.tsx` `catch` block, `409` branch | Redirect to `/login` or show custom UI instead of inline error |
@@ -48,17 +48,7 @@ The page is **publicly accessible** (no auth required). It uses `fetchPublic` (n
               └─────────────────────────────────────────────────────────┘
 ```
 
-State variables:
-
-```ts
-const [username, setUsername] = useState('')
-const [password, setPassword] = useState('')
-const [confirm,  setConfirm]  = useState('')
-const [error,    setError]    = useState<string | null>(null)
-const [loading,  setLoading]  = useState(false)
-```
-
-No multi-step wizard — a single form with all required fields.
+State: `username`, `password`, `confirm`, `error`, `loading` — single form, no wizard.
 
 ---
 
@@ -114,14 +104,6 @@ Returns `409 Conflict` if setup has already been completed.
 
 ---
 
-## Post-Submit Behavior
-
-On success the page calls `setTokens(resp)` (from `web/lib/auth.ts`) which persists both `access_token` and `refresh_token` (e.g., in `localStorage` or cookies per `auth.ts` implementation). The router then navigates to `/` (the dashboard root).
-
-The page itself does **not** poll `GET /v1/setup/status` — that check is the responsibility of the app layout / route guard.
-
----
-
 ## UI Structure
 
 ```
@@ -146,24 +128,13 @@ The page itself does **not** poll `GET /v1/setup/status` — that check is the r
 
 ---
 
-## No i18n
+## i18n
 
-The setup page uses **hardcoded English strings** (no `useTranslation()` hook). All labels, card title, card description, error messages, and button text are inline string literals.
-
-Hardcoded strings:
-- Card title: `"Welcome to Veronex"`
-- Card description: `"Create your super admin account to get started."`
-- Error (short password): `"Password must be at least 8 characters"`
-- Error (mismatch): `"Passwords do not match"`
-- Error (409): `"Setup already completed. Please sign in."`
-- Error (other): `"Setup failed. Please try again."`
-- Button idle: `"Create account"`
-- Button loading: `"Creating account…"`
+Not internationalized — hardcoded English strings (no `useTranslation()`).
 
 ---
 
 ## Related Docs
 
-- Auth token storage and refresh: `../../auth/jwt-sessions.md`
-- Login page (post-setup flow): `web/app/login/page.tsx`
-- API auth handler: `../../auth/jwt-sessions.md`
+- Auth tokens: `../../auth/jwt-sessions.md`
+- Login page: `web/app/login/page.tsx`

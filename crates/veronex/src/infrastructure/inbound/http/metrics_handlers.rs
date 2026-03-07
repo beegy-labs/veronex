@@ -32,7 +32,7 @@ struct SdTarget {
 /// `GET /v1/metrics/targets`
 ///
 /// Returns registered node-exporter endpoints in Prometheus HTTP Service
-/// Discovery format.  One target per GPU server (deduplicates backends sharing
+/// Discovery format.  One target per GPU server (deduplicates providers sharing
 /// the same physical host).  Only servers with `node_exporter_url` set are
 /// included.
 pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoResponse {

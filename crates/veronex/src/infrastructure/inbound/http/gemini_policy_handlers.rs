@@ -1,33 +1,17 @@
-use axum::extract::{Extension, Path, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::extract::{Path, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::application::ports::outbound::audit_port::AuditEvent;
 use crate::domain::entities::GeminiRateLimitPolicy;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 
+use super::audit_helpers::emit_audit;
+use super::error::AppError;
 use super::state::AppState;
 
-async fn emit_audit(state: &AppState, actor: &Claims, action: &str, resource_id: &str, resource_name: &str, details: &str) {
-    if let Some(ref port) = state.audit_port {
-        port.record(AuditEvent {
-            event_time: Utc::now(),
-            account_id: actor.sub,
-            account_name: actor.sub.to_string(),
-            action: action.to_string(),
-            resource_type: "gemini_backend".to_string(),
-            resource_id: resource_id.to_string(),
-            resource_name: resource_name.to_string(),
-            ip_address: None,
-            details: Some(details.to_string()),
-        })
-        .await;
-    }
-}
+type HandlerResult<T> = Result<T, AppError>;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
 
@@ -75,22 +59,13 @@ fn default_true() -> bool {
 /// `GET /v1/gemini/policies` — list all Gemini rate-limit policies.
 ///
 /// Returns one row per model name. The `"*"` row is the global fallback.
-pub async fn list_gemini_policies(State(state): State<AppState>) -> impl IntoResponse {
-    match state.gemini_policy_repo.list_all().await {
-        Ok(policies) => {
-            let summaries: Vec<GeminiPolicySummary> =
-                policies.into_iter().map(Into::into).collect();
-            (StatusCode::OK, Json(summaries)).into_response()
-        }
-        Err(e) => {
-            tracing::error!("failed to list gemini policies: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
-        }
-    }
+pub async fn list_gemini_policies(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<Json<Vec<GeminiPolicySummary>>> {
+    let policies = state.gemini_policy_repo.list_all().await.map_err(|e| {
+        tracing::error!("failed to list gemini policies: {e}");
+        AppError::Internal(anyhow::anyhow!("database error"))
+    })?;
+    let summaries: Vec<GeminiPolicySummary> = policies.into_iter().map(Into::into).collect();
+    Ok(Json(summaries))
 }
 
 /// `PUT /v1/gemini/policies/{model_name}` — create or update a per-model rate-limit policy.
@@ -104,11 +79,18 @@ pub async fn list_gemini_policies(State(state): State<AppState>) -> impl IntoRes
 /// { "rpm_limit": 10, "rpd_limit": 250 }
 /// ```
 pub async fn upsert_gemini_policy(
-    Extension(claims): Extension<Claims>,
+    RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
     Path(model_name): Path<String>,
     Json(req): Json<UpsertGeminiPolicyRequest>,
-) -> impl IntoResponse {
+) -> HandlerResult<Json<GeminiPolicySummary>> {
+    if req.rpm_limit < 0 {
+        return Err(AppError::BadRequest("rpm_limit must be non-negative".into()));
+    }
+    if req.rpd_limit < 0 {
+        return Err(AppError::BadRequest("rpd_limit must be non-negative".into()));
+    }
+
     let policy = GeminiRateLimitPolicy {
         id: Uuid::now_v7(),
         model_name: model_name.clone(),
@@ -118,26 +100,19 @@ pub async fn upsert_gemini_policy(
         updated_at: Utc::now(),
     };
 
-    match state.gemini_policy_repo.upsert(&policy).await {
-        Ok(()) => {
-            tracing::info!(
-                model_name = %model_name,
-                rpm = req.rpm_limit,
-                rpd = req.rpd_limit,
-                "gemini policy upserted"
-            );
-            emit_audit(&state, &claims, "update", &model_name, &format!("gemini_policy:{model_name}"),
-                &format!("Gemini rate-limit policy for '{}' upserted: rpm={}, rpd={}, free_tier={}",
-                    model_name, req.rpm_limit, req.rpd_limit, req.available_on_free_tier)).await;
-            (StatusCode::OK, Json(GeminiPolicySummary::from(policy))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("failed to upsert gemini policy: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
-        }
-    }
+    state.gemini_policy_repo.upsert(&policy).await.map_err(|e| {
+        tracing::error!("failed to upsert gemini policy: {e}");
+        AppError::Internal(anyhow::anyhow!("database error"))
+    })?;
+
+    tracing::info!(
+        model_name = %model_name,
+        rpm = req.rpm_limit,
+        rpd = req.rpd_limit,
+        "gemini policy upserted"
+    );
+    emit_audit(&state, &claims, "update", "gemini_provider", &model_name, &format!("gemini_policy:{model_name}"),
+        &format!("Gemini rate-limit policy for '{}' upserted: rpm={}, rpd={}, free_tier={}",
+            model_name, req.rpm_limit, req.rpd_limit, req.available_on_free_tier)).await;
+    Ok(Json(GeminiPolicySummary::from(policy)))
 }

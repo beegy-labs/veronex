@@ -1,12 +1,10 @@
 use axum::extract::{Request, State};
-use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::Response;
-use blake2::{Blake2b, Digest, digest::consts::U32};
-
-type Blake2b256 = Blake2b<U32>;
 use chrono::Utc;
 
+use crate::domain::services::api_key_generator::hash_api_key;
+use crate::infrastructure::inbound::http::error::AppError;
 use crate::infrastructure::inbound::http::state::AppState;
 
 const EXCLUDED_PATHS: &[&str] = &["/health", "/readyz"];
@@ -19,9 +17,9 @@ pub async fn api_key_auth(
     State(state): State<AppState>,
     mut req: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, AppError> {
     let path = req.uri().path();
-    if EXCLUDED_PATHS.iter().any(|p| path.starts_with(p)) {
+    if EXCLUDED_PATHS.iter().any(|p| path == *p) {
         return Ok(next.run(req).await);
     }
 
@@ -41,26 +39,35 @@ pub async fn api_key_auth(
                 .get("x-goog-api-key")
                 .and_then(|v| v.to_str().ok())
         })
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+        .ok_or_else(|| AppError::Unauthorized("missing API key".into()))?;
 
-    let mut hasher = Blake2b256::new();
-    hasher.update(raw_key.as_bytes());
-    let key_hash = hex::encode(hasher.finalize());
+    if raw_key.is_empty() {
+        return Err(AppError::Unauthorized("missing API key".into()));
+    }
+
+    let key_hash = hash_api_key(raw_key);
 
     let api_key = state
         .api_key_repo
         .get_by_hash(&key_hash)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("invalid API key".into()))?;
 
     if !api_key.is_active {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(AppError::Unauthorized("API key is disabled".into()));
     }
     if let Some(expires) = api_key.expires_at {
         if expires < Utc::now() {
-            return Err(StatusCode::UNAUTHORIZED);
+            return Err(AppError::Unauthorized("API key has expired".into()));
         }
+    }
+
+    // RH1: Test keys must not access production inference endpoints.
+    // Test routes are JWT-protected, so test API keys are blocked entirely here.
+    if api_key.key_type.is_test() {
+        return Err(AppError::Forbidden(
+            "test API keys are not permitted for API access".into(),
+        ));
     }
 
     req.extensions_mut().insert(api_key);
@@ -80,15 +87,19 @@ mod tests {
     #[test]
     fn excluded_path_matching() {
         let path = "/health";
-        assert!(EXCLUDED_PATHS.iter().any(|p| path.starts_with(p)));
+        assert!(EXCLUDED_PATHS.iter().any(|p| path == *p));
 
         let path = "/readyz";
-        assert!(EXCLUDED_PATHS.iter().any(|p| path.starts_with(p)));
+        assert!(EXCLUDED_PATHS.iter().any(|p| path == *p));
 
         let path = "/v1/inference";
-        assert!(!EXCLUDED_PATHS.iter().any(|p| path.starts_with(p)));
+        assert!(!EXCLUDED_PATHS.iter().any(|p| path == *p));
 
         let path = "/v1/keys";
-        assert!(!EXCLUDED_PATHS.iter().any(|p| path.starts_with(p)));
+        assert!(!EXCLUDED_PATHS.iter().any(|p| path == *p));
+
+        // Exact match prevents prefix bypass (e.g., /healthXYZ)
+        let path = "/healthXYZ";
+        assert!(!EXCLUDED_PATHS.iter().any(|p| path == *p));
     }
 }

@@ -1,5 +1,6 @@
 'use client'
 
+import { useMemo } from 'react'
 import Link from 'next/link'
 import type { Provider, GpuServer, DashboardStats, PerformanceStats, UsageAggregate, UsageBreakdown, Job, NodeMetrics, ServerMetricsPoint, ModelBreakdown } from '@/lib/types'
 import StatsCard from '@/components/stats-card'
@@ -23,21 +24,13 @@ import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtHourLabel, fmtDatetimeShort } from '@/lib/date'
 import { useLabSettings } from '@/components/lab-settings-provider'
+import { STATUS_STYLES, PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
 
 /* ─── helpers ─────────────────────────────────────────────── */
 // fmtCompact / fmtMs / fmtMsNullable imported from chart-theme
-const fmtDuration = fmtMsNullable
 
-function countByStatus(backends: Provider[], status: string) {
-  return backends.filter(b => b.status === status).length
-}
-
-const STATUS_EXTRA: Record<string, string> = {
-  completed: 'bg-status-success/15 text-status-success-fg border-status-success/30',
-  failed:    'bg-status-error/15 text-status-error-fg border-status-error/30',
-  cancelled: 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30',
-  pending:   'bg-status-warning/15 text-status-warning-fg border-status-warning/30',
-  running:   'bg-status-info/15 text-status-info-fg border-status-info/30',
+function countByStatus(providers: Provider[], status: string) {
+  return providers.filter(b => b.status === status).length
 }
 
 type ThermalLevel = 'normal' | 'warning' | 'critical' | 'unknown'
@@ -98,22 +91,22 @@ function StatSkeleton() {
 }
 
 function ProviderRow({
-  icon, label, backends,
+  icon, label, providers,
 }: {
   icon: React.ReactNode
   label: string
-  backends: Provider[]
+  providers: Provider[]
 }) {
-  const online   = countByStatus(backends, 'online')
-  const degraded = countByStatus(backends, 'degraded')
-  const offline  = countByStatus(backends, 'offline')
+  const online   = countByStatus(providers, 'online')
+  const degraded = countByStatus(providers, 'degraded')
+  const offline  = countByStatus(providers, 'offline')
 
   return (
     <div className="flex items-center justify-between py-2">
       <div className="flex items-center gap-2 text-sm font-medium">
         {icon}
         <span>{label}</span>
-        <span className="text-muted-foreground text-xs">({backends.length})</span>
+        <span className="text-muted-foreground text-xs">({providers.length})</span>
       </div>
       <div className="flex items-center gap-3 text-xs">
         {online > 0 && (
@@ -134,7 +127,7 @@ function ProviderRow({
             {offline}
           </span>
         )}
-        {backends.length === 0 && <span className="text-muted-foreground">—</span>}
+        {providers.length === 0 && <span className="text-muted-foreground">—</span>}
       </div>
     </div>
   )
@@ -180,7 +173,7 @@ function ConnectionDot({ connected, t }: { connected: boolean; t: (k: string) =>
 interface Props {
   stats: DashboardStats | undefined
   statsLoading: boolean
-  backends: Provider[] | undefined
+  providers: Provider[] | undefined
   servers: GpuServer[] | undefined
   serverMetricQueries: Array<{ data: NodeMetrics | undefined }>
   serverHistoryQueries: Array<{ data: ServerMetricsPoint[] | undefined }>
@@ -195,7 +188,7 @@ interface Props {
 /* ─── component ───────────────────────────────────────────── */
 export function DashboardTab({
   stats, statsLoading,
-  backends, servers,
+  providers, servers,
   serverMetricQueries, serverHistoryQueries,
   perf, perf7d, perf30d,
   usage, breakdown, recentJobsData,
@@ -206,12 +199,12 @@ export function DashboardTab({
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   /* ── derived: providers ─────────────────────────────────── */
-  const LOCAL_TYPES = ['ollama'] as const
-  const localBs = backends?.filter(b => (LOCAL_TYPES as readonly string[]).includes(b.backend_type)) ?? []
+  const LOCAL_TYPES = [PROVIDER_OLLAMA] as const
+  const localBs = providers?.filter(b => (LOCAL_TYPES as readonly string[]).includes(b.provider_type)) ?? []
   const apiBs   = geminiEnabled
-    ? (backends?.filter(b => b.backend_type === 'gemini') ?? [])
+    ? (providers?.filter(b => b.provider_type === PROVIDER_GEMINI) ?? [])
     : []
-  // visibleBs = only backends that are currently shown (respects lab flags)
+  // visibleBs = only providers that are currently shown (respects lab flags)
   const visibleBs = [...localBs, ...apiBs]
   const onlineAll = visibleBs.filter(b => b.status === 'online').length
   const totalProv = visibleBs.length
@@ -299,15 +292,18 @@ export function DashboardTab({
     success: h.success_count,
   })) ?? []
 
-  const modelBarData: (ModelBreakdown & { label: string })[] = (breakdown?.by_model ?? [])
-    .filter(m => geminiEnabled || m.provider_type !== 'gemini')
-    .slice()
-    .sort((a, b) => b.request_count - a.request_count)
-    .slice(0, 8)
-    .map(m => ({
-      ...m,
-      label: m.model_name.length > 22 ? m.model_name.slice(0, 21) + '…' : m.model_name,
-    }))
+  const modelBarData = useMemo<(ModelBreakdown & { label: string })[]>(() =>
+    (breakdown?.by_model ?? [])
+      .filter(m => geminiEnabled || m.provider_type !== PROVIDER_GEMINI)
+      .slice()
+      .sort((a, b) => b.request_count - a.request_count)
+      .slice(0, 8)
+      .map(m => ({
+        ...m,
+        label: m.model_name.length > 22 ? m.model_name.slice(0, 21) + '…' : m.model_name,
+      })),
+    [breakdown?.by_model, geminiEnabled],
+  )
 
   const recentJobs: Job[] = recentJobsData?.jobs ?? []
 
@@ -323,10 +319,10 @@ export function DashboardTab({
           <>
             <StatsCard
               title={t('overview.providerStatus')}
-              value={backends ? `${onlineAll}/${totalProv}` : '—'}
+              value={providers ? `${onlineAll}/${totalProv}` : '—'}
               subtitle={t('common.online')}
               icon={<Activity className="h-5 w-5" />}
-              valueClassName={backends ? providerValueCls(onlineAll, totalProv) : ''}
+              valueClassName={providers ? providerValueCls(onlineAll, totalProv) : ''}
             />
             <StatsCard
               title={t('overview.waiting')}
@@ -618,9 +614,9 @@ export function DashboardTab({
           </CardHeader>
           <CardContent className="pt-0">
             <div className="divide-y divide-border">
-              <ProviderRow icon={<Server className="h-4 w-4" />} label={t('overview.localProviders')} backends={localBs} />
+              <ProviderRow icon={<Server className="h-4 w-4" />} label={t('overview.localProviders')} providers={localBs} />
               {geminiEnabled && (
-                <ProviderRow icon={<Globe className="h-4 w-4" />} label={t('overview.apiProviders')} backends={apiBs} />
+                <ProviderRow icon={<Globe className="h-4 w-4" />} label={t('overview.apiProviders')} providers={apiBs} />
               )}
             </div>
             <div className="mt-3 pt-2 border-t border-border">
@@ -731,7 +727,7 @@ export function DashboardTab({
                 />
                 <Bar dataKey="request_count" radius={[0, 4, 4, 0]}>
                   {modelBarData.map((m, i) => (
-                    <Cell key={i} fill={m.provider_type === 'gemini' ? 'var(--theme-status-info)' : 'var(--theme-primary)'} />
+                    <Cell key={i} fill={m.provider_type === PROVIDER_GEMINI ? 'var(--theme-status-info)' : 'var(--theme-primary)'} />
                   ))}
                 </Bar>
               </BarChart>
@@ -770,11 +766,11 @@ export function DashboardTab({
                     <td className="py-3 px-4 pl-6 font-mono text-xs max-w-[180px] truncate">{job.model_name}</td>
                     <td className="py-3 px-4 text-xs text-muted-foreground max-w-[120px] truncate">{job.provider_type}</td>
                     <td className="py-3 px-4">
-                      <Badge variant="outline" className={`text-xs ${STATUS_EXTRA[job.status] ?? 'bg-muted/20 text-muted-foreground border-muted/30'}`}>
+                      <Badge variant="outline" className={`text-xs ${STATUS_STYLES[job.status] ?? 'bg-muted/20 text-muted-foreground border-muted/30'}`}>
                         {job.status}
                       </Badge>
                     </td>
-                    <td className="py-3 px-4 text-xs tabular-nums">{fmtDuration(job.latency_ms)}</td>
+                    <td className="py-3 px-4 text-xs tabular-nums">{fmtMsNullable(job.latency_ms)}</td>
                     <td className="py-3 px-4 pr-6 text-xs text-muted-foreground whitespace-nowrap">{fmtDatetimeShort(job.created_at, tz)}</td>
                   </tr>
                 ))}

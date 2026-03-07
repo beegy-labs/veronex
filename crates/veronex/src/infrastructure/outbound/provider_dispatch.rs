@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
+use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::LlmProvider;

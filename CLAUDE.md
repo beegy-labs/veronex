@@ -51,10 +51,10 @@
 | ------ | ---- | ------ |
 | Policies | `policies/` | architecture, patterns, git-flow, terminology |
 | Auth | `auth/` | jwt-sessions, api-keys, security |
-| Inference | `inference/` | job-lifecycle, job-analytics, openai-compat, capacity, model-pricing, lab-features |
+| Inference | `inference/` | job-lifecycle, job-api, session-grouping, job-analytics, openai-compat, capacity, model-pricing, lab-features |
 | Providers | `providers/` | ollama, ollama-models, gemini, gemini-models, hardware |
 | Infra | `infra/` | deploy, otel-pipeline |
-| Frontend | `frontend/` | design-system, charts, pages/* |
+| Frontend | `frontend/` | design-system (core, i18n, components), charts, pages/* |
 | Research | `research/` | 2026 best practices |
 
 ---

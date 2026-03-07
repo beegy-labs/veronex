@@ -1,6 +1,6 @@
 # Providers — Gemini: Global Model Sync & Per-Provider Selection
 
-> SSOT | **Last Updated**: 2026-03-03
+> SSOT | **Last Updated**: 2026-03-04
 
 ## Task Guide
 
@@ -9,8 +9,8 @@
 | Set admin API key | `PUT /v1/gemini/sync-config` | `gemini_model_handlers.rs` → `set_sync_config()` |
 | Sync global model list | `POST /v1/gemini/models/sync` | `gemini_model_handlers.rs` → `sync_models()` |
 | Change sync behavior (filter logic) | `infrastructure/outbound/gemini/adapter.rs` | model list filter in sync handler |
-| Enable/disable model for paid provider | `PATCH /v1/providers/{id}/selected-models/{model}` | `backend_handlers.rs` → `set_model_enabled()` |
-| Change merge logic (global + per-provider) | `backend_handlers.rs` → `list_selected_models()` | `gemini_model_repo.list()` + `sel_map` merge |
+| Enable/disable model for paid provider | `PATCH /v1/providers/{id}/selected-models/{model}` | `provider_handlers.rs` → `set_model_enabled()` |
+| Change merge logic (global + per-provider) | `provider_handlers.rs` → `list_selected_models()` | `gemini_model_repo.list()` + `sel_map` merge |
 | Add field to ProviderSelectedModel | `migrations/` + `domain/entities/` + `persistence/provider_model_selection.rs` | |
 
 ## Key Files
@@ -24,7 +24,7 @@
 | `crates/veronex/src/infrastructure/outbound/persistence/gemini_sync_config.rs` | Postgres impl |
 | `crates/veronex/src/infrastructure/outbound/persistence/gemini_model_repository.rs` | Postgres impl |
 | `crates/veronex/src/infrastructure/outbound/persistence/provider_model_selection.rs` | Postgres impl (UPSERT) |
-| `crates/veronex/src/infrastructure/inbound/http/backend_handlers.rs` | `list_selected_models`, `set_model_enabled` |
+| `crates/veronex/src/infrastructure/inbound/http/provider_handlers.rs` | `list_selected_models`, `set_model_enabled` |
 | `crates/veronex/src/infrastructure/inbound/http/state.rs` | `AppState` fields |
 
 ---
@@ -103,7 +103,7 @@ GET  /v1/gemini/models
   → { models: [{ model_name: String, synced_at: String }] }
 ```
 
-### Per-Provider Model Selection (backend_handlers.rs)
+### Per-Provider Model Selection (provider_handlers.rs)
 
 ```
 GET   /v1/providers/{id}/selected-models

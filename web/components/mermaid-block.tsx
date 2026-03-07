@@ -18,7 +18,7 @@ export function MermaidBlock({ code }: { code: string }) {
         mermaid.initialize({
           startOnLoad: false,
           theme: isDark ? 'dark' : 'default',
-          securityLevel: 'loose',
+          securityLevel: 'strict',
         })
         return mermaid.render(id, code)
       })

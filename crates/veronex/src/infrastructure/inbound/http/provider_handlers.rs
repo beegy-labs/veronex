@@ -1,8 +1,7 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use anyhow::Result;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -10,47 +9,23 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::application::ports::outbound::audit_port::AuditEvent;
-use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
-use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 use crate::infrastructure::outbound::health_checker::check_provider;
+use crate::infrastructure::outbound::valkey_keys;
 
+use super::audit_helpers::emit_audit;
+use super::error::AppError;
+use super::gemini_helpers;
 use super::state::AppState;
 
-async fn emit_audit(
-    state: &AppState,
-    actor: &Claims,
-    action: &str,
-    resource_type: &str,
-    resource_id: &str,
-    resource_name: &str,
-    details: &str,
-) {
-    if let Some(ref port) = state.audit_port {
-        port.record(AuditEvent {
-            event_time: Utc::now(),
-            account_id: actor.sub,
-            account_name: actor.sub.to_string(),
-            action: action.to_string(),
-            resource_type: resource_type.to_string(),
-            resource_id: resource_id.to_string(),
-            resource_name: resource_name.to_string(),
-            ip_address: None,
-            details: Some(details.to_string()),
-        })
-        .await;
-    }
-}
+use super::constants::MODELS_CACHE_TTL;
 
 // ── Model cache helpers ─────────────────────────────────────────────────────────
 
-/// Valkey TTL for the model list cache (1 hour).
-const MODELS_CACHE_TTL: i64 = 3600;
-
 fn models_cache_key(id: Uuid) -> String {
-    format!("veronex:models:{id}")
+    valkey_keys::provider_models(id)
 }
 
 /// Fetch the list of available models directly from the provider (bypasses cache).
@@ -58,9 +33,7 @@ fn models_cache_key(id: Uuid) -> String {
 /// * Ollama → `GET {url}/api/tags`
 /// * Gemini → `GET https://generativelanguage.googleapis.com/v1beta/models?key={api_key}`
 ///   filtered to models that support `generateContent`.
-async fn fetch_models_live(provider: &LlmProvider) -> Result<Vec<String>> {
-    let client = reqwest::Client::new();
-
+async fn fetch_models_live(client: &reqwest::Client, provider: &LlmProvider) -> Result<Vec<String>> {
     match provider.provider_type {
         ProviderType::Ollama => {
             let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
@@ -77,7 +50,7 @@ async fn fetch_models_live(provider: &LlmProvider) -> Result<Vec<String>> {
 
             let models = json["models"]
                 .as_array()
-                .unwrap_or(&vec![])
+                .map_or(&[] as &[_], |v| v)
                 .iter()
                 .filter_map(|m| m["name"].as_str().map(String::from))
                 .collect();
@@ -91,43 +64,7 @@ async fn fetch_models_live(provider: &LlmProvider) -> Result<Vec<String>> {
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("gemini provider has no api key stored"))?;
 
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-            );
-
-            let json: serde_json::Value = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("cannot reach gemini api: {e}"))?
-                .error_for_status()
-                .map_err(|e| anyhow::anyhow!("gemini api returned error: {e}"))?
-                .json()
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to parse gemini response: {e}"))?;
-
-            let models = json["models"]
-                .as_array()
-                .unwrap_or(&vec![])
-                .iter()
-                .filter(|m| {
-                    m["supportedGenerationMethods"]
-                        .as_array()
-                        .map(|methods| {
-                            methods
-                                .iter()
-                                .any(|method| method.as_str() == Some("generateContent"))
-                        })
-                        .unwrap_or(false)
-                })
-                .filter_map(|m| {
-                    m["name"]
-                        .as_str()
-                        .map(|s| s.strip_prefix("models/").unwrap_or(s).to_string())
-                })
-                .collect();
-
-            Ok(models)
+            gemini_helpers::fetch_gemini_models(client, api_key).await
         }
     }
 }
@@ -165,11 +102,11 @@ async fn load_models_cache(pool: &fred::clients::Pool, key: &str) -> Option<Vec<
 // ── Request / Response DTOs ────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-pub struct RegisterBackendRequest {
+pub struct RegisterProviderRequest {
     /// Human-readable label.
     pub name: String,
     /// `"ollama"` or `"gemini"`.
-    pub backend_type: String,
+    pub provider_type: String,
     /// Required for Ollama. E.g. `"http://192.168.1.10:11434"`.
     pub url: Option<String>,
     /// Required for Gemini. Stored as-is (PoC — no encryption).
@@ -193,7 +130,7 @@ pub struct RegisterBackendRequest {
 /// is always present.  `gpu_index` / `server_id` = `null` explicitly clears them.
 /// `api_key` = `null` or empty string keeps the existing stored key.
 #[derive(Debug, Deserialize)]
-pub struct UpdateBackendRequest {
+pub struct UpdateProviderRequest {
     pub name: String,
     /// Ollama URL. Leave empty for Gemini.
     pub url: Option<String>,
@@ -208,10 +145,10 @@ pub struct UpdateBackendRequest {
 }
 
 #[derive(Debug, Serialize)]
-pub struct BackendSummary {
+pub struct ProviderSummary {
     pub id: Uuid,
     pub name: String,
-    pub backend_type: String,
+    pub provider_type: String,
     pub url: String,
     pub is_active: bool,
     pub total_vram_mb: i64,
@@ -225,30 +162,15 @@ pub struct BackendSummary {
     pub api_key_masked: Option<String>,
 }
 
-impl From<LlmProvider> for BackendSummary {
+impl From<LlmProvider> for ProviderSummary {
     fn from(b: LlmProvider) -> Self {
-        let backend_type = match b.provider_type {
-            ProviderType::Ollama => "ollama",
-            ProviderType::Gemini => "gemini",
-        }
-        .to_string();
-        let status = match b.status {
-            LlmProviderStatus::Online => "online",
-            LlmProviderStatus::Offline => "offline",
-            LlmProviderStatus::Degraded => "degraded",
-        }
-        .to_string();
-        let api_key_masked = b.api_key_encrypted.as_ref().map(|k| {
-            if k.len() <= 8 {
-                "****".to_string()
-            } else {
-                format!("{}...{}", &k[..4], &k[k.len() - 4..])
-            }
-        });
+        let provider_type = b.provider_type.as_str().to_string();
+        let status = b.status.as_str().to_string();
+        let api_key_masked = b.api_key_encrypted.as_deref().map(gemini_helpers::mask_api_key);
         Self {
             id: b.id,
             name: b.name,
-            backend_type,
+            provider_type,
             url: b.url,
             is_active: b.is_active,
             total_vram_mb: b.total_vram_mb,
@@ -264,16 +186,12 @@ impl From<LlmProvider> for BackendSummary {
 }
 
 #[derive(Debug, Serialize)]
-pub struct RegisterBackendResponse {
+pub struct RegisterProviderResponse {
     pub id: Uuid,
     pub status: String,
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-
-fn provider_registry(state: &AppState) -> &Arc<dyn LlmProviderRegistry> {
-    &state.provider_registry
-}
 
 fn parse_provider_type(s: &str) -> Option<ProviderType> {
     match s.to_lowercase().as_str() {
@@ -283,41 +201,102 @@ fn parse_provider_type(s: &str) -> Option<ProviderType> {
     }
 }
 
+/// SSRF prevention: block cloud metadata endpoints, IPv6 loopback/link-local,
+/// and IPv4-mapped IPv6 addresses. Enforce http(s) scheme.
+///
+/// Localhost and private-network IPs are intentionally allowed because Ollama
+/// providers run on local machines (e.g. `http://192.168.1.10:11434`).
+fn validate_provider_url(url: &str) -> Result<(), AppError> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(AppError::BadRequest(
+            "provider URL must use http:// or https://".into(),
+        ));
+    }
+
+    // Block known metadata hostnames.
+    if url.contains("metadata.google.internal") {
+        return Err(AppError::BadRequest("metadata endpoints are not allowed".into()));
+    }
+
+    // Extract host portion between :// and the next /.
+    let after_scheme = url.split("://").nth(1).unwrap_or("");
+    let authority = after_scheme.split('/').next().unwrap_or("");
+    // Handle IPv6 brackets: [::1]:port → extract content between [ and ].
+    let bare = if let Some(start) = authority.find('[') {
+        let end = authority.find(']').unwrap_or(authority.len());
+        &authority[start + 1..end]
+    } else {
+        // IPv4 or hostname: strip port.
+        authority.split(':').next().unwrap_or("")
+    };
+
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        // Block link-local (169.254.x.x / fe80::) — cloud metadata lives here.
+        if is_link_local(&ip) {
+            return Err(AppError::BadRequest("metadata endpoints are not allowed".into()));
+        }
+        // Block IPv4-mapped IPv6 link-local (e.g. ::ffff:169.254.169.254).
+        if let std::net::IpAddr::V6(v6) = ip {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                if mapped.is_link_local() {
+                    return Err(AppError::BadRequest("metadata endpoints are not allowed".into()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_link_local(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+/// Fetch a provider by ID or return a structured error.
+async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvider, AppError> {
+    state
+        .provider_registry
+        .get(id)
+        .await
+        .map_err(|e| {
+            tracing::error!(%id, "failed to fetch provider: {e}");
+            AppError::Internal(anyhow::anyhow!("database error"))
+        })?
+        .ok_or_else(|| AppError::NotFound("provider not found".into()))
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `POST /v1/providers` — register a new Ollama or Gemini provider.
 ///
 /// Immediately runs a health check and sets the initial status.
 pub async fn register_provider(
-    Extension(claims): Extension<Claims>,
+    RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
-    Json(req): Json<RegisterBackendRequest>,
+    Json(req): Json<RegisterProviderRequest>,
 ) -> impl IntoResponse {
-    let Some(provider_type) = parse_provider_type(&req.backend_type) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "backend_type must be 'ollama' or 'gemini'"})),
-        )
+    let Some(provider_type) = parse_provider_type(&req.provider_type) else {
+        return AppError::BadRequest("provider_type must be 'ollama' or 'gemini'".into())
             .into_response();
     };
 
     // Validate required fields per provider type.
     match provider_type {
         ProviderType::Ollama => {
-            if req.url.as_deref().unwrap_or("").is_empty() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "url is required for ollama providers"})),
-                )
+            let url = req.url.as_deref().unwrap_or("");
+            if url.is_empty() {
+                return AppError::BadRequest("url is required for ollama providers".into())
                     .into_response();
+            }
+            if let Err(e) = validate_provider_url(url) {
+                return e.into_response();
             }
         }
         ProviderType::Gemini => {
             if req.api_key.as_deref().unwrap_or("").is_empty() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "api_key is required for gemini providers"})),
-                )
+                return AppError::BadRequest("api_key is required for gemini providers".into())
                     .into_response();
             }
         }
@@ -340,48 +319,37 @@ pub async fn register_provider(
     };
 
     // Health check before persisting.
-    let client = reqwest::Client::new();
-    let initial_status = check_provider(&client, &provider).await;
+    let initial_status = check_provider(&state.http_client, &provider).await;
     let provider = LlmProvider {
         status: initial_status.clone(),
         ..provider
     };
 
-    let registry = provider_registry(&state);
+    let registry = &state.provider_registry;
     if let Err(e) = registry.register(&provider).await {
         tracing::error!("failed to register provider: {e}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "database error"})),
-        )
-            .into_response();
+        return AppError::Internal(anyhow::anyhow!("database error")).into_response();
     }
 
-    let status_str = match initial_status {
-        LlmProviderStatus::Online => "online",
-        LlmProviderStatus::Offline => "offline",
-        LlmProviderStatus::Degraded => "degraded",
-    };
+    let status_str = initial_status.as_str();
 
     tracing::info!(
         id = %provider.id,
         name = %provider.name,
-        provider_type = %req.backend_type,
+        provider_type = %req.provider_type,
         status = %status_str,
         "provider registered"
     );
 
-    let resource_type = match provider.provider_type {
-        ProviderType::Ollama => "ollama_provider",
-        ProviderType::Gemini => "gemini_provider",
-    };
+    let resource_type = provider.provider_type.resource_type();
     emit_audit(&state, &claims, "create", resource_type, &provider.id.to_string(), &provider.name,
+
         &format!("Provider '{}' registered (type: {}, initial_status: {})",
-            provider.name, req.backend_type, status_str)).await;
+            provider.name, req.provider_type, status_str)).await;
 
     (
         StatusCode::CREATED,
-        Json(RegisterBackendResponse {
+        Json(RegisterProviderResponse {
             id: provider.id,
             status: status_str.to_string(),
         }),
@@ -391,44 +359,40 @@ pub async fn register_provider(
 
 /// `GET /v1/providers` — list all registered providers.
 pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
-    match provider_registry(&state).list_all().await {
+    match state.provider_registry.list_all().await {
         Ok(providers) => {
-            let summaries: Vec<BackendSummary> = providers.into_iter().map(Into::into).collect();
+            let summaries: Vec<ProviderSummary> = providers.into_iter().map(Into::into).collect();
             (StatusCode::OK, Json(summaries)).into_response()
         }
         Err(e) => {
             tracing::error!("failed to list providers: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            AppError::Internal(anyhow::anyhow!("database error")).into_response()
         }
     }
 }
 
 /// `DELETE /v1/providers/{id}` — soft-delete (deactivate) a provider.
 pub async fn delete_provider(
-    Extension(claims): Extension<Claims>,
+    RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    // Fetch name before deactivating for the audit record.
-    let name = provider_registry(&state).get(id).await.ok().flatten().map(|b| b.name).unwrap_or_default();
+    let provider = match get_provider(&state, id).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+    let name = provider.name.clone();
+    let resource_type = provider.provider_type.resource_type();
 
-    match provider_registry(&state).deactivate(id).await {
+    match &state.provider_registry.deactivate(id).await {
         Ok(()) => {
-            emit_audit(&state, &claims, "delete", "ollama_provider", &id.to_string(), &name,
+            emit_audit(&state, &claims, "delete", resource_type, &id.to_string(), &name,
                 &format!("Provider '{}' ({}) deactivated (soft-deleted, no longer routed)", name, id)).await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
             tracing::error!(%id, "failed to deactivate provider: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            AppError::Internal(anyhow::anyhow!("database error")).into_response()
         }
     }
 }
@@ -438,39 +402,19 @@ pub async fn healthcheck_provider(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let registry = provider_registry(&state);
-
-    let provider = match registry.get(id).await {
-        Ok(Some(b)) => b,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "provider not found"})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!(%id, "failed to fetch provider: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
-        }
+    let provider = match get_provider(&state, id).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
 
-    let client = reqwest::Client::new();
-    let new_status = check_provider(&client, &provider).await;
+    let new_status = check_provider(&state.http_client, &provider).await;
 
+    let registry = &state.provider_registry;
     if let Err(e) = registry.update_status(id, new_status.clone()).await {
         tracing::warn!(%id, "failed to persist healthcheck result: {e}");
     }
 
-    let status_str = match new_status {
-        LlmProviderStatus::Online => "online",
-        LlmProviderStatus::Offline => "offline",
-        LlmProviderStatus::Degraded => "degraded",
-    };
+    let status_str = new_status.as_str();
 
     (
         StatusCode::OK,
@@ -484,42 +428,29 @@ pub async fn healthcheck_provider(
 /// All fields are optional; only provided (non-null) fields are applied.
 /// Passing `api_key: ""` leaves the existing key unchanged.
 pub async fn update_provider(
-    Extension(claims): Extension<Claims>,
+    RequireSuper(claims): RequireSuper,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Json(req): Json<UpdateBackendRequest>,
+    Json(req): Json<UpdateProviderRequest>,
 ) -> impl IntoResponse {
-    let registry = provider_registry(&state);
-
-    let mut provider = match registry.get(id).await {
-        Ok(Some(b)) => b,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "provider not found"})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!(%id, "update_provider: db error: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
-        }
+    let mut provider = match get_provider(&state, id).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
 
+    let registry = &state.provider_registry;
+
     if req.name.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "name must not be empty"})),
-        )
-            .into_response();
+        return AppError::BadRequest("name must not be empty".into()).into_response();
     }
     provider.name = req.name.trim().to_string();
-    if let Some(url) = req.url {
-        provider.url = url;
+    if let Some(ref url) = req.url {
+        if !url.is_empty() {
+            if let Err(e) = validate_provider_url(url) {
+                return e.into_response();
+            }
+        }
+        provider.url = url.clone();
     }
     // Empty / absent api_key = keep existing stored value.
     if let Some(key) = req.api_key.filter(|s| !s.is_empty()) {
@@ -533,21 +464,14 @@ pub async fn update_provider(
 
     if let Err(e) = registry.update(&provider).await {
         tracing::error!(%id, "update_provider: failed: {e}");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "database error"})),
-        )
-            .into_response();
+        return AppError::Internal(anyhow::anyhow!("database error")).into_response();
     }
 
-    let resource_type = match provider.provider_type {
-        ProviderType::Ollama => "ollama_provider",
-        ProviderType::Gemini => "gemini_provider",
-    };
+    let resource_type = provider.provider_type.resource_type();
     emit_audit(&state, &claims, "update", resource_type, &id.to_string(), &provider.name,
         &format!("Provider '{}' ({}) configuration updated", provider.name, id)).await;
     tracing::info!(%id, "provider updated");
-    (StatusCode::OK, Json(BackendSummary::from(provider))).into_response()
+    (StatusCode::OK, Json(ProviderSummary::from(provider))).into_response()
 }
 
 // ── Unit tests ─────────────────────────────────────────────────────────────────
@@ -557,7 +481,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_summary_from_llm_provider_ollama() {
+    fn provider_summary_from_llm_provider_ollama() {
         let b = LlmProvider {
             id: Uuid::now_v7(),
             name: "test-ollama".to_string(),
@@ -573,8 +497,8 @@ mod tests {
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),
         };
-        let s = BackendSummary::from(b);
-        assert_eq!(s.backend_type, "ollama");
+        let s = ProviderSummary::from(b);
+        assert_eq!(s.provider_type, "ollama");
         assert_eq!(s.status, "online");
         assert_eq!(s.url, "http://localhost:11434");
         assert!(s.is_active);
@@ -582,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn backend_summary_from_llm_provider_gemini() {
+    fn provider_summary_from_llm_provider_gemini() {
         let b = LlmProvider {
             id: Uuid::now_v7(),
             name: "gemini-pro".to_string(),
@@ -598,8 +522,8 @@ mod tests {
             status: LlmProviderStatus::Offline,
             registered_at: Utc::now(),
         };
-        let s = BackendSummary::from(b);
-        assert_eq!(s.backend_type, "gemini");
+        let s = ProviderSummary::from(b);
+        assert_eq!(s.provider_type, "gemini");
         assert_eq!(s.status, "offline");
     }
 
@@ -611,11 +535,63 @@ mod tests {
     }
 
     #[test]
+    fn validate_provider_url_allows_http() {
+        assert!(validate_provider_url("http://192.168.1.10:11434").is_ok());
+    }
+
+    #[test]
+    fn validate_provider_url_allows_https() {
+        assert!(validate_provider_url("https://api.example.com").is_ok());
+    }
+
+    #[test]
+    fn validate_provider_url_allows_localhost() {
+        assert!(validate_provider_url("http://localhost:11434").is_ok());
+    }
+
+    #[test]
+    fn validate_provider_url_blocks_gcp_metadata() {
+        let err = validate_provider_url("http://metadata.google.internal/computeMetadata/v1/")
+            .unwrap_err();
+        assert!(err.to_string().contains("metadata"));
+    }
+
+    #[test]
+    fn validate_provider_url_blocks_ftp_scheme() {
+        let err = validate_provider_url("ftp://example.com").unwrap_err();
+        assert!(err.to_string().contains("http://"));
+    }
+
+    #[test]
+    fn validate_provider_url_blocks_file_scheme() {
+        let err = validate_provider_url("file:///etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("http://"));
+    }
+
+    #[test]
+    fn validate_provider_url_blocks_ipv6_link_local() {
+        let err = validate_provider_url("http://[fe80::1]:11434").unwrap_err();
+        assert!(err.to_string().contains("metadata"));
+    }
+
+    #[test]
+    fn validate_provider_url_blocks_ipv4_mapped_ipv6_metadata() {
+        let err = validate_provider_url("http://[::ffff:169.254.169.254]/latest/").unwrap_err();
+        assert!(err.to_string().contains("metadata"));
+    }
+
+    #[test]
+    fn validate_provider_url_blocks_ipv4_link_local() {
+        let err = validate_provider_url("http://169.254.169.254/latest/meta-data/").unwrap_err();
+        assert!(err.to_string().contains("metadata"));
+    }
+
+    #[test]
     fn register_request_deserialization() {
-        let json = r#"{"name":"local","backend_type":"ollama","url":"http://localhost:11434"}"#;
-        let req: RegisterBackendRequest = serde_json::from_str(json).unwrap();
+        let json = r#"{"name":"local","provider_type":"ollama","url":"http://localhost:11434"}"#;
+        let req: RegisterProviderRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.name, "local");
-        assert_eq!(req.backend_type, "ollama");
+        assert_eq!(req.provider_type, "ollama");
         assert_eq!(req.url.as_deref(), Some("http://localhost:11434"));
         assert!(req.api_key.is_none());
     }
@@ -630,23 +606,9 @@ pub async fn list_provider_models(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match provider_registry(&state).get(id).await {
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "provider not found"})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!(%id, "failed to fetch provider: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
-        }
-        Ok(Some(_)) => {}
+    let _provider = match get_provider(&state, id).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
 
     let cache_key = models_cache_key(id);
@@ -666,35 +628,20 @@ pub async fn list_provider_models(
 ///
 /// Requires admin auth. Returns `{"key": "AIza..."}`.
 pub async fn reveal_provider_key(
+    _claims: RequireSuper,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let provider = match provider_registry(&state).get(id).await {
-        Ok(Some(b)) => b,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "provider not found"})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!(%id, "reveal_provider_key: db error: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
-        }
+    let provider = match get_provider(&state, id).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
 
     match provider.api_key_encrypted {
         Some(key) => (StatusCode::OK, Json(serde_json::json!({"key": key}))).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "no api key stored for this provider"})),
-        )
-            .into_response(),
+        None => {
+            AppError::NotFound("no api key stored for this provider".into()).into_response()
+        }
     }
 }
 
@@ -706,37 +653,20 @@ pub async fn sync_provider_models(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let provider = match provider_registry(&state).get(id).await {
-        Ok(Some(b)) => b,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "provider not found"})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!(%id, "failed to fetch provider: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
-        }
+    let provider = match get_provider(&state, id).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
 
     // Gemini model sync is global — direct the caller to the correct endpoint.
     if matches!(provider.provider_type, ProviderType::Gemini) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "Use POST /v1/gemini/models/sync to sync Gemini models globally"
-            })),
+        return AppError::BadRequest(
+            "Use POST /v1/gemini/models/sync to sync Gemini models globally".into(),
         )
-            .into_response();
+        .into_response();
     }
 
-    match fetch_models_live(&provider).await {
+    match fetch_models_live(&state.http_client, &provider).await {
         Ok(models) => {
             let cache_key = models_cache_key(id);
             if let Some(ref pool) = state.valkey_pool {
@@ -759,11 +689,7 @@ pub async fn sync_provider_models(
         }
         Err(e) => {
             tracing::error!(%id, "model sync failed: {e}");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response()
+            AppError::ServiceUnavailable(e.to_string()).into_response()
         }
     }
 }
@@ -779,32 +705,18 @@ struct SelectedModelDto {
 
 /// `GET /v1/providers/{id}/selected-models` — list models with per-provider enabled state.
 ///
-/// **Ollama**: merges per-provider `ollama_models` with `backend_selected_models`.
+/// **Ollama**: merges per-provider `ollama_models` with `provider_selected_models`.
 ///   New models default to `is_enabled = true`.
-/// **Gemini**: merges the global `gemini_models` pool with `backend_selected_models`.
+/// **Gemini**: merges the global `gemini_models` pool with `provider_selected_models`.
 ///   New models default to `is_enabled = false`.
 pub async fn list_selected_models(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     // Resolve the provider to branch by type.
-    let provider = match state.provider_registry.get(id).await {
-        Ok(Some(b)) => b,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "provider not found"})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!(%id, "list_selected_models: failed to fetch provider: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
-        }
+    let provider = match get_provider(&state, id).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
 
     // Per-provider selections (enabled/disabled overrides).
@@ -812,11 +724,7 @@ pub async fn list_selected_models(
         Ok(s) => s,
         Err(e) => {
             tracing::error!(%id, "list_selected_models: failed to list selections: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
+            return AppError::Internal(anyhow::anyhow!("database error")).into_response();
         }
     };
     let sel_map: HashMap<String, bool> = selections
@@ -831,11 +739,7 @@ pub async fn list_selected_models(
                 Ok(m) => m,
                 Err(e) => {
                     tracing::error!(%id, "list_selected_models: failed to list ollama models: {e}");
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": "database error"})),
-                    )
-                        .into_response();
+                    return AppError::Internal(anyhow::anyhow!("database error")).into_response();
                 }
             };
             let dtos: Vec<SelectedModelDto> = models
@@ -858,11 +762,7 @@ pub async fn list_selected_models(
                 Ok(g) => g,
                 Err(e) => {
                     tracing::error!(%id, "list_selected_models: failed to list global models: {e}");
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": "database error"})),
-                    )
-                        .into_response();
+                    return AppError::Internal(anyhow::anyhow!("database error")).into_response();
                 }
             };
             let dtos: Vec<SelectedModelDto> = global
@@ -900,11 +800,85 @@ pub async fn set_model_enabled(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::error!(%id, %model_name, "set_model_enabled: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            AppError::Internal(anyhow::anyhow!("database error")).into_response()
         }
     }
+}
+
+// ── Unified sync endpoints ──────────────────────────────────────────────────
+
+/// `POST /v1/providers/{id}/sync` — unified sync for a single provider.
+///
+/// Combines health check + model sync + VRAM probing + LLM analysis.
+pub async fn sync_single_provider(
+    RequireSuper(claims): RequireSuper,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let provider = match get_provider(&state, id).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
+    };
+
+    if !matches!(provider.provider_type, ProviderType::Ollama) {
+        return AppError::BadRequest("sync is only supported for Ollama providers".into())
+            .into_response();
+    }
+
+    let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
+
+    match crate::infrastructure::outbound::capacity::analyzer::sync_provider(
+        &state.http_client,
+        provider.id,
+        &provider.name,
+        &provider.url,
+        provider.total_vram_mb,
+        &settings.analyzer_model,
+        &*state.capacity_repo,
+        &*state.vram_pool,
+        state.valkey_pool.as_ref(),
+        &*state.provider_registry,
+        &*state.ollama_model_repo,
+        &*state.model_selection_repo,
+    )
+    .await
+    {
+        Ok(()) => {
+            emit_audit(
+                &state, &claims, "sync", "ollama_provider", &id.to_string(),
+                &provider.name, &format!("Provider '{}' synced", provider.name),
+            )
+            .await;
+            (StatusCode::OK, Json(serde_json::json!({"synced": true}))).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(%id, "sync_provider failed: {e}");
+            AppError::ServiceUnavailable(e.to_string()).into_response()
+        }
+    }
+}
+
+/// `POST /v1/providers/sync` — unified sync for all active Ollama providers.
+pub async fn sync_all_providers_handler(
+    RequireSuper(claims): RequireSuper,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if state.sync_lock.available_permits() == 0 {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "message": "sync already in progress" })),
+        )
+            .into_response();
+    }
+    state.sync_trigger.notify_one();
+    emit_audit(
+        &state, &claims, "trigger", "capacity_settings", "capacity_settings",
+        "provider_sync_all", "Manual sync all providers triggered",
+    )
+    .await;
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "message": "provider sync triggered" })),
+    )
+        .into_response()
 }

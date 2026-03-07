@@ -1,12 +1,16 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use uuid::Uuid;
+
+use super::super::enums::{KeyTier, KeyType};
 
 /// API key entity for tenant authentication.
 ///
 /// The plaintext key is never stored — only the BLAKE2b-256 hash.
 /// The `key_prefix` (first 12 chars) is kept for display purposes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct ApiKey {
     pub id: Uuid,
     pub key_hash: String,
@@ -21,20 +25,12 @@ pub struct ApiKey {
     /// Soft-delete timestamp. When set, key is hidden from list and blocked from auth.
     #[serde(default)]
     pub deleted_at: Option<DateTime<Utc>>,
-    /// Key category: `"standard"` (production) or `"test"` (dev/testing).
-    #[serde(default = "default_key_type")]
-    pub key_type: String,
-    /// Billing tier: `"free"` or `"paid"` (default).
-    #[serde(default = "default_tier")]
-    pub tier: String,
-}
-
-fn default_key_type() -> String {
-    "standard".to_string()
-}
-
-fn default_tier() -> String {
-    "paid".to_string()
+    /// Key category: standard (production) or test (dev/testing).
+    #[serde(default)]
+    pub key_type: KeyType,
+    /// Billing tier: free or paid (default).
+    #[serde(default)]
+    pub tier: KeyTier,
 }
 
 /// Returned once at key creation — contains the plaintext key.
@@ -64,8 +60,8 @@ mod tests {
             expires_at: None,
             created_at: Utc::now(),
             deleted_at: None,
-            key_type: "standard".to_string(),
-            tier: "paid".to_string(),
+            key_type: KeyType::Standard,
+            tier: KeyTier::Paid,
         }
     }
 

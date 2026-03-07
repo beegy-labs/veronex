@@ -1,6 +1,6 @@
-# Infrastructure — OTel Pipeline, Redpanda & ClickHouse
+# Infrastructure -- OTel Pipeline
 
-> SSOT | **Last Updated**: 2026-03-03 (rev: OTel Logs pipeline + veronex-analytics; kafka_inference/kafka_audit removed)
+> SSOT | **Last Updated**: 2026-03-05 (rev: added derived MVs for inference_logs + audit_events)
 
 ## Task Guide
 
@@ -9,10 +9,10 @@
 | Change scrape interval | `docker/otel/config.yaml` | `scrape_interval:` under prometheus receiver |
 | Add new OTel exporter | `docker/otel/config.yaml` | Add to `exporters:` block + add to relevant `service.pipelines` |
 | Change Kafka topic name | `docker/otel/config.yaml` kafka exporter `topic:` | Also update ClickHouse `init.sql` Kafka Engine `kafka_topic_list` |
-| Add new ClickHouse Kafka chain | `docker/clickhouse/init.sql` | Pattern: `kafka_* ENGINE=Kafka` → `MV` → target `MergeTree` (MergeTree table must be declared first) |
+| Add new ClickHouse Kafka chain | `docker/clickhouse/init.sql` | Pattern: `kafka_* ENGINE=Kafka` -> `MV` -> target `MergeTree` (MergeTree table must be declared first) |
 | Add new target MergeTree table | `docker/clickhouse/init.sql` | Declare before the Kafka Engine section (top of file) |
 | Change HTTP SD endpoint auth | `infrastructure/inbound/http/gpu_server_handlers.rs` | Move route outside/inside auth middleware in `router.rs` |
-| Migrate to managed Kafka | `docker/otel/config.yaml` `brokers:` + `docker-compose.yml` `REDPANDA_URL` | Address swap only — no code changes |
+| Migrate to managed Kafka | `docker/otel/config.yaml` `brokers:` + `docker-compose.yml` `REDPANDA_URL` | Address swap only -- no code changes |
 
 ## Key Files
 
@@ -21,7 +21,7 @@
 | `docker/otel/Dockerfile` | OTel Collector image (debian-wrapped, adds wget for healthcheck) |
 | `docker/otel/config.yaml` | Receiver + exporter + pipeline config (metrics, traces, logs) |
 | `docker/clickhouse/schema.sql` | ClickHouse tables: MergeTree targets + Kafka Engine + Materialized Views |
-| `docker/clickhouse/init.sh` | Init script — substitutes `__RETENTION_*__` vars into schema.sql |
+| `docker/clickhouse/init.sh` | Init script -- substitutes `__RETENTION_*__` vars into schema.sql |
 | `docker-compose.yml` | `otel-collector`, `redpanda`, `clickhouse`, `veronex`, `veronex-analytics` services |
 | `crates/veronex-analytics/src/` | Internal analytics service (OTel write + ClickHouse read) |
 | `crates/veronex/src/infrastructure/outbound/observability/http_observability_adapter.rs` | `HttpObservabilityAdapter` (replaces RedpandaObservabilityAdapter) |
@@ -34,26 +34,29 @@
 
 ```
 [Write Path]
-veronex ──→ POST /internal/ingest/inference ──┐
-veronex ──→ POST /internal/ingest/audit    ──→ veronex-analytics
-                                               └─ OTel Logs SDK (OTLP gRPC) ──→ OTel Collector :4317
-                                                                                  └─ kafka/logs ──→ Redpanda [otel-logs]
-                                                                                                    └─ kafka_otel_logs_mv ──→ otel_logs
+veronex --> POST /internal/ingest/inference --+
+veronex --> POST /internal/ingest/audit    --> veronex-analytics
+                                               +- OTel Logs SDK (OTLP gRPC) --> OTel Collector :4317
+                                                                                  +- kafka/logs --> Redpanda [otel-logs]
+                                                                                                    +- kafka_otel_logs_mv --> otel_logs
+                                                                                                         +- otel_inference_logs_mv --> inference_logs
+                                                                                                         |                             +- api_key_usage_hourly_mv --> api_key_usage_hourly
+                                                                                                         +- otel_audit_events_mv   --> audit_events
 
-node-exporters ──→ OTel Collector (prometheus) ──→ kafka/metrics ──→ Redpanda [otel-metrics] ──→ otel_metrics_gauge
-veronex traces  ──→ OTel Collector (otlp)      ──→ kafka/traces  ──→ Redpanda [otel-traces]  ──→ otel_traces_raw
+node-exporters --> OTel Collector (prometheus) --> kafka/metrics --> Redpanda [otel-metrics] --> otel_metrics_gauge
+veronex traces  --> OTel Collector (otlp)      --> kafka/traces  --> Redpanda [otel-traces]  --> otel_traces_raw
 
-[Read Path]
-veronex ──→ GET /v1/usage             ──→ analytics_repo ──→ POST/GET /internal/* (veronex-analytics)
-veronex ──→ GET /v1/dashboard/*       ──→ analytics_repo ──┘  └─ ClickHouse otel_logs / otel_metrics_gauge
-veronex ──→ GET /v1/audit             ──→ analytics_repo ──┘
+[Read Path — ClickHouse primary, PostgreSQL fallback]
+veronex --> GET /v1/usage             --> analytics_repo (ClickHouse) --> fallback: PostgreSQL inference_jobs
+veronex --> GET /v1/dashboard/*       --> analytics_repo (ClickHouse) --> fallback: PostgreSQL inference_jobs
+veronex --> GET /v1/audit             --> analytics_repo (ClickHouse)
 ```
 
 **Key properties:**
-- **Redpanda = single message bus** — all writes go through it
-- **ClickHouse = read layer only** — Kafka Engine pulls from Redpanda, MV inserts into MergeTree
-- **veronex-analytics** = internal service (port 3003, not exposed) — owns all OTel write + ClickHouse read
-- **`otel_logs` = unified event store** — inference + audit events keyed by `LogAttributes['event.name']`
+- **Redpanda = single message bus** -- all writes go through it
+- **ClickHouse = read layer only** -- Kafka Engine pulls from Redpanda, MV inserts into MergeTree
+- **veronex-analytics** = internal service (port 3003, not exposed) -- owns all OTel write + ClickHouse read
+- **`otel_logs` = unified event store** -- inference + audit events keyed by `LogAttributes['event.name']`
 - **veronex crate** = no direct Redpanda or ClickHouse dependency (removed rskafka + clickhouse crates)
 
 ---
@@ -79,35 +82,53 @@ exporters:
   kafka/metrics:
     brokers: [redpanda:9092]
     topic: otel-metrics
-    encoding: otlp_json       # camelCase protobuf JSON (resourceMetrics, timeUnixNano, …)
+    encoding: otlp_json       # camelCase protobuf JSON (resourceMetrics, timeUnixNano, ...)
   kafka/traces:
     brokers: [redpanda:9092]
     topic: otel-traces
     encoding: otlp_json
-  kafka/logs:                 # NEW — inference + audit events from veronex-analytics
+  kafka/logs:                 # inference + audit events from veronex-analytics
     brokers: [redpanda:9092]
     topic: otel-logs
-    encoding: otlp_json       # OTLP JSON (resourceLogs, scopeLogs, logRecords, …)
+    encoding: otlp_json       # OTLP JSON (resourceLogs, scopeLogs, logRecords, ...)
 
 service:
   pipelines:
-    metrics: receivers:[prometheus]  → exporters:[kafka/metrics]
-    traces:  receivers:[otlp]        → exporters:[kafka/traces]
-    logs:    receivers:[otlp]        → exporters:[kafka/logs]   # NEW
+    metrics: receivers:[prometheus]  -> exporters:[kafka/metrics]
+    traces:  receivers:[otlp]        -> exporters:[kafka/traces]
+    logs:    receivers:[otlp]        -> exporters:[kafka/logs]
 ```
 
-> ClickHouse exporter **removed** — ClickHouse consumes via Kafka Engine only.
+> ClickHouse exporter **removed** -- ClickHouse consumes via Kafka Engine only.
 > `otlp` receiver is shared by both `traces` and `logs` pipelines.
 
 ---
 
-## ClickHouse Kafka Engine Chains (init.sql)
+## Chain 1 -- otel-logs -> otel_logs
 
-Three active chains. Old `kafka_inference` + `kafka_audit` chains removed (superseded by `kafka_otel_logs`).
+Produced by `veronex-analytics` via OTel Logs SDK -> OTel Collector -> Redpanda `otel-logs`.
+Three active Kafka Engine chains total. Chains 2 and 3 are in `otel-pipeline-ops.md`.
 
-### Chain 1 — otel-logs → otel_logs
+**Target table** (`docker/clickhouse/schema.sql`):
 
-Produced by `veronex-analytics` via OTel Logs SDK → OTel Collector → Redpanda `otel-logs`.
+```sql
+CREATE TABLE otel_logs (
+    Timestamp          DateTime64(9),
+    TraceId            String,
+    SpanId             String,
+    SeverityText       LowCardinality(String),
+    SeverityNumber     Int32,
+    ServiceName        LowCardinality(String),
+    Body               String,
+    ResourceAttributes Map(LowCardinality(String), String),
+    LogAttributes      Map(LowCardinality(String), String)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(Timestamp)
+ORDER BY (ServiceName, Timestamp)
+TTL toDate(Timestamp) + INTERVAL 90 DAY;
+```
+
+**Materialized View**:
 
 ```sql
 CREATE TABLE kafka_otel_logs (raw String) ENGINE = Kafka SETTINGS
@@ -127,14 +148,12 @@ SELECT
   LogAttributes
 FROM (
   SELECT lr,
-    -- resource attributes → Map (stringValue | intValue | doubleValue)
     CAST(arrayMap(x -> (JSONExtractString(x,'key'), COALESCE(
         nullIf(JSONExtractString(JSONExtractRaw(x,'value'),'stringValue'),''),
         nullIf(JSONExtractString(JSONExtractRaw(x,'value'),'intValue'),''),
         toString(JSONExtractFloat(JSONExtractRaw(x,'value'),'doubleValue'))
       )), JSONExtractArrayRaw(JSONExtractRaw(rm,'resource'),'attributes')),
       'Map(LowCardinality(String), String)') AS ResourceAttributes,
-    -- log record attributes (event.name, api_key_id, latency_ms, …)
     CAST(arrayMap(x -> (JSONExtractString(x,'key'), COALESCE(
         nullIf(JSONExtractString(JSONExtractRaw(x,'value'),'stringValue'),''),
         nullIf(JSONExtractString(JSONExtractRaw(x,'value'),'intValue'),''),
@@ -151,284 +170,89 @@ FROM (
 ```
 
 **Log attribute keys** (via `LogAttributes['key']`):
-- `event.name`: `"inference.completed"` | `"audit.action"`
-- Inference: `api_key_id`, `request_id`, `model_name`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `finish_reason`, `status`, `provider_type`
-- Audit: `account_id`, `account_name`, `action`, `resource_type`, `resource_id`, `resource_name`
 
-**Target table** (`docker/clickhouse/init.sql`):
-```sql
-CREATE TABLE otel_logs (
-    Timestamp          DateTime64(9),
-    TraceId            String,
-    SpanId             String,
-    SeverityText       LowCardinality(String),
-    SeverityNumber     Int32,
-    ServiceName        LowCardinality(String),
-    Body               String,
-    ResourceAttributes Map(LowCardinality(String), String),
-    LogAttributes      Map(LowCardinality(String), String)
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(Timestamp)
-ORDER BY (ServiceName, Timestamp)
-TTL toDate(Timestamp) + INTERVAL 90 DAY;
-```
+| event.name | Attribute keys |
+|------------|----------------|
+| `inference.completed` | `api_key_id`, `request_id`, `model_name`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `finish_reason`, `status`, `provider_type` |
+| `audit.action` | `account_id`, `account_name`, `action`, `resource_type`, `resource_id`, `resource_name` |
 
-### Chain 2 — otel-metrics → otel_metrics_gauge
+---
 
-OTLP JSON (camelCase) is unpacked via `arrayJoin`:
+## Derived MVs -- otel_logs → specialized tables
+
+Two additional Materialized Views extract structured events from `otel_logs` into domain-specific MergeTree tables for efficient analytical queries.
+
+### otel_inference_logs_mv (otel_logs → inference_logs)
 
 ```sql
-CREATE TABLE kafka_otel_metrics (raw String) ENGINE = Kafka SETTINGS
-  kafka_broker_list='redpanda:9092', kafka_topic_list='otel-metrics',
-  kafka_group_name='clickhouse-otel-metrics', kafka_format='JSONAsString';
-
-CREATE MATERIALIZED VIEW kafka_otel_metrics_mv TO otel_metrics_gauge AS
+CREATE MATERIALIZED VIEW otel_inference_logs_mv TO inference_logs AS
 SELECT
-  CAST(arrayMap(x -> (JSONExtractString(x,'key'),
-    JSONExtractString(JSONExtractRaw(x,'value'),'stringValue')),
-    JSONExtractArrayRaw(rm, 'resource.attributes')),
-    'Map(LowCardinality(String), String)') AS ResourceAttributes,
-  '' AS ResourceSchemaUrl, '' AS ScopeName, '' AS ScopeVersion,
-  CAST(map(), 'Map(LowCardinality(String), String)') AS ScopeAttributes,
-  0 AS ScopeDroppedAttrCount, '' AS ScopeSchemaUrl, '' AS ServiceName,
-  JSONExtractString(metric, 'name')        AS MetricName,
-  JSONExtractString(metric, 'description') AS MetricDescription,
-  JSONExtractString(metric, 'unit')        AS MetricUnit,
-  CAST(arrayMap(x -> (JSONExtractString(x,'key'),
-    JSONExtractString(JSONExtractRaw(x,'value'),'stringValue')),
-    JSONExtractArrayRaw(dp, 'attributes')),
-    'Map(LowCardinality(String), String)') AS Attributes,
-  fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'startTimeUnixNano'))) AS StartTimeUnix,
-  fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'timeUnixNano')))      AS TimeUnix,
-  JSONExtractFloat(dp, 'asDouble') AS Value,
-  0 AS Flags,
-  -- Nested type → flat sub-columns (see Gotcha #1)
-  CAST([], 'Array(Map(LowCardinality(String), String))') AS `Exemplars.FilteredAttributes`,
-  CAST([], 'Array(DateTime64(9))')                       AS `Exemplars.TimeUnix`,
-  CAST([], 'Array(Float64)')                             AS `Exemplars.Value`,
-  CAST([], 'Array(String)')                              AS `Exemplars.SpanId`,
-  CAST([], 'Array(String)')                              AS `Exemplars.TraceId`
-FROM (
-  SELECT
-    arrayJoin(JSONExtractArrayRaw(raw, 'resourceMetrics')) AS rm,
-    arrayJoin(JSONExtractArrayRaw(rm, 'scopeMetrics'))     AS sm,
-    arrayJoin(JSONExtractArrayRaw(sm, 'metrics'))          AS metric,
-    arrayJoin(JSONExtractArrayRaw(JSONExtractRaw(metric,'gauge'),'dataPoints')) AS dp
-  FROM kafka_otel_metrics
-  WHERE JSONHas(metric, 'gauge')
-);
+    Timestamp                                     AS event_time,
+    toUUIDOrZero(LogAttributes['api_key_id'])     AS api_key_id,
+    LogAttributes['tenant_id']                    AS tenant_id,
+    toUUIDOrZero(LogAttributes['request_id'])     AS request_id,
+    LogAttributes['model_name']                   AS model_name,
+    toUInt32OrZero(LogAttributes['prompt_tokens']) AS prompt_tokens,
+    toUInt32OrZero(LogAttributes['completion_tokens']) AS completion_tokens,
+    toUInt32OrZero(LogAttributes['latency_ms'])   AS latency_ms,
+    LogAttributes['finish_reason']                AS finish_reason,
+    LogAttributes['status']                       AS status
+FROM otel_logs
+WHERE LogAttributes['event.name'] = 'inference.completed';
 ```
 
-### Chain 3 — otel-traces → otel_traces_raw
+Feeds into `api_key_usage_hourly_mv` (aggregating MV on `inference_logs`).
+
+### otel_audit_events_mv (otel_logs → audit_events)
 
 ```sql
-CREATE TABLE kafka_otel_traces (raw String) ENGINE = Kafka SETTINGS ...;
-
-CREATE MATERIALIZED VIEW kafka_otel_traces_mv TO otel_traces_raw AS
-SELECT now64(3) AS received_at, raw AS payload
-FROM kafka_otel_traces;
+CREATE MATERIALIZED VIEW otel_audit_events_mv TO audit_events AS
+SELECT
+    Timestamp                                     AS event_time,
+    toUUIDOrZero(LogAttributes['account_id'])     AS account_id,
+    LogAttributes['account_name']                 AS account_name,
+    LogAttributes['action']                       AS action,
+    LogAttributes['resource_type']                AS resource_type,
+    LogAttributes['resource_id']                  AS resource_id,
+    LogAttributes['resource_name']                AS resource_name,
+    LogAttributes['ip_address']                   AS ip_address,
+    LogAttributes['details']                      AS details
+FROM otel_logs
+WHERE LogAttributes['event.name'] = 'audit.action';
 ```
 
----
+### MV Chain Summary
 
-## Gotchas
+```
+otel_logs
+  ├─ otel_inference_logs_mv → inference_logs
+  │                             └─ api_key_usage_hourly_mv → api_key_usage_hourly
+  └─ otel_audit_events_mv  → audit_events
+```
 
-### 1. ClickHouse `Nested` type in Materialized Views
-
-`Nested` columns in a target MergeTree table are stored internally as parallel `Array(...)` columns.
-A MV `SELECT` must reference them as **`Column.SubColumn`** — not `[] AS Exemplars`:
+**Backfill** (after creating MVs on existing data):
 
 ```sql
--- ❌ Wrong — ClickHouse throws THERE_IS_NO_COLUMN
-[] AS Exemplars
-
--- ✅ Correct — flat sub-column aliases
-CAST([], 'Array(Map(LowCardinality(String), String))') AS `Exemplars.FilteredAttributes`,
-CAST([], 'Array(DateTime64(9))')                       AS `Exemplars.TimeUnix`,
-CAST([], 'Array(Float64)')                             AS `Exemplars.Value`,
-CAST([], 'Array(String)')                              AS `Exemplars.SpanId`,
-CAST([], 'Array(String)')                              AS `Exemplars.TraceId`
-```
-
-### 2. Target tables must exist before Materialized Views
-
-All MergeTree target tables (`otel_logs`, `otel_metrics_gauge`, `otel_traces_raw`)
-**must be declared before the Kafka Engine section** in `init.sql`.
-
-### 3. Init scripts run only on first volume creation
-
-`docker-entrypoint-initdb.d/` scripts run only when the ClickHouse data volume is first created.
-On an existing volume, apply changes manually:
-
-```bash
-# Apply new Kafka Engine chains to existing ClickHouse
-docker compose exec clickhouse clickhouse-client \
-  --user veronex --password veronex --database veronex \
-  --multiquery < docker/clickhouse/init.sql
-
-# Or drop and recreate volume (loses all data)
-docker compose down -v && docker compose up -d
-```
-
-### 4. OTLP JSON key casing
-
-OTel Collector `otlp_json` encoding uses **camelCase** protobuf field names:
-`resourceMetrics`, `scopeMetrics`, `dataPoints`, `timeUnixNano`, `startTimeUnixNano`, `asDouble`.
-Verify against a real message before writing new MVs:
-
-```bash
-docker compose exec redpanda rpk topic consume otel-metrics -n 1
+INSERT INTO inference_logs SELECT ... FROM otel_logs WHERE LogAttributes['event.name'] = 'inference.completed';
+INSERT INTO audit_events  SELECT ... FROM otel_logs WHERE LogAttributes['event.name'] = 'audit.action';
 ```
 
 ---
 
-## Rust Observability Adapters
+## PG Fallback Pattern
 
-**`infrastructure/outbound/observability/http_observability_adapter.rs`**
+Usage and performance handlers use **ClickHouse primary with PostgreSQL fallback**:
 
-```rust
-pub struct HttpObservabilityAdapter {
-    analytics_url: String,
-    analytics_secret: String,
-    client: reqwest::Client,
-}
-// POST {ANALYTICS_URL}/internal/ingest/inference on every ObservabilityPort::record_inference()
-// Fail-open: HTTP errors → warn!, never propagated to caller
-```
+1. Try `analytics_repo` (ClickHouse via veronex-analytics)
+2. If result is empty (e.g. `request_count == 0`, `models.is_empty()`) or error → fall back to PostgreSQL `inference_jobs` table
+3. PG fallback queries use `::float8` cast on `AVG(integer)` to avoid sqlx `numeric` decode issues
 
-**`infrastructure/outbound/observability/http_audit_adapter.rs`**
-
-```rust
-pub struct HttpAuditAdapter {
-    analytics_url: String,
-    analytics_secret: String,
-    client: reqwest::Client,
-}
-// POST {ANALYTICS_URL}/internal/ingest/audit on every AuditPort::record()
-// Fail-open: HTTP errors → warn!, never propagated to caller
-```
-
-Env vars: `ANALYTICS_URL` (default `http://localhost:3003`), `ANALYTICS_SECRET`.
-If `ANALYTICS_URL` not set: `observability = None`, `audit_port = None` (fail-open).
+This ensures monitoring works during initial deployment (before ClickHouse pipeline has data) and degrades gracefully if the analytics pipeline is down.
 
 ---
 
-## Prometheus HTTP Service Discovery (OTel Collector only)
+## Cross-References
 
-`GET /v1/metrics/targets` — no auth, consumed by OTel Collector's `prometheus` receiver only.
-> Note: Prometheus itself is **not** used. This endpoint provides HTTP SD for the OTel Collector to discover node-exporter targets; metrics are stored in ClickHouse, not Prometheus.
-
-```json
-[{
-  "targets": ["192.168.1.10:9100"],
-  "labels": { "server_id": "uuid", "server_name": "gpu-node-1", "host": "192.168.1.10" }
-}]
-```
-
-- Only servers with `node_exporter_url` set
-- `host` extracted from `node_exporter_url`
-- Multiple providers on same server → one target (deduped by server_id)
-
----
-
-## Redpanda
-
-```yaml
-image: docker.redpanda.com/redpandadata/redpanda:v25.3.9
-command:
-  - redpanda start --smp=1 --memory=512M --overprovisioned
-  - --kafka-addr=PLAINTEXT://0.0.0.0:9092
-  - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
-```
-
-- `--smp=1 --memory=512M` — dev-only low-resource config (intentional)
-- `auto_create_topics_enabled: true` — topics created on first produce
-- Kafka 100% compatible: swap broker address to migrate, no code changes
-
----
-
-## GPU Server Side (docker-compose.ollama.yml)
-
-Run on each Ollama GPU server separately:
-
-```yaml
-services:
-  ollama:
-    image: ollama/ollama
-    ports: ["11434:11434"]
-
-  node-exporter:
-    image: prom/node-exporter:latest
-    command:
-      - --collector.drm      # AMD GPU VRAM + utilization
-      - --collector.hwmon    # temperature, power
-      - --collector.meminfo  # system RAM
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-    ports: ["9100:9100"]
-```
-
-**Registration flow**:
-1. `POST /v1/servers` → register GPU server with `node_exporter_url`
-2. OTel Collector polls `GET /v1/metrics/targets` every 30s → auto-starts scraping
-
----
-
-## veronex-analytics Service
-
-| Property | Value |
-|----------|-------|
-| Port | 3003 (internal only — `expose`, not `ports`) |
-| Auth | `Authorization: Bearer {ANALYTICS_SECRET}` on all endpoints |
-| Write path | `POST /internal/ingest/inference` + `POST /internal/ingest/audit` → OTel LogRecord → OTLP gRPC |
-| Read path | `GET /internal/usage`, `GET /internal/performance`, `GET /internal/audit`, `GET /internal/metrics/history/{id}`, `GET /internal/analytics` |
-
-Env vars: `CLICKHOUSE_URL`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DB`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `ANALYTICS_SECRET`.
-
----
-
-## Verification
-
-```bash
-# 1. Check Kafka Engine + MV tables exist (otel-logs chain)
-docker compose exec clickhouse clickhouse-client \
-  --user veronex --password veronex --database veronex \
-  --query "SHOW TABLES" | grep -E "kafka_otel_logs|otel_logs"
-
-# 2. Consume raw OTel logs from Redpanda
-docker compose exec redpanda rpk topic consume otel-logs -n 1 | jq .
-
-# 3. Confirm otel_logs populated (after first inference)
-curl "http://localhost:8123/?query=SELECT+LogAttributes['event.name'],count()+FROM+veronex.otel_logs+GROUP+BY+1&user=veronex&password=veronex"
-
-# 4. Confirm otel_metrics_gauge populated (after node-exporter scrape ~30s)
-curl "http://localhost:8123/?query=SELECT+count()+FROM+veronex.otel_metrics_gauge&user=veronex&password=veronex"
-
-# 5. Dashboard performance endpoint (reads from otel_logs via veronex-analytics)
-curl http://localhost:3001/v1/dashboard/performance \
-  -H "X-API-Key: veronex-bootstrap-admin-key"
-
-# 6. veronex-analytics health (internal — via docker exec)
-docker compose exec veronex-analytics wget -qO- http://localhost:3003/health
-```
-
----
-
-## Data Retention
-
-TTLs are set per table in `docker/clickhouse/schema.sql` via `__RETENTION_*__` placeholders substituted by `init.sh` at first volume creation.
-
-| Table | Env var | Default |
-|-------|---------|---------|
-| `otel_logs` | `CLICKHOUSE_RETENTION_ANALYTICS_DAYS` | 90 days |
-| `otel_metrics_gauge` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
-| `otel_traces_raw` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
-| `node_metrics` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
-| `audit_events` | `CLICKHOUSE_RETENTION_AUDIT_DAYS` | 365 days |
-
-Set in `.env` before first `docker compose up -d`. For existing volumes, use `ALTER TABLE`:
-
-```sql
-ALTER TABLE otel_logs MODIFY TTL toDate(Timestamp) + INTERVAL 30 DAY;
-```
+- **Chains 2-3, gotchas, verification, data retention**: `infra/otel-pipeline-ops.md`
+- **Observability research**: `research/infrastructure/observability.md`
+- **Deploy config**: `infra/deploy.md`

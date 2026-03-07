@@ -1,200 +1,114 @@
 # Web — Audit Page (/audit)
 
-> **SSOT** | **Tier 2** | Last Updated: 2026-03-02
+> SSOT | Tier 2 | Last Updated: 2026-03-04
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add new action filter option | `web/app/audit/page.tsx` action `<Select>` + `ACTION_COLORS` map | Add `<SelectItem>` + color variant entry |
-| Add new resource type filter | `web/app/audit/page.tsx` resource type `<Select>` | Add `<SelectItem>` value matching backend enum |
-| Add pagination | `web/app/audit/page.tsx` + `web/lib/queries/audit.ts` | Add `offset` state; pass to `auditQuery`; add pagination footer to `DataTable` |
-| Change result limit | `web/lib/queries/audit.ts` `auditQuery` `limit: 200` | Adjust numeric value |
-| Add new column | `web/app/audit/page.tsx` table + `web/lib/types.ts` `AuditEvent` | Add `TableHead` + `TableCell` + extend type |
+| Add action filter option | `web/app/audit/page.tsx` action `<Select>` + `ACTION_COLORS` | Add `<SelectItem>` + color entry |
+| Add resource type filter | `web/app/audit/page.tsx` resource type `<Select>` | Add `<SelectItem>` matching server enum |
+| Add pagination | `page.tsx` + `web/lib/queries/audit.ts` | Add `offset` state; pass to query; add pagination footer |
+| Change result limit | `web/lib/queries/audit.ts` `auditQuery` | Adjust `limit: 200` value |
+| Add new column | `page.tsx` table + `web/lib/types.ts` `AuditEvent` | Add `TableHead` + `TableCell` + extend type |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `web/app/audit/page.tsx` | Audit log page |
-| `web/lib/api.ts` | `api.auditEvents()` — builds query string, calls `GET /v1/audit` |
+| `web/lib/api.ts` | `api.auditEvents()` — `GET /v1/audit` |
 | `web/lib/queries/audit.ts` | `auditQuery` TanStack Query definition |
 | `web/lib/types.ts` | `AuditEvent` interface |
 | `web/messages/en.json` | i18n keys under `audit.*` |
 
----
-
 ## Page Purpose
 
-Read-only audit trail of all administrative actions taken in the system. Displays who did what, on which resource, from which IP address. Intended for `super` role operators to review activity.
-
-Access control is enforced by the backend (`GET /v1/audit` — JWT-protected). The frontend applies no additional role guard beyond requiring a valid session.
-
----
+Read-only audit trail of admin actions. Shows who did what, on which resource, from which IP. For `super` role operators. Access controlled by backend JWT on `GET /v1/audit`.
 
 ## Page Layout
 
 ```
 Title: "Audit Log"  Subtitle: description                    [Refresh]
-
-[Action filter ▼]  [Resource Type filter ▼]
-
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│ Time              Account   Action          Resource Type   Resource Name   IP    │
-│ Mar 2 09:14:22   alice     [create]        api_key         prod-key        …     │
-│ Mar 2 08:05:11   bob       [login]         account         bob             …     │
-│ Mar 1 22:30:00   alice     [delete]        ollama_backend  local-gpu       …     │
-└──────────────────────────────────────────────────────────────────────────────────┘
+[Action filter v]  [Resource Type filter v]
+| Time | Account | Action | Resource Type | Resource Name | IP |
 ```
 
-- `DataTable minWidth="800px"` — SSOT wrapper.
-- **Refresh** button calls `refetch()` on the active query.
-- Results capped at **200** most recent events per fetch (no client-side pagination yet).
-
----
+- `DataTable minWidth="800px"` wrapper
+- Refresh calls `refetch()`; results capped at 200 most recent (no pagination yet)
 
 ## Filters
 
-Both filters are client-controlled `useState` values that re-key the TanStack Query (triggers a new fetch on change).
+Both are `useState` values that re-key the TanStack Query (new fetch on change). Value `'all'` maps to `undefined` and is omitted from the query string.
 
 ### Action filter
 
-| UI value | API value passed |
-|----------|-----------------|
-| All Actions | *(omitted)* |
-| `create` | `create` |
-| `update` | `update` |
-| `delete` | `delete` |
-| `login` | `login` |
-| `logout` | `logout` |
-| `reset_password` | `reset_password` |
+| Values | `create`, `update`, `delete`, `login`, `logout`, `reset_password` |
+|--------|-------------------------------------------------------------------|
 
 ### Resource Type filter
 
-| UI value | API value passed |
-|----------|-----------------|
-| All Resources | *(omitted)* |
-| `account` | `account` |
-| `api_key` | `api_key` |
-| `ollama_backend` | `ollama_backend` |
-| `gemini_backend` | `gemini_backend` |
-| `gpu_server` | `gpu_server` |
-
-Filter value `'all'` is mapped to `undefined` in `auditQuery` and omitted from the query string.
-
----
+| Values | `account`, `api_key`, `ollama_provider`, `gemini_provider`, `gpu_server` |
+|--------|-------------------------------------------------------------------------|
 
 ## Action Badge Colors
 
-```ts
-const ACTION_COLORS: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-  create:         'default',      // filled primary
-  update:         'secondary',    // muted
-  delete:         'destructive',  // red
-  login:          'outline',      // ghost
-  logout:         'outline',      // ghost
-  reset_password: 'secondary',    // muted
-}
-// Unmapped actions fall back to 'outline'
-```
-
----
+| Action | Badge variant |
+|--------|---------------|
+| `create` | `default` (filled primary) |
+| `update`, `reset_password` | `secondary` (muted) |
+| `delete` | `destructive` (red) |
+| `login`, `logout` | `outline` (ghost) |
+| *(unmapped)* | `outline` fallback |
 
 ## API Endpoint
 
-| Method | Path | Auth | Query params |
-|--------|------|------|-------------|
+| Method | Path | Auth | Params |
+|--------|------|------|--------|
 | `GET` | `/v1/audit` | JWT | `limit`, `offset`, `action`, `resource_type` |
 
-Response: `AuditEvent[]`
+Response: `AuditEvent[]`. Current page requests `limit=200`, `offset=0`. Filters included only when not `'all'`.
 
-The current page always requests `limit=200` and `offset=0`. `action` and `resource_type` are included only when not `'all'`.
+## AuditEvent Type
 
-```ts
-// api.ts
-auditEvents(params?: { limit?: number; offset?: number; action?: string; resource_type?: string })
-  → GET /v1/audit?limit=200[&action=...][&resource_type=...]
-```
+| Field | Type | Notes |
+|-------|------|-------|
+| `event_time` | `string` | ISO 8601 UTC |
+| `account_id` | `string` | |
+| `account_name` | `string` | Display name |
+| `action` | `string` | create/update/delete/login/logout/reset_password |
+| `resource_type` | `string` | account/api_key/ollama_provider/gemini_provider/gpu_server |
+| `resource_id` | `string` | |
+| `resource_name` | `string` | Falls back to `resource_id` when empty |
+| `ip_address` | `string` | Shown as `'--'` when empty |
+| `details` | `string` | |
 
----
+## TanStack Query Config
 
-## Data Type
-
-```ts
-interface AuditEvent {
-  event_time: string      // ISO 8601 UTC
-  account_id: string
-  account_name: string    // display name; falls back to resource_id when resource_name is empty
-  action: string          // 'create' | 'update' | 'delete' | 'login' | 'logout' | 'reset_password' | …
-  resource_type: string   // 'account' | 'api_key' | 'ollama_backend' | 'gemini_backend' | 'gpu_server'
-  resource_id: string
-  resource_name: string   // shown in table; falls back to resource_id when empty
-  ip_address: string      // shown as '—' when empty
-  details: string
-}
-```
-
----
-
-## TanStack Query Configuration
-
-```ts
-// staleTime: 30 000 ms; retry: false; re-fetches on filter change (queryKey includes action + resourceType)
-auditQuery(action, resourceType) = queryOptions({
-  queryKey: ['audit', action, resourceType],
-  queryFn: () => api.auditEvents({ limit: 200, action: ..., resource_type: ... }),
-  staleTime: 30_000,
-  retry: false,
-})
-```
-
----
+`queryKey: ['audit', action, resourceType]` | `staleTime: 30s` | `retry: false`
+Re-fetches on filter change via queryKey dependency.
 
 ## Table Columns
 
-| Column | Source field | Notes |
-|--------|-------------|-------|
-| Time | `event_time` | `fmtDatetime(e.event_time, tz)` — user timezone |
+| Column | Source | Notes |
+|--------|--------|-------|
+| Time | `event_time` | `fmtDatetime(e.event_time, tz)` via `useTimezone()` |
 | Account | `account_name` | Monospace, `text-xs` |
-| Action | `action` | `<Badge>` with color variant from `ACTION_COLORS` |
+| Action | `action` | `<Badge>` with `ACTION_COLORS` variant |
 | Resource Type | `resource_type` | Muted text |
-| Resource Name | `resource_name \|\| resource_id` | Falls back to ID when name absent |
-| IP | `ip_address` | Muted text; `'—'` when empty |
+| Resource Name | `resource_name \|\| resource_id` | Falls back to ID |
+| IP | `ip_address` | Muted; `'--'` when empty |
 
-Rows use index `i` as key (no stable unique ID available per event).
+Rows keyed by index `i` (no stable unique ID per event).
 
----
+## i18n Keys
 
-## Date Formatting
+`audit.*`: title, description, filterAction, allActions, filterResource, allResources, noEvents, time, account, action, resourceType, resourceName, ip
 
-All timestamps use `fmtDatetime(value, tz)` from `web/lib/date.ts` with `useTimezone()`.
-
----
-
-## i18n Keys (`audit.*`)
-
-```
-audit.title
-audit.description
-audit.filterAction
-audit.allActions
-audit.filterResource
-audit.allResources
-audit.noEvents
-audit.time
-audit.account
-audit.action
-audit.resourceType
-audit.resourceName
-audit.ip
-```
-
-Shared keys also used: `common.loading`, `common.error`, `common.refresh`.
-
----
+Shared: `common.loading`, `common.error`, `common.refresh`
 
 ## Related Docs
 
-- Analytics / observability pipeline (where audit events originate): `../../infra/otel-pipeline.md`
-- Auth and session model: `../../auth/jwt-sessions.md`
+- Audit event pipeline: `../../infra/otel-pipeline.md`
+- Auth/session model: `../../auth/jwt-sessions.md`
 - DataTable SSOT: `web/components/data-table.tsx`

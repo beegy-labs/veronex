@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
+use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::ProviderType;
 

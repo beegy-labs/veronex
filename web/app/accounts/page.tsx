@@ -6,6 +6,8 @@ import { accountsQuery, accountSessionsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { Account, CreateAccountResponse, SessionRecord } from '@/lib/types'
 import { Plus, Trash2, Copy, Check, Link, Shield } from 'lucide-react'
+import { CopyButton } from '@/components/copy-button'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -26,23 +28,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
+import { useApiMutation } from '@/hooks/use-api-mutation'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDatetime } from '@/lib/date'
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  async function handleCopy() {
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-  return (
-    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleCopy} title="Copy">
-      {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
-    </Button>
-  )
-}
 
 function AccountSessionsModal({
   accountId,
@@ -61,12 +50,12 @@ function AccountSessionsModal({
 
   const revokeMutation = useMutation({
     mutationFn: (sessionId: string) => api.revokeSession(sessionId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sessions', accountId] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['sessions', accountId] }),
   })
 
   const revokeAllMutation = useMutation({
     mutationFn: () => api.revokeAllSessions(accountId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sessions', accountId] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['sessions', accountId] }),
   })
 
   return (
@@ -170,11 +159,11 @@ function CreateAccountModal({
             <DialogTitle>Account Created</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
-            <p className="text-sm text-muted-foreground">
-              Save the test API key below — it will never be shown again.
-            </p>
-            <div className="flex items-center gap-2 rounded-md border bg-muted px-3 py-2 font-mono text-xs break-all">
-              <span className="flex-1">{created.test_api_key}</span>
+            <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-4 text-status-warning-fg text-sm">
+              Save the test API key below — it will only be shown once.
+            </div>
+            <div className="flex items-center gap-2 rounded-md border bg-muted px-3 py-2">
+              <code className="flex-1 font-mono text-xs break-all select-all">{created.test_api_key}</code>
               <CopyButton text={created.test_api_key} />
             </div>
           </div>
@@ -196,7 +185,7 @@ function CreateAccountModal({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Username</Label>
-              <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
+              <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
             </div>
             <div className="space-y-1.5">
               <Label>Full name</Label>
@@ -236,7 +225,7 @@ function CreateAccountModal({
           </div>
           {mutation.isError && (
             <p className="text-sm text-destructive">
-              {String(mutation.error) || 'Failed to create account'}
+              {mutation.error instanceof Error ? mutation.error.message : 'Failed to create account'}
             </p>
           )}
         </div>
@@ -257,28 +246,27 @@ function CreateAccountModal({
 export default function AccountsPage() {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const qc = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
   const [resetToken, setResetToken] = useState<string | null>(null)
   const [sessionsAccountId, setSessionsAccountId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
 
   const { data: accounts = [], isLoading, isError } = useQuery(accountsQuery)
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.deleteAccount(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
-  })
+  const deleteMutation = useApiMutation(
+    (id: string) => api.deleteAccount(id),
+    { invalidateKey: ['accounts'], onSuccess: () => setDeleteTarget(null) },
+  )
 
-  const activeMutation = useMutation({
-    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
-      api.setAccountActive(id, is_active),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
-  })
+  const activeMutation = useApiMutation(
+    (vars: { id: string; is_active: boolean }) => api.setAccountActive(vars.id, vars.is_active),
+    { invalidateKey: ['accounts'] },
+  )
 
-  const resetMutation = useMutation({
-    mutationFn: (id: string) => api.createResetLink(id),
-    onSuccess: (data) => setResetToken(data.token),
-  })
+  const resetMutation = useApiMutation(
+    (id: string) => api.createResetLink(id),
+    { onSuccess: (data) => setResetToken(data.token) },
+  )
 
   return (
     <div className="flex flex-col gap-6 p-6 max-w-5xl mx-auto">
@@ -304,12 +292,23 @@ export default function AccountsPage() {
 
       {/* Reset token display */}
       {resetToken && (
-        <div className="rounded-md border bg-muted p-3 flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground flex-1">Reset token (share securely):</span>
-          <span className="font-mono text-xs">{resetToken}</span>
-          <CopyButton text={resetToken} />
-          <Button variant="ghost" size="sm" onClick={() => setResetToken(null)}>Close</Button>
-        </div>
+        <Dialog open onOpenChange={() => setResetToken(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{t('accounts.resetLink')}</DialogTitle>
+            </DialogHeader>
+            <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-4 text-status-warning-fg text-sm">
+              This token will only be shown once. Copy it now and share it securely.
+            </div>
+            <div className="rounded-lg bg-muted p-3 flex items-center gap-2">
+              <code className="flex-1 font-mono text-xs break-all select-all">{resetToken}</code>
+              <CopyButton text={resetToken} />
+            </div>
+            <DialogFooter>
+              <Button onClick={() => setResetToken(null)}>{t('common.done')}</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {isLoading ? (
@@ -374,7 +373,7 @@ export default function AccountsPage() {
                         size="icon"
                         className="h-7 w-7 text-destructive hover:text-destructive"
                         title={t('common.delete')}
-                        onClick={() => deleteMutation.mutate(a.id)}
+                        onClick={() => setDeleteTarget(a)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -385,6 +384,18 @@ export default function AccountsPage() {
             }
           </TableBody>
         </DataTable>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          open
+          title={t('common.delete')}
+          description={t('accounts.deleteConfirm', { name: deleteTarget.username })}
+          confirmLabel={deleteMutation.isPending ? t('common.deleting') : t('common.delete')}
+          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
+          onClose={() => setDeleteTarget(null)}
+          isLoading={deleteMutation.isPending}
+        />
       )}
     </div>
   )

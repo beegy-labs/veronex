@@ -15,6 +15,9 @@ pub trait SessionRepository: Send + Sync {
     /// Look up a session by its refresh token hash.
     async fn get_by_refresh_hash(&self, hash: &str) -> Result<Option<Session>>;
 
+    /// Look up a session by its primary key.
+    async fn get_by_id(&self, session_id: &Uuid) -> Result<Option<Session>>;
+
     /// Revoke a session: sets `revoked_at = now()` in the DB.
     async fn revoke(&self, session_id: &Uuid) -> Result<()>;
 

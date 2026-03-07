@@ -1,4 +1,4 @@
-> **SSOT** | **Tier 2** | Last Updated: 2026-03-02
+> **SSOT** | **Tier 2** | Last Updated: 2026-03-04
 
 # Model Pricing
 
@@ -18,7 +18,7 @@ CREATE TABLE model_pricing (
 );
 ```
 
-- `provider` matches `inference_jobs.backend` (e.g. `'gemini'`, `'ollama'`).
+- `provider` matches `inference_jobs.provider_type` (e.g. `'gemini'`, `'ollama'`).
 - `model_name` is either an exact model name (e.g. `'gemini-2.0-flash'`) or `'*'` as a default fallback when no exact match exists.
 - Lookup priority: **exact name first**, then `'*'` wildcard.
 
@@ -28,7 +28,7 @@ Ollama has **no rows** in `model_pricing`. The cost expression short-circuits:
 
 ```sql
 CASE
-    WHEN j.backend = 'ollama' THEN 0.0
+    WHEN j.provider_type = 'ollama' THEN 0.0
     ...
 END
 ```
@@ -61,7 +61,7 @@ Used in every query that returns cost fields:
 LEFT JOIN LATERAL (
     SELECT input_per_1m, output_per_1m
     FROM model_pricing
-    WHERE provider = j.backend
+    WHERE provider = j.provider_type
       AND (model_name = j.model_name OR model_name = '*')
     ORDER BY CASE WHEN model_name = j.model_name THEN 0 ELSE 1 END
     LIMIT 1
@@ -74,7 +74,7 @@ The `ORDER BY CASE` ensures exact model name wins over the `'*'` wildcard. The `
 
 ```sql
 CASE
-    WHEN j.backend = 'ollama' THEN 0.0
+    WHEN j.provider_type = 'ollama' THEN 0.0
     WHEN pricing.input_per_1m IS NOT NULL
          AND j.prompt_tokens IS NOT NULL
          AND j.completion_tokens IS NOT NULL THEN
@@ -108,18 +108,18 @@ Result semantics:
 
 | Field | Description |
 |-------|-------------|
-| `by_backend[].estimated_cost_usd` | Aggregate cost for that provider over the window |
+| `by_providers[].estimated_cost_usd` | Aggregate cost for that provider over the window |
 | `by_key[].estimated_cost_usd` | Aggregate cost per API key (per-job SUM, exact model lookup) |
-| `by_model[].estimated_cost_usd` | Aggregate cost per model+backend combination |
-| `total_cost_usd` | Sum of all backend costs (scalar, always a number) |
+| `by_model[].estimated_cost_usd` | Aggregate cost per model+provider combination |
+| `total_cost_usd` | Sum of all provider costs (scalar, always a number) |
 
-Note: `by_backend` uses the `'*'` wildcard only (no per-model lookup). `by_key` and `by_model` use the full exact-then-wildcard lookup per job row.
+Note: `by_providers` uses the `'*'` wildcard only (no per-model lookup). `by_key` and `by_model` use the full exact-then-wildcard lookup per job row.
 
 ## NULL Handling
 
 - `estimated_cost_usd` is `Option<f64>` in Rust / `number | null` in TypeScript.
 - It is `NULL` when either: (a) no pricing row matches the provider, or (b) `prompt_tokens` or `completion_tokens` is `NULL` (job not yet completed).
-- `total_cost_usd` in `UsageBreakdownResponse` is always a `f64` (defaults to `0.0` when no backends have pricing).
+- `total_cost_usd` in `UsageBreakdownResponse` is always a `f64` (defaults to `0.0` when no providers have pricing).
 
 ## Updating Pricing
 
@@ -131,6 +131,6 @@ Insert or `UPDATE` rows directly in `model_pricing`. No application restart requ
 
 ## Related Docs
 
-- Backend jobs SSOT: `docs/llm/inference/job-lifecycle.md` — Token Cost Measurement section
+- Jobs SSOT: `docs/llm/inference/job-lifecycle.md` — Token Cost Measurement section
 - Frontend cost display: `docs/llm/frontend/pages/usage.md` — Cost Tracking section
 - Frontend jobs UI: `docs/llm/frontend/pages/jobs.md` — Extended Job Fields section

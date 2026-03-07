@@ -16,9 +16,13 @@ pub struct HttpObservabilityAdapter {
 }
 
 impl HttpObservabilityAdapter {
-    pub fn new(analytics_url: impl Into<String>, secret: impl Into<String>) -> Self {
+    pub fn new(
+        client: reqwest::Client,
+        analytics_url: impl Into<String>,
+        secret: impl Into<String>,
+    ) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: client,
             analytics_url: analytics_url.into(),
             secret: secret.into(),
         }
@@ -36,7 +40,7 @@ struct IngestInferencePayload<'a> {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub latency_ms: u32,
-    pub finish_reason: String,
+    pub finish_reason: &'a str,
     pub status: &'a str,
     pub error_msg: Option<&'a str>,
 }
@@ -44,7 +48,6 @@ struct IngestInferencePayload<'a> {
 #[async_trait]
 impl ObservabilityPort for HttpObservabilityAdapter {
     async fn record_inference(&self, event: &InferenceEvent) -> Result<()> {
-        let finish_reason = format!("{:?}", event.finish_reason).to_lowercase();
         let payload = IngestInferencePayload {
             event_time: event.event_time,
             request_id: event.request_id,
@@ -55,13 +58,13 @@ impl ObservabilityPort for HttpObservabilityAdapter {
             prompt_tokens: event.prompt_tokens,
             completion_tokens: event.completion_tokens,
             latency_ms: event.latency_ms,
-            finish_reason,
+            finish_reason: event.finish_reason.as_str(),
             status: &event.status,
             error_msg: event.error_msg.as_deref(),
         };
 
         let url = format!("{}/internal/ingest/inference", self.analytics_url);
-        if let Err(e) = self
+        match self
             .http
             .post(&url)
             .bearer_auth(&self.secret)
@@ -69,10 +72,25 @@ impl ObservabilityPort for HttpObservabilityAdapter {
             .send()
             .await
         {
-            tracing::warn!(
-                request_id = %event.request_id,
-                "analytics ingest inference failed (non-fatal): {e}"
-            );
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    tracing::warn!(
+                        request_id = %event.request_id,
+                        %status,
+                        body = %body,
+                        "analytics ingest inference failed"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    request_id = %event.request_id,
+                    error = %e,
+                    "analytics ingest inference transport error"
+                );
+            }
         }
 
         Ok(())

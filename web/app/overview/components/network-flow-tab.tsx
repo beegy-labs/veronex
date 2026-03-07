@@ -8,16 +8,16 @@ import { ProviderFlowPanel } from './provider-flow-panel'
 import { LiveFeed } from './live-feed'
 
 interface Props {
-  backends: Provider[]
+  providers: Provider[]
 }
 
-export function NetworkFlowTab({ backends }: Props) {
+export function NetworkFlowTab({ providers }: Props) {
   const events = useInferenceStream()
   const { data: depth } = useQuery(queueDepthQuery)
 
   return (
     <div className="space-y-4">
-      <ProviderFlowPanel backends={backends} events={events} queueDepth={depth?.total ?? 0} />
+      <ProviderFlowPanel providers={providers} events={events} queueDepth={depth?.total ?? 0} />
       <LiveFeed events={events} />
     </div>
   )

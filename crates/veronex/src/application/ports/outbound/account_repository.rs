@@ -12,6 +12,9 @@ pub trait AccountRepository: Send + Sync {
     async fn list_all(&self) -> Result<Vec<Account>>;
     async fn update(&self, account: &Account) -> Result<()>;
     async fn soft_delete(&self, id: &Uuid) -> Result<()>;
+    /// Soft-delete an account and all its API keys in a single transaction.
+    /// Returns the number of API keys affected.
+    async fn soft_delete_cascade(&self, account_id: &Uuid, tenant_id: &str) -> Result<u64>;
     async fn set_active(&self, id: &Uuid, is_active: bool) -> Result<()>;
     async fn update_last_login(&self, id: &Uuid) -> Result<()>;
     async fn set_password_hash(&self, id: &Uuid, hash: &str) -> Result<()>;

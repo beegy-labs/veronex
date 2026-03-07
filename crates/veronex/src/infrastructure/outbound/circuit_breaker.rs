@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPort;
+use crate::domain::constants::CIRCUIT_BREAKER_COOLDOWN;
 
+/// Open circuit after N consecutive provider failures to prevent cascading.
 const FAILURE_THRESHOLD: u32 = 5;
-const COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CircuitState {
@@ -15,12 +16,12 @@ pub enum CircuitState {
     HalfOpen,
 }
 
-struct BackendCircuit {
+struct ProviderCircuit {
     state: CircuitState,
     consecutive_failures: u32,
 }
 
-impl BackendCircuit {
+impl ProviderCircuit {
     fn new() -> Self {
         Self { state: CircuitState::Closed, consecutive_failures: 0 }
     }
@@ -34,7 +35,7 @@ impl BackendCircuit {
 /// - HalfOpen → Closed on success.
 /// - HalfOpen → Open on failure (resets cooldown).
 pub struct CircuitBreakerMap {
-    inner: Mutex<HashMap<Uuid, BackendCircuit>>,
+    inner: Mutex<HashMap<Uuid, ProviderCircuit>>,
 }
 
 impl CircuitBreakerMap {
@@ -43,9 +44,9 @@ impl CircuitBreakerMap {
     }
 
     /// Returns true if requests are allowed for this provider.
-    pub fn is_allowed(&self, backend_id: Uuid) -> bool {
+    pub fn is_allowed(&self, provider_id: Uuid) -> bool {
         let mut map = self.inner.lock().expect("circuit breaker lock poisoned");
-        let entry = map.entry(backend_id).or_insert_with(BackendCircuit::new);
+        let entry = map.entry(provider_id).or_insert_with(ProviderCircuit::new);
         match &entry.state {
             CircuitState::Closed => true,
             CircuitState::HalfOpen => true,
@@ -53,7 +54,7 @@ impl CircuitBreakerMap {
                 if Instant::now() >= *until {
                     entry.state = CircuitState::HalfOpen;
                     tracing::info!(
-                        backend_id = %backend_id,
+                        provider_id = %provider_id,
                         "circuit breaker half-open — probing provider"
                     );
                     true
@@ -65,12 +66,12 @@ impl CircuitBreakerMap {
     }
 
     /// Call after a successful inference on this provider.
-    pub fn on_success(&self, backend_id: Uuid) {
+    pub fn on_success(&self, provider_id: Uuid) {
         let mut map = self.inner.lock().expect("circuit breaker lock poisoned");
-        if let Some(entry) = map.get_mut(&backend_id) {
+        if let Some(entry) = map.get_mut(&provider_id) {
             if entry.state != CircuitState::Closed {
                 tracing::info!(
-                    backend_id = %backend_id,
+                    provider_id = %provider_id,
                     "circuit breaker closed — provider recovered"
                 );
             }
@@ -80,19 +81,19 @@ impl CircuitBreakerMap {
     }
 
     /// Call after a failed inference on this provider.
-    pub fn on_failure(&self, backend_id: Uuid) {
+    pub fn on_failure(&self, provider_id: Uuid) {
         let mut map = self.inner.lock().expect("circuit breaker lock poisoned");
-        let entry = map.entry(backend_id).or_insert_with(BackendCircuit::new);
+        let entry = map.entry(provider_id).or_insert_with(ProviderCircuit::new);
         entry.consecutive_failures += 1;
         if entry.consecutive_failures >= FAILURE_THRESHOLD
             || entry.state == CircuitState::HalfOpen
         {
-            entry.state = CircuitState::Open { until: Instant::now() + COOLDOWN };
+            entry.state = CircuitState::Open { until: Instant::now() + CIRCUIT_BREAKER_COOLDOWN };
             entry.consecutive_failures = 0;
             tracing::warn!(
-                backend_id = %backend_id,
+                provider_id = %provider_id,
                 "circuit breaker opened — provider isolated for {}s",
-                COOLDOWN.as_secs()
+                CIRCUIT_BREAKER_COOLDOWN.as_secs()
             );
         }
     }

@@ -1,9 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { getAccessToken } from '@/lib/auth'
-
-const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
+import { isLoggedIn } from '@/lib/auth'
+import { BASE_API_URL as BASE } from '@/lib/constants'
 
 export interface FlowEvent {
   /** Unique per-event: jobId + phase + spawn timestamp */
@@ -52,13 +51,12 @@ export function useInferenceStream(): FlowEvent[] {
     let retryDelay = 2_000
 
     function connect() {
-      const token = getAccessToken()
-      if (!token) return
+      if (!isLoggedIn()) return
 
       const ctrl = new AbortController()
 
       fetch(`${BASE}/v1/dashboard/jobs/stream`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
         signal: ctrl.signal,
       })
         .then(async res => {

@@ -11,4 +11,7 @@ pub mod model_manager;
 pub mod observability;
 pub mod ollama;
 pub mod persistence;
+pub mod pubsub;
 pub mod session_grouping;
+pub mod valkey_adapter;
+pub mod valkey_keys;

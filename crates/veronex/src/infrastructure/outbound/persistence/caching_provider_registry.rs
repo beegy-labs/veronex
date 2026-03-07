@@ -1,11 +1,11 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use super::ttl_cache::TtlCache;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::LlmProviderStatus;
@@ -20,22 +20,20 @@ use crate::domain::enums::LlmProviderStatus;
 /// invalidate the cache immediately so stale data is never served after a write.
 pub struct CachingProviderRegistry {
     inner: Arc<dyn LlmProviderRegistry>,
-    cache: RwLock<Option<(Vec<LlmProvider>, Instant)>>,
-    ttl:   Duration,
+    /// Single-entry cache keyed on `()`.
+    cache: TtlCache<(), Vec<LlmProvider>>,
 }
 
 impl CachingProviderRegistry {
     pub fn new(inner: Arc<dyn LlmProviderRegistry>, ttl: Duration) -> Self {
         Self {
             inner,
-            cache: RwLock::new(None),
-            ttl,
+            cache: TtlCache::new(ttl),
         }
     }
 
-    /// Invalidate the cached list so the next `list_all` hits the DB.
     async fn invalidate(&self) {
-        *self.cache.write().await = None;
+        self.cache.invalidate_all().await;
     }
 }
 
@@ -53,27 +51,9 @@ impl LlmProviderRegistry for CachingProviderRegistry {
     }
 
     async fn list_all(&self) -> Result<Vec<LlmProvider>> {
-        // Fast path: shared read lock, return cached value if still fresh.
-        {
-            let guard = self.cache.read().await;
-            if let Some((ref providers, ts)) = *guard {
-                if ts.elapsed() < self.ttl {
-                    return Ok(providers.clone());
-                }
-            }
-        }
-
-        // Cache miss or stale: acquire write lock, re-check, then refresh.
-        let mut guard = self.cache.write().await;
-        // Re-check under write lock to avoid thundering-herd.
-        if let Some((ref providers, ts)) = *guard {
-            if ts.elapsed() < self.ttl {
-                return Ok(providers.clone());
-            }
-        }
-        let fresh = self.inner.list_all().await?;
-        *guard = Some((fresh.clone(), Instant::now()));
-        Ok(fresh)
+        self.cache
+            .get_or_insert((), self.inner.list_all())
+            .await
     }
 
     async fn get(&self, id: Uuid) -> Result<Option<LlmProvider>> {

@@ -7,10 +7,14 @@ use futures::Stream;
 use futures::StreamExt as _;
 use serde::Deserialize;
 
-use crate::application::ports::outbound::inference_backend::InferenceProviderPort;
+use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::domain::constants::PROVIDER_REQUEST_TIMEOUT;
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
 use crate::domain::value_objects::StreamToken;
+
+/// Maximum bytes allowed in the NDJSON line buffer before aborting.
+const MAX_LINE_BUFFER: usize = 1_048_576; // 1 MB
 
 pub struct OllamaAdapter {
     base_url: String,
@@ -41,7 +45,10 @@ impl OllamaAdapter {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(PROVIDER_REQUEST_TIMEOUT)
+                .build()
+                .expect("failed to build HTTP client"),
         }
     }
 }
@@ -174,6 +181,9 @@ impl OllamaAdapter {
 
             while let Some(chunk) = byte_stream.next().await {
                 let bytes = chunk.map_err(|e| anyhow::anyhow!(e))?;
+                if buf.len() + bytes.len() > MAX_LINE_BUFFER {
+                    Err(anyhow::anyhow!("response line exceeds 1 MB limit"))?;
+                }
                 buf.push_str(&String::from_utf8_lossy(&bytes));
 
                 // Consume complete newline-delimited JSON lines
@@ -270,6 +280,9 @@ impl OllamaAdapter {
 
             while let Some(chunk) = byte_stream.next().await {
                 let bytes = chunk.map_err(|e| anyhow::anyhow!(e))?;
+                if buf.len() + bytes.len() > MAX_LINE_BUFFER {
+                    Err(anyhow::anyhow!("response line exceeds 1 MB limit"))?;
+                }
                 buf.push_str(&String::from_utf8_lossy(&bytes));
 
                 while let Some(nl) = buf.find('\n') {

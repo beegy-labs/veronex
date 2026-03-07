@@ -12,12 +12,16 @@ export interface ApiKey {
   tier: 'free' | 'paid'
 }
 
-export interface Job {
+export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type JobSource = 'api' | 'test'
+
+/** Fields shared by both the list-level Job and the detail-level JobDetail. */
+export interface JobBase {
   id: string
   model_name: string
   provider_type: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-  source: 'api' | 'test'
+  status: JobStatus
+  source: JobSource
   created_at: string
   completed_at: string | null
   latency_ms: number | null
@@ -31,10 +35,13 @@ export interface Job {
   account_name: string | null
   /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
   request_path: string | null
-  /** True when the model responded with tool calls instead of text. */
-  has_tool_calls: boolean
   /** Estimated API cost in USD. 0.00 for Ollama (self-hosted). null = no pricing data. */
   estimated_cost_usd: number | null
+}
+
+export interface Job extends JobBase {
+  /** True when the model responded with tool calls instead of text. */
+  has_tool_calls: boolean
 }
 
 export interface ChatMessage {
@@ -57,37 +64,17 @@ export interface ToolCall {
   }
 }
 
-export interface JobDetail {
-  id: string
-  model_name: string
-  provider_type: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-  source: 'api' | 'test'
-  created_at: string
+export interface JobDetail extends JobBase {
   started_at: string | null
-  completed_at: string | null
-  latency_ms: number | null
-  ttft_ms: number | null
-  prompt_tokens: number | null
-  completion_tokens: number | null
-  cached_tokens: number | null
-  tps: number | null
-  api_key_name: string | null
-  /** For test run jobs: the account name of who ran it. */
-  account_name: string | null
   prompt: string
   result_text: string | null
   error: string | null
-  /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
-  request_path: string | null
   /** Tool calls emitted by the model (when responding with function calls instead of text). */
   tool_calls_json: ToolCall[] | null
   /** Number of messages in the conversation context (multi-turn agent loop). */
   message_count: number | null
   /** Full conversation context sent to the model. Null for single-turn or pre-migration jobs. */
   messages_json: ChatMessage[] | null
-  /** Estimated API cost in USD. 0.00 for Ollama (self-hosted). null = no pricing data. */
-  estimated_cost_usd: number | null
 }
 
 export interface DashboardStats {
@@ -261,13 +248,13 @@ export interface GpuNodeMetrics {
 export interface Provider {
   id: string
   name: string
-  backend_type: 'ollama' | 'gemini'
+  provider_type: 'ollama' | 'gemini'
   url: string
   is_active: boolean
   total_vram_mb: number
   /** GPU index on the host (0-based). Used to filter node-exporter metrics. */
   gpu_index: number | null
-  /** FK → gpu_servers. null for cloud backends. */
+  /** FK → gpu_servers. null for cloud providers. */
   server_id: string | null
   /** Reserved for Phase 2 sidecar. */
   agent_url: string | null
@@ -281,7 +268,7 @@ export interface Provider {
 
 export interface RegisterProviderRequest {
   name: string
-  backend_type: 'ollama' | 'gemini'
+  provider_type: 'ollama' | 'gemini'
   url?: string
   api_key?: string
   total_vram_mb?: number
@@ -322,7 +309,7 @@ export interface GeminiRateLimitPolicy {
   rpd_limit: number
   /**
    * When false: skip all free-tier providers and route directly to a paid provider.
-   * RPM/RPD counters are also suppressed for paid backends.
+   * RPM/RPD counters are also suppressed for paid providers.
    */
   available_on_free_tier: boolean
   updated_at: string
@@ -387,7 +374,7 @@ export interface OllamaSyncJob {
   results: OllamaSyncResult[]
 }
 
-/** Model with count of backends that carry it (from GET /v1/ollama/models). */
+/** Model with count of providers that carry it (from GET /v1/ollama/models). */
 export interface OllamaModelWithCount {
   model_name: string
   provider_count: number
@@ -444,12 +431,10 @@ export interface LoginRequest {
 }
 
 export interface LoginResponse {
-  access_token: string
-  token_type: string
+  ok: boolean
   account_id: string
   username: string
   role: string
-  refresh_token: string
 }
 
 export interface SessionRecord {
@@ -460,46 +445,51 @@ export interface SessionRecord {
   expires_at: string
 }
 
-export interface ModelCapacityInfo {
+export interface LoadedModelInfo {
   model_name: string
-  recommended_slots: number
-  active_slots: number
-  available_slots: number
-  vram_model_mb: number
-  vram_kv_per_slot_mb: number
-  avg_tokens_per_sec: number
-  p95_latency_ms: number
-  sample_count: number
+  weight_mb: number
+  kv_per_request_mb: number
+  active_requests: number
+  /** Adaptive concurrency limit (AIMD). 0 = unlimited. */
+  max_concurrent: number
   llm_concern: string | null
   llm_reason: string | null
-  updated_at: string
 }
 
-export interface ProviderCapacityInfo {
+export interface ProviderVramInfo {
   provider_id: string
   provider_name: string
+  total_vram_mb: number
+  used_vram_mb: number
+  available_vram_mb: number
   thermal_state: 'normal' | 'soft' | 'hard'
   temp_c: number | null
-  models: ModelCapacityInfo[]
+  loaded_models: LoadedModelInfo[]
 }
 
 export interface CapacityResponse {
-  providers: ProviderCapacityInfo[]
+  providers: ProviderVramInfo[]
 }
 
-export interface CapacitySettings {
+export interface SyncSettings {
   analyzer_model: string
-  batch_enabled: boolean
-  batch_interval_secs: number
+  sync_enabled: boolean
+  sync_interval_secs: number
+  /** AIMD probe: extra (+) or fewer (-) concurrent requests for learning. */
+  probe_permits: number
+  /** AIMD probe: every N arrivals at the limit, apply probe. 0 = disabled. */
+  probe_rate: number
   last_run_at: string | null
   last_run_status: string | null
   available_models: string[]
 }
 
-export interface PatchCapacitySettings {
+export interface PatchSyncSettings {
   analyzer_model?: string
-  batch_enabled?: boolean
-  batch_interval_secs?: number
+  sync_enabled?: boolean
+  sync_interval_secs?: number
+  probe_permits?: number
+  probe_rate?: number
 }
 
 export interface LabSettings {

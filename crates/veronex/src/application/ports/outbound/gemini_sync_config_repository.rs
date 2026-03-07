@@ -3,7 +3,7 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait GeminiSyncConfigRepository: Send + Sync {
-    /// Return the stored admin API key (plain text PoC — encryption is future work).
+    /// TODO(security): plain text PoC — encrypt at rest before production.
     /// Returns `None` if no key has been set yet.
     async fn get_api_key(&self) -> Result<Option<String>>;
 

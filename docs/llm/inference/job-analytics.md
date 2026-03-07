@@ -6,7 +6,7 @@
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add new column to `inference_logs` | `infrastructure/outbound/observability/` ClickHouse adapter + `InferenceEvent` struct | Extend INSERT SQL + `record_inference()` |
+| Add new column to `inference_logs` | `infrastructure/outbound/observability/` HttpObservabilityAdapter + `IngestInferenceRequest` struct | Extend `record_inference()` + veronex-analytics ingest endpoint |
 | Change TTFT calculation logic | `infrastructure/outbound/provider_router.rs` `run_job()` | Modify TTFT detection block (first non-empty non-final token) |
 | Add new analytics endpoint | `infrastructure/inbound/http/handlers.rs` + ClickHouse SQL | Add handler + route in `router.rs` |
 | Change Ollama token count fallback | `infrastructure/outbound/provider_router.rs` `run_job()` | Modify `token_count` fallback (currently: SSE event count) |
@@ -20,7 +20,7 @@
 | `crates/veronex/src/domain/value_objects.rs` | `StreamToken` struct |
 | `crates/veronex/src/infrastructure/outbound/gemini/adapter.rs` | `extract_usage()` — Gemini usageMetadata |
 | `crates/veronex/src/infrastructure/outbound/provider_router.rs` | `run_job()` — TTFT + token recording |
-| `crates/veronex/src/infrastructure/outbound/observability/` | `ClickHouseObservabilityAdapter` |
+| `crates/veronex/src/infrastructure/outbound/observability/` | `HttpObservabilityAdapter` (writes via veronex-analytics HTTP bridge) |
 | `crates/veronex/src/application/ports/outbound/mod.rs` | `ObservabilityPort` trait |
 | `crates/veronex/src/infrastructure/inbound/http/handlers.rs` | `/v1/usage`, `/v1/dashboard/performance` |
 
@@ -103,8 +103,7 @@ CREATE TABLE inference_logs (
 ) ENGINE = MergeTree() ORDER BY created_at;
 ```
 
-Written by `ClickHouseObservabilityAdapter::record_inference()` after each job.
-`chrono::DateTime<Utc>` → `time::OffsetDateTime` conversion required by clickhouse serde.
+Written by `HttpObservabilityAdapter::record_inference()` via `POST /internal/ingest/inference` to veronex-analytics, which forwards to OTel Collector → Redpanda → ClickHouse.
 
 ---
 

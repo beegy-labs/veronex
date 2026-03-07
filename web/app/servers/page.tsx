@@ -53,7 +53,7 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
       }
       return api.registerServer(body)
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }); onClose() },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }); onClose() },
   })
 
   return (
@@ -114,7 +114,7 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
       }
       return api.updateServer(server.id, body)
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }); onClose() },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }); onClose() },
   })
 
   return (
@@ -336,7 +336,7 @@ export default function ServersPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteServer(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['servers'] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['servers'] }),
   })
 
   return (

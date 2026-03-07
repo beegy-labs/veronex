@@ -1,14 +1,17 @@
 # Veronex
 
-> CDD Tier 1 — Entry Point (≤50 lines) | **Last Updated**: 2026-03-03
+> CDD Tier 1 — Entry Point (≤50 lines) | **Last Updated**: 2026-03-07
 
 ## Project
 
-**Veronex** (Vero+Nexus) — Queue-based LLM inference gateway (Rust/Axum) with
-OpenAI-compatible API, VRAM-aware multi-GPU routing, Gemini free/paid tier management,
-and a Next.js admin dashboard. Two Rust crates:
-- `veronex` — main API server (`crates/veronex/`)
+**Veronex** (Vero+Nexus) — Autonomous intelligence scheduler/gateway for N Ollama
+servers. Integrates request routing + capacity learning + thermal protection to
+maximize cluster-wide throughput. OpenAI-compatible API + Next.js admin dashboard.
+
+Three Rust crates:
+- `veronex` — main API server + scheduler (`crates/veronex/`)
 - `veronex-analytics` — internal analytics service (`crates/veronex-analytics/`, port 3003)
+- `veronex-agent` — per-node hardware metrics agent (`crates/veronex-agent/`)
 
 ## Navigation
 
@@ -16,6 +19,7 @@ and a Next.js admin dashboard. Two Rust crates:
 |--------|------|
 | Core rules | `.ai/rules.md` |
 | Architecture | `.ai/architecture.md` |
+| Security | `.ai/security.md` |
 | Code patterns (2026) | `docs/llm/policies/patterns.md` |
 | Git & commits | `.ai/git-flow.md` |
 | Full docs index | `docs/llm/README.md` |
@@ -24,9 +28,9 @@ and a Next.js admin dashboard. Two Rust crates:
 
 | Domain | Path | Content |
 |--------|------|---------|
-| Auth | `docs/llm/auth/` | jwt-sessions, api-keys, security |
-| Inference | `docs/llm/inference/` | job-lifecycle, job-analytics, openai-compat, capacity, model-pricing, lab-features |
-| Providers | `docs/llm/providers/` | ollama, ollama-models, gemini, gemini-models, hardware |
-| Infra | `docs/llm/infra/` | deploy, otel-pipeline |
-| Frontend | `docs/llm/frontend/` | design-system, charts, pages/* |
+| Auth | `docs/llm/auth/` | jwt-sessions (+impl), api-keys, security |
+| Inference | `docs/llm/inference/` | job-lifecycle, job-api, session-grouping, job-analytics, openai-compat, capacity, model-pricing, lab-features |
+| Providers | `docs/llm/providers/` | ollama (+impl), ollama-models, gemini, gemini-models, hardware |
+| Infra | `docs/llm/infra/` | deploy, otel-pipeline (+ops) |
+| Frontend | `docs/llm/frontend/` | design-system (core, i18n, components), charts, pages/* |
 | Research | `docs/llm/research/` | 2026 best practices (frontend, backend, infra, security) |

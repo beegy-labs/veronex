@@ -2,8 +2,8 @@
 
 import { useState, useRef, useEffect, useReducer, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '@/lib/api'
-import { getAccessToken, getAuthUser } from '@/lib/auth'
+import { isLoggedIn, getAuthUser } from '@/lib/auth'
+import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
 import type { RetryParams } from '@/lib/types'
 import { Send, Loader2, X, Square, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -15,6 +15,8 @@ import {
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
 import { renderWithMermaid } from '@/components/mermaid-block'
+import { BASE } from '@/lib/api'
+import { PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -33,7 +35,7 @@ interface Run {
   model: string
   provider_type: string
   status: StreamStatus
-  tokens: string[]
+  text: string
   errorMsg: string
 }
 
@@ -51,7 +53,7 @@ function runsReducer(state: Run[], action: RunAction): Run[] {
       return state.filter((r) => r.id !== action.id)
     case 'APPEND':
       return state.map((r) =>
-        r.id === action.id ? { ...r, tokens: [...r.tokens, action.token] } : r
+        r.id === action.id ? { ...r, text: r.text + action.token } : r
       )
     case 'SET_STATUS':
       return state.map((r) =>
@@ -75,12 +77,11 @@ interface Props {
 
 export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const { t } = useTranslation()
-  const BASE = process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
 
   const authUser = getAuthUser()
 
   // ── Shared form state ─────────────────────────────────────────────────────────
-  const [providerType, setProviderType] = useState("ollama")
+  const [providerType, setProviderType] = useState<string>(PROVIDER_OLLAMA)
   const [model, setModel] = useState('')
   const [prompt, setPrompt] = useState('')
 
@@ -92,58 +93,48 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   // Map from run id → active reader (for cancellation)
   const readersRef = useRef<Map<number, ReadableStreamDefaultReader<Uint8Array>>>(new Map())
 
-  // ── Backends ──────────────────────────────────────────────────────────────────
-  const { data: backends } = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => api.providers(),
-    staleTime: 60_000,
-  })
+  // ── Providers ─────────────────────────────────────────────────────────────────
+  const { data: providers } = useQuery(providersQuery)
 
   const availableOptions = useMemo((): ProviderOption[] => {
-    if (!backends) return [{ value: 'ollama', label: 'Ollama', isGemini: false }]
+    if (!providers) return [{ value: 'ollama', label: 'Ollama', isGemini: false }]
     const opts: ProviderOption[] = []
-    if (backends.some((b) => b.is_active && b.backend_type === 'ollama')) {
+    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_OLLAMA)) {
       opts.push({ value: 'ollama', label: 'Ollama', isGemini: false })
     }
-    if (backends.some((b) => b.is_active && b.backend_type === 'gemini' && b.is_free_tier)) {
+    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
       opts.push({ value: 'gemini-free', label: t('test.geminiFree'), isGemini: true })
     }
-    if (backends.some((b) => b.is_active && b.backend_type === 'gemini' && !b.is_free_tier)) {
+    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
       opts.push({ value: 'gemini', label: t('test.gemini'), isGemini: true })
     }
     return opts.length > 0 ? opts : [{ value: 'ollama', label: 'Ollama', isGemini: false }]
-  }, [backends, t])
+  }, [providers, t])
 
   const isGeminiProvider = availableOptions.find((o) => o.value === providerType)?.isGemini ?? false
 
   useEffect(() => {
-    if (!backends) return
+    if (!providers) return
     if (!availableOptions.find((o) => o.value === providerType)) {
       setProviderType(availableOptions[0].value)
       setModel('')
     }
-  }, [availableOptions, providerType, backends])
+  }, [availableOptions, providerType, providers])
 
   // ── Models ────────────────────────────────────────────────────────────────────
   const { data: ollamaModelsData } = useQuery({
-    queryKey: ['ollama-models'],
-    queryFn: () => api.ollamaModels(),
+    ...ollamaModelsQuery,
     enabled: !isGeminiProvider,
-    staleTime: 30_000,
   })
 
   const { data: geminiModelsData } = useQuery({
-    queryKey: ['gemini-models'],
-    queryFn: () => api.geminiModels(),
+    ...geminiModelsQuery,
     enabled: isGeminiProvider,
-    staleTime: 5 * 60_000,
   })
 
   const { data: geminiPolicies } = useQuery({
-    queryKey: ['gemini-policies'],
-    queryFn: () => api.geminiPolicies(),
+    ...geminiPoliciesQuery,
     enabled: isGeminiProvider,
-    staleTime: 5 * 60_000,
   })
 
   const availableModels = useMemo(() => {
@@ -238,8 +229,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   // ── Run handler ───────────────────────────────────────────────────────────────
   async function handleRun() {
     if (!prompt.trim() || !model) return
-    const token = getAccessToken()
-    if (!token) return
+    if (!isLoggedIn()) return
 
     if (runs.length >= MAX_RUNS) {
       // Remove oldest run
@@ -254,9 +244,9 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
       id: runId,
       prompt: prompt.trim(),
       model,
-      providerType,
+      provider_type: providerType,
       status: 'streaming',
-      tokens: [],
+      text: '',
       errorMsg: '',
     }
     dispatch({ type: 'ADD', run: newRun })
@@ -269,8 +259,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
+        credentials: 'include',
         body: JSON.stringify({
           model,
           messages: [{ role: 'user', content: prompt.trim() }],
@@ -313,7 +303,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   }
 
   const activeRun = runs.find((r) => r.id === activeRunId) ?? null
-  const canRun = !!getAccessToken() && !!prompt.trim() && !!model
+  const canRun = isLoggedIn() && !!prompt.trim() && !!model
   const isAnyStreaming = runs.some((r) => r.status === 'streaming')
 
   return (
@@ -474,10 +464,10 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
                 )}
 
                 {/* Output */}
-                {(activeRun.tokens.length > 0 || activeRun.status === 'streaming') && (
+                {(activeRun.text.length > 0 || activeRun.status === 'streaming') && (
                   <div className="rounded-md border border-border bg-muted/20 p-3 min-h-[64px]">
                     <div className="text-sm text-foreground font-mono leading-relaxed">
-                      {renderWithMermaid(activeRun.tokens.join(''), activeRun.status === 'streaming')}
+                      {renderWithMermaid(activeRun.text, activeRun.status === 'streaming')}
                     </div>
                   </div>
                 )}

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { login, TEST_CREDENTIALS } from './helpers/auth'
+import { T_SHORT } from './helpers/constants'
 
 test.describe('Authentication', () => {
   test('login with valid credentials redirects to overview', async ({ page }) => {
@@ -16,8 +17,8 @@ test.describe('Authentication', () => {
     // Should stay on login page and show "Invalid username or password" error text
     await expect(page).toHaveURL(/\/login/)
     await expect(
-      page.locator('text=Invalid username or password')
-    ).toBeVisible({ timeout: 5_000 })
+      page.getByText(/invalid username or password/i)
+    ).toBeVisible({ timeout: T_SHORT })
   })
 
   test('unauthenticated access to overview redirects to login', async ({ page }) => {

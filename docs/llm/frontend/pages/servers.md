@@ -1,6 +1,6 @@
 # Web — Servers Page (/servers)
 
-> SSOT | **Last Updated**: 2026-02-28
+> SSOT | **Last Updated**: 2026-03-04
 
 ## Task Guide
 
@@ -12,7 +12,7 @@
 | Change history hour options | `web/app/servers/page.tsx` `HIST_HOUR_OPTIONS` | Tuple of numbers |
 | Add live metric field to server cell | `web/app/servers/page.tsx` `ServerMetricsCell` render | Add field from `NodeMetrics.gpus[n]` |
 | Add pill badge to server header | `web/app/servers/page.tsx` `ServersTable` pill section | Follow SSOT pill pattern |
-| Change empty state text | `web/app/servers/page.tsx` + `web/messages/en.json` `backends.servers.noServers` | Update i18n key in all 3 locales |
+| Change empty state text | `web/app/servers/page.tsx` + `web/messages/en.json` `providers.servers.noServers` | Update i18n key in all 3 locales |
 | Change table page size | `web/app/servers/page.tsx` `PAGE_SIZE` constant | Default: 10 |
 
 ## Key Files
@@ -22,7 +22,7 @@
 | `web/app/servers/page.tsx` | All components + modals for /servers |
 | `web/lib/api.ts` | `api.servers()`, `api.registerServer()`, `api.updateServer()`, `api.deleteServer()`, `api.serverMetrics()`, `api.serverMetricsHistory()` |
 | `web/lib/types.ts` | `GpuServer`, `NodeMetrics`, `ServerMetricsPoint`, `RegisterGpuServerRequest`, `UpdateGpuServerRequest` |
-| `web/messages/en.json` | i18n keys under `backends.servers.*` |
+| `web/messages/en.json` | i18n keys under `providers.servers.*` |
 
 ---
 
@@ -105,8 +105,8 @@ Error → `unreachable` badge (`bg-status-error/10`) + retry button.
 ## RegisterServerModal
 
 Fields:
-- **Name** `*` — required, `t('backends.servers.name')`
-- **node-exporter URL** — optional, `t('backends.servers.nodeExporterUrl')`, placeholder `http://192.168.1.10:9100`
+- **Name** `*` — required, `t('providers.servers.name')`
+- **node-exporter URL** — optional, `t('providers.servers.nodeExporterUrl')`, placeholder `http://192.168.1.10:9100`
 
 Calls: `POST /v1/servers` → invalidates `['servers']`
 
@@ -120,7 +120,7 @@ Calls: `PATCH /v1/servers/{id}` → invalidates `['servers']`
 
 ---
 
-## i18n Keys (messages/en.json → `backends.servers.*`)
+## i18n Keys (messages/en.json → `providers.servers.*`)
 
 ```json
 "title", "name", "nodeExporterUrl", "registeredAt", "liveMetrics", "history",

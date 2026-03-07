@@ -21,9 +21,9 @@ pub enum DomainError {
     #[error("rate limit exceeded: {0}")]
     RateLimitExceeded(String),
 
-    // ── Backend / inference ───────────────────────────────────────────────
+    // ── Provider / inference ──────────────────────────────────────────────
     #[error("provider unavailable: {0}")]
-    BackendUnavailable(String),
+    ProviderUnavailable(String),
 
     #[error("inference failed: {0}")]
     InferenceFailed(String),
@@ -38,21 +38,4 @@ pub enum DomainError {
     // ── Conflict ─────────────────────────────────────────────────────────
     #[error("conflict: {0}")]
     Conflict(String),
-}
-
-impl DomainError {
-    /// HTTP status code for this error variant.
-    pub fn status_code(&self) -> u16 {
-        match self {
-            Self::Validation(_)         => 400,
-            Self::Unauthorized(_)       => 401,
-            Self::Forbidden(_)          => 403,
-            Self::NotFound(_)           => 404,
-            Self::Conflict(_)           => 409,
-            Self::RateLimitExceeded(_)  => 429,
-            Self::BackendUnavailable(_) | Self::InferenceFailed(_) => 502,
-            Self::QueueFull(_)          => 503,
-            Self::Configuration(_)      => 500,
-        }
-    }
 }
