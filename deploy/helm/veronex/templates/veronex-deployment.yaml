@@ -75,12 +75,9 @@ spec:
             - name: BOOTSTRAP_SUPER_PASS
               value: {{ .Values.veronex.bootstrapSuperPass | quote }}
             {{- end }}
-            {{- if .Values.otelCollector.enabled }}
+            {{- if or .Values.otelCollector.enabled .Values.veronex.otel.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://{{ .Release.Name }}-otel-collector:4317"
-            {{- else if .Values.veronex.otel.endpoint }}
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ .Values.veronex.otel.endpoint | quote }}
+              value: {{ include "veronex.otelEndpoint" . | quote }}
             {{- end }}
             {{- range $k, $v := .Values.veronex.env }}
             - name: {{ $k }}

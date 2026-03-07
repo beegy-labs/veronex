@@ -1,18 +1,4 @@
 {{/*
-Expand the name of the chart.
-*/}}
-{{- define "veronex.name" -}}
-{{- .Chart.Name | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
-Create a default fully qualified app name.
-*/}}
-{{- define "veronex.fullname" -}}
-{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" }}
-{{- end }}
-
-{{/*
 Common labels applied to all resources.
 */}}
 {{- define "veronex.labels" -}}
