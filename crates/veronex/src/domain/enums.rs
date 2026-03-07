@@ -39,10 +39,9 @@ impl std::str::FromStr for AccountRole {
 
 // ── Job / API enums ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
 pub enum JobSource {
     #[default]
     Api,
@@ -53,10 +52,9 @@ pub enum JobSource {
 ///
 /// The discriminator is the matched route path — no header convention is used.
 /// This is recorded on every queued job for per-API analytics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
 pub enum ApiFormat {
     /// POST /v1/chat/completions (OpenAI SDK, qwen-code, etc.)
     #[default]
@@ -245,10 +243,9 @@ pub enum ThrottleLevel {
 // ── API Key enums ────────────────────────────────────────────────────────────
 
 /// Billing tier for an API key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
 pub enum KeyTier {
     Free,
     #[default]
@@ -283,10 +280,9 @@ impl std::str::FromStr for KeyTier {
 }
 
 /// API key category: standard (production) or test (dev/testing).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
 pub enum KeyType {
     #[default]
     Standard,

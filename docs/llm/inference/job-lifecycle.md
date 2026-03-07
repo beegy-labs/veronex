@@ -1,15 +1,15 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-03-04
+> SSOT | **Last Updated**: 2026-03-07
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Change job status flow | `domain/enums.rs` → `JobStatus` + all `match` arms in `use_cases/inference.rs` | |
+| Change job status flow | `domain/enums.rs` → `JobStatus` + all `match` arms in `use_cases/inference/runner.rs` | |
 | Add new DB column to inference_jobs | `migrations/` + `domain/entities/mod.rs` + `persistence/job_repository.rs` `save()` | |
-| Change queue keys or poll interval | `application/use_cases/inference.rs` → `QUEUE_KEY_API_PAID` / `QUEUE_KEY_API` / `QUEUE_KEY_TEST` constants + `queue_dispatcher_loop()` | |
-| Change how tokens are counted | `application/use_cases/inference.rs` → `run_job()` token processing block (streaming loop) | |
+| Change queue keys or poll interval | `domain/constants.rs` → `QUEUE_JOBS*` constants + `use_cases/inference/dispatcher.rs` → `queue_dispatcher_loop()` | |
+| Change how tokens are counted | `use_cases/inference/runner.rs` → `run_job()` token processing block (streaming loop) | |
 | Add field to job list/detail response | See `docs/llm/inference/job-api.md` | |
 | Export training data | See `docs/llm/inference/session-grouping.md` | |
 
@@ -19,7 +19,7 @@
 |------|---------|
 | `crates/veronex/src/domain/entities/mod.rs` | `InferenceJob` entity |
 | `crates/veronex/src/domain/enums.rs` | `JobStatus`, `ProviderType`, `JobSource` |
-| `crates/veronex/src/application/use_cases/inference.rs` | `InferenceUseCaseImpl` (submit, stream, dispatch loop) |
+| `crates/veronex/src/application/use_cases/inference/` | Module: `use_case.rs` (submit, stream), `dispatcher.rs` (queue loop), `runner.rs` (run_job), `helpers.rs` (broadcast, TPM) |
 | `crates/veronex/src/infrastructure/outbound/persistence/job_repository.rs` | `PostgresJobRepository` (UPSERT) |
 | `crates/veronex/src/infrastructure/outbound/provider_router.rs` | `DynamicProviderRouter` (dispatch/routing only) |
 | `crates/veronex/src/domain/value_objects.rs` | `JobStatusEvent` — real-time event struct |
@@ -75,11 +75,11 @@ queue_dispatcher_loop:
 - API routes (source=Api) enqueue to `:paid` or `:jobs` based on `key.tier`.
 - Test Run routes (source=Test) always enqueue to `:test`.
 
-Constants in `application/use_cases/inference.rs`:
+Constants in `domain/constants.rs`:
 ```rust
-const QUEUE_KEY_API_PAID: &str = "veronex:queue:jobs:paid";   // tier="paid"
-const QUEUE_KEY_API:      &str = "veronex:queue:jobs";         // tier="free"/standard
-const QUEUE_KEY_TEST:     &str = "veronex:queue:jobs:test";    // source=Test
+pub const QUEUE_JOBS_PAID: &str = "veronex:queue:jobs:paid";   // tier="paid"
+pub const QUEUE_JOBS:      &str = "veronex:queue:jobs";         // tier="free"/standard
+pub const QUEUE_JOBS_TEST: &str = "veronex:queue:jobs:test";    // source=Test
 ```
 
 - `submit()` selects queue by `key_tier` (for Api source) or `source=Test`.
@@ -139,14 +139,18 @@ stream()      // token buffer + tokio::Notify (no polling, no broadcast channel)
 The live token buffer and job status are held in `Arc<DashMap<Uuid, JobEntry>>` (not Postgres):
 
 ```rust
-// application/use_cases/inference.rs
-struct JobEntry {
-    tokens: Vec<InferenceToken>,   // Vec::with_capacity(256) — avoids repeated realloc
-    notify: Arc<Notify>,           // wakes stream() consumers on new token
-    cancel_notify: Arc<Notify>,    // wakes run_job() cancel branch
-    status: JobStatus,
-    done: bool,
-    tpm_reservation_minute: Option<i64>, // minute bucket for TPM adjustment
+// application/use_cases/inference/mod.rs
+pub(crate) struct JobEntry {
+    pub job: InferenceJob,
+    pub status: JobStatus,
+    pub tokens: Vec<StreamToken>,      // Vec::with_capacity(256) — avoids repeated realloc
+    pub notify: Arc<Notify>,           // wakes stream() consumers on new token
+    pub cancel_notify: Arc<Notify>,    // wakes run_job() cancel branch
+    pub done: bool,
+    pub api_key_id: Option<Uuid>,
+    pub gemini_tier: Option<String>,
+    pub key_tier: Option<KeyTier>,
+    pub tpm_reservation_minute: Option<i64>, // minute bucket for TPM adjustment
 }
 ```
 

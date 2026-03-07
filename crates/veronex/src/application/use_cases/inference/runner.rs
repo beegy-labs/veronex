@@ -189,7 +189,7 @@ pub(super) async fn run_job(
                 // Periodic owner TTL refresh
                 if ts.last_owner_refresh.elapsed() >= OWNER_REFRESH_INTERVAL {
                     if let Some(ref vk) = valkey {
-                        let key = crate::infrastructure::outbound::valkey_keys::job_owner(uuid);
+                        let key = crate::domain::constants::job_owner_key(uuid);
                         let _ = vk.kv_set(&key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, true).await;
                     }
                     ts.last_owner_refresh = std::time::Instant::now();
@@ -262,7 +262,7 @@ pub(super) async fn run_job(
 
     // Ownership guard: prevent double-write if reaper re-enqueued
     if let Some(ref vk) = valkey {
-        let owner_key = crate::infrastructure::outbound::valkey_keys::job_owner(uuid);
+        let owner_key = crate::domain::constants::job_owner_key(uuid);
         if let Ok(Some(id)) = vk.kv_get(&owner_key).await
             && id != instance_id.as_ref() {
                 tracing::warn!(%uuid, current_owner = %id, "ownership lost — aborting");

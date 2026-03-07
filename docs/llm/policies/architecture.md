@@ -33,7 +33,8 @@ crates/veronex/src/
 │   ├── ports/
 │   │   ├── inbound/     # InferenceUseCase (driving port)
 │   │   └── outbound/    # all outbound port traits
-│   └── use_cases/       # InferenceUseCaseImpl
+│   └── use_cases/
+│       └── inference/   # mod.rs (JobEntry), use_case.rs, dispatcher.rs, runner.rs, helpers.rs
 │
 ├── infrastructure/
 │   ├── inbound/http/    # Axum handlers, middleware, router, AppState, error.rs
@@ -47,7 +48,7 @@ crates/veronex/src/
 │       ├── observability/      # HttpObservabilityAdapter + HttpAuditAdapter (fail-open → veronex-analytics)
 │       ├── analytics/          # HttpAnalyticsClient (GET from veronex-analytics)
 │       ├── pubsub/             # Cross-instance relay (Valkey Streams + Pub/Sub) + reaper (crash recovery)
-│       ├── valkey_keys.rs      # SSOT for all `veronex:*` key patterns (queues, leases, rate limits)
+│       ├── valkey_keys.rs      # Valkey key patterns (infra-only helpers; queue names live in domain/constants.rs)
 │       └── capacity/           # VramPool, DistributedVramPool, ThermalThrottleMap, CapacityAnalyzer
 │
 └── main.rs              # Composition root — wires all adapters

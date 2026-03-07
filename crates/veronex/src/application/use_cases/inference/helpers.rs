@@ -94,7 +94,7 @@ pub async fn record_tpm(
     }
 
     let minute = reservation_minute.unwrap_or_else(|| chrono::Utc::now().timestamp() / 60);
-    let key = crate::infrastructure::outbound::valkey_keys::ratelimit_tpm(api_key_id, minute);
+    let key = crate::domain::constants::ratelimit_tpm_key(api_key_id, minute);
     valkey.incr_by(&key, adjustment).await?;
     Ok(())
 }
