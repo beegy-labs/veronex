@@ -14,6 +14,12 @@ pub enum DomainError {
     #[error("unauthorized: {0}")]
     Unauthorized(String),
 
+    #[error("expired API key: {0}")]
+    ExpiredKey(String),
+
+    #[error("invalid API key")]
+    InvalidKey,
+
     #[error("forbidden: {0}")]
     Forbidden(String),
 

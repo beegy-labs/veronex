@@ -138,6 +138,7 @@ externalValkey:
   host: ""
   port: 6379
   password: ""  # Optional — leave empty for no auth
+  db: 0         # Valkey DB index (0-15)
 
 clickhouse:
   enabled: true
