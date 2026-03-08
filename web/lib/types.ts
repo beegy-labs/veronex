@@ -520,6 +520,15 @@ export interface PatchLabSettings {
   gemini_function_calling?: boolean
 }
 
+/** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/capacity/queue/lab queries. */
+export interface DashboardOverview {
+  stats: DashboardStats
+  performance: PerformanceStats
+  capacity: CapacityResponse
+  queue_depth: QueueDepth
+  lab: LabSettings
+}
+
 export interface AuditEvent {
   event_time: string
   account_id: string
