@@ -77,7 +77,7 @@ pub(super) async fn pg_aggregate_usage(pool: &sqlx::PgPool, hours: u32) -> Resul
          FROM inference_jobs
          WHERE created_at >= NOW() - make_interval(hours => $1)"
     )
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_one(pool)
     .await?;
 
@@ -115,7 +115,7 @@ pub(super) async fn pg_key_usage_hourly(
          ORDER BY hour"
     )
     .bind(key_id)
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_all(pool)
     .await?;
 
@@ -147,7 +147,7 @@ pub(super) async fn pg_analytics_summary(pool: &sqlx::PgPool, hours: u32) -> Res
          WHERE created_at >= NOW() - make_interval(hours => $1)
            AND status = 'completed'"
     )
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_one(pool)
     .await?;
 
@@ -170,7 +170,7 @@ pub(super) async fn pg_analytics_summary(pool: &sqlx::PgPool, hours: u32) -> Res
          ORDER BY request_count DESC
          LIMIT 50"
     )
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_all(pool)
     .await?;
 
@@ -196,7 +196,7 @@ pub(super) async fn pg_analytics_summary(pool: &sqlx::PgPool, hours: u32) -> Res
          GROUP BY status
          ORDER BY count DESC"
     )
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_all(pool)
     .await?;
 
@@ -242,7 +242,7 @@ pub(super) async fn pg_key_usage_jobs(
          LIMIT 500"
     )
     .bind(key_id)
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_all(pool)
     .await?;
 
@@ -277,7 +277,7 @@ pub(super) async fn pg_key_model_breakdown(
            AND created_at > NOW() - make_interval(hours => $2)"
     )
     .bind(key_id)
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_one(pool)
     .await?;
     let total: i64 = total_row.try_get("total").unwrap_or(1).max(1);
@@ -307,7 +307,7 @@ pub(super) async fn pg_key_model_breakdown(
          LIMIT 50"
     ))
     .bind(key_id)
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_all(pool)
     .await?;
 
@@ -362,7 +362,7 @@ pub(super) async fn pg_usage_breakdown(
          GROUP BY j.provider_type, j.provider_type, pricing.input_per_1m, pricing.output_per_1m
          ORDER BY request_count DESC",
     )
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_all(pool)
     .await?;
 
@@ -410,7 +410,7 @@ pub(super) async fn pg_usage_breakdown(
          GROUP BY k.id, k.name, k.key_prefix
          ORDER BY request_count DESC",
     ))
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_all(pool)
     .await?;
 
@@ -459,7 +459,7 @@ pub(super) async fn pg_usage_breakdown(
          GROUP BY j.model_name, j.provider_type
          ORDER BY request_count DESC",
     ))
-    .bind(hours as f64)
+    .bind(hours as i32)
     .fetch_all(pool)
     .await?;
 
