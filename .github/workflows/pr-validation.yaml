@@ -25,7 +25,6 @@ jobs:
             echo "❌ ERROR: PRs must target 'develop' or 'main', not '${BASE}'"
             exit 1
           fi
-          # main ← develop only (release merge)
           if [ "$BASE" = "main" ]; then
             HEAD="${{ github.head_ref }}"
             if [ "$HEAD" != "develop" ]; then
@@ -108,17 +107,59 @@ jobs:
 
           echo "✅ No secrets detected"
 
-      - name: Summary
-        if: success()
-        run: |
-          echo ""
-          echo "=========================================="
-          echo "✅ All validation checks passed!"
-          echo "=========================================="
-          echo ""
-          echo "Checks completed:"
-          echo "  ✅ Target branch validation"
-          echo "  ✅ Commit message format"
-          echo "  ✅ Secrets scanning"
-          echo ""
-          echo "PR is ready for review!"
+  changes:
+    name: Detect Changes
+    runs-on: arc-runner-set
+    timeout-minutes: 5
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            web:
+              - 'web/**'
+
+  test-api:
+    name: Test API
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: arc-runner-set
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run tests
+        run: SQLX_OFFLINE=true RUST_LOG=error cargo test --all
+
+  test-web:
+    name: Test Web
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: arc-runner-set
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+      - name: Type check
+        working-directory: web
+        run: npx tsc --noEmit
+      - name: Unit tests
+        working-directory: web
+        run: npx vitest run

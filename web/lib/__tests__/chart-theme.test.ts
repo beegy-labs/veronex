@@ -75,11 +75,11 @@ describe('fmtMsNullable', () => {
 })
 
 describe('fmtPct', () => {
-  it('formats ratio as percentage', () => {
+  it('formats percentage value', () => {
     expect(fmtPct(0)).toBe('0%')
-    expect(fmtPct(0.5)).toBe('50%')
-    expect(fmtPct(0.956)).toBe('96%')
-    expect(fmtPct(1)).toBe('100%')
+    expect(fmtPct(50)).toBe('50%')
+    expect(fmtPct(95.6)).toBe('96%')
+    expect(fmtPct(100)).toBe('100%')
   })
 })
 
