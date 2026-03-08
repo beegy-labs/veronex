@@ -108,17 +108,57 @@ jobs:
 
           echo "✅ No secrets detected"
 
-      - name: Summary
-        if: success()
-        run: |
-          echo ""
-          echo "=========================================="
-          echo "✅ All validation checks passed!"
-          echo "=========================================="
-          echo ""
-          echo "Checks completed:"
-          echo "  ✅ Target branch validation"
-          echo "  ✅ Commit message format"
-          echo "  ✅ Secrets scanning"
-          echo ""
-          echo "PR is ready for review!"
+  changes:
+    name: Detect Changes
+    runs-on: arc-runner-set
+    timeout-minutes: 5
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            web:
+              - 'web/**'
+
+  test-api:
+    name: Test API
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: arc-runner-set
+    timeout-minutes: 30
+    container:
+      image: rust:1-alpine
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: apk add --no-cache musl-dev
+      - name: Run tests
+        run: SQLX_OFFLINE=true RUST_LOG=error cargo test --all
+
+  test-web:
+    name: Test Web
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: arc-runner-set
+    timeout-minutes: 15
+    container:
+      image: node:22-alpine
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+      - name: Type check
+        working-directory: web
+        run: npx tsc --noEmit
+      - name: Unit tests
+        working-directory: web
+        run: npx vitest run
