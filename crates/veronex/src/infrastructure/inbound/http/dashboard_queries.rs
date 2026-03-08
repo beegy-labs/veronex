@@ -319,7 +319,7 @@ pub(super) async fn fetch_jobs(
 #[allow(clippy::unwrap_used)]
 pub(super) async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<PerformanceMetrics, AppError> {
     use sqlx::Row;
-    let hours_f64 = hours as f64;
+    let hours_i32 = hours as i32;
 
     // Percentiles + aggregates from completed jobs
     let agg = sqlx::query(
@@ -335,7 +335,7 @@ pub(super) async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<Pe
          WHERE created_at >= NOW() - make_interval(hours => $1)
            AND latency_ms IS NOT NULL AND latency_ms > 0"
     )
-    .bind(hours_f64)
+    .bind(hours_i32)
     .fetch_one(pool)
     .await?;
 
@@ -360,7 +360,7 @@ pub(super) async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<Pe
          GROUP BY DATE_TRUNC('hour', created_at)
          ORDER BY hour"
     )
-    .bind(hours_f64)
+    .bind(hours_i32)
     .fetch_all(pool)
     .await?;
 
