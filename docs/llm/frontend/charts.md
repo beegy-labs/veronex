@@ -1,6 +1,6 @@
 # Web — Chart System
 
-> SSOT | **Last Updated**: 2026-03-02 (rev: recharts 3.7 — no breaking changes for this codebase; formatter rule unchanged)
+> SSOT | **Last Updated**: 2026-03-08 (rev: recharts 3.7 — no breaking changes for this codebase; formatter rule unchanged)
 
 ## Overview
 
@@ -31,6 +31,7 @@ web/components/donut-chart.tsx  ← shared DonutChart component
 | Add a donut/pie chart | Use `<DonutChart>` from `@/components/donut-chart` | Never inline `<PieChart>` in pages |
 | Add a bar/line/area chart | Import theme constants from `@/lib/chart-theme` | Apply to XAxis, YAxis, Tooltip, Legend |
 | Add a new chart style constant | `web/lib/chart-theme.ts` | Export a named const with a JSDoc comment |
+| Format numbers compactly | Use `fmtCompact(n)` from `chart-theme.ts` | 1234→"1.2K", 77.8→"77.8", 999→"999". Decimals capped at 1dp |
 
 ---
 
@@ -195,11 +196,28 @@ import {
 
 ---
 
+## Dual Y-Axis Pattern
+
+When two series have vastly different scales (e.g. requests ~26 vs tokens ~543K), use dual Y-axes:
+
+```tsx
+<YAxis yAxisId="left" tick={AXIS_TICK} axisLine={false} tickLine={false} width={40} tickFormatter={fmtCompact} />
+<YAxis yAxisId="right" orientation="right" tick={AXIS_TICK} axisLine={false} tickLine={false} width={50} tickFormatter={fmtCompact} />
+<Area yAxisId="left" dataKey="requests" ... />
+<Area yAxisId="right" dataKey="tokens" ... />
+```
+
+Used in:
+- `usage/components/overview-tab.tsx` — requests (left) vs tokens (right)
+- `usage/components/by-key-tab.tsx` — prompt tokens (left) vs completion tokens (right)
+
+---
+
 ## Pages Using Charts
 
 | Page | Chart Types | Notes |
 |------|-------------|-------|
-| `web/app/usage/page.tsx` | DonutChart × 2, AreaChart, BarChart | Uses `DonutChart` component |
+| `web/app/usage/page.tsx` | DonutChart × 2, AreaChart (dual Y), BarChart | Uses `DonutChart` component |
 | `web/app/overview/page.tsx` | AreaChart | |
 | `web/app/performance/page.tsx` | LineChart, BarChart | |
 

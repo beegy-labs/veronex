@@ -1,6 +1,6 @@
 # Web -- Providers Page: Ollama Components
 
-> SSOT | **Last Updated**: 2026-03-06 | Companion to `providers.md`
+> SSOT | **Last Updated**: 2026-03-08 | Companion to `providers.md`
 
 ## OllamaServerMetrics
 
@@ -64,7 +64,8 @@ No props. Placed after `<OllamaSyncSection />` in OllamaTab.
 
 | Field | Detail |
 |-------|--------|
-| `analyzerModel` | `<select>` from `settings.available_models` (Ollama /api/tags) |
+| `providerFilter` | `<select>` filters analyzer model list by provider type (all/ollama/gemini); Gemini hidden when `gemini_function_calling` lab feature disabled |
+| `analyzerModel` | `<select>` from `settings.available_models` grouped by provider type (Ollama/Gemini) |
 | `syncEnabled` | Switch; off = auto-sync paused (manual sync still works) |
 | `syncIntervalSecs` | Number input (min: 60, step: 30) |
 | `probePermits` | Number input; AIMD probe: +N(위로 탐색), -N(아래로 탐색), 0=비활성 |

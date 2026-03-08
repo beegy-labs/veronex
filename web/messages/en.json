@@ -18,6 +18,7 @@
     "audit": "Audit Log"
   },
   "common": {
+    "all": "All",
     "loading": "Loading…",
     "empty": "No data yet.",
     "error": "Failed to load data",

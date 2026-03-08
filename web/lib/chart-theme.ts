@@ -65,7 +65,7 @@ export const CURSOR_STROKE = { stroke: 'var(--theme-border)' }
 export function fmtCompact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
+  return Number.isInteger(n) ? String(n) : n.toFixed(1)
 }
 
 // ── Duration / latency formatters ────────────────────────────────────────────
