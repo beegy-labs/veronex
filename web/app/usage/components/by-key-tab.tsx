@@ -135,11 +135,12 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
                             </linearGradient>
                           </defs>
                           <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
-                          <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={45} tickFormatter={fmtCompact} />
+                          <YAxis yAxisId="left" tick={AXIS_TICK} axisLine={false} tickLine={false} width={45} tickFormatter={fmtCompact} />
+                          <YAxis yAxisId="right" orientation="right" tick={AXIS_TICK} axisLine={false} tickLine={false} width={50} tickFormatter={fmtCompact} />
                           <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => fmtCompact(Number(v))} />
                           <Legend wrapperStyle={LEGEND_STYLE} />
-                          <Area type="monotone" dataKey="prompt" name={t('usage.prompt')}     stroke="var(--theme-primary)"      fill="url(#gradPrompt)" strokeWidth={2} dot={false} />
-                          <Area type="monotone" dataKey="compl"  name={t('usage.completion')} stroke="var(--theme-status-info)"  fill="url(#gradCompl)"  strokeWidth={2} dot={false} />
+                          <Area yAxisId="left" type="monotone" dataKey="prompt" name={t('usage.prompt')}     stroke="var(--theme-primary)"      fill="url(#gradPrompt)" strokeWidth={2} dot={false} />
+                          <Area yAxisId="right" type="monotone" dataKey="compl"  name={t('usage.completion')} stroke="var(--theme-status-info)"  fill="url(#gradCompl)"  strokeWidth={2} dot={false} />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>

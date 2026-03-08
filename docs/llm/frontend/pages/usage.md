@@ -8,8 +8,8 @@ KPI row (always visible) then tabs:
 
 | Tab | Contents |
 |-----|----------|
-| `overview` | Global request+token trend (AreaChart), token donut, analytics KPIs (TPS, avg tokens), finish reasons donut, model distribution bar |
-| `by-key` | Key breakdown table (clickable), selected-key detail: hourly charts + key model breakdown |
+| `overview` | Global request+token trend (AreaChart, dual Y-axis: left=requests, right=tokens), token donut, analytics KPIs (TPS, avg tokens), finish reasons donut, model distribution bar |
+| `by-key` | Key breakdown table (clickable), selected-key detail: hourly charts (dual Y-axis: left=prompt, right=completion tokens) + key model breakdown |
 | `by-model` | Search input, model breakdown table, model latency horizontal bar |
 | `by-provider` | Provider breakdown cards (2-col grid) |
 

@@ -48,6 +48,13 @@ All ClickHouse-dependent endpoints use **ClickHouse primary + PG fallback**: if 
 
 Sorted ascending by `avg_latency_ms` (fastest first).
 
+## Success Rate Scale
+
+Backend returns `success_rate` on a **0-100 scale** (not 0-1). Frontend formatters:
+- `fmtPct(n)` — renders `Math.round(n)%` directly (no `*100`)
+- `successRateCls(rate)` — thresholds at 99/95 (not 0.99/0.95)
+- `errorCount` — `total_requests - Math.round(success_rate / 100 * total_requests)`
+
 ## TPS Trend Computation
 
 Per-hour TPS is estimated as:

@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
 import { fmtMbShort } from '@/lib/chart-theme'
+import { useLabSettings } from '@/components/lab-settings-provider'
 
 export function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
   const { t } = useTranslation()
@@ -59,10 +60,13 @@ export function VramBar({ used, total }: { used: number; total: number }) {
 export function OllamaCapacitySection() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const { labSettings } = useLabSettings()
+  const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   const { data: capacityData, isLoading: capacityLoading } = useQuery(capacityQuery)
   const { data: settings } = useQuery(syncSettingsQuery)
 
+  const [providerFilter, setProviderFilter] = useState<string>('all')
   const [analyzerModel, setAnalyzerModel] = useState<string>('')
   const [syncEnabled, setSyncEnabled] = useState<boolean>(true)
   const [intervalSecs, setIntervalSecs] = useState<string>('')
@@ -113,7 +117,15 @@ export function OllamaCapacitySection() {
   const providers = capacityData?.providers ?? []
   const lastRunAt = settings?.last_run_at
   const lastRunStatus = settings?.last_run_status
-  const availableModels = settings?.available_models ?? {}
+  const allModels = settings?.available_models ?? {}
+
+  // Filter: hide gemini when lab feature is off, apply provider filter
+  const availableModels = Object.fromEntries(
+    Object.entries(allModels)
+      .filter(([p]) => p !== 'gemini' || geminiEnabled)
+      .filter(([p]) => providerFilter === 'all' || p === providerFilter)
+  )
+  const providerOptions = Object.keys(allModels).filter(p => p !== 'gemini' || geminiEnabled)
 
   function fmtRelativeTime(iso: string | null) {
     if (!iso) return t('providers.capacity.never')
@@ -164,6 +176,22 @@ export function OllamaCapacitySection() {
           </div>
 
           <div className="flex items-end gap-3 flex-wrap">
+            {providerOptions.length > 1 && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">{t('usage.providerCol')}</Label>
+                <Select value={providerFilter} onValueChange={setProviderFilter}>
+                  <SelectTrigger className="h-8 text-sm w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">{t('common.all')}</SelectItem>
+                    {providerOptions.map((p) => (
+                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1 min-w-44">
               <Label className="text-xs text-muted-foreground">{t('providers.capacity.analyzerModel')}</Label>
               <Select value={analyzerModel} onValueChange={setAnalyzerModel}>

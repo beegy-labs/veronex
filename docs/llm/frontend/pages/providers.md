@@ -7,7 +7,7 @@
 | Task | File | What to change |
 |------|------|----------------|
 | Add new Gemini query key | `web/app/providers/page.tsx` `GEMINI_QUERY_KEYS` constant | Add key, use in query + add to `refreshGeminiData()` |
-| Change capacity analyzer model options | `web/app/providers/page.tsx` `OllamaCapacitySection` -- `<select>` maps `available_models` | Models come from `GET /v1/dashboard/capacity/settings` `available_models` (Ollama /api/tags) |
+| Change capacity analyzer model options | `web/app/providers/components/ollama-capacity-section.tsx` | Models from `GET /v1/dashboard/capacity/settings` `available_models: Record<string, string[]>` grouped by provider type. Provider filter Select + analyzer model Select. Gemini hidden when `gemini_function_calling` lab feature disabled |
 | Change capacity refresh interval | `web/app/providers/page.tsx` `OllamaCapacitySection` -- `useQuery` capacity query | Default: no auto-refetch (manual Sync Now) |
 | Add action button to Ollama provider row | `web/app/providers/page.tsx` `OllamaTab` row actions | Same pattern as existing actions |
 | Add action button to Gemini paid provider row | `web/app/providers/page.tsx` `GeminiTab` Gemini API Keys Table | Paid vs free tier conditional (`!provider.is_free_tier`) |
