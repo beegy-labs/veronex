@@ -148,6 +148,8 @@ Change via admin web `/providers?s=gemini` — no code change needed.
 
 ## `provider_type` Field → Tier Filter Mapping
 
+`is_free_tier: true` on the `LlmProvider` entity marks Google free-tier projects. RPM/RPD limits are defined in `gemini_rate_limit_policies`. When a policy has `available_on_free_tier = false`, free-tier providers are skipped entirely and requests route directly to paid providers.
+
 | `provider_type` field value | `tier_filter` | Behavior |
 |----------------------------|--------------|----------|
 | `"gemini-free"` | `Some("free")` | Free providers only, paid_providers = [] |
