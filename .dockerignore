@@ -1,0 +1,8 @@
+target
+web/node_modules
+web/.next
+*.tsbuildinfo
+.git
+docs
+.specs
+.ai
