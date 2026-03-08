@@ -1,0 +1,18 @@
+dependencies:
+- name: postgresql
+  repository: https://charts.bitnami.com/bitnami
+  version: 18.5.5
+- name: valkey
+  repository: https://charts.bitnami.com/bitnami
+  version: 5.4.3
+- name: clickhouse
+  repository: https://charts.bitnami.com/bitnami
+  version: 9.4.4
+- name: minio
+  repository: https://charts.bitnami.com/bitnami
+  version: 17.0.21
+- name: redpanda
+  repository: https://charts.redpanda.com
+  version: 25.3.2
+digest: sha256:329161d944077a7a42532c6dd36406a266c443bc5b3852b6a12e94be0e72d5d8
+generated: "2026-03-07T21:23:03.547782+09:00"

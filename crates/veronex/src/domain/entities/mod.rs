@@ -1,0 +1,409 @@
+pub mod account;
+pub use account::Account;
+
+pub mod session;
+pub use session::Session;
+
+pub mod api_key;
+pub use api_key::*;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+use uuid::Uuid;
+
+use super::enums::{
+    ApiFormat, FinishReason, JobSource, JobStatus, LlmProviderStatus, ProviderType,
+};
+use super::value_objects::{JobId, ModelName, Prompt};
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
+pub struct InferenceJob {
+    pub id: JobId,
+    pub prompt: Prompt,
+    pub model_name: ModelName,
+    pub status: JobStatus,
+    pub provider_type: ProviderType,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+    /// Full concatenated output of the inference. Populated on completion so the
+    /// result can be replayed after a server restart (since the token buffer is
+    /// in-memory only).
+    #[serde(default)]
+    pub result_text: Option<String>,
+    /// The API key that submitted this job. `None` for Test Run jobs.
+    #[serde(default)]
+    pub api_key_id: Option<Uuid>,
+    /// The account that submitted this job via Test Run (JWT). `None` for API key jobs.
+    #[serde(default)]
+    pub account_id: Option<Uuid>,
+    /// Inference execution latency in ms (started_at → completed_at).
+    /// `None` while the job is pending/running.
+    #[serde(default)]
+    pub latency_ms: Option<i32>,
+    /// Time to first token in ms (started_at → first token received).
+    /// `None` while pending/running or not yet measured.
+    #[serde(default)]
+    pub ttft_ms: Option<i32>,
+    /// Number of prompt (input) tokens.
+    /// `None` while pending/running or if not reported by provider.
+    #[serde(default)]
+    pub prompt_tokens: Option<i32>,
+    /// Number of completion (output) tokens generated.
+    /// `None` while pending/running.
+    #[serde(default)]
+    pub completion_tokens: Option<i32>,
+    /// Tokens served from cache (Gemini `cachedContentTokenCount`).
+    /// Always `None` for Ollama (not exposed by API).
+    #[serde(default)]
+    pub cached_tokens: Option<i32>,
+    /// Whether this job came from the test panel or a real API client.
+    #[serde(default)]
+    pub source: JobSource,
+    /// The specific provider instance (Ollama server) that processed this job.
+    /// `None` until dispatched. Set by the queue dispatcher before running.
+    #[serde(default)]
+    pub provider_id: Option<Uuid>,
+    /// Which API format the inbound request arrived via (route-based discriminator).
+    #[serde(default)]
+    pub api_format: ApiFormat,
+    /// Full LLM input context — complete messages array in Ollama `/api/chat` format.
+    ///
+    /// Contains: system prompt + prior turns (user/assistant/tool) + current user message.
+    /// When Some, the OllamaAdapter routes to `/api/chat`; when None, to `/api/generate`.
+    ///
+    /// Persisted to DB as `messages_json JSONB` (migration 000045).
+    /// Serves as ground-truth training input: input=messages_json, output=result_text+tool_calls_json.
+    /// Can reach 100–500 KB for agentic sessions with large file contents.
+    #[serde(default)]
+    pub messages: Option<serde_json::Value>,
+    /// Tool/function definitions forwarded from the client (OpenAI or Ollama format).
+    /// Passed to the provider so it can produce proper `tool_calls` responses.
+    /// Not persisted to DB — in-memory only during dispatch.
+    #[serde(default)]
+    pub tools: Option<serde_json::Value>,
+    /// The HTTP path of the inbound request that created this job.
+    /// e.g. "/v1/chat/completions", "/api/chat", "/v1beta/models/gemini-2.0-flash:generateContent"
+    /// Not set for jobs recovered on startup.
+    #[serde(default)]
+    pub request_path: Option<String>,
+    /// Time the job spent waiting in the Valkey queue before dispatch (ms).
+    /// Computed as `started_at - created_at` when the job transitions to Running.
+    /// `None` while pending (not yet dispatched).
+    #[serde(default)]
+    pub queue_time_ms: Option<i32>,
+    /// Timestamp when a cancellation request was received.
+    /// Set by `InferenceUseCaseImpl::cancel()` for non-terminal jobs.
+    /// `None` if the job was never cancelled.
+    #[serde(default)]
+    pub cancelled_at: Option<DateTime<Utc>>,
+    /// Client-supplied conversation / thread ID (from X-Conversation-ID header).
+    /// Groups all LLM turns that belong to one agent session.
+    /// NULL for single-turn requests or clients that do not send the header.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    /// Structured tool calls returned by the model (JSONB in DB).
+    /// Ollama format: `[{function: {name, arguments}}]`
+    /// Populated when the model made at least one tool call; None for text-only responses.
+    #[serde(default)]
+    pub tool_calls_json: Option<serde_json::Value>,
+    /// Blake2b-256 hex hash of the full messages array.
+    /// Used for session grouping (conversation chain detection).
+    #[serde(default)]
+    pub messages_hash: Option<String>,
+    /// Blake2b-256 hex hash of messages[0..n-1] (all turns except last).
+    /// Empty string = first turn (no parent). Used to link child → parent in a session.
+    #[serde(default)]
+    pub messages_prefix_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceResult {
+    pub job_id: JobId,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    /// Tokens served from cache (e.g. Gemini `cachedContentTokenCount`).
+    /// Billed at a lower rate than regular prompt tokens.
+    /// `None` if the provider does not expose this metric (Ollama).
+    pub cached_tokens: Option<u32>,
+    pub latency_ms: u32,
+    pub ttft_ms: Option<u32>,
+    pub tokens: Vec<String>,
+    pub finish_reason: FinishReason,
+}
+
+/// Physical GPU server (one node-exporter per host).
+///
+/// `node_exporter_url` is the only connection point to the hardware.
+/// CPU / memory / GPU metrics are fetched live from that endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
+pub struct GpuServer {
+    pub id: Uuid,
+    pub name: String,
+    /// node-exporter endpoint, e.g. `"http://192.168.1.10:9100"`.
+    pub node_exporter_url: Option<String>,
+    pub registered_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
+pub struct LlmProvider {
+    pub id: Uuid,
+    pub name: String,
+    pub provider_type: ProviderType,
+    pub url: String,
+    pub api_key_encrypted: Option<String>,
+    pub is_active: bool,
+    /// GPU VRAM capacity in MiB (manual). 0 = unknown → treat as unlimited for dispatch.
+    pub total_vram_mb: i64,
+    /// GPU index on this host (0-based). Correlates with node-exporter drm/hwmon metrics.
+    /// `None` = GPU 0 / not specified.
+    #[serde(default)]
+    pub gpu_index: Option<i16>,
+    /// FK → gpu_servers. `None` for cloud providers (Gemini, etc.).
+    #[serde(default)]
+    pub server_id: Option<Uuid>,
+    /// veronex-agent URL (Phase 2, currently unused).
+    /// e.g. `http://192.168.1.10:9091`
+    #[serde(default)]
+    pub agent_url: Option<String>,
+    /// true = key is on a Google free-tier project.
+    /// RPM/RPD limits are read from `gemini_rate_limit_policies` (per model, shared).
+    #[serde(default)]
+    pub is_free_tier: bool,
+    pub status: LlmProviderStatus,
+    pub registered_at: DateTime<Utc>,
+}
+
+/// Per-model Gemini rate limit policy (shared across all free-tier providers).
+///
+/// Stored in `gemini_rate_limit_policies` and editable from the admin UI.
+/// `model_name = "*"` is the global fallback used when no model-specific row exists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiRateLimitPolicy {
+    pub id: Uuid,
+    /// e.g. "gemini-2.5-flash" or "*" (global default)
+    pub model_name: String,
+    /// Max requests per minute (0 = no enforcement)
+    pub rpm_limit: i32,
+    /// Max requests per day (0 = no enforcement)
+    pub rpd_limit: i32,
+    /// Whether this model can be used on a Google free-tier project.
+    /// When false: skip all free-tier providers and route directly to a paid provider.
+    /// RPM/RPD counters are also suppressed for paid providers.
+    pub available_on_free_tier: bool,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn make_inference_job() -> InferenceJob {
+        InferenceJob {
+            id: JobId::new(),
+            prompt: Prompt::new("What is Rust?").unwrap(),
+            model_name: ModelName::new("llama3.2").unwrap(),
+            status: JobStatus::Pending,
+            provider_type: ProviderType::Ollama,
+            created_at: Utc::now(),
+            started_at: None,
+            completed_at: None,
+            error: None,
+            result_text: None,
+            api_key_id: None,
+            account_id: None,
+            latency_ms: None,
+            ttft_ms: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            source: JobSource::Api,
+            provider_id: None,
+            api_format: ApiFormat::OpenaiCompat,
+            messages: None,
+            tools: None,
+            request_path: None,
+            queue_time_ms: None,
+            cancelled_at: None,
+            conversation_id: None,
+            tool_calls_json: None,
+            messages_hash: None,
+            messages_prefix_hash: None,
+        }
+    }
+
+    fn make_llm_provider() -> LlmProvider {
+        LlmProvider {
+            id: Uuid::now_v7(),
+            name: "local-ollama".to_string(),
+            provider_type: ProviderType::Ollama,
+            url: "http://localhost:11434".to_string(),
+            api_key_encrypted: None,
+            is_active: true,
+            total_vram_mb: 24576,
+            gpu_index: None,
+            server_id: None,
+            agent_url: None,
+            is_free_tier: false,
+            status: LlmProviderStatus::Online,
+            registered_at: Utc::now(),
+        }
+    }
+
+    fn make_inference_result() -> InferenceResult {
+        InferenceResult {
+            job_id: JobId::new(),
+            prompt_tokens: 10,
+            completion_tokens: 50,
+            cached_tokens: None,
+            latency_ms: 1200,
+            ttft_ms: Some(150),
+            tokens: vec!["Hello".to_string(), " world".to_string()],
+            finish_reason: FinishReason::Stop,
+        }
+    }
+
+    #[test]
+    fn inference_job_creation() {
+        let job = make_inference_job();
+        assert_eq!(job.status, JobStatus::Pending);
+        assert_eq!(job.provider_type, ProviderType::Ollama);
+        assert_eq!(job.prompt.as_str(), "What is Rust?");
+        assert_eq!(job.model_name.as_str(), "llama3.2");
+        assert!(job.started_at.is_none());
+        assert!(job.completed_at.is_none());
+        assert!(job.error.is_none());
+    }
+
+    #[test]
+    fn inference_job_with_all_fields() {
+        let now = Utc::now();
+        let job = InferenceJob {
+            id: JobId::new(),
+            prompt: Prompt::new("Explain quantum computing").unwrap(),
+            model_name: ModelName::new("gemini-pro").unwrap(),
+            status: JobStatus::Failed,
+            provider_type: ProviderType::Gemini,
+            created_at: now,
+            started_at: Some(now),
+            completed_at: Some(now),
+            error: Some("timeout".to_string()),
+            result_text: None,
+            api_key_id: None,
+            account_id: None,
+            latency_ms: None,
+            ttft_ms: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            source: JobSource::Api,
+            provider_id: None,
+            api_format: ApiFormat::OpenaiCompat,
+            messages: None,
+            request_path: None,
+            queue_time_ms: None,
+            cancelled_at: None,
+            conversation_id: None,
+            tool_calls_json: None,
+            messages_hash: None,
+            messages_prefix_hash: None,
+            tools: None,
+        };
+        assert_eq!(job.status, JobStatus::Failed);
+        assert!(job.started_at.is_some());
+        assert!(job.completed_at.is_some());
+        assert_eq!(job.error.as_deref(), Some("timeout"));
+    }
+
+    #[test]
+    fn llm_provider_creation_with_uuidv7() {
+        let provider = make_llm_provider();
+        assert_eq!(provider.id.get_version_num(), 7);
+        assert_eq!(provider.name, "local-ollama");
+        assert_eq!(provider.provider_type, ProviderType::Ollama);
+        assert!(provider.is_active);
+        assert_eq!(provider.status, LlmProviderStatus::Online);
+        assert!(provider.api_key_encrypted.is_none());
+    }
+
+    #[test]
+    fn llm_provider_with_api_key() {
+        let mut provider = make_llm_provider();
+        provider.provider_type = ProviderType::Gemini;
+        provider.api_key_encrypted = Some("encrypted_key_data".to_string());
+        assert!(provider.api_key_encrypted.is_some());
+        assert_eq!(provider.provider_type, ProviderType::Gemini);
+    }
+
+    #[test]
+    fn inference_result_creation() {
+        let result = make_inference_result();
+        assert_eq!(result.prompt_tokens, 10);
+        assert_eq!(result.completion_tokens, 50);
+        assert_eq!(result.latency_ms, 1200);
+        assert_eq!(result.ttft_ms, Some(150));
+        assert_eq!(result.tokens.len(), 2);
+        assert_eq!(result.finish_reason, FinishReason::Stop);
+    }
+
+    #[test]
+    fn inference_result_without_ttft() {
+        let result = InferenceResult {
+            job_id: JobId::new(),
+            prompt_tokens: 5,
+            completion_tokens: 20,
+            cached_tokens: None,
+            latency_ms: 800,
+            ttft_ms: None,
+            tokens: vec!["response".to_string()],
+            finish_reason: FinishReason::Length,
+        };
+        assert!(result.ttft_ms.is_none());
+        assert_eq!(result.finish_reason, FinishReason::Length);
+    }
+
+    #[test]
+    fn inference_job_serde_roundtrip() {
+        let job = make_inference_job();
+        let json = serde_json::to_string(&job).unwrap();
+        let deserialized: InferenceJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, job.id);
+        assert_eq!(deserialized.status, job.status);
+        assert_eq!(deserialized.provider_type, job.provider_type);
+        assert_eq!(deserialized.prompt.as_str(), job.prompt.as_str());
+        assert_eq!(deserialized.model_name.as_str(), job.model_name.as_str());
+    }
+
+    #[test]
+    fn llm_provider_serde_roundtrip() {
+        let provider = make_llm_provider();
+        let json = serde_json::to_string(&provider).unwrap();
+        let deserialized: LlmProvider = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, provider.id);
+        assert_eq!(deserialized.name, provider.name);
+        assert_eq!(deserialized.provider_type, provider.provider_type);
+        assert_eq!(deserialized.url, provider.url);
+        assert_eq!(deserialized.is_active, provider.is_active);
+        assert_eq!(deserialized.status, provider.status);
+    }
+
+    #[test]
+    fn inference_result_serde_roundtrip() {
+        let result = make_inference_result();
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: InferenceResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.job_id, result.job_id);
+        assert_eq!(deserialized.prompt_tokens, result.prompt_tokens);
+        assert_eq!(deserialized.completion_tokens, result.completion_tokens);
+        assert_eq!(deserialized.latency_ms, result.latency_ms);
+        assert_eq!(deserialized.ttft_ms, result.ttft_ms);
+        assert_eq!(deserialized.tokens, result.tokens);
+        assert_eq!(deserialized.finish_reason, result.finish_reason);
+    }
+}

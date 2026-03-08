@@ -1,0 +1,273 @@
+# ── App images ─────────────────────────────────────────────────────────────────
+
+veronex:
+  image:
+    repository: ghcr.io/veronex/veronex
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  cors:
+    allowedOrigins: "*"
+
+  jwt:
+    secret: ""  # REQUIRED — override via --set or values override file
+
+  ollama:
+    url: "http://ollama:11434"
+
+  analytics:
+    secret: ""  # REQUIRED — shared secret between veronex and veronex-analytics
+
+  bootstrapSuperUser: ""
+  bootstrapSuperPass: ""
+  geminiApiKey: ""
+
+  encryption:
+    key: ""  # REQUIRED — AES-256-GCM key for provider API keys. Generate: openssl rand -hex 32
+
+  # Capacity analyzer Ollama URL — defaults to OLLAMA_URL when unset
+  capacityAnalyzerOllamaUrl: ""
+
+  # Session grouping interval (seconds). Default: 86400 (24h)
+  sessionGroupingIntervalSecs: ""
+
+  otel:
+    # gRPC endpoint (e.g. http://otel-collector:4317)
+    endpoint: ""
+    # HTTP endpoint — auto-derived from endpoint if unset
+    httpEndpoint: ""
+
+  service:
+    type: ClusterIP
+    port: 3000
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+  # Extra environment variables (key: value)
+  env: {}
+
+veronexAnalytics:
+  image:
+    repository: ghcr.io/veronex/veronex-analytics
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 3003
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+  env: {}
+
+veronexWeb:
+  image:
+    repository: ghcr.io/veronex/veronex-web
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 3000
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  env: {}
+
+veronexAgent:
+  enabled: true
+  image:
+    repository: ghcr.io/veronex/veronex-agent
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  # Agent listens on this port (per-node)
+  port: 9091
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+
+  env: {}
+
+# ── Subcharts — enable/disable each independently ──────────────────────────────
+# When a subchart is disabled, set the corresponding external* values.
+
+postgresql:
+  enabled: true
+  auth:
+    username: veronex
+    password: ""  # REQUIRED — override in production
+    database: veronex
+
+externalPostgresql:
+  host: ""
+  port: 5432
+  username: ""
+  password: ""
+  database: ""
+
+valkey:
+  enabled: true
+  auth:
+    enabled: false
+
+externalValkey:
+  host: ""
+  port: 6379
+  password: ""  # Optional — leave empty for no auth
+  db: 0         # Valkey DB index (0-15)
+
+clickhouse:
+  enabled: true
+  auth:
+    username: veronex
+    password: ""  # REQUIRED — override in production
+    database: veronex
+
+externalClickhouse:
+  host: ""
+  port: 8123
+  username: ""
+  password: ""
+  database: ""
+
+minio:
+  enabled: true
+  auth:
+    rootUser: veronex
+    rootPassword: ""  # REQUIRED — override in production
+  defaultBuckets: "veronex-messages"
+
+externalMinio:
+  endpoint: ""
+  accessKey: ""
+  secretKey: ""
+  bucket: "veronex-messages"
+  region: "us-east-1"
+
+# Redpanda chart uses strict schema — 'enabled' must be top-level to avoid validation error.
+redpandaEnabled: true
+
+externalRedpanda:
+  brokers: ""
+
+# ── OTel Collector (optional) ──────────────────────────────────────────────────
+
+otelCollector:
+  enabled: true
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.123.0"
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  service:
+    type: ClusterIP
+
+# ── ClickHouse Schema Init ───────────────────────────────────────────────────
+
+clickhouseInit:
+  enabled: true
+  image: clickhouse/clickhouse-client:26.1
+
+# ── ServiceAccount ───────────────────────────────────────────────────────────
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# ── External Secrets ─────────────────────────────────────────────────────────
+# Use one of these to inject secrets from an external provider (Vault, AWS SM, etc.)
+# When enabled, the chart-managed Secret is NOT created — the external provider manages it.
+
+externalSecrets:
+  # Option 1: External Secrets Operator (ESO)
+  # Creates an ExternalSecret resource that syncs to a K8s Secret.
+  eso:
+    enabled: false
+    # SecretStore or ClusterSecretStore reference
+    secretStoreRef:
+      name: ""
+      kind: SecretStore  # or ClusterSecretStore
+    # Remote key mappings (provider-specific paths)
+    remoteRefs:
+      jwtSecret: ""            # e.g. "veronex/jwt-secret"
+      analyticsSecret: ""      # e.g. "veronex/analytics-secret"
+      databaseUrl: ""          # e.g. "veronex/database-url"
+      s3AccessKey: ""          # e.g. "veronex/s3-access-key"
+      s3SecretKey: ""          # e.g. "veronex/s3-secret-key"
+      geminiApiKey: ""         # e.g. "veronex/gemini-api-key" (optional)
+      encryptionKey: ""        # e.g. "veronex/encryption-key" (optional)
+    refreshInterval: "1h"
+
+  # Option 2: CSI Secrets Store Driver
+  # Mounts secrets as files; pods read from mounted volume.
+  csi:
+    enabled: false
+    provider: ""  # vault, aws, azure, gcp
+    # SecretProviderClass name — must be pre-created
+    secretProviderClassName: ""
+    # Create a K8s Secret from the CSI-mounted secrets (for env var usage)
+    syncAsSecret: true
+
+  # Option 3: Pre-existing Secret
+  # Use a Secret that already exists in the namespace (managed externally).
+  existingSecretName: ""
+
+# ── Autoscaling ──────────────────────────────────────────────────────────────
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+
+# ── PodDisruptionBudget ──────────────────────────────────────────────────────
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# ── Ingress (optional) ─────────────────────────────────────────────────────────
+
+ingress:
+  enabled: false
+  className: nginx
+  host: veronex.example.com
+  tls:
+    enabled: false
+    secretName: ""

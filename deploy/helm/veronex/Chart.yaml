@@ -1,0 +1,32 @@
+apiVersion: v2
+name: veronex
+description: Veronex LLM Inference Gateway — Helm Chart
+type: application
+version: 0.1.0
+appVersion: "latest"
+
+dependencies:
+  - name: postgresql
+    version: ">=15.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+
+  - name: valkey
+    version: ">=1.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: valkey.enabled
+
+  - name: clickhouse
+    version: ">=6.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: clickhouse.enabled
+
+  - name: minio
+    version: ">=14.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: minio.enabled
+
+  - name: redpanda
+    version: ">=5.0.0"
+    repository: https://charts.redpanda.com
+    condition: redpandaEnabled

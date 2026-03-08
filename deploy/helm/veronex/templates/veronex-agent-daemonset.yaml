@@ -1,0 +1,73 @@
+{{- if .Values.veronexAgent.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}-veronex-agent
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    app.kubernetes.io/name: veronex-agent
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: veronex-agent
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        app.kubernetes.io/name: veronex-agent
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: agent
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
+      containers:
+        - name: veronex-agent
+          image: "{{ .Values.veronexAgent.image.repository }}:{{ .Values.veronexAgent.image.tag }}"
+          imagePullPolicy: {{ .Values.veronexAgent.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.veronexAgent.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          env:
+            - name: PORT
+              value: "{{ .Values.veronexAgent.port }}"
+            - name: OLLAMA_URL
+              value: {{ .Values.veronex.ollama.url | quote }}
+            {{- range $k, $v := .Values.veronexAgent.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.veronexAgent.resources | nindent 12 }}
+          volumeMounts:
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+            - name: proc-meminfo
+              mountPath: /proc/meminfo
+              readOnly: true
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: proc-meminfo
+          hostPath:
+            path: /proc/meminfo
+{{- end }}
