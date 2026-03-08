@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-veronex-web
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.web.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.veronexWeb.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "veronex.web.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        {{- include "veronex.web.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
+      containers:
+        - name: veronex-web
+          image: "{{ .Values.veronexWeb.image.repository }}:{{ .Values.veronexWeb.image.tag }}"
+          imagePullPolicy: {{ .Values.veronexWeb.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.veronexWeb.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          env:
+            - name: NEXT_PUBLIC_VERONEX_API_URL
+              value: "http://{{ .Release.Name }}-veronex:{{ .Values.veronex.service.port }}"
+            {{- range $k, $v := .Values.veronexWeb.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.veronexWeb.resources | nindent 12 }}

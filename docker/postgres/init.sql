@@ -1,0 +1,2 @@
+-- Schema is managed by sqlx migrations (migrations/0000000001_init.sql).
+-- This file intentionally left empty.

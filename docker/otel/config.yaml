@@ -1,0 +1,97 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  # Scrape node-exporter instances deployed alongside Ollama servers.
+  # Targets are fetched dynamically from veronex via Prometheus HTTP SD.
+  # Register node-exporter URLs in the veronex admin → Providers page.
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: node-exporter
+          scrape_interval: 30s
+          http_sd_configs:
+            - url: http://veronex:3000/v1/metrics/targets
+              refresh_interval: 30s
+
+  # OTLP receiver for application traces (veronex service).
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 200
+    send_batch_max_size: 256
+
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+
+exporters:
+  # Kafka/Redpanda exporters — Redpanda is the single message bus.
+  # ClickHouse consumes these topics via Kafka Engine → Materialized View.
+  # Swap broker address to migrate to Kafka cluster (zero code changes).
+  kafka/metrics:
+    brokers: [redpanda:9092]
+    topic: otel-metrics
+    encoding: otlp_json
+    timeout: 10s
+    producer:
+      compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  kafka/traces:
+    brokers: [redpanda:9092]
+    topic: otel-traces
+    encoding: otlp_json
+    timeout: 10s
+    producer:
+      compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  kafka/logs:
+    brokers: [redpanda:9092]
+    topic: otel-logs
+    encoding: otlp_json
+    timeout: 10s
+    producer:
+      compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # Debug logging (disable in production).
+  debug:
+    verbosity: basic
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [kafka/metrics]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [kafka/traces]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [kafka/logs]

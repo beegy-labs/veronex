@@ -1,0 +1,201 @@
+# Auth -- RBAC, JWT & Sessions
+
+> SSOT | **Last Updated**: 2026-03-03 (rev 5 -- split: impl details in [jwt-sessions-impl.md](jwt-sessions-impl.md))
+
+## Overview
+
+Two independent auth layers:
+
+| Layer | Mechanism | Protects |
+|-------|-----------|----------|
+| API Key | `X-API-Key` header (BLAKE2b hash) | Inference only: `/v1/chat/*`, `/v1/inference/*`, `/api/*`, `/v1beta/*`, `/v1/jobs/*/stream` |
+| JWT Bearer | `Authorization: Bearer <token>` (HS256) | All admin routes: `/v1/accounts/*`, `/v1/audit`, `/v1/keys/*`, `/v1/usage/*`, `/v1/dashboard/*`, `/v1/providers/*`, `/v1/servers/*`, `/v1/gemini/*`, `/v1/ollama/*`, `/v1/test/*` |
+| Public | None | `/v1/auth/*`, `/v1/setup/*`, `/health`, `/readyz`, `/docs/*`, `/v1/metrics/targets` |
+
+## Roles
+
+| Role | Capabilities |
+|------|-------------|
+| `super` | Manage accounts, view audit, all admin actions |
+| `admin` | Normal admin -- no account management or audit |
+
+Stored in `accounts.role` (`CHECK (role IN ('super', 'admin'))`).
+
+## Router Layers (4-layer)
+
+```
+Public         /v1/auth/*, /v1/setup/*, /health, /readyz, /docs/*, /v1/metrics/targets   no middleware
+API Key Auth   /v1/inference/*, /v1/chat/*, /api/*, /v1beta/*, /v1/jobs/*/stream          api_key_auth + rate_limiter
+JWT Auth       /v1/accounts/*, /v1/audit, /v1/keys/*, /v1/usage/*, /v1/dashboard/*,       jwt_auth
+               /v1/providers/*, /v1/servers/*, /v1/gemini/*, /v1/ollama/*
+JWT Auth       /v1/test/*                                                                  jwt_auth (no rate limit)
+```
+
+## JWT Middleware (`jwt_auth`)
+
+- Extracts `Authorization: Bearer <token>`
+- Decodes via `jsonwebtoken::decode<Claims>(token, HS256, secret)`
+- Checks Valkey `veronex:revoked:{jti}` -- 401 if revoked (O(1) blocklist)
+- `tokio::spawn` calls `session_repo.update_last_used(&jti)` (non-blocking)
+- Inserts `Claims { sub, role, jti, exp }` into request extensions
+
+### RequireSuper Extractor
+
+`FromRequestParts` -- reads `Claims` from extensions, returns 403 if `role != "super"`.
+Usage: `RequireSuper(claims): RequireSuper` as handler arg.
+
+## Accounts Table
+
+```sql
+CREATE TABLE accounts (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username      VARCHAR(64) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,          -- Argon2id
+  name          VARCHAR(128) NOT NULL,
+  email         VARCHAR(255),
+  role          VARCHAR(16) NOT NULL DEFAULT 'admin'
+                CHECK (role IN ('super', 'admin')),
+  department    VARCHAR(128),
+  position      VARCHAR(128),
+  is_active     BOOLEAN NOT NULL DEFAULT true,
+  created_by    UUID REFERENCES accounts(id),
+  last_login_at TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at    TIMESTAMPTZ                     -- soft-delete
+);
+CREATE INDEX idx_accounts_username ON accounts(username) WHERE deleted_at IS NULL;
+```
+
+Migration: `000034_accounts.sql`
+
+## First-Run Setup Flow
+
+On fresh install (no accounts), the first super account is created via:
+
+| Endpoint | Auth | Behavior |
+|----------|------|----------|
+| `GET /v1/setup/status` | None | `{ "needs_setup": true/false }` |
+| `POST /v1/setup` | None | Creates super account + issues session; 409 if any account exists |
+
+Frontend `AppShell` checks setup status on every load: `needs_setup: true` redirects to `/setup`.
+
+**CI bootstrap** (optional, pre-seed without UI):
+```bash
+BOOTSTRAP_SUPER_USER=admin    # Both must be set; omit for setup-flow-only
+BOOTSTRAP_SUPER_PASS=secret
+```
+
+## Password Hashing
+
+- **Algorithm**: Argon2id (`argon2 = "0.5"` crate), PHC string format
+- API keys use BLAKE2b-256 (unchanged)
+
+## JWT Properties
+
+| Property | Value |
+|----------|-------|
+| Algorithm | HS256 |
+| `sub` | `account.id` (UUID) |
+| `role` | `"super"` / `"admin"` |
+| `jti` | `Uuid::now_v7()` -- unique per session, used for revocation |
+| `exp` | now + 1 hour |
+| Secret | `JWT_SECRET` env var |
+
+## Sessions (`account_sessions` table)
+
+```sql
+CREATE TABLE account_sessions (
+  id                 UUID PRIMARY KEY DEFAULT uuidv7(),
+  account_id         UUID NOT NULL REFERENCES accounts(id),
+  jti                UUID NOT NULL UNIQUE,
+  refresh_token_hash VARCHAR(64),       -- BLAKE2b-256
+  ip_address         VARCHAR(45),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at       TIMESTAMPTZ,
+  expires_at         TIMESTAMPTZ NOT NULL,
+  revoked_at         TIMESTAMPTZ
+);
+```
+
+Migration: `20260301000036_account_sessions.sql`
+
+**Revocation flow**: Login inserts session with `jti`. Logout sets `revoked_at` + Valkey `SET veronex:revoked:{jti} 1 EX {remaining_ttl}`. Refresh revokes old session, creates new one with new `jti` and new refresh hash. Valkey entries auto-expire.
+
+> **Note**: `RefreshResponse` returns only `{ access_token, token_type }`. The server generates a new refresh token hash but does not send the raw value to the client. The client's original refresh token becomes invalid after one refresh call (old session revoked).
+
+## Password Reset
+
+One-time token in Valkey: `veronex:pwreset:{token} -> account_id`, TTL 24h.
+- Super creates: `POST /v1/accounts/{id}/reset-link` returns `{ token }`
+- User resets: `POST /v1/auth/reset-password { token, new_password }` -- token deleted immediately
+
+## Auth Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/v1/setup/status` | None | `{ needs_setup }` |
+| POST | `/v1/setup` | None | Create first super + issue session; 409 if exists |
+| POST | `/v1/auth/login` | None | Verify Argon2id, issue access+refresh tokens |
+| POST | `/v1/auth/logout` | None | Revoke session by refresh token; 204 |
+| POST | `/v1/auth/refresh` | None | Revoke old session, issue new access+refresh (server-side); only `access_token` returned to client. Note: new refresh hash stored but not sent -- client's original refresh token is invalidated after one refresh |
+| POST | `/v1/auth/reset-password` | None | Validate Valkey token, save new hash; 204 |
+
+## Test Run Endpoints (JWT Bearer)
+
+Logged-in accounts run inference without an API key. Jobs tracked by `account_id`, `source=Test`, excluded from API metrics. See [openai-compat.md](../inference/openai-compat.md) for request/response format details.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/test/completions` | OpenAI SSE stream |
+| GET | `/v1/test/jobs/{job_id}/stream` | SSE reconnect |
+| POST | `/v1/test/api/chat` | Ollama NDJSON stream |
+| POST | `/v1/test/api/generate` | Ollama NDJSON stream |
+| POST | `/v1/test/v1beta/models/{*path}` | Gemini SSE stream |
+
+All test routes: `api_key_id=NULL`, `account_id=claims.sub`, queue=`veronex:queue:jobs:test` (low-priority).
+
+Full request/response specs: [jwt-sessions-impl.md](jwt-sessions-impl.md#test-run-endpoint-details)
+
+## Account Endpoints (RequireSuper)
+
+All require `Authorization: Bearer <super-token>`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/accounts` | List all active accounts |
+| POST | `/v1/accounts` | Create account + auto-generate test API key |
+| PATCH | `/v1/accounts/{id}` | Update name/email/department/position |
+| DELETE | `/v1/accounts/{id}` | Soft-delete |
+| PATCH | `/v1/accounts/{id}/active` | Toggle `is_active` |
+| POST | `/v1/accounts/{id}/reset-link` | Generate 24h reset token |
+| GET | `/v1/accounts/{id}/sessions` | List active sessions |
+| DELETE | `/v1/accounts/{id}/sessions` | Revoke all sessions |
+| DELETE | `/v1/sessions/{session_id}` | Revoke specific session |
+
+Full request/response specs: [jwt-sessions-impl.md](jwt-sessions-impl.md#account-endpoint-details)
+
+## Environment Variables
+
+```bash
+JWT_SECRET=change-me-in-production   # HS256 signing key -- MUST change in production
+# BOOTSTRAP_SUPER_USER=admin         # optional: pre-seed super account
+# BOOTSTRAP_SUPER_PASS=secret        # optional: both must be set
+```
+
+## Implementation Files
+
+| File | Role |
+|------|------|
+| `infrastructure/inbound/http/auth_handlers.rs` | setup + login/logout/refresh/reset-password |
+| `infrastructure/inbound/http/test_handlers.rs` | test completions + stream (JWT, no rate limit) |
+| `infrastructure/inbound/http/account_handlers.rs` | CRUD + reset-link + session endpoints |
+| `infrastructure/inbound/http/audit_handlers.rs` | GET /v1/audit |
+| `infrastructure/inbound/http/middleware/jwt_auth.rs` | jwt_auth + RequireSuper |
+| `domain/entities/{account,session}.rs` | Account + Session entities |
+| `application/ports/outbound/{account,session}_repository.rs` | Repository ports |
+| `application/ports/outbound/audit_port.rs` | AuditPort + AuditEvent |
+| `infrastructure/outbound/persistence/{account,session}_repository.rs` | Postgres impls |
+| `infrastructure/outbound/observability/http_audit_adapter.rs` | HttpAuditAdapter |
+| `web/lib/auth.ts` | Token cookie helpers |
+| `web/lib/auth-guard.ts` | Refresh mutex + redirect logic |
+| `web/lib/api-client.ts` | ApiClient (auto 401 refresh+retry) |

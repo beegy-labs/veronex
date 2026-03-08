@@ -1,0 +1,26 @@
+{{- if .Values.otelCollector.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-otel-collector
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.otel.selectorLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.otelCollector.service.type }}
+  selector:
+    {{- include "veronex.otel.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+    - name: health
+      port: 13133
+      targetPort: health
+      protocol: TCP
+{{- end }}

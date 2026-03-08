@@ -1,0 +1,1 @@
+../../vendor/agentic-dev-protocol/docs/en/add.md

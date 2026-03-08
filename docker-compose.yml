@@ -1,0 +1,221 @@
+# Copy .env.example to .env and fill in required values before running
+name: veronex
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: veronex
+      POSTGRES_USER: veronex
+      POSTGRES_PASSWORD: veronex
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U veronex -d veronex"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:9.0.3-alpine
+    platform: linux/amd64
+    command:
+      - valkey-server
+      - --save
+      - "60 1"
+      - --appendonly
+      - "yes"
+      - --databases
+      - "16"
+    ports:
+      - "6380:6379"
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: veronex
+      CLICKHOUSE_USER: veronex
+      CLICKHOUSE_PASSWORD: veronex
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      # Data retention — applies on first volume creation only.
+      # To change TTL on an existing volume: ALTER TABLE otel_logs MODIFY TTL ...
+      CLICKHOUSE_RETENTION_ANALYTICS_DAYS: ${CLICKHOUSE_RETENTION_ANALYTICS_DAYS:-90}
+      CLICKHOUSE_RETENTION_METRICS_DAYS: ${CLICKHOUSE_RETENTION_METRICS_DAYS:-30}
+      CLICKHOUSE_RETENTION_AUDIT_DAYS: ${CLICKHOUSE_RETENTION_AUDIT_DAYS:-365}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./docker/clickhouse/init.sh:/docker-entrypoint-initdb.d/01_init.sh
+      - ./docker/clickhouse/schema.sql:/docker-entrypoint-initdb.d/schema.sql.tmpl
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9010:9000"   # S3 API
+      - "9011:9001"   # Web console (http://localhost:9011)
+    environment:
+      MINIO_ROOT_USER: veronex
+      MINIO_ROOT_PASSWORD: veronex123
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  veronex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    volumes:
+      # AMD GPU sysfs (read-only). On Linux hosts this exposes hardware counters
+      # to the gpu_metrics collector. On macOS/Docker Desktop this path does not
+      # exist and the collector will log a single debug message then do nothing.
+      - /sys/class/drm:/sys/class/drm:ro
+    environment:
+      DATABASE_URL: postgres://veronex:veronex@postgres:5432/veronex
+      # DB index /0 — must match the queue/rate-limit keys in veronex
+      VALKEY_URL: redis://valkey:6379/0
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required - copy .env.example to .env}
+      ANALYTICS_URL: http://veronex-analytics:3003
+      ANALYTICS_SECRET: ${ANALYTICS_SECRET:-veronex-analytics-internal-secret}
+      BOOTSTRAP_SUPER_USER: ${BOOTSTRAP_SUPER_USER-}
+      BOOTSTRAP_SUPER_PASS: ${BOOTSTRAP_SUPER_PASS-}
+      GEMINI_ENCRYPTION_KEY: ${GEMINI_ENCRYPTION_KEY:-22551e8092edc3243163385e0dc6157ead33f14f14b1dbc794f0a00bb51886ae}
+      CORS_ALLOWED_ORIGINS: http://localhost:3002
+      RUST_LOG: info
+      # OTel distributed tracing — optional, uncomment to enable.
+      # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      # Capacity analyzer Ollama URL — defaults to OLLAMA_URL when unset.
+      # CAPACITY_ANALYZER_OLLAMA_URL: http://host.docker.internal:11434
+      # S3 / MinIO — conversation context object storage
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: veronex
+      S3_SECRET_KEY: veronex123
+      S3_BUCKET: veronex-messages
+      S3_REGION: us-east-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  veronex-analytics:
+    build:
+      context: .
+      dockerfile: crates/veronex-analytics/Dockerfile
+    expose:
+      - "3003"
+    environment:
+      PORT: "3003"
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: veronex
+      CLICKHOUSE_PASSWORD: veronex
+      CLICKHOUSE_DB: veronex
+      OTEL_HTTP_ENDPOINT: http://otel-collector:4318
+      ANALYTICS_SECRET: ${ANALYTICS_SECRET:-veronex-analytics-internal-secret}
+      RUST_LOG: info
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      otel-collector:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.3.9
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --overprovisioned
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --set
+      - redpanda.data_directory=/var/lib/redpanda/data
+    ports:
+      - "9092:9092"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  otel-collector:
+    build:
+      context: ./docker/otel
+      dockerfile: Dockerfile
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./docker/otel/config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "13133:13133" # health_check
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:13133"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      veronex:
+        condition: service_started
+    restart: unless-stopped
+
+  veronex-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
+        NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${NEXT_PUBLIC_VERONEX_ADMIN_KEY:-veronex-bootstrap-admin-key}
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
+      NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${NEXT_PUBLIC_VERONEX_ADMIN_KEY:-veronex-bootstrap-admin-key}
+    depends_on:
+      - veronex
+
+volumes:
+  postgres_data:
+  valkey_data:
+  clickhouse_data:
+  redpanda_data:
+  minio_data:

@@ -3,8 +3,6 @@ name: CI
 on:
   push:
     branches: [develop, main]
-  pull_request:
-    branches: [develop, main]
   workflow_dispatch:
     inputs:
       force_build:
@@ -15,29 +13,16 @@ on:
 
 env:
   REGISTRY: gitea.girok.dev
-  IMAGE_NAME: beegy-labs/inferq
+  IMAGE_NAME: beegy-labs/veronex
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Check
-    if: github.event_name == 'pull_request'
-    runs-on: [self-hosted, kubernetes, gitops]
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      # TODO: Add lint/test steps once tech stack is defined
-
   build:
     name: Build
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && contains(fromJSON('["develop", "main"]'), github.ref_name)
-    runs-on: [self-hosted, kubernetes, gitops]
+    runs-on: arc-runner-set
     timeout-minutes: 60
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
@@ -72,19 +57,19 @@ jobs:
         run: |
           if [ "${{ inputs.force_build }}" = "true" ]; then
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "🔨 Force build requested, skipping image check"
+            echo "Force build requested, skipping image check"
             exit 0
           fi
           TAG="${{ steps.meta.outputs.tag }}"
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: token ${GITEA_TOKEN}" \
-            "${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/inferq/${TAG}")
+            "https://${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex/${TAG}")
           if [ "$RESPONSE" = "200" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "✅ Image ${TAG} already exists, skipping build"
+            echo "Image ${TAG} already exists, skipping build"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "🔨 Image ${TAG} not found, proceeding with build"
+            echo "Image ${TAG} not found, proceeding with build"
           fi
 
       - uses: docker/build-push-action@v5
@@ -96,49 +81,3 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-
-  deploy:
-    name: Deploy
-    if: always() && needs.build.result == 'success'
-    needs: build
-    runs-on: [self-hosted, kubernetes, gitops]
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: beegy-labs/platform-gitops
-          token: ${{ secrets.GITOPS_PAT }}
-          path: gitops
-
-      - name: Update & Push
-        run: |
-          cd gitops && git pull --rebase
-          case "${{ github.ref_name }}" in
-            main)    FILE="clusters/home/values/inferq-prod.yaml";    ENV="production" ;;
-            develop) FILE="clusters/home/values/inferq-dev.yaml";     ENV="development" ;;
-            *)       FILE="clusters/home/values/inferq-dev.yaml";     ENV="development" ;;
-          esac
-          awk -v newtag="${{ needs.build.outputs.tag }}" '
-            /^image:/ { in_image=1 }
-            in_image && /^[a-z]/ && !/^image:/ { in_image=0 }
-            in_image && /tag:/ { sub(/tag: ".*"/, "tag: \"" newtag "\""); in_image=0 }
-            { print }
-          ' ${FILE} > ${FILE}.tmp && mv ${FILE}.tmp ${FILE}
-          git config user.name "GitHub Actions Bot"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ${FILE}
-          git diff --staged --quiet || git commit -m "chore(${ENV}): update inferq to ${{ needs.build.outputs.tag }}"
-          for i in 1 2 3; do git push && break || { sleep 3; git pull --rebase; }; done
-
-      - name: Cleanup old images
-        env:
-          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
-        run: |
-          case "${{ github.ref_name }}" in
-            main)    P="" ;;
-            develop) P="develop-" ;;
-            *)       P="develop-" ;;
-          esac
-          curl -s -H "Authorization: token ${GITEA_TOKEN}" "https://gitea.girok.dev/api/v1/packages/beegy-labs/container/inferq" | \
-            jq -r ".[] | select(.version | startswith(\"${P}\")) | \"\(.created_at)|\(.version)\"" | sort -r | tail -n +11 | \
-            while IFS='|' read -r _ v; do curl -sX DELETE -H "Authorization: token ${GITEA_TOKEN}" "https://gitea.girok.dev/api/v1/packages/beegy-labs/container/inferq/${v}"; done

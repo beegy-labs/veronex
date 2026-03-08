@@ -1,21 +1,20 @@
 # Architecture
-
-> Hexagonal Architecture overview | **Last Updated**: 2026-02-19
+> CDD Tier 1 — Hexagonal Architecture pointer (≤50 lines) | **Last Updated**: 2026-03-07
 
 ## Structure
 
 ```
-src/
-├── domain/          # Core entities & value objects (no deps)
-├── application/     # Use cases + ports (interfaces)
+crates/veronex/src/
+├── domain/          # Entities, value objects, enums (no deps)
+├── application/     # Use cases + ports (traits)
 │   ├── ports/
-│   │   ├── inbound/   # Driving ports (IInferenceUseCase, etc.)
-│   │   └── outbound/  # Driven ports (IQueuePort, IGpuPort, etc.)
-│   └── use-cases/
+│   │   ├── inbound/   # InferenceUseCase
+│   │   └── outbound/  # Repositories, registries, adapters
+│   └── use_cases/inference/  # mod, use_case, dispatcher, runner, helpers
 ├── infrastructure/  # Adapters (implements ports)
-│   ├── inbound/     # HTTP, SSE, WebSocket adapters
-│   └── outbound/    # Redis, GPU worker, DB adapters
-└── main.py          # Composition root (wires everything)
+│   ├── inbound/http/  # Axum handlers, middleware, router
+│   └── outbound/      # Postgres, Valkey, Ollama, Gemini, OTel
+└── main.rs          # Composition root (wires everything)
 ```
 
 ## Dependency Rule
@@ -25,13 +24,26 @@ infrastructure → application → domain
 (Never reverse. Domain knows nothing outside itself.)
 ```
 
-## Key Ports
+## Key Ports (subset — full list in SSOT)
 
-| Port           | Direction | Implemented By       |
-| -------------- | --------- | -------------------- |
-| IInferenceUseCase | Inbound | HTTP/SSE Adapter    |
-| IQueuePort     | Outbound  | Redis Adapter        |
-| IGpuPort       | Outbound  | GPU Worker Adapter   |
-| IStreamPort    | Outbound  | SSE Adapter          |
+| Port | Direction | Adapter |
+| ---- | --------- | ------- |
+| `InferenceUseCase` | Inbound | HTTP handlers |
+| `InferenceProviderPort` | Outbound | OllamaAdapter, GeminiAdapter |
+| `ProviderDispatchPort` | Outbound | ConcreteProviderDispatch |
+| `LlmProviderRegistry` | Outbound | CachingProviderRegistry (5s TTL) |
+| `JobRepository` | Outbound | PostgresJobRepository |
+| `ApiKeyRepository` | Outbound | PostgresApiKeyRepository |
+| `AuditPort` | Outbound | HttpAuditAdapter (fail-open) |
+| `ObservabilityPort` | Outbound | HttpObservabilityAdapter (fail-open) |
+
+## Background Loops
+
+| Loop | Interval | Purpose |
+|------|----------|---------|
+| `sync_loop` | base tick 30s (per-provider sync_interval ~300s) | Unified: health + model sync + VRAM probe + LLM analysis |
+| `health_checker` | 30 s | Provider health + agent metrics + thermal auto-detect |
+| `queue_dispatcher` | Lua priority pop | 3-queue dispatch + model filter + stickiness + gate chain |
+| `session_grouping` | 24 h | Batch conversation_id assignment |
 
 **SSOT**: `docs/llm/policies/architecture.md`

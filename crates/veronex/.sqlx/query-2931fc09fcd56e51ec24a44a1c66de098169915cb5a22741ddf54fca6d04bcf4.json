@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT provider_id, model_name, is_enabled, added_at\n            FROM provider_selected_models\n            WHERE provider_id = $1\n            ORDER BY model_name ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "provider_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "model_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "added_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2931fc09fcd56e51ec24a44a1c66de098169915cb5a22741ddf54fca6d04bcf4"
+}

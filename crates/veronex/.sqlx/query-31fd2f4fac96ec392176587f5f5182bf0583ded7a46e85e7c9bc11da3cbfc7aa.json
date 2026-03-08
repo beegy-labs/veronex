@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE ollama_sync_jobs\n            SET done_providers = done_providers + 1,\n                results = results || jsonb_build_array($2::jsonb)\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31fd2f4fac96ec392176587f5f5182bf0583ded7a46e85e7c9bc11da3cbfc7aa"
+}
