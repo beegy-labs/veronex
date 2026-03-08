@@ -2,6 +2,16 @@ import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { STALE_TIME_FAST, REFETCH_INTERVAL_FAST } from '@/lib/constants'
 
+// ── Dashboard overview (aggregated snapshot) ──────────────────────────────────
+
+export const dashboardOverviewQuery = queryOptions({
+  queryKey: ['dashboard-overview'] as const,
+  queryFn: () => api.overview(),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchIntervalInBackground: false,
+})
+
 // ── Dashboard stats (KPI cards) ───────────────────────────────────────────────
 
 export const dashboardStatsQuery = queryOptions({

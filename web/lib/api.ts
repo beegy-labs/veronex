@@ -22,6 +22,9 @@ export const api = {
   stats: () =>
     apiClient.get<DashboardStats>('/v1/dashboard/stats'),
 
+  overview: () =>
+    apiClient.get<import('./types').DashboardOverview>('/v1/dashboard/overview'),
+
   jobs: (params?: string) =>
     apiClient.get<{ jobs: Job[]; total: number }>(
       `/v1/dashboard/jobs${params ? '?' + params : ''}`,

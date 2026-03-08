@@ -64,6 +64,41 @@ jobs:
         working-directory: web
         run: npm run build
 
+  e2e-smoke-pr:
+    name: E2E Smoke (PR)
+    if: github.event_name == 'pull_request'
+    needs: check-web
+    runs-on: [self-hosted, kubernetes, gitops]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run smoke tests
+        working-directory: web
+        run: npx playwright test --grep @smoke
+        env:
+          CI: "true"
+          PLAYWRIGHT_BASE_URL: ${{ vars.E2E_BASE_URL }}
+          PLAYWRIGHT_API_URL: ${{ vars.E2E_API_URL }}
+          E2E_USERNAME: ${{ secrets.E2E_USERNAME }}
+          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-pr
+          path: web/playwright-report/
+          retention-days: 7
+
   build:
     name: Build
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && contains(fromJSON('["develop", "main"]'), github.ref_name)

@@ -2,7 +2,7 @@
 
 import { useQuery, useQueries } from '@tanstack/react-query'
 import {
-  dashboardStatsQuery, recentJobsQuery, performanceQuery,
+  dashboardOverviewQuery, recentJobsQuery, performanceQuery,
   usageAggregateQuery, usageBreakdownQuery,
   providersQuery, serversQuery, serverMetricsQuery, serverMetricsHistoryQuery,
 } from '@/lib/queries'
@@ -13,7 +13,9 @@ import { DashboardTab } from './components/dashboard-tab'
 export default function OverviewPage() {
   const { t } = useTranslation()
 
-  const { data: stats, isLoading: statsLoading, error: statsError } = useQuery(dashboardStatsQuery)
+  // Single aggregated query for stats + perf(24h) + capacity + queue + lab
+  const { data: overview, isLoading: overviewLoading, error: overviewError } = useQuery(dashboardOverviewQuery)
+
   const { data: providers } = useQuery(providersQuery)
   const { data: servers } = useQuery(serversQuery)
 
@@ -25,20 +27,20 @@ export default function OverviewPage() {
     queries: (servers ?? []).map(s => serverMetricsHistoryQuery(s.id, 1440)),
   })
 
-  const { data: perf }    = useQuery(performanceQuery(24))
+  // Additional perf windows (overview endpoint only returns 24h)
   const { data: perf7d }  = useQuery(performanceQuery(168))
   const { data: perf30d } = useQuery(performanceQuery(720))
   const { data: usage }   = useQuery(usageAggregateQuery(24))
   const { data: breakdown } = useQuery(usageBreakdownQuery(24))
   const { data: recentJobsData } = useQuery(recentJobsQuery)
 
-  if (statsError) {
+  if (overviewError) {
     return (
       <Card className="border-destructive/50 bg-destructive/10">
         <CardContent className="p-6 text-destructive">
           <p className="font-semibold">{t('overview.failedStats')}</p>
           <p className="text-sm mt-1 opacity-80">
-            {statsError instanceof Error ? statsError.message : t('common.unknownError')}
+            {overviewError instanceof Error ? overviewError.message : t('common.unknownError')}
           </p>
         </CardContent>
       </Card>
@@ -53,13 +55,13 @@ export default function OverviewPage() {
       </div>
 
       <DashboardTab
-        stats={stats}
-        statsLoading={statsLoading}
+        stats={overview?.stats}
+        statsLoading={overviewLoading}
         providers={providers}
         servers={servers}
         serverMetricQueries={serverMetricQueries}
         serverHistoryQueries={serverHistoryQueries}
-        perf={perf}
+        perf={overview?.performance}
         perf7d={perf7d}
         perf30d={perf30d}
         usage={usage}
