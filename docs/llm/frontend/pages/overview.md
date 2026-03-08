@@ -7,6 +7,10 @@
 
 Main dashboard — single-screen system health view. Aggregates KPIs, infrastructure status, workload metrics, and recent activity from multiple API endpoints.
 
+## Aggregated Endpoint
+
+`GET /v1/dashboard/overview` returns `{ stats, performance, capacity, queue_depth, lab }` in a single response. The handler runs five independent queries via `tokio::join!` (dashboard stats, performance metrics, capacity settings, queue depth from Valkey, lab settings) to minimize round-trips. The frontend overview page uses this alongside per-server metrics for the full dashboard view.
+
 ## Data Sources
 
 | Query | Endpoint | Refresh |
@@ -49,7 +53,7 @@ Main dashboard — single-screen system health view. Aggregates KPIs, infrastruc
   - Mini sparkline: hourly avg latency (24h AreaChart)
 
 ### Section 5: Provider Status + API Keys (2 cards)
-- **Provider Status**: Ollama (local) + Gemini (API, gated by `gemini_function_calling` lab flag)
+- **Provider Status**: Ollama + Gemini labels (i18n: `overview.localProviders` = "Ollama", `overview.apiProviders` = "Gemini"), gated by `gemini_function_calling` lab flag
   - `ProviderRow` component: online/degraded/offline dot counts
 - **API Keys**: active_keys count + total_keys subtitle
 

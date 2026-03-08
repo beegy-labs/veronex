@@ -124,8 +124,8 @@
     "prevMonth": "prev month",
     "topModels": "Top Models",
     "noServerPower": "No server data",
-    "localProviders": "Local",
-    "apiProviders": "API Services",
+    "localProviders": "Ollama",
+    "apiProviders": "Gemini",
     "totalReqsSubtitle": "requests",
     "activeKeysLabel": "Active",
     "dashboard": "Dashboard",
@@ -260,7 +260,15 @@
     "keysCount": "{{count}} keys",
     "viewUsage": "View usage",
     "usageTitle": "Usage — {{name}}",
-    "modelBreakdown": "Model Usage"
+    "modelBreakdown": "Model Usage",
+    "createdBy": "Created By",
+    "regenerateKey": "Regenerate key",
+    "regenerateTitle": "Regenerate API Key",
+    "regenerateConfirm": "Regenerate {{name}}? The current key will be invalidated immediately and a new key will be issued.",
+    "regenerating": "Regenerating…",
+    "keySavedAck": "I have saved the key",
+    "viewHistory": "View change history",
+    "historyTitle": "Change History — {{name}}"
   },
   "providers": {
     "title": "Providers",

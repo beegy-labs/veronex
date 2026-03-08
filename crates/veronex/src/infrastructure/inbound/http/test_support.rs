@@ -275,6 +275,7 @@ pub(crate) fn make_app() -> axum::Router {
         created_at: chrono::Utc::now(),
         key_type: KeyType::Standard,
         tier: KeyTier::Paid,
+        account_id: None,
     };
     let pg_pool = sqlx::postgres::PgPoolOptions::new()
         .connect_lazy("postgres://test:test@localhost/test")

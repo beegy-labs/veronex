@@ -150,6 +150,7 @@ pub async fn create_account(
         deleted_at: None,
         key_type: KeyType::Test,
         tier: KeyTier::Paid,
+        account_id: Some(claims.sub),
     };
 
     // Create account in DB

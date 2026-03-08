@@ -65,7 +65,7 @@ No props. Placed after `<OllamaSyncSection />` in OllamaTab.
 | Field | Detail |
 |-------|--------|
 | `providerFilter` | `<select>` filters analyzer model list by provider type (all/ollama/gemini); Gemini hidden when `gemini_function_calling` lab feature disabled |
-| `analyzerModel` | `<select>` from `settings.available_models` grouped by provider type (Ollama/Gemini) |
+| `analyzerModel` | `<select>` from `settings.available_models` grouped by provider type (Ollama/Gemini). Backend: Ollama via `/api/tags`, Gemini via `gemini_models` DB with Gemini API fallback when DB empty |
 | `syncEnabled` | Switch; off = auto-sync paused (manual sync still works) |
 | `syncIntervalSecs` | Number input (min: 60, step: 30) |
 | `probePermits` | Number input; AIMD probe: +N(위로 탐색), -N(아래로 탐색), 0=비활성 |

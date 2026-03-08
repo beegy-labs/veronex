@@ -102,6 +102,9 @@ impl AnalyticsRepository for HttpAnalyticsClient {
         if let Some(ref rt) = filters.resource_type {
             qs.push_str(&format!("&resource_type={}", urlencoding(rt)));
         }
+        if let Some(ref rid) = filters.resource_id {
+            qs.push_str(&format!("&resource_id={}", urlencoding(rid)));
+        }
 
         let raw: Vec<AuditEventJson> = self.get(&qs).await?;
 

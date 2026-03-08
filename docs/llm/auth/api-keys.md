@@ -1,6 +1,6 @@
 # API Keys — Server-Side: Auth & Rate Limiting
 
-> SSOT | **Last Updated**: 2026-03-08 (rev: ts(skip) on sensitive fields)
+> SSOT | **Last Updated**: 2026-03-08 (rev: account_id, created_by, regenerate)
 
 ## Task Guide
 
@@ -45,10 +45,11 @@ pub struct ApiKey {
     pub deleted_at: Option<DateTime<Utc>>,   // #[ts(skip)] — internal only
     pub key_type: KeyType,                   // #[ts(skip)] — internal only (Standard | Test)
     pub tier: KeyTier,                       // Free | Paid — domain enum (migration 000038)
+    pub account_id: Option<Uuid>,            // FK → accounts(id), set on create
 }
 ```
 
-> **Status: Planned** — `account_id` and `is_test_key` are planned DB columns (migration 000035) but are NOT yet implemented in the Rust `ApiKey` entity. Migration exists but entity does not use these columns yet. The entity uses `key_type` to distinguish test keys.
+`account_id` tracks who created the key. Super admin list view batch-resolves `account_id` → username for the `created_by` display field.
 
 ### Key Type vs Tier
 
@@ -73,8 +74,7 @@ CREATE TABLE api_keys (
     rate_limit_tpm  INTEGER      NOT NULL DEFAULT 0,
     key_type        TEXT         NOT NULL DEFAULT 'standard', -- migration 000033
     tier            TEXT         NOT NULL DEFAULT 'paid',     -- migration 000038
-    -- account_id UUID REFERENCES accounts(id),          -- (planned, migration 000035, not yet in Rust entity)
-    -- is_test_key BOOLEAN NOT NULL DEFAULT false,       -- (planned, migration 000035, not yet in Rust entity)
+    account_id      UUID REFERENCES accounts(id),         -- migration 000035, tracks creator
     expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
     deleted_at      TIMESTAMPTZ  -- migration 000021
@@ -85,21 +85,22 @@ CREATE TABLE api_keys (
 -- (planned) One test key per account: uq_api_keys_account_test ON (account_id) WHERE is_test_key=true AND deleted_at IS NULL
 ```
 
-- migrations: 000001 CREATE, 000021 deleted_at, 000033 key_type column, 000035 account_id + is_test_key (planned -- not yet in entity), 000038 tier column, 000040 drop name unique index
+- migrations: 000001 CREATE, 000021 deleted_at, 000033 key_type column, 000035 account_id, 000038 tier column, 000040 drop name unique index
 
 ---
 
 ## API Endpoints
 
 ```
-POST   /v1/keys        CreateKeyRequest → CreateKeyResponse (plaintext shown once)
-                       Names are non-unique labels; unique id = UUIDv7
-GET    /v1/keys        → Vec<KeySummary> (excludes soft-deleted; excludes key_type = 'test')
-DELETE /v1/keys/{id}   → 204 (soft-delete: sets deleted_at = NOW())
-PATCH  /v1/keys/{id}   PatchKeyRequest { is_active?, tier? } → 204
+POST   /v1/keys              CreateKeyRequest → CreateKeyResponse (plaintext shown once)
+                              Names are non-unique labels; unique id = UUIDv7
+GET    /v1/keys              → Vec<KeySummary> (excludes soft-deleted; excludes key_type = 'test')
+DELETE /v1/keys/{id}         → 204 (soft-delete: sets deleted_at = NOW())
+PATCH  /v1/keys/{id}         PatchKeyRequest { is_active?, tier? } → 204
+POST   /v1/keys/{id}/regenerate → CreateKeyResponse (new hash + prefix, same id)
 ```
 
-`GET /v1/keys` filters out test keys (`key_type = 'test'`) server-side and is scoped to `tenant_id = 'default'` via `list_by_tenant("default")`. These scopes must match the `DashboardStats` SQL.
+`GET /v1/keys` filters out test keys (`key_type = 'test'`) server-side. Scope: **super admin** sees all keys (`list_all()`); non-super users see only their own tenant's keys (`list_by_tenant(username)`).
 
 ### Request / Response Structs
 
@@ -140,9 +141,23 @@ pub struct KeySummary {
     pub rate_limit_rpm: i32,
     pub rate_limit_tpm: i32,
     pub tier: String,                        // "free" | "paid"
+    pub created_by: Option<String>,          // resolved from account_id → username (super admin only)
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
+```
+
+### Key Regeneration
+
+`POST /v1/keys/{id}/regenerate` generates a new BLAKE2b-256 hash and prefix for an existing key. The key ID is preserved so historical usage data remains linked. The old key is invalidated immediately. The new plaintext is returned once (same as `CreateKeyResponse`).
+
+RBAC: super admin can regenerate any key; non-super can only regenerate their own tenant's keys.
+
+```rust
+// key_handlers.rs — regenerate_key()
+let (_new_id, plaintext, new_hash, new_prefix) = generate_api_key();
+state.api_key_repo.regenerate(&uuid, &new_hash, &new_prefix).await?;
+// Returns CreateKeyResponse with new plaintext
 ```
 
 ### DashboardStats — key counts (test keys excluded)
@@ -222,6 +237,21 @@ Fail-closed: Valkey error → returns 503 Service Unavailable, job rejected.
 ### Cascade Delete
 
 When an account is soft-deleted, all associated API keys are automatically soft-deleted via `soft_delete_by_tenant(tenant_id)`.
+
+---
+
+## Audit Trail
+
+All key operations emit audit events to ClickHouse via OTel:
+
+| Action | resource_type | When |
+|--------|---------------|------|
+| `create` | `api_key` | Key created |
+| `update` | `api_key` | is_active or tier changed |
+| `delete` | `api_key` | Key soft-deleted |
+| `regenerate` | `api_key` | Key regenerated (new hash) |
+
+Per-key history: `GET /v1/audit?resource_type=api_key&resource_id={key_id}` returns all audit events for a specific key. The web UI shows a History button per key row.
 
 ---
 

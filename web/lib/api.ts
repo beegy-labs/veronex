@@ -84,6 +84,9 @@ export const api = {
   updateKeyTier: (id: string, tier: 'free' | 'paid') =>
     apiClient.patch<void>(`/v1/keys/${id}`, { tier }),
 
+  regenerateKey: (id: string) =>
+    apiClient.post<CreateKeyResponse>(`/v1/keys/${id}/regenerate`),
+
   // ── Usage (JWT-protected) ─────────────────────────────────────────────────
   usageAggregate: (hours = 24) =>
     apiClient.get<UsageAggregate>(`/v1/usage?hours=${hours}`),
@@ -236,12 +239,13 @@ export const api = {
     apiClient.delete<void>(`/v1/accounts/${accountId}/sessions`),
 
   // ── Audit (JWT-protected) ─────────────────────────────────────────────────
-  auditEvents: (params?: { limit?: number; offset?: number; action?: string; resource_type?: string }) => {
+  auditEvents: (params?: { limit?: number; offset?: number; action?: string; resource_type?: string; resource_id?: string }) => {
     const qs = new URLSearchParams()
     if (params?.limit != null) qs.set('limit', String(params.limit))
     if (params?.offset != null) qs.set('offset', String(params.offset))
     if (params?.action) qs.set('action', params.action)
     if (params?.resource_type) qs.set('resource_type', params.resource_type)
+    if (params?.resource_id) qs.set('resource_id', params.resource_id)
     const q = qs.toString()
     return apiClient.get<AuditEvent[]>(`/v1/audit${q ? '?' + q : ''}`)
   },

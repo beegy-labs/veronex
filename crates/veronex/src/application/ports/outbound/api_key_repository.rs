@@ -40,6 +40,9 @@ pub trait ApiKeyRepository: Send + Sync {
 
     /// Soft-delete all active keys belonging to a tenant. Returns the number of keys affected.
     async fn soft_delete_by_tenant(&self, tenant_id: &str) -> Result<u64>;
+
+    /// Regenerate a key: replace hash and prefix with new values. Same ID preserved.
+    async fn regenerate(&self, key_id: &Uuid, new_hash: &str, new_prefix: &str) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -151,6 +154,15 @@ mod tests {
             }
             Ok(count)
         }
+
+        async fn regenerate(&self, key_id: &Uuid, new_hash: &str, new_prefix: &str) -> Result<()> {
+            let mut keys = self.keys.lock().await;
+            if let Some(key) = keys.iter_mut().find(|k| k.id == *key_id && k.deleted_at.is_none()) {
+                key.key_hash = new_hash.to_string();
+                key.key_prefix = new_prefix.to_string();
+            }
+            Ok(())
+        }
     }
 
     fn make_api_key(tenant_id: &str) -> ApiKey {
@@ -168,6 +180,7 @@ mod tests {
             created_at: Utc::now(),
             key_type: KeyType::Standard,
             tier: KeyTier::Paid,
+            account_id: None,
         }
     }
 

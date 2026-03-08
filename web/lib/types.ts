@@ -27,6 +27,8 @@ export interface ApiKey {
   expires_at: string | null
   /** Billing tier: `"free"` or `"paid"` */
   tier: 'free' | 'paid'
+  /** Username of the creator (super admin view) */
+  created_by?: string
 }
 
 // ── Re-exported generated enums (SSOT: Rust domain → ts-rs → here) ──────────

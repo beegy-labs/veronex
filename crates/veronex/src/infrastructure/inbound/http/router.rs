@@ -113,6 +113,7 @@ fn build_jwt_router() -> Router<AppState> {
         // Key management
         .route("/v1/keys", get(key_handlers::list_keys).post(key_handlers::create_key))
         .route("/v1/keys/{id}", delete(key_handlers::delete_key).patch(key_handlers::toggle_key))
+        .route("/v1/keys/{id}/regenerate", post(key_handlers::regenerate_key))
         // Usage
         .route("/v1/usage", get(usage_handlers::aggregate_usage))
         .route("/v1/usage/breakdown", get(usage_handlers::usage_breakdown))

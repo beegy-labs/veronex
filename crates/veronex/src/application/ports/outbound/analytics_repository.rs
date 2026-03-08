@@ -73,6 +73,7 @@ pub struct AuditFilters {
     pub offset: u32,
     pub action: Option<String>,
     pub resource_type: Option<String>,
+    pub resource_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

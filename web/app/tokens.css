@@ -200,6 +200,7 @@
 
   --theme-logo-start: var(--palette-logo-light-start);
   --theme-logo-end:   var(--palette-logo-light-end);
+  --theme-logo-inner: #0f3325;
 }
 
 /* Dark mode — "Obsidian Verde" */
@@ -249,6 +250,7 @@
 
   --theme-logo-start: var(--palette-logo-dark-start);
   --theme-logo-end:   var(--palette-logo-dark-end);
+  --theme-logo-inner: rgba(255,255,255,0.55);
 }
 
 /* ------------------------------------------------------------------
