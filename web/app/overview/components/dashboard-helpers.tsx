@@ -9,8 +9,8 @@ export type ThermalLevel = 'normal' | 'warning' | 'critical' | 'unknown'
 
 export function successRateCls(rate: number | undefined): string {
   if (rate == null) return ''
-  if (rate >= 0.99) return 'bg-status-success/15 text-status-success-fg'
-  if (rate >= 0.95) return 'bg-status-warning/15 text-status-warning-fg'
+  if (rate >= 99) return 'bg-status-success/15 text-status-success-fg'
+  if (rate >= 95) return 'bg-status-warning/15 text-status-warning-fg'
   return 'bg-status-error/15 text-status-error-fg'
 }
 

@@ -49,7 +49,7 @@ export default function PerformancePage() {
   })) ?? []
 
   const hasData    = data && data.total_requests > 0
-  const errorCount = data ? data.total_requests - Math.round(data.success_rate * data.total_requests) : 0
+  const errorCount = data ? data.total_requests - Math.round(data.success_rate / 100 * data.total_requests) : 0
   const currentLabel = TIME_LABEL_MAP.get(hours) ?? `${hours}h`
 
   // Merge analytics model stats (has success_rate) with breakdown model data (has avg_latency_ms)

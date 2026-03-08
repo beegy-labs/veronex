@@ -59,12 +59,13 @@ export function OverviewTab({ agg, analytics, perf, currentLabel }: OverviewTabP
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
-                <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={45} tickFormatter={fmtCompact} />
+                <YAxis yAxisId="left" tick={AXIS_TICK} axisLine={false} tickLine={false} width={40} tickFormatter={fmtCompact} />
+                <YAxis yAxisId="right" orientation="right" tick={AXIS_TICK} axisLine={false} tickLine={false} width={50} tickFormatter={fmtCompact} />
                 <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => fmtCompact(Number(v))} />
                 <Legend wrapperStyle={LEGEND_STYLE} />
-                <Area type="monotone" dataKey="requests" name={t('usage.requests')}
+                <Area yAxisId="left" type="monotone" dataKey="requests" name={t('usage.requests')}
                   stroke="var(--theme-primary)" fill="url(#gradReqs)" strokeWidth={2} dot={false} />
-                <Area type="monotone" dataKey="tokens" name={t('usage.totalTokens')}
+                <Area yAxisId="right" type="monotone" dataKey="tokens" name={t('usage.totalTokens')}
                   stroke="var(--theme-status-info)" fill="url(#gradToks)" strokeWidth={2} dot={false} />
               </AreaChart>
             </ResponsiveContainer>

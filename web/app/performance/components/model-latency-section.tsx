@@ -75,8 +75,8 @@ export function ModelLatencySection({ models }: { models: ModelPerfRow[] }) {
                   <TableCell className="text-right">
                     {m.success_rate != null ? (
                       <span className={`text-sm font-semibold tabular-nums ${
-                        (m.success_rate * 100) >= 90 ? 'text-status-success-fg'
-                          : (m.success_rate * 100) >= 70 ? 'text-status-warning-fg'
+                        m.success_rate >= 90 ? 'text-status-success-fg'
+                          : m.success_rate >= 70 ? 'text-status-warning-fg'
                           : 'text-status-error-fg'
                       }`}>
                         {fmtPct(m.success_rate)}

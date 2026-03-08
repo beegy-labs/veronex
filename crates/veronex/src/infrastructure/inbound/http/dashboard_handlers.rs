@@ -187,13 +187,13 @@ pub struct SyncSettingsResponse {
     pub probe_rate:         i32,
     pub last_run_at:        Option<String>,
     pub last_run_status:    Option<String>,
-    pub available_models:   Vec<String>,
+    pub available_models:   HashMap<String, Vec<String>>,
 }
 
 impl SyncSettingsResponse {
     fn from_settings(
         settings: crate::application::ports::outbound::capacity_settings_repository::CapacitySettings,
-        available_models: Vec<String>,
+        available_models: HashMap<String, Vec<String>>,
     ) -> Self {
         Self {
             analyzer_model:     settings.analyzer_model,
@@ -380,10 +380,7 @@ pub async fn get_capacity_settings(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
-
-    // Fetch available models from Ollama /api/tags
-    let available_models = fetch_ollama_tags(&state.http_client, &state.analyzer_url).await;
-
+    let available_models = fetch_all_provider_models(&state).await;
     Json(SyncSettingsResponse::from_settings(settings, available_models)).into_response()
 }
 
@@ -410,7 +407,7 @@ pub async fn patch_capacity_settings(
             emit_audit(&state, &claims, "update", "capacity_settings", "capacity_settings", "capacity_settings",
                 &format!("Sync settings updated: model={:?}, sync_enabled={:?}, sync_interval_secs={:?}",
                     body.analyzer_model, body.sync_enabled, body.sync_interval_secs)).await;
-            let available_models = fetch_ollama_tags(&state.http_client, &state.analyzer_url).await;
+            let available_models = fetch_all_provider_models(&state).await;
             Json(SyncSettingsResponse::from_settings(settings, available_models)).into_response()
         }
         Err(e) => {
@@ -443,28 +440,61 @@ pub async fn trigger_capacity_sync(
         .into_response()
 }
 
-// ── Helper: fetch Ollama model tags ────────────────────────────────
+// ── Helper: fetch models from all registered providers ────────────
 
-async fn fetch_ollama_tags(client: &reqwest::Client, analyzer_url: &str) -> Vec<String> {
-    #[derive(serde::Deserialize)]
-    struct TagsResponse { models: Vec<TagModel> }
-    #[derive(serde::Deserialize)]
-    struct TagModel { name: String }
+async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<String>> {
+    use crate::domain::enums::ProviderType;
 
-    let url = format!("{}/api/tags", analyzer_url.trim_end_matches('/'));
-    match client
-        .get(&url)
-        .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
-        .send()
-        .await
-    {
-        Ok(resp) => resp
-            .json::<TagsResponse>()
+    let mut result: HashMap<String, Vec<String>> = HashMap::new();
+
+    let providers = state.provider_registry.list_all().await.unwrap_or_default();
+
+    // ── Ollama: fetch /api/tags from each active Ollama provider ───
+    let ollama_providers: Vec<_> = providers.iter()
+        .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
+        .collect();
+
+    let mut ollama_models = std::collections::BTreeSet::new();
+    for provider in &ollama_providers {
+        let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
+        if let Ok(resp) = state.http_client
+            .get(&url)
+            .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
+            .send()
             .await
-            .map(|t| t.models.into_iter().map(|m| m.name).collect())
-            .unwrap_or_default(),
-        Err(_) => vec![],
+        {
+            #[derive(serde::Deserialize)]
+            struct TagsResponse { models: Vec<TagModel> }
+            #[derive(serde::Deserialize)]
+            struct TagModel { name: String }
+
+            if let Ok(tags) = resp.json::<TagsResponse>().await {
+                for m in tags.models {
+                    ollama_models.insert(m.name);
+                }
+            }
+        }
     }
+    if !ollama_models.is_empty() {
+        result.insert("ollama".to_string(), ollama_models.into_iter().collect());
+    }
+
+    // ── Gemini: show synced models only when lab feature is enabled ──
+    let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+    if lab.gemini_function_calling {
+        let gemini_models: Vec<String> = state.gemini_model_repo
+            .list()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.model_name)
+            .collect();
+        if !gemini_models.is_empty() {
+            result.insert("gemini".to_string(), gemini_models);
+        }
+    }
+
+    result
 }
 
 // ── GET /v1/dashboard/queue/depth — Valkey queue lengths ────────────

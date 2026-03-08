@@ -500,7 +500,7 @@ export interface SyncSettings {
   probe_rate: number
   last_run_at: string | null
   last_run_status: string | null
-  available_models: string[]
+  available_models: Record<string, string[]>
 }
 
 export interface PatchSyncSettings {
