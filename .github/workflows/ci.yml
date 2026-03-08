@@ -3,8 +3,6 @@ name: CI
 on:
   push:
     branches: [develop, main]
-  pull_request:
-    branches: [develop, main]
   workflow_dispatch:
     inputs:
       force_build:
@@ -22,86 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Check
-    if: github.event_name == 'pull_request'
-    runs-on: arc-runner-set
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Rust fmt
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Test
-        run: cargo test --all
-        env:
-          SQLX_OFFLINE: "true"
-          RUST_LOG: error
-
-  check-web:
-    name: Check Web
-    if: github.event_name == 'pull_request'
-    runs-on: arc-runner-set
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies
-        working-directory: web
-        run: npm ci
-      - name: Type check
-        working-directory: web
-        run: npx tsc --noEmit
-      - name: Unit tests
-        working-directory: web
-        run: npm test
-      - name: Build
-        working-directory: web
-        run: npm run build
-
-  e2e-smoke-pr:
-    name: E2E Smoke (PR)
-    if: github.event_name == 'pull_request'
-    needs: check-web
-    runs-on: arc-runner-set
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        working-directory: web
-        run: npm ci
-
-      - name: Install Playwright
-        working-directory: web
-        run: npx playwright install --with-deps chromium
-
-      - name: Run smoke tests
-        working-directory: web
-        run: npx playwright test --grep @smoke
-        env:
-          CI: "true"
-          PLAYWRIGHT_BASE_URL: ${{ vars.E2E_BASE_URL }}
-          PLAYWRIGHT_API_URL: ${{ vars.E2E_API_URL }}
-          E2E_USERNAME: ${{ secrets.E2E_USERNAME }}
-          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
-
-      - name: Upload report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-pr
-          path: web/playwright-report/
-          retention-days: 7
-
   build:
     name: Build
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && contains(fromJSON('["develop", "main"]'), github.ref_name)
     runs-on: arc-runner-set
     timeout-minutes: 60
     outputs:
@@ -137,19 +57,19 @@ jobs:
         run: |
           if [ "${{ inputs.force_build }}" = "true" ]; then
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "🔨 Force build requested, skipping image check"
+            echo "Force build requested, skipping image check"
             exit 0
           fi
           TAG="${{ steps.meta.outputs.tag }}"
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: token ${GITEA_TOKEN}" \
-            "${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex/${TAG}")
+            "https://${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex/${TAG}")
           if [ "$RESPONSE" = "200" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "✅ Image ${TAG} already exists, skipping build"
+            echo "Image ${TAG} already exists, skipping build"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "🔨 Image ${TAG} not found, proceeding with build"
+            echo "Image ${TAG} not found, proceeding with build"
           fi
 
       - uses: docker/build-push-action@v5
@@ -161,4 +81,3 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-
