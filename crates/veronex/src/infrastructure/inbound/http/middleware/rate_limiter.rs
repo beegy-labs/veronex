@@ -242,6 +242,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             key_type: KeyType::Standard,
             tier: KeyTier::Paid,
+            account_id: None,
         };
         assert_eq!(key.rate_limit_rpm, 0);
         assert_eq!(key.rate_limit_tpm, 0);
