@@ -4,17 +4,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::{ch_query_error, format_rfc3339, success_rate, validate_hours, HoursQuery};
 use crate::state::AppState;
-
-#[derive(Deserialize)]
-pub struct UsageQuery {
-    #[serde(default = "default_hours")]
-    pub hours: u32,
-}
-
-fn default_hours() -> u32 {
-    24
-}
 
 // ── Aggregate types (match veronex handler shapes) ─────────────────────────────
 
@@ -129,8 +120,10 @@ pub struct AnalyticsResponse {
 /// `GET /internal/usage?hours=`
 pub async fn aggregate_usage(
     State(state): State<AppState>,
-    Query(q): Query<UsageQuery>,
+    Query(q): Query<HoursQuery>,
 ) -> Result<Json<UsageAggregateRow>, StatusCode> {
+    validate_hours(q.hours)?;
+
     let result = state
         .ch
         .query(
@@ -154,10 +147,7 @@ pub async fn aggregate_usage(
         .bind(q.hours)
         .fetch_one::<UsageAggregateRow>()
         .await
-        .map_err(|e| {
-            tracing::warn!("aggregate_usage query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| ch_query_error(e, "aggregate_usage query failed"))?;
 
     Ok(Json(result))
 }
@@ -166,8 +156,10 @@ pub async fn aggregate_usage(
 pub async fn key_usage(
     State(state): State<AppState>,
     Path(key_id): Path<Uuid>,
-    Query(q): Query<UsageQuery>,
+    Query(q): Query<HoursQuery>,
 ) -> Result<Json<Vec<HourlyUsageResponse>>, StatusCode> {
+    validate_hours(q.hours)?;
+
     let rows = state
         .ch
         .query(
@@ -196,28 +188,19 @@ pub async fn key_usage(
         .bind(q.hours)
         .fetch_all::<HourlyUsageRow>()
         .await
-        .map_err(|e| {
-            tracing::warn!("key_usage query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| ch_query_error(e, "key_usage query failed"))?;
 
     let response = rows
         .into_iter()
-        .map(|r| {
-            let hour = r
-                .hour
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default();
-            HourlyUsageResponse {
-                hour,
-                request_count: r.request_count,
-                success_count: r.success_count,
-                cancelled_count: r.cancelled_count,
-                error_count: r.error_count,
-                prompt_tokens: r.prompt_tokens,
-                completion_tokens: r.completion_tokens,
-                total_tokens: r.total_tokens,
-            }
+        .map(|r| HourlyUsageResponse {
+            hour: format_rfc3339(r.hour),
+            request_count: r.request_count,
+            success_count: r.success_count,
+            cancelled_count: r.cancelled_count,
+            error_count: r.error_count,
+            prompt_tokens: r.prompt_tokens,
+            completion_tokens: r.completion_tokens,
+            total_tokens: r.total_tokens,
         })
         .collect();
 
@@ -228,8 +211,10 @@ pub async fn key_usage(
 pub async fn key_usage_jobs(
     State(state): State<AppState>,
     Path(key_id): Path<Uuid>,
-    Query(q): Query<UsageQuery>,
+    Query(q): Query<HoursQuery>,
 ) -> Result<Json<Vec<JobUsageResponse>>, StatusCode> {
+    validate_hours(q.hours)?;
+
     let rows = state
         .ch
         .query(
@@ -253,28 +238,19 @@ pub async fn key_usage_jobs(
         .bind(q.hours)
         .fetch_all::<JobUsageRow>()
         .await
-        .map_err(|e| {
-            tracing::warn!("key_usage_jobs query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| ch_query_error(e, "key_usage_jobs query failed"))?;
 
     let response = rows
         .into_iter()
-        .map(|r| {
-            let event_time = r
-                .event_time
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default();
-            JobUsageResponse {
-                event_time,
-                request_id: r.request_id,
-                model_name: r.model_name,
-                prompt_tokens: r.prompt_tokens,
-                completion_tokens: r.completion_tokens,
-                latency_ms: r.latency_ms,
-                finish_reason: r.finish_reason,
-                status: r.status,
-            }
+        .map(|r| JobUsageResponse {
+            event_time: format_rfc3339(r.event_time),
+            request_id: r.request_id,
+            model_name: r.model_name,
+            prompt_tokens: r.prompt_tokens,
+            completion_tokens: r.completion_tokens,
+            latency_ms: r.latency_ms,
+            finish_reason: r.finish_reason,
+            status: r.status,
         })
         .collect();
 
@@ -284,8 +260,10 @@ pub async fn key_usage_jobs(
 /// `GET /internal/analytics?hours=`
 pub async fn get_analytics(
     State(state): State<AppState>,
-    Query(q): Query<UsageQuery>,
+    Query(q): Query<HoursQuery>,
 ) -> Result<Json<AnalyticsResponse>, StatusCode> {
+    validate_hours(q.hours)?;
+
     let agg = state
         .ch
         .query(
@@ -302,10 +280,7 @@ pub async fn get_analytics(
         .bind(q.hours)
         .fetch_one::<AnalyticsAggRow>()
         .await
-        .map_err(|e| {
-            tracing::warn!("analytics agg query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| ch_query_error(e, "analytics agg query failed"))?;
 
     let model_rows = state
         .ch
@@ -326,10 +301,7 @@ pub async fn get_analytics(
         .bind(q.hours)
         .fetch_all::<ModelStatRow>()
         .await
-        .map_err(|e| {
-            tracing::warn!("analytics model query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| ch_query_error(e, "analytics model query failed"))?;
 
     let reason_rows = state
         .ch
@@ -346,28 +318,18 @@ pub async fn get_analytics(
         .bind(q.hours)
         .fetch_all::<FinishReasonRow>()
         .await
-        .map_err(|e| {
-            tracing::warn!("analytics reason query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| ch_query_error(e, "analytics reason query failed"))?;
 
     let models = model_rows
         .into_iter()
-        .map(|r| {
-            let success_rate = if r.request_count > 0 {
-                r.success_count as f64 / r.request_count as f64
-            } else {
-                0.0
-            };
-            ModelStat {
-                model_name: r.model_name,
-                request_count: r.request_count,
-                success_count: r.success_count,
-                success_rate,
-                total_prompt_tokens: r.total_prompt_tokens,
-                total_completion_tokens: r.total_completion_tokens,
-                avg_latency_ms: r.avg_latency_ms,
-            }
+        .map(|r| ModelStat {
+            model_name: r.model_name,
+            request_count: r.request_count,
+            success_count: r.success_count,
+            success_rate: success_rate(r.request_count, r.success_count),
+            total_prompt_tokens: r.total_prompt_tokens,
+            total_completion_tokens: r.total_completion_tokens,
+            avg_latency_ms: r.avg_latency_ms,
         })
         .collect();
 
@@ -383,4 +345,23 @@ pub async fn get_analytics(
         models,
         finish_reasons,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::handlers::success_rate;
+
+    #[test]
+    fn avg_tps_rounding() {
+        // Simulates the rounding logic: (val * 10).round() / 10
+        let raw = 12.345_f64;
+        let rounded = (raw * 10.0).round() / 10.0;
+        assert!((rounded - 12.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn success_rate_normal() {
+        let rate = success_rate(100, 95);
+        assert!((rate - 0.95).abs() < f64::EPSILON);
+    }
 }

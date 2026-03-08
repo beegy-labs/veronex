@@ -1,6 +1,6 @@
 # Web -- Brand, Design System & Core
 
-> SSOT | **Last Updated**: 2026-03-04 | Split from monolithic design-system into 3 files
+> SSOT | **Last Updated**: 2026-03-08 | Split from monolithic design-system into 3 files
 
 Related files:
 - [design-system-i18n.md](design-system-i18n.md) -- i18n, timezone, date formatting
@@ -29,7 +29,9 @@ Related files:
 | `web/app/globals.css` | Tailwind v4 entry + focus ring + bee animation |
 | `web/app/layout.tsx` | All providers: Theme, I18n, Timezone, QueryClient, LabSettings |
 | `web/components/lab-settings-provider.tsx` | `useLabSettings()` -- experimental feature flags |
-| `web/components/nav.tsx` | Collapsible sidebar + `HexLogo` SVG |
+| `web/components/nav.tsx` | Collapsible sidebar (imports `HexLogo` from `nav-icons.tsx`) |
+| `web/components/nav-icons.tsx` | `HexLogo` + `OllamaIcon` SVGs |
+| `web/components/nav-settings-dialog.tsx` | Settings dialog: language, timezone, lab features |
 | `web/components/theme-provider.tsx` | `data-theme` switcher, `localStorage('hg-theme')` |
 | `web/components/data-table.tsx` | `DataTable` + `DataTableEmpty` -- SSOT for all tables |
 | `web/lib/chart-theme.ts` | Recharts constants + `fmtMs`/`fmtMsAxis`/`fmtMsNullable` |
@@ -44,7 +46,7 @@ Related files:
 ## Brand (Veronex)
 
 - **Name**: Vero (truth/precision) + Nexus (connection hub)
-- **Logo**: `HexLogo` in `nav.tsx` -- flat-top honeycomb hexagon SVG, 32x32 viewBox
+- **Logo**: `HexLogo` in `nav-icons.tsx` -- flat-top honeycomb hexagon SVG, 32x32 viewBox
 - **Logo CSS vars**: `var(--theme-logo-start)`, `var(--theme-logo-end)`
 - **Favicon**: `web/public/favicon.svg` -- forest gradient `#0d2518 -> #16402e`
 - **Wordmark**: `web/public/logo.svg` -- hex mark + "Veronex" text in `#16402e`
@@ -128,7 +130,7 @@ Footer:
   v0.1.0 / [Settings gear] / [theme toggle]
 ```
 
-**Settings gear**: opens Dialog with Language row (en/ko/ja) + Timezone row (11 presets + "Custom...").
+**Settings gear**: opens `NavSettingsDialog` (`nav-settings-dialog.tsx`) with Language row (en/ko/ja) + Timezone row (11 presets + "Custom...") + Lab features toggle.
 
 | Property | Value |
 |----------|-------|

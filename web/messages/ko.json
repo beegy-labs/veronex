@@ -7,7 +7,6 @@
     "jobs": "작업",
     "keys": "API 키",
     "providers": "프로바이더",
-    "providers": "프로바이더",
     "usage": "사용량",
     "performance": "성능",
     "test": "테스트",
@@ -78,7 +77,12 @@
     "labFeatures": "실험실 기능",
     "labFeaturesDesc": "실험적 기능 — 불안정할 수 있습니다.",
     "labGeminiFunctionCalling": "Gemini 함수 호출",
-    "labGeminiFunctionCallingDesc": "Gemini 호환 엔드포인트를 통한 도구 사용을 활성화합니다. 아직 개발 중입니다."
+    "labGeminiFunctionCallingDesc": "Gemini 호환 엔드포인트를 통한 도구 사용을 활성화합니다. 아직 개발 중입니다.",
+    "menu": "메뉴",
+    "expand": "펼치기",
+    "collapse": "접기",
+    "signOut": "로그아웃",
+    "retry": "재시도"
   },
   "overview": {
     "title": "개요",
@@ -505,7 +509,18 @@
     "byModel": "모델별",
     "searchModels": "모델 검색...",
     "modelLatencyChart": "모델 지연시간",
-    "keyDetail": "키 상세"
+    "keyDetail": "키 상세",
+    "prompt": "프롬프트",
+    "completion": "완성",
+    "modelCol": "모델",
+    "keyCol": "키",
+    "requestsCol": "요청",
+    "shareCol": "비율",
+    "successCol": "성공",
+    "tokensCol": "토큰",
+    "callPct": "호출 %",
+    "avgLatencyCol": "평균 지연",
+    "free": "무료"
   },
   "performance": {
     "title": "성능",
@@ -629,7 +644,16 @@
     "revokeSession": "세션 만료",
     "revokeAll": "모든 세션 만료",
     "noSessions": "활성 세션 없음",
-    "lastUsed": "마지막 사용"
+    "lastUsed": "마지막 사용",
+    "accountCreated": "계정이 생성되었습니다",
+    "saveKeyWarning": "아래의 테스트 API 키를 저장하세요 — 다시 표시되지 않습니다.",
+    "password": "비밀번호",
+    "email": "이메일",
+    "fullName": "성명",
+    "position": "직책",
+    "createFailed": "계정 생성에 실패했습니다",
+    "creating": "생성 중…",
+    "tokenWarning": "이 토큰은 한 번만 표시됩니다. 지금 복사하여 안전하게 보관하세요."
   },
   "audit": {
     "title": "감사 로그",

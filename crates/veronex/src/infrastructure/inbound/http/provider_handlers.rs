@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::Result;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -18,6 +16,7 @@ use crate::infrastructure::outbound::valkey_keys;
 use super::audit_helpers::emit_audit;
 use super::error::AppError;
 use super::gemini_helpers;
+use super::provider_validation::{parse_provider_type, validate_provider_url};
 use super::state::AppState;
 
 use super::constants::MODELS_CACHE_TTL;
@@ -109,7 +108,7 @@ pub struct RegisterProviderRequest {
     pub provider_type: String,
     /// Required for Ollama. E.g. `"http://192.168.1.10:11434"`.
     pub url: Option<String>,
-    /// Required for Gemini. Stored as-is (PoC — no encryption).
+    /// Required for Gemini. Encrypted at rest via AES-256-GCM.
     pub api_key: Option<String>,
     /// GPU VRAM capacity in MiB (manual). 0 = unknown.
     pub total_vram_mb: Option<i64>,
@@ -193,67 +192,8 @@ pub struct RegisterProviderResponse {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-fn parse_provider_type(s: &str) -> Option<ProviderType> {
-    match s.to_lowercase().as_str() {
-        "ollama" => Some(ProviderType::Ollama),
-        "gemini" => Some(ProviderType::Gemini),
-        _ => None,
-    }
-}
-
-/// SSRF prevention: block cloud metadata endpoints, IPv6 loopback/link-local,
-/// and IPv4-mapped IPv6 addresses. Enforce http(s) scheme.
-///
-/// Localhost and private-network IPs are intentionally allowed because Ollama
-/// providers run on local machines (e.g. `http://192.168.1.10:11434`).
-fn validate_provider_url(url: &str) -> Result<(), AppError> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(AppError::BadRequest(
-            "provider URL must use http:// or https://".into(),
-        ));
-    }
-
-    // Block known metadata hostnames.
-    if url.contains("metadata.google.internal") {
-        return Err(AppError::BadRequest("metadata endpoints are not allowed".into()));
-    }
-
-    // Extract host portion between :// and the next /.
-    let after_scheme = url.split("://").nth(1).unwrap_or("");
-    let authority = after_scheme.split('/').next().unwrap_or("");
-    // Handle IPv6 brackets: [::1]:port → extract content between [ and ].
-    let bare = if let Some(start) = authority.find('[') {
-        let end = authority.find(']').unwrap_or(authority.len());
-        &authority[start + 1..end]
-    } else {
-        // IPv4 or hostname: strip port.
-        authority.split(':').next().unwrap_or("")
-    };
-
-    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
-        // Block link-local (169.254.x.x / fe80::) — cloud metadata lives here.
-        if is_link_local(&ip) {
-            return Err(AppError::BadRequest("metadata endpoints are not allowed".into()));
-        }
-        // Block IPv4-mapped IPv6 link-local (e.g. ::ffff:169.254.169.254).
-        if let std::net::IpAddr::V6(v6) = ip
-            && let Some(mapped) = v6.to_ipv4_mapped()
-                && mapped.is_link_local() {
-                    return Err(AppError::BadRequest("metadata endpoints are not allowed".into()));
-                }
-    }
-    Ok(())
-}
-
-fn is_link_local(ip: &std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => v4.is_link_local(),
-        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
-    }
-}
-
 /// Fetch a provider by ID or return a structured error.
-async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvider, AppError> {
+pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvider, AppError> {
     state
         .provider_registry
         .get(id)
@@ -471,129 +411,6 @@ pub async fn update_provider(
     (StatusCode::OK, Json(ProviderSummary::from(provider))).into_response()
 }
 
-// ── Unit tests ─────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn provider_summary_from_llm_provider_ollama() {
-        let b = LlmProvider {
-            id: Uuid::now_v7(),
-            name: "test-ollama".to_string(),
-            provider_type: ProviderType::Ollama,
-            url: "http://localhost:11434".to_string(),
-            api_key_encrypted: None,
-            is_active: true,
-            total_vram_mb: 8192,
-            gpu_index: Some(0),
-            server_id: None,
-            agent_url: None,
-            is_free_tier: false,
-            status: LlmProviderStatus::Online,
-            registered_at: Utc::now(),
-        };
-        let s = ProviderSummary::from(b);
-        assert_eq!(s.provider_type, "ollama");
-        assert_eq!(s.status, "online");
-        assert_eq!(s.url, "http://localhost:11434");
-        assert!(s.is_active);
-        assert_eq!(s.gpu_index, Some(0));
-    }
-
-    #[test]
-    fn provider_summary_from_llm_provider_gemini() {
-        let b = LlmProvider {
-            id: Uuid::now_v7(),
-            name: "gemini-pro".to_string(),
-            provider_type: ProviderType::Gemini,
-            url: String::new(),
-            api_key_encrypted: Some("secret".to_string()),
-            is_active: true,
-            total_vram_mb: 0,
-            gpu_index: None,
-            server_id: None,
-            agent_url: None,
-            is_free_tier: true,
-            status: LlmProviderStatus::Offline,
-            registered_at: Utc::now(),
-        };
-        let s = ProviderSummary::from(b);
-        assert_eq!(s.provider_type, "gemini");
-        assert_eq!(s.status, "offline");
-    }
-
-    #[test]
-    fn parse_provider_type_case_insensitive() {
-        assert_eq!(parse_provider_type("Ollama"), Some(ProviderType::Ollama));
-        assert_eq!(parse_provider_type("GEMINI"), Some(ProviderType::Gemini));
-        assert_eq!(parse_provider_type("unknown"), None);
-    }
-
-    #[test]
-    fn validate_provider_url_allows_http() {
-        assert!(validate_provider_url("http://192.168.1.10:11434").is_ok());
-    }
-
-    #[test]
-    fn validate_provider_url_allows_https() {
-        assert!(validate_provider_url("https://api.example.com").is_ok());
-    }
-
-    #[test]
-    fn validate_provider_url_allows_localhost() {
-        assert!(validate_provider_url("http://localhost:11434").is_ok());
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_gcp_metadata() {
-        let err = validate_provider_url("http://metadata.google.internal/computeMetadata/v1/")
-            .unwrap_err();
-        assert!(err.to_string().contains("metadata"));
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_ftp_scheme() {
-        let err = validate_provider_url("ftp://example.com").unwrap_err();
-        assert!(err.to_string().contains("http://"));
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_file_scheme() {
-        let err = validate_provider_url("file:///etc/passwd").unwrap_err();
-        assert!(err.to_string().contains("http://"));
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_ipv6_link_local() {
-        let err = validate_provider_url("http://[fe80::1]:11434").unwrap_err();
-        assert!(err.to_string().contains("metadata"));
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_ipv4_mapped_ipv6_metadata() {
-        let err = validate_provider_url("http://[::ffff:169.254.169.254]/latest/").unwrap_err();
-        assert!(err.to_string().contains("metadata"));
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_ipv4_link_local() {
-        let err = validate_provider_url("http://169.254.169.254/latest/meta-data/").unwrap_err();
-        assert!(err.to_string().contains("metadata"));
-    }
-
-    #[test]
-    fn register_request_deserialization() {
-        let json = r#"{"name":"local","provider_type":"ollama","url":"http://localhost:11434"}"#;
-        let req: RegisterProviderRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.name, "local");
-        assert_eq!(req.provider_type, "ollama");
-        assert_eq!(req.url.as_deref(), Some("http://localhost:11434"));
-        assert!(req.api_key.is_none());
-    }
-}
-
 /// `GET /v1/providers/{id}/models` — list models available on a provider.
 ///
 /// Returns the cached model list if available (TTL: 1 h).
@@ -620,7 +437,7 @@ pub async fn list_provider_models(
     (StatusCode::OK, Json(serde_json::json!({"models": []}))).into_response()
 }
 
-/// `GET /v1/providers/{id}/key` — return the stored (plain-text PoC) API key for a Gemini provider.
+/// `GET /v1/providers/{id}/key` — return the decrypted API key for a Gemini provider.
 ///
 /// Requires admin auth. Returns `{"key": "AIza..."}`.
 pub async fn reveal_provider_key(
@@ -686,117 +503,6 @@ pub async fn sync_provider_models(
         Err(e) => {
             tracing::error!(%id, "model sync failed: {e}");
             AppError::ServiceUnavailable(e.to_string()).into_response()
-        }
-    }
-}
-
-// ── Selected-model handlers ────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct SelectedModelDto {
-    model_name: String,
-    is_enabled: bool,
-    synced_at: DateTime<Utc>,
-}
-
-/// `GET /v1/providers/{id}/selected-models` — list models with per-provider enabled state.
-///
-/// **Ollama**: merges per-provider `ollama_models` with `provider_selected_models`.
-///   New models default to `is_enabled = true`.
-/// **Gemini**: merges the global `gemini_models` pool with `provider_selected_models`.
-///   New models default to `is_enabled = false`.
-pub async fn list_selected_models(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    // Resolve the provider to branch by type.
-    let provider = match get_provider(&state, id).await {
-        Ok(p) => p,
-        Err(e) => return e.into_response(),
-    };
-
-    // Per-provider selections (enabled/disabled overrides).
-    let selections = match state.model_selection_repo.list(id).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(%id, "list_selected_models: failed to list selections: {e}");
-            return AppError::Internal(anyhow::anyhow!("database error")).into_response();
-        }
-    };
-    let sel_map: HashMap<String, bool> = selections
-        .into_iter()
-        .map(|s| (s.model_name, s.is_enabled))
-        .collect();
-
-    match provider.provider_type {
-        ProviderType::Ollama => {
-            // Use per-provider synced model list; default is_enabled = true.
-            let models = match state.ollama_model_repo.models_for_provider(id).await {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::error!(%id, "list_selected_models: failed to list ollama models: {e}");
-                    return AppError::Internal(anyhow::anyhow!("database error")).into_response();
-                }
-            };
-            let dtos: Vec<SelectedModelDto> = models
-                .into_iter()
-                .map(|model_name| {
-                    let is_enabled = sel_map.get(&model_name).copied().unwrap_or(true);
-                    SelectedModelDto {
-                        model_name,
-                        is_enabled,
-                        synced_at: Utc::now(),
-                    }
-                })
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
-        }
-
-        ProviderType::Gemini => {
-            // Global model pool; default is_enabled = false.
-            let global = match state.gemini_model_repo.list().await {
-                Ok(g) => g,
-                Err(e) => {
-                    tracing::error!(%id, "list_selected_models: failed to list global models: {e}");
-                    return AppError::Internal(anyhow::anyhow!("database error")).into_response();
-                }
-            };
-            let dtos: Vec<SelectedModelDto> = global
-                .into_iter()
-                .map(|m| {
-                    let is_enabled = sel_map.get(&m.model_name).copied().unwrap_or(false);
-                    SelectedModelDto {
-                        model_name: m.model_name,
-                        is_enabled,
-                        synced_at: m.synced_at,
-                    }
-                })
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SetModelEnabledRequest {
-    pub is_enabled: bool,
-}
-
-/// `PATCH /v1/providers/{id}/selected-models/{model_name}` — toggle a model's enabled state.
-pub async fn set_model_enabled(
-    State(state): State<AppState>,
-    Path((id, model_name)): Path<(Uuid, String)>,
-    Json(req): Json<SetModelEnabledRequest>,
-) -> impl IntoResponse {
-    match state
-        .model_selection_repo
-        .set_enabled(id, &model_name, req.is_enabled)
-        .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            tracing::error!(%id, %model_name, "set_model_enabled: {e}");
-            AppError::Internal(anyhow::anyhow!("database error")).into_response()
         }
     }
 }
@@ -877,4 +583,69 @@ pub async fn sync_all_providers_handler(
         Json(serde_json::json!({ "message": "provider sync triggered" })),
     )
         .into_response()
+}
+
+// ── Unit tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_summary_from_llm_provider_ollama() {
+        let b = LlmProvider {
+            id: Uuid::now_v7(),
+            name: "test-ollama".to_string(),
+            provider_type: ProviderType::Ollama,
+            url: "http://localhost:11434".to_string(),
+            api_key_encrypted: None,
+            is_active: true,
+            total_vram_mb: 8192,
+            gpu_index: Some(0),
+            server_id: None,
+            agent_url: None,
+            is_free_tier: false,
+            status: LlmProviderStatus::Online,
+            registered_at: Utc::now(),
+        };
+        let s = ProviderSummary::from(b);
+        assert_eq!(s.provider_type, "ollama");
+        assert_eq!(s.status, "online");
+        assert_eq!(s.url, "http://localhost:11434");
+        assert!(s.is_active);
+        assert_eq!(s.gpu_index, Some(0));
+    }
+
+    #[test]
+    fn provider_summary_from_llm_provider_gemini() {
+        let b = LlmProvider {
+            id: Uuid::now_v7(),
+            name: "gemini-pro".to_string(),
+            provider_type: ProviderType::Gemini,
+            url: String::new(),
+            api_key_encrypted: Some("secret".to_string()),
+            is_active: true,
+            total_vram_mb: 0,
+            gpu_index: None,
+            server_id: None,
+            agent_url: None,
+            is_free_tier: true,
+            status: LlmProviderStatus::Offline,
+            registered_at: Utc::now(),
+        };
+        let s = ProviderSummary::from(b);
+        assert_eq!(s.provider_type, "gemini");
+        assert_eq!(s.status, "offline");
+    }
+
+    #[test]
+    fn register_request_deserialization() {
+        let json = r#"{"name":"local","provider_type":"ollama","url":"http://localhost:11434"}"#;
+        let req: RegisterProviderRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.name, "local");
+        assert_eq!(req.provider_type, "ollama");
+        assert_eq!(req.url.as_deref(), Some("http://localhost:11434"));
+        assert!(req.api_key.is_none());
+    }
 }

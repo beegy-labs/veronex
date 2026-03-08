@@ -9,6 +9,7 @@ use tower_http::trace::TraceLayer;
 use super::account_handlers;
 use super::audit_handlers;
 use super::auth_handlers;
+use super::model_selection_handlers;
 use super::provider_handlers;
 use super::dashboard_handlers;
 use super::docs_handlers;
@@ -121,6 +122,7 @@ fn build_jwt_router() -> Router<AppState> {
         // Analytics
         .route("/v1/dashboard/analytics", get(usage_handlers::get_analytics))
         // Dashboard
+        .route("/v1/dashboard/overview", get(dashboard_handlers::get_dashboard_overview))
         .route("/v1/dashboard/stats", get(dashboard_handlers::get_stats))
         .route("/v1/dashboard/queue/depth", get(dashboard_handlers::get_queue_depth))
         .route("/v1/dashboard/jobs/stream", get(dashboard_handlers::job_events_sse))
@@ -137,8 +139,8 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/providers/{id}/models", get(provider_handlers::list_provider_models))
         .route("/v1/providers/sync", post(provider_handlers::sync_all_providers_handler))
         .route("/v1/providers/{id}/key", get(provider_handlers::reveal_provider_key))
-        .route("/v1/providers/{id}/selected-models", get(provider_handlers::list_selected_models))
-        .route("/v1/providers/{id}/selected-models/{model_name}", patch(provider_handlers::set_model_enabled))
+        .route("/v1/providers/{id}/selected-models", get(model_selection_handlers::list_selected_models))
+        .route("/v1/providers/{id}/selected-models/{model_name}", patch(model_selection_handlers::set_model_enabled))
         // GPU server management
         .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers).post(gpu_server_handlers::register_gpu_server))
         .route(

@@ -1,6 +1,6 @@
 # API Keys — Server-Side: Auth & Rate Limiting
 
-> SSOT | **Last Updated**: 2026-03-04
+> SSOT | **Last Updated**: 2026-03-08 (rev: ts(skip) on sensitive fields)
 
 ## Task Guide
 
@@ -33,7 +33,7 @@
 // domain/entities/api_key.rs
 pub struct ApiKey {
     pub id: Uuid,
-    pub key_hash: String,                    // BLAKE2b-256, never stored plaintext
+    pub key_hash: String,                    // BLAKE2b-256, #[serde(skip_serializing)] #[ts(skip)]
     pub key_prefix: String,                  // First 12 chars for display
     pub tenant_id: String,
     pub name: String,
@@ -42,8 +42,8 @@ pub struct ApiKey {
     pub rate_limit_tpm: i32,                 // 0 = unlimited
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
-    pub deleted_at: Option<DateTime<Utc>>,   // NULL = active, NOT NULL = soft-deleted
-    pub key_type: KeyType,                   // Standard | Test — domain enum (migration 000033)
+    pub deleted_at: Option<DateTime<Utc>>,   // #[ts(skip)] — internal only
+    pub key_type: KeyType,                   // #[ts(skip)] — internal only (Standard | Test)
     pub tier: KeyTier,                       // Free | Paid — domain enum (migration 000038)
 }
 ```

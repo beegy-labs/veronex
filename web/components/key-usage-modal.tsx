@@ -186,8 +186,8 @@ export function KeyUsageModal({
                       <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={42} tickFormatter={fmtCompact} />
                       <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => fmtCompact(Number(v))} />
                       <Legend wrapperStyle={LEGEND_STYLE} />
-                      <Area type="monotone" dataKey="prompt" name="Prompt"     stroke="var(--theme-primary)"       fill="url(#ku-gradPrompt)" strokeWidth={2} dot={false} />
-                      <Area type="monotone" dataKey="compl"  name="Completion" stroke="var(--theme-status-info)"  fill="url(#ku-gradCompl)"  strokeWidth={2} dot={false} />
+                      <Area type="monotone" dataKey="prompt" name={t('usage.prompt')}     stroke="var(--theme-primary)"       fill="url(#ku-gradPrompt)" strokeWidth={2} dot={false} />
+                      <Area type="monotone" dataKey="compl"  name={t('usage.completion')} stroke="var(--theme-status-info)"  fill="url(#ku-gradCompl)"  strokeWidth={2} dot={false} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>

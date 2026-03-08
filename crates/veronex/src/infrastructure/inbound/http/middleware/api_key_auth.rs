@@ -86,19 +86,19 @@ mod tests {
     #[test]
     fn excluded_path_matching() {
         let path = "/health";
-        assert!(EXCLUDED_PATHS.iter().any(|p| path == *p));
+        assert!(EXCLUDED_PATHS.contains(&path));
 
         let path = "/readyz";
-        assert!(EXCLUDED_PATHS.iter().any(|p| path == *p));
+        assert!(EXCLUDED_PATHS.contains(&path));
 
         let path = "/v1/inference";
-        assert!(!EXCLUDED_PATHS.iter().any(|p| path == *p));
+        assert!(!EXCLUDED_PATHS.contains(&path));
 
         let path = "/v1/keys";
-        assert!(!EXCLUDED_PATHS.iter().any(|p| path == *p));
+        assert!(!EXCLUDED_PATHS.contains(&path));
 
         // Exact match prevents prefix bypass (e.g., /healthXYZ)
         let path = "/healthXYZ";
-        assert!(!EXCLUDED_PATHS.iter().any(|p| path == *p));
+        assert!(!EXCLUDED_PATHS.contains(&path));
     }
 }

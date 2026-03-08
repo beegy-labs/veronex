@@ -44,4 +44,8 @@ pub enum DomainError {
     // ── Conflict ─────────────────────────────────────────────────────────
     #[error("conflict: {0}")]
     Conflict(String),
+
+    // ── Internal (infrastructure-originated) ────────────────────────────
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
 }

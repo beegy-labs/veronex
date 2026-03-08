@@ -1,6 +1,6 @@
 # Web — Usage Page
 
-> SSOT | Tier 2 | Last Updated: 2026-03-05
+> SSOT | Tier 2 | Last Updated: 2026-03-08
 
 ## Layout (Tabs)
 
@@ -18,6 +18,11 @@ KPI row (always visible) then tabs:
 | File | Purpose |
 |------|---------|
 | `web/app/usage/page.tsx` | Usage page (KPI cards + 4-tab breakdown) |
+| `web/app/usage/components/token-donut.tsx` | `TokenDonut` — prompt/completion donut chart |
+| `web/app/usage/components/finish-reasons-card.tsx` | `FinishReasonsCard` — finish reason distribution |
+| `web/app/usage/components/provider-breakdown.tsx` | `ProviderBreakdownSection` — per-provider cards |
+| `web/app/usage/components/breakdown-tables.tsx` | `KeyBreakdownTable`, `ModelBreakdownTable` |
+| `web/app/usage/components/model-latency-chart.tsx` | `ModelLatencyChart` — horizontal bar chart |
 | `web/lib/types.ts` | `UsageBreakdown`, `ProviderBreakdown`, `KeyBreakdown`, `ModelBreakdown` |
 | `web/lib/api.ts` | `usageAggregate()`, `usageBreakdown()` |
 | `web/messages/en.json` | i18n keys under `usage.*` |

@@ -5,9 +5,12 @@ pub mod auth_handlers;
 pub mod constants;
 pub mod error;
 pub mod cancel_guard;
+pub mod model_selection_handlers;
 pub mod provider_handlers;
+mod provider_validation;
 pub mod docs_handlers;
 pub mod dashboard_handlers;
+mod dashboard_queries;
 pub mod gemini_compat_handlers;
 pub mod gemini_helpers;
 pub mod gemini_model_handlers;
@@ -22,7 +25,12 @@ pub mod middleware;
 pub mod ollama_model_handlers;
 pub mod openai_handlers;
 pub mod openai_sse_types;
+mod query_helpers;
 pub mod test_handlers;
 pub mod router;
 pub mod state;
 pub mod usage_handlers;
+mod usage_queries;
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+pub(crate) mod test_support;

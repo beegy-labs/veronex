@@ -1,4 +1,4 @@
-> **SSOT** | **Tier 2** | Last Updated: 2026-03-05
+> **SSOT** | **Tier 2** | Last Updated: 2026-03-08
 
 # Web — Performance Page
 
@@ -20,7 +20,9 @@ Chart: Error Rate / Hour (LineChart 0–100%)
 
 | File | Purpose |
 |------|---------|
-| `web/app/performance/page.tsx` | Performance page |
+| `web/app/performance/page.tsx` | Performance page (KPI cards + charts) |
+| `web/app/performance/components/model-latency-section.tsx` | `ModelLatencySection` — model table + latency bar chart |
+| `web/app/performance/components/key-performance-section.tsx` | `KeyPerformanceSection` — per-key table |
 | `web/lib/queries/dashboard.ts` | `performanceQuery(hours)` — `GET /v1/dashboard/performance` |
 | `web/lib/queries/usage.ts` | `usageBreakdownQuery(hours)` — reused for model/key breakdown |
 | `web/lib/queries/usage.ts` | `analyticsQuery(hours)` — TPS + model success rates |

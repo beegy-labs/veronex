@@ -3,17 +3,8 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use super::{ch_query_error, format_rfc3339, success_rate, validate_hours, HoursQuery};
 use crate::state::AppState;
-
-#[derive(Deserialize)]
-pub struct PerfQuery {
-    #[serde(default = "default_hours")]
-    pub hours: u32,
-}
-
-fn default_hours() -> u32 {
-    24
-}
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct LatencyStatsRow {
@@ -60,8 +51,10 @@ pub struct PerformanceResponse {
 /// `GET /internal/performance?hours=`
 pub async fn get_performance(
     State(state): State<AppState>,
-    Query(q): Query<PerfQuery>,
+    Query(q): Query<HoursQuery>,
 ) -> Result<Json<PerformanceResponse>, StatusCode> {
+    validate_hours(q.hours)?;
+
     let stats = state
         .ch
         .query(
@@ -80,10 +73,7 @@ pub async fn get_performance(
         .bind(q.hours)
         .fetch_one::<LatencyStatsRow>()
         .await
-        .map_err(|e| {
-            tracing::warn!("performance stats query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| ch_query_error(e, "performance stats query failed"))?;
 
     let hourly_rows = state
         .ch
@@ -103,24 +93,12 @@ pub async fn get_performance(
         .bind(q.hours)
         .fetch_all::<HourlyThroughputRow>()
         .await
-        .map_err(|e| {
-            tracing::warn!("performance hourly query failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    let success_rate = if stats.total_requests > 0 {
-        stats.success_count as f64 / stats.total_requests as f64
-    } else {
-        0.0
-    };
+        .map_err(|e| ch_query_error(e, "performance hourly query failed"))?;
 
     let hourly = hourly_rows
         .into_iter()
         .map(|r| HourlyThroughputResponse {
-            hour: r
-                .hour
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default(),
+            hour: format_rfc3339(r.hour),
             request_count: r.request_count,
             success_count: r.success_count,
             avg_latency_ms: r.avg_latency_ms,
@@ -134,8 +112,24 @@ pub async fn get_performance(
         p95_latency_ms: stats.p95_latency_ms,
         p99_latency_ms: stats.p99_latency_ms,
         total_requests: stats.total_requests,
-        success_rate,
+        success_rate: success_rate(stats.total_requests, stats.success_count),
         total_tokens: stats.total_tokens,
         hourly,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::handlers::success_rate;
+
+    #[test]
+    fn success_rate_computed_correctly() {
+        let rate = success_rate(200, 180);
+        assert!((rate - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn success_rate_zero_requests() {
+        assert_eq!(success_rate(0, 0), 0.0);
+    }
 }

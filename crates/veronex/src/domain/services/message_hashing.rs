@@ -49,6 +49,7 @@ pub fn compute_message_hashes(messages: &serde_json::Value) -> Option<(String, S
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use serde_json::json;

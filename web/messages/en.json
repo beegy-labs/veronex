@@ -7,7 +7,6 @@
     "jobs": "Jobs",
     "keys": "API Keys",
     "providers": "Providers",
-    "providers": "Providers",
     "usage": "Usage",
     "performance": "Performance",
     "test": "Test",
@@ -78,7 +77,12 @@
     "labFeatures": "Lab Features",
     "labFeaturesDesc": "Experimental features — may be unstable.",
     "labGeminiFunctionCalling": "Gemini function calling",
-    "labGeminiFunctionCallingDesc": "Enable tool use (function calling) through the Gemini-compatible endpoint. Still in development."
+    "labGeminiFunctionCallingDesc": "Enable tool use (function calling) through the Gemini-compatible endpoint. Still in development.",
+    "menu": "Menu",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "signOut": "Sign out",
+    "retry": "Retry"
   },
   "overview": {
     "title": "Overview",
@@ -505,7 +509,18 @@
     "byModel": "By Model",
     "searchModels": "Search models...",
     "modelLatencyChart": "Model Latency",
-    "keyDetail": "Key Detail"
+    "keyDetail": "Key Detail",
+    "prompt": "Prompt",
+    "completion": "Completion",
+    "modelCol": "Model",
+    "keyCol": "Key",
+    "requestsCol": "Requests",
+    "shareCol": "Share",
+    "successCol": "Success",
+    "tokensCol": "Tokens",
+    "callPct": "Call %",
+    "avgLatencyCol": "Avg Latency",
+    "free": "Free"
   },
   "performance": {
     "title": "Performance",
@@ -629,7 +644,16 @@
     "revokeSession": "Revoke session",
     "revokeAll": "Revoke all sessions",
     "noSessions": "No active sessions",
-    "lastUsed": "Last used"
+    "lastUsed": "Last used",
+    "accountCreated": "Account Created",
+    "saveKeyWarning": "Save the test API key below — it will only be shown once.",
+    "password": "Password",
+    "email": "Email",
+    "fullName": "Full name",
+    "position": "Position",
+    "createFailed": "Failed to create account",
+    "creating": "Creating…",
+    "tokenWarning": "This token will only be shown once. Copy it now and share it securely."
   },
   "audit": {
     "title": "Audit Log",

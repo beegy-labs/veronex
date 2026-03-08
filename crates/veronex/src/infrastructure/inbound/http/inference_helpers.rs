@@ -112,7 +112,7 @@ pub fn build_sse_response(
     state: &AppState,
     job_id: JobId,
     append_done: bool,
-    mut map_token: impl FnMut(Result<StreamToken, anyhow::Error>) -> Event + Send + 'static,
+    mut map_token: impl FnMut(Result<StreamToken, crate::domain::errors::DomainError>) -> Event + Send + 'static,
 ) -> Response {
     let guard = match try_acquire_sse(&state.sse_connections) {
         Ok(g) => g,

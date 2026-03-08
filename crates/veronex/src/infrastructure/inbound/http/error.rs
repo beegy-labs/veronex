@@ -101,6 +101,7 @@ impl From<crate::domain::errors::DomainError> for AppError {
             }
             DomainError::QueueFull(msg) => Self::ServiceUnavailable(msg),
             DomainError::Configuration(msg) => Self::Internal(anyhow::anyhow!(msg)),
+            DomainError::Internal(e) => Self::Internal(e),
         }
     }
 }

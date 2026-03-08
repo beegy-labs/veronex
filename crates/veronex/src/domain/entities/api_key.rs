@@ -13,6 +13,8 @@ use super::super::enums::{KeyTier, KeyType};
 #[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct ApiKey {
     pub id: Uuid,
+    #[serde(skip_serializing)]
+    #[ts(skip)]
     pub key_hash: String,
     pub key_prefix: String,
     pub tenant_id: String,
@@ -24,9 +26,11 @@ pub struct ApiKey {
     pub created_at: DateTime<Utc>,
     /// Soft-delete timestamp. When set, key is hidden from list and blocked from auth.
     #[serde(default)]
+    #[ts(skip)]
     pub deleted_at: Option<DateTime<Utc>>,
     /// Key category: standard (production) or test (dev/testing).
     #[serde(default)]
+    #[ts(skip)]
     pub key_type: KeyType,
     /// Billing tier: free or paid (default).
     #[serde(default)]
@@ -44,6 +48,7 @@ pub struct ApiKeyCreated {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -95,18 +100,17 @@ mod tests {
     }
 
     #[test]
-    fn api_key_serde_roundtrip() {
+    fn api_key_serialization_omits_key_hash() {
         let key = make_api_key();
         let json = serde_json::to_string(&key).unwrap();
-        let deserialized: ApiKey = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.id, key.id);
-        assert_eq!(deserialized.key_hash, key.key_hash);
-        assert_eq!(deserialized.key_prefix, key.key_prefix);
-        assert_eq!(deserialized.tenant_id, key.tenant_id);
-        assert_eq!(deserialized.name, key.name);
-        assert_eq!(deserialized.is_active, key.is_active);
-        assert_eq!(deserialized.rate_limit_rpm, key.rate_limit_rpm);
-        assert_eq!(deserialized.rate_limit_tpm, key.rate_limit_tpm);
+        // key_hash must not appear in serialized output
+        assert!(!json.contains("key_hash"));
+        // public fields must be present
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["key_prefix"], "iq_01ARZ3N");
+        assert_eq!(v["tenant_id"], "tenant-1");
+        assert_eq!(v["name"], "test-key");
+        assert_eq!(v["is_active"], true);
     }
 
     #[test]
@@ -114,8 +118,8 @@ mod tests {
         let mut key = make_api_key();
         key.expires_at = Some(Utc::now());
         let json = serde_json::to_string(&key).unwrap();
-        let deserialized: ApiKey = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.expires_at.is_some());
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v["expires_at"].is_string());
     }
 
     #[test]

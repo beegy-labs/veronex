@@ -10,7 +10,7 @@
 | Add new status filter option | `web/app/jobs/page.tsx` `STATUS_OPTIONS` in `JobsSection` | Matches `JobStatus` enum on backend |
 | Change pagination page size | `web/app/jobs/page.tsx` -> `PAGE_SIZE` constant | |
 | Add new i18n key to jobs | `web/messages/en.json` `jobs.*` -> `web/messages/ko.json` -> `web/messages/ja.json` | Always add to all 3 locales |
-| Change duration format breakpoints | `web/components/job-table.tsx` `formatDuration()` | Change ms thresholds |
+| Change duration format breakpoints | `web/lib/chart-theme.ts` `fmtMsNullable()` | Change ms thresholds |
 | Add another tab to the Jobs page | `web/app/jobs/page.tsx` -> add `<TabsTrigger>` + `<TabsContent>` + new `<JobsSection source="...">` | Extend `JobsSectionProps.source` type |
 
 ## Key Files
@@ -18,7 +18,8 @@
 | File | Purpose |
 |------|---------|
 | `web/app/jobs/page.tsx` | Jobs page -- `GroupSessionsPanel` + 3 tabs (`JobsSection` x 2, `NetworkFlowTab`) |
-| `web/components/job-table.tsx` | Jobs table + detail modal (fully i18n) |
+| `web/components/job-table.tsx` | Jobs table (imports `JobDetailModal` from `job-detail-modal.tsx`) |
+| `web/components/job-detail-modal.tsx` | `JobDetailModal` — timing, tokens, prompt/result, conversation history |
 | `web/lib/types.ts` | `Job`, `JobDetail` types (include `source` field) |
 | `web/lib/api.ts` | `api.jobs()`, `api.jobDetail()`, `api.triggerSessionGrouping()` |
 | `web/messages/en.json` | i18n keys under `jobs.*` |

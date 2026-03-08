@@ -32,6 +32,9 @@ hex = "0.4"
 rand = "0.8"
 argon2 = "0.5"
 jsonwebtoken = "9"
+aes-gcm = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
 
 # Observability
 tracing = "0.1"

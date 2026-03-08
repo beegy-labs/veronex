@@ -29,7 +29,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
           <WifiOff className="h-3 w-3 mr-1.5" />{t('providers.servers.unreachable')}
         </Badge>
         <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground"
-          onClick={() => refetch()} disabled={isFetching} title="Retry">
+          onClick={() => refetch()} disabled={isFetching} title={t('common.retry')}>
           <RefreshCw className={isFetching ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
         </Button>
       </div>

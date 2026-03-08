@@ -267,7 +267,7 @@ export function OllamaTab({
                                   } />
                                 </Button>
                               </TooltipTrigger>
-                              <TooltipContent>Sync</TooltipContent>
+                              <TooltipContent>{t('common.sync')}</TooltipContent>
                             </Tooltip>
                             <Tooltip>
                               <TooltipTrigger asChild>

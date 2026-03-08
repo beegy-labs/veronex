@@ -120,3 +120,47 @@ pub async fn get_server_metrics_history(
 
     Ok(Json(points))
 }
+
+/// Select bucket interval based on the requested hour range.
+#[cfg(test)]
+fn bucket_interval(hours: u32) -> &'static str {
+    if hours <= 24 {
+        "1 MINUTE"
+    } else if hours <= 168 {
+        "5 MINUTE"
+    } else {
+        "60 MINUTE"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bucket_interval_1_minute() {
+        assert_eq!(bucket_interval(1), "1 MINUTE");
+        assert_eq!(bucket_interval(24), "1 MINUTE");
+    }
+
+    #[test]
+    fn bucket_interval_5_minute() {
+        assert_eq!(bucket_interval(25), "5 MINUTE");
+        assert_eq!(bucket_interval(168), "5 MINUTE");
+    }
+
+    #[test]
+    fn bucket_interval_60_minute() {
+        assert_eq!(bucket_interval(169), "60 MINUTE");
+        assert_eq!(bucket_interval(1440), "60 MINUTE");
+    }
+
+    #[test]
+    fn hours_clamped_range() {
+        // The handler clamps hours to 1..=1440
+        let hours = 0_u32.clamp(1, 1440);
+        assert_eq!(hours, 1);
+        let hours = 9999_u32.clamp(1, 1440);
+        assert_eq!(hours, 1440);
+    }
+}

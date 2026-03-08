@@ -1,6 +1,6 @@
 # Overview Page
 
-> SSOT | **Last Updated**: 2026-03-07
+> SSOT | **Last Updated**: 2026-03-08
 > Route: `/overview` (default landing page after login)
 
 ## Purpose
@@ -80,7 +80,9 @@ Main dashboard — single-screen system health view. Aggregates KPIs, infrastruc
 | File | Role |
 |------|------|
 | `web/app/overview/page.tsx` | Page component — data fetching + error boundary |
-| `web/app/overview/components/dashboard-tab.tsx` | Main dashboard layout (all 8 sections) |
+| `web/app/overview/components/dashboard-tab.tsx` | Main dashboard layout (sections 1-5) |
+| `web/app/overview/components/dashboard-helpers.tsx` | Shared helpers: `ThermalBadge`, `ConnectionDot`, `ProviderRow`, color utils |
+| `web/app/overview/components/dashboard-lower-sections.tsx` | `RequestTrendSection`, `TopModelsSection`, `RecentJobsSection`, `TokenSummarySection` |
 | `web/app/overview/components/network-flow-tab.tsx` | Network flow visualization (used from /flow) |
 | `web/app/overview/components/provider-flow-panel.tsx` | Provider flow SVG panel |
 | `web/app/overview/components/live-feed.tsx` | Real-time SSE event feed |

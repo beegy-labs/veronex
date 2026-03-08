@@ -13,4 +13,8 @@ pub trait CircuitBreakerPort: Send + Sync {
 
     /// Record a failed inference — may transition Closed → Open.
     fn on_failure(&self, provider_id: Uuid);
+
+    /// Record a request latency sample (ms). When P99 exceeds the threshold
+    /// and enough samples exist, the circuit soft-degrades to HalfOpen.
+    fn record_latency(&self, provider_id: Uuid, latency_ms: u64);
 }
