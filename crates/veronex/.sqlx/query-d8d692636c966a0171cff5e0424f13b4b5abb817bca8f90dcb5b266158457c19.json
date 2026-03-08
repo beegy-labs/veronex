@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO ollama_models (model_name, provider_id, synced_at)\n                VALUES ($1, $2, NOW())\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d8d692636c966a0171cff5e0424f13b4b5abb817bca8f90dcb5b266158457c19"
+}

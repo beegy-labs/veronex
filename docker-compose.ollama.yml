@@ -1,0 +1,61 @@
+# veronex — Ollama server bundle
+#
+# Deploy this on each machine that runs Ollama (bare metal, VM, or Docker host).
+# The node-exporter sidecar collects GPU temp/VRAM, CPU, RAM, and disk metrics
+# and exposes them on :9100 for the OTel Collector to scrape.
+#
+# Usage:
+#   OLLAMA_HOST=0.0.0.0 docker compose -f docker-compose.ollama.yml up -d
+#
+# Then register the backend in the veronex admin:
+#   Ollama URL:  http://<this-server-ip>:11434
+#   GPU Index:   0  (adjust if multiple GPUs)
+#   Max VRAM:    24576  (MiB, adjust to your GPU)
+#   Max RAM:     65536  (MiB, adjust — Phase 2: auto-filled from K8s limits)
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_HOST: ${OLLAMA_HOST:-0.0.0.0}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
+    restart: unless-stopped
+    # AMD GPU — uncomment if using ROCm:
+    # devices:
+    #   - /dev/kfd:/dev/kfd
+    #   - /dev/dri:/dev/dri
+    # NVIDIA GPU — uncomment if using NVIDIA:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      - --collector.drm        # AMD GPU VRAM, utilisation (requires kernel 5.7+)
+      - --collector.hwmon     # GPU temperature, power
+      - --collector.meminfo   # System RAM
+      - --collector.cpu       # CPU utilisation
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "9100:9100"
+    pid: host
+    restart: unless-stopped
+
+volumes:
+  ollama_data:

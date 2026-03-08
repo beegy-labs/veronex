@@ -1,0 +1,41 @@
+Veronex has been deployed!
+
+{{- if .Values.ingress.enabled }}
+
+  Dashboard: https://{{ .Values.ingress.host }}
+  API:       https://{{ .Values.ingress.host }}/v1/chat/completions
+
+{{- else }}
+
+  Get the dashboard URL:
+    kubectl port-forward svc/{{ .Release.Name }}-veronex-web {{ .Values.veronexWeb.service.port }}:{{ .Values.veronexWeb.service.port }}
+    open http://localhost:{{ .Values.veronexWeb.service.port }}
+
+  Get the API URL:
+    kubectl port-forward svc/{{ .Release.Name }}-veronex {{ .Values.veronex.service.port }}:{{ .Values.veronex.service.port }}
+    curl http://localhost:{{ .Values.veronex.service.port }}/health
+
+{{- end }}
+
+Components:
+  - veronex (API server + scheduler)
+  - veronex-analytics (OTel ingest + read API)
+  - veronex-web (Next.js dashboard)
+{{- if .Values.veronexAgent.enabled }}
+  - veronex-agent (per-node hardware metrics, DaemonSet)
+{{- end }}
+{{- if .Values.otelCollector.enabled }}
+  - otel-collector (OpenTelemetry Collector)
+{{- end }}
+
+First run:
+  1. Visit the dashboard and complete the setup wizard
+  2. Add an Ollama provider URL in Dashboard > Providers
+  3. Create an API key in Dashboard > Keys
+  4. Test: curl http://<api>/v1/chat/completions -H "Authorization: Bearer iq_..."
+
+{{- if not .Values.veronex.jwt.secret }}
+
+  WARNING: veronex.jwt.secret is not set! Set it with:
+    --set veronex.jwt.secret=$(openssl rand -hex 32)
+{{- end }}
