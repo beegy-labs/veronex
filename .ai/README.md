@@ -1,31 +1,36 @@
-# inferq
+# Veronex
 
-> CDD Tier 1 - Entry Point (≤50 lines)
+> CDD Tier 1 — Entry Point (≤50 lines) | **Last Updated**: 2026-03-07
 
 ## Project
 
-Queue-based LLM inference server with real-time SSE streaming. Single GPU, serial processing.
+**Veronex** (Vero+Nexus) — Autonomous intelligence scheduler/gateway for N Ollama
+servers. Integrates request routing + capacity learning + thermal protection to
+maximize cluster-wide throughput. OpenAI-compatible API + Next.js admin dashboard.
+
+Three Rust crates:
+- `veronex` — main API server + scheduler (`crates/veronex/`)
+- `veronex-analytics` — internal analytics service (`crates/veronex-analytics/`, port 3003)
+- `veronex-agent` — per-node hardware metrics agent (`crates/veronex-agent/`)
 
 ## Navigation
 
-| Action          | Read                              |
-| --------------- | --------------------------------- |
-| Core rules      | `.ai/rules.md`                    |
-| Architecture    | `.ai/architecture.md`             |
-| Git & commits   | `.ai/git-flow.md`                 |
-| Current work    | `.specs/tasks/`                   |
-| Full policies   | `docs/llm/policies/`              |
+| Action | Read |
+|--------|------|
+| Core rules | `.ai/rules.md` |
+| Architecture | `.ai/architecture.md` |
+| Security | `.ai/security.md` |
+| Code patterns (2026) | `docs/llm/policies/patterns.md` |
+| Git & commits | `.ai/git-flow.md` |
+| Full docs index | `docs/llm/README.md` |
 
-## Methodology
+## Key Docs by Domain
 
-| Phase | Location      | Focus              |
-| ----- | ------------- | ------------------ |
-| CDD   | `.ai/`, `docs/llm/` | HOW (patterns) |
-| SDD   | `.specs/`     | WHAT (tasks)       |
-
-## Policies
-
-| Doc          | Path                                |
-| ------------ | ----------------------------------- |
-| Architecture | `docs/llm/policies/architecture.md` |
-| Git Flow     | `docs/llm/policies/git-flow.md`     |
+| Domain | Path | Content |
+|--------|------|---------|
+| Auth | `docs/llm/auth/` | jwt-sessions (+impl), api-keys, security |
+| Inference | `docs/llm/inference/` | job-lifecycle, job-api, session-grouping, job-analytics, openai-compat, capacity, model-pricing, lab-features |
+| Providers | `docs/llm/providers/` | ollama (+impl), ollama-models, gemini, gemini-models, hardware |
+| Infra | `docs/llm/infra/` | deploy, otel-pipeline (+ops) |
+| Frontend | `docs/llm/frontend/` | design-system (core, i18n, components), charts, pages/* |
+| Research | `docs/llm/research/` | 2026 best practices (frontend, backend, infra, security) |

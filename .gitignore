@@ -1,0 +1,36 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node / Next.js
+web/node_modules/
+web/.next/
+web/.env.local
+web/out/
+web/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+*.env
+
+# Build artifacts
+*.log
+web/tsconfig.tsbuildinfo
+
+# ts-rs auto-generated bindings
+web/lib/generated/
+
+# Helm dependency charts (downloaded by helm dependency build)
+deploy/helm/*/charts/*.tgz

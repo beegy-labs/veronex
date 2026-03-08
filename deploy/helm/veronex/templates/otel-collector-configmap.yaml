@@ -1,0 +1,63 @@
+{{- if .Values.otelCollector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-otel-collector-config
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.otel.selectorLabels" . | nindent 4 }}
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: veronex-targets
+              scrape_interval: 30s
+              http_sd_configs:
+                - url: http://{{ .Release.Name }}-veronex:{{ .Values.veronex.service.port }}/v1/metrics/targets
+                  refresh_interval: 60s
+
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 1000
+
+    exporters:
+      kafka/logs:
+        brokers:
+          - {{ include "veronex.redpandaBroker" . }}
+        topic: otel-logs
+        encoding: otlp_proto
+      kafka/metrics:
+        brokers:
+          - {{ include "veronex.redpandaBroker" . }}
+        topic: otel-metrics
+        encoding: otlp_proto
+      kafka/traces:
+        brokers:
+          - {{ include "veronex.redpandaBroker" . }}
+        topic: otel-traces
+        encoding: otlp_proto
+
+    service:
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [kafka/logs]
+        metrics:
+          receivers: [prometheus]
+          processors: [batch]
+          exporters: [kafka/metrics]
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [kafka/traces]
+{{- end }}

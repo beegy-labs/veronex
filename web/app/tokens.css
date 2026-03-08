@@ -1,0 +1,319 @@
+/* ============================================================
+   VERONEX DESIGN TOKEN SSOT
+   Concept  : "Verde Nexus" — Vero (green/truth) × Nexus (hub/connect)
+   Brand    : Veronex — veronex.verobee.com
+   Themes   : "Platinum Signal"  (light) & "Obsidian Verde"  (dark)
+
+   Contrast ratios (WCAG 2.1):
+     Primary  : AAA (≥ 7:1)  — light 12.71:1 · dark 7.73:1 (on page bg)
+     All text : AAA (≥ 7:1) primary tier · AA minimum on all tiers
+     Status   : AAA in both modes
+
+   4-layer architecture:
+     Layer 0  @property     — type safety + CSS transition support
+     Layer 1  --palette-*   — raw hex (never reference in TSX)
+     Layer 2  --theme-*     — semantic (light/dark switchable)
+     Layer 3  @theme inline — Tailwind utility generation
+
+   Rules:
+     - Never hardcode hex in TSX. Use Tailwind utilities or var(--theme-*).
+     - @property initial-value must match light-mode defaults.
+   ============================================================ */
+
+/* ------------------------------------------------------------------
+   LAYER 0 — @property definitions  (initial = light-mode values)
+   ------------------------------------------------------------------ */
+
+/* Backgrounds */
+@property --theme-bg-page     { syntax: '<color>'; inherits: true; initial-value: #f2f4f2; }
+@property --theme-bg-card     { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+@property --theme-bg-elevated { syntax: '<color>'; inherits: true; initial-value: #edf0ed; }
+@property --theme-bg-hover    { syntax: '<color>'; inherits: true; initial-value: #e4e8e4; }
+
+/* Text */
+@property --theme-text-primary   { syntax: '<color>'; inherits: true; initial-value: #141a14; }
+@property --theme-text-secondary { syntax: '<color>'; inherits: true; initial-value: #334155; }
+@property --theme-text-bright    { syntax: '<color>'; inherits: true; initial-value: #000000; }
+@property --theme-text-dim       { syntax: '<color>'; inherits: true; initial-value: #475569; }
+@property --theme-text-faint     { syntax: '<color>'; inherits: true; initial-value: #64748b; }
+
+/* Border */
+@property --theme-border-subtle  { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
+@property --theme-border-default { syntax: '<color>'; inherits: true; initial-value: #cbd5e1; }
+@property --theme-border         { syntax: '<color>'; inherits: true; initial-value: #e2e8f0; }
+
+/* Brand */
+@property --theme-primary            { syntax: '<color>'; inherits: true; initial-value: #0f3325; }
+@property --theme-primary-foreground { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+@property --theme-ring               { syntax: '<color>'; inherits: true; initial-value: #0f3325; }
+@property --theme-focus-ring         { syntax: '<color>'; inherits: true; initial-value: #0f3325; }
+
+/* Destructive */
+@property --theme-destructive { syntax: '<color>'; inherits: true; initial-value: #9f1239; }
+
+/* Status */
+@property --theme-status-success   { syntax: '<color>'; inherits: true; initial-value: #065f46; }
+@property --theme-status-error     { syntax: '<color>'; inherits: true; initial-value: #9f1239; }
+@property --theme-status-warning   { syntax: '<color>'; inherits: true; initial-value: #78350f; }
+@property --theme-status-info      { syntax: '<color>'; inherits: true; initial-value: #1e40af; }
+@property --theme-status-cancelled { syntax: '<color>'; inherits: true; initial-value: #475569; }
+
+/* Status fg */
+@property --theme-status-success-fg { syntax: '<color>'; inherits: true; initial-value: #065f46; }
+@property --theme-status-error-fg   { syntax: '<color>'; inherits: true; initial-value: #9f1239; }
+@property --theme-status-warning-fg { syntax: '<color>'; inherits: true; initial-value: #78350f; }
+@property --theme-status-info-fg    { syntax: '<color>'; inherits: true; initial-value: #1e40af; }
+
+/* Accent */
+@property --theme-accent-gpu   { syntax: '<color>'; inherits: true; initial-value: #0e7490; }
+@property --theme-accent-power { syntax: '<color>'; inherits: true; initial-value: #78350f; }
+@property --theme-accent-brand { syntax: '<color>'; inherits: true; initial-value: #0f3325; }
+
+/* Chart */
+@property --theme-chart-1 { syntax: '<color>'; inherits: true; initial-value: #1d6b44; }
+@property --theme-chart-2 { syntax: '<color>'; inherits: true; initial-value: #059669; }
+@property --theme-chart-3 { syntax: '<color>'; inherits: true; initial-value: #0891b2; }
+@property --theme-chart-4 { syntax: '<color>'; inherits: true; initial-value: #e11d48; }
+@property --theme-chart-5 { syntax: '<color>'; inherits: true; initial-value: #d97706; }
+
+/* ------------------------------------------------------------------
+   LAYER 1 — Palette  (raw hex — never reference outside this file)
+   ------------------------------------------------------------------ */
+
+:root {
+  /* ── Light palette: "Platinum Signal" ────────────────────────── */
+  /* Backgrounds — Platinum Pearl: green-tinted off-white, reduces eye strain */
+  --light-bg-page:      #f2f4f2;   /* Platinum Pearl */
+  --light-bg-card:      #ffffff;   /* Pure White — card independence */
+  --light-bg-elevated:  #edf0ed;   /* gentle green-tint elevated surface */
+  --light-bg-hover:     #e4e8e4;
+
+  /* Text — Anthracite + Slate Silver, all AAA on card (#fff) */
+  --light-text-primary:   #141a14;   /* Anthracite: ~14.4:1 on Pearl ✓ AAA */
+  --light-text-secondary: #334155;   /* Slate Silver: ~10:1  ✓ AAA */
+  --light-text-dim:       #475569;   /* Metallic Slate: ~7.4:1 ✓ AAA */
+  --light-text-faint:     #64748b;   /* ~4.5:1 ✓ AA  */
+
+  /* Border — soft green-slate tint */
+  --light-border-subtle:  #e2e8e0;
+  --light-border-default: #cbd5d1;
+  --light-border-strong:  #94a3a0;
+
+  /* Brand — Deep Ivy: 12.71:1 on white ✓ AAA */
+  --light-primary:      #0f3325;   /* Deep Ivy */
+  --light-primary-mid:  #164429;   /* ivy-mid — hover */
+  --light-primary-soft: #1d6b44;   /* ivy-soft — charts */
+
+  /* ── Dark palette: "Obsidian Verde" ──────────────────────────── */
+  /* Backgrounds — deep green-black, night forest atmosphere */
+  --dark-bg-page:      #080a09;   /* Obsidian Deep */
+  --dark-bg-card:      #111412;   /* Dark Graphite */
+  --dark-bg-elevated:  #182019;
+  --dark-bg-hover:     #1e2820;
+
+  /* Text — Platinum + Titanium Silver scale */
+  --dark-text-primary:   #e2e8e2;   /* Soft Platinum: ~14.2:1 on page ✓ AAA */
+  --dark-text-secondary: #94a3b8;   /* Titanium Silver: ~7.7:1 ✓ AAA */
+  --dark-text-dim:       #64748b;   /* ~4.1:1 ✓ AA  */
+  --dark-text-faint:     #475569;   /* decorative only */
+
+  /* Border — deep forest-green tint */
+  --dark-border-subtle:  #1a2118;
+  --dark-border-default: #2a3828;
+  --dark-border-strong:  #3d5040;
+
+  /* Brand — Bio-Emerald: 7.73:1 on page bg (#080a09) ✓ AAA */
+  --dark-primary:      #10b981;   /* Bio-Emerald */
+  --dark-primary-mid:  #34d399;   /* emerald-400 — hover */
+  --dark-primary-soft: #059669;   /* emerald-600 — subtle bg */
+
+  /* ── Status: light (all AAA on white) ───────────────────────── */
+  --status-l-success:  #065f46;   /* emerald-800  7.67:1 ✓ AAA */
+  --status-l-error:    #9f1239;   /* rose-800     8.02:1 ✓ AAA */
+  --status-l-warning:  #78350f;   /* amber-900    9.06:1 ✓ AAA */
+  --status-l-info:     #1e40af;   /* blue-800     8.71:1 ✓ AAA */
+  --status-l-cancelled:#475569;   /* slate-600    7.59:1 ✓ AAA */
+
+  /* ── Status: dark (all AAA on card #0c0e17) ──────────────────── */
+  --status-d-success:  #34d399;   /* emerald-400 10.01:1 ✓ AAA */
+  --status-d-error:    #fb7185;   /* rose-400     7.15:1 ✓ AAA */
+  --status-d-warning:  #fbbf24;   /* amber-400   11.52:1 ✓ AAA */
+  --status-d-info:     #60a5fa;   /* blue-400     7.57:1 ✓ AAA */
+  --status-d-cancelled:#64748b;   /* slate-500    4.2:1  ✓ AA  */
+
+  /* ── Logo gradient ───────────────────────────────────────────── */
+  --palette-logo-light-start: #0c4a2a;   /* forest-900  — dark anchor  */
+  --palette-logo-light-end:   #16a34a;   /* green-600   — bright apex  */
+  --palette-logo-dark-start:  #047857;   /* emerald-700 — rich depth   */
+  --palette-logo-dark-end:    #10b981;   /* Bio-Emerald — brand primary */
+}
+
+/* ------------------------------------------------------------------
+   LAYER 2 — Semantic tokens
+   ------------------------------------------------------------------ */
+
+/* Light mode (default) — "Platinum Signal" */
+:root,
+[data-theme='light'] {
+  --theme-bg-page:     var(--light-bg-page);
+  --theme-bg-card:     var(--light-bg-card);
+  --theme-bg-elevated: var(--light-bg-elevated);
+  --theme-bg-hover:    var(--light-bg-hover);
+
+  --theme-text-primary:   var(--light-text-primary);
+  --theme-text-secondary: var(--light-text-secondary);
+  --theme-text-bright:    #000000;
+  --theme-text-dim:       var(--light-text-dim);
+  --theme-text-faint:     var(--light-text-faint);
+
+  --theme-border-subtle:  var(--light-border-subtle);
+  --theme-border-default: var(--light-border-default);
+  --theme-border:         var(--light-border-subtle);
+
+  --theme-primary:            var(--light-primary);
+  --theme-primary-foreground: #ffffff;
+  --theme-ring:               var(--light-primary);
+  --theme-focus-ring:         var(--light-primary);
+
+  --theme-destructive: var(--status-l-error);
+
+  --theme-status-success:    var(--status-l-success);
+  --theme-status-error:      var(--status-l-error);
+  --theme-status-warning:    var(--status-l-warning);
+  --theme-status-info:       var(--status-l-info);
+  --theme-status-cancelled:  var(--status-l-cancelled);
+  --theme-status-success-fg: var(--status-l-success);
+  --theme-status-error-fg:   var(--status-l-error);
+  --theme-status-warning-fg: var(--status-l-warning);
+  --theme-status-info-fg:    var(--status-l-info);
+
+  --theme-accent-gpu:    #0e7490;   /* cyan-700   5.4:1 ✓ AA  */
+  --theme-accent-power:  var(--status-l-warning);
+  --theme-accent-brand:  var(--light-primary);
+  --theme-surface-code:  var(--light-bg-elevated);
+
+  --theme-chart-1: var(--light-primary-soft);  /* ivy-soft #1d6b44 */
+  --theme-chart-2: #059669;                    /* emerald-600 */
+  --theme-chart-3: #0891b2;                    /* cyan-600    */
+  --theme-chart-4: #e11d48;                    /* rose-600    */
+  --theme-chart-5: #d97706;                    /* amber-600   */
+
+  --theme-logo-start: var(--palette-logo-light-start);
+  --theme-logo-end:   var(--palette-logo-light-end);
+  --theme-logo-inner: #0f3325;
+}
+
+/* Dark mode — "Obsidian Verde" */
+[data-theme='dark'] {
+  --theme-bg-page:     var(--dark-bg-page);
+  --theme-bg-card:     var(--dark-bg-card);
+  --theme-bg-elevated: var(--dark-bg-elevated);
+  --theme-bg-hover:    var(--dark-bg-hover);
+
+  --theme-text-primary:   var(--dark-text-primary);
+  --theme-text-secondary: var(--dark-text-secondary);
+  --theme-text-bright:    #f8fafc;
+  --theme-text-dim:       var(--dark-text-dim);
+  --theme-text-faint:     var(--dark-text-faint);
+
+  --theme-border-subtle:  var(--dark-border-subtle);
+  --theme-border-default: var(--dark-border-default);
+  --theme-border:         var(--dark-border-subtle);
+
+  --theme-primary:            var(--dark-primary);
+  --theme-primary-foreground: #041f16;   /* Deep Dark on Bio-Emerald button */
+  --theme-ring:               var(--dark-primary);
+  --theme-focus-ring:         var(--dark-primary);
+
+  --theme-destructive: var(--status-d-error);
+
+  --theme-status-success:    var(--status-d-success);
+  --theme-status-error:      var(--status-d-error);
+  --theme-status-warning:    var(--status-d-warning);
+  --theme-status-info:       var(--status-d-info);
+  --theme-status-cancelled:  var(--status-d-cancelled);
+  --theme-status-success-fg: var(--status-d-success);
+  --theme-status-error-fg:   var(--status-d-error);
+  --theme-status-warning-fg: var(--status-d-warning);
+  --theme-status-info-fg:    var(--status-d-info);
+
+  --theme-accent-gpu:    #22d3ee;   /* cyan-400  */
+  --theme-accent-power:  var(--status-d-warning);
+  --theme-accent-brand:  var(--dark-primary);
+  --theme-surface-code:  var(--dark-bg-elevated);
+
+  --theme-chart-1: var(--dark-primary);    /* Bio-Emerald */
+  --theme-chart-2: var(--status-d-success);/* emerald-400 */
+  --theme-chart-3: #22d3ee;                /* cyan-400   */
+  --theme-chart-4: var(--status-d-error);  /* rose-400   */
+  --theme-chart-5: var(--status-d-warning);/* amber-400  */
+
+  --theme-logo-start: var(--palette-logo-dark-start);
+  --theme-logo-end:   var(--palette-logo-dark-end);
+  --theme-logo-inner: rgba(255,255,255,0.55);
+}
+
+/* ------------------------------------------------------------------
+   LAYER 3 — @theme inline: Tailwind utility generation
+   ------------------------------------------------------------------ */
+
+@theme inline {
+  /* shadcn/ui core */
+  --color-background:           var(--theme-bg-page);
+  --color-foreground:           var(--theme-text-primary);
+  --color-card:                 var(--theme-bg-card);
+  --color-card-foreground:      var(--theme-text-primary);
+  --color-popover:              var(--theme-bg-card);
+  --color-popover-foreground:   var(--theme-text-primary);
+  --color-primary:              var(--theme-primary);
+  --color-primary-foreground:   var(--theme-primary-foreground);
+  --color-secondary:            var(--theme-bg-elevated);
+  --color-secondary-foreground: var(--theme-text-primary);
+  --color-muted:                var(--theme-bg-elevated);
+  --color-muted-foreground:     var(--theme-text-secondary);
+  --color-accent:               var(--theme-bg-hover);
+  --color-accent-foreground:    var(--theme-text-primary);
+  --color-destructive:          var(--theme-destructive);
+  --color-destructive-foreground: var(--theme-primary-foreground);
+  --color-border:               var(--theme-border);
+  --color-input:                var(--theme-border-default);
+  --color-ring:                 var(--theme-ring);
+
+  /* Charts */
+  --color-chart-1: var(--theme-chart-1);
+  --color-chart-2: var(--theme-chart-2);
+  --color-chart-3: var(--theme-chart-3);
+  --color-chart-4: var(--theme-chart-4);
+  --color-chart-5: var(--theme-chart-5);
+
+  /* Extended text hierarchy */
+  --color-text-bright: var(--theme-text-bright);
+  --color-text-dim:    var(--theme-text-dim);
+  --color-text-faint:  var(--theme-text-faint);
+
+  /* Status */
+  --color-status-success:   var(--theme-status-success);
+  --color-status-error:     var(--theme-status-error);
+  --color-status-warning:   var(--theme-status-warning);
+  --color-status-info:      var(--theme-status-info);
+  --color-status-cancelled: var(--theme-status-cancelled);
+
+  --color-status-success-fg: var(--theme-status-success-fg);
+  --color-status-error-fg:   var(--theme-status-error-fg);
+  --color-status-warning-fg: var(--theme-status-warning-fg);
+  --color-status-info-fg:    var(--theme-status-info-fg);
+
+  /* Accents */
+  --color-accent-gpu:   var(--theme-accent-gpu);
+  --color-accent-power: var(--theme-accent-power);
+  --color-accent-brand: var(--theme-accent-brand);
+
+  /* Surface */
+  --color-surface-code: var(--theme-surface-code);
+
+  /* Radius */
+  --radius:    0.5rem;
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}

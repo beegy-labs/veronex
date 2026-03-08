@@ -1,0 +1,38 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import './tokens.css';
+
+/* ── Bee particle — Network Flow visualization ───────────────────────────── */
+/* offset-path positions the particle along the SVG path.                    */
+/* will-change promotes a composited layer so motion is off the main thread. */
+@keyframes bee-fly {
+  0%   { offset-distance: 0%;   opacity: 0; }
+  6%   {                        opacity: 1; }
+  88%  {                        opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+.bee-particle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  pointer-events: none;
+  will-change: offset-distance, opacity;
+  animation: bee-fly 1400ms linear forwards;
+  offset-anchor: 50% 50%;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  *:focus-visible {
+    outline: 4px solid var(--theme-focus-ring);
+    outline-offset: 4px;
+    border-radius: 2px;
+  }
+}

@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-veronex
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.api.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.veronex.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "veronex.api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        {{- include "veronex.api.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
+      containers:
+        - name: veronex
+          image: "{{ .Values.veronex.image.repository }}:{{ .Values.veronex.image.tag }}"
+          imagePullPolicy: {{ .Values.veronex.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.veronex.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          envFrom:
+            - secretRef:
+                name: {{ include "veronex.secretName" . }}
+          env:
+            - name: PORT
+              value: "{{ .Values.veronex.service.port }}"
+            - name: VALKEY_URL
+              value: {{ include "veronex.valkeyUrl" . | quote }}
+            - name: ANALYTICS_URL
+              value: "http://{{ .Release.Name }}-veronex-analytics:{{ .Values.veronexAnalytics.service.port }}"
+            - name: S3_ENDPOINT
+              value: {{ include "veronex.s3Endpoint" . | quote }}
+            - name: S3_BUCKET
+              value: {{ include "veronex.s3Bucket" . | quote }}
+            - name: S3_REGION
+              value: {{ include "veronex.s3Region" . | quote }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ .Values.veronex.cors.allowedOrigins | quote }}
+            - name: OLLAMA_URL
+              value: {{ .Values.veronex.ollama.url | quote }}
+            {{- if .Values.veronex.capacityAnalyzerOllamaUrl }}
+            - name: CAPACITY_ANALYZER_OLLAMA_URL
+              value: {{ .Values.veronex.capacityAnalyzerOllamaUrl | quote }}
+            {{- end }}
+            {{- if .Values.veronex.sessionGroupingIntervalSecs }}
+            - name: SESSION_GROUPING_INTERVAL_SECS
+              value: {{ .Values.veronex.sessionGroupingIntervalSecs | quote }}
+            {{- end }}
+            {{- if .Values.veronex.bootstrapSuperUser }}
+            - name: BOOTSTRAP_SUPER_USER
+              value: {{ .Values.veronex.bootstrapSuperUser | quote }}
+            {{- end }}
+            {{- if .Values.veronex.bootstrapSuperPass }}
+            - name: BOOTSTRAP_SUPER_PASS
+              value: {{ .Values.veronex.bootstrapSuperPass | quote }}
+            {{- end }}
+            {{- if or .Values.otelCollector.enabled .Values.veronex.otel.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ include "veronex.otelEndpoint" . | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.veronex.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.veronex.resources | nindent 12 }}

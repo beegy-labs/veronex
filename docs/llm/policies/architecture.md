@@ -1,93 +1,58 @@
 # Hexagonal Architecture Policy
 
-> SSOT for inferq architecture | **Last Updated**: 2026-02-19
+> SSOT | **Last Updated**: 2026-03-07
+> Code patterns and templates → `policies/patterns.md`
+
+## Vision
+
+Veronex is an **autonomous intelligence scheduler/gateway** for N Ollama servers:
+
+- **Cluster-wide optimization**: maximize total throughput across all servers, not individual server performance
+- **Dynamic model allocation**: compute optimal "model combination + concurrent request count" per server in real-time
+- **Multi-model co-residence**: when VRAM allows, load multiple models simultaneously for parallel processing; when insufficient, FIFO + model locality to minimize switching cost
+- **3-phase adaptive learning**: Cold Start (limit=1) → AIMD (TPS+p95 per model) → LLM Batch (all-model combination tuning)
+- **Thermal protection**: auto decelerate → block → cooldown → gradual recovery (per-provider thresholds, auto-detected from GPU vendor)
+- **Self-healing**: circuit breaker per provider, crash recovery via Valkey, queue reaper for orphaned jobs
 
 ## Overview
 
-inferq uses **Hexagonal Architecture (Ports & Adapters)** to isolate the LLM inference domain from infrastructure concerns (HTTP, Redis, GPU drivers).
+Veronex uses **Hexagonal Architecture (Ports & Adapters)** to isolate the LLM inference domain from infrastructure concerns (HTTP, Valkey, Postgres, OTel).
 
 ## Directory Structure
 
 ```
-src/
+crates/veronex/src/
 ├── domain/
-│   ├── entities/        # InferenceJob, InferenceResult
-│   ├── value-objects/   # JobId, Prompt, StreamToken
-│   └── exceptions/      # Domain-level exceptions
+│   ├── entities/        # InferenceJob, LlmProvider, GpuServer, ApiKey, …
+│   ├── enums.rs         # JobStatus, ProviderType, LlmProviderStatus, …
+│   ├── services/        # Pure domain logic (message_hashing, api_key_generator)
+│   ├── constants.rs     # SSOT for domain-layer constants (TPM, job lifecycle, queue timing)
+│   ├── errors.rs        # DomainError (Validation, NotFound, Internal, …)
+│   └── value_objects.rs # JobId, Prompt, ModelName
 │
 ├── application/
 │   ├── ports/
-│   │   ├── inbound/     # Driving ports (use case interfaces)
-│   │   └── outbound/    # Driven ports (infrastructure interfaces)
-│   └── use-cases/       # Core business logic
+│   │   ├── inbound/     # InferenceUseCase (driving port)
+│   │   └── outbound/    # all outbound port traits
+│   └── use_cases/
+│       └── inference/   # mod.rs (JobEntry), use_case.rs, dispatcher.rs, runner.rs, helpers.rs
 │
 ├── infrastructure/
-│   ├── inbound/
-│   │   ├── http/        # FastAPI route handlers
-│   │   └── sse/         # SSE streaming adapter
+│   ├── inbound/http/    # Axum handlers, middleware, router, AppState, error.rs
 │   └── outbound/
-│       ├── queue/       # Redis queue adapter
-│       ├── gpu/         # GPU worker adapter
-│       └── persistence/ # DB adapter (optional)
+│       ├── persistence/ # Postgres adapters (one per port)
+│       ├── ollama/      # OllamaAdapter
+│       ├── gemini/      # GeminiAdapter
+│       ├── provider_router.rs  # DynamicProviderRouter (VRAM-aware)
+│       ├── health_checker.rs   # 30s background health checker (+ thermal throttle update)
+│       ├── model_manager/      # OllamaModelManager (disabled — VramPool manages lifecycle)
+│       ├── observability/      # HttpObservabilityAdapter + HttpAuditAdapter (fail-open → veronex-analytics)
+│       ├── analytics/          # HttpAnalyticsClient (GET from veronex-analytics)
+│       ├── pubsub/             # Cross-instance relay (Valkey Streams + Pub/Sub) + reaper (crash recovery)
+│       ├── valkey_keys.rs      # Valkey key patterns (infra-only helpers; queue names live in domain/constants.rs)
+│       └── capacity/           # VramPool, DistributedVramPool, ThermalThrottleMap, CapacityAnalyzer
 │
-└── main.py              # Composition root
-```
-
-## Layers
-
-### Domain Layer
-
-- No external dependencies
-- Pure Python dataclasses / Pydantic models
-- Contains: entities, value objects, domain exceptions
-
-```python
-# domain/entities/inference_job.py
-@dataclass
-class InferenceJob:
-    id: JobId
-    prompt: Prompt
-    status: JobStatus
-    created_at: datetime
-```
-
-### Application Layer
-
-- Depends only on domain
-- Defines all ports (interfaces)
-- Contains: use cases, port interfaces
-
-```python
-# application/ports/outbound/queue_port.py
-class IQueuePort(ABC):
-    @abstractmethod
-    async def enqueue(self, job: InferenceJob) -> None: ...
-
-    @abstractmethod
-    async def dequeue(self) -> InferenceJob: ...
-```
-
-```python
-# application/ports/inbound/inference_use_case.py
-class IInferenceUseCase(ABC):
-    @abstractmethod
-    async def submit(self, prompt: str) -> JobId: ...
-
-    @abstractmethod
-    async def stream(self, job_id: JobId) -> AsyncIterator[StreamToken]: ...
-```
-
-### Infrastructure Layer
-
-- Depends on application (implements ports)
-- Contains: adapters (HTTP, SSE, Redis, GPU)
-- Never contains business logic
-
-```python
-# infrastructure/outbound/queue/redis_queue_adapter.py
-class RedisQueueAdapter(IQueuePort):
-    async def enqueue(self, job: InferenceJob) -> None:
-        await self.redis.rpush(QUEUE_KEY, job.to_json())
+└── main.rs              # Composition root — wires all adapters
 ```
 
 ## Dependency Rule
@@ -98,55 +63,119 @@ infrastructure → application → domain
 
 - `domain` imports nothing from other layers
 - `application` imports only from `domain`
-- `infrastructure` imports from `application` (to implement ports)
+- `infrastructure` imports from `application` (implements port traits)
 
-**Violation**: Any reverse dependency is a bug.
+Violation = compile error (Rust enforces this naturally).
 
-## Composition Root
+## Layers
 
-All wiring happens in `main.py`:
+| Layer | Rules |
+|-------|-------|
+| Domain | No dependencies, no async, no I/O. Pure structs/enums |
+| Application | Depends only on `domain`. Defines port traits (`#[async_trait]`) + use case impl |
+| Infrastructure | Implements ports (adapters). No business logic |
 
-```python
-# main.py
-queue_adapter = RedisQueueAdapter(redis_client)
-gpu_adapter = GpuWorkerAdapter(model)
-use_case = InferenceUseCase(queue_adapter, gpu_adapter)
-http_adapter = HttpAdapter(use_case)
+## Composition Root (main.rs)
+
+Wires all `Arc<dyn Port>` adapters into `AppState`, then passes to `build_app()`.
+Notable: `CachingProviderRegistry` decorates `PostgresProviderRegistry` (5s TTL) since `list_all()` runs on every job dequeue.
+
+## Multi-Provider Routing (Intelligence Scheduler)
+
 ```
+Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → RPUSH veronex:queue:jobs
+      OR POST /v1/test/completions  (Bearer JWT, source=Test)  → RPUSH veronex:queue:jobs:test
+       → queue_dispatcher_loop: Lua priority pop [paid, jobs, test] → processing list
+         → 2-stage model filter:
+           1. providers_for_model() → has the model installed?
+           2. list_enabled() → model enabled on this provider?
+         → VRAM sort + model stickiness (+100GB bonus for loaded model)
+         → tier sort (paid→non-free-tier, free→free-tier)
+         → gate chain:
+           circuit_breaker → thermal (per-provider, auto-detected GPU/CPU profile)
+           → concurrency limit (AIMD-learned max_concurrent)
+           → vram_pool.try_reserve() → VramPermit or re-enqueue
+         → tokio::spawn run_job(permit)
+           → OllamaAdapter | GeminiAdapter → SSE tokens
+           → permit dropped (auto) → KV cache returned, weight stays
+           → ObservabilityPort → veronex-analytics → ClickHouse
+
+Direct path (dev mode, no Valkey):
+  pick_and_build() → gate chain → try_reserve() → None = skip (VRAM unavailable)
+
+Reconnect:
+  GET /v1/jobs/{id}/stream      (X-API-Key)  → SSE replay
+  GET /v1/test/jobs/{id}/stream (Bearer JWT) → SSE replay
+
+Background loops:
+  health_checker (30s):
+    → provider health (Ollama/Gemini)
+    → agent metrics poll → Valkey cache (HwMetrics with gpu_vendor)
+    → thermal.set_thresholds(gpu_vendor) + thermal.update(temp_c)
+  run_sync_loop (base tick 30s, per-provider sync_interval ~300s):
+    → per Ollama provider: /api/version + /api/tags + /api/ps + /api/show
+    → model sync + VRAM probe + KV compute
+    → AIMD: TPS ratio + p95 spike → max_concurrent adjustment
+    → LLM Batch: all-model combination analysis → ±2 clamp auto-applied
+    → DB persist (model_vram_profiles)
+```
+
+## AppState
+
+> Defined in `infrastructure/inbound/http/state.rs`. Field categories: `infra/deploy.md` -- AppState.
+> All fields are `Arc<dyn Port>` -- wired in `main.rs` composition root.
+
+## Message Bus
+
+> Redpanda = single message bus. ClickHouse = read layer only (Kafka Engine → MV → MergeTree).
+> Observability is fail-open: if unreachable, inference continues unrecorded.
+> Full pipeline spec: `infra/otel-pipeline.md`.
 
 ## Key Design Decisions
 
 | Decision | Rationale |
-| -------- | --------- |
-| Serial queue (not parallel) | Single GPU — concurrent calls would deadlock |
-| SSE over WebSocket | Unidirectional stream is sufficient; simpler protocol |
-| Port per concern | `IQueuePort`, `IGpuPort`, `IStreamPort` separated for testability |
-| Domain has no async | Pure domain logic; async lives in adapters |
-
-## Testing Strategy
-
-| Layer | Test Type | Mock Target |
-| -------------- | -------------- | -------------------- |
-| domain | Unit | Nothing (pure) |
-| application | Unit | Outbound ports (mock) |
-| infrastructure | Integration | Real Redis/GPU or stub |
+|----------|-----------|
+| Queue-based LB | Veronex is the load balancer — no external LB needed |
+| VRAM-aware routing | Minimizes model load cost (APU loads are slow) |
+| GpuServer split | Multiple Ollama providers per host → single node-exporter scrape |
+| SSE over WebSocket | Unidirectional stream is sufficient; simpler implementation |
+| Arc<dyn Trait> | Runtime polymorphism; adapters freely swappable at composition root |
+| async-trait kept | `Arc<dyn Port>` requires it; native async fn in trait is not dyn-safe |
 
 ## Port Catalog
 
-### Inbound (Driving)
+### Inbound
 
-| Port | Method | Description |
-| ---- | ------ | ----------- |
-| `IInferenceUseCase` | `submit(prompt)` | Enqueue inference job |
-| `IInferenceUseCase` | `stream(job_id)` | Stream tokens as SSE |
-| `IInferenceUseCase` | `status(job_id)` | Get job status |
+| Port | Methods |
+|------|---------|
+| `InferenceUseCase` | `submit`, `process`, `stream`, `get_status`, `cancel` |
 
-### Outbound (Driven)
+### Outbound
 
-| Port | Method | Description |
-| ---- | ------ | ----------- |
-| `IQueuePort` | `enqueue(job)` | Push job to queue |
-| `IQueuePort` | `dequeue()` | Pop next job (blocking) |
-| `IGpuPort` | `infer(job)` | Run inference on GPU |
-| `IGpuPort` | `stream_infer(job)` | Stream tokens from GPU |
-| `IStreamPort` | `publish(token)` | Publish token to SSE channel |
+| Port | Adapter | Notes |
+|------|---------|-------|
+| `InferenceProviderPort` | `OllamaAdapter`, `GeminiAdapter` | SSE streaming |
+| `ProviderDispatchPort` | `ConcreteProviderDispatch` | Provider selection, adapter build, Gemini rate-limit counters |
+| `LlmProviderRegistry` | `CachingProviderRegistry` → `PostgresProviderRegistry` | 5s TTL decorator |
+| `GpuServerRegistry` | `PostgresGpuServerRegistry` | Server + node-exporter |
+| `JobRepository` | `PostgresJobRepository` | UPSERT on conflict |
+| `ApiKeyRepository` | `PostgresApiKeyRepository` | BLAKE2b hash lookup |
+| `ObservabilityPort` | `HttpObservabilityAdapter` | fail-open → veronex-analytics |
+| `AuditPort` | `HttpAuditAdapter` | fail-open → veronex-analytics |
+| `AnalyticsRepository` | `HttpAnalyticsClient` | GET from veronex-analytics |
+| `AccountRepository` | `PostgresAccountRepository` | Argon2id, soft-delete, RBAC |
+| `SessionRepository` | `PostgresSessionRepository` | jti + BLAKE2b refresh hash |
+| `ModelCapacityRepository` | `PostgresModelCapacityRepository` | VRAM profiles (weight, KV, arch params) |
+| `CapacitySettingsRepository` | `PostgresCapacitySettingsRepository` | Singleton (id=1) |
+| `OllamaModelRepository` | `PostgresOllamaModelRepository` | Model-aware routing |
+| `OllamaSyncJobRepository` | `PostgresOllamaSyncJobRepository` | Async sync (JSONB) |
+| `GeminiPolicyRepository` | `PostgresGeminiPolicyRepository` | UPSERT + `*` fallback |
+| `GeminiSyncConfigRepository` | `PostgresGeminiSyncConfigRepository` | Singleton admin key |
+| `GeminiModelRepository` | `PostgresGeminiModelRepository` | Global model pool |
+| `ProviderModelSelectionRepository` | `PostgresProviderModelSelectionRepository` | Per-provider model filter |
+| `VramPoolPort` | `VramPool`, `DistributedVramPool` | Per-provider VRAM pool: try_reserve → VramPermit (RAII, KV-only release) |
+| `CircuitBreakerPort` | `CircuitBreakerMap` | Per-provider failure isolation (Closed→Open→HalfOpen) |
+| `ThermalPort` | `ThermalThrottleMap` | Per-provider GPU thermal throttle level (Normal/Soft/Hard) |
+| `LabSettingsRepository` | `PostgresLabSettingsRepository` | Feature flags (gemini_function_calling) |
+| `ValkeyPort`             | `ValkeyAdapter`          | Queue (push/pop/priority), KV (set/get/del), counters, pub/sub |
+| `MessageStore` | `S3MessageStore` | MinIO/AWS S3 message storage |

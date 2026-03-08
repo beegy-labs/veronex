@@ -1,6 +1,6 @@
 # Git Flow
 
-> Branch & commit strategy | **Last Updated**: 2026-02-19
+> Branch & commit strategy | **Last Updated**: 2026-03-07
 
 ## Branch Flow
 

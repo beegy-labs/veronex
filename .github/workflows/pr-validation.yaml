@@ -1,0 +1,124 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+
+jobs:
+  validate:
+    name: Validate PR
+    runs-on: arc-runner-set
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check target branch
+        run: |
+          echo "Validating PR target branch..."
+          BASE="${{ github.base_ref }}"
+          if [ "$BASE" != "develop" ] && [ "$BASE" != "main" ]; then
+            echo "❌ ERROR: PRs must target 'develop' or 'main', not '${BASE}'"
+            exit 1
+          fi
+          # main ← develop only (release merge)
+          if [ "$BASE" = "main" ]; then
+            HEAD="${{ github.head_ref }}"
+            if [ "$HEAD" != "develop" ]; then
+              echo "❌ ERROR: Only 'develop' branch can merge into 'main', not '${HEAD}'"
+              exit 1
+            fi
+          fi
+          echo "✅ Target branch is correct: ${BASE}"
+
+      - name: Validate commit messages
+        run: |
+          echo "Validating commit message format..."
+
+          git log --format="%H %s" origin/${{ github.base_ref }}..HEAD | while read hash message; do
+            echo "Checking commit: $hash"
+            echo "  Message: $message"
+
+            if echo "$message" | grep -qE '^Merge [0-9a-f]{40} into [0-9a-f]{40}'; then
+              echo "  ⏭️  Skipping merge commit"
+              continue
+            fi
+
+            if ! echo "$message" | grep -qE '^(feat|fix|chore|docs|refactor|test|perf|ci|build|revert|style)\([a-z0-9-]+\): .+'; then
+              echo "❌ ERROR: Invalid commit message format"
+              echo "  Expected: type(scope): description"
+              echo "  Got: $message"
+              echo ""
+              echo "Valid types: feat, fix, chore, docs, refactor, test, perf, ci, build, revert, style"
+              echo "Example: feat(auth): add user authentication"
+              exit 1
+            fi
+
+            echo "  ✅ Format is valid"
+          done
+
+          echo "✅ All commit messages are valid"
+
+      - name: Scan for secrets
+        run: |
+          echo "Scanning for potential secrets in changed lines..."
+
+          DIFF_CONTENT=$(git diff origin/${{ github.base_ref }}..HEAD | grep '^+' | grep -v '^+++' || true)
+
+          if [ -z "$DIFF_CONTENT" ]; then
+            echo "No added lines to scan"
+            exit 0
+          fi
+
+          SECRET_PATTERNS=(
+            'password\s*=\s*["\047][^"\047<>]{8,}'
+            'api[_-]?key\s*=\s*["\047][^"\047<>]{16,}'
+            'secret[_-]?key\s*=\s*["\047][^"\047<>]{16,}'
+            'token\s*=\s*["\047](ghp_|github_pat_)[a-zA-Z0-9]{36,}'
+            'aws_access_key_id\s*=\s*["\047]AK[A-Z0-9]{16,}'
+            'private[_-]?key\s*=\s*["\047]-----BEGIN'
+          )
+
+          EXCLUDE_PATTERNS='(existingSecret|secretKeyRef|secretStoreRef|<[A-Z_]+>|<YOUR_|<SECRET|REDACTED|example\.com|encrypt|decrypt|master_key|encryption_key)'
+
+          FOUND_SECRETS=0
+
+          for pattern in "${SECRET_PATTERNS[@]}"; do
+            MATCHES=$(echo "$DIFF_CONTENT" | grep -iE "$pattern" || true)
+            if [ -n "$MATCHES" ]; then
+              REAL_MATCHES=$(echo "$MATCHES" | grep -vE "$EXCLUDE_PATTERNS" || true)
+              if [ -n "$REAL_MATCHES" ]; then
+                echo "⚠️  Potential secret found:"
+                echo "$REAL_MATCHES"
+                FOUND_SECRETS=1
+              fi
+            fi
+          done
+
+          if [ $FOUND_SECRETS -eq 1 ]; then
+            echo ""
+            echo "❌ ERROR: Potential secrets detected in changed lines"
+            echo "Please review and remove any hardcoded secrets"
+            exit 1
+          fi
+
+          echo "✅ No secrets detected"
+
+      - name: Summary
+        if: success()
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "✅ All validation checks passed!"
+          echo "=========================================="
+          echo ""
+          echo "Checks completed:"
+          echo "  ✅ Target branch validation"
+          echo "  ✅ Commit message format"
+          echo "  ✅ Secrets scanning"
+          echo ""
+          echo "PR is ready for review!"
