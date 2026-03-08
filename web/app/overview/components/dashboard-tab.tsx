@@ -10,164 +10,31 @@ import {
   CheckCircle2, XCircle, AlertTriangle,
 } from 'lucide-react'
 import {
-  AreaChart, Area, BarChart, Bar, Cell,
-  XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
+  AreaChart, Area,
+  XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
-  AXIS_TICK, LEGEND_STYLE, CURSOR_FILL,
+  AXIS_TICK, CURSOR_FILL,
   fmtMs, fmtMsNullable, fmtCompact,
 } from '@/lib/chart-theme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
-import { fmtHourLabel, fmtDatetimeShort } from '@/lib/date'
+import { fmtHourLabel } from '@/lib/date'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import { STATUS_STYLES, PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
+import { PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
+import {
+  RequestTrendSection, TopModelsSection, RecentJobsSection, TokenSummarySection,
+} from './dashboard-lower-sections'
 
-/* ─── helpers ─────────────────────────────────────────────── */
-// fmtCompact / fmtMs / fmtMsNullable imported from chart-theme
-
-function countByStatus(providers: Provider[], status: string) {
-  return providers.filter(b => b.status === status).length
-}
-
-type ThermalLevel = 'normal' | 'warning' | 'critical' | 'unknown'
-
-/* ─── pure color helpers ──────────────────────────────────── */
-function successRateCls(rate: number | undefined): string {
-  if (rate == null) return ''
-  if (rate >= 0.99) return 'bg-status-success/15 text-status-success-fg'
-  if (rate >= 0.95) return 'bg-status-warning/15 text-status-warning-fg'
-  return 'bg-status-error/15 text-status-error-fg'
-}
-
-function providerValueCls(online: number, total: number): string {
-  if (total === 0) return ''
-  if (online === total) return 'text-status-success-fg'
-  if (online > 0)       return 'text-status-warning-fg'
-  return 'text-status-error-fg'
-}
-
-function pendingValueCls(count: number): string {
-  if (count === 0)  return 'text-status-success-fg'
-  if (count < 10)   return 'text-status-warning-fg'
-  return 'text-status-error-fg'
-}
-
-function latencyColor(val: number | null | undefined, warnMs: number, errMs: number): string {
-  if (val == null) return ''
-  if (val >= errMs)  return 'text-status-error-fg'
-  if (val >= warnMs) return 'text-status-warning-fg'
-  return ''
-}
-
-const THERMAL_ROW_CLS: Record<ThermalLevel, string> = {
-  normal:   '',
-  warning:  'bg-status-warning/5 border-l-2 border-status-warning/60',
-  critical: 'bg-status-error/5 border-l-2 border-status-error/60',
-  unknown:  '',
-}
-
-const THERMAL_NAME_CLS: Record<ThermalLevel, string> = {
-  normal:   '',
-  warning:  'text-status-warning-fg',
-  critical: 'text-status-error-fg',
-  unknown:  '',
-}
-
-/* ─── sub-components ──────────────────────────────────────── */
-function StatSkeleton() {
-  return (
-    <Card>
-      <CardContent className="p-5">
-        <div className="h-3 w-24 rounded bg-muted animate-pulse mb-4" />
-        <div className="h-8 w-16 rounded bg-muted animate-pulse mb-2" />
-        <div className="h-2 w-20 rounded bg-muted animate-pulse" />
-      </CardContent>
-    </Card>
-  )
-}
-
-function ProviderRow({
-  icon, label, providers,
-}: {
-  icon: React.ReactNode
-  label: string
-  providers: Provider[]
-}) {
-  const online   = countByStatus(providers, 'online')
-  const degraded = countByStatus(providers, 'degraded')
-  const offline  = countByStatus(providers, 'offline')
-
-  return (
-    <div className="flex items-center justify-between py-2">
-      <div className="flex items-center gap-2 text-sm font-medium">
-        {icon}
-        <span>{label}</span>
-        <span className="text-muted-foreground text-xs">({providers.length})</span>
-      </div>
-      <div className="flex items-center gap-3 text-xs">
-        {online > 0 && (
-          <span className="flex items-center gap-1 text-status-success-fg">
-            <span className="h-1.5 w-1.5 rounded-full bg-status-success inline-block" />
-            {online}
-          </span>
-        )}
-        {degraded > 0 && (
-          <span className="flex items-center gap-1 text-status-warning-fg">
-            <span className="h-1.5 w-1.5 rounded-full bg-status-warning inline-block" />
-            {degraded}
-          </span>
-        )}
-        {offline > 0 && (
-          <span className="flex items-center gap-1 text-muted-foreground">
-            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground inline-block" />
-            {offline}
-          </span>
-        )}
-        {providers.length === 0 && <span className="text-muted-foreground">—</span>}
-      </div>
-    </div>
-  )
-}
-
-function ThermalBadge({ level, temp, t }: {
-  level: ThermalLevel
-  temp: number | null
-  t: (k: string) => string
-}) {
-  if (level === 'unknown') return <span className="text-[11px] text-muted-foreground">—</span>
-
-  const cfg = {
-    normal:   { cls: 'text-status-success-fg',  Icon: CheckCircle2,  key: 'overview.tempNormal' },
-    warning:  { cls: 'text-status-warning-fg',  Icon: AlertTriangle, key: 'overview.tempWarning' },
-    critical: { cls: 'text-status-error-fg',    Icon: XCircle,       key: 'overview.tempCritical' },
-  }[level as Exclude<ThermalLevel, 'unknown'>]
-
-  return (
-    <span className={`flex items-center gap-1 text-[11px] font-medium ${cfg.cls}`}>
-      <cfg.Icon className="h-3 w-3" />
-      <span>{t(cfg.key)}</span>
-      {temp != null && <span className="tabular-nums opacity-70">({temp.toFixed(0)}°C)</span>}
-    </span>
-  )
-}
-
-function ConnectionDot({ connected, t }: { connected: boolean; t: (k: string) => string }) {
-  return connected ? (
-    <span className="flex items-center gap-1 text-[11px] font-medium text-status-success-fg">
-      <span className="h-1.5 w-1.5 rounded-full bg-status-success inline-block" />
-      {t('overview.connected')}
-    </span>
-  ) : (
-    <span className="flex items-center gap-1 text-[11px] font-medium text-status-error-fg">
-      <span className="h-1.5 w-1.5 rounded-full bg-status-error inline-block" />
-      {t('overview.unreachable')}
-    </span>
-  )
-}
+import {
+  type ThermalLevel,
+  successRateCls, providerValueCls, pendingValueCls, latencyColor,
+  countByStatus,
+  THERMAL_ROW_CLS, THERMAL_NAME_CLS,
+  StatSkeleton, ProviderRow, ThermalBadge, ConnectionDot,
+} from './dashboard-helpers'
 
 /* ─── props ───────────────────────────────────────────────── */
 interface Props {
@@ -652,161 +519,10 @@ export function DashboardTab({
         </Card>
       </div>
 
-      {/* Section 5: Request Trend */}
-      {trendData.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('overview.requestTrend')}</CardTitle>
-            <p className="text-xs text-muted-foreground">{t('overview.last24h')}</p>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={trendData}>
-                <defs>
-                  <linearGradient id="gradTotal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="var(--theme-primary)" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="var(--theme-primary)" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gradSuccess" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="var(--theme-status-success)" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="var(--theme-status-success)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
-                <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={35} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} />
-                <Legend wrapperStyle={LEGEND_STYLE} />
-                <Area type="monotone" dataKey="total"   name={t('overview.totalReqs')}
-                  stroke="var(--theme-primary)" fill="url(#gradTotal)" strokeWidth={2} dot={false} />
-                <Area type="monotone" dataKey="success" name={t('overview.successReqs')}
-                  stroke="var(--theme-status-success)" fill="url(#gradSuccess)" strokeWidth={2} dot={false} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Section 6: Top Models */}
-      {modelBarData.length > 0 && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <CardTitle>{t('overview.topModels')}</CardTitle>
-                <p className="text-xs text-muted-foreground mt-0.5">{t('overview.last24h')}</p>
-              </div>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: 'var(--theme-primary)' }} />
-                  Ollama
-                </span>
-                {geminiEnabled && (
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: 'var(--theme-status-info)' }} />
-                    Gemini
-                  </span>
-                )}
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={Math.max(160, modelBarData.length * 36)}>
-              <BarChart data={modelBarData} layout="vertical" margin={{ left: 8, right: 16 }}>
-                <XAxis type="number" tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={fmtCompact} />
-                <YAxis
-                  type="category" dataKey="label" width={154}
-                  tick={{ ...AXIS_TICK, fontSize: 10 }}
-                  axisLine={false} tickLine={false}
-                />
-                <Tooltip
-                  contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL}
-                  formatter={(v, _name, props: { payload?: ModelBreakdown }) => [
-                    `${fmtCompact(Number(v))} ${t('usage.reqCount')}`,
-                    props.payload?.provider_type ?? '',
-                  ] as [string, string]}
-                />
-                <Bar dataKey="request_count" radius={[0, 4, 4, 0]}>
-                  {modelBarData.map((m, i) => (
-                    <Cell key={i} fill={m.provider_type === PROVIDER_GEMINI ? 'var(--theme-status-info)' : 'var(--theme-primary)'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Section 7: Recent Jobs */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-3">
-          <CardTitle className="text-base">{t('overview.recentJobs')}</CardTitle>
-          <Link href="/jobs" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-            {t('overview.viewAllJobs')} <ArrowRight className="h-3 w-3" />
-          </Link>
-        </CardHeader>
-        {recentJobs.length === 0 ? (
-          <CardContent className="pb-6 text-center text-sm text-muted-foreground">
-            {t('jobs.noJobs')}
-          </CardContent>
-        ) : (
-          <div className="overflow-x-auto">
-            <table style={{ minWidth: '560px' }} className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="h-11 px-4 pl-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.model')}</th>
-                  <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.provider')}</th>
-                  <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.status')}</th>
-                  <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.latency')}</th>
-                  <th className="h-11 px-4 pr-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.createdAt')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentJobs.map((job) => (
-                  <tr key={job.id} className="border-b border-border last:border-0">
-                    <td className="py-3 px-4 pl-6 font-mono text-xs max-w-[180px] truncate">{job.model_name}</td>
-                    <td className="py-3 px-4 text-xs text-muted-foreground max-w-[120px] truncate">{job.provider_type}</td>
-                    <td className="py-3 px-4">
-                      <Badge variant="outline" className={`text-xs ${STATUS_STYLES[job.status] ?? 'bg-muted/20 text-muted-foreground border-muted/30'}`}>
-                        {job.status}
-                      </Badge>
-                    </td>
-                    <td className="py-3 px-4 text-xs tabular-nums">{fmtMsNullable(job.latency_ms)}</td>
-                    <td className="py-3 px-4 pr-6 text-xs text-muted-foreground whitespace-nowrap">{fmtDatetimeShort(job.created_at, tz)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
-      {/* Section 8: Token Summary */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">{t('overview.tokenSummary')}</CardTitle>
-          <p className="text-xs text-muted-foreground">{t('overview.last24h')}</p>
-        </CardHeader>
-        <CardContent className="pt-0">
-          {usage ? (
-            <>
-              <p className="text-3xl font-bold tabular-nums flex items-baseline gap-1">
-                {fmtCompact(usage.total_tokens)}
-                <span className="text-sm font-normal text-muted-foreground">tokens</span>
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {t('usage.promptTokens')} {fmtCompact(usage.prompt_tokens)} · {t('usage.completionTokens')} {fmtCompact(usage.completion_tokens)}
-              </p>
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground">{t('overview.analyticsOffline')}</p>
-          )}
-          <div className="mt-3 pt-2 border-t border-border">
-            <Link href="/usage" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-              {t('overview.goToUsage')} <ArrowRight className="h-3 w-3" />
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
+      <RequestTrendSection trendData={trendData} />
+      <TopModelsSection modelBarData={modelBarData} geminiEnabled={geminiEnabled} />
+      <RecentJobsSection recentJobs={recentJobs} tz={tz} />
+      <TokenSummarySection usage={usage} />
     </div>
   )
 }

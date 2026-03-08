@@ -144,6 +144,15 @@ pub fn ratelimit_tpm_key(key_id: uuid::Uuid, minute: i64) -> String {
 /// Cooldown before half-open probe after circuit opens.
 pub const CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(60);
 
+/// Sliding window size for P99 latency tracking per provider.
+pub const CIRCUIT_BREAKER_LATENCY_WINDOW: usize = 100;
+
+/// Minimum samples required before P99 latency can trigger soft degradation.
+pub const CIRCUIT_BREAKER_LATENCY_MIN_SAMPLES: usize = 20;
+
+/// P99 latency threshold (ms). When exceeded, circuit transitions to HalfOpen.
+pub const CIRCUIT_BREAKER_P99_THRESHOLD_MS: u64 = 30_000;
+
 /// Heartbeat interval for instance liveness (reaper).
 pub const REAPER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 

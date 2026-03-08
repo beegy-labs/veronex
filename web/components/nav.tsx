@@ -5,37 +5,18 @@ import { usePathname, useSearchParams } from 'next/navigation'
 import { useState, useEffect, Suspense } from 'react'
 import {
   LayoutDashboard, List, Key, Server,
-  BarChart2, Gauge, Sun, Moon, ChevronLeft, Languages, Clock,
+  BarChart2, Gauge, Sun, Moon, ChevronLeft,
   BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
-  Users, Shield, LogOut, Settings2, FlaskConical,
+  Users, Shield, LogOut, Settings2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
 import { useTranslation } from '@/i18n'
-import { i18n } from '@/i18n'
-import { locales, localeLabels, localStorageKey, type Locale } from '@/i18n/config'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { getAuthUser } from '@/lib/auth'
 import { redirectToLogin } from '@/lib/auth-guard'
-import { api } from '@/lib/api'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import { Switch } from '@/components/ui/switch'
-import { useTimezone, type Timezone, PRESET_TIMEZONES, isValidTimezone } from '@/components/timezone-provider'
-import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
+import { useTimezone } from '@/components/timezone-provider'
+import { NavSettingsDialog } from '@/components/nav-settings-dialog'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -101,62 +82,7 @@ const navItems: NavItem[] = [
   },
 ]
 
-// ── Logo ───────────────────────────────────────────────────────────────────────
-
-function HexLogo({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 32 32"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="Veronex"
-    >
-      <defs>
-        <linearGradient id="hex-grad" x1="2.5" y1="4.3" x2="29.5" y2="27.7" gradientUnits="userSpaceOnUse">
-          <stop offset="0%"   style={{ stopColor: 'var(--theme-logo-start)' }} />
-          <stop offset="100%" style={{ stopColor: 'var(--theme-logo-end)' }} />
-        </linearGradient>
-      </defs>
-      <polygon
-        points="29.5,16 22.8,27.7 9.2,27.7 2.5,16 9.2,4.3 22.8,4.3"
-        fill="url(#hex-grad)"
-      />
-      <polygon
-        points="25,16 20.5,23.8 11.5,23.8 7,16 11.5,8.2 20.5,8.2"
-        fill="none"
-        stroke="white"
-        strokeWidth="1.5"
-        strokeOpacity="0.55"
-      />
-    </svg>
-  )
-}
-
-// ── Ollama llama logo (matches Ollama brand) ────────────────────────────────────
-
-function OllamaIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="Ollama"
-    >
-      {/* Left ear */}
-      <path d="M7.5 1.5 C7 1.5 6.5 2 6.5 2.5 L6.5 5 C6.5 5.5 7 6 7.5 6 L9 6 C9.5 6 10 5.5 10 5 L10 2.5 C10 2 9.5 1.5 9 1.5 Z" />
-      {/* Right ear */}
-      <path d="M15 1.5 C14.5 1.5 14 2 14 2.5 L14 5 C14 5.5 14.5 6 15 6 L16.5 6 C17 6 17.5 5.5 17.5 5 L17.5 2.5 C17.5 2 17 1.5 16.5 1.5 Z" />
-      {/* Head */}
-      <ellipse cx="12" cy="9" rx="5.5" ry="4.5" />
-      {/* Neck */}
-      <path d="M9.5 13 L9.5 16 C9.5 16.5 10 17 10.5 17 L13.5 17 C14 17 14.5 16.5 14.5 16 L14.5 13 Z" />
-      {/* Body */}
-      <rect x="6.5" y="16.5" width="11" height="6" rx="3" />
-    </svg>
-  )
-}
+import { HexLogo, OllamaIcon } from '@/components/nav-icons'
 
 // ── Inner nav (needs useSearchParams — wrapped in Suspense by parent) ───────────
 
@@ -165,22 +91,14 @@ function NavContent() {
   const searchParams = useSearchParams()
   const { theme, toggleTheme } = useTheme()
   const { t } = useTranslation()
-  const { tz, setTz, resetToLocaleDefault } = useTimezone()
+  const { resetToLocaleDefault } = useTimezone()
 
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [locale, setLocale] = useState<Locale>('en')
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
   const [authUser, setAuthUser] = useState<{ username: string; role: string } | null>(null)
-  const { labSettings, refetch: refetchLabSettings } = useLabSettings()
+  const { labSettings } = useLabSettings()
   const [showSettings, setShowSettings] = useState(false)
-  const [showCustomTzInline, setShowCustomTzInline] = useState(false)
-  const [customTzInput, setCustomTzInput] = useState('')
-  const [customTzError, setCustomTzError] = useState(false)
-  const [labLoading, setLabLoading] = useState(false)
-
-  const isPresetTz = PRESET_TIMEZONES.includes(tz as typeof PRESET_TIMEZONES[number])
-  const tzSelectValue = isPresetTz ? tz : '__custom__'
 
   // Restore persisted state on mount
   useEffect(() => {
@@ -189,13 +107,6 @@ function NavContent() {
 
     const savedCollapsed = localStorage.getItem(NAV_COLLAPSED_KEY)
     if (savedCollapsed === 'true') setCollapsed(true)
-
-    const savedLocale = localStorage.getItem(localStorageKey) as Locale | null
-    if (savedLocale && locales.includes(savedLocale)) setLocale(savedLocale)
-    else {
-      const browser = navigator.language.slice(0, 2) as Locale
-      if (locales.includes(browser)) setLocale(browser)
-    }
 
     const groups: Record<string, boolean> = {}
     for (const item of navItems) {
@@ -258,14 +169,6 @@ function NavContent() {
     })
   }
 
-  function changeLocale(next: Locale) {
-    setLocale(next)
-    localStorage.setItem(localStorageKey, next)
-    i18n.changeLanguage(next)
-    // Auto-set timezone from locale if user hasn't explicitly chosen one
-    resetToLocaleDefault(next)
-  }
-
   function isChildActive(child: NavGroupChild, basePath: string): boolean {
     if (child.section) {
       if (pathname !== basePath) return false
@@ -286,7 +189,7 @@ function NavContent() {
           type="button"
           onClick={() => setMobileOpen((v) => !v)}
           className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-          title="Menu"
+          title={t('common.menu')}
         >
           <Menu className="h-5 w-5" />
         </button>
@@ -327,7 +230,7 @@ function NavContent() {
             type="button"
             onClick={toggleCollapsed}
             className="flex items-center justify-center"
-            title="Expand"
+            title={t('common.expand')}
           >
             <HexLogo className="h-7 w-7" />
           </button>
@@ -339,7 +242,7 @@ function NavContent() {
               type="button"
               onClick={toggleCollapsed}
               className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0"
-              title="Collapse"
+              title={t('common.collapse')}
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
@@ -489,7 +392,7 @@ function NavContent() {
               <span className="text-xs text-muted-foreground truncate">{authUser.username}</span>
               <button
                 type="button"
-                title="Sign out"
+                title={t('common.signOut')}
                 onClick={() => redirectToLogin()}
                 className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
               >
@@ -528,7 +431,7 @@ function NavContent() {
 
           <button
             type="button"
-            onClick={() => { setShowSettings(true); setShowCustomTzInline(false) }}
+            onClick={() => setShowSettings(true)}
             className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
             title={t('common.settings')}
           >
@@ -545,168 +448,11 @@ function NavContent() {
           </button>
         </div>
 
-        {/* Settings dialog — language + timezone */}
-        {showSettings && (
-          <Dialog open onOpenChange={(open) => {
-            if (!open) { setShowSettings(false); setShowCustomTzInline(false); setCustomTzError(false) }
-          }}>
-            <DialogContent className="max-w-xs">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <Settings2 className="h-4 w-4 text-primary" />
-                  {t('common.settings')}
-                </DialogTitle>
-              </DialogHeader>
-
-              <div className="space-y-4 pt-1">
-                {/* Language row */}
-                <div className="flex items-center gap-3">
-                  <Languages className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="text-sm text-muted-foreground flex-1">{t('common.language')}</span>
-                  <Select value={locale} onValueChange={(v) => changeLocale(v as Locale)}>
-                    <SelectTrigger className="h-8 w-36 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {locales.map((loc) => (
-                        <SelectItem key={loc} value={loc} className="text-xs">
-                          {localeLabels[loc]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Timezone row */}
-                <div className="flex items-center gap-3">
-                  <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="text-sm text-muted-foreground flex-1">{t('common.timezone')}</span>
-                  <Select
-                    value={tzSelectValue}
-                    onValueChange={(v) => {
-                      if (v === '__custom__') {
-                        setCustomTzInput(isPresetTz ? '' : tz)
-                        setCustomTzError(false)
-                        setShowCustomTzInline(true)
-                      } else {
-                        setTz(v as Timezone)
-                        setShowCustomTzInline(false)
-                      }
-                    }}
-                  >
-                    <SelectTrigger className="h-8 w-36 text-xs">
-                      {isPresetTz
-                        ? <SelectValue />
-                        : <span className="truncate">{tz.split('/').pop()}</span>
-                      }
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="UTC" className="text-xs">{t('common.utc')}</SelectItem>
-                      <SelectItem value="America/New_York" className="text-xs">{t('common.eastern')}</SelectItem>
-                      <SelectItem value="America/Chicago" className="text-xs">{t('common.central')}</SelectItem>
-                      <SelectItem value="America/Denver" className="text-xs">{t('common.mountain')}</SelectItem>
-                      <SelectItem value="America/Los_Angeles" className="text-xs">{t('common.pacific')}</SelectItem>
-                      <SelectItem value="Europe/London" className="text-xs">{t('common.london')}</SelectItem>
-                      <SelectItem value="Africa/Johannesburg" className="text-xs">{t('common.johannesburg')}</SelectItem>
-                      <SelectItem value="Asia/Seoul" className="text-xs">{t('common.kst')}</SelectItem>
-                      <SelectItem value="Asia/Tokyo" className="text-xs">{t('common.jst')}</SelectItem>
-                      <SelectItem value="Australia/Sydney" className="text-xs">{t('common.sydney')}</SelectItem>
-                      <SelectItem value="Pacific/Auckland" className="text-xs">{t('common.auckland')}</SelectItem>
-                      <SelectItem value="__custom__" className="text-xs">{t('common.custom')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Lab features section */}
-                <div className="border-t pt-3 mt-1">
-                  <div className="flex items-center gap-2 mb-2">
-                    <FlaskConical className="h-4 w-4 text-amber-500 shrink-0" />
-                    <span className="text-sm font-medium flex-1">{t('common.labFeatures')}</span>
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 uppercase tracking-wide">
-                      Lab
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mb-3 pl-6">{t('common.labFeaturesDesc')}</p>
-
-                  {/* Gemini function calling */}
-                  <div className="pl-6 space-y-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium">{t('common.labGeminiFunctionCalling')}</p>
-                        <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{t('common.labGeminiFunctionCallingDesc')}</p>
-                      </div>
-                      <Switch
-                        checked={labSettings?.gemini_function_calling ?? false}
-                        disabled={labLoading || labSettings === null}
-                        onCheckedChange={async (checked) => {
-                          setLabLoading(true)
-                          try {
-                            await api.patchLabSettings({ gemini_function_calling: checked })
-                            await refetchLabSettings()
-                          } catch {
-                            // keep previous state on error
-                          } finally {
-                            setLabLoading(false)
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Custom IANA input — shown inline when "Custom…" is selected */}
-                {showCustomTzInline && (
-                  <div className="pl-7 space-y-2">
-                    <Input
-                      value={customTzInput}
-                      onChange={(e) => { setCustomTzInput(e.target.value); setCustomTzError(false) }}
-                      placeholder={t('common.customTimezonePlaceholder')}
-                      className="font-mono text-xs h-8"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          if (isValidTimezone(customTzInput.trim())) {
-                            setTz(customTzInput.trim() as Timezone)
-                            setShowCustomTzInline(false)
-                          } else {
-                            setCustomTzError(true)
-                          }
-                        }
-                      }}
-                    />
-                    <p className="text-xs text-muted-foreground">{t('common.customTimezoneHint')}</p>
-                    {customTzError && (
-                      <p className="text-xs text-destructive">{t('common.customTimezoneInvalid')}</p>
-                    )}
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs flex-1"
-                        onClick={() => { setShowCustomTzInline(false); setCustomTzError(false) }}
-                      >
-                        {t('common.cancel')}
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="h-7 text-xs flex-1"
-                        onClick={() => {
-                          if (isValidTimezone(customTzInput.trim())) {
-                            setTz(customTzInput.trim() as Timezone)
-                            setShowCustomTzInline(false)
-                          } else {
-                            setCustomTzError(true)
-                          }
-                        }}
-                      >
-                        {t('common.save')}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </DialogContent>
-          </Dialog>
-        )}
+        <NavSettingsDialog
+          open={showSettings}
+          onClose={() => setShowSettings(false)}
+          resetToLocaleDefault={resetToLocaleDefault}
+        />
       </div>
     </aside>
     </>

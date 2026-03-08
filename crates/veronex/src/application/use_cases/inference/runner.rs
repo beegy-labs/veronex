@@ -51,8 +51,203 @@ impl Default for TokenStreamState {
     }
 }
 
+// ── Stream error handler ────────────────────────────────────────────────────
+
+/// Handle a provider stream error: persist failure, emit observability, refund TPM.
+#[allow(clippy::too_many_arguments)]
+async fn handle_stream_error(
+    jobs: &Arc<DashMap<Uuid, JobEntry>>,
+    job: &mut InferenceJob,
+    job_repo: &dyn JobRepository,
+    observability: &Option<Arc<dyn ObservabilityPort>>,
+    valkey: &Option<Arc<dyn ValkeyPort>>,
+    uuid: Uuid,
+    started_at: chrono::DateTime<chrono::Utc>,
+    api_key_id: Option<Uuid>,
+    tpm_minute: Option<i64>,
+    ts: &TokenStreamState,
+    error: &anyhow::Error,
+) {
+    let msg = error.to_string();
+
+    if let Some(mut entry) = jobs.get_mut(&uuid) {
+        entry.status = JobStatus::Failed;
+        entry.job.status = JobStatus::Failed;
+        entry.job.error = Some(msg.clone());
+        entry.done = true;
+        let notify = entry.notify.clone();
+        drop(entry);
+        notify.notify_one();
+    }
+
+    job.status = JobStatus::Failed;
+    job.error = Some(msg.clone());
+    if let Err(db_err) = job_repo.save(job).await {
+        tracing::warn!(job_id = %uuid, "failed to persist failed state: {db_err}");
+    }
+
+    let latency_ms = chrono::Utc::now()
+        .signed_duration_since(started_at).num_milliseconds().max(0) as u32;
+    emit_inference_event(
+        observability, uuid, api_key_id, job,
+        ts.prompt_tokens.unwrap_or(0),
+        ts.completion_tokens.unwrap_or(ts.token_count as u32),
+        latency_ms, FinishReason::Error, "failed".into(), Some(msg),
+    ).await;
+
+    // Refund TPM reservation
+    if let (Some(vk), Some(key_id)) = (valkey, api_key_id)
+        && let Err(e) = record_tpm(vk.as_ref(), key_id, 0, tpm_minute).await
+    {
+        tracing::warn!(job_id = %uuid, "failed to refund TPM: {e}");
+    }
+
+    schedule_cleanup(jobs, uuid, JOB_CLEANUP_DELAY);
+}
+
+// ── Job finalizer ───────────────────────────────────────────────────────────
+
+/// Finalize a completed job: ownership guard, persist results, broadcast, record metrics.
+///
+/// Returns `Some(latency_ms)` if the job completed normally, `None` if cancelled
+/// or ownership was lost to another node.
+#[allow(clippy::too_many_arguments)]
+async fn finalize_job(
+    jobs: &Arc<DashMap<Uuid, JobEntry>>,
+    job: &mut InferenceJob,
+    job_repo: &dyn JobRepository,
+    valkey: &Option<Arc<dyn ValkeyPort>>,
+    observability: &Option<Arc<dyn ObservabilityPort>>,
+    model_manager: &Option<Arc<dyn ModelManagerPort>>,
+    provider_dispatch: &dyn ProviderDispatchPort,
+    event_tx: &broadcast::Sender<JobStatusEvent>,
+    instance_id: &Arc<str>,
+    cancel_notifiers: &DashMap<Uuid, Arc<Notify>>,
+    uuid: Uuid,
+    started_at: chrono::DateTime<chrono::Utc>,
+    ts: TokenStreamState,
+    api_key_id: Option<Uuid>,
+    tpm_minute: Option<i64>,
+    provider_id: Option<Uuid>,
+    provider_is_free_tier: bool,
+) -> Option<u32> {
+    let completed_at = chrono::Utc::now();
+
+    // Mark in-memory entry as completed
+    let final_status = if let Some(mut entry) = jobs.get_mut(&uuid) {
+        if entry.status != JobStatus::Cancelled {
+            entry.status = JobStatus::Completed;
+            entry.job.status = JobStatus::Completed;
+            entry.job.completed_at = Some(completed_at);
+            entry.done = true;
+            let notify = entry.notify.clone();
+            drop(entry);
+            notify.notify_one();
+            JobStatus::Completed
+        } else {
+            JobStatus::Cancelled
+        }
+    } else {
+        JobStatus::Completed
+    };
+
+    let result_text = (!ts.text.is_empty()).then_some(ts.text);
+    let tool_calls_json = (!ts.tool_calls.is_empty())
+        .then_some(serde_json::Value::Array(ts.tool_calls));
+
+    let latency_ms_raw = completed_at.signed_duration_since(started_at).num_milliseconds().max(0);
+    let stored_latency = latency_ms_raw as i32;
+    let stored_completion = ts.completion_tokens.map(|v| v as i32)
+        .or_else(|| (ts.token_count > 0).then_some(ts.token_count as i32));
+
+    // Ownership guard: prevent double-write if reaper re-enqueued
+    if let Some(vk) = valkey {
+        let owner_key = crate::domain::constants::job_owner_key(uuid);
+        if let Ok(Some(id)) = vk.kv_get(&owner_key).await
+            && id != instance_id.as_ref()
+        {
+            tracing::warn!(%uuid, current_owner = %id, "ownership lost — aborting");
+            if let Some(mut entry) = jobs.get_mut(&uuid) { entry.done = true; }
+            cancel_notifiers.remove(&uuid);
+            schedule_cleanup(jobs, uuid, OWNERSHIP_LOST_CLEANUP_DELAY);
+            return None;
+        }
+    }
+
+    // Persist completed state
+    job.status = JobStatus::Completed;
+    job.completed_at = Some(completed_at);
+    job.result_text = result_text;
+    job.tool_calls_json = tool_calls_json;
+    job.latency_ms = Some(stored_latency);
+    job.ttft_ms = ts.ttft_ms;
+    job.prompt_tokens = ts.prompt_tokens.map(|v| v as i32);
+    job.completion_tokens = stored_completion;
+    job.cached_tokens = ts.cached_tokens.map(|v| v as i32);
+    if let Err(e) = job_repo.save(job).await {
+        tracing::warn!(job_id = %uuid, "failed to persist completed state: {e}");
+    }
+
+    // Broadcast status event
+    broadcast_event(event_tx, valkey, instance_id, &JobStatusEvent {
+        id: uuid.to_string(),
+        status: match final_status {
+            JobStatus::Cancelled => "cancelled",
+            JobStatus::Failed => "failed",
+            _ => "completed",
+        }.into(),
+        model_name: job.model_name.as_str().into(),
+        provider_type: job.provider_type.as_str().into(),
+        latency_ms: Some(stored_latency),
+    }).await;
+
+    cancel_notifiers.remove(&uuid);
+
+    // Record LRU usage (Ollama only)
+    if job.provider_type == ProviderType::Ollama
+        && let Some(mm) = model_manager
+    {
+        mm.record_used(job.model_name.as_str()).await;
+    }
+
+    // Record TPM
+    if let (Some(vk), Some(key_id)) = (valkey, api_key_id)
+        && let Err(e) = record_tpm(vk.as_ref(), key_id, ts.token_count, tpm_minute).await
+    {
+        tracing::warn!(job_id = %uuid, "failed to record TPM: {e}");
+    }
+
+    // Gemini RPM/RPD counters (free-tier only)
+    if job.provider_type == ProviderType::Gemini && provider_is_free_tier
+        && let Some(pid) = provider_id
+        && let Err(e) = provider_dispatch.increment_gemini_counters(pid, job.model_name.as_str()).await
+    {
+        tracing::warn!(job_id = %uuid, "failed to increment Gemini counters: {e}");
+    }
+
+    // Observability event
+    let (reason, status) = match final_status {
+        JobStatus::Cancelled => (FinishReason::Cancelled, "cancelled".into()),
+        _ => (FinishReason::Stop, "completed".into()),
+    };
+    emit_inference_event(
+        observability, uuid, api_key_id, job,
+        ts.prompt_tokens.unwrap_or(0),
+        ts.completion_tokens.unwrap_or(ts.token_count as u32),
+        latency_ms_raw as u32, reason, status, None,
+    ).await;
+
+    schedule_cleanup(jobs, uuid, JOB_CLEANUP_DELAY);
+    Some(latency_ms_raw as u32)
+}
+
 // ── Job runner ──────────────────────────────────────────────────────────────
 
+/// Run a single inference job: setup → stream tokens → finalize.
+///
+/// Returns `Ok(Some(latency_ms))` on successful completion,
+/// `Ok(None)` if the job was cancelled or ownership was lost,
+/// `Err` on provider stream failure.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_job(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
@@ -69,18 +264,18 @@ pub(super) async fn run_job(
     event_tx: broadcast::Sender<JobStatusEvent>,
     instance_id: Arc<str>,
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
-) -> Result<()> {
-    // Ensure model is loaded (Ollama only)
+) -> Result<Option<u32>> {
+    // ── Setup ──────────────────────────────────────────────────────────
     if job.provider_type == ProviderType::Ollama
         && let Some(ref mm) = model_manager
-            && let Err(e) = mm.ensure_loaded(job.model_name.as_str()).await {
-                tracing::warn!(%uuid, "model manager ensure_loaded failed (non-fatal): {e}");
-            }
+        && let Err(e) = mm.ensure_loaded(job.model_name.as_str()).await
+    {
+        tracing::warn!(%uuid, "model manager ensure_loaded failed (non-fatal): {e}");
+    }
 
-    // ── Running ──────────────────────────────────────────────────────
     let started_at = chrono::Utc::now();
     let (api_key_id, tpm_minute) = if let Some(mut entry) = jobs.get_mut(&uuid) {
-        if entry.status == JobStatus::Cancelled { return Ok(()); }
+        if entry.status == JobStatus::Cancelled { return Ok(None); }
         entry.status = JobStatus::Running;
         entry.job.status = JobStatus::Running;
         entry.job.started_at = Some(started_at);
@@ -107,7 +302,7 @@ pub(super) async fn run_job(
         latency_ms: None,
     }).await;
 
-    // ── Stream tokens ────────────────────────────────────────────────
+    // ── Stream tokens ──────────────────────────────────────────────────
     let cancel_notify = jobs.get(&uuid)
         .map(|e| e.cancel_notify.clone())
         .unwrap_or_else(|| Arc::new(Notify::new()));
@@ -122,7 +317,7 @@ pub(super) async fn run_job(
             _ = cancel_notify.notified() => {
                 tracing::info!(%uuid, "job cancelled — dropping stream");
                 schedule_cleanup(&jobs, uuid, JOB_CLEANUP_DELAY);
-                return Ok(());
+                return Ok(None);
             }
             item = stream.next() => item,
         };
@@ -134,7 +329,7 @@ pub(super) async fn run_job(
             None => break,
         };
 
-        if entry.status == JobStatus::Cancelled { return Ok(()); }
+        if entry.status == JobStatus::Cancelled { return Ok(None); }
 
         match result {
             Ok(token) => {
@@ -196,141 +391,23 @@ pub(super) async fn run_job(
                 }
             }
             Err(e) => {
-                let msg = e.to_string();
-                entry.status = JobStatus::Failed;
-                entry.job.status = JobStatus::Failed;
-                entry.job.error = Some(msg.clone());
-                entry.done = true;
-                let notify = entry.notify.clone();
                 drop(entry);
-                notify.notify_one();
-
-                job.status = JobStatus::Failed;
-                job.error = Some(msg.clone());
-                if let Err(db_err) = job_repo.save(&job).await {
-                    tracing::warn!(job_id = %uuid, "failed to persist failed state: {db_err}");
-                }
-
-                let latency_ms = chrono::Utc::now()
-                    .signed_duration_since(started_at).num_milliseconds().max(0) as u32;
-                emit_inference_event(
-                    &observability, uuid, api_key_id, &job,
-                    ts.prompt_tokens.unwrap_or(0),
-                    ts.completion_tokens.unwrap_or(ts.token_count as u32),
-                    latency_ms, FinishReason::Error, "failed".into(), Some(msg),
+                handle_stream_error(
+                    &jobs, &mut job, job_repo.as_ref(), &observability, &valkey,
+                    uuid, started_at, api_key_id, tpm_minute, &ts, &e,
                 ).await;
-
-                // Refund TPM reservation
-                if let (Some(vk), Some(key_id)) = (&valkey, api_key_id)
-                    && let Err(e) = record_tpm(vk.as_ref(), key_id, 0, tpm_minute).await {
-                        tracing::warn!(job_id = %uuid, "failed to refund TPM: {e}");
-                    }
-
-                schedule_cleanup(&jobs, uuid, JOB_CLEANUP_DELAY);
                 return Err(e);
             }
         }
     }
 
-    // ── Completed ────────────────────────────────────────────────────
-    let completed_at = chrono::Utc::now();
-    let final_status = if let Some(mut entry) = jobs.get_mut(&uuid) {
-        if entry.status != JobStatus::Cancelled {
-            entry.status = JobStatus::Completed;
-            entry.job.status = JobStatus::Completed;
-            entry.job.completed_at = Some(completed_at);
-            entry.done = true;
-            let notify = entry.notify.clone();
-            drop(entry);
-            notify.notify_one();
-            JobStatus::Completed
-        } else {
-            JobStatus::Cancelled
-        }
-    } else {
-        JobStatus::Completed
-    };
-
-    let result_text = (!ts.text.is_empty()).then_some(ts.text);
-    let tool_calls_json = (!ts.tool_calls.is_empty())
-        .then_some(serde_json::Value::Array(ts.tool_calls));
-
-    let latency_ms_raw = completed_at.signed_duration_since(started_at).num_milliseconds().max(0);
-    let stored_latency = latency_ms_raw as i32;
-    let stored_completion = ts.completion_tokens.map(|v| v as i32)
-        .or_else(|| (ts.token_count > 0).then_some(ts.token_count as i32));
-
-    // Ownership guard: prevent double-write if reaper re-enqueued
-    if let Some(ref vk) = valkey {
-        let owner_key = crate::domain::constants::job_owner_key(uuid);
-        if let Ok(Some(id)) = vk.kv_get(&owner_key).await
-            && id != instance_id.as_ref() {
-                tracing::warn!(%uuid, current_owner = %id, "ownership lost — aborting");
-                if let Some(mut entry) = jobs.get_mut(&uuid) { entry.done = true; }
-                cancel_notifiers.remove(&uuid);
-                schedule_cleanup(&jobs, uuid, OWNERSHIP_LOST_CLEANUP_DELAY);
-                return Ok(());
-            }
-    }
-
-    job.status = JobStatus::Completed;
-    job.completed_at = Some(completed_at);
-    job.result_text = result_text.clone();
-    job.tool_calls_json = tool_calls_json;
-    job.latency_ms = Some(stored_latency);
-    job.ttft_ms = ts.ttft_ms;
-    job.prompt_tokens = ts.prompt_tokens.map(|v| v as i32);
-    job.completion_tokens = stored_completion;
-    job.cached_tokens = ts.cached_tokens.map(|v| v as i32);
-    if let Err(e) = job_repo.save(&job).await {
-        tracing::warn!(job_id = %uuid, "failed to persist completed state: {e}");
-    }
-
-    broadcast_event(&event_tx, &valkey, &instance_id, &JobStatusEvent {
-        id: uuid.to_string(),
-        status: match final_status {
-            JobStatus::Cancelled => "cancelled",
-            JobStatus::Failed => "failed",
-            _ => "completed",
-        }.into(),
-        model_name: job.model_name.as_str().into(),
-        provider_type: job.provider_type.as_str().into(),
-        latency_ms: Some(stored_latency),
-    }).await;
-
-    cancel_notifiers.remove(&uuid);
-
-    // Record LRU usage (Ollama only)
-    if job.provider_type == ProviderType::Ollama
-        && let Some(ref mm) = model_manager {
-            mm.record_used(job.model_name.as_str()).await;
-        }
-
-    // Record TPM
-    if let (Some(vk), Some(key_id)) = (&valkey, api_key_id)
-        && let Err(e) = record_tpm(vk.as_ref(), key_id, ts.token_count, tpm_minute).await {
-            tracing::warn!(job_id = %uuid, "failed to record TPM: {e}");
-        }
-
-    // Gemini RPM/RPD counters (free-tier only)
-    if job.provider_type == ProviderType::Gemini && provider_is_free_tier
-        && let Some(pid) = provider_id
-            && let Err(e) = provider_dispatch.increment_gemini_counters(pid, job.model_name.as_str()).await {
-                tracing::warn!(job_id = %uuid, "failed to increment Gemini counters: {e}");
-            }
-
-    // Observability event
-    let (reason, status) = match final_status {
-        JobStatus::Cancelled => (FinishReason::Cancelled, "cancelled".into()),
-        _ => (FinishReason::Stop, "completed".into()),
-    };
-    emit_inference_event(
-        &observability, uuid, api_key_id, &job,
-        ts.prompt_tokens.unwrap_or(0),
-        ts.completion_tokens.unwrap_or(ts.token_count as u32),
-        latency_ms_raw as u32, reason, status, None,
+    // ── Finalize ───────────────────────────────────────────────────────
+    let latency_ms = finalize_job(
+        &jobs, &mut job, job_repo.as_ref(), &valkey, &observability,
+        &model_manager, provider_dispatch.as_ref(), &event_tx, &instance_id,
+        &cancel_notifiers, uuid, started_at, ts, api_key_id, tpm_minute,
+        provider_id, provider_is_free_tier,
     ).await;
 
-    schedule_cleanup(&jobs, uuid, JOB_CLEANUP_DELAY);
-    Ok(())
+    Ok(latency_ms)
 }

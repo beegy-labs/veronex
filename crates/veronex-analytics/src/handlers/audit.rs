@@ -48,26 +48,40 @@ pub async fn list_audit_events(
     let limit = q.limit.unwrap_or(100).min(1000);
     let offset = q.offset.unwrap_or(0);
 
-    // Build optional filter conditions using ClickHouse parameterised queries.
-    // We construct the SQL dynamically since ClickHouse doesn't support NULL
-    // parameter binding for conditional WHERE clauses well.
+    // Whitelist validation — reject unknown filter values to prevent injection.
+    const ALLOWED_ACTIONS: &[&str] = &[
+        "create", "update", "delete", "login", "logout", "sync",
+        "trigger", "reset_password", "toggle", "revoke",
+    ];
+    const ALLOWED_RESOURCE_TYPES: &[&str] = &[
+        "account", "ollama_provider", "gemini_provider", "api_key",
+        "capacity_settings", "gemini_policy", "gpu_server", "lab_settings",
+    ];
+
+    if let Some(ref action) = q.action
+        && !ALLOWED_ACTIONS.contains(&action.as_str())
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if let Some(ref rt) = q.resource_type
+        && !ALLOWED_RESOURCE_TYPES.contains(&rt.as_str())
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Build filter conditions. Values are whitelist-validated above, safe for interpolation.
     let mut conditions = vec![
         "LogAttributes['event.name'] = 'audit.action'".to_string(),
     ];
     if let Some(ref action) = q.action {
-        conditions.push(format!(
-            "LogAttributes['action'] = '{}'",
-            action.replace('\'', "''")
-        ));
+        conditions.push(format!("LogAttributes['action'] = '{action}'"));
     }
     if let Some(ref rt) = q.resource_type {
-        conditions.push(format!(
-            "LogAttributes['resource_type'] = '{}'",
-            rt.replace('\'', "''")
-        ));
+        conditions.push(format!("LogAttributes['resource_type'] = '{rt}'"));
     }
     let where_clause = conditions.join(" AND ");
 
+    // LIMIT and OFFSET are u32 from deserialization — integer format is safe.
     let sql = format!(
         "SELECT
             Timestamp                               AS event_time,
@@ -117,4 +131,40 @@ pub async fn list_audit_events(
         .collect();
 
     Ok(Json(events))
+}
+
+#[cfg(test)]
+mod tests {
+    const ALLOWED_ACTIONS: &[&str] = &[
+        "create", "update", "delete", "login", "logout", "sync",
+        "trigger", "reset_password", "toggle", "revoke",
+    ];
+    const ALLOWED_RESOURCE_TYPES: &[&str] = &[
+        "account", "ollama_provider", "gemini_provider", "api_key",
+        "capacity_settings", "gemini_policy", "gpu_server", "lab_settings",
+    ];
+
+    #[test]
+    fn rejects_invalid_action() {
+        let bad = "'; DROP TABLE--";
+        assert!(!ALLOWED_ACTIONS.contains(&bad));
+    }
+
+    #[test]
+    fn accepts_valid_action() {
+        assert!(ALLOWED_ACTIONS.contains(&"create"));
+        assert!(ALLOWED_ACTIONS.contains(&"logout"));
+    }
+
+    #[test]
+    fn rejects_invalid_resource_type() {
+        let bad = "<script>alert(1)</script>";
+        assert!(!ALLOWED_RESOURCE_TYPES.contains(&bad));
+    }
+
+    #[test]
+    fn accepts_valid_resource_type() {
+        assert!(ALLOWED_RESOURCE_TYPES.contains(&"account"));
+        assert!(ALLOWED_RESOURCE_TYPES.contains(&"api_key"));
+    }
 }

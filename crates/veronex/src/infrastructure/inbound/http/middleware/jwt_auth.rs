@@ -49,13 +49,20 @@ pub async fn jwt_auth(
     let claims = token_data.claims;
 
     // Check Valkey revocation blocklist (O(1)).
+    // When Valkey is not configured, revocation checking is unavailable — acceptable
+    // because no tokens can be revoked without a Valkey instance.
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
         let revoked_key = valkey_keys::revoked_jti(claims.jti);
+        // Fail-closed: Valkey error must deny access, not silently allow a
+        // potentially-revoked token through.
         let exists: bool = pool
             .exists(&revoked_key)
             .await
-            .unwrap_or(false);
+            .map_err(|e| {
+                tracing::error!(jti = %claims.jti, "revocation check failed: {e}");
+                AppError::ServiceUnavailable("token revocation check unavailable".into())
+            })?;
         if exists {
             return Err(AppError::Unauthorized("token has been revoked".into()));
         }

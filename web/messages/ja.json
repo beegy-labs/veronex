@@ -7,7 +7,6 @@
     "jobs": "ジョブ",
     "keys": "APIキー",
     "providers": "プロバイダー",
-    "providers": "プロバイダー",
     "usage": "使用量",
     "performance": "パフォーマンス",
     "test": "テスト",
@@ -78,7 +77,12 @@
     "labFeatures": "ラボ機能",
     "labFeaturesDesc": "実験的機能 — 不安定な場合があります。",
     "labGeminiFunctionCalling": "Gemini 関数呼び出し",
-    "labGeminiFunctionCallingDesc": "Gemini 互換エンドポイントを通じたツール使用（関数呼び出し）を有効にします。開発中です。"
+    "labGeminiFunctionCallingDesc": "Gemini 互換エンドポイントを通じたツール使用（関数呼び出し）を有効にします。開発中です。",
+    "menu": "メニュー",
+    "expand": "展開",
+    "collapse": "折りたたむ",
+    "signOut": "サインアウト",
+    "retry": "再試行"
   },
   "overview": {
     "title": "概要",
@@ -505,7 +509,18 @@
     "byModel": "モデル別",
     "searchModels": "モデルを検索...",
     "modelLatencyChart": "モデルレイテンシー",
-    "keyDetail": "キー詳細"
+    "keyDetail": "キー詳細",
+    "prompt": "プロンプト",
+    "completion": "補完",
+    "modelCol": "モデル",
+    "keyCol": "キー",
+    "requestsCol": "リクエスト",
+    "shareCol": "割合",
+    "successCol": "成功",
+    "tokensCol": "トークン",
+    "callPct": "呼出 %",
+    "avgLatencyCol": "平均レイテンシ",
+    "free": "無料"
   },
   "performance": {
     "title": "パフォーマンス",
@@ -629,7 +644,16 @@
     "revokeSession": "セッション失効",
     "revokeAll": "すべてのセッションを失効",
     "noSessions": "アクティブなセッションなし",
-    "lastUsed": "最終使用"
+    "lastUsed": "最終使用",
+    "accountCreated": "アカウントが作成されました",
+    "saveKeyWarning": "以下のテスト用APIキーを保存してください — 再表示されません。",
+    "password": "パスワード",
+    "email": "メール",
+    "fullName": "フルネーム",
+    "position": "役職",
+    "createFailed": "アカウントの作成に失敗しました",
+    "creating": "作成中…",
+    "tokenWarning": "このトークンは一度だけ表示されます。今すぐコピーして安全に保管してください。"
   },
   "audit": {
     "title": "監査ログ",

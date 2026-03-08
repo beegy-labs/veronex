@@ -16,7 +16,8 @@
 
 | File | Purpose |
 |------|---------|
-| `web/components/api-test-panel.tsx` | Multi-run SSE test panel |
+| `web/components/api-test-panel.tsx` | Multi-run SSE test panel (UI + handlers) |
+| `web/components/api-test-types.ts` | Types (`Run`, `OpenAIChunk`, `RunAction`) + `runsReducer` |
 | `web/app/jobs/page.tsx` | Embeds `<ApiTestPanel>` above job sections |
 | `web/lib/api.ts` | `providers()`, `ollamaModels()`, `geminiModels()`, `geminiPolicies()` |
 | `web/messages/en.json` | i18n keys under `test.*`, `apiDocs.*` |

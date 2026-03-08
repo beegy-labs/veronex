@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline
 
-> SSOT | **Last Updated**: 2026-03-05 (rev: added derived MVs for inference_logs + audit_events)
+> SSOT | **Last Updated**: 2026-03-08 (rev: timestamp semantics fix, ingest validation)
 
 ## Task Guide
 
@@ -56,6 +56,8 @@ veronex --> GET /v1/audit             --> analytics_repo (ClickHouse)
 - **Redpanda = single message bus** -- all writes go through it
 - **ClickHouse = read layer only** -- Kafka Engine pulls from Redpanda, MV inserts into MergeTree
 - **veronex-analytics** = internal service (port 3003, not exposed) -- owns all OTel write + ClickHouse read
+- **Timestamp semantics**: `timeUnixNano` = original event time (from veronex), `observedTimeUnixNano` = collector receipt time
+- **Ingest validation**: Event type whitelist (`inference.completed`, `audit.action`), required field checks → 400 on invalid
 - **`otel_logs` = unified event store** -- inference + audit events keyed by `LogAttributes['event.name']`
 - **veronex crate** = no direct Redpanda or ClickHouse dependency (removed rskafka + clickhouse crates)
 

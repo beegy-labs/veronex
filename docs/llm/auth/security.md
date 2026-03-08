@@ -1,6 +1,6 @@
 # Security
 
-> SSOT | **Last Updated**: 2026-03-07 (trimmed: cross-refs jwt-sessions.md, api-keys.md)
+> SSOT | **Last Updated**: 2026-03-08 (review fixes: fail-closed JWT, atomic refresh, AES-GCM, audit whitelist)
 
 ## Authentication & Authorization
 
@@ -49,9 +49,9 @@ For full details see:
 |-------|-----------|---------|-------|
 | Passwords | Argon2id | PHC string in DB | Random 16-byte salt per password |
 | API Keys | BLAKE2b-256 | Hash only in DB | `key_prefix` for UI display |
-| Gemini API Keys | Plain text (PoC) | Stored as-is in DB | AES-256-GCM planned — not yet implemented |
+| Gemini API Keys | AES-256-GCM | Encrypted in DB | `GEMINI_ENCRYPTION_KEY` env var (≥32 chars), HKDF-derived |
 
-Key rotation strategy for encrypted fields: planned (future).
+Key rotation strategy for encrypted fields: planned (future). Current encryption uses random 12-byte nonce per value (nonce‖ciphertext stored as base64).
 
 **Gemini API key transport**: Gemini API keys are sent via the `x-goog-api-key` HTTP header (not URL query parameters) to avoid key leakage in access logs.
 
@@ -118,12 +118,16 @@ Pipeline: `*_handlers.rs` -> `AuditPort::record()` -> `HttpAuditAdapter` -> vero
 
 | Practice | Implementation |
 |----------|---------------|
-| Type-safe SQL | sqlx compile-time verification |
+| Parameterized SQL | All queries use `sqlx::query().bind()` — no string interpolation |
 | Parameterized queries | All queries use prepared statements |
 | Struct validation | Request structs validated before processing |
 | No error leakage | Internal errors hidden from client |
 | Full logging | Context in server logs only |
 | Fail-closed rate limiting | 503 on Valkey errors instead of allowing requests through |
+| Fail-closed JWT revocation | Valkey error → 503 (denies access), not fail-open |
+| Atomic refresh token claim | SET NX + EX prevents TOCTOU race on token replay |
+| ClickHouse audit whitelist | Action/resource_type validated against allowlist before query |
+| Analytics input validation | Hours parameter bounded 1..=8760 on all handlers |
 
 ### Secrets Management
 
@@ -134,6 +138,7 @@ Pipeline: `*_handlers.rs` -> `AuditPort::record()` -> `HttpAuditAdapter` -> vero
 | S3 access key | `S3_ACCESS_KEY` | **Always** | No default — required for startup |
 | S3 secret key | `S3_SECRET_KEY` | **Always** | No default — required for startup |
 | CORS origins | `CORS_ALLOWED_ORIGINS` | **Always** | No default — required for startup |
+| Gemini encryption key | `GEMINI_ENCRYPTION_KEY` | **Always** | `>=32` chars, HKDF-derived AES-256-GCM key |
 | Analytics shared secret | `ANALYTICS_SECRET` | When `ANALYTICS_URL` set | No default — adapters disabled if missing |
 | Bootstrap API key | `BOOTSTRAP_API_KEY` | Planned | Defined in Helm, not yet read by Rust |
 

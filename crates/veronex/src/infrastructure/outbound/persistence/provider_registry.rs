@@ -7,17 +7,19 @@ use uuid::Uuid;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
+use crate::domain::services::encryption::{decrypt_or_legacy, encrypt};
 
 /// Column list shared by all SELECT queries on llm_providers.
 const PROVIDER_COLS: &str = "id, name, provider_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, agent_url, is_free_tier, status, registered_at";
 
 pub struct PostgresProviderRegistry {
     pool: PgPool,
+    master_key: [u8; 32],
 }
 
 impl PostgresProviderRegistry {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, master_key: [u8; 32]) -> Self {
+        Self { pool, master_key }
     }
 }
 
@@ -37,14 +39,15 @@ fn str_to_status(s: &str) -> LlmProviderStatus {
 
 // ── Row mapping ────────────────────────────────────────────────────────────────
 
-fn row_to_provider(row: &sqlx::postgres::PgRow) -> Result<LlmProvider> {
+/// Returns `(provider, needs_re_encrypt)`.
+fn row_to_provider(row: &sqlx::postgres::PgRow, master_key: &[u8; 32]) -> Result<(LlmProvider, bool)> {
     use sqlx::Row as _;
 
     let id: Uuid = row.try_get("id").context("id")?;
     let name: String = row.try_get("name").context("name")?;
     let provider_type_str: String = row.try_get("provider_type").context("provider_type")?;
     let url: String = row.try_get("url").context("url")?;
-    let api_key_encrypted: Option<String> = row.try_get("api_key_encrypted").context("api_key_encrypted")?;
+    let api_key_raw: Option<String> = row.try_get("api_key_encrypted").context("api_key_encrypted")?;
     let is_active: bool = row.try_get("is_active").context("is_active")?;
     let total_vram_mb: i64 = row.try_get("total_vram_mb").context("total_vram_mb")?;
     let gpu_index: Option<i16> = row.try_get("gpu_index").context("gpu_index")?;
@@ -54,7 +57,15 @@ fn row_to_provider(row: &sqlx::postgres::PgRow) -> Result<LlmProvider> {
     let status_str: String = row.try_get("status").context("status")?;
     let registered_at: DateTime<Utc> = row.try_get("registered_at").context("registered_at")?;
 
-    Ok(LlmProvider {
+    // Decrypt API key at the persistence boundary; domain works with plaintext.
+    let mut needs_re_encrypt = false;
+    let api_key_encrypted = api_key_raw.map(|raw| {
+        let (plaintext, re_encrypt) = decrypt_or_legacy(&raw, master_key);
+        needs_re_encrypt = re_encrypt;
+        plaintext
+    });
+
+    Ok((LlmProvider {
         id,
         name,
         provider_type: provider_type_str.parse::<ProviderType>().map_err(|e| anyhow::anyhow!(e))?,
@@ -68,7 +79,30 @@ fn row_to_provider(row: &sqlx::postgres::PgRow) -> Result<LlmProvider> {
         is_free_tier,
         status: str_to_status(&status_str),
         registered_at,
-    })
+    }, needs_re_encrypt))
+}
+
+// ── Re-encryption helper ──────────────────────────────────────────────────────
+
+impl PostgresProviderRegistry {
+    /// Re-encrypt a single provider's API key in place (UPDATE only the key column).
+    async fn re_encrypt_key(&self, id: Uuid, plaintext: &str) {
+        match encrypt(plaintext, &self.master_key) {
+            Ok(encrypted) => {
+                if let Err(e) = sqlx::query(
+                    "UPDATE llm_providers SET api_key_encrypted = $1 WHERE id = $2",
+                )
+                .bind(&encrypted)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                {
+                    tracing::error!(%id, "failed to re-encrypt legacy provider key: {e}");
+                }
+            }
+            Err(e) => tracing::error!(%id, "encryption failed during re-encrypt: {e}"),
+        }
+    }
 }
 
 // ── Repository impl ────────────────────────────────────────────────────────────
@@ -76,6 +110,13 @@ fn row_to_provider(row: &sqlx::postgres::PgRow) -> Result<LlmProvider> {
 #[async_trait]
 impl LlmProviderRegistry for PostgresProviderRegistry {
     async fn register(&self, provider: &LlmProvider) -> Result<()> {
+        let encrypted_key = provider
+            .api_key_encrypted
+            .as_deref()
+            .map(|k| encrypt(k, &self.master_key))
+            .transpose()
+            .context("failed to encrypt provider api key")?;
+
         sqlx::query(
             "INSERT INTO llm_providers
                  (id, name, provider_type, url, api_key_encrypted, is_active,
@@ -87,7 +128,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .bind(&provider.name)
         .bind(provider.provider_type.as_str())
         .bind(&provider.url)
-        .bind(&provider.api_key_encrypted)
+        .bind(&encrypted_key)
         .bind(provider.is_active)
         .bind(provider.total_vram_mb)
         .bind(provider.gpu_index)
@@ -110,7 +151,18 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .await
         .context("failed to list active providers")?;
 
-        rows.iter().map(row_to_provider).collect()
+        let mut providers = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let (p, needs) = row_to_provider(r, &self.master_key)?;
+            if needs
+                && let Some(ref key) = p.api_key_encrypted
+            {
+                tracing::warn!(id = %p.id, "legacy plaintext provider key — re-encrypting");
+                self.re_encrypt_key(p.id, key).await;
+            }
+            providers.push(p);
+        }
+        Ok(providers)
     }
 
     async fn list_all(&self) -> Result<Vec<LlmProvider>> {
@@ -120,7 +172,18 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .await
         .context("failed to list all providers")?;
 
-        rows.iter().map(row_to_provider).collect()
+        let mut providers = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let (p, needs) = row_to_provider(r, &self.master_key)?;
+            if needs
+                && let Some(ref key) = p.api_key_encrypted
+            {
+                tracing::warn!(id = %p.id, "legacy plaintext provider key — re-encrypting");
+                self.re_encrypt_key(p.id, key).await;
+            }
+            providers.push(p);
+        }
+        Ok(providers)
     }
 
     async fn get(&self, id: Uuid) -> Result<Option<LlmProvider>> {
@@ -132,7 +195,16 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .context("failed to get provider")?;
 
         match row {
-            Some(r) => Ok(Some(row_to_provider(&r)?)),
+            Some(r) => {
+                let (provider, needs_re_encrypt) = row_to_provider(&r, &self.master_key)?;
+                if needs_re_encrypt
+                    && let Some(ref key) = provider.api_key_encrypted
+                {
+                    tracing::warn!(%id, "legacy plaintext provider key — re-encrypting");
+                    self.re_encrypt_key(id, key).await;
+                }
+                Ok(Some(provider))
+            }
             None => Ok(None),
         }
     }
@@ -159,6 +231,13 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn update(&self, provider: &LlmProvider) -> Result<()> {
+        let encrypted_key = provider
+            .api_key_encrypted
+            .as_deref()
+            .map(|k| encrypt(k, &self.master_key))
+            .transpose()
+            .context("failed to encrypt provider api key")?;
+
         sqlx::query(
             "UPDATE llm_providers
              SET name = $1,
@@ -174,7 +253,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         )
         .bind(&provider.name)
         .bind(&provider.url)
-        .bind(&provider.api_key_encrypted)
+        .bind(&encrypted_key)
         .bind(provider.total_vram_mb)
         .bind(provider.gpu_index)
         .bind(provider.server_id)

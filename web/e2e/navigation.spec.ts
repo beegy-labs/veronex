@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { login } from './helpers/auth'
 import { T_DEFAULT } from './helpers/constants'
 
-test.describe('Navigation', () => {
+test.describe('Navigation @smoke', () => {
   test.beforeEach(async ({ page }) => {
     await login(page)
   })

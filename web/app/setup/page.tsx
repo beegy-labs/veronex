@@ -8,8 +8,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { useTranslation } from '@/i18n'
 
 export default function SetupPage() {
+  const { t } = useTranslation()
   const router = useRouter()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -22,11 +24,11 @@ export default function SetupPage() {
     setError(null)
 
     if (password.length < 8) {
-      setError('Password must be at least 8 characters')
+      setError(t('setup.passwordTooShort'))
       return
     }
     if (password !== confirm) {
-      setError('Passwords do not match')
+      setError(t('setup.passwordMismatch'))
       return
     }
 
@@ -37,9 +39,9 @@ export default function SetupPage() {
       router.push('/')
     } catch (err: unknown) {
       if (err instanceof Error && err.message.startsWith('409')) {
-        setError('Setup already completed. Please sign in.')
+        setError(t('setup.alreadySetup'))
       } else {
-        setError('Setup failed. Please try again.')
+        setError(t('setup.failed'))
       }
     } finally {
       setLoading(false)
@@ -50,15 +52,15 @@ export default function SetupPage() {
     <div className="min-h-screen flex items-center justify-center bg-background">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-xl">Welcome to Veronex</CardTitle>
+          <CardTitle className="text-xl">{t('setup.title')}</CardTitle>
           <CardDescription>
-            Create your super admin account to get started.
+            {t('setup.description')}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="username">{t('setup.username')}</Label>
               <Input
                 id="username"
                 type="text"
@@ -69,7 +71,7 @@ export default function SetupPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t('setup.password')}</Label>
               <Input
                 id="password"
                 type="password"
@@ -81,7 +83,7 @@ export default function SetupPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="confirm">Confirm Password</Label>
+              <Label htmlFor="confirm">{t('setup.confirmPassword')}</Label>
               <Input
                 id="confirm"
                 type="password"
@@ -95,7 +97,7 @@ export default function SetupPage() {
               <p className="text-sm text-destructive">{error}</p>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Creating account…' : 'Create account'}
+              {loading ? t('setup.submitting') : t('setup.submit')}
             </Button>
           </form>
         </CardContent>

@@ -24,10 +24,11 @@ Veronex uses **Hexagonal Architecture (Ports & Adapters)** to isolate the LLM in
 crates/veronex/src/
 ├── domain/
 │   ├── entities/        # InferenceJob, LlmProvider, GpuServer, ApiKey, …
-│   ├── enums/           # JobStatus, ProviderType, LlmProviderStatus, …
+│   ├── enums.rs         # JobStatus, ProviderType, LlmProviderStatus, …
 │   ├── services/        # Pure domain logic (message_hashing, api_key_generator)
 │   ├── constants.rs     # SSOT for domain-layer constants (TPM, job lifecycle, queue timing)
-│   └── value_objects/   # JobId, Prompt, ModelName
+│   ├── errors.rs        # DomainError (Validation, NotFound, Internal, …)
+│   └── value_objects.rs # JobId, Prompt, ModelName
 │
 ├── application/
 │   ├── ports/

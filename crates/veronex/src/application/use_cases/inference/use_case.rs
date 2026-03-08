@@ -1,7 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::Result;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::Stream;
@@ -24,6 +23,7 @@ use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{JobSource, JobStatus, KeyTier};
+use crate::domain::errors::DomainError;
 use crate::domain::value_objects::{JobId, JobStatusEvent, ModelName, Prompt, StreamToken};
 use crate::domain::constants::{
     INITIAL_TOKEN_CAPACITY,
@@ -36,6 +36,8 @@ use super::JobEntry;
 use super::dispatcher::{queue_dispatcher_loop, spawn_job_direct};
 use super::helpers::broadcast_event;
 use super::runner::run_job;
+
+type Result<T> = std::result::Result<T, DomainError>;
 
 // ── UseCase struct ──────────────────────────────────────────────────────────
 
@@ -154,6 +156,17 @@ impl InferenceUseCaseImpl {
         for mut job in pending {
             let uuid = job.id.0;
             if job.status == JobStatus::Running {
+                // Check if another node currently owns this job — skip if so.
+                let owner_key = crate::domain::constants::job_owner_key(uuid);
+                if let Ok(Some(owner)) = valkey.kv_get(&owner_key).await
+                    && owner != self.instance_id.as_ref()
+                {
+                    tracing::info!(
+                        %uuid, current_owner = %owner,
+                        "skipping recovery — job owned by another node"
+                    );
+                    continue;
+                }
                 if let Err(e) = self.job_repo.update_status(&job.id, JobStatus::Pending).await {
                     tracing::warn!(%uuid, "failed to reset running→pending: {e}");
                 }
@@ -288,7 +301,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             self.observability.clone(), self.model_manager.clone(),
             self.provider_dispatch.clone(), uuid, job, Some(pid), is_free,
             self.event_tx.clone(), self.instance_id.clone(), self.cancel_notifiers.clone(),
-        ).await
+        ).await?;
+        Ok(())
     }
 
     fn stream(&self, job_id: &JobId) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {

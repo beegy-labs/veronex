@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { apiLogin, authedRequest } from './helpers/api'
 import { testId } from './helpers/constants'
 
-test.describe('API: Keys CRUD', () => {
+test.describe('API: Keys CRUD @smoke', () => {
   let api: ReturnType<typeof authedRequest>
 
   test.beforeEach(async ({ request }) => {

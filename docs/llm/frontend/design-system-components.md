@@ -1,6 +1,6 @@
 # Web -- Component Patterns & Auth Architecture
 
-> SSOT | **Last Updated**: 2026-03-04 | Split from design-system.md
+> SSOT | **Last Updated**: 2026-03-08 | Split from design-system.md
 
 Related files:
 - [design-system.md](design-system.md) -- brand, tokens, theme, nav, DataTable, state management
@@ -182,6 +182,8 @@ Real-time inference traffic visualization. Accessible as the 3rd tab on `/jobs` 
 |------|------|
 | `web/app/overview/components/network-flow-tab.tsx` | Composes ProviderFlowPanel + LiveFeed |
 | `web/app/overview/components/provider-flow-panel.tsx` | SVG topology: API -> Queue -> Providers |
+| `web/app/overview/components/dashboard-helpers.tsx` | Shared: ThermalBadge, ConnectionDot, ProviderRow |
+| `web/app/overview/components/dashboard-lower-sections.tsx` | RequestTrend, TopModels, RecentJobs, TokenSummary |
 | `web/app/overview/components/live-feed.tsx` | Scrollable real-time event list |
 | `web/hooks/use-inference-stream.ts` | 5s TanStack Query polling |
 

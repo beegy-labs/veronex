@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { login, TEST_CREDENTIALS } from './helpers/auth'
 import { T_SHORT } from './helpers/constants'
 
-test.describe('Authentication', () => {
+test.describe('Authentication @smoke', () => {
   test('login with valid credentials redirects to overview', async ({ page }) => {
     await login(page)
     await expect(page).toHaveURL(/\/overview/)

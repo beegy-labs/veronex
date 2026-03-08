@@ -1,13 +1,15 @@
 use std::pin::Pin;
 
-use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
 
 use uuid::Uuid;
 
 use crate::domain::enums::{ApiFormat, JobSource, JobStatus, KeyTier, ProviderType};
+use crate::domain::errors::DomainError;
 use crate::domain::value_objects::{JobId, StreamToken};
+
+type Result<T> = std::result::Result<T, DomainError>;
 
 /// Parameters for submitting a new inference job.
 pub struct SubmitJobRequest {

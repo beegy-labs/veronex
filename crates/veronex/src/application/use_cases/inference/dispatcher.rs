@@ -190,7 +190,11 @@ pub(super) fn spawn_job_direct(
             provider_dispatch, uuid, job, Some(provider_id), is_free,
             event_tx, instance_id, cancel_notifiers,
         ).await {
-            Ok(()) => circuit_breaker.on_success(provider_id),
+            Ok(Some(latency_ms)) => {
+                circuit_breaker.on_success(provider_id);
+                circuit_breaker.record_latency(provider_id, latency_ms as u64);
+            }
+            Ok(None) => {} // cancelled or ownership lost
             Err(e) => {
                 tracing::error!(job_id = %uuid, "inference job failed: {e}");
                 circuit_breaker.on_failure(provider_id);
@@ -303,7 +307,11 @@ pub(super) async fn queue_dispatcher_loop(
                         jobs_c, adapter, repo_c, Some(vk_c.clone()), obs_c, mm_c,
                         pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
                     ).await {
-                        Ok(()) => cb_c.on_success(pid),
+                        Ok(Some(latency_ms)) => {
+                            cb_c.on_success(pid);
+                            cb_c.record_latency(pid, latency_ms as u64);
+                        }
+                        Ok(None) => {} // cancelled or ownership lost
                         Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
                     }
                     let _ = vk_c.list_remove(QUEUE_PROCESSING, &uuid_str).await;

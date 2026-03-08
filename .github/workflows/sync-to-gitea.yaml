@@ -1,0 +1,45 @@
+name: Sync to Gitea
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+    tags:
+      - '**'
+  workflow_dispatch:
+
+concurrency:
+  group: gitea-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Mirror to Gitea
+    runs-on: arc-runner-set
+    timeout-minutes: 3
+
+    steps:
+      - name: Clone mirror repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -rf /tmp/mirror-repo
+          git clone --mirror https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git /tmp/mirror-repo
+
+      - name: Force push to Gitea
+        env:
+          GITEA_URL: ${{ secrets.GITEA_URL }}
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          cd /tmp/mirror-repo
+          if [[ "$GITEA_URL" == https://* ]]; then
+            GITEA_PUSH_URL=$(echo "$GITEA_URL" | sed "s|https://|https://oauth2:${GITEA_TOKEN}@|")
+          else
+            GITEA_PUSH_URL=$(echo "$GITEA_URL" | sed "s|http://|http://oauth2:${GITEA_TOKEN}@|")
+          fi
+          git push --force "$GITEA_PUSH_URL" 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf /tmp/mirror-repo

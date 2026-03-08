@@ -11,6 +11,7 @@ pub struct Account {
     pub id: Uuid,
     pub username: String,
     #[serde(skip_serializing)]
+    #[ts(skip)]
     pub password_hash: String,
     pub name: String,
     pub email: Option<String>,
@@ -18,8 +19,10 @@ pub struct Account {
     pub department: Option<String>,
     pub position: Option<String>,
     pub is_active: bool,
+    #[ts(skip)]
     pub created_by: Option<Uuid>,
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    #[ts(skip)]
     pub deleted_at: Option<DateTime<Utc>>,
 }

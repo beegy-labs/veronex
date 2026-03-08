@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { apiLogin, authedRequest } from './helpers/api'
 
-test.describe('API: Dashboard & Inference', () => {
+test.describe('API: Dashboard & Inference @smoke', () => {
   let api: ReturnType<typeof authedRequest>
 
   test.beforeEach(async ({ request }) => {

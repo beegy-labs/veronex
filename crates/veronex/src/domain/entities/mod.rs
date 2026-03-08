@@ -78,17 +78,17 @@ pub struct InferenceJob {
     /// Persisted to DB as `messages_json JSONB` (migration 000045).
     /// Serves as ground-truth training input: input=messages_json, output=result_text+tool_calls_json.
     /// Can reach 100–500 KB for agentic sessions with large file contents.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub messages: Option<serde_json::Value>,
     /// Tool/function definitions forwarded from the client (OpenAI or Ollama format).
     /// Passed to the provider so it can produce proper `tool_calls` responses.
     /// Not persisted to DB — in-memory only during dispatch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub tools: Option<serde_json::Value>,
     /// The HTTP path of the inbound request that created this job.
     /// e.g. "/v1/chat/completions", "/api/chat", "/v1beta/models/gemini-2.0-flash:generateContent"
     /// Not set for jobs recovered on startup.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub request_path: Option<String>,
     /// Time the job spent waiting in the Valkey queue before dispatch (ms).
     /// Computed as `started_at - created_at` when the job transitions to Running.
@@ -98,25 +98,25 @@ pub struct InferenceJob {
     /// Timestamp when a cancellation request was received.
     /// Set by `InferenceUseCaseImpl::cancel()` for non-terminal jobs.
     /// `None` if the job was never cancelled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub cancelled_at: Option<DateTime<Utc>>,
     /// Client-supplied conversation / thread ID (from X-Conversation-ID header).
     /// Groups all LLM turns that belong to one agent session.
     /// NULL for single-turn requests or clients that do not send the header.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub conversation_id: Option<String>,
     /// Structured tool calls returned by the model (JSONB in DB).
     /// Ollama format: `[{function: {name, arguments}}]`
     /// Populated when the model made at least one tool call; None for text-only responses.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub tool_calls_json: Option<serde_json::Value>,
     /// Blake2b-256 hex hash of the full messages array.
     /// Used for session grouping (conversation chain detection).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub messages_hash: Option<String>,
     /// Blake2b-256 hex hash of messages[0..n-1] (all turns except last).
     /// Empty string = first turn (no parent). Used to link child → parent in a session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub messages_prefix_hash: Option<String>,
 }
 
@@ -200,6 +200,7 @@ pub struct GeminiRateLimitPolicy {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

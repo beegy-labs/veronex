@@ -24,7 +24,9 @@
 
 | File | Purpose |
 |------|---------|
-| `web/app/providers/page.tsx` | All 2 tabs + all modals (OllamaTab, GeminiTab) |
+| `web/app/providers/page.tsx` | Tab router + shared queries (OllamaTab, GeminiTab) |
+| `web/app/providers/components/ollama-sections.tsx` | `OllamaSyncSection` + re-exports from `ollama-capacity-section.tsx` |
+| `web/app/providers/components/ollama-capacity-section.tsx` | `OllamaCapacitySection`, `ThermalBadge`, `VramBar` |
 | `web/lib/api.ts` | `api.servers()`, `api.providers()`, `api.ollamaModels()`, `api.syncOllamaModels()`, `api.ollamaSyncStatus()`, `api.geminiModels()`, `api.syncGeminiStatus()`, `api.capacity()`, `api.capacitySettings()`, `api.patchCapacitySettings()`, `api.triggerCapacitySync()` |
 | `web/lib/types.ts` | `Provider`, `GpuServer`, `OllamaSyncJob`, `GeminiRateLimitPolicy`, `GeminiModel`, `ProviderSelectedModel`, `GeminiStatusSyncResponse`, `CapacityResponse`, `ProviderCapacityInfo`, `ModelCapacityInfo`, `CapacitySettings`, `PatchCapacitySettings` |
 | `web/messages/en.json` | i18n keys under `providers.*` |

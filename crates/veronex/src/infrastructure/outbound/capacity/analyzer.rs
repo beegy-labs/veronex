@@ -756,8 +756,10 @@ pub async fn run_sync_loop(
             }
         }
 
-        #[allow(clippy::unwrap_used)]
-        let _permit = sync_lock.clone().acquire_owned().await.unwrap();
+        let Ok(_permit) = sync_lock.clone().acquire_owned().await else {
+            tracing::error!("sync semaphore closed unexpectedly");
+            break;
+        };
 
         let all_providers = registry.list_all().await.unwrap_or_default();
         let ollama_providers: Vec<_> = all_providers

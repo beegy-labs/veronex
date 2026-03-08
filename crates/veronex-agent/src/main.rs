@@ -217,13 +217,8 @@ async fn collect_gpu(card: Option<(u8, &str)>) -> GpuInfo {
 
 // ── /proc/meminfo ──────────────────────────────────────────────────────────────
 
-async fn collect_memory() -> MemoryInfo {
-    // Try both the bind-mount path and the native path.
-    let content = match fs::read_to_string("/proc/meminfo").await {
-        Ok(c) => c,
-        Err(_) => fs::read_to_string("/host/proc/meminfo").await.unwrap_or_default(),
-    };
-
+/// Parse `/proc/meminfo`-formatted content into a [`MemoryInfo`].
+fn parse_meminfo(content: &str) -> MemoryInfo {
     let mut total_kb = 0u64;
     let mut free_kb = 0u64;
     let mut available_kb = 0u64;
@@ -248,6 +243,15 @@ async fn collect_memory() -> MemoryInfo {
     }
 }
 
+async fn collect_memory() -> MemoryInfo {
+    // Try both the bind-mount path and the native path.
+    let content = match fs::read_to_string("/proc/meminfo").await {
+        Ok(c) => c,
+        Err(_) => fs::read_to_string("/host/proc/meminfo").await.unwrap_or_default(),
+    };
+    parse_meminfo(&content)
+}
+
 // ── Ollama /api/ps ─────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -265,15 +269,21 @@ async fn collect_ollama(ollama_url: &str, client: &reqwest::Client) -> OllamaInf
     let url = format!("{}/api/ps", ollama_url.trim_end_matches('/'));
     let resp = match client.get(&url).timeout(Duration::from_secs(3)).send().await {
         Ok(r) => r,
-        Err(_) => return OllamaInfo::default(),
+        Err(e) => {
+            tracing::warn!("ollama /api/ps request failed: {e}");
+            return OllamaInfo::default();
+        }
     };
     let ps: OllamaPs = match resp.json().await {
         Ok(p) => p,
-        Err(_) => return OllamaInfo::default(),
+        Err(e) => {
+            tracing::warn!("ollama /api/ps response parse failed: {e}");
+            return OllamaInfo::default();
+        }
     };
     let models = ps.models.unwrap_or_default();
     let count = models.len().min(255) as u8;
-    let loaded_vram_mb = models.iter().map(|m| m.size_vram / 1_048_576).sum::<u64>() as u32;
+    let loaded_vram_mb = models.iter().map(|m| m.size_vram / 1_048_576).sum::<u64>().min(u32::MAX as u64) as u32;
     OllamaInfo { loaded_model_count: count, loaded_vram_mb }
 }
 
@@ -303,7 +313,7 @@ async fn handler_health() -> impl IntoResponse {
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -326,6 +336,105 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     tracing::info!("veronex-agent listening on {addr} (ollama={ollama_url})", ollama_url = cfg.ollama_url);
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── vendor_name ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn vendor_name_amd() {
+        assert_eq!(vendor_name("0x1002"), "amd");
+    }
+
+    #[test]
+    fn vendor_name_nvidia() {
+        assert_eq!(vendor_name("0x10de"), "nvidia");
+    }
+
+    #[test]
+    fn vendor_name_unknown() {
+        assert_eq!(vendor_name("0x8086"), "unknown");
+        assert_eq!(vendor_name(""), "unknown");
+    }
+
+    #[test]
+    fn vendor_name_trims_whitespace() {
+        assert_eq!(vendor_name("0x1002\n"), "amd");
+        assert_eq!(vendor_name("  0x10de  "), "nvidia");
+    }
+
+    // ── parse_meminfo ───────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_meminfo_typical() {
+        let content = "\
+MemTotal:       32768000 kB
+MemFree:         8192000 kB
+MemAvailable:   16384000 kB
+Buffers:          512000 kB
+Cached:          4096000 kB
+";
+        let info = parse_meminfo(content);
+        assert_eq!(info.total_mb, 32000);
+        assert_eq!(info.used_mb, 24000); // total - free
+        assert_eq!(info.available_mb, 16000);
+    }
+
+    #[test]
+    fn parse_meminfo_empty() {
+        let info = parse_meminfo("");
+        assert_eq!(info.total_mb, 0);
+        assert_eq!(info.used_mb, 0);
+        assert_eq!(info.available_mb, 0);
+    }
+
+    #[test]
+    fn parse_meminfo_partial() {
+        let content = "MemTotal:       1048576 kB\n";
+        let info = parse_meminfo(content);
+        assert_eq!(info.total_mb, 1024);
+        assert_eq!(info.used_mb, 1024); // total - free(0) = total
+        assert_eq!(info.available_mb, 0);
+    }
+
+    #[test]
+    fn parse_meminfo_malformed_values() {
+        let content = "\
+MemTotal:       notanumber kB
+MemFree:        1024 kB
+";
+        let info = parse_meminfo(content);
+        assert_eq!(info.total_mb, 0);
+        assert_eq!(info.used_mb, 0); // 0 - 1024 saturates to 0
+        assert_eq!(info.available_mb, 0);
+    }
+
+    // ── Config::from_env defaults ───────────────────────────────────────────
+
+    #[test]
+    fn config_defaults() {
+        // SAFETY: test runs single-threaded; no other thread reads these vars.
+        unsafe {
+            std::env::remove_var("OLLAMA_URL");
+            std::env::remove_var("PORT");
+        }
+        let cfg = Config::from_env();
+        assert_eq!(cfg.ollama_url, "http://localhost:11434");
+        assert_eq!(cfg.port, 9091);
+    }
+
+    #[test]
+    fn loaded_vram_mb_overflow_protection() {
+        // Value in MB that exceeds u32::MAX — clamp prevents truncation
+        let vram_mb: u64 = u32::MAX as u64 + 1000;
+        let clamped = vram_mb.min(u32::MAX as u64) as u32;
+        assert_eq!(clamped, u32::MAX);
+    }
 }

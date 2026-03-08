@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { accountsQuery, accountSessionsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { Account, CreateAccountResponse, SessionRecord } from '@/lib/types'
-import { Plus, Trash2, Copy, Check, Link, Shield } from 'lucide-react'
+import { Plus, Trash2, Link, Shield } from 'lucide-react'
 import { CopyButton } from '@/components/copy-button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -120,6 +120,7 @@ function CreateAccountModal({
   open: boolean
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -156,11 +157,11 @@ function CreateAccountModal({
       <Dialog open={open} onOpenChange={handleClose}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Account Created</DialogTitle>
+            <DialogTitle>{t('accounts.accountCreated')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-4 text-status-warning-fg text-sm">
-              Save the test API key below — it will only be shown once.
+              {t('accounts.saveKeyWarning')}
             </div>
             <div className="flex items-center gap-2 rounded-md border bg-muted px-3 py-2">
               <code className="flex-1 font-mono text-xs break-all select-all">{created.test_api_key}</code>
@@ -168,7 +169,7 @@ function CreateAccountModal({
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={handleClose}>Done</Button>
+            <Button onClick={handleClose}>{t('common.done')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -179,30 +180,30 @@ function CreateAccountModal({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create Account</DialogTitle>
+          <DialogTitle>{t('accounts.createAccount')}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-1">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Username</Label>
+              <Label>{t('accounts.username')}</Label>
               <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
             </div>
             <div className="space-y-1.5">
-              <Label>Full name</Label>
+              <Label>{t('accounts.fullName')}</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>Password</Label>
+            <Label>{t('accounts.password')}</Label>
             <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Email</Label>
+              <Label>{t('accounts.email')}</Label>
               <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Role</Label>
+              <Label>{t('accounts.role')}</Label>
               <select
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
                 value={role}
@@ -215,27 +216,27 @@ function CreateAccountModal({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Department</Label>
+              <Label>{t('accounts.department')}</Label>
               <Input value={department} onChange={(e) => setDepartment(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Position</Label>
+              <Label>{t('accounts.position')}</Label>
               <Input value={position} onChange={(e) => setPosition(e.target.value)} />
             </div>
           </div>
           {mutation.isError && (
             <p className="text-sm text-destructive">
-              {mutation.error instanceof Error ? mutation.error.message : 'Failed to create account'}
+              {mutation.error instanceof Error ? mutation.error.message : t('accounts.createFailed')}
             </p>
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={handleClose}>Cancel</Button>
+          <Button variant="outline" onClick={handleClose}>{t('common.cancel')}</Button>
           <Button
             onClick={() => mutation.mutate()}
             disabled={mutation.isPending || !username || !password || !name}
           >
-            {mutation.isPending ? 'Creating…' : 'Create'}
+            {mutation.isPending ? t('accounts.creating') : t('common.create')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -298,7 +299,7 @@ export default function AccountsPage() {
               <DialogTitle>{t('accounts.resetLink')}</DialogTitle>
             </DialogHeader>
             <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-4 text-status-warning-fg text-sm">
-              This token will only be shown once. Copy it now and share it securely.
+              {t('accounts.tokenWarning')}
             </div>
             <div className="rounded-lg bg-muted p-3 flex items-center gap-2">
               <code className="flex-1 font-mono text-xs break-all select-all">{resetToken}</code>

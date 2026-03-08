@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "http://localhost:4318".to_string());
 
     let analytics_secret = std::env::var("ANALYTICS_SECRET")
-        .unwrap_or_else(|_| "veronex-analytics-internal-secret".to_string());
+        .expect("ANALYTICS_SECRET env var is required — set a strong random token");
 
     let port: u16 = std::env::var("PORT")
         .ok()
