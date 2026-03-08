@@ -1,10 +1,9 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
-COPY package.json ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
 
-# These must be available at build time so Next.js bakes them into the client bundle
 ARG NEXT_PUBLIC_VERONEX_API_URL=http://localhost:3001
 ARG NEXT_PUBLIC_VERONEX_ADMIN_KEY=
 ENV NEXT_PUBLIC_VERONEX_API_URL=$NEXT_PUBLIC_VERONEX_API_URL
