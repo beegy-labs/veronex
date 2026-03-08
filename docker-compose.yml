@@ -104,6 +104,7 @@ services:
       ANALYTICS_SECRET: ${ANALYTICS_SECRET:-veronex-analytics-internal-secret}
       BOOTSTRAP_SUPER_USER: ${BOOTSTRAP_SUPER_USER-}
       BOOTSTRAP_SUPER_PASS: ${BOOTSTRAP_SUPER_PASS-}
+      GEMINI_ENCRYPTION_KEY: ${GEMINI_ENCRYPTION_KEY:-22551e8092edc3243163385e0dc6157ead33f14f14b1dbc794f0a00bb51886ae}
       CORS_ALLOWED_ORIGINS: http://localhost:3002
       RUST_LOG: info
       # OTel distributed tracing — optional, uncomment to enable.

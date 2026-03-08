@@ -23,6 +23,9 @@ veronex:
   bootstrapSuperPass: ""
   geminiApiKey: ""
 
+  encryption:
+    key: ""  # REQUIRED — AES-256-GCM key for provider API keys. Generate: openssl rand -hex 32
+
   # Capacity analyzer Ollama URL — defaults to OLLAMA_URL when unset
   capacityAnalyzerOllamaUrl: ""
 
@@ -228,6 +231,7 @@ externalSecrets:
       s3AccessKey: ""          # e.g. "veronex/s3-access-key"
       s3SecretKey: ""          # e.g. "veronex/s3-secret-key"
       geminiApiKey: ""         # e.g. "veronex/gemini-api-key" (optional)
+      encryptionKey: ""        # e.g. "veronex/encryption-key" (optional)
     refreshInterval: "1h"
 
   # Option 2: CSI Secrets Store Driver
