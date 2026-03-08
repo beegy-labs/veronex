@@ -408,7 +408,7 @@ export function DashboardTab({
                     <td key={i} className="py-3 text-right">
                       {d != null ? (
                         <span className={`inline-flex items-center justify-center rounded px-1.5 py-0.5 text-xs font-bold tabular-nums ${successRateCls(d.success_rate)}`}>
-                          {Math.round(d.success_rate * 100)}%
+                          {Math.round(d.success_rate)}%
                         </span>
                       ) : '—'}
                     </td>

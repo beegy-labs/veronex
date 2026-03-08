@@ -14,7 +14,9 @@ import { Card, CardContent } from '@/components/ui/card'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -111,7 +113,7 @@ export function OllamaCapacitySection() {
   const providers = capacityData?.providers ?? []
   const lastRunAt = settings?.last_run_at
   const lastRunStatus = settings?.last_run_status
-  const availableModels = settings?.available_models ?? []
+  const availableModels = settings?.available_models ?? {}
 
   function fmtRelativeTime(iso: string | null) {
     if (!iso) return t('providers.capacity.never')
@@ -169,8 +171,15 @@ export function OllamaCapacitySection() {
                   <SelectValue placeholder={analyzerModel || '—'} />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableModels.map((m) => (
-                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  {Object.entries(availableModels).map(([provider, models]) => (
+                    <SelectGroup key={provider}>
+                      <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                        {provider}
+                      </SelectLabel>
+                      {models.map((m) => (
+                        <SelectItem key={`${provider}:${m}`} value={m}>{m}</SelectItem>
+                      ))}
+                    </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>

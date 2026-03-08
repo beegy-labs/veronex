@@ -114,8 +114,9 @@ export function fmtMsNullable(n: number | null | undefined): string {
 // ── Percentage formatter ──────────────────────────────────────────────────────
 
 /** Format a 0..1 ratio as a rounded percentage string. Example: 0.956 → "96%" */
+/** Format a percentage value (0–100 scale from backend) as "XX%". */
 export function fmtPct(n: number): string {
-  return `${Math.round(n * 100)}%`
+  return `${Math.round(n)}%`
 }
 
 // ── Memory size formatter ─────────────────────────────────────────────────────
