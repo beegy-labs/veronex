@@ -25,7 +25,6 @@ jobs:
             echo "❌ ERROR: PRs must target 'develop' or 'main', not '${BASE}'"
             exit 1
           fi
-          # main ← develop only (release merge)
           if [ "$BASE" = "main" ]; then
             HEAD="${{ github.head_ref }}"
             if [ "$HEAD" != "develop" ]; then
@@ -134,12 +133,9 @@ jobs:
     if: needs.changes.outputs.api == 'true'
     runs-on: arc-runner-set
     timeout-minutes: 30
-    container:
-      image: rust:1-alpine
     steps:
       - uses: actions/checkout@v4
-      - name: Install build deps
-        run: apk add --no-cache musl-dev
+      - uses: dtolnay/rust-toolchain@stable
       - name: Run tests
         run: SQLX_OFFLINE=true RUST_LOG=error cargo test --all
 
@@ -149,10 +145,13 @@ jobs:
     if: needs.changes.outputs.web == 'true'
     runs-on: arc-runner-set
     timeout-minutes: 15
-    container:
-      image: node:22-alpine
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
       - name: Install dependencies
         working-directory: web
         run: npm ci
