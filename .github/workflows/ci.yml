@@ -25,7 +25,7 @@ jobs:
   check:
     name: Check
     if: github.event_name == 'pull_request'
-    runs-on: [self-hosted, kubernetes, gitops]
+    runs-on: arc-runner-set
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
   check-web:
     name: Check Web
     if: github.event_name == 'pull_request'
-    runs-on: [self-hosted, kubernetes, gitops]
+    runs-on: arc-runner-set
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +68,7 @@ jobs:
     name: E2E Smoke (PR)
     if: github.event_name == 'pull_request'
     needs: check-web
-    runs-on: [self-hosted, kubernetes, gitops]
+    runs-on: arc-runner-set
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -102,7 +102,7 @@ jobs:
   build:
     name: Build
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && contains(fromJSON('["develop", "main"]'), github.ref_name)
-    runs-on: [self-hosted, kubernetes, gitops]
+    runs-on: arc-runner-set
     timeout-minutes: 60
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
@@ -162,91 +162,3 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
 
-  deploy:
-    name: Deploy
-    if: always() && needs.build.result == 'success'
-    needs: build
-    runs-on: [self-hosted, kubernetes, gitops]
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: beegy-labs/platform-gitops
-          token: ${{ secrets.GITOPS_PAT }}
-          path: gitops
-
-      - name: Update & Push
-        run: |
-          cd gitops && git pull --rebase
-          case "${{ github.ref_name }}" in
-            main)    FILE="clusters/home/values/veronex-prod.yaml";    ENV="production" ;;
-            develop) FILE="clusters/home/values/veronex-dev.yaml";     ENV="development" ;;
-            *)       FILE="clusters/home/values/veronex-dev.yaml";     ENV="development" ;;
-          esac
-          awk -v newtag="${{ needs.build.outputs.tag }}" '
-            /^image:/ { in_image=1 }
-            in_image && /^[a-z]/ && !/^image:/ { in_image=0 }
-            in_image && /tag:/ { sub(/tag: ".*"/, "tag: \"" newtag "\""); in_image=0 }
-            { print }
-          ' ${FILE} > ${FILE}.tmp && mv ${FILE}.tmp ${FILE}
-          git config user.name "GitHub Actions Bot"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ${FILE}
-          git diff --staged --quiet || git commit -m "chore(${ENV}): update veronex to ${{ needs.build.outputs.tag }}"
-          for i in 1 2 3; do git push && break || { sleep 3; git pull --rebase; }; done
-
-      - name: Cleanup old images
-        env:
-          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
-        run: |
-          case "${{ github.ref_name }}" in
-            main)    P="" ;;
-            develop) P="develop-" ;;
-            *)       P="develop-" ;;
-          esac
-          curl -s -H "Authorization: token ${GITEA_TOKEN}" "https://gitea.girok.dev/api/v1/packages/beegy-labs/container/veronex" | \
-            jq -r ".[] | select(.version | startswith(\"${P}\")) | \"\(.created_at)|\(.version)\"" | sort -r | tail -n +11 | \
-            while IFS='|' read -r _ v; do curl -sX DELETE -H "Authorization: token ${GITEA_TOKEN}" "https://gitea.girok.dev/api/v1/packages/beegy-labs/container/veronex/${v}"; done
-
-  e2e-smoke:
-    name: E2E Smoke
-    if: always() && needs.deploy.result == 'success'
-    needs: deploy
-    runs-on: [self-hosted, kubernetes, gitops]
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        working-directory: web
-        run: npm ci
-
-      - name: Install Playwright
-        working-directory: web
-        run: npx playwright install --with-deps chromium
-
-      - name: Wait for rollout
-        run: |
-          case "${{ github.ref_name }}" in
-            main)    NS="veronex-prod" ;;
-            *)       NS="veronex-dev" ;;
-          esac
-          kubectl rollout status deployment/veronex -n ${NS} --timeout=120s || true
-
-      - name: Run smoke tests
-        working-directory: web
-        run: npx playwright test --grep @smoke
-        env:
-          CI: "true"
-          PLAYWRIGHT_BASE_URL: ${{ vars.E2E_BASE_URL }}
-          PLAYWRIGHT_API_URL: ${{ vars.E2E_API_URL }}
-          E2E_USERNAME: ${{ secrets.E2E_USERNAME }}
-          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
-
-      - name: Upload report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: web/playwright-report/
-          retention-days: 7
