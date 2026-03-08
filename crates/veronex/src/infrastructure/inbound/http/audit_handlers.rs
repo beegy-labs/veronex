@@ -16,6 +16,7 @@ pub struct AuditQuery {
     pub offset: Option<u32>,
     pub action: Option<String>,
     pub resource_type: Option<String>,
+    pub resource_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -48,6 +49,7 @@ pub async fn list_audit_events(
         offset: q.offset.unwrap_or(0),
         action: q.action,
         resource_type: q.resource_type,
+        resource_id: q.resource_id,
     };
 
     let rows = repo

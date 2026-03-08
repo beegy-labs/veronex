@@ -1,6 +1,6 @@
 # Auth -- Implementation Details
 
-> SSOT | **Last Updated**: 2026-03-04 | Parent: [jwt-sessions.md](jwt-sessions.md)
+> SSOT | **Last Updated**: 2026-03-08 | Parent: [jwt-sessions.md](jwt-sessions.md)
 
 ## Test Run Endpoint Details
 
@@ -64,17 +64,15 @@ Response: 204
 Response: { "token": "uuid-v4-string" }
 ```
 
-### api_keys Changes (Migration 035) -- Planned
+### api_keys Changes (Migration 035)
 
-> **Not yet in Rust entity**: The `ApiKey` struct does not have `account_id` or `is_test_key` fields. The migration SQL exists but these columns are not yet used by the application. Test keys are currently distinguished by `key_type = "test"`.
+`account_id` is now implemented in the `ApiKey` entity. It tracks which account created the key. Super admin list view batch-resolves `account_id` → username for the `created_by` display field. Test keys use `key_type = "test"` (not `is_test_key`).
 
 ```sql
--- Planned columns (not yet in ApiKey entity):
 ALTER TABLE api_keys ADD COLUMN account_id UUID REFERENCES accounts(id);
-ALTER TABLE api_keys ADD COLUMN is_test_key BOOLEAN NOT NULL DEFAULT false;
-CREATE UNIQUE INDEX uq_api_keys_account_test
-  ON api_keys (account_id) WHERE is_test_key = true AND deleted_at IS NULL;
 ```
+
+See [api-keys.md](api-keys.md) for entity definition and regenerate endpoint.
 
 ## Audit Trail
 
@@ -85,7 +83,7 @@ pub struct AuditEvent {
   pub event_time: DateTime<Utc>,
   pub account_id: Uuid,
   pub account_name: String,
-  pub action: String,        // create|update|delete|login|logout|reset_password|sync|trigger
+  pub action: String,        // create|update|delete|regenerate|login|logout|reset_password|sync|trigger
   pub resource_type: String, // api_key|ollama_provider|gemini_provider|account|gpu_server|session|lab_settings|capacity_settings
   pub resource_id: String,
   pub resource_name: String,

@@ -176,22 +176,20 @@ export function OllamaCapacitySection() {
           </div>
 
           <div className="flex items-end gap-3 flex-wrap">
-            {providerOptions.length > 1 && (
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">{t('usage.providerCol')}</Label>
-                <Select value={providerFilter} onValueChange={setProviderFilter}>
-                  <SelectTrigger className="h-8 text-sm w-28">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">{t('common.all')}</SelectItem>
-                    {providerOptions.map((p) => (
-                      <SelectItem key={p} value={p}>{p}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">{t('usage.providerCol')}</Label>
+              <Select value={providerFilter} onValueChange={setProviderFilter}>
+                <SelectTrigger className="h-8 text-sm w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{t('common.all')}</SelectItem>
+                  {providerOptions.map((p) => (
+                    <SelectItem key={p} value={p}>{p}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-1 min-w-44">
               <Label className="text-xs text-muted-foreground">{t('providers.capacity.analyzerModel')}</Label>
               <Select value={analyzerModel} onValueChange={setAnalyzerModel}>
@@ -283,7 +281,7 @@ export function OllamaCapacitySection() {
         </Card>
       )}
 
-      {providers.map((provider) => (
+      {providers.filter((p) => providerFilter === 'all' || p.provider_name.toLowerCase().includes(providerFilter)).map((provider) => (
         <Card key={provider.provider_id}>
           <CardContent className="p-0">
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">

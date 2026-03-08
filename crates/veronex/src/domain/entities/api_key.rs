@@ -35,6 +35,10 @@ pub struct ApiKey {
     /// Billing tier: free or paid (default).
     #[serde(default)]
     pub tier: KeyTier,
+    /// Account that created this key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub account_id: Option<Uuid>,
 }
 
 /// Returned once at key creation — contains the plaintext key.
@@ -67,6 +71,7 @@ mod tests {
             deleted_at: None,
             key_type: KeyType::Standard,
             tier: KeyTier::Paid,
+            account_id: None,
         }
     }
 

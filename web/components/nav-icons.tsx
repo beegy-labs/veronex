@@ -20,9 +20,8 @@ export function HexLogo({ className }: { className?: string }) {
       <polygon
         points="25,16 20.5,23.8 11.5,23.8 7,16 11.5,8.2 20.5,8.2"
         fill="none"
-        stroke="white"
+        stroke="var(--theme-logo-inner)"
         strokeWidth="1.5"
-        strokeOpacity="0.55"
       />
     </svg>
   )

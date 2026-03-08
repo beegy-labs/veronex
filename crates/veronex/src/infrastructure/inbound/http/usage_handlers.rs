@@ -32,6 +32,13 @@ async fn verify_key_ownership(
     claims: &Claims,
     key_id: &uuid::Uuid,
 ) -> Result<(), AppError> {
+    // Super admin can access any key's usage
+    if claims.role == crate::domain::enums::AccountRole::Super {
+        // Just verify the key exists
+        state.api_key_repo.get_by_id(key_id).await?
+            .ok_or_else(|| AppError::NotFound("key not found".into()))?;
+        return Ok(());
+    }
     let tenant_id = super::key_handlers::resolve_tenant_id(state, claims).await?;
     let key = state
         .api_key_repo

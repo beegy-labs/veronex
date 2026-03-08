@@ -11,6 +11,7 @@ pub struct AuditQuery {
     pub offset: Option<u32>,
     pub action: Option<String>,
     pub resource_type: Option<String>,
+    pub resource_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
@@ -50,12 +51,13 @@ pub async fn list_audit_events(
 
     // Whitelist validation — reject unknown filter values to prevent injection.
     const ALLOWED_ACTIONS: &[&str] = &[
-        "create", "update", "delete", "login", "logout", "sync",
+        "create", "update", "delete", "regenerate", "login", "logout", "sync",
         "trigger", "reset_password", "toggle", "revoke",
     ];
     const ALLOWED_RESOURCE_TYPES: &[&str] = &[
         "account", "ollama_provider", "gemini_provider", "api_key",
         "capacity_settings", "gemini_policy", "gpu_server", "lab_settings",
+        "session",
     ];
 
     if let Some(ref action) = q.action
@@ -68,6 +70,12 @@ pub async fn list_audit_events(
     {
         return Err(StatusCode::BAD_REQUEST);
     }
+    // resource_id is a UUID — validate format to prevent injection.
+    if let Some(ref rid) = q.resource_id {
+        if uuid::Uuid::parse_str(rid).is_err() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
 
     // Build filter conditions. Values are whitelist-validated above, safe for interpolation.
     let mut conditions = vec![
@@ -78,6 +86,9 @@ pub async fn list_audit_events(
     }
     if let Some(ref rt) = q.resource_type {
         conditions.push(format!("LogAttributes['resource_type'] = '{rt}'"));
+    }
+    if let Some(ref rid) = q.resource_id {
+        conditions.push(format!("LogAttributes['resource_id'] = '{rid}'"));
     }
     let where_clause = conditions.join(" AND ");
 
@@ -136,12 +147,13 @@ pub async fn list_audit_events(
 #[cfg(test)]
 mod tests {
     const ALLOWED_ACTIONS: &[&str] = &[
-        "create", "update", "delete", "login", "logout", "sync",
+        "create", "update", "delete", "regenerate", "login", "logout", "sync",
         "trigger", "reset_password", "toggle", "revoke",
     ];
     const ALLOWED_RESOURCE_TYPES: &[&str] = &[
         "account", "ollama_provider", "gemini_provider", "api_key",
         "capacity_settings", "gemini_policy", "gpu_server", "lab_settings",
+        "session",
     ];
 
     #[test]

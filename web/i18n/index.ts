@@ -25,6 +25,9 @@ if (!i18n.isInitialized) {
       ja: { translation: ja },
     },
     interpolation: { escapeValue: false },
+    // Suppress Locize sponsorship console.info
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...({ showSupportNotice: false } as any),
   })
 }
 

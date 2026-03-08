@@ -69,17 +69,17 @@ export default function RootLayout({
   }))
 
   return (
-    <html lang="en" className="h-full">
+    <html lang="en" className="h-full" suppressHydrationWarning>
       <head>
         <title>Veronex</title>
         <meta name="description" content="Veronex — LLM inference queue and routing dashboard" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
         <link rel="icon" href="/favicon-light.svg" type="image/svg+xml" media="(prefers-color-scheme: light)" />
         <link rel="icon" href="/favicon-dark.svg"  type="image/svg+xml" media="(prefers-color-scheme: dark)" />
-        <link rel="icon" href="/favicon-dark.svg"  type="image/svg+xml" />
         {/* Prevent flash of wrong theme */}
         <script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('hg-theme');if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();` }} />
       </head>
-      <body className="h-full bg-background text-foreground">
+      <body className="h-full bg-background text-foreground" suppressHydrationWarning>
         <ThemeProvider>
           <I18nProvider>
             <TimezoneProvider>

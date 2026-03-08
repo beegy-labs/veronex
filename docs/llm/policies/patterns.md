@@ -330,7 +330,7 @@ Reusable functions in the HTTP handler layer to avoid duplication:
 | `validate_username()` | `handlers.rs` | Alphanumeric + `_.-`, max 64 chars |
 | `validate_content_length()` | `inference_helpers.rs` | Content size validation (SSOT) |
 | `validate_model_name()` | `inference_helpers.rs` | Model name length validation (SSOT) |
-| `resolve_tenant_id()` | `key_handlers.rs` | Account lookup → username (pub(super)) |
+| `resolve_tenant_id()` | `key_handlers.rs` | Account lookup → username (pub(super)). `list_keys`: super admin uses `list_all()`, others use `list_by_tenant(username)` |
 | `convert_tool_call()` | `openai_handlers.rs` | Tool call JSON for streaming + non-streaming |
 | `SyncSettingsResponse::from_settings()` | `dashboard_handlers.rs` | Capacity settings → response |
 | `filter_by_model_selection()` | `provider_router.rs` | HashSet-based O(1) model filtering (DRY) |

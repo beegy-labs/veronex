@@ -124,8 +124,8 @@
     "prevMonth": "전월 대비",
     "topModels": "주요 모델",
     "noServerPower": "서버 데이터 없음",
-    "localProviders": "로컬",
-    "apiProviders": "API 서비스",
+    "localProviders": "Ollama",
+    "apiProviders": "Gemini",
     "totalReqsSubtitle": "요청",
     "activeKeysLabel": "활성",
     "dashboard": "대시보드",
@@ -260,7 +260,15 @@
     "keysCount": "{{count}}개",
     "viewUsage": "사용량 보기",
     "usageTitle": "사용량 — {{name}}",
-    "modelBreakdown": "모델별 사용"
+    "modelBreakdown": "모델별 사용",
+    "createdBy": "생성자",
+    "regenerateKey": "키 갱신",
+    "regenerateTitle": "API 키 갱신",
+    "regenerateConfirm": "{{name}} 키를 갱신하시겠습니까? 기존 키는 즉시 무효화되고 새로운 키가 발급됩니다.",
+    "regenerating": "갱신 중…",
+    "keySavedAck": "키를 저장했습니다",
+    "viewHistory": "변경 이력 보기",
+    "historyTitle": "변경 이력 — {{name}}"
   },
   "providers": {
     "title": "프로바이더",

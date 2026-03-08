@@ -61,6 +61,9 @@ pub struct KeySummary {
     pub created_at: chrono::DateTime<Utc>,
     /// Billing tier: free or paid.
     pub tier: KeyTier,
+    /// Username of creator (populated via account_id JOIN).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
@@ -97,6 +100,7 @@ pub async fn create_key(
         deleted_at: None,
         key_type: KeyType::Standard,
         tier: req.tier,
+        account_id: Some(claims.sub),
     };
 
     state
@@ -135,23 +139,41 @@ pub async fn list_keys(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<KeySummary>>, AppError> {
-    let tenant_id = resolve_tenant_id(&state, &claims).await?;
-    let keys = state.api_key_repo.list_by_tenant(&tenant_id).await?;
+    let keys = if claims.role == crate::domain::enums::AccountRole::Super {
+        state.api_key_repo.list_all().await?
+    } else {
+        let tenant_id = resolve_tenant_id(&state, &claims).await?;
+        state.api_key_repo.list_by_tenant(&tenant_id).await?
+    };
+
+    // Batch-resolve account_id → username in O(1) query (accounts table is small — admin only)
+    let username_map: std::collections::HashMap<Uuid, String> = state
+        .account_repo
+        .list_all()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| (a.id, a.username))
+        .collect();
 
     let summaries: Vec<KeySummary> = keys
         .into_iter()
         .filter(|k| !k.key_type.is_test())
-        .map(|k| KeySummary {
-            id: k.id,
-            key_prefix: k.key_prefix,
-            tenant_id: k.tenant_id,
-            name: k.name,
-            is_active: k.is_active,
-            rate_limit_rpm: k.rate_limit_rpm,
-            rate_limit_tpm: k.rate_limit_tpm,
-            expires_at: k.expires_at,
-            created_at: k.created_at,
-            tier: k.tier,
+        .map(|k| {
+            let created_by = k.account_id.and_then(|id| username_map.get(&id).cloned());
+            KeySummary {
+                id: k.id,
+                key_prefix: k.key_prefix,
+                tenant_id: k.tenant_id,
+                name: k.name,
+                is_active: k.is_active,
+                rate_limit_rpm: k.rate_limit_rpm,
+                rate_limit_tpm: k.rate_limit_tpm,
+                expires_at: k.expires_at,
+                created_at: k.created_at,
+                tier: k.tier,
+                created_by,
+            }
         })
         .collect();
 
@@ -165,12 +187,14 @@ pub async fn delete_key(
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
     let uuid = super::handlers::parse_uuid(&id)?;
-    let tenant_id = resolve_tenant_id(&state, &claims).await?;
 
     let key = state.api_key_repo.get_by_id(&uuid).await?
         .ok_or_else(|| AppError::NotFound("key not found".into()))?;
-    if key.tenant_id != tenant_id {
-        return Err(AppError::Forbidden("not your key".into()));
+    if claims.role != crate::domain::enums::AccountRole::Super {
+        let tenant_id = resolve_tenant_id(&state, &claims).await?;
+        if key.tenant_id != tenant_id {
+            return Err(AppError::Forbidden("not your key".into()));
+        }
     }
 
     state
@@ -192,12 +216,14 @@ pub async fn toggle_key(
     Json(req): Json<PatchKeyRequest>,
 ) -> Result<StatusCode, AppError> {
     let uuid = super::handlers::parse_uuid(&id)?;
-    let tenant_id = resolve_tenant_id(&state, &claims).await?;
 
     let key = state.api_key_repo.get_by_id(&uuid).await?
         .ok_or_else(|| AppError::NotFound("key not found".into()))?;
-    if key.tenant_id != tenant_id {
-        return Err(AppError::Forbidden("not your key".into()));
+    if claims.role != crate::domain::enums::AccountRole::Super {
+        let tenant_id = resolve_tenant_id(&state, &claims).await?;
+        if key.tenant_id != tenant_id {
+            return Err(AppError::Forbidden("not your key".into()));
+        }
     }
 
     // Build audit description before consuming req fields.
@@ -221,6 +247,40 @@ pub async fn toggle_key(
     emit_audit(&state, &claims, "update", "api_key", &id, &id, &details).await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /v1/keys/{id}/regenerate — Issue a new key for the same ID.
+///
+/// The old key is immediately invalidated. Returns the new plaintext key once.
+pub async fn regenerate_key(
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<CreateKeyResponse>, AppError> {
+    let uuid = super::handlers::parse_uuid(&id)?;
+
+    let key = state.api_key_repo.get_by_id(&uuid).await?
+        .ok_or_else(|| AppError::NotFound("key not found".into()))?;
+    if claims.role != crate::domain::enums::AccountRole::Super {
+        let tenant_id = resolve_tenant_id(&state, &claims).await?;
+        if key.tenant_id != tenant_id {
+            return Err(AppError::Forbidden("not your key".into()));
+        }
+    }
+
+    let (_new_id, plaintext, new_hash, new_prefix) = generate_api_key();
+    state.api_key_repo.regenerate(&uuid, &new_hash, &new_prefix).await?;
+
+    emit_audit(&state, &claims, "regenerate", "api_key", &id, &key.name,
+        &format!("API key '{}' regenerated (old key invalidated)", key.name)).await;
+
+    Ok(Json(CreateKeyResponse {
+        id: uuid,
+        key: plaintext,
+        key_prefix: new_prefix,
+        tenant_id: key.tenant_id,
+        created_at: key.created_at,
+    }))
 }
 
 #[cfg(test)]
@@ -285,6 +345,7 @@ mod tests {
             expires_at: None,
             created_at: Utc::now(),
             tier: KeyTier::Paid,
+            created_by: None,
         };
         let json = serde_json::to_value(&summary).unwrap();
         assert!(json.get("id").is_some());

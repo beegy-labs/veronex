@@ -4,8 +4,8 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { keysQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
-import type { ApiKey, CreateKeyResponse } from '@/lib/types'
-import { Plus, Trash2, BarChart2 } from 'lucide-react'
+import type { ApiKey, AuditEvent, CreateKeyResponse } from '@/lib/types'
+import { Plus, Trash2, BarChart2, RefreshCw, History } from 'lucide-react'
 import { CopyButton } from '@/components/copy-button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
@@ -148,9 +149,11 @@ function CreateKeyModal({
 
 function KeyCreatedModal({ resp, onClose }: { resp: CreateKeyResponse; onClose: () => void }) {
   const { t } = useTranslation()
+  const [ack, setAck] = useState(false)
+
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-lg">
+    <Dialog open onOpenChange={() => { /* block dismiss until ack */ }}>
+      <DialogContent className="max-w-lg" onPointerDownOutside={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>{t('keys.createdTitle')}</DialogTitle>
         </DialogHeader>
@@ -164,8 +167,51 @@ function KeyCreatedModal({ resp, onClose }: { resp: CreateKeyResponse; onClose: 
           <CopyButton text={resp.key} />
         </div>
 
+        <div className="flex items-center gap-2">
+          <Checkbox id="key-ack" checked={ack} onCheckedChange={(v) => setAck(v === true)} />
+          <Label htmlFor="key-ack" className="text-sm cursor-pointer">{t('keys.keySavedAck')}</Label>
+        </div>
+
         <DialogFooter>
-          <Button onClick={onClose}>{t('common.done')}</Button>
+          <Button onClick={onClose} disabled={!ack}>{t('common.done')}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function KeyHistoryModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => void }) {
+  const { t } = useTranslation()
+  const { tz } = useTimezone()
+  const { data: events, isLoading } = useQuery({
+    queryKey: ['audit', 'api_key', apiKey.id],
+    queryFn: () => api.auditEvents({ resource_type: 'api_key', resource_id: apiKey.id, limit: 50 }),
+  })
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-w-lg max-h-[70vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>{t('keys.historyTitle', { name: apiKey.name })}</DialogTitle>
+        </DialogHeader>
+        <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
+          {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
+          {events && events.length === 0 && (
+            <p className="text-sm text-muted-foreground">{t('common.empty')}</p>
+          )}
+          {events?.map((ev, i) => (
+            <div key={i} className="rounded-lg border px-3 py-2 text-sm space-y-0.5">
+              <div className="flex items-center justify-between gap-2">
+                <Badge variant="outline" className="text-[10px]">{ev.action}</Badge>
+                <span className="text-xs text-muted-foreground">{fmtDateOnly(ev.event_time, tz)}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">{ev.details}</p>
+              <p className="text-[10px] text-muted-foreground/60">{ev.account_name}</p>
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>{t('common.close')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -179,9 +225,13 @@ export default function KeysPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [createdKey, setCreatedKey] = useState<CreateKeyResponse | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null)
+  const [regenerateTarget, setRegenerateTarget] = useState<ApiKey | null>(null)
   const [usageKey, setUsageKey] = useState<ApiKey | null>(null)
+  const [historyKey, setHistoryKey] = useState<ApiKey | null>(null)
 
   const { data: keys, isLoading, error } = useQuery(keysQuery)
+
+  const hasCreatedBy = keys?.some((k) => k.created_by)
 
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteKey(id),
@@ -197,6 +247,15 @@ export default function KeysPage() {
     (vars: { id: string; tier: 'free' | 'paid' }) => api.updateKeyTier(vars.id, vars.tier),
     { invalidateKey: ['keys'] },
   )
+
+  const regenerateMutation = useMutation({
+    mutationFn: (id: string) => api.regenerateKey(id),
+    onSuccess: (data) => {
+      setRegenerateTarget(null)
+      setCreatedKey(data)
+      queryClient.invalidateQueries({ queryKey: ['keys'] })
+    },
+  })
 
   function handleCreated(resp: CreateKeyResponse) {
     setShowCreate(false)
@@ -252,6 +311,7 @@ export default function KeysPage() {
                   <TableHead>{t('keys.status')}</TableHead>
                   <TableHead>{t('keys.activeToggle')}</TableHead>
                   <TableHead>{t('keys.rpmTpm')}</TableHead>
+                  {hasCreatedBy && <TableHead>{t('keys.createdBy')}</TableHead>}
                   <TableHead>{t('keys.createdAt')}</TableHead>
                   <TableHead className="text-right">{t('keys.actions')}</TableHead>
                 </TableRow>
@@ -304,6 +364,11 @@ export default function KeysPage() {
                       {key.rate_limit_rpm === 0 ? '∞' : key.rate_limit_rpm} /{' '}
                       {key.rate_limit_tpm === 0 ? '∞' : key.rate_limit_tpm}
                     </TableCell>
+                    {hasCreatedBy && (
+                      <TableCell className="text-muted-foreground text-xs">
+                        {key.created_by ?? '—'}
+                      </TableCell>
+                    )}
                     <TableCell className="text-muted-foreground text-xs">
                       {fmtDateOnly(key.created_at, tz)}
                     </TableCell>
@@ -317,6 +382,24 @@ export default function KeysPage() {
                           className="text-muted-foreground hover:text-primary"
                         >
                           <BarChart2 className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setHistoryKey(key)}
+                          title={t('keys.viewHistory')}
+                          className="text-muted-foreground hover:text-primary"
+                        >
+                          <History className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setRegenerateTarget(key)}
+                          title={t('keys.regenerateKey')}
+                          className="text-muted-foreground hover:text-status-warning-fg"
+                        >
+                          <RefreshCw className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -360,8 +443,24 @@ export default function KeysPage() {
         />
       )}
 
+      {regenerateTarget && (
+        <ConfirmDialog
+          open
+          title={t('keys.regenerateTitle')}
+          description={t('keys.regenerateConfirm', { name: regenerateTarget.name })}
+          confirmLabel={regenerateMutation.isPending ? t('keys.regenerating') : t('keys.regenerateKey')}
+          onConfirm={() => regenerateMutation.mutate(regenerateTarget.id)}
+          onClose={() => setRegenerateTarget(null)}
+          isLoading={regenerateMutation.isPending}
+        />
+      )}
+
       {usageKey && (
         <KeyUsageModal apiKey={usageKey} onClose={() => setUsageKey(null)} />
+      )}
+
+      {historyKey && (
+        <KeyHistoryModal apiKey={historyKey} onClose={() => setHistoryKey(null)} />
       )}
     </div>
   )

@@ -124,8 +124,8 @@
     "prevMonth": "先月比",
     "topModels": "主要モデル",
     "noServerPower": "サーバーデータなし",
-    "localProviders": "ローカル",
-    "apiProviders": "APIサービス",
+    "localProviders": "Ollama",
+    "apiProviders": "Gemini",
     "totalReqsSubtitle": "リクエスト",
     "activeKeysLabel": "アクティブ",
     "dashboard": "ダッシュボード",
@@ -260,7 +260,15 @@
     "keysCount": "{{count}}件",
     "viewUsage": "使用量を見る",
     "usageTitle": "使用量 — {{name}}",
-    "modelBreakdown": "モデル別使用状況"
+    "modelBreakdown": "モデル別使用状況",
+    "createdBy": "作成者",
+    "regenerateKey": "キーを再生成",
+    "regenerateTitle": "APIキーの再生成",
+    "regenerateConfirm": "{{name}} を再生成しますか？現在のキーは即座に無効化され、新しいキーが発行されます。",
+    "regenerating": "再生成中…",
+    "keySavedAck": "キーを保存しました",
+    "viewHistory": "変更履歴を見る",
+    "historyTitle": "変更履歴 — {{name}}"
   },
   "providers": {
     "title": "プロバイダー",

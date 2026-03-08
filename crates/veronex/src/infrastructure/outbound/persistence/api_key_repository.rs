@@ -9,7 +9,7 @@ use crate::domain::entities::ApiKey;
 use crate::domain::enums::KeyTier;
 
 /// Column list shared by all SELECT queries on api_keys.
-const API_KEY_COLS: &str = "id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at, key_type, tier";
+const API_KEY_COLS: &str = "id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at, key_type, tier, account_id";
 
 /// PostgreSQL-backed implementation of `ApiKeyRepository`.
 pub struct PostgresApiKeyRepository {
@@ -55,6 +55,7 @@ fn row_to_api_key(row: &sqlx::postgres::PgRow) -> Result<ApiKey> {
             .context("missing column: deleted_at")?,
         key_type: parse_db_enum(row.try_get("key_type").unwrap_or(None), "key_type"),
         tier: parse_db_enum(row.try_get("tier").unwrap_or(None), "tier"),
+        account_id: row.try_get("account_id").unwrap_or(None),
     })
 }
 
@@ -62,8 +63,8 @@ fn row_to_api_key(row: &sqlx::postgres::PgRow) -> Result<ApiKey> {
 impl ApiKeyRepository for PostgresApiKeyRepository {
     async fn create(&self, key: &ApiKey) -> Result<()> {
         sqlx::query(
-            "INSERT INTO api_keys (id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, key_type, tier)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+            "INSERT INTO api_keys (id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, key_type, tier, account_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(key.id)
         .bind(&key.key_hash)
@@ -77,6 +78,7 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
         .bind(key.created_at)
         .bind(key.key_type.as_str())
         .bind(key.tier.as_str())
+        .bind(key.account_id)
         .execute(&self.pool)
         .await
         .context("failed to create api key")?;
@@ -185,6 +187,19 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
             .await
             .context("failed to soft-delete api key")?;
 
+        Ok(())
+    }
+
+    async fn regenerate(&self, key_id: &Uuid, new_hash: &str, new_prefix: &str) -> Result<()> {
+        sqlx::query(&format!(
+            "UPDATE api_keys SET key_hash = $1, key_prefix = $2 WHERE id = $3 AND {SOFT_DELETE}"
+        ))
+        .bind(new_hash)
+        .bind(new_prefix)
+        .bind(key_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to regenerate api key")?;
         Ok(())
     }
 

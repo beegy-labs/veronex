@@ -479,16 +479,29 @@ async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<Stri
         result.insert("ollama".to_string(), ollama_models.into_iter().collect());
     }
 
-    // ── Gemini: show synced models only when lab feature is enabled ──
+    // ── Gemini: show models only when lab feature is enabled ──
     let lab = state.lab_settings_repo.get().await.unwrap_or_default();
     if lab.gemini_function_calling {
-        let gemini_models: Vec<String> = state.gemini_model_repo
+        // Try DB first (synced models)
+        let mut gemini_models: Vec<String> = state.gemini_model_repo
             .list()
             .await
             .unwrap_or_default()
             .into_iter()
             .map(|m| m.model_name)
             .collect();
+
+        // Fallback: fetch from Gemini API if DB is empty
+        if gemini_models.is_empty() {
+            if let Ok(Some(api_key)) = state.gemini_sync_config_repo.get_api_key().await {
+                if let Ok(models) = super::gemini_helpers::fetch_gemini_models(
+                    &state.http_client, &api_key,
+                ).await {
+                    gemini_models = models;
+                }
+            }
+        }
+
         if !gemini_models.is_empty() {
             result.insert("gemini".to_string(), gemini_models);
         }
