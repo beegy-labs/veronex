@@ -112,6 +112,9 @@ impl ApiKeyRepository for MockApiKeyRepo {
     async fn soft_delete_by_tenant(&self, _tenant_id: &str) -> Result<u64> {
         Ok(0)
     }
+    async fn regenerate(&self, _key_id: &Uuid, _new_hash: &str, _new_prefix: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub(crate) struct MockProviderRegistry;

@@ -29,8 +29,8 @@ Thumbs.db
 *.log
 web/tsconfig.tsbuildinfo
 
-# ts-rs auto-generated bindings
-web/lib/generated/
+# ts-rs auto-generated bindings (tracked for CI builds)
+# web/lib/generated/
 
 # Helm dependency charts (downloaded by helm dependency build)
 deploy/helm/*/charts/*.tgz
