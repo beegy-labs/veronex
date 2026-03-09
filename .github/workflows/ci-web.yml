@@ -44,12 +44,25 @@ jobs:
         run: |
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           case "${{ github.ref_name }}" in
-            main)    TAG="${SHORT_SHA}";         TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" ;;
-            develop) TAG="develop-${SHORT_SHA}"; TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop" ;;
-            *)       TAG="develop-${SHORT_SHA}"; TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}" ;;
+            main)
+              TAG="${SHORT_SHA}"
+              TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+              API_URL="https://veronex-api.verobee.com"
+              ;;
+            develop)
+              TAG="develop-${SHORT_SHA}"
+              TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop"
+              API_URL="https://veronex-api-dev.verobee.com"
+              ;;
+            *)
+              TAG="develop-${SHORT_SHA}"
+              TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}"
+              API_URL="https://veronex-api-dev.verobee.com"
+              ;;
           esac
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "api_url=${API_URL}" >> $GITHUB_OUTPUT
 
       - name: Check if image exists
         id: check_image
@@ -80,5 +93,7 @@ jobs:
           file: ./web/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            NEXT_PUBLIC_VERONEX_API_URL=${{ steps.meta.outputs.api_url }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
