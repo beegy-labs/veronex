@@ -4323,19 +4323,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "veronex-agent"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.8",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "veronex-analytics"
 version = "0.1.0"
 dependencies = [

@@ -9,13 +9,11 @@ COPY Cargo.toml Cargo.lock ./
 
 # Copy all workspace member Cargo.toml files
 COPY crates/veronex/Cargo.toml ./crates/veronex/
-COPY crates/veronex-agent/Cargo.toml ./crates/veronex-agent/
 COPY crates/veronex-analytics/Cargo.toml ./crates/veronex-analytics/
 
 # Dummy source for dependency caching
-RUN mkdir -p crates/veronex/src crates/veronex-agent/src crates/veronex-analytics/src && \
+RUN mkdir -p crates/veronex/src crates/veronex-analytics/src && \
     echo "fn main() {}" > crates/veronex/src/main.rs && \
-    echo "fn main() {}" > crates/veronex-agent/src/main.rs && \
     echo "fn main() {}" > crates/veronex-analytics/src/main.rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \

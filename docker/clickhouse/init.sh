@@ -10,11 +10,18 @@
 ANALYTICS_DAYS="${CLICKHOUSE_RETENTION_ANALYTICS_DAYS:-90}"
 METRICS_DAYS="${CLICKHOUSE_RETENTION_METRICS_DAYS:-30}"
 AUDIT_DAYS="${CLICKHOUSE_RETENTION_AUDIT_DAYS:-365}"
+KAFKA_BROKER="${KAFKA_BROKER:-redpanda:9092}"
+KAFKA_USER="${KAFKA_USERNAME:-}"
+KAFKA_PASS="${KAFKA_PASSWORD:-}"
 
 sed \
   -e "s/__RETENTION_ANALYTICS_DAYS__/${ANALYTICS_DAYS}/g" \
   -e "s/__RETENTION_METRICS_DAYS__/${METRICS_DAYS}/g"     \
   -e "s/__RETENTION_AUDIT_DAYS__/${AUDIT_DAYS}/g"         \
+  -e "s/__KAFKA_BROKER__/${KAFKA_BROKER}/g"               \
+  -e "s/__KAFKA_USERNAME__/${KAFKA_USER}/g"               \
+  -e "s/__KAFKA_PASSWORD__/${KAFKA_PASS}/g"               \
+  -e "s/__CLICKHOUSE_DB__/${CLICKHOUSE_DB}/g"             \
   /docker-entrypoint-initdb.d/schema.sql.tmpl             \
 | clickhouse-client                                        \
     --host 127.0.0.1                                       \

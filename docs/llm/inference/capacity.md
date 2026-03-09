@@ -400,7 +400,7 @@ Per-provider configurable thresholds via `ThermalThresholds`. Soft gate checks *
 
 ### Auto-Detection
 
-Thermal profile is set automatically by health_checker based on `gpu_vendor` from veronex-agent:
+Thermal profile is set automatically by health_checker based on `gpu_vendor` from node-exporter:
 
 | `gpu_vendor` | Profile | Source |
 |-------------|---------|--------|
@@ -408,7 +408,7 @@ Thermal profile is set automatically by health_checker based on `gpu_vendor` fro
 | `"amd"` | CPU (75/82/90°C) | sysfs vendor `0x1002` (Ryzen AI = APU/iGPU) |
 | empty/unknown | CPU (default) | no agent or no GPU detected |
 
-Detection path: `veronex-agent` reads `/sys/class/drm/cardN/device/vendor` → reports `gpu_vendor` in `GET /api/metrics` → cached in Valkey (`HwMetrics`) → `health_checker` calls `thermal.set_thresholds()` every 30s cycle.
+Detection path: `node-exporter` exposes sysfs vendor info → `health_checker` determines `gpu_vendor` from metrics → cached in Valkey (`HwMetrics`) → `health_checker` calls `thermal.set_thresholds()` every 30s cycle.
 
 ### Threshold Profiles
 
