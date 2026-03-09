@@ -93,12 +93,11 @@ jobs:
     if: needs.build.outputs.skipped != 'true'
     runs-on: arc-runner-set
     steps:
-      - name: Checkout platform-gitops
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: beegy-labs/platform-gitops
           ref: develop
-          token: ${{ secrets.GITEA_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
 
       - name: Update image tag
         run: |
