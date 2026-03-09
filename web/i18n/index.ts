@@ -6,7 +6,7 @@ import en from '../messages/en.json'
 import ko from '../messages/ko.json'
 import ja from '../messages/ja.json'
 
-function detectLocale(): Locale {
+export function detectLocale(): Locale {
   if (typeof window === 'undefined') return defaultLocale
   const stored = localStorage.getItem(localStorageKey)
   if (stored && locales.includes(stored as Locale)) return stored as Locale
@@ -17,7 +17,9 @@ function detectLocale(): Locale {
 
 if (!i18n.isInitialized) {
   i18n.use(initReactI18next).init({
-    lng: detectLocale(),
+    // Always start with defaultLocale to match server render (avoid hydration mismatch).
+    // Client-side locale detection happens in I18nProvider via useEffect.
+    lng: defaultLocale,
     fallbackLng: defaultLocale,
     resources: {
       en: { translation: en },
