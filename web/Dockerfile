@@ -16,6 +16,6 @@ WORKDIR /app
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
-EXPOSE 3002
+EXPOSE 3000
 ENV NODE_OPTIONS="--max-http-header-size=32768"
 CMD ["node", "server.js"]
