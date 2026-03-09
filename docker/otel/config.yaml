@@ -21,6 +21,25 @@ processors:
     check_interval: 1s
     limit_mib: 256
 
+  # Filter: only forward metrics we care about to Kafka.
+  # Agent pushes ALL node-exporter metrics raw — this is where we select.
+  filter/metrics:
+    metrics:
+      include:
+        match_type: regexp
+        metric_names:
+          # System
+          - node_memory_MemTotal_bytes
+          - node_memory_MemAvailable_bytes
+          - node_cpu_seconds_total
+          # GPU (DRM + hwmon)
+          - node_drm_.*
+          - node_hwmon_temp_celsius
+          - node_hwmon_power_average_watt.*
+          - node_hwmon_chip_names
+          # Ollama
+          - ollama_.*
+
 exporters:
   # Kafka/Redpanda exporters — Redpanda is the single message bus.
   # ClickHouse consumes these topics via Kafka Engine → Materialized View.
@@ -72,7 +91,7 @@ service:
   pipelines:
     metrics:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, filter/metrics, batch]
       exporters: [kafka/metrics]
     traces:
       receivers: [otlp]

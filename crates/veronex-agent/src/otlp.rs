@@ -1,4 +1,5 @@
-/// Lightweight OTLP HTTP/JSON client for pushing gauge metrics.
+/// Lightweight OTLP HTTP/JSON client for pushing raw gauge metrics.
+/// No transformation — just format conversion (Gauge → OTLP JSON).
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,7 +11,7 @@ use crate::scraper::Gauge;
 /// Push a batch of gauge metrics to the OTel Collector via OTLP HTTP.
 ///
 /// Resource attributes are built from the target labels — type, server_id,
-/// provider_id, etc. are all forwarded so ClickHouse can correlate.
+/// provider_id, etc. are all forwarded so downstream can correlate.
 pub async fn push_metrics(
     client: &reqwest::Client,
     otel_endpoint: &str,
@@ -43,7 +44,6 @@ pub async fn push_metrics(
 
             json!({
                 "name": g.name,
-                "unit": unit_for(g.name),
                 "gauge": {
                     "dataPoints": [{
                         "asDouble": g.value,
@@ -79,16 +79,4 @@ pub async fn push_metrics(
     }
 
     Ok(())
-}
-
-fn unit_for(name: &str) -> &'static str {
-    match name {
-        "system.memory.total" | "system.memory.used" | "gpu.vram.used" | "gpu.vram.total"
-        | "ollama.model.vram" => "MiBy",
-        "gpu.utilization" => "%",
-        "gpu.temperature" => "Cel",
-        "gpu.power" => "W",
-        "system.cpu.count" | "ollama.loaded_models" => "{count}",
-        _ => "",
-    }
 }

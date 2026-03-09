@@ -21,6 +21,25 @@ data:
         timeout: 5s
         send_batch_size: 1000
 
+      # Filter: only forward metrics we care about to Kafka.
+      # Agent pushes ALL node-exporter metrics raw — this is where we select.
+      filter/metrics:
+        metrics:
+          include:
+            match_type: regexp
+            metric_names:
+              # System
+              - node_memory_MemTotal_bytes
+              - node_memory_MemAvailable_bytes
+              - node_cpu_seconds_total
+              # GPU (DRM + hwmon)
+              - node_drm_.*
+              - node_hwmon_temp_celsius
+              - node_hwmon_power_average_watt.*
+              - node_hwmon_chip_names
+              # Ollama
+              - ollama_.*
+
     exporters:
       kafka/logs:
         brokers:
@@ -46,7 +65,7 @@ data:
           exporters: [kafka/logs]
         metrics:
           receivers: [otlp]
-          processors: [batch]
+          processors: [filter/metrics, batch]
           exporters: [kafka/metrics]
         traces:
           receivers: [otlp]
