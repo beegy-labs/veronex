@@ -199,7 +199,8 @@ services:
     environment:
       VERONEX_API_URL: http://veronex:3000
       OTEL_HTTP_ENDPOINT: http://otel-collector:4318
-      SCRAPE_INTERVAL: "30"
+      SCRAPE_INTERVAL_MS: "${SCRAPE_INTERVAL_MS:-15000}"
+      REPLICA_COUNT: "1"
       RUST_LOG: info
     depends_on:
       veronex:

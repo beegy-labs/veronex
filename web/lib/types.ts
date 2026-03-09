@@ -272,8 +272,6 @@ export interface Provider {
   gpu_index: number | null
   /** FK → gpu_servers. null for cloud providers. */
   server_id: string | null
-  /** Reserved for Phase 2 sidecar. */
-  agent_url: string | null
   /** true = Google free-tier project; RPM/RPD limits come from gemini_rate_limit_policies. */
   is_free_tier: boolean
   status: LlmProviderStatus
@@ -290,7 +288,6 @@ export interface RegisterProviderRequest {
   total_vram_mb?: number
   gpu_index?: number
   server_id?: string
-  agent_url?: string
   is_free_tier?: boolean
 }
 

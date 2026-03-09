@@ -1,12 +1,13 @@
 {{- if .Values.veronexAgent.enabled }}
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ .Release.Name }}-veronex-agent
   labels:
     {{- include "veronex.labels" . | nindent 4 }}
     {{- include "veronex.agent.selectorLabels" . | nindent 4 }}
 spec:
+  serviceName: {{ .Release.Name }}-veronex-agent
   replicas: {{ .Values.veronexAgent.replicaCount }}
   selector:
     matchLabels:
@@ -29,8 +30,10 @@ spec:
               value: "http://{{ .Release.Name }}-veronex:{{ .Values.veronex.service.port }}"
             - name: OTEL_HTTP_ENDPOINT
               value: {{ include "veronex.otelHttpEndpoint" . | quote }}
-            - name: SCRAPE_INTERVAL
-              value: {{ .Values.veronexAgent.scrapeInterval | quote }}
+            - name: SCRAPE_INTERVAL_MS
+              value: {{ .Values.veronexAgent.scrapeIntervalMs | quote }}
+            - name: REPLICA_COUNT
+              value: {{ .Values.veronexAgent.replicaCount | quote }}
             - name: RUST_LOG
               value: "info"
             {{- range $k, $v := .Values.veronexAgent.env }}

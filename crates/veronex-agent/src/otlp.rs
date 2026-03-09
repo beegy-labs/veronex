@@ -1,8 +1,5 @@
 /// Lightweight OTLP HTTP/JSON client for pushing gauge metrics.
-///
-/// Constructs an ExportMetricsServiceRequest in OTLP JSON format and POSTs
-/// it to the collector's `/v1/metrics` endpoint.  Fail-open: errors are
-/// returned but never fatal.
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -11,11 +8,13 @@ use serde_json::{json, Value};
 use crate::scraper::Gauge;
 
 /// Push a batch of gauge metrics to the OTel Collector via OTLP HTTP.
+///
+/// Resource attributes are built from the target labels — type, server_id,
+/// provider_id, etc. are all forwarded so ClickHouse can correlate.
 pub async fn push_metrics(
     client: &reqwest::Client,
     otel_endpoint: &str,
-    server_id: &str,
-    server_name: &str,
+    labels: &HashMap<String, String>,
     gauges: &[Gauge],
 ) -> Result<()> {
     if gauges.is_empty() {
@@ -28,11 +27,16 @@ pub async fn push_metrics(
         .map(|d| d.as_nanos().to_string())
         .unwrap_or_else(|_| "0".into());
 
+    let resource_attrs: Vec<Value> = labels
+        .iter()
+        .map(|(k, v)| json!({"key": k, "value": {"stringValue": v}}))
+        .chain(std::iter::once(json!({"key": "service.name", "value": {"stringValue": "veronex-agent"}})))
+        .collect();
+
     let metrics: Vec<Value> = gauges
         .iter()
         .map(|g| {
-            let attrs: Vec<Value> = g
-                .labels
+            let attrs: Vec<Value> = g.labels
                 .iter()
                 .map(|(k, v)| json!({"key": k, "value": {"stringValue": v}}))
                 .collect();
@@ -53,13 +57,7 @@ pub async fn push_metrics(
 
     let payload = json!({
         "resourceMetrics": [{
-            "resource": {
-                "attributes": [
-                    {"key": "service.name", "value": {"stringValue": "veronex-agent"}},
-                    {"key": "server.id", "value": {"stringValue": server_id}},
-                    {"key": "server.name", "value": {"stringValue": server_name}}
-                ]
-            },
+            "resource": { "attributes": resource_attrs },
             "scopeMetrics": [{
                 "scope": {"name": "veronex-agent"},
                 "metrics": metrics
@@ -83,7 +81,6 @@ pub async fn push_metrics(
     Ok(())
 }
 
-/// Map metric name to OTel unit string.
 fn unit_for(name: &str) -> &'static str {
     match name {
         "system.memory.total" | "system.memory.used" | "gpu.vram.used" | "gpu.vram.total"

@@ -116,8 +116,6 @@ pub struct RegisterProviderRequest {
     pub gpu_index: Option<i16>,
     /// FK → gpu_servers. Optional; Gemini providers leave this null.
     pub server_id: Option<Uuid>,
-    /// node-exporter URL for hardware metrics. E.g. `"http://192.168.1.10:9100"`.
-    pub agent_url: Option<String>,
     /// true = key is on a Google free-tier project.
     /// RPM/RPD limits are managed globally via `gemini_rate_limit_policies`.
     pub is_free_tier: Option<bool>,
@@ -153,7 +151,6 @@ pub struct ProviderSummary {
     pub total_vram_mb: i64,
     pub gpu_index: Option<i16>,
     pub server_id: Option<Uuid>,
-    pub agent_url: Option<String>,
     pub is_free_tier: bool,
     pub status: String,
     pub registered_at: DateTime<Utc>,
@@ -175,7 +172,6 @@ impl From<LlmProvider> for ProviderSummary {
             total_vram_mb: b.total_vram_mb,
             gpu_index: b.gpu_index,
             server_id: b.server_id,
-            agent_url: b.agent_url,
             is_free_tier: b.is_free_tier,
             status,
             registered_at: b.registered_at,
@@ -250,7 +246,6 @@ pub async fn register_provider(
         total_vram_mb: req.total_vram_mb.unwrap_or(0),
         gpu_index: req.gpu_index,
         server_id: req.server_id,
-        agent_url: req.agent_url.filter(|s| !s.is_empty()),
         is_free_tier: req.is_free_tier.unwrap_or(false),
         status: LlmProviderStatus::Offline, // initial; overwritten by health check
         registered_at: Utc::now(),
@@ -604,8 +599,7 @@ mod tests {
             total_vram_mb: 8192,
             gpu_index: Some(0),
             server_id: None,
-            agent_url: None,
-            is_free_tier: false,
+                is_free_tier: false,
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),
         };
@@ -629,8 +623,7 @@ mod tests {
             total_vram_mb: 0,
             gpu_index: None,
             server_id: None,
-            agent_url: None,
-            is_free_tier: true,
+                is_free_tier: true,
             status: LlmProviderStatus::Offline,
             registered_at: Utc::now(),
         };

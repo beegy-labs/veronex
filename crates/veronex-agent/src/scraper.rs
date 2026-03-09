@@ -1,5 +1,5 @@
-/// Scrapes node-exporter (Prometheus text) and Ollama API, returning a flat
-/// list of gauge metrics ready for OTLP push.
+/// Scrapes node-exporter (Prometheus text) and Ollama API independently,
+/// returning flat gauge lists ready for OTLP push.
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -16,42 +16,22 @@ pub struct Gauge {
 
 // ── Node-exporter ────────────────────────────────────────────────────────────
 
-/// Scrape node-exporter + Ollama and return combined gauge list.
-pub async fn scrape(
-    client: &reqwest::Client,
-    node_exporter_url: &str,
-    ollama_url: Option<&str>,
-) -> Vec<Gauge> {
-    let mut gauges = Vec::new();
-
-    match scrape_node_exporter(client, node_exporter_url).await {
-        Ok(g) => gauges.extend(g),
-        Err(e) => tracing::warn!("node-exporter scrape failed: {e}"),
-    }
-
-    if let Some(url) = ollama_url {
-        match scrape_ollama(client, url).await {
-            Ok(g) => gauges.extend(g),
-            Err(e) => tracing::debug!("ollama scrape skipped: {e}"),
+/// Scrape node-exporter and return hardware gauge list.
+pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
+    let url = format!("{}/metrics", base_url.trim_end_matches('/'));
+    match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
+        Ok(resp) => match resp.text().await {
+            Ok(text) => parse_node_exporter(&text),
+            Err(e) => {
+                tracing::warn!("node-exporter read failed: {e}");
+                vec![]
+            }
+        },
+        Err(e) => {
+            tracing::warn!("node-exporter scrape failed: {e}");
+            vec![]
         }
     }
-
-    gauges
-}
-
-async fn scrape_node_exporter(
-    client: &reqwest::Client,
-    base_url: &str,
-) -> anyhow::Result<Vec<Gauge>> {
-    let url = format!("{}/metrics", base_url.trim_end_matches('/'));
-    let text = client
-        .get(&url)
-        .timeout(SCRAPE_TIMEOUT)
-        .send()
-        .await?
-        .text()
-        .await?;
-    Ok(parse_node_exporter(&text))
 }
 
 /// Extract label value from Prometheus metric line.
@@ -84,7 +64,6 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
     let mut mem_available: f64 = 0.0;
     let mut cpu_set: HashSet<String> = HashSet::new();
 
-    // GPU (DRM + hwmon)
     let mut drm_busy: HashMap<String, f64> = HashMap::new();
     let mut drm_vram_used: HashMap<String, f64> = HashMap::new();
     let mut drm_vram_total: HashMap<String, f64> = HashMap::new();
@@ -153,29 +132,14 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
         }
     }
 
-    // System memory
-    gauges.push(Gauge {
-        name: "system.memory.total",
-        value: mem_total / 1_048_576.0,
-        labels: vec![],
-    });
-    gauges.push(Gauge {
-        name: "system.memory.used",
-        value: (mem_total - mem_available) / 1_048_576.0,
-        labels: vec![],
-    });
-    gauges.push(Gauge {
-        name: "system.cpu.count",
-        value: cpu_set.len() as f64,
-        labels: vec![],
-    });
+    gauges.push(Gauge { name: "system.memory.total", value: mem_total / 1_048_576.0, labels: vec![] });
+    gauges.push(Gauge { name: "system.memory.used", value: (mem_total - mem_available) / 1_048_576.0, labels: vec![] });
+    gauges.push(Gauge { name: "system.cpu.count", value: cpu_set.len() as f64, labels: vec![] });
 
-    // Build GPU list (DRM primary, hwmon-only fallback)
     let mut chips_sorted: Vec<String> = amdgpu_chips.into_iter().collect();
     chips_sorted.sort();
 
-    let mut drm_cards: Vec<String> = drm_busy
-        .keys()
+    let mut drm_cards: Vec<String> = drm_busy.keys()
         .chain(drm_vram_used.keys())
         .chain(drm_vram_total.keys())
         .cloned()
@@ -185,17 +149,9 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
     drm_cards.sort();
 
     let gpu_sources: Vec<(String, Option<&String>)> = if !drm_cards.is_empty() {
-        drm_cards
-            .iter()
-            .enumerate()
-            .map(|(i, card)| (card.clone(), chips_sorted.get(i)))
-            .collect()
+        drm_cards.iter().enumerate().map(|(i, card)| (card.clone(), chips_sorted.get(i))).collect()
     } else if !chips_sorted.is_empty() {
-        chips_sorted
-            .iter()
-            .enumerate()
-            .map(|(i, chip)| (format!("card{i}"), Some(chip)))
-            .collect()
+        chips_sorted.iter().enumerate().map(|(i, chip)| (format!("card{i}"), Some(chip))).collect()
     } else {
         vec![]
     };
@@ -237,15 +193,22 @@ struct OllamaPsModel {
     size_vram: Option<u64>,
 }
 
-async fn scrape_ollama(client: &reqwest::Client, ollama_url: &str) -> anyhow::Result<Vec<Gauge>> {
-    let url = format!("{}/api/ps", ollama_url.trim_end_matches('/'));
-    let resp: OllamaPsResponse = client
-        .get(&url)
-        .timeout(SCRAPE_TIMEOUT)
-        .send()
-        .await?
-        .json()
-        .await?;
+/// Scrape Ollama /api/ps and return model gauge list.
+pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
+    let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
+    let resp: OllamaPsResponse = match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
+        Ok(r) => match r.json().await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!("ollama parse failed: {e}");
+                return vec![];
+            }
+        },
+        Err(e) => {
+            tracing::debug!("ollama scrape failed: {e}");
+            return vec![];
+        }
+    };
 
     let models = resp.models.unwrap_or_default();
     let mut gauges = vec![Gauge {
@@ -262,7 +225,7 @@ async fn scrape_ollama(client: &reqwest::Client, ollama_url: &str) -> anyhow::Re
         });
     }
 
-    Ok(gauges)
+    gauges
 }
 
 #[cfg(test)]

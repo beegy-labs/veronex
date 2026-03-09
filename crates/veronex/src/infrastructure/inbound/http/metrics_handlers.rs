@@ -1,41 +1,41 @@
+use std::collections::HashMap;
+
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Serialize;
 
+use crate::domain::enums::ProviderType;
+
 use super::state::AppState;
 
-// ── Prometheus HTTP Service Discovery ─────────────────────────────────────────
+// ── veronex-agent target discovery ───────────────────────────────────────────
 //
-// OTel Collector (prometheus receiver) polls this endpoint every 30 s to
-// discover which node-exporter instances to scrape.
+// veronex-agent polls this endpoint each scrape cycle to discover scrape
+// targets.  Two independent target types are returned:
 //
-// Format: https://prometheus.io/docs/prometheus/latest/http_sd/
+//   type=server  — node-exporter endpoints (hardware: CPU, mem, GPU)
+//   type=ollama  — Ollama endpoints (loaded models, VRAM per model)
 //
-// OTel config:
-//   receivers:
-//     prometheus:
-//       config:
-//         scrape_configs:
-//           - job_name: node-exporter
-//             http_sd_configs:
-//               - url: http://veronex:3000/v1/metrics/targets
-//                 refresh_interval: 30s
+// When an Ollama provider is linked to a GpuServer (server_id FK), both
+// targets carry matching server_id labels so analytics can correlate them.
 
 #[derive(Serialize)]
 struct SdTarget {
     targets: Vec<String>,
-    labels: std::collections::HashMap<String, String>,
+    labels: HashMap<String, String>,
 }
 
 /// `GET /v1/metrics/targets`
 ///
-/// Returns registered node-exporter endpoints in Prometheus HTTP Service
-/// Discovery format.  One target per GPU server (deduplicates providers sharing
-/// the same physical host).  Only servers with `node_exporter_url` set are
-/// included.
+/// Returns scrape targets for veronex-agent.  Server and Ollama targets are
+/// returned independently — each is collected on its own, linked via
+/// `server_id` when associated.
 pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoResponse {
+    let mut targets: Vec<SdTarget> = Vec::new();
+
+    // ── Server targets (node-exporter) ──────────────────────────────────
     let servers = match state.gpu_server_registry.list_all().await {
         Ok(s) => s,
         Err(e) => {
@@ -48,38 +48,47 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
         }
     };
 
-    let targets: Vec<SdTarget> = servers
-        .into_iter()
-        .filter_map(|s| {
-            let ne_url = s.node_exporter_url.filter(|u| !u.is_empty())?;
+    for s in &servers {
+        let Some(ne_url) = s.node_exporter_url.as_deref().filter(|u| !u.is_empty()) else {
+            continue;
+        };
+        let target = ne_url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .to_string();
 
-            // Strip scheme — Prometheus SD wants "host:port" not "http://host:port".
-            let target = ne_url
-                .trim_start_matches("http://")
-                .trim_start_matches("https://")
-                .to_string();
+        let mut labels = HashMap::new();
+        labels.insert("type".into(), "server".into());
+        labels.insert("server_id".into(), s.id.to_string());
+        labels.insert("server_name".into(), s.name.clone());
 
-            // Extract bare hostname from the node-exporter URL for the label.
-            // e.g. "http://192.168.1.10:9100" → "192.168.1.10"
-            let host = ne_url
-                .trim_start_matches("http://")
-                .trim_start_matches("https://")
-                .split(':')
-                .next()
-                .unwrap_or("")
-                .to_string();
+        targets.push(SdTarget { targets: vec![target], labels });
+    }
 
-            let mut labels = std::collections::HashMap::new();
-            labels.insert("server_id".to_string(), s.id.to_string());
-            labels.insert("server_name".to_string(), s.name.clone());
-            labels.insert("host".to_string(), host);
+    // ── Ollama targets ──────────────────────────────────────────────────
+    let providers = state.provider_registry.list_all().await.unwrap_or_default();
 
-            Some(SdTarget {
-                targets: vec![target],
-                labels,
-            })
-        })
-        .collect();
+    for p in providers {
+        if p.provider_type != ProviderType::Ollama || !p.is_active {
+            continue;
+        }
+        let target = p.url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .to_string();
+
+        let mut labels = HashMap::new();
+        labels.insert("type".into(), "ollama".into());
+        labels.insert("provider_id".into(), p.id.to_string());
+        labels.insert("provider_name".into(), p.name.clone());
+
+        // Link to server when associated
+        if let Some(sid) = p.server_id {
+            labels.insert("server_id".into(), sid.to_string());
+        }
+
+        targets.push(SdTarget { targets: vec![target], labels });
+    }
 
     (StatusCode::OK, Json(targets)).into_response()
 }

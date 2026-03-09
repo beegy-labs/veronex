@@ -1,10 +1,19 @@
-/// veronex-agent: Scrapes node-exporter + Ollama metrics from registered
-/// GPU servers and pushes them to OTel Collector via OTLP HTTP.
+/// veronex-agent: Collects hardware + Ollama metrics independently and pushes
+/// them to OTel Collector via OTLP HTTP.
+///
+/// Two target types, each collected on its own:
+///   type=server  — node-exporter (CPU, mem, GPU)
+///   type=ollama  — Ollama /api/ps (loaded models, VRAM)
+///
+/// When linked (server_id FK), analytics can correlate both.
+///
+/// Supports N replicas via modulus sharding — no external coordination.
 ///
 /// Environment variables:
 ///   VERONEX_API_URL    — veronex API base URL (default: http://localhost:3000)
 ///   OTEL_HTTP_ENDPOINT — OTel Collector HTTP endpoint (default: http://localhost:4318)
-///   SCRAPE_INTERVAL    — seconds between scrape cycles (default: 30)
+///   SCRAPE_INTERVAL_MS — milliseconds between scrape cycles (default: 15000)
+///   REPLICA_COUNT      — total number of agent pods (default: 1)
 ///   RUST_LOG           — tracing filter (default: info)
 use std::collections::HashMap;
 use std::time::Duration;
@@ -15,6 +24,7 @@ use tokio::signal;
 
 mod otlp;
 mod scraper;
+mod shard;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -24,6 +34,8 @@ struct Config {
     veronex_api_url: String,
     otel_endpoint: String,
     scrape_interval: Duration,
+    ordinal: u32,
+    replicas: u32,
 }
 
 impl Config {
@@ -33,17 +45,22 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:3000".into()),
             otel_endpoint: std::env::var("OTEL_HTTP_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:4318".into()),
-            scrape_interval: Duration::from_secs(
-                std::env::var("SCRAPE_INTERVAL")
+            scrape_interval: Duration::from_millis(
+                std::env::var("SCRAPE_INTERVAL_MS")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(30),
+                    .unwrap_or(15_000),
             ),
+            ordinal: shard::ordinal_from_hostname(),
+            replicas: std::env::var("REPLICA_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1),
         }
     }
 }
 
-// ── Target discovery (from veronex API) ──────────────────────────────────────
+// ── Target discovery ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
 struct SdTarget {
@@ -68,7 +85,7 @@ async fn discover_targets(client: &reqwest::Client, api_url: &str) -> Vec<SdTarg
     }
 }
 
-// ── Main loop ────────────────────────────────────────────────────────────────
+// ── Main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -87,23 +104,35 @@ async fn main() -> Result<()> {
     tracing::info!(
         api = %config.veronex_api_url,
         otel = %config.otel_endpoint,
-        interval = config.scrape_interval.as_secs(),
+        ordinal = config.ordinal,
+        replicas = config.replicas,
+        interval_ms = config.scrape_interval.as_millis() as u64,
         "veronex-agent started"
     );
 
     loop {
         tokio::select! {
+            biased;
             _ = signal::ctrl_c() => {
                 tracing::info!("shutdown signal received");
                 break;
             }
             _ = scrape_cycle(&client, &config) => {}
-            _ = tokio::time::sleep(config.scrape_interval) => {}
         }
+        tokio::time::sleep(config.scrape_interval).await;
     }
 
     tracing::info!("veronex-agent stopped");
     Ok(())
+}
+
+/// Shard key for a target — server_id for servers, provider_id for ollama.
+fn shard_key(t: &SdTarget) -> &str {
+    match t.labels.get("type").map(|s| s.as_str()) {
+        Some("server") => t.labels.get("server_id").map(|s| s.as_str()).unwrap_or(""),
+        Some("ollama") => t.labels.get("provider_id").map(|s| s.as_str()).unwrap_or(""),
+        _ => "",
+    }
 }
 
 async fn scrape_cycle(client: &reqwest::Client, config: &Config) {
@@ -113,34 +142,47 @@ async fn scrape_cycle(client: &reqwest::Client, config: &Config) {
         return;
     }
 
-    // Scrape all targets concurrently
-    let futures: Vec<_> = targets
+    let my_targets: Vec<_> = targets
+        .iter()
+        .filter(|t| shard::owns(shard_key(t), config.ordinal, config.replicas))
+        .collect();
+
+    if my_targets.is_empty() {
+        return;
+    }
+
+    let futures: Vec<_> = my_targets
         .iter()
         .filter_map(|t| {
             let host_port = t.targets.first()?;
-            let server_id = t.labels.get("server_id").cloned().unwrap_or_default();
-            let server_name = t.labels.get("server_name").cloned().unwrap_or_default();
-            let ollama_url = t.labels.get("ollama_url").cloned();
-            let ne_url = format!("http://{host_port}");
+            let target_type = t.labels.get("type")?.as_str();
+            let url = format!("http://{host_port}");
+            let labels = t.labels.clone();
 
             Some(async move {
-                let metrics =
-                    scraper::scrape(client, &ne_url, ollama_url.as_deref()).await;
-                (server_id, server_name, metrics)
+                match target_type {
+                    "server" => {
+                        let metrics = scraper::scrape_node_exporter(client, &url).await;
+                        (labels, metrics)
+                    }
+                    "ollama" => {
+                        let metrics = scraper::scrape_ollama(client, &url).await;
+                        (labels, metrics)
+                    }
+                    _ => (labels, vec![]),
+                }
             })
         })
         .collect();
 
     let results = futures::future::join_all(futures).await;
 
-    for (server_id, server_name, metrics) in results {
-        if let Err(e) =
-            otlp::push_metrics(client, &config.otel_endpoint, &server_id, &server_name, &metrics)
-                .await
-        {
-            tracing::warn!(server = %server_name, "OTLP push failed: {e}");
-        } else {
-            tracing::debug!(server = %server_name, n = metrics.len(), "pushed");
+    for (labels, metrics) in &results {
+        if metrics.is_empty() {
+            continue;
+        }
+        if let Err(e) = otlp::push_metrics(client, &config.otel_endpoint, labels, metrics).await {
+            tracing::warn!(target = ?labels.get("type"), "OTLP push failed: {e}");
         }
     }
 }

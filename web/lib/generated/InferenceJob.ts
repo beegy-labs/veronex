@@ -3,7 +3,7 @@ import type { ApiFormat } from "./ApiFormat";
 import type { JobId } from "./JobId";
 import type { JobSource } from "./JobSource";
 import type { JobStatus } from "./JobStatus";
-import type { JsonValue } from "./JsonValue";
+import type { JsonValue } from "../../../crates/veronex/bindings/serde_json/JsonValue";
 import type { ModelName } from "./ModelName";
 import type { Prompt } from "./Prompt";
 import type { ProviderType } from "./ProviderType";

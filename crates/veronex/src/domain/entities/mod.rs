@@ -167,10 +167,6 @@ pub struct LlmProvider {
     /// FK → gpu_servers. `None` for cloud providers (Gemini, etc.).
     #[serde(default)]
     pub server_id: Option<Uuid>,
-    /// node-exporter URL for hardware metrics polling.
-    /// e.g. `http://192.168.1.10:9100`
-    #[serde(default)]
-    pub agent_url: Option<String>,
     /// true = key is on a Google free-tier project.
     /// RPM/RPD limits are read from `gemini_rate_limit_policies` (per model, shared).
     #[serde(default)]
@@ -249,7 +245,6 @@ mod tests {
             total_vram_mb: 24576,
             gpu_index: None,
             server_id: None,
-            agent_url: None,
             is_free_tier: false,
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),

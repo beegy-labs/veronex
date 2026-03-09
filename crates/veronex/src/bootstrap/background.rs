@@ -53,6 +53,7 @@ pub async fn spawn_background_tasks(
     // ── Health checker ─────────────────────────────────────────────
     tasks.spawn(run_health_checker_loop(
         repos.provider_registry.clone(),
+        repos.gpu_server_registry.clone(),
         30,
         infra.valkey_pool.clone(),
         thermal.clone(),

@@ -47,7 +47,6 @@ pub struct LlmProvider {
   pub total_vram_mb: i64,               // 0 = unlimited
   pub gpu_index: Option<i16>,           // 0-based GPU index on host
   pub server_id: Option<Uuid>,          // FK -> gpu_servers (Gemini = NULL)
-  pub agent_url: Option<String>,        // deprecated, unused
   pub is_free_tier: bool,               // Gemini only
   pub status: LlmProviderStatus,        // Online | Offline | Degraded
   pub registered_at: DateTime<Utc>,
@@ -67,7 +66,6 @@ CREATE TABLE llm_providers (
   total_vram_mb     BIGINT       NOT NULL DEFAULT 0,
   gpu_index         SMALLINT,
   server_id         UUID REFERENCES gpu_servers(id) ON DELETE SET NULL,
-  agent_url         TEXT,                          -- deprecated, unused
   is_free_tier      BOOLEAN      NOT NULL DEFAULT false,
   status            VARCHAR(20)  NOT NULL DEFAULT 'offline',
   registered_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
