@@ -223,5 +223,4 @@ Deduplication helpers in `infrastructure/inbound/http/`:
 | `infrastructure/outbound/hw_metrics.rs` | `gpu_vendor` field added to `HwMetrics` |
 | `infrastructure/outbound/health_checker.rs` | Auto-set thermal thresholds from `gpu_vendor` per cycle |
 | `main.rs` | model_manager=None, model_selection_repo wiring, distributed setup |
-| `veronex-agent/src/main.rs` | `gpu_vendor` from sysfs vendor ID (AMD/NVIDIA detection) |
 | `Cargo.toml` | Fred features: `subscriber-client`, `i-pubsub`, **`i-streams`** |

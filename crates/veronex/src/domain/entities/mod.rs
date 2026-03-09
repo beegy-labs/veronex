@@ -167,8 +167,8 @@ pub struct LlmProvider {
     /// FK → gpu_servers. `None` for cloud providers (Gemini, etc.).
     #[serde(default)]
     pub server_id: Option<Uuid>,
-    /// veronex-agent URL (Phase 2, currently unused).
-    /// e.g. `http://192.168.1.10:9091`
+    /// node-exporter URL for hardware metrics polling.
+    /// e.g. `http://192.168.1.10:9100`
     #[serde(default)]
     pub agent_url: Option<String>,
     /// true = key is on a Google free-tier project.
