@@ -102,9 +102,9 @@ If `ANALYTICS_URL` not set: `observability = None`, `audit_port = None`.
 
 ---
 
-## Prometheus HTTP Service Discovery
+## Metrics Target Discovery
 
-`GET /v1/metrics/targets` -- no auth, consumed by OTel Collector's `prometheus` receiver only. Prometheus itself is **not** used; metrics are stored in ClickHouse.
+`GET /v1/metrics/targets` -- no auth, consumed by veronex-agent (StatefulSet, modulus-sharded replicas) to discover node-exporter and Ollama scrape targets. Agent pushes raw metrics to OTel Collector via OTLP HTTP.
 
 ```json
 [{ "targets": ["192.168.1.10:9100"],

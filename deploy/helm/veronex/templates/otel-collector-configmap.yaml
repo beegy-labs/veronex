@@ -26,17 +26,17 @@ data:
         brokers:
           - {{ include "veronex.redpandaBroker" . }}
         topic: otel-logs
-        encoding: otlp_proto
+        encoding: otlp_json
       kafka/metrics:
         brokers:
           - {{ include "veronex.redpandaBroker" . }}
         topic: otel-metrics
-        encoding: otlp_proto
+        encoding: otlp_json
       kafka/traces:
         brokers:
           - {{ include "veronex.redpandaBroker" . }}
         topic: otel-traces
-        encoding: otlp_proto
+        encoding: otlp_json
 
     service:
       pipelines:

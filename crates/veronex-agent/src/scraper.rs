@@ -14,6 +14,12 @@ use serde::Deserialize;
 
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Max labels per metric line (DOS protection).
+const MAX_LABELS: usize = 32;
+
+/// Max models from Ollama /api/ps (DOS protection).
+const MAX_OLLAMA_MODELS: usize = 256;
+
 /// Metric name prefixes to forward from node-exporter.
 /// Everything else is dropped at the agent level.
 const NODE_EXPORTER_ALLOWLIST: &[&str] = &[
@@ -57,7 +63,7 @@ pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> V
     }
 }
 
-/// Parse Prometheus text — filter by allowlist, pass raw values through.
+/// Parse Prometheus text — filter by allowlist, skip NaN/Inf, pass raw values.
 fn parse_node_exporter(text: &str) -> Vec<Gauge> {
     let mut gauges = Vec::new();
 
@@ -70,6 +76,10 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
         let Some((metric_part, value)) = parse_line(line) else {
             continue;
         };
+
+        if !value.is_finite() {
+            continue;
+        }
 
         let name = match metric_part.find('{') {
             Some(i) => &metric_part[..i],
@@ -92,6 +102,8 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
 
 /// Parse a Prometheus metric line into (metric_part, value).
 fn parse_line(line: &str) -> Option<(&str, f64)> {
+    // Find the boundary between metric{labels} and the value.
+    // If braces exist, split after '}'; otherwise split at first space.
     let split_at = if let Some(brace_end) = line.find('}') {
         line[brace_end..].find(' ').map(|i| brace_end + i)
     } else {
@@ -102,7 +114,7 @@ fn parse_line(line: &str) -> Option<(&str, f64)> {
     Some((metric_part, value))
 }
 
-/// Extract all labels from a Prometheus metric part: `name{k1="v1",k2="v2"}`.
+/// Extract labels from `name{k1="v1",k2="v2"}`, capped at MAX_LABELS.
 fn parse_labels(metric_part: &str) -> Vec<(String, String)> {
     let Some(start) = metric_part.find('{') else {
         return vec![];
@@ -112,12 +124,13 @@ fn parse_labels(metric_part: &str) -> Vec<(String, String)> {
     };
     let inner = &metric_part[start + 1..end];
     let mut labels = Vec::new();
-    let mut rest = inner;
+    let mut remaining = inner;
 
-    while !rest.is_empty() {
-        let Some(eq) = rest.find('=') else { break };
-        let key = &rest[..eq];
-        let after_eq = &rest[eq + 1..];
+    while !remaining.is_empty() && labels.len() < MAX_LABELS {
+        // key="value"
+        let Some(eq) = remaining.find('=') else { break };
+        let key = &remaining[..eq];
+        let after_eq = &remaining[eq + 1..];
 
         if !after_eq.starts_with('"') {
             break;
@@ -128,10 +141,11 @@ fn parse_labels(metric_part: &str) -> Vec<(String, String)> {
         let val = &after_eq[1..1 + val_end];
         labels.push((key.to_string(), val.to_string()));
 
-        let consumed = eq + 1 + 1 + val_end + 1;
-        rest = &rest[consumed..];
-        if rest.starts_with(',') {
-            rest = &rest[1..];
+        // Advance past: key="value" → skip eq + opening quote + value + closing quote
+        let advance = eq + 1 + 1 + val_end + 1;
+        remaining = &remaining[advance..];
+        if remaining.starts_with(',') {
+            remaining = &remaining[1..];
         }
     }
 
@@ -170,6 +184,11 @@ pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gaug
     };
 
     let models = resp.models.unwrap_or_default();
+    if models.len() > MAX_OLLAMA_MODELS {
+        tracing::warn!(count = models.len(), "ollama returned too many models, truncating");
+    }
+    let models = &models[..models.len().min(MAX_OLLAMA_MODELS)];
+
     let mut gauges = Vec::with_capacity(models.len() * 2 + 1);
 
     gauges.push(Gauge {
@@ -178,7 +197,7 @@ pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gaug
         labels: vec![],
     });
 
-    for model in &models {
+    for model in models {
         let model_label = vec![(
             "model".into(),
             model.name.as_deref().unwrap_or("unknown").to_string(),
@@ -216,7 +235,7 @@ node_drm_gpu_busy_percent{card="card1"} 42
 some_random_metric 999
 "#;
         let gauges = parse_node_exporter(text);
-        assert_eq!(gauges.len(), 2); // only memory + drm
+        assert_eq!(gauges.len(), 2);
         assert!(gauges.iter().any(|g| g.name == "node_memory_MemTotal_bytes"));
         assert!(gauges.iter().any(|g| g.name == "node_drm_gpu_busy_percent"));
     }
@@ -226,8 +245,14 @@ some_random_metric 999
         let text = "node_memory_MemTotal_bytes 6.7385810944e+10\n";
         let gauges = parse_node_exporter(text);
         let total = gauges.iter().find(|g| g.name == "node_memory_MemTotal_bytes").unwrap();
-        // Raw bytes — NOT converted to MB
         assert!((total.value - 6.7385810944e10).abs() < 1.0);
+    }
+
+    #[test]
+    fn skips_nan_and_inf() {
+        let text = "node_memory_MemTotal_bytes NaN\nnode_memory_MemAvailable_bytes +Inf\n";
+        let gauges = parse_node_exporter(text);
+        assert!(gauges.is_empty());
     }
 
     #[test]
@@ -249,9 +274,20 @@ node_cpu_seconds_total{cpu="0",mode="user"} 500
 node_cpu_seconds_total{cpu="1",mode="idle"} 900
 "#;
         let gauges = parse_node_exporter(text);
-        // 3 individual lines — NOT aggregated into cpu count
         assert_eq!(gauges.len(), 3);
         assert!(gauges.iter().all(|g| g.name == "node_cpu_seconds_total"));
+    }
+
+    #[test]
+    fn parse_labels_capped() {
+        // Build a metric with more labels than MAX_LABELS
+        let mut parts = Vec::new();
+        for i in 0..40 {
+            parts.push(format!("k{i}=\"v{i}\""));
+        }
+        let metric = format!("foo{{{}}}", parts.join(","));
+        let labels = parse_labels(&metric);
+        assert_eq!(labels.len(), MAX_LABELS);
     }
 
     #[test]
