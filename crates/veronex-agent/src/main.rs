@@ -2,7 +2,7 @@
 /// GPU servers and pushes them to OTel Collector via OTLP HTTP.
 ///
 /// Environment variables:
-///   VERONEX_API_URL   — veronex API base URL (default: http://localhost:3000)
+///   VERONEX_API_URL    — veronex API base URL (default: http://localhost:3000)
 ///   OTEL_HTTP_ENDPOINT — OTel Collector HTTP endpoint (default: http://localhost:4318)
 ///   SCRAPE_INTERVAL    — seconds between scrape cycles (default: 30)
 ///   RUST_LOG           — tracing filter (default: info)
@@ -11,9 +11,12 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::Deserialize;
+use tokio::signal;
 
 mod otlp;
 mod scraper;
+
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -42,22 +45,20 @@ impl Config {
 
 // ── Target discovery (from veronex API) ──────────────────────────────────────
 
-/// A scrape target discovered from veronex `/v1/metrics/targets`.
 #[derive(Debug, Clone, Deserialize)]
 struct SdTarget {
     targets: Vec<String>,
     labels: HashMap<String, String>,
 }
 
-/// Fetch registered GPU server targets from veronex API.
 async fn discover_targets(client: &reqwest::Client, api_url: &str) -> Vec<SdTarget> {
     let url = format!("{}/v1/metrics/targets", api_url.trim_end_matches('/'));
-    match client.get(&url).timeout(Duration::from_secs(10)).send().await {
+    match client.get(&url).timeout(DISCOVERY_TIMEOUT).send().await {
         Ok(resp) if resp.status().is_success() => {
             resp.json::<Vec<SdTarget>>().await.unwrap_or_default()
         }
         Ok(resp) => {
-            tracing::warn!(status = %resp.status(), "failed to fetch targets from veronex");
+            tracing::warn!(status = %resp.status(), "failed to fetch targets");
             vec![]
         }
         Err(e) => {
@@ -91,50 +92,55 @@ async fn main() -> Result<()> {
     );
 
     loop {
-        let targets = discover_targets(&client, &config.veronex_api_url).await;
-
-        if targets.is_empty() {
-            tracing::debug!("no targets discovered, sleeping");
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                tracing::info!("shutdown signal received");
+                break;
+            }
+            _ = scrape_cycle(&client, &config) => {}
+            _ = tokio::time::sleep(config.scrape_interval) => {}
         }
+    }
 
-        for target in &targets {
-            let Some(host_port) = target.targets.first() else {
-                continue;
-            };
-            let server_id = target.labels.get("server_id").cloned().unwrap_or_default();
-            let server_name = target.labels.get("server_name").cloned().unwrap_or_default();
+    tracing::info!("veronex-agent stopped");
+    Ok(())
+}
 
-            // node-exporter URL: targets are "host:port" without scheme
+async fn scrape_cycle(client: &reqwest::Client, config: &Config) {
+    let targets = discover_targets(client, &config.veronex_api_url).await;
+    if targets.is_empty() {
+        tracing::debug!("no targets discovered");
+        return;
+    }
+
+    // Scrape all targets concurrently
+    let futures: Vec<_> = targets
+        .iter()
+        .filter_map(|t| {
+            let host_port = t.targets.first()?;
+            let server_id = t.labels.get("server_id").cloned().unwrap_or_default();
+            let server_name = t.labels.get("server_name").cloned().unwrap_or_default();
+            let ollama_url = t.labels.get("ollama_url").cloned();
             let ne_url = format!("http://{host_port}");
 
-            // Derive Ollama URL from node-exporter host (same host, port 11434)
-            let ollama_host = host_port.split(':').next().unwrap_or(host_port);
-            let ollama_url = format!("http://{ollama_host}:11434");
+            Some(async move {
+                let metrics =
+                    scraper::scrape(client, &ne_url, ollama_url.as_deref()).await;
+                (server_id, server_name, metrics)
+            })
+        })
+        .collect();
 
-            // Scrape and push
-            let metrics = scraper::scrape(&client, &ne_url, &ollama_url).await;
-            if let Err(e) = otlp::push_metrics(
-                &client,
-                &config.otel_endpoint,
-                &server_id,
-                &server_name,
-                &metrics,
-            )
-            .await
-            {
-                tracing::warn!(
-                    server = %server_name,
-                    "OTLP push failed: {e}"
-                );
-            } else {
-                tracing::debug!(
-                    server = %server_name,
-                    gauge_count = metrics.len(),
-                    "pushed metrics"
-                );
-            }
+    let results = futures::future::join_all(futures).await;
+
+    for (server_id, server_name, metrics) in results {
+        if let Err(e) =
+            otlp::push_metrics(client, &config.otel_endpoint, &server_id, &server_name, &metrics)
+                .await
+        {
+            tracing::warn!(server = %server_name, "OTLP push failed: {e}");
+        } else {
+            tracing::debug!(server = %server_name, n = metrics.len(), "pushed");
         }
-
-        tokio::time::sleep(config.scrape_interval).await;
     }
 }

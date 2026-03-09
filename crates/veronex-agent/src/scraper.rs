@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+const SCRAPE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// A single gauge metric with name, value, and optional extra labels.
 pub struct Gauge {
     pub name: &'static str,
@@ -18,20 +20,20 @@ pub struct Gauge {
 pub async fn scrape(
     client: &reqwest::Client,
     node_exporter_url: &str,
-    ollama_url: &str,
+    ollama_url: Option<&str>,
 ) -> Vec<Gauge> {
     let mut gauges = Vec::new();
 
-    // node-exporter
     match scrape_node_exporter(client, node_exporter_url).await {
         Ok(g) => gauges.extend(g),
         Err(e) => tracing::warn!("node-exporter scrape failed: {e}"),
     }
 
-    // Ollama
-    match scrape_ollama(client, ollama_url).await {
-        Ok(g) => gauges.extend(g),
-        Err(e) => tracing::debug!("ollama scrape skipped: {e}"),
+    if let Some(url) = ollama_url {
+        match scrape_ollama(client, url).await {
+            Ok(g) => gauges.extend(g),
+            Err(e) => tracing::debug!("ollama scrape skipped: {e}"),
+        }
     }
 
     gauges
@@ -44,7 +46,7 @@ async fn scrape_node_exporter(
     let url = format!("{}/metrics", base_url.trim_end_matches('/'));
     let text = client
         .get(&url)
-        .timeout(Duration::from_secs(5))
+        .timeout(SCRAPE_TIMEOUT)
         .send()
         .await?
         .text()
@@ -60,15 +62,27 @@ fn get_label<'a>(metric_part: &'a str, key: &str) -> Option<&'a str> {
     Some(&metric_part[start..end])
 }
 
+/// Parse a Prometheus metric line into (metric_part, value).
+fn parse_line(line: &str) -> Option<(&str, f64)> {
+    let line = line.trim();
+    if line.starts_with('#') || line.is_empty() {
+        return None;
+    }
+    let split_at = if let Some(brace_end) = line.find('}') {
+        line[brace_end..].find(' ').map(|i| brace_end + i)
+    } else {
+        line.find(' ')
+    }?;
+    let metric_part = &line[..split_at];
+    let value: f64 = line[split_at + 1..].split_whitespace().next()?.parse().ok()?;
+    Some((metric_part, value))
+}
+
 fn parse_node_exporter(text: &str) -> Vec<Gauge> {
     let mut gauges = Vec::new();
     let mut mem_total: f64 = 0.0;
     let mut mem_available: f64 = 0.0;
-
-    // CPU tracking
     let mut cpu_set: HashSet<String> = HashSet::new();
-    let mut _cpu_idle_sum: f64 = 0.0;
-    let mut _cpu_total_sum: f64 = 0.0;
 
     // GPU (DRM + hwmon)
     let mut drm_busy: HashMap<String, f64> = HashMap::new();
@@ -80,22 +94,9 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
     let mut amdgpu_chips: HashSet<String> = HashSet::new();
 
     for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('#') || line.is_empty() {
+        let Some((metric_part, value)) = parse_line(line) else {
             continue;
-        }
-
-        let (metric_part, value_str) = {
-            let split_at = if let Some(brace_end) = line.find('}') {
-                line[brace_end..].find(' ').map(|i| brace_end + i)
-            } else {
-                line.find(' ')
-            };
-            let Some(idx) = split_at else { continue };
-            (&line[..idx], line[idx + 1..].split_whitespace().next().unwrap_or(""))
         };
-
-        let Ok(value) = value_str.parse::<f64>() else { continue };
         let name = metric_part.split('{').next().unwrap_or(metric_part);
 
         match name {
@@ -104,10 +105,6 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
             "node_cpu_seconds_total" => {
                 if let Some(cpu) = get_label(metric_part, "cpu") {
                     cpu_set.insert(cpu.to_string());
-                }
-                _cpu_total_sum += value;
-                if get_label(metric_part, "mode") == Some("idle") {
-                    _cpu_idle_sum += value;
                 }
             }
             "node_hwmon_chip_names" => {
@@ -137,23 +134,18 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
                     drm_vram_total.insert(card.to_string(), value);
                 }
             }
-            "node_hwmon_temp_celsius" => {
+            "node_hwmon_temp_celsius" | "node_hwmon_power_average_watts"
+            | "node_hwmon_power_average_watt" => {
                 if let Some(chip) = get_label(metric_part, "chip") {
                     let is_amdgpu = chip.contains("amdgpu")
                         || chip_name_map.get(chip).is_some_and(|n| n == "amdgpu");
                     if is_amdgpu {
-                        hwmon_temp.entry(chip.to_string()).or_insert(value);
                         amdgpu_chips.insert(chip.to_string());
-                    }
-                }
-            }
-            "node_hwmon_power_average_watts" | "node_hwmon_power_average_watt" => {
-                if let Some(chip) = get_label(metric_part, "chip") {
-                    let is_amdgpu = chip.contains("amdgpu")
-                        || chip_name_map.get(chip).is_some_and(|n| n == "amdgpu");
-                    if is_amdgpu {
-                        hwmon_power.entry(chip.to_string()).or_insert(value);
-                        amdgpu_chips.insert(chip.to_string());
+                        if name == "node_hwmon_temp_celsius" {
+                            hwmon_temp.entry(chip.to_string()).or_insert(value);
+                        } else {
+                            hwmon_power.entry(chip.to_string()).or_insert(value);
+                        }
                     }
                 }
             }
@@ -162,19 +154,23 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
     }
 
     // System memory
-    let mem_total_mb = mem_total / 1_048_576.0;
-    let mem_used_mb = (mem_total - mem_available) / 1_048_576.0;
-    gauges.push(Gauge { name: "system.memory.total", value: mem_total_mb, labels: vec![] });
-    gauges.push(Gauge { name: "system.memory.used", value: mem_used_mb, labels: vec![] });
-
-    // CPU
+    gauges.push(Gauge {
+        name: "system.memory.total",
+        value: mem_total / 1_048_576.0,
+        labels: vec![],
+    });
+    gauges.push(Gauge {
+        name: "system.memory.used",
+        value: (mem_total - mem_available) / 1_048_576.0,
+        labels: vec![],
+    });
     gauges.push(Gauge {
         name: "system.cpu.count",
         value: cpu_set.len() as f64,
         labels: vec![],
     });
 
-    // Build GPU metrics
+    // Build GPU list (DRM primary, hwmon-only fallback)
     let mut chips_sorted: Vec<String> = amdgpu_chips.into_iter().collect();
     chips_sorted.sort();
 
@@ -206,42 +202,21 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
 
     for (idx, (card, chip)) in gpu_sources.iter().enumerate() {
         let gpu_label = vec![("gpu", idx.to_string())];
-
         if let Some(v) = drm_vram_used.get(card) {
-            gauges.push(Gauge {
-                name: "gpu.vram.used",
-                value: v / 1_048_576.0,
-                labels: gpu_label.clone(),
-            });
+            gauges.push(Gauge { name: "gpu.vram.used", value: v / 1_048_576.0, labels: gpu_label.clone() });
         }
         if let Some(v) = drm_vram_total.get(card) {
-            gauges.push(Gauge {
-                name: "gpu.vram.total",
-                value: v / 1_048_576.0,
-                labels: gpu_label.clone(),
-            });
+            gauges.push(Gauge { name: "gpu.vram.total", value: v / 1_048_576.0, labels: gpu_label.clone() });
         }
         if let Some(v) = drm_busy.get(card) {
-            gauges.push(Gauge {
-                name: "gpu.utilization",
-                value: *v,
-                labels: gpu_label.clone(),
-            });
+            gauges.push(Gauge { name: "gpu.utilization", value: *v, labels: gpu_label.clone() });
         }
         if let Some(chip) = chip {
             if let Some(v) = hwmon_temp.get(*chip) {
-                gauges.push(Gauge {
-                    name: "gpu.temperature",
-                    value: *v,
-                    labels: gpu_label.clone(),
-                });
+                gauges.push(Gauge { name: "gpu.temperature", value: *v, labels: gpu_label.clone() });
             }
             if let Some(v) = hwmon_power.get(*chip) {
-                gauges.push(Gauge {
-                    name: "gpu.power",
-                    value: *v,
-                    labels: gpu_label.clone(),
-                });
+                gauges.push(Gauge { name: "gpu.power", value: *v, labels: gpu_label.clone() });
             }
         }
     }
@@ -262,37 +237,87 @@ struct OllamaPsModel {
     size_vram: Option<u64>,
 }
 
-async fn scrape_ollama(
-    client: &reqwest::Client,
-    ollama_url: &str,
-) -> anyhow::Result<Vec<Gauge>> {
+async fn scrape_ollama(client: &reqwest::Client, ollama_url: &str) -> anyhow::Result<Vec<Gauge>> {
     let url = format!("{}/api/ps", ollama_url.trim_end_matches('/'));
     let resp: OllamaPsResponse = client
         .get(&url)
-        .timeout(Duration::from_secs(5))
+        .timeout(SCRAPE_TIMEOUT)
         .send()
         .await?
         .json()
         .await?;
 
     let models = resp.models.unwrap_or_default();
-    let mut gauges = Vec::new();
-
-    gauges.push(Gauge {
+    let mut gauges = vec![Gauge {
         name: "ollama.loaded_models",
         value: models.len() as f64,
         labels: vec![],
-    });
+    }];
 
     for model in &models {
-        let model_name = model.name.as_deref().unwrap_or("unknown");
-        let vram_mb = model.size_vram.unwrap_or(0) as f64 / 1_048_576.0;
         gauges.push(Gauge {
             name: "ollama.model.vram",
-            value: vram_mb,
-            labels: vec![("model", model_name.to_string())],
+            value: model.size_vram.unwrap_or(0) as f64 / 1_048_576.0,
+            labels: vec![("model", model.name.as_deref().unwrap_or("unknown").to_string())],
         });
     }
 
     Ok(gauges)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_memory_metrics() {
+        let text = r#"
+node_memory_MemTotal_bytes 6.7385810944e+10
+node_memory_MemAvailable_bytes 5.0e+10
+"#;
+        let gauges = parse_node_exporter(text);
+        let total = gauges.iter().find(|g| g.name == "system.memory.total").unwrap();
+        assert!((total.value - 64264.0).abs() < 1.0);
+        let used = gauges.iter().find(|g| g.name == "system.memory.used").unwrap();
+        assert!((used.value - 16580.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn parse_gpu_drm_metrics() {
+        let text = r#"
+node_drm_gpu_busy_percent{card="card1"} 42
+node_drm_memory_vram_used_bytes{card="card1"} 4294967296
+node_drm_memory_vram_total_bytes{card="card1"} 103079215104
+node_hwmon_chip_names{chip="0000:c4:00_0",chip_name="amdgpu"} 1
+node_hwmon_temp_celsius{chip="0000:c4:00_0",sensor="temp1"} 55
+node_hwmon_power_average_watts{chip="0000:c4:00_0"} 30
+"#;
+        let gauges = parse_node_exporter(text);
+        let util = gauges.iter().find(|g| g.name == "gpu.utilization").unwrap();
+        assert!((util.value - 42.0).abs() < 0.1);
+        let vram = gauges.iter().find(|g| g.name == "gpu.vram.used").unwrap();
+        assert!((vram.value - 4096.0).abs() < 1.0);
+        let temp = gauges.iter().find(|g| g.name == "gpu.temperature").unwrap();
+        assert!((temp.value - 55.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn parse_cpu_count() {
+        let text = r#"
+node_cpu_seconds_total{cpu="0",mode="idle"} 1000
+node_cpu_seconds_total{cpu="0",mode="user"} 500
+node_cpu_seconds_total{cpu="1",mode="idle"} 900
+node_cpu_seconds_total{cpu="1",mode="user"} 600
+"#;
+        let gauges = parse_node_exporter(text);
+        let count = gauges.iter().find(|g| g.name == "system.cpu.count").unwrap();
+        assert!((count.value - 2.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn get_label_extracts_value() {
+        assert_eq!(get_label(r#"foo{cpu="3",mode="idle"}"#, "cpu"), Some("3"));
+        assert_eq!(get_label(r#"foo{cpu="3",mode="idle"}"#, "mode"), Some("idle"));
+        assert_eq!(get_label(r#"foo{cpu="3"}"#, "missing"), None);
+    }
 }
