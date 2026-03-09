@@ -1,12 +1,13 @@
 # Infrastructure -- OTel Pipeline
 
-> SSOT | **Last Updated**: 2026-03-08 (rev: timestamp semantics fix, ingest validation)
+> SSOT | **Last Updated**: 2026-03-09 (rev: agent OTLP push, zero-config policy)
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Change scrape interval | `docker/otel/config.yaml` | `scrape_interval:` under prometheus receiver |
+| Change agent scrape interval | `values.yaml` `scrapeIntervalMs` or `docker-compose.yml` `SCRAPE_INTERVAL_MS` | Agent env var (milliseconds) |
+| Add new metric to collection | `crates/veronex-agent/src/scraper.rs` | Add prefix to `NODE_EXPORTER_ALLOWLIST` |
 | Add new OTel exporter | `docker/otel/config.yaml` | Add to `exporters:` block + add to relevant `service.pipelines` |
 | Change Kafka topic name | `docker/otel/config.yaml` kafka exporter `topic:` | Also update ClickHouse `init.sql` Kafka Engine `kafka_topic_list` |
 | Add new ClickHouse Kafka chain | `docker/clickhouse/init.sql` | Pattern: `kafka_* ENGINE=Kafka` -> `MV` -> target `MergeTree` (MergeTree table must be declared first) |
@@ -26,7 +27,10 @@
 | `crates/veronex-analytics/src/` | Internal analytics service (OTel write + ClickHouse read) |
 | `crates/veronex/src/infrastructure/outbound/observability/http_observability_adapter.rs` | `HttpObservabilityAdapter` (replaces RedpandaObservabilityAdapter) |
 | `crates/veronex/src/infrastructure/outbound/observability/http_audit_adapter.rs` | `HttpAuditAdapter` (replaces RedpandaAuditAdapter) |
-| `crates/veronex/src/infrastructure/inbound/http/gpu_server_handlers.rs` | `GET /v1/metrics/targets` (HTTP SD) |
+| `crates/veronex/src/infrastructure/inbound/http/metrics_handlers.rs` | `GET /v1/metrics/targets` (agent target discovery) |
+| `crates/veronex-agent/src/scraper.rs` | Metric allowlist + Prometheus text → OTLP conversion (raw values) |
+| `crates/veronex-agent/src/otlp.rs` | OTLP HTTP/JSON push client |
+| `crates/veronex-agent/src/shard.rs` | Modulus sharding for multi-replica deduplication |
 
 ---
 
@@ -43,7 +47,9 @@ veronex --> POST /internal/ingest/audit    --> veronex-analytics
                                                                                                          |                             +- api_key_usage_hourly_mv --> api_key_usage_hourly
                                                                                                          +- otel_audit_events_mv   --> audit_events
 
-node-exporters --> OTel Collector (prometheus) --> kafka/metrics --> Redpanda [otel-metrics] --> otel_metrics_gauge
+node-exporters -+
+                +-> veronex-agent (select + raw forward) --> OTel Collector (otlp) --> kafka/metrics --> Redpanda [otel-metrics] --> otel_metrics_gauge
+ollama /api/ps -+
 veronex traces  --> OTel Collector (otlp)      --> kafka/traces  --> Redpanda [otel-traces]  --> otel_traces_raw
 
 [Read Path — ClickHouse primary, PostgreSQL fallback]
@@ -63,19 +69,36 @@ veronex --> GET /v1/audit             --> analytics_repo (ClickHouse)
 
 ---
 
+## veronex-agent Policy (Zero-Config Principle)
+
+> **`helm install` / `docker-compose up` must work without any OTEL Collector configuration changes.**
+
+| Responsibility | Owner | NOT allowed |
+|----------------|-------|-------------|
+| Metric selection (allowlist) | **Agent** (`scraper.rs`) | OTEL filter processor |
+| Value transformation (unit conversion) | **ClickHouse queries** | Agent or OTEL |
+| Format conversion (Prometheus text → OTLP) | **Agent** | — |
+| Transport + batching | **OTEL Collector** | — |
+| Routing to Kafka topics | **OTEL Collector** | — |
+
+**Why agent selects, not OTEL:**
+- Open source users should not need to configure OTEL Collector
+- Adding OTEL `filter` processor requires `contrib` image (not guaranteed)
+- Metric allowlist changes are code changes (version-controlled, tested)
+
+**Allowlist** (`crates/veronex-agent/src/scraper.rs`):
+```
+node_memory_MemTotal_bytes, node_memory_MemAvailable_bytes,
+node_cpu_seconds_total, node_drm_*, node_hwmon_temp_celsius,
+node_hwmon_power_average_watt*, node_hwmon_chip_names,
+ollama_* (loaded_models, model_size_vram_bytes, model_size_bytes)
+```
+
 ## OTel Collector Config (docker/otel/config.yaml)
 
 ```yaml
 receivers:
-  prometheus:               # node-exporter scrape via HTTP SD
-    config:
-      scrape_configs:
-        - job_name: node-exporter
-          scrape_interval: 30s
-          http_sd_configs:
-            - url: http://veronex:3000/v1/metrics/targets
-              refresh_interval: 30s
-  otlp:
+  otlp:                       # veronex-agent pushes pre-filtered metrics via OTLP HTTP
     protocols:
       grpc: { endpoint: 0.0.0.0:4317 }
       http: { endpoint: 0.0.0.0:4318 }
@@ -96,13 +119,14 @@ exporters:
 
 service:
   pipelines:
-    metrics: receivers:[prometheus]  -> exporters:[kafka/metrics]
-    traces:  receivers:[otlp]        -> exporters:[kafka/traces]
-    logs:    receivers:[otlp]        -> exporters:[kafka/logs]
+    metrics: receivers:[otlp]  -> exporters:[kafka/metrics]
+    traces:  receivers:[otlp]  -> exporters:[kafka/traces]
+    logs:    receivers:[otlp]  -> exporters:[kafka/logs]
 ```
 
 > ClickHouse exporter **removed** -- ClickHouse consumes via Kafka Engine only.
-> `otlp` receiver is shared by both `traces` and `logs` pipelines.
+> `otlp` receiver is shared by all three pipelines (metrics, traces, logs).
+> No `prometheus` receiver — agent handles external node-exporter scraping (K8s 외부 bare-metal 지원).
 
 ---
 

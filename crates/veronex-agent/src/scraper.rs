@@ -1,13 +1,34 @@
-/// Scrapes node-exporter (Prometheus text) and Ollama API independently,
-/// converting raw data to OTLP gauges WITHOUT any transformation.
+/// Scrapes node-exporter and Ollama API independently,
+/// selecting relevant metrics and forwarding raw values to OTLP.
 ///
-/// Agent responsibility: collect + forward only.
-/// Filtering, unit conversion, aggregation → OTEL Collector transform processor.
+/// Agent policy:
+///   - SELECT which metrics to forward (whitelist)
+///   - NO value transformation (no unit conversion, no aggregation)
+///   - Raw values + original labels → OTLP push
+///
+/// This ensures `helm install` / `docker-compose up` works without
+/// any OTEL Collector configuration changes.
 use std::time::Duration;
 
 use serde::Deserialize;
 
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Metric name prefixes to forward from node-exporter.
+/// Everything else is dropped at the agent level.
+const NODE_EXPORTER_ALLOWLIST: &[&str] = &[
+    "node_memory_MemTotal_bytes",
+    "node_memory_MemAvailable_bytes",
+    "node_cpu_seconds_total",
+    "node_drm_",
+    "node_hwmon_temp_celsius",
+    "node_hwmon_power_average_watt",
+    "node_hwmon_chip_names",
+];
+
+fn is_allowed(name: &str) -> bool {
+    NODE_EXPORTER_ALLOWLIST.iter().any(|prefix| name.starts_with(prefix))
+}
 
 /// A single gauge metric — raw name, raw value, raw labels from the source.
 pub struct Gauge {
@@ -18,12 +39,12 @@ pub struct Gauge {
 
 // ── Node-exporter ────────────────────────────────────────────────────────────
 
-/// Scrape node-exporter /metrics and return every Prometheus line as a Gauge.
+/// Scrape node-exporter /metrics — select allowed metrics, forward raw values.
 pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
     let url = format!("{}/metrics", base_url.trim_end_matches('/'));
     match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
         Ok(resp) => match resp.text().await {
-            Ok(text) => parse_prometheus(&text),
+            Ok(text) => parse_node_exporter(&text),
             Err(e) => {
                 tracing::warn!("node-exporter read failed: {e}");
                 vec![]
@@ -36,9 +57,8 @@ pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> V
     }
 }
 
-/// Parse Prometheus text exposition format into raw Gauges.
-/// No filtering, no unit conversion — every metric line becomes a Gauge.
-fn parse_prometheus(text: &str) -> Vec<Gauge> {
+/// Parse Prometheus text — filter by allowlist, pass raw values through.
+fn parse_node_exporter(text: &str) -> Vec<Gauge> {
     let mut gauges = Vec::new();
 
     for line in text.lines() {
@@ -47,25 +67,23 @@ fn parse_prometheus(text: &str) -> Vec<Gauge> {
             continue;
         }
 
-        // Split: metric_name{labels} value [timestamp]
-        let (metric_part, value) = match parse_line(line) {
-            Some(v) => v,
-            None => continue,
+        let Some((metric_part, value)) = parse_line(line) else {
+            continue;
         };
 
-        // Extract metric name (before '{' or entire string)
         let name = match metric_part.find('{') {
             Some(i) => &metric_part[..i],
             None => metric_part,
         };
 
-        // Extract labels from {key="val",key2="val2"}
-        let labels = parse_labels(metric_part);
+        if !is_allowed(name) {
+            continue;
+        }
 
         gauges.push(Gauge {
             name: name.to_string(),
             value,
-            labels,
+            labels: parse_labels(metric_part),
         });
     }
 
@@ -97,7 +115,6 @@ fn parse_labels(metric_part: &str) -> Vec<(String, String)> {
     let mut rest = inner;
 
     while !rest.is_empty() {
-        // key="value"
         let Some(eq) = rest.find('=') else { break };
         let key = &rest[..eq];
         let after_eq = &rest[eq + 1..];
@@ -105,15 +122,13 @@ fn parse_labels(metric_part: &str) -> Vec<(String, String)> {
         if !after_eq.starts_with('"') {
             break;
         }
-        let val_start = 1; // skip opening quote
-        let Some(val_end) = after_eq[val_start..].find('"') else {
+        let Some(val_end) = after_eq[1..].find('"') else {
             break;
         };
-        let val = &after_eq[val_start..val_start + val_end];
+        let val = &after_eq[1..1 + val_end];
         labels.push((key.to_string(), val.to_string()));
 
-        // Skip past closing quote + optional comma
-        let consumed = eq + 1 + val_start + val_end + 1; // key= + " + val + "
+        let consumed = eq + 1 + 1 + val_end + 1;
         rest = &rest[consumed..];
         if rest.starts_with(',') {
             rest = &rest[1..];
@@ -130,16 +145,14 @@ struct OllamaPsResponse {
     models: Option<Vec<OllamaPsModel>>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize)]
 struct OllamaPsModel {
     name: Option<String>,
     size_vram: Option<u64>,
     size: Option<u64>,
-    expires_at: Option<String>,
 }
 
-/// Scrape Ollama /api/ps and return raw model data as Gauges.
-/// No unit conversion — size_vram and size are forwarded as raw bytes.
+/// Scrape Ollama /api/ps — forward raw byte values, no conversion.
 pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
     let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
     let resp: OllamaPsResponse = match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
@@ -157,7 +170,7 @@ pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gaug
     };
 
     let models = resp.models.unwrap_or_default();
-    let mut gauges = Vec::with_capacity(models.len() * 3 + 1);
+    let mut gauges = Vec::with_capacity(models.len() * 2 + 1);
 
     gauges.push(Gauge {
         name: "ollama_loaded_models".into(),
@@ -182,18 +195,7 @@ pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gaug
             gauges.push(Gauge {
                 name: "ollama_model_size_bytes".into(),
                 value: size as f64,
-                labels: model_label.clone(),
-            });
-        }
-        if let Some(ref expires) = model.expires_at {
-            gauges.push(Gauge {
-                name: "ollama_model_expires_at".into(),
-                value: 1.0, // presence marker; actual timestamp in label
-                labels: {
-                    let mut l = model_label.clone();
-                    l.push(("expires_at".into(), expires.clone()));
-                    l
-                },
+                labels: model_label,
             });
         }
     }
@@ -206,44 +208,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_prometheus_passthrough() {
+    fn filters_by_allowlist() {
         let text = r#"
 node_memory_MemTotal_bytes 6.7385810944e+10
-node_memory_MemAvailable_bytes 5.0e+10
+node_filesystem_size_bytes{mountpoint="/"} 500000000000
+node_drm_gpu_busy_percent{card="card1"} 42
+some_random_metric 999
 "#;
-        let gauges = parse_prometheus(text);
-        assert_eq!(gauges.len(), 2);
+        let gauges = parse_node_exporter(text);
+        assert_eq!(gauges.len(), 2); // only memory + drm
+        assert!(gauges.iter().any(|g| g.name == "node_memory_MemTotal_bytes"));
+        assert!(gauges.iter().any(|g| g.name == "node_drm_gpu_busy_percent"));
+    }
+
+    #[test]
+    fn raw_values_no_conversion() {
+        let text = "node_memory_MemTotal_bytes 6.7385810944e+10\n";
+        let gauges = parse_node_exporter(text);
         let total = gauges.iter().find(|g| g.name == "node_memory_MemTotal_bytes").unwrap();
+        // Raw bytes — NOT converted to MB
         assert!((total.value - 6.7385810944e10).abs() < 1.0);
     }
 
     #[test]
-    fn parse_prometheus_preserves_labels() {
-        let text = r#"
-node_drm_gpu_busy_percent{card="card1"} 42
-node_hwmon_temp_celsius{chip="0000:c4:00_0",sensor="temp1"} 55
-"#;
-        let gauges = parse_prometheus(text);
-        assert_eq!(gauges.len(), 2);
-
-        let busy = gauges.iter().find(|g| g.name == "node_drm_gpu_busy_percent").unwrap();
-        assert!((busy.value - 42.0).abs() < 0.1);
-        assert_eq!(busy.labels, vec![("card".into(), "card1".into())]);
-
-        let temp = gauges.iter().find(|g| g.name == "node_hwmon_temp_celsius").unwrap();
-        assert_eq!(temp.labels.len(), 2);
-        assert_eq!(temp.labels[0], ("chip".into(), "0000:c4:00_0".into()));
-        assert_eq!(temp.labels[1], ("sensor".into(), "temp1".into()));
+    fn preserves_labels() {
+        let text = r#"node_hwmon_temp_celsius{chip="0000:c4:00_0",sensor="temp1"} 55"#;
+        let gauges = parse_node_exporter(text);
+        assert_eq!(gauges.len(), 1);
+        assert_eq!(gauges[0].labels, vec![
+            ("chip".into(), "0000:c4:00_0".into()),
+            ("sensor".into(), "temp1".into()),
+        ]);
     }
 
     #[test]
-    fn parse_prometheus_cpu_lines() {
+    fn cpu_lines_passed_individually() {
         let text = r#"
 node_cpu_seconds_total{cpu="0",mode="idle"} 1000
 node_cpu_seconds_total{cpu="0",mode="user"} 500
 node_cpu_seconds_total{cpu="1",mode="idle"} 900
 "#;
-        let gauges = parse_prometheus(text);
+        let gauges = parse_node_exporter(text);
+        // 3 individual lines — NOT aggregated into cpu count
         assert_eq!(gauges.len(), 3);
         assert!(gauges.iter().all(|g| g.name == "node_cpu_seconds_total"));
     }
