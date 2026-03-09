@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/veronex",
-    "crates/veronex-agent",
     "crates/veronex-analytics",
 ]
 resolver = "2"

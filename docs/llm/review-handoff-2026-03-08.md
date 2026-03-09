@@ -49,11 +49,6 @@ cd web && npm run build                  # clean
 **Change**: Replaced `std::env::var("VALKEY_URL").unwrap()` (2 occurrences) with `config.valkey_url.as_deref().expect(...)`. Config already has `valkey_url: Option<String>`.
 **Verify**: No `std::env::var("VALKEY_URL")` in background.rs. Uses `config` parameter that's already passed to the function.
 
-### 9. Agent Stability
-**File**: `crates/veronex-agent/src/main.rs`
-**Change**: VRAM sum `.min(u32::MAX as u64) as u32` overflow guard. `tracing::warn!` on both Ollama error paths. `.unwrap()` → `.expect("descriptive message")` on bind/serve.
-**Verify**: Overflow test: value > u32::MAX → clamps to u32::MAX.
-
 ### 10. Clippy Tautological Tests
 **Files**: `performance.rs`, `usage.rs`, `audit.rs` (analytics)
 **Change**: Replaced `assert!(0_u32 == 0)` style tautologies with `is_valid_hours()` helper + meaningful assertions. Audit tests use local constants (not `use super::*` which was unused).
@@ -166,11 +161,6 @@ cd web && npm run build                  # clean
 **Change**: Before resetting Running→Pending, checks `kv_get(job_owner_key)`. If another node owns the job, skips recovery with log. Uses let-chain for clippy compliance.
 **Risk addressed**: Multi-node environments — prevents double execution when Node A restarts while Node B is processing.
 **Verify**: Only jobs with no active owner or self-owned get recovered. Other nodes' jobs are untouched.
-
-### 29. Agent `main()` → `Result`
-**File**: `crates/veronex-agent/src/main.rs:316`
-**Change**: `async fn main()` → `async fn main() -> Result<(), Box<dyn std::error::Error>>`. Replaced `.expect()` on `TcpListener::bind()` and `axum::serve()` with `?`.
-**Verify**: No `expect()` in agent main. Error propagation via `?` operator.
 
 ### 30. `auth_handlers.rs` Test Fixes
 **File**: `infrastructure/inbound/http/auth_handlers.rs`

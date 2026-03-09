@@ -149,9 +149,9 @@ pub struct ServerMetricsPoint {
 **AMD APU note (Ryzen AI Max+ 395)**: `chip` label is PCI address format (`0000:00:08_1_…`).
 Identify via `node_hwmon_chip_names{chip_name="amdgpu"}`. Two-step query in `hw_metrics.rs`.
 
-## veronex-agent GPU Vendor Detection
+## GPU Vendor Detection via node-exporter
 
-The agent detects GPU vendor from sysfs `/sys/class/drm/cardN/device/vendor`:
+GPU vendor is detected from sysfs `/sys/class/drm/cardN/device/vendor` via node-exporter metrics:
 
 | Vendor ID | `gpu_vendor` | Thermal Profile |
 |-----------|-------------|-----------------|
@@ -159,7 +159,7 @@ The agent detects GPU vendor from sysfs `/sys/class/drm/cardN/device/vendor`:
 | `0x10de` | `"nvidia"` | GPU (80/88/93°C) |
 | other/none | `"unknown"` | CPU (default) |
 
-The `gpu_vendor` field is included in `GET /api/metrics` response and cached in `HwMetrics`. The health_checker reads it every 30s cycle and calls `thermal.set_thresholds()` to configure per-provider thermal limits.
+The `gpu_vendor` field is derived from node-exporter metrics and cached in `HwMetrics`. The health_checker reads it every 30s cycle and calls `thermal.set_thresholds()` to configure per-provider thermal limits.
 
 **Agent GPU metrics by vendor**:
 - **AMD**: Full sysfs support — `mem_info_vram_used`, `mem_info_vram_total`, `gpu_busy_percent`, hwmon temp/power

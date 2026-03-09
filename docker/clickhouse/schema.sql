@@ -54,6 +54,43 @@ FROM (
     GROUP BY hour, api_key_id, tenant_id
 );
 
+-- ── Derived MVs: otel_logs → specialized tables ──────────────────────────────
+-- These MVs extract structured events from the unified otel_logs table
+-- into domain-specific MergeTree tables for efficient analytical queries.
+
+-- otel_logs(inference.completed) → inference_logs
+CREATE MATERIALIZED VIEW IF NOT EXISTS otel_inference_logs_mv
+TO inference_logs AS
+SELECT
+    Timestamp                                                        AS event_time,
+    toUUIDOrZero(LogAttributes['api_key_id'])                        AS api_key_id,
+    LogAttributes['tenant_id']                                       AS tenant_id,
+    toUUIDOrZero(LogAttributes['request_id'])                        AS request_id,
+    LogAttributes['model_name']                                      AS model_name,
+    toUInt32OrZero(LogAttributes['prompt_tokens'])                   AS prompt_tokens,
+    toUInt32OrZero(LogAttributes['completion_tokens'])               AS completion_tokens,
+    toUInt32OrZero(LogAttributes['latency_ms'])                      AS latency_ms,
+    LogAttributes['finish_reason']                                   AS finish_reason,
+    LogAttributes['status']                                          AS status
+FROM otel_logs
+WHERE LogAttributes['event.name'] = 'inference.completed';
+
+-- otel_logs(audit.action) → audit_events
+CREATE MATERIALIZED VIEW IF NOT EXISTS otel_audit_events_mv
+TO audit_events AS
+SELECT
+    Timestamp                                                        AS event_time,
+    toUUIDOrZero(LogAttributes['account_id'])                        AS account_id,
+    LogAttributes['account_name']                                    AS account_name,
+    LogAttributes['action']                                          AS action,
+    LogAttributes['resource_type']                                   AS resource_type,
+    LogAttributes['resource_id']                                     AS resource_id,
+    LogAttributes['resource_name']                                   AS resource_name,
+    LogAttributes['ip_address']                                      AS ip_address,
+    LogAttributes['details']                                         AS details
+FROM otel_logs
+WHERE LogAttributes['event.name'] = 'audit.action';
+
 -- OTel metrics gauge — populated by Kafka Engine MV below
 CREATE TABLE IF NOT EXISTS otel_metrics_gauge (
     ResourceAttributes      Map(LowCardinality(String), String),
@@ -128,44 +165,6 @@ PARTITION BY toYYYYMM(event_time)
 ORDER BY (event_time, resource_type, resource_id)
 TTL toDate(event_time) + INTERVAL __RETENTION_AUDIT_DAYS__ DAY;
 
--- ── Derived MVs: otel_logs → specialized tables ──────────────────────────────
--- These MVs extract structured events from the unified otel_logs table
--- into domain-specific MergeTree tables for efficient analytical queries.
--- MUST appear after otel_logs + audit_events table definitions.
-
--- otel_logs(inference.completed) → inference_logs
-CREATE MATERIALIZED VIEW IF NOT EXISTS otel_inference_logs_mv
-TO inference_logs AS
-SELECT
-    Timestamp                                                        AS event_time,
-    toUUIDOrZero(LogAttributes['api_key_id'])                        AS api_key_id,
-    LogAttributes['tenant_id']                                       AS tenant_id,
-    toUUIDOrZero(LogAttributes['request_id'])                        AS request_id,
-    LogAttributes['model_name']                                      AS model_name,
-    toUInt32OrZero(LogAttributes['prompt_tokens'])                   AS prompt_tokens,
-    toUInt32OrZero(LogAttributes['completion_tokens'])               AS completion_tokens,
-    toUInt32OrZero(LogAttributes['latency_ms'])                      AS latency_ms,
-    LogAttributes['finish_reason']                                   AS finish_reason,
-    LogAttributes['status']                                          AS status
-FROM otel_logs
-WHERE LogAttributes['event.name'] = 'inference.completed';
-
--- otel_logs(audit.action) → audit_events
-CREATE MATERIALIZED VIEW IF NOT EXISTS otel_audit_events_mv
-TO audit_events AS
-SELECT
-    Timestamp                                                        AS event_time,
-    toUUIDOrZero(LogAttributes['account_id'])                        AS account_id,
-    LogAttributes['account_name']                                    AS account_name,
-    LogAttributes['action']                                          AS action,
-    LogAttributes['resource_type']                                   AS resource_type,
-    LogAttributes['resource_id']                                     AS resource_id,
-    LogAttributes['resource_name']                                   AS resource_name,
-    LogAttributes['ip_address']                                      AS ip_address,
-    LogAttributes['details']                                         AS details
-FROM otel_logs
-WHERE LogAttributes['event.name'] = 'audit.action';
-
 -- node-exporter curated metrics (dashboard queries)
 CREATE TABLE IF NOT EXISTS node_metrics (
     ts              DateTime64(3),
@@ -199,12 +198,16 @@ CREATE TABLE IF NOT EXISTS kafka_otel_logs (
     raw String
 ) ENGINE = Kafka
 SETTINGS
-    kafka_broker_list          = 'redpanda:9092',
-    kafka_topic_list           = 'otel-logs',
-    kafka_group_name           = 'clickhouse-otel-logs',
+    kafka_broker_list          = '__KAFKA_BROKER__',
+    kafka_topic_list           = 'otel.audit.logs',
+    kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-logs',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
-    kafka_skip_broken_messages = 10;
+    kafka_skip_broken_messages = 10,
+    kafka_security_protocol    = 'SASL_PLAINTEXT',
+    kafka_sasl_mechanism       = 'SCRAM-SHA-512',
+    kafka_sasl_username        = '__KAFKA_USERNAME__',
+    kafka_sasl_password        = '__KAFKA_PASSWORD__';
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_logs_mv
 TO otel_logs AS
@@ -263,12 +266,16 @@ CREATE TABLE IF NOT EXISTS kafka_otel_metrics (
     raw String
 ) ENGINE = Kafka
 SETTINGS
-    kafka_broker_list          = 'redpanda:9092',
-    kafka_topic_list           = 'otel-metrics',
-    kafka_group_name           = 'clickhouse-otel-metrics',
+    kafka_broker_list          = '__KAFKA_BROKER__',
+    kafka_topic_list           = 'otel.audit.metrics',
+    kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-metrics',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
-    kafka_skip_broken_messages = 10;
+    kafka_skip_broken_messages = 10,
+    kafka_security_protocol    = 'SASL_PLAINTEXT',
+    kafka_sasl_mechanism       = 'SCRAM-SHA-512',
+    kafka_sasl_username        = '__KAFKA_USERNAME__',
+    kafka_sasl_password        = '__KAFKA_PASSWORD__';
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_metrics_mv
 TO otel_metrics_gauge AS
@@ -333,12 +340,16 @@ CREATE TABLE IF NOT EXISTS kafka_otel_traces (
     raw String
 ) ENGINE = Kafka
 SETTINGS
-    kafka_broker_list          = 'redpanda:9092',
-    kafka_topic_list           = 'otel-traces',
-    kafka_group_name           = 'clickhouse-otel-traces',
+    kafka_broker_list          = '__KAFKA_BROKER__',
+    kafka_topic_list           = 'otel.audit.traces',
+    kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-traces',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
-    kafka_skip_broken_messages = 10;
+    kafka_skip_broken_messages = 10,
+    kafka_security_protocol    = 'SASL_PLAINTEXT',
+    kafka_sasl_mechanism       = 'SCRAM-SHA-512',
+    kafka_sasl_username        = '__KAFKA_USERNAME__',
+    kafka_sasl_password        = '__KAFKA_PASSWORD__';
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_traces_mv
 TO otel_traces_raw AS

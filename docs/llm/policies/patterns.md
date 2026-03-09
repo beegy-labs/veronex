@@ -195,7 +195,7 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 |----------|-------|---------|
 | `OLLAMA_HEALTH_TIMEOUT` | 5s | Ollama `/api/version` health check |
 | `GEMINI_HEALTH_TIMEOUT` | 10s | Gemini API key validation |
-| `AGENT_METRICS_TIMEOUT` | 5s | veronex-agent `/api/metrics` poll |
+| `NODE_EXPORTER_METRICS_TIMEOUT` | 5s | node-exporter metrics scrape |
 
 ## Background Tasks -- JoinSet + CancellationToken
 
