@@ -1,6 +1,6 @@
 # Infrastructure -- Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-03-07 (rev6: Helm chart overhaul — secrets mgmt, external infra, DaemonSet agent)
+> SSOT | **Last Updated**: 2026-03-07 (rev6: Helm chart overhaul — secrets mgmt, external infra, StatefulSet agent)
 
 ## Task Guide
 
