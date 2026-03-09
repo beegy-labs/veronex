@@ -86,3 +86,35 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+  deploy:
+    name: Update GitOps
+    needs: build
+    if: needs.build.outputs.skipped != 'true'
+    runs-on: arc-runner-set
+    steps:
+      - name: Checkout platform-gitops
+        uses: actions/checkout@v4
+        with:
+          repository: beegy-labs/platform-gitops
+          ref: develop
+          token: ${{ secrets.GITEA_TOKEN }}
+
+      - name: Update image tag
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          case "${{ github.ref_name }}" in
+            main)    FILE="clusters/home/values/veronex-prod-values.yaml" ;;
+            develop) FILE="clusters/home/values/veronex-dev-values.yaml" ;;
+            *)       exit 0 ;;
+          esac
+          sed -i "/^analytics:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(veronex): update analytics image tag to ${{ needs.build.outputs.tag }}"
+          git push
