@@ -96,7 +96,6 @@ CREATE TABLE llm_providers (
     total_vram_mb     BIGINT      NOT NULL DEFAULT 0,
     status            VARCHAR(32) NOT NULL DEFAULT 'offline',
     registered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    agent_url         TEXT,
     gpu_index         SMALLINT,
     server_id         UUID        REFERENCES gpu_servers(id) ON DELETE SET NULL,
     is_free_tier      BOOLEAN     NOT NULL DEFAULT false
