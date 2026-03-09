@@ -1,4 +1,4 @@
-/// Hardware metrics from veronex-agent (Valkey cache) and
+/// Hardware metrics from node-exporter (Valkey cache) and
 /// live node-exporter fetch (Prometheus text format).
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -11,9 +11,9 @@ pub fn hw_metrics_key(provider_id: Uuid) -> String {
     super::valkey_keys::hw_metrics(provider_id)
 }
 
-// ── Agent-based metrics (Phase 2) ──────────────────────────────────────────────
+// ── Hardware metrics (from node-exporter) ─────────────────────────────────────
 
-/// GPU + system RAM metrics as reported by veronex-agent.
+/// GPU + system RAM metrics collected from node-exporter.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HwMetrics {
     pub vram_used_mb: u32,
@@ -23,7 +23,6 @@ pub struct HwMetrics {
     pub temp_c: f32,
     pub mem_used_mb: u32,
     pub mem_total_mb: u32,
-    pub loaded_model_count: u8,
     /// GPU vendor from sysfs: "amd", "nvidia", or empty.
     #[serde(default)]
     pub gpu_vendor: String,

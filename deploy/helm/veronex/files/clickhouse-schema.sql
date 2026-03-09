@@ -198,12 +198,16 @@ CREATE TABLE IF NOT EXISTS kafka_otel_logs (
     raw String
 ) ENGINE = Kafka
 SETTINGS
-    kafka_broker_list          = 'redpanda:9092',
-    kafka_topic_list           = 'otel-logs',
-    kafka_group_name           = 'clickhouse-otel-logs',
+    kafka_broker_list          = '__KAFKA_BROKER__',
+    kafka_topic_list           = 'otel.audit.logs',
+    kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-logs',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
-    kafka_skip_broken_messages = 10;
+    kafka_skip_broken_messages = 10,
+    kafka_security_protocol    = 'SASL_PLAINTEXT',
+    kafka_sasl_mechanism       = 'SCRAM-SHA-512',
+    kafka_sasl_username        = '__KAFKA_USERNAME__',
+    kafka_sasl_password        = '__KAFKA_PASSWORD__';
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_logs_mv
 TO otel_logs AS
@@ -262,12 +266,16 @@ CREATE TABLE IF NOT EXISTS kafka_otel_metrics (
     raw String
 ) ENGINE = Kafka
 SETTINGS
-    kafka_broker_list          = 'redpanda:9092',
-    kafka_topic_list           = 'otel-metrics',
-    kafka_group_name           = 'clickhouse-otel-metrics',
+    kafka_broker_list          = '__KAFKA_BROKER__',
+    kafka_topic_list           = 'otel.audit.metrics',
+    kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-metrics',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
-    kafka_skip_broken_messages = 10;
+    kafka_skip_broken_messages = 10,
+    kafka_security_protocol    = 'SASL_PLAINTEXT',
+    kafka_sasl_mechanism       = 'SCRAM-SHA-512',
+    kafka_sasl_username        = '__KAFKA_USERNAME__',
+    kafka_sasl_password        = '__KAFKA_PASSWORD__';
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_metrics_mv
 TO otel_metrics_gauge AS
@@ -332,12 +340,16 @@ CREATE TABLE IF NOT EXISTS kafka_otel_traces (
     raw String
 ) ENGINE = Kafka
 SETTINGS
-    kafka_broker_list          = 'redpanda:9092',
-    kafka_topic_list           = 'otel-traces',
-    kafka_group_name           = 'clickhouse-otel-traces',
+    kafka_broker_list          = '__KAFKA_BROKER__',
+    kafka_topic_list           = 'otel.audit.traces',
+    kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-traces',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
-    kafka_skip_broken_messages = 10;
+    kafka_skip_broken_messages = 10,
+    kafka_security_protocol    = 'SASL_PLAINTEXT',
+    kafka_sasl_mechanism       = 'SCRAM-SHA-512',
+    kafka_sasl_username        = '__KAFKA_USERNAME__',
+    kafka_sasl_password        = '__KAFKA_PASSWORD__';
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_traces_mv
 TO otel_traces_raw AS

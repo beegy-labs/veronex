@@ -95,26 +95,6 @@ veronexWeb:
 
   env: {}
 
-veronexAgent:
-  enabled: true
-  image:
-    repository: ghcr.io/veronex/veronex-agent
-    tag: latest
-    pullPolicy: IfNotPresent
-
-  # Agent listens on this port (per-node)
-  port: 9091
-
-  resources:
-    requests:
-      cpu: 50m
-      memory: 32Mi
-    limits:
-      cpu: 200m
-      memory: 64Mi
-
-  env: {}
-
 # ── Subcharts — enable/disable each independently ──────────────────────────────
 # When a subchart is disabled, set the corresponding external* values.
 

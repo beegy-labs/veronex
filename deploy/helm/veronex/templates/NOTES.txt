@@ -21,9 +21,6 @@ Components:
   - veronex (API server + scheduler)
   - veronex-analytics (OTel ingest + read API)
   - veronex-web (Next.js dashboard)
-{{- if .Values.veronexAgent.enabled }}
-  - veronex-agent (per-node hardware metrics, DaemonSet)
-{{- end }}
 {{- if .Values.otelCollector.enabled }}
   - otel-collector (OpenTelemetry Collector)
 {{- end }}

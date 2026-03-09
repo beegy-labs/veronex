@@ -93,9 +93,6 @@ pub const OLLAMA_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// Timeout for Gemini health check (lightweight models list).
 pub const GEMINI_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Timeout for veronex-agent metrics fetch.
-pub const AGENT_METRICS_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Timeout for LLM single-model analysis call.
 pub const LLM_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30);
 

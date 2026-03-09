@@ -9,13 +9,11 @@ COPY Cargo.toml Cargo.lock ./
 
 # Copy all workspace member Cargo.toml files (needed to resolve workspace)
 COPY crates/veronex/Cargo.toml ./crates/veronex/
-COPY crates/veronex-agent/Cargo.toml ./crates/veronex-agent/
 COPY crates/veronex-analytics/Cargo.toml ./crates/veronex-analytics/
 
 # Dummy source for all workspace members — caches dependency compilation
-RUN mkdir -p crates/veronex/src crates/veronex-agent/src crates/veronex-analytics/src && \
+RUN mkdir -p crates/veronex/src crates/veronex-analytics/src && \
     echo "fn main() {}" > crates/veronex/src/main.rs && \
-    echo "fn main() {}" > crates/veronex-agent/src/main.rs && \
     echo "fn main() {}" > crates/veronex-analytics/src/main.rs
 RUN cargo build --release -p veronex-analytics 2>/dev/null || true
 

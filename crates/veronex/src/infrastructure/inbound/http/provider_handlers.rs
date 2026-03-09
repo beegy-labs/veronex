@@ -116,7 +116,7 @@ pub struct RegisterProviderRequest {
     pub gpu_index: Option<i16>,
     /// FK → gpu_servers. Optional; Gemini providers leave this null.
     pub server_id: Option<Uuid>,
-    /// veronex-agent URL (Phase 2, reserved). E.g. `"http://192.168.1.10:9091"`.
+    /// node-exporter URL for hardware metrics. E.g. `"http://192.168.1.10:9100"`.
     pub agent_url: Option<String>,
     /// true = key is on a Google free-tier project.
     /// RPM/RPD limits are managed globally via `gemini_rate_limit_policies`.
