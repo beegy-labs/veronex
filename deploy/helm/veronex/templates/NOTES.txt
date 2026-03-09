@@ -19,6 +19,7 @@ Veronex has been deployed!
 
 Components:
   - veronex (API server + scheduler)
+  - veronex-agent (metrics collector → OTLP push)
   - veronex-analytics (OTel ingest + read API)
   - veronex-web (Next.js dashboard)
 {{- if .Values.otelCollector.enabled }}

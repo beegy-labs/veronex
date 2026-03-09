@@ -1,35 +1,34 @@
 FROM rust:1-alpine AS builder
 
-RUN apk add --no-cache musl-dev protoc
+RUN apk add --no-cache musl-dev
 
 WORKDIR /app
 
-# Copy workspace root manifests (Cargo.lock lives here)
+# Copy workspace root manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Copy all workspace member Cargo.toml files (needed to resolve workspace)
+# Copy all workspace member Cargo.toml files
 COPY crates/veronex/Cargo.toml ./crates/veronex/
 COPY crates/veronex-analytics/Cargo.toml ./crates/veronex-analytics/
 COPY crates/veronex-agent/Cargo.toml ./crates/veronex-agent/
 
-# Dummy source for all workspace members — caches dependency compilation
+# Dummy source for dependency caching
 RUN mkdir -p crates/veronex/src crates/veronex-analytics/src crates/veronex-agent/src && \
     echo "fn main() {}" > crates/veronex/src/main.rs && \
     echo "fn main() {}" > crates/veronex-analytics/src/main.rs && \
     echo "fn main() {}" > crates/veronex-agent/src/main.rs
-RUN cargo build --release -p veronex-analytics 2>/dev/null || true
+RUN cargo build --release -p veronex-agent 2>/dev/null || true
 
 # Real source
-COPY crates/veronex-analytics/src ./crates/veronex-analytics/src
-RUN touch crates/veronex-analytics/src/main.rs && \
-    cargo build --release -p veronex-analytics
+COPY crates/veronex-agent/src ./crates/veronex-agent/src
+RUN touch crates/veronex-agent/src/main.rs && \
+    cargo build --release -p veronex-agent
 
 FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
-COPY --from=builder /app/target/release/veronex-analytics ./
+COPY --from=builder /app/target/release/veronex-agent ./
 
-EXPOSE 3003
-CMD ["./veronex-analytics"]
+CMD ["./veronex-agent"]

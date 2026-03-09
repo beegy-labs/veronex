@@ -2,6 +2,7 @@
 members = [
     "crates/veronex",
     "crates/veronex-analytics",
+    "crates/veronex-agent",
 ]
 resolver = "2"
 

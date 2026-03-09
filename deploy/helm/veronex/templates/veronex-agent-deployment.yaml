@@ -1,0 +1,42 @@
+{{- if .Values.veronexAgent.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-veronex-agent
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.agent.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.veronexAgent.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "veronex.agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        {{- include "veronex.agent.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
+      containers:
+        - name: veronex-agent
+          image: "{{ .Values.veronexAgent.image.repository }}:{{ .Values.veronexAgent.image.tag }}"
+          imagePullPolicy: {{ .Values.veronexAgent.image.pullPolicy }}
+          env:
+            - name: VERONEX_API_URL
+              value: "http://{{ .Release.Name }}-veronex:{{ .Values.veronex.service.port }}"
+            - name: OTEL_HTTP_ENDPOINT
+              value: {{ include "veronex.otelHttpEndpoint" . | quote }}
+            - name: SCRAPE_INTERVAL
+              value: {{ .Values.veronexAgent.scrapeInterval | quote }}
+            - name: RUST_LOG
+              value: "info"
+            {{- range $k, $v := .Values.veronexAgent.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.veronexAgent.resources | nindent 12 }}
+{{- end }}

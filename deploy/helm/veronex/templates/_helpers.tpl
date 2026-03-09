@@ -35,6 +35,15 @@ app.kubernetes.io/component: web
 {{- end }}
 
 {{/*
+Selector labels — veronex-agent
+*/}}
+{{- define "veronex.agent.selectorLabels" -}}
+app.kubernetes.io/name: veronex-agent
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: agent
+{{- end }}
+
+{{/*
 Selector labels — otel-collector
 */}}
 {{- define "veronex.otel.selectorLabels" -}}

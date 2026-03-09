@@ -15,14 +15,6 @@ data:
             endpoint: 0.0.0.0:4317
           http:
             endpoint: 0.0.0.0:4318
-      prometheus:
-        config:
-          scrape_configs:
-            - job_name: veronex-targets
-              scrape_interval: 30s
-              http_sd_configs:
-                - url: http://{{ .Release.Name }}-veronex:{{ .Values.veronex.service.port }}/v1/metrics/targets
-                  refresh_interval: 60s
 
     processors:
       batch:
@@ -53,7 +45,7 @@ data:
           processors: [batch]
           exporters: [kafka/logs]
         metrics:
-          receivers: [prometheus]
+          receivers: [otlp]
           processors: [batch]
           exporters: [kafka/metrics]
         traces:

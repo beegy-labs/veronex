@@ -74,6 +74,23 @@ veronexAnalytics:
 
   env: {}
 
+veronexAgent:
+  enabled: true
+  image:
+    repository: ghcr.io/veronex/veronex-agent
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  scrapeInterval: "30"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  env: {}
+
 veronexWeb:
   image:
     repository: ghcr.io/veronex/veronex-web

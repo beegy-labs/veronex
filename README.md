@@ -204,9 +204,10 @@ Client → POST /v1/chat/completions (X-API-Key)
           ↓ ObservabilityPort → veronex-analytics → OTel → ClickHouse
 ```
 
-Two Rust crates:
+Three Rust crates:
 - **`veronex`** — API server + scheduler (`crates/veronex/`)
 - **`veronex-analytics`** — OTel ingest + analytics read API (`crates/veronex-analytics/`, port 3003)
+- **`veronex-agent`** — Metrics collector: scrapes node-exporter + Ollama, pushes to OTel via OTLP (`crates/veronex-agent/`)
 
 Hexagonal architecture (Ports & Adapters):
 ```

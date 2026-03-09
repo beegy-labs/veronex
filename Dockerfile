@@ -10,11 +10,13 @@ COPY Cargo.toml Cargo.lock ./
 # Copy all workspace member Cargo.toml files
 COPY crates/veronex/Cargo.toml ./crates/veronex/
 COPY crates/veronex-analytics/Cargo.toml ./crates/veronex-analytics/
+COPY crates/veronex-agent/Cargo.toml ./crates/veronex-agent/
 
 # Dummy source for dependency caching
-RUN mkdir -p crates/veronex/src crates/veronex-analytics/src && \
+RUN mkdir -p crates/veronex/src crates/veronex-analytics/src crates/veronex-agent/src && \
     echo "fn main() {}" > crates/veronex/src/main.rs && \
-    echo "fn main() {}" > crates/veronex-analytics/src/main.rs
+    echo "fn main() {}" > crates/veronex-analytics/src/main.rs && \
+    echo "fn main() {}" > crates/veronex-agent/src/main.rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     SQLX_OFFLINE=true cargo build --release -p veronex 2>/dev/null || true
