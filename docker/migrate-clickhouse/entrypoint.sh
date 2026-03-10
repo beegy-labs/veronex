@@ -33,6 +33,6 @@ for f in /migrations/*.sql; do
     "$f" > "$TMPDIR/$(basename "$f")"
 done
 
-DB_URL="clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@${CLICKHOUSE_HOST}:9000/${CLICKHOUSE_DB}?x-multi-statement=true"
+DB_URL="clickhouse://${CLICKHOUSE_HOST}:9000?username=${CLICKHOUSE_USER}&password=${CLICKHOUSE_PASSWORD}&database=${CLICKHOUSE_DB}&x-multi-statement=true"
 
 exec migrate -path "$TMPDIR" -database "$DB_URL" "${@:-up}"

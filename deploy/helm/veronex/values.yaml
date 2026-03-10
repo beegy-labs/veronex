@@ -202,10 +202,10 @@ otelCollector:
 
 migrations:
   enabled: true
-  image: ghcr.io/golang-migrate/migrate:v4.18.3
+  image: migrate/migrate
   clickhouse:
     # Wrapper image with envsubst + migrate
-    image: ghcr.io/golang-migrate/migrate:v4.18.3
+    image: migrate/migrate
     kafkaBroker: ""           # REQUIRED — e.g. redpanda:9092
     kafkaUsername: ""
     kafkaPassword: ""

@@ -224,17 +224,23 @@ services:
 
   # ── Database migrations (run manually) ───────────────────────────────────────
   # Usage:
-  #   docker compose run --rm migrate-postgres [up|down|version]
-  #   docker compose run --rm migrate-clickhouse [up|down|version]
+  #   docker compose run --rm migrate-postgres           # apply all (up)
+  #   docker compose run --rm migrate-clickhouse         # apply all (up)
+  #   docker compose run --rm migrate-postgres down 1    # roll back 1
   migrate-postgres:
-    image: ghcr.io/golang-migrate/migrate:v4.18.3
+    image: migrate/migrate
     profiles: [migrate]
     volumes:
       - ./migrations/postgres:/migrations:ro
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-veronex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-veronex}
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - -path=/migrations
-      - -database=postgres://${POSTGRES_USER:-veronex}:${POSTGRES_PASSWORD:-veronex}@postgres:5432/veronex?sslmode=disable
-      - up
+      - |
+        /migrate -path /migrations \
+          -database "postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/veronex?sslmode=disable" \
+          $${1:-up}
     depends_on:
       postgres:
         condition: service_healthy

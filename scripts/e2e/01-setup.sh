@@ -11,6 +11,8 @@ hdr "Phase 1: Infrastructure Setup"
 if [ "$SKIP_DB_RESET" = "0" ]; then
   docker compose exec -T postgres psql -U veronex -d veronex -c \
     "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
+  # Re-apply migrations since schema was dropped
+  docker compose run --rm migrate-postgres > /dev/null 2>&1
   docker compose restart veronex > /dev/null 2>&1
   info "Waiting for veronex to start..."
   for i in $(seq 1 30); do

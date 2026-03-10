@@ -17,7 +17,10 @@ API="${API_URL:-http://localhost:3001}"
 OLLAMA_URL="${OLLAMA_URL:-https://ollama.girok.dev}"
 NODE_EXPORTER="${NODE_EXPORTER:-http://192.168.1.21:9100}"
 USERNAME="${USERNAME:-admin}"
-PASSWORD=${PASSWORD:?E2E_PASSWORD must be set}
+# E2E_PASSWORD env var required in CI; falls back to default for local dev.
+_E2E_DEFAULT=admin2026!
+PASSWORD=${E2E_PASSWORD:-$_E2E_DEFAULT}
+unset _E2E_DEFAULT
 MODEL="${MODEL:-qwen3:8b}"
 CONCURRENT="${CONCURRENT:-6}"
 SKIP_DB_RESET="${SKIP_DB_RESET:-0}"
