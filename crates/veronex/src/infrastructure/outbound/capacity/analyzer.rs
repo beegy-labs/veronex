@@ -443,7 +443,7 @@ pub async fn sync_provider(
         .unwrap_or({
             if provider_total_vram_mb > 0 { provider_total_vram_mb as u32 } else { 0 }
         });
-    let temp_c = hw.as_ref().map(|h| h.temp_c);
+    let temp_c = hw.as_ref().map(|h| h.max_temp_c());
 
     // Set total VRAM on the pool
     if vram_total_mb > 0 {

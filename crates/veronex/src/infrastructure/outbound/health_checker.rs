@@ -119,6 +119,8 @@ async fn poll_node_exporter_metrics(
         gpu_util_pct: gpu.and_then(|g| g.busy_pct).unwrap_or(0.0) as u8,
         power_w: gpu.and_then(|g| g.power_w).unwrap_or(0.0) as f32,
         temp_c: gpu.and_then(|g| g.temp_c).unwrap_or(0.0) as f32,
+        temp_junction_c: gpu.and_then(|g| g.temp_junction_c).unwrap_or(0.0) as f32,
+        temp_mem_c: gpu.and_then(|g| g.temp_mem_c).unwrap_or(0.0) as f32,
         mem_used_mb: (node_metrics.mem_total_mb.saturating_sub(node_metrics.mem_available_mb)) as u32,
         mem_total_mb: node_metrics.mem_total_mb as u32,
         gpu_vendor,
@@ -211,7 +213,7 @@ pub async fn run_health_checker_loop(
                     thermal.set_thresholds(provider.id, profile);
 
                     let prev  = thermal.get(provider.id);
-                    let level = thermal.update(provider.id, hw.temp_c);
+                    let level = thermal.update(provider.id, hw.max_temp_c());
 
                     if level != prev {
                         match &level {

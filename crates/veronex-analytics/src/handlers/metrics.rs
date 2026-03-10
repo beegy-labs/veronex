@@ -23,6 +23,8 @@ struct ServerMetricsHistoryRow {
     mem_total_mb: f64,
     mem_avail_mb: f64,
     gpu_temp_c: f64,
+    gpu_temp_junction_c: f64,
+    gpu_temp_mem_c: f64,
     gpu_power_w: f64,
 }
 
@@ -32,6 +34,8 @@ pub struct ServerMetricsPoint {
     pub mem_total_mb: u64,
     pub mem_avail_mb: u64,
     pub gpu_temp_c: Option<f64>,
+    pub gpu_temp_junction_c: Option<f64>,
+    pub gpu_temp_mem_c: Option<f64>,
     pub gpu_power_w: Option<f64>,
 }
 
@@ -56,11 +60,11 @@ pub async fn get_server_metrics_history(
     let chip_rows = state
         .ch
         .query(
-            "SELECT DISTINCT Attributes['chip'] AS chip
+            "SELECT DISTINCT attributes['chip'] AS chip
              FROM otel_metrics_gauge
-             WHERE MetricName = 'node_hwmon_chip_names'
-               AND Attributes['chip_name'] = 'amdgpu'
-               AND Attributes['server_id'] = ?
+             WHERE metric_name = 'node_hwmon_chip_names'
+               AND attributes['chip_name'] = 'amdgpu'
+               AND server_id = ?
              LIMIT 1",
         )
         .bind(&server_id_str)
@@ -70,22 +74,30 @@ pub async fn get_server_metrics_history(
 
     let gpu_chip = chip_rows.into_iter().next().map(|r| r.chip).unwrap_or_default();
 
-    // Step 2: pivot query
+    // Step 2: pivot query — edge(temp1), junction(temp2), memory(temp3)
     let query_str = format!(
         "SELECT
-            toStartOfInterval(TimeUnix, INTERVAL {bucket_interval}) AS ts,
-            toFloat64(maxIf(Value, MetricName = 'node_memory_MemTotal_bytes') / 1048576.0) AS mem_total_mb,
-            toFloat64(avgIf(Value, MetricName = 'node_memory_MemAvailable_bytes') / 1048576.0) AS mem_avail_mb,
-            avgIf(Value,
-                MetricName = 'node_hwmon_temp_celsius'
-                AND Attributes['chip'] = ?
-                AND Attributes['sensor'] = 'temp1') AS gpu_temp_c,
-            avgIf(Value,
-                MetricName IN ('node_hwmon_power_average_watt', 'node_hwmon_power_average_watts')
-                AND Attributes['chip'] = ?) AS gpu_power_w
+            toStartOfInterval(ts, INTERVAL {bucket_interval}) AS ts,
+            toFloat64(maxIf(value, metric_name = 'node_memory_MemTotal_bytes') / 1048576.0) AS mem_total_mb,
+            toFloat64(avgIf(value, metric_name = 'node_memory_MemAvailable_bytes') / 1048576.0) AS mem_avail_mb,
+            avgIf(value,
+                metric_name = 'node_hwmon_temp_celsius'
+                AND attributes['chip'] = ?
+                AND attributes['sensor'] = 'temp1') AS gpu_temp_c,
+            avgIf(value,
+                metric_name = 'node_hwmon_temp_celsius'
+                AND attributes['chip'] = ?
+                AND attributes['sensor'] = 'temp2') AS gpu_temp_junction_c,
+            avgIf(value,
+                metric_name = 'node_hwmon_temp_celsius'
+                AND attributes['chip'] = ?
+                AND attributes['sensor'] = 'temp3') AS gpu_temp_mem_c,
+            avgIf(value,
+                metric_name IN ('node_hwmon_power_average_watt', 'node_hwmon_power_average_watts')
+                AND attributes['chip'] = ?) AS gpu_power_w
         FROM otel_metrics_gauge
-        WHERE Attributes['server_id'] = ?
-          AND TimeUnix >= now() - INTERVAL ? HOUR
+        WHERE server_id = ?
+          AND ts >= now() - INTERVAL ? HOUR
         GROUP BY ts
         ORDER BY ts"
     );
@@ -93,6 +105,8 @@ pub async fn get_server_metrics_history(
     let rows = state
         .ch
         .query(&query_str)
+        .bind(&gpu_chip)
+        .bind(&gpu_chip)
         .bind(&gpu_chip)
         .bind(&gpu_chip)
         .bind(&server_id_str)
@@ -114,6 +128,8 @@ pub async fn get_server_metrics_history(
             mem_total_mb: r.mem_total_mb as u64,
             mem_avail_mb: r.mem_avail_mb as u64,
             gpu_temp_c: if r.gpu_temp_c > 0.0 { Some(r.gpu_temp_c) } else { None },
+            gpu_temp_junction_c: if r.gpu_temp_junction_c > 0.0 { Some(r.gpu_temp_junction_c) } else { None },
+            gpu_temp_mem_c: if r.gpu_temp_mem_c > 0.0 { Some(r.gpu_temp_mem_c) } else { None },
             gpu_power_w: if r.gpu_power_w > 0.0 { Some(r.gpu_power_w) } else { None },
         })
         .collect();

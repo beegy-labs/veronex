@@ -75,11 +75,14 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
         <div key={gpu.card} className="flex items-center gap-2 flex-wrap">
           <span className="w-6 text-[10px] font-semibold text-accent-gpu uppercase tracking-wide shrink-0">GPU</span>
           <span className="text-text-dim font-mono">{gpu.card}</span>
-          {gpu.temp_c != null && (
-            <span className={`flex items-center gap-0.5 tabular-nums ${gpu.temp_c >= 85 ? 'text-status-error-fg font-bold' : 'text-text-dim'}`}>
-              <Thermometer className="h-3 w-3" />{gpu.temp_c.toFixed(0)}°C
-            </span>
-          )}
+          {(gpu.temp_junction_c ?? gpu.temp_c) != null && (() => {
+            const t = gpu.temp_junction_c ?? gpu.temp_c!
+            return (
+              <span className={`flex items-center gap-0.5 tabular-nums ${t >= 85 ? 'text-status-error-fg font-bold' : 'text-text-dim'}`}>
+                <Thermometer className="h-3 w-3" />{t.toFixed(0)}°C
+              </span>
+            )
+          })()}
           {gpu.power_w != null && (
             <span className="flex items-center gap-0.5 text-text-dim tabular-nums">
               <Zap className="h-3 w-3 text-accent-power" />{gpu.power_w.toFixed(0)}W
@@ -120,9 +123,10 @@ export function ServerMetricsCompact({
   const memPct = data.mem_total_mb > 0 ? Math.round((memUsed / data.mem_total_mb) * 100) : 0
   const cpuPct = data.cpu_usage_pct != null ? Math.round(data.cpu_usage_pct) : null
   const gpu = data.gpus[gpuIndex ?? 0] ?? null
-  const tempCls = gpu?.temp_c != null && gpu.temp_c >= 85
+  const gpuTemp = gpu?.temp_junction_c ?? gpu?.temp_c ?? null
+  const tempCls = gpuTemp != null && gpuTemp >= 85
     ? 'text-status-error-fg'
-    : gpu?.temp_c != null && gpu.temp_c >= 70
+    : gpuTemp != null && gpuTemp >= 70
     ? 'text-status-warn-fg'
     : 'text-muted-foreground'
 
@@ -145,9 +149,9 @@ export function ServerMetricsCompact({
           </span>
         </span>
       )}
-      {gpu?.temp_c != null && (
+      {gpuTemp != null && (
         <span className={`flex items-center gap-0.5 text-[11px] tabular-nums ${tempCls}`}>
-          <Thermometer className="h-3 w-3 shrink-0" />{gpu.temp_c.toFixed(0)}°C
+          <Thermometer className="h-3 w-3 shrink-0" />{gpuTemp.toFixed(0)}°C
         </span>
       )}
       {gpu?.power_w != null && (

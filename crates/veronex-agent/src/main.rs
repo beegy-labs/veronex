@@ -75,11 +75,11 @@ async fn discover_targets(client: &reqwest::Client, api_url: &str) -> Vec<SdTarg
             resp.json::<Vec<SdTarget>>().await.unwrap_or_default()
         }
         Ok(resp) => {
-            tracing::warn!(status = %resp.status(), "failed to fetch targets");
+            tracing::debug!(status = %resp.status(), "target discovery returned non-success");
             vec![]
         }
         Err(e) => {
-            tracing::warn!("target discovery failed: {e}");
+            tracing::debug!("target discovery failed: {e}");
             vec![]
         }
     }

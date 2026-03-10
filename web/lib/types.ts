@@ -255,6 +255,8 @@ export interface NodeMetrics {
 export interface GpuNodeMetrics {
   card: string
   temp_c: number | null
+  temp_junction_c: number | null
+  temp_mem_c: number | null
   power_w: number | null
   vram_used_mb: number | null
   vram_total_mb: number | null
@@ -339,6 +341,8 @@ export interface ServerMetricsPoint {
   mem_total_mb: number
   mem_avail_mb: number
   gpu_temp_c: number | null
+  gpu_temp_junction_c: number | null
+  gpu_temp_mem_c: number | null
   gpu_power_w: number | null
 }
 

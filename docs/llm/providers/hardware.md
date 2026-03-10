@@ -1,6 +1,6 @@
 # Hardware — GPU Server & Metrics
 
-> SSOT | **Last Updated**: 2026-03-01 (rev: history max 168h → 1440h, adaptive buckets)
+> SSOT | **Last Updated**: 2026-03-10 (rev: junction/memory temp, max_temp_c thermal)
 
 ## Task Guide
 
@@ -108,7 +108,9 @@ pub struct NodeMetrics {
 }
 pub struct GpuNodeMetrics {
     pub card: String,              // "card0"
-    pub temp_c: Option<f64>,
+    pub temp_c: Option<f64>,       // edge (temp1)
+    pub temp_junction_c: Option<f64>, // hotspot (temp2) — primary throttle input
+    pub temp_mem_c: Option<f64>,   // VRAM (temp3) — data corruption guard
     pub power_w: Option<f64>,
     pub vram_used_mb: Option<u64>,
     pub vram_total_mb: Option<u64>,
@@ -123,7 +125,9 @@ pub struct ServerMetricsPoint {
     pub ts: String,             // ISO 8601, 1-min bucket start
     pub mem_total_mb: u64,
     pub mem_avail_mb: u64,
-    pub gpu_temp_c: Option<f64>,
+    pub gpu_temp_c: Option<f64>,          // edge
+    pub gpu_temp_junction_c: Option<f64>, // junction/hotspot
+    pub gpu_temp_mem_c: Option<f64>,      // VRAM
     pub gpu_power_w: Option<f64>,
 }
 ```
@@ -141,7 +145,9 @@ pub struct ServerMetricsPoint {
 | `node_drm_gpu_busy_percent{card="cardN"}` | GPU utilization (`--collector.drm`) |
 | `node_drm_memory_vram_used_bytes` | VRAM used |
 | `node_drm_memory_vram_total_bytes` | VRAM total |
-| `node_hwmon_temp_celsius` | GPU temp (amdgpu only) |
+| `node_hwmon_temp_celsius{sensor="temp1"}` | GPU edge temp (amdgpu only) |
+| `node_hwmon_temp_celsius{sensor="temp2"}` | GPU junction/hotspot temp |
+| `node_hwmon_temp_celsius{sensor="temp3"}` | GPU memory (HBM/GDDR) temp |
 | `node_hwmon_power_average_watt(s)` | GPU power (both spellings accepted) |
 
 **Required flags**: `--collector.drm --collector.hwmon --collector.meminfo`
@@ -182,15 +188,19 @@ Controlled by `let bucket_interval` in `gpu_server_handlers.rs` → passed into 
 ```sql
 -- Two-step: first find amdgpu chip label, then:
 -- bucket_interval = "1 MINUTE" | "5 MINUTE" | "60 MINUTE" (selected by hours range)
-SELECT toStartOfInterval(TimeUnix, INTERVAL {bucket_interval}) AS ts,
-       maxIf(Value, MetricName='node_memory_MemTotal_bytes') / 1048576      AS mem_total_mb,
-       avgIf(Value, MetricName='node_memory_MemAvailable_bytes') / 1048576  AS mem_avail_mb,
-       avgIf(Value, MetricName='node_hwmon_temp_celsius'
-             AND Attributes['chip'] = ? AND Attributes['sensor']='temp1')    AS gpu_temp_c,
-       avgIf(Value, MetricName IN ('node_hwmon_power_average_watt',
-             'node_hwmon_power_average_watts') AND Attributes['chip'] = ?)   AS gpu_power_w
+SELECT toStartOfInterval(ts, INTERVAL {bucket_interval}) AS ts,
+       maxIf(value, metric_name='node_memory_MemTotal_bytes') / 1048576      AS mem_total_mb,
+       avgIf(value, metric_name='node_memory_MemAvailable_bytes') / 1048576  AS mem_avail_mb,
+       avgIf(value, metric_name='node_hwmon_temp_celsius'
+             AND attributes['chip'] = ? AND attributes['sensor']='temp1')    AS gpu_temp_c,
+       avgIf(value, metric_name='node_hwmon_temp_celsius'
+             AND attributes['chip'] = ? AND attributes['sensor']='temp2')    AS gpu_temp_junction_c,
+       avgIf(value, metric_name='node_hwmon_temp_celsius'
+             AND attributes['chip'] = ? AND attributes['sensor']='temp3')    AS gpu_temp_mem_c,
+       avgIf(value, metric_name IN ('node_hwmon_power_average_watt',
+             'node_hwmon_power_average_watts') AND attributes['chip'] = ?)   AS gpu_power_w
 FROM otel_metrics_gauge
-WHERE Attributes['server_id'] = ? AND TimeUnix >= now() - INTERVAL ? HOUR
+WHERE server_id = ? AND ts >= now() - INTERVAL ? HOUR
 GROUP BY ts ORDER BY ts
 ```
 

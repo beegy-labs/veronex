@@ -20,7 +20,14 @@ pub struct HwMetrics {
     pub vram_total_mb: u32,
     pub gpu_util_pct: u8,
     pub power_w: f32,
+    /// GPU edge temperature (°C). Kept for backward compat + logging.
     pub temp_c: f32,
+    /// GPU junction/hotspot temperature (°C). Primary throttle input.
+    #[serde(default)]
+    pub temp_junction_c: f32,
+    /// GPU memory temperature (°C). VRAM thermal protection.
+    #[serde(default)]
+    pub temp_mem_c: f32,
     pub mem_used_mb: u32,
     pub mem_total_mb: u32,
     /// GPU vendor from sysfs: "amd", "nvidia", or empty.
@@ -34,9 +41,15 @@ impl HwMetrics {
         self.vram_total_mb as i64 - self.vram_used_mb as i64
     }
 
-    /// Returns `true` when the GPU temperature is at or above 85 °C.
+    /// Worst-case temperature across all GPU sensors.
+    /// Used for thermal throttle decisions — junction is typically the hottest.
+    pub fn max_temp_c(&self) -> f32 {
+        self.temp_c.max(self.temp_junction_c).max(self.temp_mem_c)
+    }
+
+    /// Returns `true` when any GPU sensor is at or above 85 °C.
     pub fn is_overheating(&self) -> bool {
-        self.temp_c >= 85.0
+        self.max_temp_c() >= 85.0
     }
 }
 
@@ -108,8 +121,14 @@ pub struct NodeMetrics {
 pub struct GpuNodeMetrics {
     /// DRM card name, e.g. `"card0"`.
     pub card: String,
-    /// GPU temperature in °C (hwmon).
+    /// GPU edge temperature in °C (hwmon sensor=temp1).
     pub temp_c: Option<f64>,
+    /// GPU junction/hotspot temperature in °C (hwmon sensor=temp2).
+    /// Highest point on die — primary throttle trigger.
+    pub temp_junction_c: Option<f64>,
+    /// GPU memory (HBM/GDDR) temperature in °C (hwmon sensor=temp3).
+    /// VRAM overheating causes silent data corruption in LLM inference.
+    pub temp_mem_c: Option<f64>,
     /// GPU power draw in Watts (hwmon).
     pub power_w: Option<f64>,
     /// VRAM used in MiB (DRM).
@@ -186,6 +205,7 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
     let mut chip_name_map: HashMap<String, String> = HashMap::new();
 
     // hwmon metrics keyed by chip label; only amdgpu chips are collected.
+    // Keyed as "chip:sensor" for per-sensor lookup (temp1=edge, temp2=junction, temp3=memory).
     let mut hwmon_temp: HashMap<String, f64> = HashMap::new();
     let mut hwmon_power: HashMap<String, f64> = HashMap::new();
     let mut amdgpu_chips: HashSet<String> = HashSet::new();
@@ -282,8 +302,8 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
                     let is_amdgpu = chip.contains("amdgpu")
                         || chip_name_map.get(chip).is_some_and(|n| n == "amdgpu");
                     if is_amdgpu {
-                        // Take the lowest-numbered sensor as the representative temp.
-                        hwmon_temp.entry(chip.to_string()).or_insert(value);
+                        let sensor = get_label(metric_part, "sensor").unwrap_or("temp1");
+                        hwmon_temp.insert(format!("{chip}:{sensor}"), value);
                         amdgpu_chips.insert(chip.to_string());
                     }
                 }
@@ -334,7 +354,9 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
 
                 GpuNodeMetrics {
                     card: card.clone(),
-                    temp_c: chip.and_then(|c| hwmon_temp.get(c)).copied(),
+                    temp_c: chip.and_then(|c| hwmon_temp.get(&format!("{c}:temp1"))).copied(),
+                    temp_junction_c: chip.and_then(|c| hwmon_temp.get(&format!("{c}:temp2"))).copied(),
+                    temp_mem_c: chip.and_then(|c| hwmon_temp.get(&format!("{c}:temp3"))).copied(),
                     power_w: chip.and_then(|c| hwmon_power.get(c)).copied(),
                     vram_used_mb: drm_vram_used
                         .get(card)
@@ -353,7 +375,9 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
             .enumerate()
             .map(|(i, chip)| GpuNodeMetrics {
                 card: format!("card{i}"),
-                temp_c: hwmon_temp.get(chip).copied(),
+                temp_c: hwmon_temp.get(&format!("{chip}:temp1")).copied(),
+                temp_junction_c: hwmon_temp.get(&format!("{chip}:temp2")).copied(),
+                temp_mem_c: hwmon_temp.get(&format!("{chip}:temp3")).copied(),
                 power_w: hwmon_power.get(chip).copied(),
                 vram_used_mb: None,
                 vram_total_mb: None,

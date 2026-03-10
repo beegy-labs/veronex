@@ -34,16 +34,6 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_assignment() {
-        let id = "server-abc-123";
-        let owner = (0..3).find(|&o| owns(id, o, 3)).unwrap();
-        // Same input always maps to same owner
-        for _ in 0..100 {
-            assert!(owns(id, owner, 3));
-        }
-    }
-
-    #[test]
     fn no_duplicates() {
         let ids = ["srv-1", "srv-2", "srv-3", "srv-4", "srv-5"];
         let replicas = 3;

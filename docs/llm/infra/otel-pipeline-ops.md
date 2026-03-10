@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline Operations
 
-> SSOT | **Last Updated**: 2026-03-04 (rev: split from `otel-pipeline.md`)
+> SSOT | **Last Updated**: 2026-03-09 (rev: lean metrics schema, fix MV JSON extraction)
 
 See `infra/otel-pipeline.md` for pipeline overview, OTel Collector config, and Chain 1 (otel-logs).
 
@@ -8,45 +8,44 @@ See `infra/otel-pipeline.md` for pipeline overview, OTel Collector config, and C
 
 ## Chain 2 -- otel-metrics -> otel_metrics_gauge
 
-OTLP JSON (camelCase) unpacked via `arrayJoin`. Note `Exemplars.*` flat sub-columns (see Gotchas).
+Lean schema — only 5 columns (was 17). `server_id` extracted from OTLP resource attributes for direct column filtering.
 
 ```sql
-CREATE TABLE kafka_otel_metrics (raw String) ENGINE = Kafka SETTINGS
-  kafka_broker_list='redpanda:9092', kafka_topic_list='otel-metrics',
-  kafka_group_name='clickhouse-otel-metrics', kafka_format='JSONAsString';
+CREATE TABLE otel_metrics_gauge (
+    ts           DateTime64(9),
+    server_id    LowCardinality(String),
+    metric_name  LowCardinality(String),
+    value        Float64,
+    attributes   Map(LowCardinality(String), String)
+) ENGINE = MergeTree() PARTITION BY toDate(ts)
+ORDER BY (metric_name, server_id, ts)
+TTL toDate(ts) + INTERVAL 30 DAY;
 
 CREATE MATERIALIZED VIEW kafka_otel_metrics_mv TO otel_metrics_gauge AS
 SELECT
-  CAST(arrayMap(x -> (JSONExtractString(x,'key'),
-    JSONExtractString(JSONExtractRaw(x,'value'),'stringValue')),
-    JSONExtractArrayRaw(rm, 'resource.attributes')),
-    'Map(LowCardinality(String), String)') AS ResourceAttributes,
-  '' AS ResourceSchemaUrl, '' AS ScopeName, '' AS ScopeVersion,
-  CAST(map(), 'Map(LowCardinality(String), String)') AS ScopeAttributes,
-  0 AS ScopeDroppedAttrCount, '' AS ScopeSchemaUrl, '' AS ServiceName,
-  JSONExtractString(metric, 'name') AS MetricName,
-  JSONExtractString(metric, 'description') AS MetricDescription,
-  JSONExtractString(metric, 'unit') AS MetricUnit,
-  CAST(arrayMap(x -> (JSONExtractString(x,'key'),
-    JSONExtractString(JSONExtractRaw(x,'value'),'stringValue')),
-    JSONExtractArrayRaw(dp, 'attributes')),
-    'Map(LowCardinality(String), String)') AS Attributes,
-  fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'startTimeUnixNano'))) AS StartTimeUnix,
-  fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'timeUnixNano'))) AS TimeUnix,
-  JSONExtractFloat(dp, 'asDouble') AS Value, 0 AS Flags,
-  CAST([], 'Array(Map(LowCardinality(String), String))') AS `Exemplars.FilteredAttributes`,
-  CAST([], 'Array(DateTime64(9))') AS `Exemplars.TimeUnix`,
-  CAST([], 'Array(Float64)') AS `Exemplars.Value`,
-  CAST([], 'Array(String)') AS `Exemplars.SpanId`,
-  CAST([], 'Array(String)') AS `Exemplars.TraceId`
+    fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'timeUnixNano'))) AS ts,
+    ResAttrs['server_id'] AS server_id,
+    JSONExtractString(metric, 'name') AS metric_name,
+    JSONExtractFloat(dp, 'asDouble') AS value,
+    CAST(arrayMap(x -> (JSONExtractString(x,'key'),
+        JSONExtractString(JSONExtractRaw(x,'value'),'stringValue')),
+        JSONExtractArrayRaw(dp, 'attributes')),
+        'Map(LowCardinality(String), String)') AS attributes
 FROM (
-  SELECT
-    arrayJoin(JSONExtractArrayRaw(raw, 'resourceMetrics')) AS rm,
-    arrayJoin(JSONExtractArrayRaw(rm, 'scopeMetrics')) AS sm,
-    arrayJoin(JSONExtractArrayRaw(sm, 'metrics')) AS metric,
-    arrayJoin(JSONExtractArrayRaw(JSONExtractRaw(metric,'gauge'),'dataPoints')) AS dp
-  FROM kafka_otel_metrics
-  WHERE JSONHas(metric, 'gauge')
+    SELECT rm, metric, dp,
+        CAST(arrayMap(x -> (JSONExtractString(x,'key'),
+            JSONExtractString(JSONExtractRaw(x,'value'),'stringValue')),
+            JSONExtractArrayRaw(JSONExtractRaw(rm, 'resource'), 'attributes')),
+            'Map(LowCardinality(String), String)') AS ResAttrs
+    FROM (
+        SELECT
+            arrayJoin(JSONExtractArrayRaw(raw, 'resourceMetrics')) AS rm,
+            arrayJoin(JSONExtractArrayRaw(rm, 'scopeMetrics')) AS sm,
+            arrayJoin(JSONExtractArrayRaw(sm, 'metrics')) AS metric,
+            arrayJoin(JSONExtractArrayRaw(JSONExtractRaw(metric,'gauge'),'dataPoints')) AS dp
+        FROM kafka_otel_metrics
+        WHERE JSONHas(metric, 'gauge')
+    )
 );
 ```
 
@@ -62,10 +61,6 @@ SELECT now64(3) AS received_at, raw AS payload FROM kafka_otel_traces;
 ---
 
 ## Gotchas
-
-### ClickHouse Nested type in Materialized Views
-
-`Nested` columns are stored as parallel `Array(...)` columns internally. A MV `SELECT` must alias each sub-column as `Column.SubColumn` individually. Using `[] AS Exemplars` causes `THERE_IS_NO_COLUMN`. See Chain 2 SQL for the correct pattern with `Exemplars.FilteredAttributes`, `Exemplars.TimeUnix`, etc.
 
 ### Target tables must exist before Materialized Views
 
@@ -191,7 +186,6 @@ TTLs set via `__RETENTION_*__` placeholders in `schema.sql`, substituted by `ini
 | `otel_logs` | `CLICKHOUSE_RETENTION_ANALYTICS_DAYS` | 90 days |
 | `otel_metrics_gauge` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
 | `otel_traces_raw` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
-| `node_metrics` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
 | `audit_events` | `CLICKHOUSE_RETENTION_AUDIT_DAYS` | 365 days |
 
 Set in `.env` before first `docker compose up -d`. For existing volumes, use `ALTER TABLE ... MODIFY TTL toDate(Timestamp) + INTERVAL 30 DAY`.

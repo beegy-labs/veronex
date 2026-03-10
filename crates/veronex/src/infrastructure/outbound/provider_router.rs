@@ -504,7 +504,7 @@ pub async fn get_ollama_available_vram_mb(
                 tracing::warn!(
                     provider_id = %provider.id,
                     name = %provider.name,
-                    temp = hw.temp_c,
+                    temp = hw.max_temp_c(),
                     "provider overheating — skipping dispatch"
                 );
                 return i64::MIN;
