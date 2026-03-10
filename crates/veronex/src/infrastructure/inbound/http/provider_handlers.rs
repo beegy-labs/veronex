@@ -14,7 +14,7 @@ use crate::infrastructure::outbound::health_checker::check_provider;
 use crate::infrastructure::outbound::valkey_keys;
 
 use super::audit_helpers::emit_audit;
-use super::error::AppError;
+use super::error::{AppError, db_error};
 use super::gemini_helpers;
 use super::provider_validation::{parse_provider_type, validate_provider_url};
 use super::state::AppState;
@@ -196,7 +196,7 @@ pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvid
         .await
         .map_err(|e| {
             tracing::error!(%id, "failed to fetch provider: {e}");
-            AppError::Internal(anyhow::anyhow!("database error"))
+            db_error(e)
         })?
         .ok_or_else(|| AppError::NotFound("provider not found".into()))
 }
@@ -261,7 +261,7 @@ pub async fn register_provider(
     let registry = &state.provider_registry;
     if let Err(e) = registry.register(&provider).await {
         tracing::error!("failed to register provider: {e}");
-        return AppError::Internal(anyhow::anyhow!("database error")).into_response();
+        return db_error(e).into_response();
     }
 
     let status_str = initial_status.as_str();
@@ -299,7 +299,7 @@ pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse 
         }
         Err(e) => {
             tracing::error!("failed to list providers: {e}");
-            AppError::Internal(anyhow::anyhow!("database error")).into_response()
+            db_error(e).into_response()
         }
     }
 }
@@ -325,7 +325,7 @@ pub async fn delete_provider(
         }
         Err(e) => {
             tracing::error!(%id, "failed to deactivate provider: {e}");
-            AppError::Internal(anyhow::anyhow!("database error")).into_response()
+            db_error(e).into_response()
         }
     }
 }
@@ -396,7 +396,7 @@ pub async fn update_provider(
 
     if let Err(e) = registry.update(&provider).await {
         tracing::error!(%id, "update_provider: failed: {e}");
-        return AppError::Internal(anyhow::anyhow!("database error")).into_response();
+        return db_error(e).into_response();
     }
 
     let resource_type = provider.provider_type.resource_type();

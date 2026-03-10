@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
 import { fmtMbShort } from '@/lib/chart-theme'
+import { RESOURCE_CRITICAL, RESOURCE_WARNING } from '@/lib/constants'
 import { useLabSettings } from '@/components/lab-settings-provider'
 
 export function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
@@ -46,7 +47,7 @@ export function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
 export function VramBar({ used, total }: { used: number; total: number }) {
   if (total === 0) return <span className="text-xs text-muted-foreground italic">unknown</span>
   const pct = Math.min(100, Math.round((used / total) * 100))
-  const color = pct > 90 ? 'bg-status-error' : pct > 70 ? 'bg-status-warn' : 'bg-status-success'
+  const color = pct > RESOURCE_CRITICAL ? 'bg-status-error' : pct > RESOURCE_WARNING ? 'bg-status-warn' : 'bg-status-success'
   return (
     <div className="flex items-center gap-2 min-w-32">
       <div className="flex-1 h-2 rounded-full bg-muted/60 overflow-hidden">

@@ -79,6 +79,13 @@ pub const QUEUE_PROCESSING: &str = "veronex:queue:processing";
 /// Scoring bonus (MB) for models already loaded in VRAM (locality preference).
 pub const MODEL_LOCALITY_BONUS_MB: i64 = 100_000;
 
+// ── Streaming buffer limits ─────────────────────────────────────────────────
+
+/// Maximum bytes allowed in an SSE/NDJSON line buffer before aborting.
+///
+/// Shared by Ollama (NDJSON) and Gemini (SSE) streaming adapters.
+pub const MAX_LINE_BUFFER: usize = 1_048_576; // 1 MB
+
 // ── HTTP request timeouts ──────────────────────────────────────────────────
 
 /// Timeout for inference requests to Ollama/Gemini providers (5 min).

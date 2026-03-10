@@ -10,6 +10,8 @@ use crate::domain::enums::ProviderType;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 
+use super::constants::ERR_DATABASE;
+use super::error::error_json;
 use super::state::AppState;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
@@ -62,11 +64,7 @@ pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
         }
         Err(e) => {
             tracing::error!("ollama list_models: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
         }
     }
 }
@@ -96,11 +94,7 @@ pub async fn list_model_providers(
         }
         Err(e) => {
             tracing::error!("ollama list_model_providers: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
         }
     }
 }
@@ -117,11 +111,7 @@ pub async fn list_provider_models(
         }
         Err(e) => {
             tracing::error!("ollama list_provider_models: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
         }
     }
 }
@@ -145,11 +135,7 @@ pub async fn sync_all_providers(
         }
         Err(e) => {
             tracing::error!("sync_all_providers: failed to list providers: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
+            return error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response();
         }
     };
 
@@ -166,21 +152,18 @@ pub async fn sync_all_providers(
         Ok(id) => id,
         Err(e) => {
             tracing::error!("sync_all_providers: failed to create sync job: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
+            return error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response();
         }
     };
 
     // Clone Arcs for the background task.
+    let http_client = state.http_client.clone();
     let ollama_model_repo = state.ollama_model_repo.clone();
     let ollama_sync_job_repo = state.ollama_sync_job_repo.clone();
     let model_selection_repo = state.model_selection_repo.clone();
 
     tokio::spawn(async move {
-        let client = reqwest::Client::new();
+        let client = http_client;
 
         for provider in providers {
             let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
@@ -296,11 +279,7 @@ pub async fn get_sync_status(
             .into_response(),
         Err(e) => {
             tracing::error!("get_sync_status: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
         }
     }
 }

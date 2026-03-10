@@ -6,11 +6,13 @@ import { Thermometer, Zap, MemoryStick, WifiOff, RefreshCw, Cpu } from 'lucide-r
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
+import { fmtMb } from '@/lib/chart-theme'
+import {
+  GPU_TEMP_CRITICAL, GPU_TEMP_WARNING,
+  RESOURCE_CRITICAL, RESOURCE_WARNING,
+} from '@/lib/constants'
 
-export function fmtMb(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GiB`
-  return `${mb} MiB`
-}
+export { fmtMb } from '@/lib/chart-theme'
 
 // ── Full-width metrics cell (Servers page) ────────────────────────────────────
 
@@ -48,7 +50,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
         <span className="text-text-bright font-mono tabular-nums">
           {fmtMb(memUsed)}<span className="text-muted-foreground/70"> / {fmtMb(data.mem_total_mb)}</span>
         </span>
-        <span className={`ml-auto font-semibold tabular-nums ${memPct >= 90 ? 'text-status-error-fg' : memPct >= 75 ? 'text-status-warning-fg' : 'text-muted-foreground'}`}>
+        <span className={`ml-auto font-semibold tabular-nums ${memPct >= RESOURCE_CRITICAL ? 'text-status-error-fg' : memPct >= RESOURCE_WARNING ? 'text-status-warning-fg' : 'text-muted-foreground'}`}>
           {memPct}%
         </span>
       </div>
@@ -63,7 +65,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
               : <>{data.cpu_logical}<span className="text-muted-foreground/60">t</span></>}
           </span>
           {cpuPct != null && (
-            <span className={`ml-auto font-semibold tabular-nums ${cpuPct >= 90 ? 'text-status-error-fg' : cpuPct >= 75 ? 'text-status-warning-fg' : 'text-muted-foreground'}`}>
+            <span className={`ml-auto font-semibold tabular-nums ${cpuPct >= RESOURCE_CRITICAL ? 'text-status-error-fg' : cpuPct >= RESOURCE_WARNING ? 'text-status-warning-fg' : 'text-muted-foreground'}`}>
               {cpuPct}%
             </span>
           )}
@@ -78,7 +80,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
           {(gpu.temp_junction_c ?? gpu.temp_c) != null && (() => {
             const t = gpu.temp_junction_c ?? gpu.temp_c!
             return (
-              <span className={`flex items-center gap-0.5 tabular-nums ${t >= 85 ? 'text-status-error-fg font-bold' : 'text-text-dim'}`}>
+              <span className={`flex items-center gap-0.5 tabular-nums ${t >= GPU_TEMP_CRITICAL ? 'text-status-error-fg font-bold' : 'text-text-dim'}`}>
                 <Thermometer className="h-3 w-3" />{t.toFixed(0)}°C
               </span>
             )
@@ -124,9 +126,9 @@ export function ServerMetricsCompact({
   const cpuPct = data.cpu_usage_pct != null ? Math.round(data.cpu_usage_pct) : null
   const gpu = data.gpus[gpuIndex ?? 0] ?? null
   const gpuTemp = gpu?.temp_junction_c ?? gpu?.temp_c ?? null
-  const tempCls = gpuTemp != null && gpuTemp >= 85
+  const tempCls = gpuTemp != null && gpuTemp >= GPU_TEMP_CRITICAL
     ? 'text-status-error-fg'
-    : gpuTemp != null && gpuTemp >= 70
+    : gpuTemp != null && gpuTemp >= GPU_TEMP_WARNING
     ? 'text-status-warn-fg'
     : 'text-muted-foreground'
 
@@ -137,14 +139,14 @@ export function ServerMetricsCompact({
         <span className="tabular-nums font-mono text-[11px] text-text-dim">
           {fmtMb(memUsed)}<span className="text-muted-foreground/40">/{fmtMb(data.mem_total_mb)}</span>
         </span>
-        <span className={`text-[10px] tabular-nums ${memPct >= 90 ? 'text-status-error-fg' : memPct >= 75 ? 'text-status-warning-fg' : 'text-muted-foreground/70'}`}>
+        <span className={`text-[10px] tabular-nums ${memPct >= RESOURCE_CRITICAL ? 'text-status-error-fg' : memPct >= RESOURCE_WARNING ? 'text-status-warning-fg' : 'text-muted-foreground/70'}`}>
           {memPct}%
         </span>
       </span>
       {cpuPct != null && (
         <span className="flex items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground">
           <Cpu className="h-3 w-3 shrink-0" />
-          <span className={cpuPct >= 90 ? 'text-status-error-fg font-bold' : cpuPct >= 70 ? 'text-status-warning-fg' : ''}>
+          <span className={cpuPct >= RESOURCE_CRITICAL ? 'text-status-error-fg font-bold' : cpuPct >= RESOURCE_WARNING ? 'text-status-warning-fg' : ''}>
             {cpuPct}%
           </span>
         </span>

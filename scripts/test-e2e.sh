@@ -23,7 +23,7 @@ export E2E_STATE; E2E_STATE=$(mktemp /tmp/veronex-e2e-state.XXXXXX)
 COUNTS_FILE="$E2E_STATE.counts"
 : > "$E2E_STATE"
 : > "$COUNTS_FILE"
-cleanup() { rm -f "$E2E_STATE" "$COUNTS_FILE" /tmp/_sched_login.json 2>/dev/null; }
+cleanup() { rm -f "$E2E_STATE" "$COUNTS_FILE" "$COUNTS_FILE".* /tmp/_sched_login.json 2>/dev/null; }
 trap cleanup EXIT
 
 # ── Banner ───────────────────────────────────────────────────────────────────
@@ -34,28 +34,46 @@ echo -e "${CYAN}${BOLD}═══════════════════
 echo -e "  ${CYAN}API=${API_URL:-http://localhost:3001}  Model=${MODEL:-qwen3:8b}  Concurrency=${CONCURRENT:-6}${NC}"
 
 # ── Run phases ───────────────────────────────────────────────────────────────
-PHASES=(
-  "01-setup.sh"
-  "02-inference.sh"
-  "03-crud.sh"
-  "04-security.sh"
-  "05-api-surface.sh"
-  "06-lifecycle.sh"
-)
+# Sequential: 01-setup (creates state) then 02-inference (generates data)
+bash "$E2E_DIR/01-setup.sh"
+bash "$E2E_DIR/02-inference.sh"
 
-for phase in "${PHASES[@]}"; do
-  bash "$E2E_DIR/$phase"
+# Parallel: 03-06 read shared state but write separate counts files
+PARALLEL_PHASES=("03-crud.sh" "04-security.sh" "05-api-surface.sh" "06-lifecycle.sh")
+PARALLEL_PIDS=()
+PARALLEL_COUNTS=()
+PARALLEL_EXIT=0
+
+for phase in "${PARALLEL_PHASES[@]}"; do
+  phase_counts="$COUNTS_FILE.${phase%.sh}"
+  : > "$phase_counts"
+  PARALLEL_COUNTS+=("$phase_counts")
+  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase" &
+  PARALLEL_PIDS+=($!)
+done
+
+# Wait for all parallel phases; collect any failures
+for i in "${!PARALLEL_PIDS[@]}"; do
+  if ! wait "${PARALLEL_PIDS[$i]}"; then
+    echo -e "${RED}[ERROR]${NC} ${PARALLEL_PHASES[$i]} exited non-zero" >&2
+    PARALLEL_EXIT=1
+  fi
 done
 
 # ── Aggregate results ────────────────────────────────────────────────────────
+# Collect counts from sequential phases (main counts file) + parallel phase files
+ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}")
 TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
-while IFS= read -r line; do
-  case "$line" in
-    PASS_COUNT=*) TOTAL_PASS=$((TOTAL_PASS + ${line#PASS_COUNT=})) ;;
-    FAIL_COUNT=*) TOTAL_FAIL=$((TOTAL_FAIL + ${line#FAIL_COUNT=})) ;;
-    FAIL_MSG=*)   ALL_FAIL_MSGS+=("${line#FAIL_MSG=}") ;;
-  esac
-done < "$COUNTS_FILE"
+for cf in "${ALL_COUNTS_FILES[@]}"; do
+  [ -f "$cf" ] || continue
+  while IFS= read -r line; do
+    case "$line" in
+      PASS_COUNT=*) TOTAL_PASS=$((TOTAL_PASS + ${line#PASS_COUNT=})) ;;
+      FAIL_COUNT=*) TOTAL_FAIL=$((TOTAL_FAIL + ${line#FAIL_COUNT=})) ;;
+      FAIL_MSG=*)   ALL_FAIL_MSGS+=("${line#FAIL_MSG=}") ;;
+    esac
+  done < "$cf"
+done
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 # Load inference round stats from state
@@ -81,4 +99,6 @@ fi
 
 echo -e "${CYAN}${BOLD}══════════════════════════════════════════════${NC}"
 
+# Exit non-zero if any test failed or a parallel phase crashed
+[ "$PARALLEL_EXIT" -ne 0 ] && [ "$TOTAL_FAIL" -eq 0 ] && TOTAL_FAIL=1
 exit "$TOTAL_FAIL"

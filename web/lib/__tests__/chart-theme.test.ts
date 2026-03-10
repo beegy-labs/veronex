@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fmtCompact, fmtMs, fmtMsAxis, fmtMsNullable, fmtPct, fmtMbShort } from '../chart-theme'
+import { fmtCompact, fmtMs, fmtMsAxis, fmtMsNullable, fmtPct, fmtMb, fmtMbShort } from '../chart-theme'
 
 describe('fmtCompact', () => {
   it('returns raw number below 1K', () => {
@@ -80,6 +80,18 @@ describe('fmtPct', () => {
     expect(fmtPct(50)).toBe('50%')
     expect(fmtPct(95.6)).toBe('96%')
     expect(fmtPct(100)).toBe('100%')
+  })
+})
+
+describe('fmtMb', () => {
+  it('formats MiB below 1024', () => {
+    expect(fmtMb(512)).toBe('512 MiB')
+  })
+
+  it('formats GiB at or above 1024', () => {
+    expect(fmtMb(1024)).toBe('1.0 GiB')
+    expect(fmtMb(2048)).toBe('2.0 GiB')
+    expect(fmtMb(8192)).toBe('8.0 GiB')
   })
 })
 

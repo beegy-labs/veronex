@@ -101,13 +101,15 @@ E2E_STATE="${E2E_STATE:-/tmp/veronex-e2e-state.env}"
 save_var()   { echo "export $1=\"$2\"" >> "$E2E_STATE"; export "$1"="$2"; }
 load_state() { [ -f "$E2E_STATE" ] && source "$E2E_STATE" || true; }
 
-# Write pass/fail counts to state file for aggregation
+# Write pass/fail counts to state file for aggregation.
+# Parallel phases set E2E_COUNTS_FILE to a phase-specific path.
 save_counts() {
-  echo "PASS_COUNT=$PASS_COUNT" >> "$E2E_STATE.counts"
-  echo "FAIL_COUNT=$FAIL_COUNT" >> "$E2E_STATE.counts"
+  local cf="${E2E_COUNTS_FILE:-$E2E_STATE.counts}"
+  echo "PASS_COUNT=$PASS_COUNT" >> "$cf"
+  echo "FAIL_COUNT=$FAIL_COUNT" >> "$cf"
   if [ ${#FAIL_MSGS[@]} -gt 0 ]; then
     for msg in "${FAIL_MSGS[@]}"; do
-      echo "FAIL_MSG=$msg" >> "$E2E_STATE.counts"
+      echo "FAIL_MSG=$msg" >> "$cf"
     done
   fi
 }
