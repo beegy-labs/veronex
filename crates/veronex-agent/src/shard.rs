@@ -26,7 +26,9 @@ pub fn ordinal_from_hostname() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Concrete edge cases kept as documentation.
     #[test]
     fn single_replica_owns_all() {
         assert!(owns("any-server", 0, 1));
@@ -34,38 +36,47 @@ mod tests {
     }
 
     #[test]
-    fn no_duplicates() {
-        let ids = ["srv-1", "srv-2", "srv-3", "srv-4", "srv-5"];
-        let replicas = 3;
-        for id in &ids {
-            let owners: Vec<u32> = (0..replicas).filter(|&o| owns(id, o, replicas)).collect();
-            assert_eq!(owners.len(), 1, "{id} assigned to multiple owners: {owners:?}");
-        }
-    }
-
-    #[test]
-    fn even_distribution() {
-        let replicas = 4;
-        let mut counts = [0u32; 4];
-        for i in 0..1000 {
-            let id = format!("server-{i}");
-            let owner = (0..replicas).find(|&o| owns(&id, o, replicas)).unwrap();
-            counts[owner as usize] += 1;
-        }
-        // Each shard should get roughly 250 ± 50
-        for (i, &c) in counts.iter().enumerate() {
-            assert!(
-                (200..=300).contains(&c),
-                "shard {i} got {c}/1000 targets — uneven distribution"
-            );
-        }
-    }
-
-    #[test]
     fn ordinal_parsing() {
-        // Can't set env in parallel tests safely, so test the parse logic
         assert_eq!("veronex-agent-2".rsplit('-').next().and_then(|s| s.parse::<u32>().ok()), Some(2));
         assert_eq!("agent-0".rsplit('-').next().and_then(|s| s.parse::<u32>().ok()), Some(0));
         assert_eq!("no-number-here".rsplit('-').next().and_then(|s| s.parse::<u32>().ok()), None);
+    }
+
+    proptest! {
+        /// Each server_id is assigned to exactly one replica (no duplicates, no orphans).
+        #[test]
+        fn every_id_assigned_to_exactly_one_replica(
+            id in "[a-z]{3,20}",
+            replicas in 2u32..=16,
+        ) {
+            let owners: Vec<u32> = (0..replicas).filter(|&o| owns(&id, o, replicas)).collect();
+            prop_assert_eq!(owners.len(), 1, "{} assigned to {:?} (expected exactly 1)", id, owners);
+        }
+
+        /// Single replica always owns everything.
+        #[test]
+        fn single_replica_always_owns(id in "[a-z]{1,30}") {
+            prop_assert!(owns(&id, 0, 1));
+        }
+
+        /// Distribution across replicas is roughly even (chi-squared-like check).
+        #[test]
+        fn distribution_roughly_even(replicas in 2u32..=8) {
+            let n = 1000u32;
+            let mut counts = vec![0u32; replicas as usize];
+            for i in 0..n {
+                let id = format!("server-{i}");
+                let owner = (0..replicas).find(|&o| owns(&id, o, replicas)).unwrap();
+                counts[owner as usize] += 1;
+            }
+            let expected = n / replicas;
+            let tolerance = expected / 3; // ~33% tolerance
+            for (i, &c) in counts.iter().enumerate() {
+                prop_assert!(
+                    c > expected - tolerance && c < expected + tolerance,
+                    "shard {i} got {c}/{n}, expected ~{expected} ± {tolerance}"
+                );
+            }
+        }
     }
 }

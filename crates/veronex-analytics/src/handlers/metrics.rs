@@ -152,31 +152,40 @@ fn bucket_interval(hours: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Concrete boundary examples kept as documentation.
     #[test]
-    fn bucket_interval_1_minute() {
+    fn bucket_interval_boundary_examples() {
         assert_eq!(bucket_interval(1), "1 MINUTE");
         assert_eq!(bucket_interval(24), "1 MINUTE");
-    }
-
-    #[test]
-    fn bucket_interval_5_minute() {
         assert_eq!(bucket_interval(25), "5 MINUTE");
         assert_eq!(bucket_interval(168), "5 MINUTE");
-    }
-
-    #[test]
-    fn bucket_interval_60_minute() {
         assert_eq!(bucket_interval(169), "60 MINUTE");
-        assert_eq!(bucket_interval(1440), "60 MINUTE");
     }
 
-    #[test]
-    fn hours_clamped_range() {
-        // The handler clamps hours to 1..=1440
-        let hours = 0_u32.clamp(1, 1440);
-        assert_eq!(hours, 1);
-        let hours = 9999_u32.clamp(1, 1440);
-        assert_eq!(hours, 1440);
+    proptest! {
+        #[test]
+        fn bucket_interval_1min_range(hours in 1u32..=24) {
+            prop_assert_eq!(bucket_interval(hours), "1 MINUTE");
+        }
+
+        #[test]
+        fn bucket_interval_5min_range(hours in 25u32..=168) {
+            prop_assert_eq!(bucket_interval(hours), "5 MINUTE");
+        }
+
+        #[test]
+        fn bucket_interval_60min_range(hours in 169u32..=10000) {
+            prop_assert_eq!(bucket_interval(hours), "60 MINUTE");
+        }
+
+        /// Clamp always produces a value in [1, 1440].
+        #[test]
+        fn hours_clamp_always_in_range(hours in 0u32..=100000) {
+            let clamped = hours.clamp(1, 1440);
+            prop_assert!(clamped >= 1);
+            prop_assert!(clamped <= 1440);
+        }
     }
 }

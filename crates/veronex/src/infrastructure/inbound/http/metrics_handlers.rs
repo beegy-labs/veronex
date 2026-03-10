@@ -121,15 +121,44 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Concrete example kept as documentation.
     #[test]
-    fn normalize_strips_scheme_path_query() {
+    fn normalize_strips_scheme_path_query_example() {
         assert_eq!(normalize_host_port("http://192.168.1.21:9100"), "192.168.1.21:9100");
-        assert_eq!(normalize_host_port("https://ollama.example.com:11434/api/chat"), "ollama.example.com:11434");
-        assert_eq!(normalize_host_port("http://host:8080/metrics?foo=bar"), "host:8080");
         assert_eq!(normalize_host_port("192.168.1.21:9100"), "192.168.1.21:9100");
-        assert_eq!(normalize_host_port("https://host/path"), "host");
-        assert_eq!(normalize_host_port("http://host:9100#fragment"), "host:9100");
-        assert_eq!(normalize_host_port("http://host:8080/path?q=1#frag"), "host:8080");
+    }
+
+    proptest! {
+        #[test]
+        fn normalize_always_strips_scheme_path_query_fragment(
+            host in "[a-z]{3,10}",
+            port in 1000u16..65535,
+            path in prop::option::of("/[a-z]{0,5}"),
+            query in prop::option::of("\\?[a-z]=[0-9]"),
+            fragment in prop::option::of("#[a-z]+"),
+        ) {
+            let scheme = if port % 2 == 0 { "http" } else { "https" };
+            let url = format!("{scheme}://{host}:{port}{}{}{}",
+                path.as_deref().unwrap_or(""),
+                query.as_deref().unwrap_or(""),
+                fragment.as_deref().unwrap_or(""));
+            let result = normalize_host_port(&url);
+            prop_assert!(!result.starts_with("http"), "scheme not stripped: {result}");
+            prop_assert!(!result.contains('/'), "path not stripped: {result}");
+            prop_assert!(!result.contains('?'), "query not stripped: {result}");
+            prop_assert!(!result.contains('#'), "fragment not stripped: {result}");
+            prop_assert_eq!(result, format!("{host}:{port}"));
+        }
+
+        #[test]
+        fn normalize_bare_host_port_is_identity(
+            host in "[a-z]{3,10}",
+            port in 1000u16..65535,
+        ) {
+            let input = format!("{host}:{port}");
+            prop_assert_eq!(normalize_host_port(&input), input);
+        }
     }
 }

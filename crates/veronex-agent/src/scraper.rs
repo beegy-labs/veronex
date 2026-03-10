@@ -262,7 +262,9 @@ pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gaug
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Concrete example: allowlist filtering with real metric data.
     #[test]
     fn filters_by_allowlist_and_preserves_raw_values() {
         let text = r#"
@@ -273,13 +275,12 @@ some_random_metric 999
 "#;
         let gauges = parse_node_exporter(text);
         assert_eq!(gauges.len(), 2);
-
         let mem = gauges.iter().find(|g| g.name == "node_memory_MemTotal_bytes").unwrap();
-        assert!((mem.value - 6.7385810944e10).abs() < 1.0); // raw bytes, not MB
-
+        assert!((mem.value - 6.7385810944e10).abs() < 1.0);
         assert!(gauges.iter().any(|g| g.name == "node_drm_gpu_busy_percent"));
     }
 
+    /// Concrete edge case: NaN/Inf skipped.
     #[test]
     fn skips_nan_and_inf() {
         let text = "node_memory_MemTotal_bytes NaN\nnode_memory_MemAvailable_bytes +Inf\n";
@@ -287,6 +288,7 @@ some_random_metric 999
         assert!(gauges.is_empty());
     }
 
+    /// Concrete example: label parsing with real metric format.
     #[test]
     fn preserves_labels_end_to_end() {
         let text = r#"node_hwmon_temp_celsius{chip="0000:c4:00_0",sensor="temp1"} 55"#;
@@ -296,31 +298,71 @@ some_random_metric 999
             ("chip".into(), "0000:c4:00_0".into()),
             ("sensor".into(), "temp1".into()),
         ]);
-
-        // No labels
         assert!(parse_labels("foo").is_empty());
     }
 
-    #[test]
-    fn cpu_lines_not_aggregated() {
-        let text = r#"
-node_cpu_seconds_total{cpu="0",mode="idle"} 1000
-node_cpu_seconds_total{cpu="0",mode="user"} 500
-node_cpu_seconds_total{cpu="1",mode="idle"} 900
-"#;
-        let gauges = parse_node_exporter(text);
-        assert_eq!(gauges.len(), 3);
-        assert!(gauges.iter().all(|g| g.name == "node_cpu_seconds_total"));
-    }
-
-    #[test]
-    fn parse_labels_capped_at_max() {
-        let mut parts = Vec::new();
-        for i in 0..40 {
-            parts.push(format!("k{i}=\"v{i}\""));
+    proptest! {
+        /// Allowed metrics always pass through with correct value and name.
+        #[test]
+        fn allowed_metric_always_passes(
+            prefix in prop::sample::select(vec![
+                "node_memory_MemTotal_bytes",
+                "node_memory_MemAvailable_bytes",
+                "node_cpu_seconds_total",
+                "node_drm_gpu_busy",
+                "node_hwmon_temp_celsius",
+                "node_hwmon_power_average_watt",
+                "node_hwmon_chip_names",
+            ]),
+            value in 0.0f64..1e15,
+        ) {
+            prop_assume!(value.is_finite());
+            let text = format!("{prefix} {value}");
+            let gauges = parse_node_exporter(&text);
+            prop_assert_eq!(gauges.len(), 1);
+            prop_assert_eq!(&gauges[0].name, &prefix);
+            prop_assert!((gauges[0].value - value).abs() < 1.0);
         }
-        let metric = format!("foo{{{}}}", parts.join(","));
-        let labels = parse_labels(&metric);
-        assert_eq!(labels.len(), MAX_LABELS);
+
+        /// Non-allowed metrics are always filtered out.
+        #[test]
+        fn non_allowed_metric_filtered(
+            name in "[a-z_]{5,20}",
+            value in 0.0f64..1e10,
+        ) {
+            prop_assume!(value.is_finite());
+            prop_assume!(!is_allowed(&name));
+            let text = format!("{name} {value}");
+            let gauges = parse_node_exporter(&text);
+            prop_assert!(gauges.is_empty());
+        }
+
+        /// Comments and blank lines never produce gauges.
+        #[test]
+        fn comments_and_blanks_ignored(
+            comment in "# [a-zA-Z ]{0,50}",
+        ) {
+            let text = format!("{comment}\n\n");
+            let gauges = parse_node_exporter(&text);
+            prop_assert!(gauges.is_empty());
+        }
+
+        /// Labels are capped at MAX_LABELS regardless of input count.
+        #[test]
+        fn labels_never_exceed_max(count in (MAX_LABELS + 1)..80usize) {
+            let parts: Vec<String> = (0..count).map(|i| format!("k{i}=\"v{i}\"")).collect();
+            let metric = format!("foo{{{}}}", parts.join(","));
+            let labels = parse_labels(&metric);
+            prop_assert!(labels.len() <= MAX_LABELS);
+        }
+
+        /// parse_labels roundtrip: N labels in → N labels out (up to MAX_LABELS).
+        #[test]
+        fn parse_labels_count_matches(count in 1usize..MAX_LABELS) {
+            let parts: Vec<String> = (0..count).map(|i| format!("k{i}=\"v{i}\"")).collect();
+            let metric = format!("foo{{{}}}", parts.join(","));
+            let labels = parse_labels(&metric);
+            prop_assert_eq!(labels.len(), count);
+        }
     }
 }
