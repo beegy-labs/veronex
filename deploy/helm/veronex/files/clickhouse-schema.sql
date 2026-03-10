@@ -54,6 +54,25 @@ FROM (
     GROUP BY hour, api_key_id, tenant_id
 );
 
+-- OTel logs — unified event store for inference + audit events.
+-- Distinguish via LogAttributes['event.name']:
+--   'inference.completed' | 'audit.action'
+-- Populated by Kafka Engine MV below (veronex-analytics → OTLP → OTel Collector → Redpanda).
+CREATE TABLE IF NOT EXISTS otel_logs (
+    Timestamp          DateTime64(9),
+    TraceId            String,
+    SpanId             String,
+    SeverityText       LowCardinality(String),
+    SeverityNumber     Int32,
+    ServiceName        LowCardinality(String),
+    Body               String,
+    ResourceAttributes Map(LowCardinality(String), String),
+    LogAttributes      Map(LowCardinality(String), String)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(Timestamp)
+ORDER BY (ServiceName, Timestamp)
+TTL toDate(Timestamp) + INTERVAL __RETENTION_ANALYTICS_DAYS__ DAY;
+
 -- ── Derived MVs: otel_logs → specialized tables ──────────────────────────────
 -- These MVs extract structured events from the unified otel_logs table
 -- into domain-specific MergeTree tables for efficient analytical queries.
@@ -113,25 +132,6 @@ CREATE TABLE IF NOT EXISTS otel_traces_raw (
 PARTITION BY toYYYYMM(received_at)
 ORDER BY received_at
 TTL toDate(received_at) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
-
--- OTel logs — unified event store for inference + audit events.
--- Distinguish via LogAttributes['event.name']:
---   'inference.completed' | 'audit.action'
--- Populated by Kafka Engine MV below (veronex-analytics → OTLP → OTel Collector → Redpanda).
-CREATE TABLE IF NOT EXISTS otel_logs (
-    Timestamp          DateTime64(9),
-    TraceId            String,
-    SpanId             String,
-    SeverityText       LowCardinality(String),
-    SeverityNumber     Int32,
-    ServiceName        LowCardinality(String),
-    Body               String,
-    ResourceAttributes Map(LowCardinality(String), String),
-    LogAttributes      Map(LowCardinality(String), String)
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(Timestamp)
-ORDER BY (ServiceName, Timestamp)
-TTL toDate(Timestamp) + INTERVAL __RETENTION_ANALYTICS_DAYS__ DAY;
 
 -- Audit events (DEPRECATED — superseded by otel_logs)
 CREATE TABLE IF NOT EXISTS audit_events (
