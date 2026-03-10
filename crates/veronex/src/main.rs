@@ -31,8 +31,7 @@ async fn main() -> Result<()> {
     let masked_db_url = mask_database_url(&config.database_url);
     tracing::info!("connecting to postgres at {masked_db_url}");
     let pg_pool = database::connect(&config.database_url).await?;
-    sqlx::migrate!().run(&pg_pool).await?;
-    tracing::info!("postgres ready, migrations applied");
+    tracing::info!("postgres ready");
 
     // ── Valkey (optional) ──────────────────────────────────────────
     let valkey_pool = if let Some(ref url) = config.valkey_url {

@@ -196,11 +196,24 @@ otelCollector:
   service:
     type: ClusterIP
 
-# ── ClickHouse Schema Init ───────────────────────────────────────────────────
+# ── Database Migrations ──────────────────────────────────────────────────────
+# Runs as pre-install,pre-upgrade Helm hook.
+# helm install/upgrade triggers migrations automatically.
 
-clickhouseInit:
+migrations:
   enabled: true
-  image: clickhouse/clickhouse-client:26.1
+  image: ghcr.io/golang-migrate/migrate:v4.18.3
+  clickhouse:
+    # Wrapper image with envsubst + migrate
+    image: ghcr.io/golang-migrate/migrate:v4.18.3
+    kafkaBroker: ""           # REQUIRED — e.g. redpanda:9092
+    kafkaUsername: ""
+    kafkaPassword: ""
+    kafkaSecurityProtocol: SASL_PLAINTEXT
+    kafkaSaslMechanism: SCRAM-SHA-512
+    retentionAnalyticsDays: 90
+    retentionMetricsDays: 30
+    retentionAuditDays: 365
 
 # ── ServiceAccount ───────────────────────────────────────────────────────────
 

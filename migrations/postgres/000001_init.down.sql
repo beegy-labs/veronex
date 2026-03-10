@@ -1,0 +1,16 @@
+DROP TABLE IF EXISTS lab_settings;
+DROP TABLE IF EXISTS model_pricing;
+DROP TABLE IF EXISTS capacity_settings;
+DROP TABLE IF EXISTS model_vram_profiles;
+DROP TABLE IF EXISTS ollama_sync_jobs;
+DROP TABLE IF EXISTS ollama_models;
+DROP TABLE IF EXISTS gemini_models;
+DROP TABLE IF EXISTS gemini_sync_config;
+DROP TABLE IF EXISTS gemini_rate_limit_policies;
+DROP TABLE IF EXISTS provider_selected_models;
+DROP TABLE IF EXISTS inference_jobs;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS account_sessions;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS llm_providers;
+DROP TABLE IF EXISTS gpu_servers;

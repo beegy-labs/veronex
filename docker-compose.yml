@@ -12,7 +12,6 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-veronex} -d veronex"]
       interval: 5s
@@ -57,8 +56,6 @@ services:
       CLICKHOUSE_RETENTION_AUDIT_DAYS: ${CLICKHOUSE_RETENTION_AUDIT_DAYS:-365}
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      - ./docker/clickhouse/init.sh:/docker-entrypoint-initdb.d/01_init.sh
-      - ./docker/clickhouse/schema.sql:/docker-entrypoint-initdb.d/schema.sql.tmpl
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
       interval: 10s
@@ -224,6 +221,43 @@ services:
       NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${NEXT_PUBLIC_VERONEX_ADMIN_KEY:-veronex-bootstrap-admin-key}
     depends_on:
       - veronex
+
+  # ── Database migrations (run manually) ───────────────────────────────────────
+  # Usage:
+  #   docker compose run --rm migrate-postgres [up|down|version]
+  #   docker compose run --rm migrate-clickhouse [up|down|version]
+  migrate-postgres:
+    image: ghcr.io/golang-migrate/migrate:v4.18.3
+    profiles: [migrate]
+    volumes:
+      - ./migrations/postgres:/migrations:ro
+    command:
+      - -path=/migrations
+      - -database=postgres://${POSTGRES_USER:-veronex}:${POSTGRES_PASSWORD:-veronex}@postgres:5432/veronex?sslmode=disable
+      - up
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  migrate-clickhouse:
+    build:
+      context: ./docker/migrate-clickhouse
+    profiles: [migrate]
+    volumes:
+      - ./migrations/clickhouse:/migrations:ro
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-veronex}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-veronex}
+      CLICKHOUSE_DB: veronex
+      KAFKA_BROKER: redpanda:9092
+      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+      RETENTION_ANALYTICS_DAYS: ${CLICKHOUSE_RETENTION_ANALYTICS_DAYS:-90}
+      RETENTION_METRICS_DAYS: ${CLICKHOUSE_RETENTION_METRICS_DAYS:-30}
+      RETENTION_AUDIT_DAYS: ${CLICKHOUSE_RETENTION_AUDIT_DAYS:-365}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
 
 volumes:
   postgres_data:
