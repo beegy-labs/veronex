@@ -201,6 +201,7 @@ REQUEST(model_name, context_len)
 │
 ├─ 4. Model selection filter (queue path only)
 │     list_enabled(provider_id) → skip if model is disabled
+│     **Fail fast**: if zero candidates remain after filtering → fail job immediately (no re-enqueue)
 │
 ├─ 5. Sort: VRAM available + model stickiness bonus
 │     loaded provider → +100GB bonus → highest priority (model locality)

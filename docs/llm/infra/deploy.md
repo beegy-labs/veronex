@@ -1,6 +1,6 @@
 # Infrastructure -- Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-03-07 (rev6: Helm chart overhaul — secrets mgmt, external infra, StatefulSet agent)
+> SSOT | **Last Updated**: 2026-03-10 (rev7: agent env vars, image registry, agent StatefulSet)
 
 ## Task Guide
 
@@ -41,9 +41,11 @@
 | veronex | local build | **3001**->3000 | Rust API server |
 | veronex-analytics | local build | internal 3003 | Analytics (OTel write + ClickHouse read) |
 | veronex-web | local build | 3002 | Next.js admin dashboard |
+| veronex-agent | local build | none (push-only) | OTLP push collector (node-exporter + Ollama → OTel Collector) |
 | otel-collector | docker/otel/Dockerfile | 4317, 4318, 13133 | Metrics + traces + logs -> Redpanda |
 
 > Port offsets (+1): 5432->5433, 6379->6380, 3000->3001 (vergate/Gitea conflicts)
+> Image registry: `gitea.girok.dev/beegy-labs/*` (veronex, veronex-analytics, veronex-agent, veronex-web)
 
 ---
 
@@ -85,6 +87,12 @@ ANALYTICS_SECRET=<shared-secret>
 CLICKHOUSE_RETENTION_ANALYTICS_DAYS=90   # set before first `docker compose up`
 CLICKHOUSE_RETENTION_METRICS_DAYS=30
 CLICKHOUSE_RETENTION_AUDIT_DAYS=365
+
+# veronex-agent (OTLP push collector — no HTTP server)
+VERONEX_API_URL=http://veronex:3000      # target discovery endpoint
+OTEL_HTTP_ENDPOINT=http://otel-collector:4318
+SCRAPE_INTERVAL_MS=15000                 # scrape cycle interval (default: 15000)
+REPLICA_COUNT=1                          # total StatefulSet replicas (modulus sharding)
 
 # Next.js web (veronex-web)
 NEXT_PUBLIC_VERONEX_API_URL=http://localhost:3001
@@ -241,6 +249,7 @@ helm install veronex deploy/helm/veronex/ \
 | `veronex-deployment.yaml` | Deployment | API server, `envFrom` secretRef |
 | `veronex-analytics-deployment.yaml` | Deployment | ClickHouse analytics service |
 | `veronex-web-deployment.yaml` | Deployment | Next.js dashboard |
+| `veronex-agent-statefulset.yaml` | StatefulSet + headless Service | Agent (ordinal-based sharding) |
 | `otel-collector-deployment.yaml` | Deployment | OTel Collector (optional) |
 | `clickhouse-init-job.yaml` | Job (hook) | Applies ClickHouse schema on install/upgrade |
 | `secret.yaml` | Secret | Chart-managed (skipped when ESO/CSI/existing) |

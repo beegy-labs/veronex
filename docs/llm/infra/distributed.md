@@ -63,7 +63,9 @@ The reaper deducts reserved HASH on lease expiry, preventing zombie reservations
 
 **ACK**: On job completion/failure, `LREM processing 1 {uuid}` + `DEL job:owner:{job_id}`.
 
-**Re-queue on no-provider**: `LREM processing` + `LPUSH` back to source queue.
+**Fail fast on no candidates**: If zero eligible providers remain after model filtering (e.g., model disabled on all providers), the job is failed immediately — not re-enqueued.
+
+**Re-queue on no-provider (VRAM)**: If candidates exist but all fail gate checks (VRAM, thermal, concurrency), `LREM processing` + `LPUSH` back to source queue.
 
 ### Double-Execution Prevention
 

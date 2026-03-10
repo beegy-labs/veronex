@@ -47,9 +47,9 @@ veronex --> POST /internal/ingest/audit    --> veronex-analytics
                                                                                                          |                             +- api_key_usage_hourly_mv --> api_key_usage_hourly
                                                                                                          +- otel_audit_events_mv   --> audit_events
 
-node-exporters -+
-                +-> veronex-agent (select + raw forward) --> OTel Collector (otlp) --> kafka/metrics --> Redpanda [otel-metrics] --> otel_metrics_gauge
-ollama /api/ps -+
+node-exporters (type=server) -+
+                              +-> veronex-agent (select + OTLP push) --> OTel Collector (otlp) --> kafka/metrics --> Redpanda [otel-metrics] --> otel_metrics_gauge
+ollama /api/ps (type=ollama) -+
 veronex traces  --> OTel Collector (otlp)      --> kafka/traces  --> Redpanda [otel-traces]  --> otel_traces_raw
 
 [Read Path — ClickHouse primary, PostgreSQL fallback]
@@ -72,6 +72,33 @@ veronex --> GET /v1/audit             --> analytics_repo (ClickHouse)
 ## veronex-agent Policy (Zero-Config Principle)
 
 > **`helm install` / `docker-compose up` must work without any OTEL Collector configuration changes.**
+> Agent is a pure OTLP push collector — no HTTP server, no inbound ports.
+
+### Two Independent Target Types
+
+Agent discovers targets via `GET /v1/metrics/targets`. Each target has a `type` label:
+
+| Type | Source | Shard key | Collects |
+|------|--------|-----------|----------|
+| `server` | node-exporter `/metrics` | `server_id` | CPU, mem, GPU (DRM, hwmon) |
+| `ollama` | Ollama `/api/ps` | `provider_id` | loaded models, VRAM per model |
+
+Targets are returned as `host[:port]` only (URL normalization strips scheme/path/query). Agent prepends `http://` before scraping.
+
+### N-Way Replication (Modulus Sharding)
+
+StatefulSet replicas shard targets by `hash(shard_key) % replica_count == ordinal`. Ordinal is extracted from the K8s pod hostname suffix (e.g., `veronex-agent-2` → ordinal 2). Single replica (`REPLICA_COUNT=1`) owns all targets.
+
+### DoS Protection
+
+| Guard | Value | File |
+|-------|-------|------|
+| `MAX_NODE_EXPORTER_BODY` | 16 MB | `scraper.rs` |
+| `MAX_OLLAMA_BODY` | 1 MB | `scraper.rs` |
+| `MAX_CONCURRENT_SCRAPES` | 32 (semaphore) | `main.rs` |
+| `SCRAPE_TIMEOUT` | 5 s | `scraper.rs` |
+
+### Responsibility Split
 
 | Responsibility | Owner | NOT allowed |
 |----------------|-------|-------------|

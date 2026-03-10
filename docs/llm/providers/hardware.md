@@ -83,8 +83,9 @@ GET    /v1/servers/{id}/metrics/history?hours=N
        → Vec<ServerMetricsPoint>  (adaptive buckets from otel_metrics_gauge)
 
 GET    /v1/metrics/targets
-       Prometheus HTTP SD — no auth required, OTel Collector only
-       → [{ "targets": ["host:9100"], "labels": { server_id, server_name, host } }]
+       Agent target discovery — no auth, returns two target types (server + ollama)
+       → [{ "targets": ["host:9100"], "labels": { type, server_id, server_name } },
+          { "targets": ["host:11434"], "labels": { type, provider_id, provider_name, server_id? } }]
 ```
 
 ### Request Structs

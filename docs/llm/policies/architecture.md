@@ -110,7 +110,7 @@ Reconnect:
 Background loops:
   health_checker (30s):
     → provider health (Ollama/Gemini)
-    → agent metrics poll → Valkey cache (HwMetrics with gpu_vendor)
+    → hw_metrics fetch (node-exporter direct) → Valkey cache (HwMetrics with gpu_vendor)
     → thermal.set_thresholds(gpu_vendor) + thermal.update(temp_c)
   run_sync_loop (base tick 30s, per-provider sync_interval ~300s):
     → per Ollama provider: /api/version + /api/tags + /api/ps + /api/show

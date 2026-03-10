@@ -42,7 +42,7 @@ infrastructure → application → domain
 | Loop | Interval | Purpose |
 |------|----------|---------|
 | `sync_loop` | base tick 30s (per-provider sync_interval ~300s) | Unified: health + model sync + VRAM probe + LLM analysis |
-| `health_checker` | 30 s | Provider health + agent metrics + thermal auto-detect |
+| `health_checker` | 30 s | Provider health + hw_metrics fetch + thermal auto-detect |
 | `queue_dispatcher` | Lua priority pop | 3-queue dispatch + model filter + stickiness + gate chain |
 | `session_grouping` | 24 h | Batch conversation_id assignment |
 

@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline Operations
 
-> SSOT | **Last Updated**: 2026-03-09 (rev: lean metrics schema, fix MV JSON extraction)
+> SSOT | **Last Updated**: 2026-03-10 (rev: 2-target discovery, URL normalization)
 
 See `infra/otel-pipeline.md` for pipeline overview, OTel Collector config, and Chain 1 (otel-logs).
 
@@ -99,14 +99,19 @@ If `ANALYTICS_URL` not set: `observability = None`, `audit_port = None`.
 
 ## Metrics Target Discovery
 
-`GET /v1/metrics/targets` -- no auth, consumed by veronex-agent (StatefulSet, modulus-sharded replicas) to discover node-exporter and Ollama scrape targets. Agent pushes raw metrics to OTel Collector via OTLP HTTP.
+`GET /v1/metrics/targets` -- no auth, consumed by veronex-agent (StatefulSet, modulus-sharded replicas). Returns two independent target types, each collected separately. Targets are `host[:port]` only (URL normalization strips scheme/path/query).
 
 ```json
-[{ "targets": ["192.168.1.10:9100"],
-   "labels": { "server_id": "uuid", "server_name": "gpu-node-1", "host": "192.168.1.10" } }]
+[
+  { "targets": ["192.168.1.10:9100"],
+    "labels": { "type": "server", "server_id": "uuid", "server_name": "gpu-node-1" } },
+  { "targets": ["192.168.1.10:11434"],
+    "labels": { "type": "ollama", "provider_id": "uuid", "provider_name": "gpu-1", "server_id": "uuid" } }
+]
 ```
 
-Only servers with `node_exporter_url`. Multiple providers on same server = one target (deduped by server_id).
+- `type=server` — one per `gpu_servers` row with `node_exporter_url`, shard key = `server_id`
+- `type=ollama` — one per active Ollama provider, shard key = `provider_id`, includes `server_id` when linked
 
 ---
 
@@ -137,7 +142,7 @@ services:
     ports: ["9100:9100"]
 ```
 
-Registration: `POST /v1/servers` with `node_exporter_url` -> OTel Collector polls `/v1/metrics/targets` every 30s.
+Registration: `POST /v1/servers` with `node_exporter_url` -> veronex-agent polls `/v1/metrics/targets` each scrape cycle (default 15s).
 
 ---
 
