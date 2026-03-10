@@ -197,7 +197,7 @@ info "Sync job: $SYNC_ID"
 
 # Wait for sync completion
 for i in $(seq 1 20); do
-  sleep 2
+  sleep 1
   SYNC_STATUS=$(aget "/v1/ollama/sync/status" 2>/dev/null | jv '["status"]' 2>/dev/null || echo "running")
   [ "$SYNC_STATUS" != "running" ] && break
 done
@@ -342,11 +342,11 @@ apost "/v1/providers/sync" "{}" > /dev/null 2>&1 || true
 info "Manual sync triggered, waiting for VRAM probing..."
 
 # Keep model loaded while waiting
-for i in $(seq 1 12); do
+for i in $(seq 1 10); do
   curl -s "$API/v1/chat/completions" \
     -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
     -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4,\"stream\":false}" > /dev/null 2>&1 &
-  sleep 5
+  sleep 2
   CAP=$(aget "/v1/dashboard/capacity" 2>/dev/null || echo '{"providers":[]}')
   LOADED_COUNT=$(echo "$CAP" | python3 -c "
 import sys,json
@@ -408,7 +408,7 @@ if [ "$AIMD_LIMIT" = "0" ]; then
     wait 2>/dev/null
     # Trigger sync
     apost "/v1/providers/sync" "{}" > /dev/null 2>&1 || true
-    sleep 8
+    sleep 5
     AIMD_LIMIT=$(get_aimd_limit)
     [ "$AIMD_LIMIT" != "0" ] && break
     info "  attempt $attempt: limit still 0"
@@ -743,60 +743,73 @@ MAP_CODE=$(agetc "/v1/ollama/models/$MODEL/providers" | tail -1)
 
 # ── Phase 17: Multi-Format Inference ─────────────────────────────────────────
 
-hdr "Phase 17: Multi-Format Inference"
+hdr "Phase 17: Multi-Format Inference (parallel)"
+
+# Fire all 7 requests in parallel
+TMPDIR_17=$(mktemp -d)
+(curl -s --max-time 30 "$API/v1/chat/completions" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hi\"}],\"max_tokens\":8,\"stream\":true}" \
+  > "$TMPDIR_17/sse" 2>/dev/null || true) &
+(curl -s -w "\n%{http_code}" --max-time 30 "$API/api/chat" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say one word\"}],\"stream\":false}" \
+  > "$TMPDIR_17/chat" 2>/dev/null || printf "\n000" > "$TMPDIR_17/chat") &
+(curl -s -w "\n%{http_code}" --max-time 30 "$API/api/generate" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"Say one word\",\"stream\":false}" \
+  > "$TMPDIR_17/generate" 2>/dev/null || printf "\n000" > "$TMPDIR_17/generate") &
+(curl -s -w "\n%{http_code}" "$API/api/tags" -H "X-API-Key: $API_KEY" \
+  > "$TMPDIR_17/tags" 2>/dev/null || printf "\n000" > "$TMPDIR_17/tags") &
+(curl -s -w "\n%{http_code}" "$API/api/show" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"name\":\"$MODEL\"}" \
+  > "$TMPDIR_17/show" 2>/dev/null || printf "\n000" > "$TMPDIR_17/show") &
+(curl -s -w "\n%{http_code}" "$API/v1beta/models" -H "X-API-Key: $API_KEY" \
+  > "$TMPDIR_17/gemini" 2>/dev/null || printf "\n000" > "$TMPDIR_17/gemini") &
+(curl -s -w "\n%{http_code}" "$API/v1/test/completions" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4,\"stream\":false}" \
+  > "$TMPDIR_17/test" 2>/dev/null || printf "\n000" > "$TMPDIR_17/test") &
+wait
 
 # 17.1: SSE streaming (OpenAI)
 hdr "17.1 OpenAI SSE streaming"
-SSE_RES=$(curl -s --max-time 30 "$API/v1/chat/completions" \
-  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hi\"}],\"max_tokens\":8,\"stream\":true}" 2>/dev/null || echo "")
-if echo "$SSE_RES" | grep -q "data:"; then
-  pass "OpenAI SSE streaming works"
-else
-  fail "SSE streaming: no data events"
-fi
+SSE_RES=$(cat "$TMPDIR_17/sse" 2>/dev/null || echo "")
+echo "$SSE_RES" | grep -q "data:" \
+  && pass "OpenAI SSE streaming works" || fail "SSE streaming: no data events"
 
 # 17.2: Ollama /api/chat
 hdr "17.2 Ollama /api/chat"
-OLLAMA_CHAT_RES=$(curl -s -w "\n%{http_code}" --max-time 30 "$API/api/chat" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say one word\"}],\"stream\":false}" 2>/dev/null)
-OLLAMA_CHAT_CODE=$(echo "$OLLAMA_CHAT_RES" | tail -1)
+OLLAMA_CHAT_CODE=$(tail -1 "$TMPDIR_17/chat" 2>/dev/null || echo "000")
 [ "$OLLAMA_CHAT_CODE" = "200" ] && pass "Ollama /api/chat → 200" || fail "Ollama chat → $OLLAMA_CHAT_CODE"
 
 # 17.3: Ollama /api/generate
 hdr "17.3 Ollama /api/generate"
-OLLAMA_GEN_RES=$(curl -s -w "\n%{http_code}" --max-time 30 "$API/api/generate" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"prompt\":\"Say one word\",\"stream\":false}" 2>/dev/null)
-OLLAMA_GEN_CODE=$(echo "$OLLAMA_GEN_RES" | tail -1)
+OLLAMA_GEN_CODE=$(tail -1 "$TMPDIR_17/generate" 2>/dev/null || echo "000")
 [ "$OLLAMA_GEN_CODE" = "200" ] && pass "Ollama /api/generate → 200" || fail "Ollama generate → $OLLAMA_GEN_CODE"
 
 # 17.4: Ollama /api/tags
 hdr "17.4 Ollama /api/tags"
-TAGS_RES=$(curl -s -w "\n%{http_code}" "$API/api/tags" -H "X-API-Key: $API_KEY" 2>/dev/null)
-TAGS_CODE=$(echo "$TAGS_RES" | tail -1)
+TAGS_CODE=$(tail -1 "$TMPDIR_17/tags" 2>/dev/null || echo "000")
 [ "$TAGS_CODE" = "200" ] && pass "Ollama /api/tags → 200" || fail "Ollama tags → $TAGS_CODE"
 
 # 17.5: Ollama /api/show
 hdr "17.5 Ollama /api/show"
-SHOW_RES=$(curl -s -w "\n%{http_code}" "$API/api/show" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"name\":\"$MODEL\"}" 2>/dev/null)
-SHOW_CODE=$(echo "$SHOW_RES" | tail -1)
+SHOW_CODE=$(tail -1 "$TMPDIR_17/show" 2>/dev/null || echo "000")
 [ "$SHOW_CODE" = "200" ] && pass "Ollama /api/show → 200" || fail "Ollama show → $SHOW_CODE"
 
 # 17.6: Gemini /v1beta/models
 hdr "17.6 Gemini /v1beta/models"
-GEMINI_LIST_CODE=$(curl -s -w "\n%{http_code}" "$API/v1beta/models" \
-  -H "X-API-Key: $API_KEY" 2>/dev/null | tail -1)
+GEMINI_LIST_CODE=$(tail -1 "$TMPDIR_17/gemini" 2>/dev/null || echo "000")
 [ "$GEMINI_LIST_CODE" = "200" ] && pass "Gemini /v1beta/models → 200" || fail "Gemini models → $GEMINI_LIST_CODE"
 
 # 17.7: Test endpoint (JWT, no rate limit)
 hdr "17.7 Test inference (JWT)"
-TEST_INF_CODE=$(apostc "/v1/test/completions" \
-  "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4,\"stream\":false}" | tail -1)
+TEST_INF_CODE=$(tail -1 "$TMPDIR_17/test" 2>/dev/null || echo "000")
 [ "$TEST_INF_CODE" = "200" ] && pass "Test completions → 200" || fail "Test completions → $TEST_INF_CODE"
+
+rm -rf "$TMPDIR_17"
 
 # ── Phase 18: Server & Audit & Lab ──────────────────────────────────────────
 
@@ -986,7 +999,7 @@ hdr "22.1 Job cancel"
 # Start a long inference in background
 curl -s "$API/v1/chat/completions" \
   -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a very long detailed essay about the history of computer science from 1950 to 2025\"}],\"max_tokens\":2000,\"stream\":true}" > /dev/null 2>&1 &
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about computer science history\"}],\"max_tokens\":300,\"stream\":true}" > /dev/null 2>&1 &
 CANCEL_PID=$!
 sleep 3
 
@@ -1230,7 +1243,7 @@ if [ -n "$INF_JOB_ID" ] && [ "$INF_JOB_ID" != "None" ]; then
   for _w in $(seq 1 15); do
     S=$(kget "/v1/inference/$INF_JOB_ID/status" 2>/dev/null | jv '["status"]' 2>/dev/null || echo "")
     case "$S" in completed|Completed|failed|Failed) break ;; esac
-    sleep 2
+    sleep 1
   done
   INF_STREAM_CODE=$(kgetc "/v1/inference/$INF_JOB_ID/stream" | code)
   [ "$INF_STREAM_CODE" = "200" ] \
