@@ -37,10 +37,14 @@ fn normalize_host_port(url: &str) -> String {
         .split_once('/')
         .map(|(h, _)| h)
         .unwrap_or(without_scheme);
-    host_port
+    let without_query = host_port
         .split_once('?')
         .map(|(h, _)| h)
-        .unwrap_or(host_port)
+        .unwrap_or(host_port);
+    without_query
+        .split_once('#')
+        .map(|(h, _)| h)
+        .unwrap_or(without_query)
         .to_string()
 }
 
@@ -125,5 +129,7 @@ mod tests {
         assert_eq!(normalize_host_port("http://host:8080/metrics?foo=bar"), "host:8080");
         assert_eq!(normalize_host_port("192.168.1.21:9100"), "192.168.1.21:9100");
         assert_eq!(normalize_host_port("https://host/path"), "host");
+        assert_eq!(normalize_host_port("http://host:9100#fragment"), "host:9100");
+        assert_eq!(normalize_host_port("http://host:8080/path?q=1#frag"), "host:8080");
     }
 }

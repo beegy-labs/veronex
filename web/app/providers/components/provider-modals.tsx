@@ -116,7 +116,7 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
                       {gpuCards.map((gpu, i) => (
                         <SelectItem key={gpu.card} value={String(i)}>
                           GPU {i} ({gpu.card})
-                          {gpu.temp_c != null ? ` — ${gpu.temp_c.toFixed(0)}°C` : ''}
+                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${(gpu.temp_junction_c ?? gpu.temp_c)!.toFixed(0)}°C` : ''}
                           {gpu.power_w != null ? ` · ${gpu.power_w.toFixed(0)}W` : ''}
                         </SelectItem>
                       ))}
@@ -296,7 +296,7 @@ export function RegisterModal({
                       {gpuCards.map((gpu, i) => (
                         <SelectItem key={gpu.card} value={String(i)}>
                           GPU {i} ({gpu.card})
-                          {gpu.temp_c != null ? ` — ${gpu.temp_c.toFixed(0)}°C` : ''}
+                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${(gpu.temp_junction_c ?? gpu.temp_c)!.toFixed(0)}°C` : ''}
                           {gpu.power_w != null ? ` · ${gpu.power_w.toFixed(0)}W` : ''}
                         </SelectItem>
                       ))}
