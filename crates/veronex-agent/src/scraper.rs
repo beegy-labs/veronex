@@ -14,6 +14,12 @@ use serde::Deserialize;
 
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Max response body size from node-exporter (16 MiB).
+const MAX_NODE_EXPORTER_BODY: usize = 16 * 1024 * 1024;
+
+/// Max response body size from Ollama /api/ps (1 MiB).
+const MAX_OLLAMA_BODY: usize = 1024 * 1024;
+
 /// Max labels per metric line (DOS protection).
 const MAX_LABELS: usize = 32;
 
@@ -49,13 +55,27 @@ pub struct Gauge {
 pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
     let url = format!("{}/metrics", base_url.trim_end_matches('/'));
     match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
-        Ok(resp) => match resp.text().await {
-            Ok(text) => parse_node_exporter(&text),
-            Err(e) => {
-                tracing::debug!("node-exporter read failed: {e}");
-                vec![]
+        Ok(resp) => {
+            let content_len = resp.content_length().unwrap_or(0) as usize;
+            if content_len > MAX_NODE_EXPORTER_BODY {
+                tracing::warn!(url, bytes = content_len, "node-exporter body too large, skipping");
+                return vec![];
             }
-        },
+            match resp.bytes().await {
+                Ok(bytes) if bytes.len() > MAX_NODE_EXPORTER_BODY => {
+                    tracing::warn!(url, bytes = bytes.len(), "node-exporter body exceeded limit");
+                    vec![]
+                }
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    parse_node_exporter(&text)
+                }
+                Err(e) => {
+                    tracing::debug!("node-exporter read failed: {e}");
+                    vec![]
+                }
+            }
+        }
         Err(e) => {
             tracing::debug!("node-exporter scrape failed: {e}");
             vec![]
@@ -170,13 +190,30 @@ struct OllamaPsModel {
 pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
     let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
     let resp: OllamaPsResponse = match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
-        Ok(r) => match r.json().await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::debug!("ollama parse failed: {e}");
+        Ok(r) => {
+            let content_len = r.content_length().unwrap_or(0) as usize;
+            if content_len > MAX_OLLAMA_BODY {
+                tracing::warn!(url, bytes = content_len, "ollama body too large, skipping");
                 return vec![];
             }
-        },
+            match r.bytes().await {
+                Ok(bytes) if bytes.len() > MAX_OLLAMA_BODY => {
+                    tracing::warn!(url, bytes = bytes.len(), "ollama body exceeded limit");
+                    return vec![];
+                }
+                Ok(bytes) => match serde_json::from_slice(&bytes) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::debug!("ollama parse failed: {e}");
+                        return vec![];
+                    }
+                },
+                Err(e) => {
+                    tracing::debug!("ollama read failed: {e}");
+                    return vec![];
+                }
+            }
+        }
         Err(e) => {
             tracing::debug!("ollama scrape failed: {e}");
             return vec![];

@@ -27,6 +27,23 @@ struct SdTarget {
     labels: HashMap<String, String>,
 }
 
+/// Strip a URL down to `host[:port]` — removes scheme, path, query, fragment.
+fn normalize_host_port(url: &str) -> String {
+    let without_scheme = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+    // Strip path/query/fragment: take everything up to first '/' or '?'
+    let host_port = without_scheme
+        .split_once('/')
+        .map(|(h, _)| h)
+        .unwrap_or(without_scheme);
+    host_port
+        .split_once('?')
+        .map(|(h, _)| h)
+        .unwrap_or(host_port)
+        .to_string()
+}
+
 /// `GET /v1/metrics/targets`
 ///
 /// Returns scrape targets for veronex-agent.  Server and Ollama targets are
@@ -42,7 +59,7 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
             tracing::error!("metrics targets: failed to list gpu servers: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
+                Json(serde_json::json!({"error": "failed to list gpu servers"})),
             )
                 .into_response();
         }
@@ -52,10 +69,7 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
         let Some(ne_url) = s.node_exporter_url.as_deref().filter(|u| !u.is_empty()) else {
             continue;
         };
-        let target = ne_url
-            .trim_start_matches("http://")
-            .trim_start_matches("https://")
-            .to_string();
+        let target = normalize_host_port(ne_url);
 
         let mut labels = HashMap::new();
         labels.insert("type".into(), "server".into());
@@ -66,16 +80,23 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
     }
 
     // ── Ollama targets ──────────────────────────────────────────────────
-    let providers = state.provider_registry.list_all().await.unwrap_or_default();
+    let providers = match state.provider_registry.list_all().await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("metrics targets: failed to list providers: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "failed to list providers"})),
+            )
+                .into_response();
+        }
+    };
 
     for p in providers {
         if p.provider_type != ProviderType::Ollama || !p.is_active {
             continue;
         }
-        let target = p.url
-            .trim_start_matches("http://")
-            .trim_start_matches("https://")
-            .to_string();
+        let target = normalize_host_port(&p.url);
 
         let mut labels = HashMap::new();
         labels.insert("type".into(), "ollama".into());
@@ -91,4 +112,18 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
     }
 
     (StatusCode::OK, Json(targets)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_strips_scheme_path_query() {
+        assert_eq!(normalize_host_port("http://192.168.1.21:9100"), "192.168.1.21:9100");
+        assert_eq!(normalize_host_port("https://ollama.example.com:11434/api/chat"), "ollama.example.com:11434");
+        assert_eq!(normalize_host_port("http://host:8080/metrics?foo=bar"), "host:8080");
+        assert_eq!(normalize_host_port("192.168.1.21:9100"), "192.168.1.21:9100");
+        assert_eq!(normalize_host_port("https://host/path"), "host");
+    }
 }

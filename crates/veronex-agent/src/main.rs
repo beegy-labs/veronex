@@ -16,17 +16,22 @@
 ///   REPLICA_COUNT      — total number of agent pods (default: 1)
 ///   RUST_LOG           — tracing filter (default: info)
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use serde::Deserialize;
 use tokio::signal;
+use tokio::sync::Semaphore;
 
 mod otlp;
 mod scraper;
 mod shard;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Max concurrent scrape tasks to prevent resource exhaustion.
+const MAX_CONCURRENT_SCRAPES: usize = 32;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -100,6 +105,7 @@ async fn main() -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
+    let scrape_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_SCRAPES));
 
     tracing::info!(
         api = %config.veronex_api_url,
@@ -117,7 +123,7 @@ async fn main() -> Result<()> {
                 tracing::info!("shutdown signal received");
                 break;
             }
-            _ = scrape_cycle(&client, &config) => {}
+            _ = scrape_cycle(&client, &config, &scrape_semaphore) => {}
         }
         tokio::time::sleep(config.scrape_interval).await;
     }
@@ -135,7 +141,7 @@ fn shard_key(t: &SdTarget) -> &str {
     }
 }
 
-async fn scrape_cycle(client: &reqwest::Client, config: &Config) {
+async fn scrape_cycle(client: &reqwest::Client, config: &Config, semaphore: &Arc<Semaphore>) {
     let targets = discover_targets(client, &config.veronex_api_url).await;
     if targets.is_empty() {
         tracing::debug!("no targets discovered");
@@ -158,8 +164,10 @@ async fn scrape_cycle(client: &reqwest::Client, config: &Config) {
             let target_type = t.labels.get("type")?.as_str();
             let url = format!("http://{host_port}");
             let labels = t.labels.clone();
+            let sem = semaphore.clone();
 
             Some(async move {
+                let _permit = sem.acquire().await;
                 match target_type {
                     "server" => {
                         let metrics = scraper::scrape_node_exporter(client, &url).await;

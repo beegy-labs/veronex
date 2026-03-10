@@ -111,6 +111,8 @@ async fn poll_node_exporter_metrics(
     let gpu_idx = provider.gpu_index.unwrap_or(0) as usize;
     let gpu = node_metrics.gpus.get(gpu_idx);
 
+    // DRM metrics come from amdgpu kernel driver — if DRM GPU exists, it's AMD.
+    // NVIDIA GPUs use proprietary driver and don't expose DRM metrics via node-exporter.
     let gpu_vendor = if gpu.is_some() { "amd".to_string() } else { String::new() };
 
     let hw = HwMetrics {
@@ -131,7 +133,7 @@ async fn poll_node_exporter_metrics(
         name = %provider.name,
         vram = "{}/{} MiB",
         hw.vram_used_mb, hw.vram_total_mb,
-        temp = hw.temp_c,
+        temp = hw.max_temp_c(),
         "node-exporter metrics collected"
     );
 
@@ -220,7 +222,7 @@ pub async fn run_health_checker_loop(
                             ThrottleLevel::Hard => {
                                 tracing::warn!(
                                     provider = %provider.name,
-                                    temp    = hw.temp_c,
+                                    temp    = hw.max_temp_c(),
                                     cooldown_secs = 60,
                                     "HARD THROTTLE: dispatch suspended, cooldown active"
                                 );
@@ -239,14 +241,14 @@ pub async fn run_health_checker_loop(
                             ThrottleLevel::Soft => {
                                 tracing::warn!(
                                     provider = %provider.name,
-                                    temp    = hw.temp_c,
+                                    temp    = hw.max_temp_c(),
                                     "SOFT THROTTLE: capped to 1 slot"
                                 );
                             }
                             ThrottleLevel::Normal => {
                                 tracing::info!(
                                     provider = %provider.name,
-                                    temp    = hw.temp_c,
+                                    temp    = hw.max_temp_c(),
                                     "throttle lifted — normal ops"
                                 );
                                 use fred::prelude::*;

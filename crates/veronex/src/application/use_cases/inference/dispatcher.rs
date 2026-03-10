@@ -17,10 +17,10 @@ use crate::application::ports::outbound::provider_model_selection::ProviderModel
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::entities::{InferenceJob, LlmProvider};
-use crate::domain::enums::{JobSource, KeyTier, ProviderType, ThrottleLevel};
+use crate::domain::enums::{JobSource, JobStatus, KeyTier, ProviderType, ThrottleLevel};
 use crate::domain::value_objects::JobStatusEvent;
 use crate::domain::constants::{
-    GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_OWNER_TTL_SECS,
+    GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
     MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
     QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID,
     QUEUE_JOBS_TEST as QUEUE_KEY_TEST, QUEUE_POLL_INTERVAL, QUEUE_PROCESSING,
@@ -28,6 +28,7 @@ use crate::domain::constants::{
 use crate::application::ports::outbound::concurrency_port::VramPermit;
 
 use super::JobEntry;
+use super::helpers::schedule_cleanup;
 use super::runner::run_job;
 
 // ── Provider filtering ──────────────────────────────────────────────────────
@@ -139,6 +140,36 @@ async fn score_and_claim(
         })
 }
 
+// ── Fail job when no provider is available ────────────────────────────────────
+
+async fn fail_job_no_provider(
+    jobs: &Arc<DashMap<Uuid, JobEntry>>,
+    job_repo: &Arc<dyn JobRepository>,
+    uuid: Uuid,
+    reason: &str,
+) {
+    if let Some(mut entry) = jobs.get_mut(&uuid) {
+        entry.status = JobStatus::Failed;
+        entry.job.status = JobStatus::Failed;
+        entry.job.error = Some(reason.to_string());
+        entry.done = true;
+        let notify = entry.notify.clone();
+        drop(entry);
+        notify.notify_one();
+    }
+
+    let job_id = crate::domain::value_objects::JobId(uuid);
+    if let Ok(Some(mut job)) = job_repo.get(&job_id).await {
+        job.status = JobStatus::Failed;
+        job.error = Some(reason.to_string());
+        if let Err(e) = job_repo.save(&job).await {
+            tracing::warn!(job_id = %uuid, "failed to persist no-provider failure: {e}");
+        }
+    }
+
+    schedule_cleanup(jobs, uuid, JOB_CLEANUP_DELAY);
+}
+
 // ── Direct spawn (no-Valkey dev mode) ───────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -165,7 +196,11 @@ pub(super) fn spawn_job_direct(
             .await
         {
             Ok(r) => r,
-            Err(e) => { tracing::error!(job_id = %uuid, "no provider: {e}"); return; }
+            Err(e) => {
+                tracing::error!(job_id = %uuid, "no provider: {e}");
+                fail_job_no_provider(&jobs, &job_repo, uuid, &e.to_string()).await;
+                return;
+            }
         };
 
         if !circuit_breaker.is_allowed(provider_id) {
@@ -275,6 +310,15 @@ pub(super) async fn queue_dispatcher_loop(
             job.provider_type, model, gemini_tier.as_deref(),
         ).await;
 
+        // No eligible candidates → fail immediately (e.g. model disabled on all providers)
+        if candidates.is_empty() {
+            tracing::warn!(%uuid, model, "no eligible provider — failing job");
+            let uuid_str = uuid.to_string();
+            let _ = valkey.list_remove(QUEUE_PROCESSING, &uuid_str).await;
+            fail_job_no_provider(&jobs, &job_repo, uuid, "no eligible provider for this model").await;
+            continue;
+        }
+
         let claimed = score_and_claim(
             candidates, provider_dispatch.as_ref(), vram_pool.as_ref(),
             thermal.as_ref(), circuit_breaker.as_ref(), model,
@@ -319,7 +363,8 @@ pub(super) async fn queue_dispatcher_loop(
                 });
             }
             None => {
-                tracing::debug!(%uuid, "no provider, re-queuing");
+                // Candidates exist but VRAM/thermal/circuit-breaker blocked — re-queue
+                tracing::debug!(%uuid, "no provider slot available, re-queuing");
                 let uuid_str = uuid.to_string();
                 let _ = valkey.list_remove(QUEUE_PROCESSING, &uuid_str).await;
                 let requeue = match (job.source, key_tier) {

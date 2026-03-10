@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS kafka_otel_logs (
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list          = '__KAFKA_BROKER__',
-    kafka_topic_list           = 'otel.audit.logs',
+    kafka_topic_list           = 'otel-logs',
     kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-logs',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS kafka_otel_metrics (
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list          = '__KAFKA_BROKER__',
-    kafka_topic_list           = 'otel.audit.metrics',
+    kafka_topic_list           = 'otel-metrics',
     kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-metrics',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
@@ -295,7 +295,7 @@ CREATE TABLE IF NOT EXISTS kafka_otel_traces (
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list          = '__KAFKA_BROKER__',
-    kafka_topic_list           = 'otel.audit.traces',
+    kafka_topic_list           = 'otel-traces',
     kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-traces',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,

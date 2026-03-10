@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline
 
-> SSOT | **Last Updated**: 2026-03-09 (rev: agent OTLP push, zero-config policy)
+> SSOT | **Last Updated**: 2026-03-10 (rev: agent 2-target push, URL normalization, DoS protection)
 
 ## Task Guide
 
@@ -12,7 +12,7 @@
 | Change Kafka topic name | `docker/otel/config.yaml` kafka exporter `topic:` | Also update ClickHouse `init.sql` Kafka Engine `kafka_topic_list` |
 | Add new ClickHouse Kafka chain | `docker/clickhouse/init.sql` | Pattern: `kafka_* ENGINE=Kafka` -> `MV` -> target `MergeTree` (MergeTree table must be declared first) |
 | Add new target MergeTree table | `docker/clickhouse/init.sql` | Declare before the Kafka Engine section (top of file) |
-| Change HTTP SD endpoint auth | `infrastructure/inbound/http/gpu_server_handlers.rs` | Move route outside/inside auth middleware in `router.rs` |
+| Change HTTP SD endpoint auth | `infrastructure/inbound/http/metrics_handlers.rs` | Move route outside/inside auth middleware in `router.rs` |
 | Migrate to managed Kafka | `docker/otel/config.yaml` `brokers:` + `docker-compose.yml` `REDPANDA_URL` | Address swap only -- no code changes |
 
 ## Key Files
@@ -27,8 +27,8 @@
 | `crates/veronex-analytics/src/` | Internal analytics service (OTel write + ClickHouse read) |
 | `crates/veronex/src/infrastructure/outbound/observability/http_observability_adapter.rs` | `HttpObservabilityAdapter` (replaces RedpandaObservabilityAdapter) |
 | `crates/veronex/src/infrastructure/outbound/observability/http_audit_adapter.rs` | `HttpAuditAdapter` (replaces RedpandaAuditAdapter) |
-| `crates/veronex/src/infrastructure/inbound/http/metrics_handlers.rs` | `GET /v1/metrics/targets` (agent target discovery) |
-| `crates/veronex-agent/src/scraper.rs` | Metric allowlist + Prometheus text → OTLP conversion (raw values) |
+| `crates/veronex/src/infrastructure/inbound/http/metrics_handlers.rs` | `GET /v1/metrics/targets` — two target types (server + ollama), URL normalization to `host[:port]` |
+| `crates/veronex-agent/src/scraper.rs` | Metric allowlist + Prometheus text → OTLP conversion (raw values), body size limits (16MB node-exporter, 1MB Ollama) |
 | `crates/veronex-agent/src/otlp.rs` | OTLP HTTP/JSON push client |
 | `crates/veronex-agent/src/shard.rs` | Modulus sharding for multi-replica deduplication |
 
