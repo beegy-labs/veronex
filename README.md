@@ -12,7 +12,7 @@ Veronex is not a simple reverse proxy. It is an **intelligence scheduler** that:
 2. **Cluster-wide optimization** — maximizes total throughput across all servers, not individual server performance
 3. **Dynamic model allocation** — computes optimal "model combination + concurrent request count" per server in real-time
 4. **Multi-model co-residence** — when VRAM allows, loads multiple models simultaneously for parallel processing; when insufficient, FIFO + model locality to minimize switching cost
-5. **3-phase adaptive learning** — Cold Start (limit=1) → AIMD (TPS+p95 per model) → LLM Batch (all-model combination tuning with ±2 clamp)
+5. **3-phase adaptive learning** — Cold Start (weight-based initial limit) → AIMD (TPS+p95 per model) → LLM Batch (all-model combination tuning with ±2 clamp)
 6. **Thermal protection** — auto decelerate → block → cooldown → gradual recovery (per-provider thresholds, auto-detected from GPU vendor)
 7. **Self-healing** — circuit breaker per provider, crash recovery via Valkey, queue reaper for orphaned jobs
 
@@ -49,10 +49,10 @@ Veronex learns the optimal concurrency limit per model automatically:
 
 ```
 Phase 1: Cold Start
-  New model → max_concurrent = 1
-  First inference data → set baseline TPS + p95
+  New model → max_concurrent from weight table (first inference data → baseline TPS + p95)
+    < 5 GB  → 8    5–20 GB → 4    20–50 GB → 2    > 50 GB → 1
 
-Phase 2: AIMD (every sync cycle, ~300s)
+Phase 2: AIMD (every sync cycle, ~30s per provider)
   stats = compute_throughput_stats(provider, model, 1h)
   ratio = current_tps / baseline_tps
 
@@ -70,6 +70,7 @@ Phase 3: LLM Batch (when total_samples >= 10)
 
 Dispatch:
   if active_count >= max_concurrent → re-enqueue (wait in queue)
+  APU/unified memory: VRAM gate bypassed when loaded weight > DRM-reported VRAM
   Probe policy: periodically allows ±N above/below limit for exploration
 ```
 
@@ -110,7 +111,8 @@ open http://localhost:3002
 | Valkey | 6380 | Job queue + rate limiting + session revocation |
 | ClickHouse | 8123, 9000 | Analytics store |
 | Redpanda | 9092 | OTel event stream (Kafka-compatible) |
-| MinIO | 9011 (console), 9010 (S3 API) | S3-compatible message storage |
+| OTel Collector | 4317 (gRPC), 4318 (HTTP) | OTLP ingest from veronex + veronex-agent |
+| MinIO | 9011 (console), 9010 (S3 API) | S3-compatible message context storage |
 
 ---
 
@@ -144,7 +146,9 @@ BOOTSTRAP_SUPER_USER=admin BOOTSTRAP_SUPER_PASS=<pass> docker compose up -d
 git pull
 docker compose build
 docker compose up -d
-# Database migrations run automatically on startup
+# Run migrations if schema changed:
+docker compose run --rm migrate-postgres
+docker compose run --rm migrate-clickhouse
 ```
 
 ### Env Variables
