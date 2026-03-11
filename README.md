@@ -188,38 +188,87 @@ Interactive API docs available at `http://localhost:3002/api-docs`.
 
 ## Architecture
 
-```
-Client → POST /v1/chat/completions (X-API-Key)
-          ↓ API key auth + rate limit (RPM/TPM)
-          ↓ RPUSH veronex:queue:jobs:paid | :jobs | :jobs:test
-          ↓ queue_dispatcher: Lua priority pop → processing list
-          ↓ 2-stage model filter:
-          │   1. providers_for_model() → has the model?
-          │   2. list_enabled() → model enabled on this provider?
-          ↓ VRAM sort + model stickiness (+100GB bonus for loaded model)
-          ↓ Gate chain:
-          │   circuit_breaker → thermal → concurrency limit → vram_pool.try_reserve()
-          ↓ OllamaAdapter | GeminiAdapter → SSE tokens → client
-          ↓ VramPermit dropped (RAII) → KV cache returned, weight stays
-          ↓ ObservabilityPort → veronex-analytics → OTel → ClickHouse
+Three Rust crates working together:
+
+- **`veronex`** — API server + scheduler + VRAM pool + adaptive concurrency (`crates/veronex/`)
+- **`veronex-analytics`** — OTel ingest + analytics read API, port 3003 (`crates/veronex-analytics/`)
+- **`veronex-agent`** — Distributed metrics collector: scrapes node-exporter + Ollama → OTLP push (`crates/veronex-agent/`)
+
+### Request Flow
+
+```mermaid
+flowchart TD
+    C([Client]) --> R[POST /v1/chat/completions\nOllama native · Gemini · SSE]
+    R --> M[API Key Auth\n+ Rate Limit RPM/TPM]
+    M -->|rejected| E401([401 / 429])
+    M -->|ok| Q[Valkey Priority Queue\npaid › standard › test]
+
+    Q --> D[Queue Dispatcher\nLua priority pop]
+    D --> F[3-Stage Provider Filter\n① active + type match\n② model availability\n③ admin-enabled models]
+    F -->|no candidate| FAIL([job → failed])
+    F -->|candidates| S[Score & Sort\nVRAM headroom + model stickiness]
+
+    S --> G[Gate Chain]
+    G --> CB{Circuit\nBreaker}
+    CB -->|open| NEXT[next candidate]
+    CB -->|closed| TH{Thermal\ncheck}
+    TH -->|hard block| NEXT
+    TH -->|ok| VR{VRAM\nreserve}
+    VR -->|exhausted| RQ[re-enqueue front]
+    VR -->|permit granted| RUN[Job Runner\nasync spawn]
+
+    RUN --> OL[Ollama /api/generate\nor /api/chat]
+    RUN --> GM[Gemini generateContent]
+    OL & GM --> SSE[SSE token stream → client]
+    SSE --> DROP[VramPermit drop\nKV cache released\nweight stays in VRAM]
+    DROP --> OBS[Observability\nfail-open async]
+    OBS --> PG[(Postgres\naudit + jobs)]
+    OBS --> CH[(ClickHouse\nanalytics)]
 ```
 
-Three Rust crates:
-- **`veronex`** — API server + scheduler (`crates/veronex/`)
-- **`veronex-analytics`** — OTel ingest + analytics read API (`crates/veronex-analytics/`, port 3003)
-- **`veronex-agent`** — Metrics collector: scrapes node-exporter + Ollama, pushes to OTel via OTLP (`crates/veronex-agent/`)
+### Capacity Learning Loop
+
+```mermaid
+flowchart LR
+    subgraph SYNC["Sync Loop · every 30s per provider"]
+        HW[GET /api/ps\nloaded models + VRAM] --> APU{DRM VRAM\n< model weight?}
+        APU -->|APU unified memory| EST[estimated_total\n= observed × 1.15]
+        APU -->|discrete GPU| DRM[total = DRM reported]
+        EST & DRM --> POOL[VramPool.set_total]
+        POOL --> SHOW[POST /api/show\narch profile per model\nlayers · kv_heads · ctx]
+        SHOW --> KV[KV cache estimate\nbytes_per_token × ctx]
+        KV --> AIMD{samples ≥ 3?}
+        AIMD -->|cold start| INIT[initial limit\nfrom weight table\n<5GB→8 · 5-20GB→4\n20-50GB→2 · >50GB→1]
+        AIMD -->|warm| AD[AIMD update\ntps<0.7× → ×0.75\ntps≥0.9× → +1\np95 spike → decrease]
+        INIT & AD --> LLM[LLM Batch Analysis\nqwen2.5:3b\nall models → recommended\nmax_concurrent ±2 clamp]
+    end
+```
+
+### veronex-agent · Distributed Metrics Collection
+
+```mermaid
+flowchart LR
+    subgraph AGENT["veronex-agent · one replica per shard"]
+        D2[GET /v1/metrics/targets] --> SH[Shard filter\nhash server_id % replicas]
+        SH --> NE[node-exporter scrape\nCPU · mem · GPU · hwmon\nwhitelist filter]
+        SH --> OP[Ollama /api/ps\nloaded models + VRAM bytes]
+        NE & OP --> OTLP[POST OTLP HTTP\nto OTel Collector]
+    end
+    OTLP --> OC[OTel Collector] --> RP[Redpanda] --> CK[(ClickHouse)]
+```
 
 Hexagonal architecture (Ports & Adapters):
+
 ```
-domain/ (entities, enums, value objects — no deps)
-  ↑
-application/ (use cases + port traits)
-  ↑
-infrastructure/ (Axum handlers, Postgres, Valkey, Ollama, Gemini, OTel adapters)
+domain/          entities, value objects, enums — zero external deps
+    ↑
+application/     use cases + port traits (interfaces)
+    ↑
+infrastructure/  Axum handlers · Postgres · Valkey · Ollama · Gemini · OTel adapters
 ```
 
 Full architecture details: [`.ai/architecture.md`](.ai/architecture.md)
-Domain CDD docs: [`docs/llm/`](docs/llm/)
+Domain docs: [`docs/llm/`](docs/llm/)
 
 ---
 
