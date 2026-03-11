@@ -13,6 +13,10 @@ if [ "$SKIP_DB_RESET" = "0" ]; then
     "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
   # Re-apply migrations since schema was dropped
   docker compose run --rm migrate-postgres > /dev/null 2>&1
+  # Clear Valkey job queues and stale keys to avoid zombie jobs after DB reset
+  docker compose exec -T valkey valkey-cli EVAL \
+    "local count=0; for _,k in ipairs(redis.call('keys','veronex:*')) do count=count+redis.call('del',k) end; return count" 0 \
+    > /dev/null 2>&1 || true
   docker compose restart veronex > /dev/null 2>&1
   info "Waiting for veronex to start..."
   for i in $(seq 1 30); do

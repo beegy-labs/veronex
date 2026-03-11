@@ -42,7 +42,7 @@ WARMUP_OK="no"
 for _w in $(seq 1 20); do
   WU_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 90 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":2,\"stream\":false}" 2>/dev/null | tail -1)
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":2,\"stream\":false}" 2>/dev/null | tail -1) || WU_CODE="000"
   [ "$WU_CODE" = "200" ] && WARMUP_OK="yes" && break
   info "Inference warm-up ${_w}/20 → HTTP $WU_CODE, waiting 5s..."
   sleep 5

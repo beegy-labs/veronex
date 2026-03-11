@@ -438,11 +438,26 @@ pub async fn sync_provider(
     } else {
         None
     };
-    let vram_total_mb = hw.as_ref().map(|h| h.vram_total_mb)
+    let drm_vram_mb = hw.as_ref().map(|h| h.vram_total_mb)
         .filter(|&v| v > 0)
         .unwrap_or({
             if provider_total_vram_mb > 0 { provider_total_vram_mb as u32 } else { 0 }
         });
+
+    // APU / unified-memory detection: AMD Ryzen AI (iGPU) and similar APUs report only
+    // the dedicated BIOS-allocated VRAM via DRM (e.g. 1024 MiB), while Ollama transparently
+    // uses shared system RAM. Detect this when loaded model weight exceeds DRM VRAM and
+    // estimate total capacity as observed_weight × 1.15 (CDD: estimated_total = max_observed_sum_size_vram × 1.15).
+    let total_ps_weight_mb: u32 = ps.models.iter()
+        .map(|m| (m.size_vram / 1_048_576) as u32)
+        .sum();
+    let vram_total_mb = if drm_vram_mb > 0 && total_ps_weight_mb > drm_vram_mb {
+        // APU confirmed: estimated_total = observed_weight × 1.15 (CDD spec).
+        total_ps_weight_mb * 115 / 100
+    } else {
+        drm_vram_mb
+    };
+
     let temp_c = hw.as_ref().map(|h| h.max_temp_c());
 
     // Set total VRAM on the pool
@@ -691,10 +706,10 @@ pub async fn sync_provider(
     Ok(())
 }
 
-/// Initial max_concurrent: conservative cold-start = 1.
-/// Requests only 1 concurrent per model until LLM batch analysis recommends otherwise.
-fn initial_max_concurrent(_weight_mb: u32) -> u32 {
-    1
+/// Initial max_concurrent based on model weight (cold-start heuristic).
+/// Matches the weight-based caps table in docs/llm/inference/capacity.md.
+fn initial_max_concurrent(weight_mb: u32) -> u32 {
+    weight_based_max_concurrent(weight_mb)
 }
 
 /// Weight-based heuristic used as LLM analysis fallback.
