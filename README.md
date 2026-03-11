@@ -2,15 +2,13 @@
 
 **Autonomous scheduler and gateway for N Ollama servers** — VRAM-aware routing, adaptive concurrency, thermal protection, OpenAI-compatible API.
 
-Veronex is not a reverse proxy. It treats all your Ollama instances as a single compute pool and learns the optimal request concurrency per model through live inference data.
+Veronex is not a reverse proxy. It treats all your Ollama instances as a single compute pool and learns the optimal concurrency per model through live inference data.
 
-- Routes requests to the provider with the most available VRAM, with model-stickiness to avoid reloading
-- Learns `max_concurrent` per model via AIMD (TPS + p95 latency), then refines with LLM batch analysis
-- Detects GPU/CPU thermal state automatically and throttles before hardware is stressed
-- Recovers from provider crashes via circuit breaker + Valkey queue reaper
-- OpenAI, Ollama native, and Gemini API compatible — drop-in for existing clients
-
-Primary optimization target: **AMD Ryzen AI 395+** (APU unified memory).
+- **Smart routing** — dispatches to the provider with the most VRAM headroom; keeps models resident to avoid reloading
+- **Adaptive concurrency** — learns `max_concurrent` per model via AIMD (TPS + p95), then refines via LLM batch analysis
+- **Thermal protection** — detects GPU/CPU thermal state per provider; throttles automatically before hardware is stressed
+- **Self-healing** — circuit breaker + queue reaper recover from provider crashes without losing requests
+- **API compatible** — OpenAI, Ollama native, and Gemini — drop-in for existing clients and SDKs
 
 ---
 
@@ -20,19 +18,13 @@ Primary optimization target: **AMD Ryzen AI 395+** (APU unified memory).
 git clone <repo> && cd veronex
 cp .env.example .env          # set JWT_SECRET (required)
 docker compose up -d
-open http://localhost:3002     # setup wizard → create admin → add provider
+open http://localhost:3002     # setup wizard → create admin → add provider → get API key
 ```
 
 > **macOS**: `OLLAMA_URL=http://host.docker.internal:11434` works out of the box.
 > **Linux**: set `OLLAMA_URL=http://172.17.0.1:11434` in `.env`.
 
-API key: Dashboard → Keys → Create Key.
-
----
-
-## API Usage
-
-Drop-in OpenAI compatible:
+Then call it like any OpenAI-compatible endpoint:
 
 ```bash
 curl http://localhost:3001/v1/chat/completions \
@@ -47,7 +39,7 @@ client = OpenAI(base_url="http://localhost:3001/v1", api_key="iq_...")
 client.chat.completions.create(model="llama3.2", messages=[...])
 ```
 
-Interactive docs: `http://localhost:3001/swagger-ui`
+Interactive API docs: `http://localhost:3001/swagger-ui`
 
 ---
 
@@ -62,39 +54,37 @@ flowchart TD
     M -->|ok| Q[Valkey Priority Queue\npaid › standard › test]
 
     Q --> D[Queue Dispatcher]
-    D --> F[Provider Filter\n① active + type\n② model available\n③ admin-enabled]
-    F -->|none| FAIL([job → failed])
-    F -->|ok| S[Score by VRAM headroom\n+ model stickiness]
+    D --> F[Provider Filter\n① active + type match\n② model available\n③ admin-enabled]
+    F -->|no match| FAIL([job → failed])
+    F -->|candidates| S[Score & rank\nVRAM headroom + model stickiness]
 
-    S --> CB{Circuit Breaker}
-    CB -->|open| S
-    CB -->|ok| TH{Thermal}
-    TH -->|hard| S
-    TH -->|ok| VR{VRAM reserve}
-    VR -->|full| RQ[re-enqueue]
-    VR -->|ok| RUN[Job Runner]
+    S --> GATE["For each candidate in order"]
+    GATE -->|circuit open| GATE
+    GATE -->|thermal hard| GATE
+    GATE -->|VRAM full| RQ[re-enqueue to front]
+    GATE -->|pass| RUN[Job Runner]
 
     RUN --> OL[Ollama]
     RUN --> GM[Gemini]
     OL & GM --> SSE[SSE stream → client]
-    SSE --> DROP[VramPermit drop\nKV cache released]
+    SSE --> DROP[VramPermit drop — KV cache released]
     DROP --> OBS[(Postgres + ClickHouse)]
 ```
 
-### Adaptive Concurrency (per provider, per model)
+### Adaptive Concurrency (per provider × model, every 30s)
 
 ```mermaid
 flowchart LR
-    subgraph SYNC["Every 30s per provider"]
-        PS[GET /api/ps\nloaded models] --> VRAM{DRM VRAM\n< model weight?}
-        VRAM -->|APU| EST[estimated = observed × 1.15]
-        VRAM -->|GPU| DRM[total = DRM reported]
+    subgraph SYNC["Sync Loop"]
+        PS[GET /api/ps] --> VRAM{loaded weight\n> DRM VRAM?}
+        VRAM -->|APU unified memory| EST[estimated = observed × 1.15]
+        VRAM -->|discrete GPU| DRM[total = DRM reported]
         EST & DRM --> POOL[VramPool update]
-        POOL --> KV[KV cache estimate\nfrom arch profile]
-        KV --> AI{samples ≥ 3?}
-        AI -->|cold| INIT[weight table\n<5GB→8 · 5-20GB→4\n20-50GB→2 · >50GB→1]
-        AI -->|warm| AIMD[AIMD\ntps<0.7× → ×0.75\ntps≥0.9× → +1]
-        INIT & AIMD --> LLM[LLM Batch\nqwen2.5:3b ±2 clamp]
+        POOL --> KV[KV cache estimate\nfrom model arch]
+        KV --> PHASE{samples ≥ 3?}
+        PHASE -->|cold start| INIT[weight table\n<5GB→8 · 5-20GB→4\n20-50GB→2 · >50GB→1]
+        PHASE -->|learning| AIMD[AIMD\ntps<0.7× → ×0.75\ntps≥0.9× → +1\np95 spike → decrease]
+        INIT & AIMD --> LLM[LLM Batch\nqwen2.5:3b · ±2 clamp]
     end
 ```
 
