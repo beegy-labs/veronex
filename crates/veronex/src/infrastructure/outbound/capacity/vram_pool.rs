@@ -231,7 +231,16 @@ impl VramPoolPort for VramPool {
             let cur_kv = reserved_kv.load(Ordering::Acquire);
             let loaded = Self::loaded_weight_mb(&state) as i64;
             let safety = total as i64 * state.safety_permil.load(Ordering::Acquire) as i64 / 1000;
-            let available = total as i64 - loaded - cur_kv as i64 - DEFAULT_BUFFER_MB as i64 - safety - weight_cost as i64;
+
+            // APU / unified-memory case: if loaded models already exceed the DRM-reported
+            // total VRAM, the hardware is using shared system RAM (e.g. AMD Ryzen AI 395+).
+            // Trust the concurrency limit instead of VRAM arithmetic, which would incorrectly
+            // block all requests when loaded_weight > total_vram.
+            let available = if loaded + weight_cost as i64 > total as i64 {
+                i64::MAX
+            } else {
+                total as i64 - loaded - cur_kv as i64 - DEFAULT_BUFFER_MB as i64 - safety - weight_cost as i64
+            };
 
             if available < kv_mb as i64 {
                 // Not enough VRAM — bump safety factor for next time.

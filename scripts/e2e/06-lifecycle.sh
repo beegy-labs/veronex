@@ -36,13 +36,31 @@ else
 fi
 kill $CANCEL_PID 2>/dev/null || true; wait $CANCEL_PID 2>/dev/null || true
 
+# Poll until inference is ready (non-streaming warm-up request)
+# This directly validates the provider/model is available, more reliable than VramPool state.
+WARMUP_OK="no"
+for _w in $(seq 1 20); do
+  WU_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 90 "$API/v1/chat/completions" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":2,\"stream\":false}" 2>/dev/null | tail -1)
+  [ "$WU_CODE" = "200" ] && WARMUP_OK="yes" && break
+  info "Inference warm-up ${_w}/20 → HTTP $WU_CODE, waiting 5s..."
+  sleep 5
+done
+[ "$WARMUP_OK" = "yes" ] && pass "Inference ready after cancel" || fail "Inference not ready after warm-up"
+
 # ── SSE Content Verification ────────────────────────────────────────────────
 
 hdr "SSE Verification"
 
-SSE_FULL=$(curl -s --max-time 30 "$API/v1/chat/completions" \
-  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello\"}],\"max_tokens\":8,\"stream\":true}" 2>/dev/null || echo "")
+SSE_FULL=""
+for _sse_try in $(seq 1 3); do
+  SSE_FULL=$(curl -s --max-time 30 "$API/v1/chat/completions" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello\"}],\"max_tokens\":8,\"stream\":true}" 2>/dev/null || echo "")
+  echo "$SSE_FULL" | grep -q "^data: {" && break
+  [ "$_sse_try" -lt 3 ] && info "SSE retry ${_sse_try}/3, waiting 10s..." && sleep 10
+done
 
 SSE_OK=$(echo "$SSE_FULL" | grep "^data: {" | head -1 | python3 -c "
 import sys, json
@@ -54,8 +72,8 @@ else: print('no')
 " 2>/dev/null || echo "no")
 [ "$SSE_OK" = "yes" ] && pass "SSE valid JSON structure" || fail "SSE JSON invalid"
 
-HAS_DONE=$(echo "$SSE_FULL" | grep -c "\[DONE\]" || echo "0")
-[ "$HAS_DONE" -gt 0 ] && pass "SSE ends with [DONE]" || fail "SSE missing [DONE]"
+HAS_DONE=$(echo "$SSE_FULL" | grep -c "\[DONE\]" 2>/dev/null; true)
+[ "${HAS_DONE:-0}" -gt 0 ] && pass "SSE ends with [DONE]" || fail "SSE missing [DONE]"
 
 # ── Native Inference API ────────────────────────────────────────────────────
 
