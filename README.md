@@ -252,13 +252,17 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph AGENT["veronex-agent · one replica per shard"]
-        D2[GET /v1/metrics/targets] --> SH[Shard filter\nhash server_id % replicas]
-        SH --> NE[node-exporter scrape\nCPU · mem · GPU · hwmon\nwhitelist filter]
-        SH --> OP[Ollama /api/ps\nloaded models + VRAM bytes]
-        NE & OP --> OTLP[POST OTLP HTTP\nto OTel Collector]
+    V[veronex API\n/v1/metrics/targets] -->|target list| SH
+
+    subgraph AGENT["veronex-agent (multi-replica, sharded)"]
+        SH[Shard filter\nhash server_id % replicas]
+        SH -->|scrape| NE[node-exporter\nCPU · mem · GPU · hwmon]
+        SH -->|scrape| OL[Ollama /api/ps\nloaded models · VRAM]
     end
-    OTLP --> OC[OTel Collector] --> RP[Redpanda] --> CK[(ClickHouse)]
+
+    NE -->|metrics| PUSH[OTLP HTTP push]
+    OL -->|metrics| PUSH
+    PUSH --> OC[OTel Collector] --> RP[Redpanda] --> CK[(ClickHouse)]
 ```
 
 Hexagonal architecture (Ports & Adapters):
