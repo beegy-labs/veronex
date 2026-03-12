@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline
 
-> SSOT | **Last Updated**: 2026-03-10 (rev: agent 2-target push, URL normalization, DoS protection)
+> SSOT | **Last Updated**: 2026-03-13 (rev: agent 2-target push, URL normalization, DoS protection, feat/agent-otlp-push)
 
 ## Task Guide
 

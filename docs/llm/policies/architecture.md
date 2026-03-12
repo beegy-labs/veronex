@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-07
+> SSOT | **Last Updated**: 2026-03-13
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision
@@ -10,7 +10,7 @@ Veronex is an **autonomous intelligence scheduler/gateway** for N Ollama servers
 - **Cluster-wide optimization**: maximize total throughput across all servers, not individual server performance
 - **Dynamic model allocation**: compute optimal "model combination + concurrent request count" per server in real-time
 - **Multi-model co-residence**: when VRAM allows, load multiple models simultaneously for parallel processing; when insufficient, FIFO + model locality to minimize switching cost
-- **3-phase adaptive learning**: Cold Start (limit=1) → AIMD (TPS+p95 per model) → LLM Batch (all-model combination tuning)
+- **3-phase adaptive learning**: Cold Start (`num_parallel` top-down, multi-model `committed_parallel` guard) → AIMD (TPS+p95 per model, capped at `num_parallel`) → LLM Batch (all-model combination tuning)
 - **Thermal protection**: auto decelerate → block → cooldown → gradual recovery (per-provider thresholds, auto-detected from GPU vendor)
 - **Self-healing**: circuit breaker per provider, crash recovery via Valkey, queue reaper for orphaned jobs
 

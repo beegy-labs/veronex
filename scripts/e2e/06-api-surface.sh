@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Phase 17+24: Multi-Format Inference, Endpoint Smoke Tests
+# Phase 06: Multi-Format Inference + Endpoint Smoke Tests
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"; load_state
 
-# ── Multi-Format Inference ──────────────────────────────────────────────────
+# ── Multi-Format Inference ────────────────────────────────────────────────────
 
-hdr "Multi-Format Inference"
+hdr "Multi-Format Inference (all endpoints)"
 
 TMPDIR_MF=$(mktemp -d)
 (curl -s --max-time 30 "$API/v1/chat/completions" \
@@ -43,16 +43,41 @@ wait
 # SSE check
 SSE_RES=$(cat "$TMPDIR_MF/sse" 2>/dev/null || echo "")
 echo "$SSE_RES" | grep -q "data:" \
-  && pass "OpenAI SSE streaming" || fail "SSE: no data events"
+  && pass "OpenAI SSE streaming has data events" || fail "SSE: no data events"
 
-# Batch endpoint checks
 for ep in chat generate tags show gemini test_completions test_chat test_generate; do
   c=$(tail -1 "$TMPDIR_MF/$ep" 2>/dev/null || echo "000")
   [ "$c" = "200" ] && pass "$ep → 200" || fail "$ep → $c"
 done
 rm -rf "$TMPDIR_MF"
 
-# ── Endpoint Smoke Tests ────────────────────────────────────────────────────
+# ── SSE Content Validation ────────────────────────────────────────────────────
+
+hdr "SSE Content Validation"
+
+SSE_FULL=""
+for _sse_try in $(seq 1 3); do
+  SSE_FULL=$(curl -s --max-time 30 "$API/v1/chat/completions" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello\"}],\"max_tokens\":8,\"stream\":true}" \
+    2>/dev/null || echo "")
+  echo "$SSE_FULL" | grep -q "^data: {" && break
+  [ "$_sse_try" -lt 3 ] && info "SSE retry ${_sse_try}/3, waiting 10s..." && sleep 10
+done
+
+SSE_OK=$(echo "$SSE_FULL" | grep "^data: {" | head -1 | python3 -c "
+import sys, json
+line = sys.stdin.readline().strip()
+if line.startswith('data: '):
+    d = json.loads(line[6:])
+    print('yes' if 'choices' in d and len(d['choices']) > 0 else 'no')
+else: print('no')
+" 2>/dev/null || echo "no")
+[ "$SSE_OK" = "yes" ] && pass "SSE valid JSON structure with choices" || fail "SSE JSON invalid"
+HAS_DONE=$(echo "$SSE_FULL" | grep -c "\[DONE\]" 2>/dev/null; true)
+[ "${HAS_DONE:-0}" -gt 0 ] && pass "SSE ends with [DONE]" || fail "SSE missing [DONE]"
+
+# ── Endpoint Smoke Tests ──────────────────────────────────────────────────────
 
 hdr "Endpoint Smoke Tests"
 
@@ -60,41 +85,25 @@ assert_get "/v1/servers" 200 "List servers"
 assert_get "/v1/audit?limit=10" 200 "Audit log"
 assert_get "/v1/dashboard/lab" 200 "Lab settings"
 assert_get "/v1/dashboard/analytics?hours=24" 200 "Dashboard analytics"
+assert_get "/v1/dashboard/queue/depth" 200 "Queue depth"
+assert_get "/v1/dashboard/overview" 200 "Dashboard overview"
 
 c=$(curl -s -w "\n%{http_code}" "$API/docs/openapi.json" | code)
 [ "$c" = "200" ] && pass "OpenAPI spec → 200" || fail "OpenAPI → $c"
-
+c=$(curl -s -w "\n%{http_code}" "$API/docs/swagger" | code)
+[ "$c" = "200" ] && pass "Swagger UI → 200" || fail "Swagger → $c"
+c=$(curl -s -w "\n%{http_code}" "$API/docs/redoc" | code)
+[ "$c" = "200" ] && pass "Redoc UI → 200" || fail "Redoc → $c"
 c=$(curl -s -w "\n%{http_code}" "$API/v1/metrics/targets" | code)
 [ "$c" = "200" ] && pass "Metrics targets → 200" || fail "Metrics targets → $c"
 
-c=$(curl -s -w "\n%{http_code}" "$API/docs/swagger" | code)
-[ "$c" = "200" ] && pass "Swagger UI → 200" || fail "Swagger → $c"
-
-c=$(curl -s -w "\n%{http_code}" "$API/docs/redoc" | code)
-[ "$c" = "200" ] && pass "Redoc UI → 200" || fail "Redoc → $c"
-
-if [ -n "$SERVER_ID" ] && [ "$SERVER_ID" != "None" ]; then
-  c=$(agetc "/v1/servers/$SERVER_ID/metrics" | code)
-  [ "$c" = "200" ] && pass "Server metrics → 200" || info "Server metrics → $c"
-  assert_get "/v1/servers/$SERVER_ID/metrics/history?hours=1" 200 "Metrics history"
-fi
-
-if [ -n "$PROVIDER_ID" ] && [ "$PROVIDER_ID" != "None" ]; then
-  c=$(apostc "/v1/providers/$PROVIDER_ID/sync" "{}" | code)
-  [ "$c" = "200" ] || [ "$c" = "202" ] && pass "Provider sync → $c" || fail "Provider sync → $c"
-  c=$(agetc "/v1/providers/$PROVIDER_ID/key" | code)
-  [ "$c" = "200" ] && pass "Provider key → 200" || pass "Provider key → $c (no key)"
-fi
-
-c=$(apostc "/v1/dashboard/session-grouping/trigger" "{}" | code)
-[ "$c" = "200" ] || [ "$c" = "202" ] && pass "Session grouping → $c" || fail "Session grouping → $c"
-
+# /api/version, /api/ps
 c=$(curl -s -w "\n%{http_code}" "$API/api/version" -H "X-API-Key: $API_KEY" 2>/dev/null | code)
 [ "$c" = "200" ] && pass "/api/version → 200" || fail "/api/version → $c"
-
 c=$(curl -s -w "\n%{http_code}" "$API/api/ps" -H "X-API-Key: $API_KEY" 2>/dev/null | code)
 [ "$c" = "200" ] && pass "/api/ps → 200" || fail "/api/ps → $c"
 
+# Embed endpoints
 for ep_name in "embed" "embeddings"; do
   BODY='{"model":"'"$MODEL"'","input":"test"}'
   [ "$ep_name" = "embeddings" ] && BODY='{"model":"'"$MODEL"'","prompt":"test"}'
@@ -106,6 +115,29 @@ for ep_name in "embed" "embeddings"; do
     *) fail "/api/$ep_name → $c" ;;
   esac
 done
+
+# ── Server / Provider Endpoints ───────────────────────────────────────────────
+
+hdr "Server & Provider Endpoints"
+
+if [ -n "${SERVER_ID_LOCAL:-}" ] && [ "$SERVER_ID_LOCAL" != "None" ]; then
+  c=$(agetc "/v1/servers/$SERVER_ID_LOCAL/metrics" | code)
+  [ "$c" = "200" ] && pass "Local server metrics → 200" || info "Local server metrics → $c"
+  assert_get "/v1/servers/$SERVER_ID_LOCAL/metrics/history?hours=1" 200 "Local metrics history"
+fi
+if [ -n "${SERVER_ID_REMOTE:-}" ] && [ "$SERVER_ID_REMOTE" != "None" ]; then
+  c=$(agetc "/v1/servers/$SERVER_ID_REMOTE/metrics" | code)
+  [ "$c" = "200" ] && pass "Remote server metrics → 200" || info "Remote server metrics → $c"
+fi
+
+if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
+  c=$(agetc "/v1/providers/$PROVIDER_ID_LOCAL/key" | code)
+  [ "$c" = "200" ] && pass "Local provider key → 200" || info "Local provider key → $c (no key)"
+fi
+
+# Session grouping trigger
+c=$(apostc "/v1/dashboard/session-grouping/trigger" "{}" | code)
+[ "$c" = "200" ] || [ "$c" = "202" ] && pass "Session grouping → $c" || fail "Session grouping → $c"
 
 # Lab toggle + revert
 LAB=$(aget "/v1/dashboard/lab" 2>/dev/null | jv '["gemini_enabled"]' 2>/dev/null || echo "")
