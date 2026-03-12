@@ -126,12 +126,12 @@ impl ThermalThrottleMap {
                 if temp_c >= th.hard_at {
                     ThrottleLevel::Hard
                 } else {
-                    // Transition to Cooldown when temp drops below hard_at.
-                    // Full provider_total_active==0 check comes in Phase 5.
-                    let cooldown_elapsed = prev_hard_since
+                    // Remain Hard until placement_planner calls set_cooldown() when active==0.
+                    // Fallback: after cooldown_secs (300s) auto-advance to avoid infinite Hard.
+                    let force_advance = prev_hard_since
                         .map(|t| t.elapsed().as_secs() >= self.cooldown_secs)
                         .unwrap_or(false);
-                    if cooldown_elapsed {
+                    if force_advance {
                         ThrottleLevel::Cooldown
                     } else {
                         ThrottleLevel::Hard
@@ -232,6 +232,24 @@ impl ThermalThrottleMap {
     pub fn temp_c(&self, provider_id: Uuid) -> Option<f32> {
         self.states.get(&provider_id).map(|s| s.temp_c)
     }
+
+    /// Seconds elapsed since the provider entered Hard state (None if not in Hard).
+    pub fn hard_since_elapsed_secs(&self, provider_id: Uuid) -> Option<u64> {
+        self.states
+            .get(&provider_id)
+            .and_then(|s| s.hard_since.map(|t| t.elapsed().as_secs()))
+    }
+
+    /// Force Hard → Cooldown transition (called by placement_planner when active==0).
+    pub fn set_cooldown(&self, provider_id: Uuid) {
+        if let Some(mut state) = self.states.get_mut(&provider_id) {
+            if state.level == ThrottleLevel::Hard {
+                state.level = ThrottleLevel::Cooldown;
+                state.hard_since = None;
+                state.cooldown_entered_at = Some(Instant::now());
+            }
+        }
+    }
 }
 
 impl ThermalPort for ThermalThrottleMap {
@@ -255,6 +273,14 @@ impl ThermalPort for ThermalThrottleMap {
             }
         }
         min_pf
+    }
+
+    fn hard_since_elapsed_secs(&self, provider_id: Uuid) -> Option<u64> {
+        self.hard_since_elapsed_secs(provider_id)
+    }
+
+    fn set_cooldown(&self, provider_id: Uuid) {
+        self.set_cooldown(provider_id);
     }
 }
 

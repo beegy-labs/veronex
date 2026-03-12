@@ -78,6 +78,64 @@ pub async fn preload_model(
     }
 }
 
+/// Pull drain sequence (SDD §5):
+/// 1. Wait up to 60s for active_requests == 0 (drain).
+/// 2. Call Ollama `/api/pull` to update model weights.
+/// 3. Reset AIMD epoch via `mark_model_unloaded` (sample_count=0, baselines=0, epoch=now).
+/// 4. Set is_pulling=false.
+///
+/// This function runs in a background task spawned by the pull handler.
+pub async fn pull_and_reset(
+    client: &reqwest::Client,
+    base_url: &str,
+    model: &str,
+    provider_id: Uuid,
+    vram_pool: &Arc<dyn VramPoolPort>,
+) {
+    const DRAIN_TIMEOUT_SECS: u64 = 60;
+    const DRAIN_POLL_MS: u64 = 500;
+
+    // Phase 1: drain — wait for active requests to reach 0
+    let drain_start = std::time::Instant::now();
+    loop {
+        let active = vram_pool.active_requests(provider_id, model);
+        if active == 0 {
+            tracing::info!(%provider_id, %model, "pull drain: active=0, proceeding to pull");
+            break;
+        }
+        if drain_start.elapsed().as_secs() >= DRAIN_TIMEOUT_SECS {
+            tracing::warn!(%provider_id, %model, active, "pull drain: 60s timeout, forcing pull anyway (drain stalled)");
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(DRAIN_POLL_MS)).await;
+    }
+
+    // Phase 2: pull model via Ollama API
+    let url = format!("{}/api/pull", base_url.trim_end_matches('/'));
+    match client
+        .post(&url)
+        .json(&serde_json::json!({"model": model, "stream": false}))
+        .timeout(Duration::from_secs(14400)) // 4h max for large models
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::info!(%provider_id, %model, "pull completed successfully");
+        }
+        Ok(resp) => {
+            tracing::warn!(%provider_id, %model, status = %resp.status(), "pull returned non-success status");
+        }
+        Err(e) => {
+            tracing::warn!(%provider_id, %model, "pull failed: {e}");
+        }
+    }
+
+    // Phase 3: reset AIMD epoch — mark model as unloaded (clears sample_count, baselines, epoch)
+    vram_pool.mark_model_unloaded(provider_id, model);
+    vram_pool.set_pulling(provider_id, model, false);
+    tracing::info!(%provider_id, %model, "pull drain sequence complete — AIMD epoch reset");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

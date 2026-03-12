@@ -211,6 +211,34 @@ async fn planner_tick(
     // Track which servers were used for Scale-Out/Preload this cycle (protect from ⑤)
     let mut scale_out_servers: HashSet<Uuid> = HashSet::new();
 
+    // ── Hard Gate Watchdog (SDD §3/§6) ─────────────────────────────────
+    // Drives Hard → Cooldown when active==0. Logs at 60s/90s drain stalls.
+    for p in &ollama_providers {
+        if thermal.get_level(p.id) != ThrottleLevel::Hard {
+            continue;
+        }
+        let active = vram_pool.provider_active_requests(p.id);
+        if active == 0 {
+            // Active drained naturally — start Cooldown timer now (SDD §3)
+            thermal.set_cooldown(p.id);
+            tracing::info!(provider_id = %p.id, "Hard gate: active=0, transitioning to Cooldown");
+            continue;
+        }
+        if let Some(elapsed) = thermal.hard_since_elapsed_secs(p.id) {
+            if elapsed >= 90 {
+                tracing::error!(
+                    provider_id = %p.id, elapsed_secs = elapsed, active_requests = active,
+                    "WATCHDOG: Hard gate >90s drain stall — {active} active requests remain"
+                );
+            } else if elapsed >= 60 {
+                tracing::warn!(
+                    provider_id = %p.id, elapsed_secs = elapsed, active_requests = active,
+                    "Hard gate 60s threshold: {active} requests still active, drain stalled"
+                );
+            }
+        }
+    }
+
     // ── Step ④: STANDBY recovery ────────────────────────────────────────
     for p in &ollama_providers {
         if !vram_pool.is_standby(p.id) {
