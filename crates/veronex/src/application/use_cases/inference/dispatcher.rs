@@ -45,11 +45,12 @@ async fn filter_candidates(
 ) -> Vec<LlmProvider> {
     let all = registry.list_all().await.unwrap_or_default();
 
-    // Stage 1: active + type + tier
+    // Stage 1: active + type + tier + standby exclusion
     let mut candidates: Vec<_> = all.into_iter()
         .filter(|b| {
             b.is_active && b.provider_type == provider_type
                 && !matches!(gemini_tier, Some(GEMINI_TIER_FREE) if !b.is_free_tier)
+                && !vram_pool.is_standby(b.id)
         })
         .collect();
 
