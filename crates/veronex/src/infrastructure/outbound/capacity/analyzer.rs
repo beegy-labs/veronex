@@ -626,6 +626,82 @@ pub async fn sync_provider(
         vram_pool.set_total_vram(provider_id, vram_total_mb);
     }
 
+    // ── Governor: reset dispatch_blocked and governor_cap for all loaded models ──
+    for name in vram_pool.loaded_model_names(provider_id) {
+        vram_pool.set_dispatch_blocked(provider_id, &name, false);
+        vram_pool.set_governor_cap(provider_id, &name, 0);
+    }
+
+    // ── Governor: fair-share pressure check ──
+    let provider_total_active = vram_pool.provider_active_requests(provider_id);
+    let governor_active = provider_total_active > num_parallel;
+
+    if governor_active {
+        // Collect candidates: active_count > 0 OR demand_counter > 0
+        let loaded_names = vram_pool.loaded_model_names(provider_id);
+        let mut candidates: Vec<(String, u64)> = Vec::new(); // (model, oldest_queued_ms)
+
+        for name in &loaded_names {
+            let active = vram_pool.active_requests(provider_id, name);
+            let demand_key = crate::domain::constants::demand_key(name);
+            let demand: u64 = if let Some(pool) = valkey_pool {
+                use fred::prelude::*;
+                let v: Result<Option<String>, _> = pool.get(&demand_key).await;
+                v.ok().flatten().and_then(|s| s.parse().ok()).unwrap_or(0)
+            } else {
+                0
+            };
+            if active > 0 || demand > 0 {
+                // oldest_queued_ms: oldest job in ZSET (lower = older = higher priority)
+                let oldest = if let Some(pool) = valkey_pool {
+                    use fred::prelude::*;
+                    let queue_key = format!("veronex:queue:{name}");
+                    let result: Result<Vec<(String, f64)>, _> = pool.zrange(&queue_key, 0, 0, None, false, None, false).await;
+                    result.ok().and_then(|v| v.first().map(|(_, score)| score.round() as u64)).unwrap_or(u64::MAX)
+                } else {
+                    u64::MAX
+                };
+                candidates.push((name.clone(), oldest));
+            }
+        }
+
+        let n = candidates.len();
+        let budget = num_parallel as usize;
+
+        if n > 0 {
+            // Sort by oldest_queued_ms ascending (oldest first = highest priority)
+            candidates.sort_by_key(|(_, oldest)| *oldest);
+
+            if n <= budget {
+                let base = budget / n;
+                let rem = budget % n;
+                for (i, (model, _)) in candidates.iter().enumerate() {
+                    let share = base as u32 + if i < rem { 1 } else { 0 };
+                    let mc = vram_pool.max_concurrent(provider_id, model);
+                    vram_pool.set_governor_cap(provider_id, model, mc.min(share));
+                }
+            } else {
+                // n > budget: top budget models get share=1, rest get share=0
+                for (i, (model, _)) in candidates.iter().enumerate() {
+                    if i < budget {
+                        let mc = vram_pool.max_concurrent(provider_id, model);
+                        vram_pool.set_governor_cap(provider_id, model, mc.min(1));
+                    } else {
+                        vram_pool.set_dispatch_blocked(provider_id, model, true);
+                    }
+                }
+            }
+
+            tracing::info!(
+                provider = %provider_name,
+                total_active = provider_total_active,
+                num_parallel,
+                governor_candidates = n,
+                "governor fair-share activated"
+            );
+        }
+    }
+
     // Mark loaded models + unload models no longer in /api/ps
     let ps_names: std::collections::HashSet<&str> =
         ps.models.iter().map(|m| m.name.as_str()).collect();
@@ -715,7 +791,8 @@ pub async fn sync_provider(
                     vram_pool.set_baseline_p95_ms(provider_id, &model.name, stats.p95_latency_ms as u32);
                 }
             }
-        } else if stats.sample_count >= 3 {
+        } else if stats.sample_count >= 3 && !governor_active {
+            // Governor active → suppress AIMD increase/decrease (fair-share cap is the final value)
             let ratio = current_tps_x100 as f64 / baseline as f64;
             let baseline_p95 = vram_pool.baseline_p95_ms(provider_id, &model.name);
             let current_p95 = stats.p95_latency_ms as u32;

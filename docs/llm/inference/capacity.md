@@ -283,6 +283,11 @@ impl Drop for VramPermit {
 }
 ```
 
+**VramPermit constructors**:
+- `with_last_active()` — local single-instance permit with `last_active_at` tracking.
+- `combined()` — distributed permit: local atomic decrement + async Valkey release via oneshot channel.
+- `VramPermit::new()` was removed; all callers use `with_last_active()` or `combined()`.
+
 **Two counters tracked by VramPermit**:
 1. `reserved_kv_mb` (provider-global): total KV reservation, used for available VRAM calculation.
 2. `active_count` (per-model): active requests per model, used for dashboard + thermal throttle.
@@ -415,6 +420,30 @@ at dispatch time (try_reserve):
     if active >= max_concurrent: block
 ```
 
+### Provider-Wide Pressure Governor
+
+When `provider_total_active > num_parallel` at the start of the AIMD sync loop, the governor activates fair-share budgeting instead of running AIMD increase/decrease (both are suppressed while the governor is active).
+
+**Activation condition**: `provider_total_active > num_parallel`
+
+**Candidates**: loaded models where `active_count > 0 OR demand_counter > 0`. The demand guard prevents deadlock — models with pending demand must always receive share ≥ 1.
+
+**Distribution** (sorted by `oldest_queued_ms` ascending — oldest queued job gets priority):
+- If `n ≤ budget`: `base = budget / n`, remainder distributed 1-by-1 to oldest models. All candidates get share ≥ 1.
+- If `n > budget`: top `budget` models get `share = 1`, rest get `share = 0`.
+
+**Enforcement** (`governor_cap` field in `ModelState`):
+- `share > 0`: `governor_cap = min(max_concurrent, share)`. `max_concurrent` is NOT modified (preserves AIMD learning values).
+- `share = 0`: `dispatch_blocked = true`. No dispatch until next cycle.
+
+**Dispatch check** (`should_block()`): checks `dispatch_blocked` first (→ block immediately), then applies `effective_limit = min(max_concurrent, governor_cap)` when `governor_cap > 0`.
+
+**Reset**: At the start of each AIMD sync cycle, all `dispatch_blocked = false` and `governor_cap = 0` are reset before re-evaluation.
+
+**Baseline freeze**: During governor-active cycles, `baseline_tps` is NOT updated — governor-capped TPS is not the model's true throughput.
+
+**Deactivation**: When `provider_total_active ≤ num_parallel`, governor is inactive and AIMD increase/decrease resumes normally.
+
 ---
 
 ## APU VRAM Management
@@ -494,6 +523,32 @@ thermal(per-provider) → circuit_breaker → concurrency_limit(AIMD)
 - Circuit breaker (existing impl in `score_and_claim()`): consecutive failure tracking, independent of thermal
 - Concurrency limit (AIMD): `max_concurrent` enforcement via `try_reserve`
 - During RampUp: thermal gate passes but AIMD forces `max_concurrent=1`
+
+---
+
+## Placement Planner: Standby / Scale-In
+
+The placement planner runs every 5s and manages provider lifecycle alongside Scale-Out and preloading.
+
+### Standby State (Scale-In)
+
+The placement planner marks a provider as standby when it is idle and not the last server:
+
+- **Trigger (Step ⑤)**: `server_idle` = no loaded models with demand AND `total_active = 0` AND no model preloading. Provider must not be in `scale_out_servers` for this cycle, not in hold-down, and not already standby/transitioning.
+- **Effect**: `set_standby(provider_id, true)` + `set_transition_until(provider_id, now + 30s)`. Server remains physically running but is excluded from new request routing (dispatcher skips standby providers).
+- **`transition_until` guard**: 30-second window after state change (both Scale-In and STANDBY recovery) during which the provider is skipped from further state changes.
+
+### STANDBY Recovery (Step ④)
+
+A standby server is reactivated when:
+- **Condition A**: it has a loaded model with `demand > 0`, OR
+- **Condition B**: it is the best candidate (most free VRAM) for a `scale_out_needed` model.
+
+On recovery: `set_standby(false)` + new `transition_until = now + 30s` + added to `scale_out_servers` to prevent immediate re-Scale-In.
+
+### Standby Eviction
+
+While in standby, the eviction threshold for idle models is shortened to **30s** (vs 180s normally).
 
 ---
 

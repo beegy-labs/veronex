@@ -49,6 +49,8 @@ struct ModelState {
     dispatch_blocked: AtomicBool,
     /// max_concurrent snapshot before Hard throttle (for RampUp exit condition).
     pre_hard_max_concurrent: AtomicU32,
+    /// Governor dispatch cap for this AIMD cycle (0 = no governor cap active).
+    governor_cap: AtomicU32,
 }
 
 impl ModelState {
@@ -72,6 +74,7 @@ impl ModelState {
             learning_epoch_started_at: AtomicU64::new(0),
             dispatch_blocked: AtomicBool::new(false),
             pre_hard_max_concurrent: AtomicU32::new(0),
+            governor_cap: AtomicU32::new(0),
         }
     }
 }
@@ -153,10 +156,20 @@ impl VramPool {
     /// Check adaptive concurrency limit with probe policy.
     /// Returns true if the request should be BLOCKED.
     fn should_block(ms: &ModelState, probe_permits: i32, probe_rate: u32) -> bool {
+        // Governor dispatch_blocked → always block (fair-share share=0)
+        if ms.dispatch_blocked.load(Ordering::Acquire) {
+            return true;
+        }
+
         let limit = ms.max_concurrent.load(Ordering::Acquire);
         if limit == 0 {
             return false; // unlimited
         }
+
+        // Governor cap: use min(max_concurrent, governor_cap) when cap > 0
+        let gov_cap = ms.governor_cap.load(Ordering::Acquire);
+        let limit = if gov_cap > 0 { limit.min(gov_cap) } else { limit };
+
         let active = ms.active_count.load(Ordering::Acquire);
         if probe_permits > 0 {
             // Probe UP: periodically allow above limit
@@ -591,6 +604,57 @@ impl VramPoolPort for VramPool {
         let now_ms = chrono::Utc::now().timestamp_millis() as u64;
         now_ms.saturating_sub(last) / 1000
     }
+
+    fn set_standby(&self, provider_id: Uuid, value: bool) {
+        let state = self.get_or_create(provider_id);
+        state.is_standby.store(value, Ordering::Release);
+    }
+
+    fn is_standby(&self, provider_id: Uuid) -> bool {
+        self.providers.get(&provider_id)
+            .map(|s| s.is_standby.load(Ordering::Acquire))
+            .unwrap_or(false)
+    }
+
+    fn set_transition_until(&self, provider_id: Uuid, until_ms: u64) {
+        let state = self.get_or_create(provider_id);
+        state.transition_until.store(until_ms, Ordering::Release);
+    }
+
+    fn in_transition(&self, provider_id: Uuid) -> bool {
+        self.providers.get(&provider_id)
+            .map(|s| {
+                let until = s.transition_until.load(Ordering::Acquire);
+                if until == 0 { return false; }
+                let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                now_ms < until
+            })
+            .unwrap_or(false)
+    }
+
+    fn governor_cap(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.providers.get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.governor_cap.load(Ordering::Acquire)))
+            .unwrap_or(0)
+    }
+
+    fn set_governor_cap(&self, provider_id: Uuid, model: &str, cap: u32) {
+        let state = self.get_or_create(provider_id);
+        if let Some(ms) = state.models.get(model) {
+            ms.governor_cap.store(cap, Ordering::Release);
+        }
+    }
+
+    fn sum_loaded_max_concurrent(&self, provider_id: Uuid) -> u32 {
+        self.providers.get(&provider_id)
+            .map(|s| {
+                s.models.iter()
+                    .filter(|e| e.is_loaded)
+                    .map(|e| e.max_concurrent.load(Ordering::Acquire))
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
@@ -878,6 +942,122 @@ mod tests {
 
         pool.record_preload_success(pid, "model");
         assert!(!pool.is_preload_excluded(pid, "model"));
+    }
+
+    // ── Standby / Transition tests ────────────────────────────────────────
+
+    #[test]
+    fn standby_defaults_false() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        assert!(!pool.is_standby(pid));
+    }
+
+    #[test]
+    fn set_standby_toggles() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_standby(pid, true);
+        assert!(pool.is_standby(pid));
+        pool.set_standby(pid, false);
+        assert!(!pool.is_standby(pid));
+    }
+
+    #[test]
+    fn in_transition_defaults_false() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        assert!(!pool.in_transition(pid));
+    }
+
+    #[test]
+    fn in_transition_with_future_deadline() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        let future_ms = chrono::Utc::now().timestamp_millis() as u64 + 60_000;
+        pool.set_transition_until(pid, future_ms);
+        assert!(pool.in_transition(pid));
+    }
+
+    #[test]
+    fn in_transition_with_past_deadline() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_transition_until(pid, 1); // past
+        assert!(!pool.in_transition(pid));
+    }
+
+    // ── Governor cap tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn governor_cap_defaults_zero() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        assert_eq!(pool.governor_cap(pid, "model"), 0);
+    }
+
+    #[test]
+    fn set_governor_cap_persists() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.mark_model_loaded(pid, "model", 1000);
+        pool.set_governor_cap(pid, "model", 3);
+        assert_eq!(pool.governor_cap(pid, "model"), 3);
+    }
+
+    #[test]
+    fn governor_cap_limits_dispatch() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_probe_config(0, 0);
+        pool.set_max_concurrent(pid, "model", 8);
+        pool.mark_model_loaded(pid, "model", 1000);
+        pool.set_governor_cap(pid, "model", 2);
+
+        let p1 = pool.try_reserve(pid, "model");
+        let p2 = pool.try_reserve(pid, "model");
+        let p3 = pool.try_reserve(pid, "model");
+
+        assert!(p1.is_some());
+        assert!(p2.is_some());
+        assert!(p3.is_none(), "governor_cap=2 should block 3rd request");
+        drop(p1);
+        drop(p2);
+    }
+
+    #[test]
+    fn dispatch_blocked_blocks_all() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_probe_config(0, 0);
+        pool.set_max_concurrent(pid, "model", 8);
+        pool.set_dispatch_blocked(pid, "model", true);
+
+        let p1 = pool.try_reserve(pid, "model");
+        assert!(p1.is_none(), "dispatch_blocked should block all requests");
+    }
+
+    // ── sum_loaded_max_concurrent tests ─────────────────────────────────────
+
+    #[test]
+    fn sum_loaded_max_concurrent_empty() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        assert_eq!(pool.sum_loaded_max_concurrent(pid), 0);
+    }
+
+    #[test]
+    fn sum_loaded_max_concurrent_counts_loaded_only() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.mark_model_loaded(pid, "a", 1000);
+        pool.set_max_concurrent(pid, "a", 4);
+        pool.mark_model_loaded(pid, "b", 2000);
+        pool.set_max_concurrent(pid, "b", 3);
+        // "c" not loaded
+        pool.set_max_concurrent(pid, "c", 5);
+
+        assert_eq!(pool.sum_loaded_max_concurrent(pid), 7); // 4 + 3, not 12
     }
 
     // ── Property-based tests ─────────────────────────────────────────────

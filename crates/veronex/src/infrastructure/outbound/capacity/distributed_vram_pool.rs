@@ -305,4 +305,32 @@ impl VramPoolPort for DistributedVramPool {
     fn idle_since_secs(&self, provider_id: Uuid, model: &str) -> u64 {
         self.local.idle_since_secs(provider_id, model)
     }
+
+    fn set_standby(&self, provider_id: Uuid, value: bool) {
+        self.local.set_standby(provider_id, value);
+    }
+
+    fn is_standby(&self, provider_id: Uuid) -> bool {
+        self.local.is_standby(provider_id)
+    }
+
+    fn set_transition_until(&self, provider_id: Uuid, until_ms: u64) {
+        self.local.set_transition_until(provider_id, until_ms);
+    }
+
+    fn in_transition(&self, provider_id: Uuid) -> bool {
+        self.local.in_transition(provider_id)
+    }
+
+    fn governor_cap(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.governor_cap(provider_id, model)
+    }
+
+    fn set_governor_cap(&self, provider_id: Uuid, model: &str, cap: u32) {
+        self.local.set_governor_cap(provider_id, model, cap);
+    }
+
+    fn sum_loaded_max_concurrent(&self, provider_id: Uuid) -> u32 {
+        self.local.sum_loaded_max_concurrent(provider_id)
+    }
 }

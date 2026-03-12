@@ -32,15 +32,6 @@ pub struct VramPermit {
 }
 
 impl VramPermit {
-    /// Create a local (in-process) permit backed by an atomic counter.
-    pub(crate) fn new(
-        kv_mb: u32,
-        reserved_kv: Arc<AtomicU32>,
-        active_count: Arc<AtomicU32>,
-    ) -> Self {
-        Self { kv_mb, reserved_kv: Some(reserved_kv), active_count: Some(active_count), release_tx: None, last_active_at: None }
-    }
-
     /// Create a local permit with last_active_at tracking (Phase 7).
     pub(crate) fn with_last_active(
         kv_mb: u32,
@@ -203,4 +194,25 @@ pub trait VramPoolPort: Send + Sync {
 
     /// Seconds since last active request for a model+provider.
     fn idle_since_secs(&self, provider_id: Uuid, model: &str) -> u64;
+
+    /// Mark provider as standby (Scale-In: excluded from routing, models may still be loaded).
+    fn set_standby(&self, provider_id: Uuid, value: bool);
+
+    /// Check if provider is in standby mode.
+    fn is_standby(&self, provider_id: Uuid) -> bool;
+
+    /// Mark provider as transitioning (Scale-In/Out guard) until given Unix ms.
+    fn set_transition_until(&self, provider_id: Uuid, until_ms: u64);
+
+    /// Check if provider is currently in a state transition.
+    fn in_transition(&self, provider_id: Uuid) -> bool;
+
+    /// Get governor dispatch cap for a model (0 = no governor cap active).
+    fn governor_cap(&self, provider_id: Uuid, model: &str) -> u32;
+
+    /// Set governor dispatch cap for this AIMD cycle.
+    fn set_governor_cap(&self, provider_id: Uuid, model: &str, cap: u32);
+
+    /// Sum of max_concurrent for all loaded models on a provider.
+    fn sum_loaded_max_concurrent(&self, provider_id: Uuid) -> u32;
 }

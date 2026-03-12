@@ -189,10 +189,32 @@ async fn planner_tick(
     let mut scale_out_servers: HashSet<Uuid> = HashSet::new();
 
     // ── Step ④: STANDBY recovery ────────────────────────────────────────
-    // Skip for now — standby management requires full integration (Phase 5 core)
-    // Condition A: server has loaded model with demand>0
-    // Condition B: server is best_server for a scale_out_needed model
-    // For single-server: typically no-op
+    for p in &ollama_providers {
+        if !vram_pool.is_standby(p.id) {
+            continue;
+        }
+        if vram_pool.in_transition(p.id) {
+            continue;
+        }
+
+        // Condition A: server has loaded model with demand>0
+        let loaded = vram_pool.loaded_model_names(p.id);
+        let has_demand = loaded.iter().any(|m| model_demand.contains_key(m));
+
+        // Condition B: server is best_server for a scale_out_needed model
+        let is_best_for_scaleout = scale_out_needed.iter().any(|model| {
+            scale_out_candidates.iter().any(|c| c.id == p.id)
+                && !vram_pool.loaded_model_names(p.id).contains(&model.to_string())
+        });
+
+        if has_demand || is_best_for_scaleout {
+            vram_pool.set_standby(p.id, false);
+            let guard_until = now_ms + TRANSITION_GUARD_SECS * 1000;
+            vram_pool.set_transition_until(p.id, guard_until);
+            scale_out_servers.insert(p.id);
+            tracing::info!(provider_id = %p.id, "STANDBY recovery — server reactivated");
+        }
+    }
 
     // ── Step ①: Scale-Out ───────────────────────────────────────────────
     for model in &scale_out_needed {
@@ -261,6 +283,7 @@ async fn planner_tick(
         let url = server.url.clone();
         let model_c = model.clone();
         let provider_id = server.id;
+        let np = server.num_parallel.max(1) as u32;
         let vram_c = vram_pool.clone();
         let http_c = http_client.clone();
         let valkey_c = valkey.clone();
@@ -269,7 +292,7 @@ async fn planner_tick(
 
         tokio::spawn(async move {
             let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
-                &http_c, &url, &model_c, provider_id, &vram_c,
+                &http_c, &url, &model_c, provider_id, &vram_c, np,
             ).await;
             // Release locks
             let _ = valkey_c.kv_del(&preload_key_c).await;
@@ -325,6 +348,7 @@ async fn planner_tick(
             let url = p.url.clone();
             let model_c = model.clone();
             let provider_id = p.id;
+            let np = p.num_parallel.max(1) as u32;
             let vram_c = vram_pool.clone();
             let http_c = http_client.clone();
             let valkey_c = valkey.clone();
@@ -332,7 +356,7 @@ async fn planner_tick(
 
             tokio::spawn(async move {
                 let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
-                    &http_c, &url, &model_c, provider_id, &vram_c,
+                    &http_c, &url, &model_c, provider_id, &vram_c, np,
                 ).await;
                 let _ = valkey_c.kv_del(&preload_key_c).await;
                 if success {
@@ -362,7 +386,7 @@ async fn planner_tick(
             }
 
             let idle_secs = vram_pool.idle_since_secs(p.id, &model);
-            let threshold = EVICT_IDLE_SECS; // standby uses shorter threshold but skip for now
+            let threshold = if vram_pool.is_standby(p.id) { STANDBY_EVICT_IDLE_SECS } else { EVICT_IDLE_SECS };
 
             if idle_secs >= threshold {
                 vram_pool.mark_model_unloaded(p.id, &model);
@@ -398,9 +422,16 @@ async fn planner_tick(
                 continue;
             }
 
+            // Skip if already standby or in transition
+            if vram_pool.is_standby(p.id) || vram_pool.in_transition(p.id) {
+                continue;
+            }
+
             // Mark as standby (Scale-In)
-            // TODO: implement set_standby via ProviderVramState.is_standby
-            tracing::debug!(provider_id = %p.id, "Scale-In candidate identified (standby)");
+            vram_pool.set_standby(p.id, true);
+            let guard_until = now_ms + TRANSITION_GUARD_SECS * 1000;
+            vram_pool.set_transition_until(p.id, guard_until);
+            tracing::info!(provider_id = %p.id, "Scale-In — provider marked standby");
         }
     }
 

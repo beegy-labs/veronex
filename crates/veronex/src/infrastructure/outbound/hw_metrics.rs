@@ -413,3 +413,241 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
 
     (metrics, snapshot)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Memory metrics ────────────────────────────────────────────────────
+
+    #[test]
+    fn mem_total_bytes_converted_to_mb() {
+        let text = "node_memory_MemTotal_bytes 8589934592\n\
+                    node_memory_MemAvailable_bytes 4294967296\n";
+        let (metrics, _) = parse_prometheus_metrics(text);
+        // 8589934592 / 1048576 = 8192 MiB
+        assert_eq!(metrics.mem_total_mb, 8192);
+        // 4294967296 / 1048576 = 4096 MiB
+        assert_eq!(metrics.mem_available_mb, 4096);
+    }
+
+    #[test]
+    fn mem_available_present_but_total_missing() {
+        let text = "node_memory_MemAvailable_bytes 2147483648\n";
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.mem_total_mb, 0);
+        assert_eq!(metrics.mem_available_mb, 2048);
+    }
+
+    // ── CPU logical / physical core detection ────────────────────────────
+
+    #[test]
+    fn cpu_logical_count_from_cpu_seconds_total() {
+        // Four CPUs (0-3), two modes each — logical count should be 4
+        let text = r#"node_cpu_seconds_total{cpu="0",mode="idle"} 1000.0
+node_cpu_seconds_total{cpu="0",mode="user"} 200.0
+node_cpu_seconds_total{cpu="1",mode="idle"} 1001.0
+node_cpu_seconds_total{cpu="1",mode="user"} 201.0
+node_cpu_seconds_total{cpu="2",mode="idle"} 1002.0
+node_cpu_seconds_total{cpu="3",mode="idle"} 1003.0
+"#;
+        let (metrics, snapshot) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.cpu_logical, 4);
+        assert_eq!(metrics.cpu_physical, None); // node_cpu_info not present
+        // idle sum: 1000 + 1001 + 1002 + 1003 = 4006
+        assert!((snapshot.idle - 4006.0).abs() < 0.01, "idle={}", snapshot.idle);
+    }
+
+    #[test]
+    fn cpu_physical_from_node_cpu_info() {
+        // 4 logical (cpu=0..3), 2 physical cores (core 0 & 1, package 0)
+        let text = r#"node_cpu_seconds_total{cpu="0",mode="idle"} 100.0
+node_cpu_seconds_total{cpu="1",mode="idle"} 100.0
+node_cpu_seconds_total{cpu="2",mode="idle"} 100.0
+node_cpu_seconds_total{cpu="3",mode="idle"} 100.0
+node_cpu_info{cpu="0",core="0",package="0"} 1
+node_cpu_info{cpu="1",core="1",package="0"} 1
+node_cpu_info{cpu="2",core="0",package="0"} 1
+node_cpu_info{cpu="3",core="1",package="0"} 1
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.cpu_logical, 4);
+        // Two unique core:package pairs → 2 physical cores
+        assert_eq!(metrics.cpu_physical, Some(2));
+    }
+
+    // ── DRM VRAM total parsing ────────────────────────────────────────────
+
+    #[test]
+    fn drm_vram_total_bytes_converted_to_mb() {
+        // 8 GiB VRAM = 8589934592 bytes = 8192 MiB
+        let text = r#"node_drm_memory_vram_total_bytes{card="card0"} 8589934592
+node_drm_memory_vram_used_bytes{card="card0"} 1073741824
+node_drm_gpu_busy_percent{card="card0"} 42
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus.len(), 1);
+        let gpu = &metrics.gpus[0];
+        assert_eq!(gpu.card, "card0");
+        assert_eq!(gpu.vram_total_mb, Some(8192));
+        assert_eq!(gpu.vram_used_mb, Some(1024));
+        assert_eq!(gpu.busy_pct, Some(42.0));
+    }
+
+    #[test]
+    fn drm_vram_size_bytes_accepted_as_fallback() {
+        // node_drm_memory_vram_size_bytes (older node-exporter spelling)
+        let text = r#"node_drm_memory_vram_size_bytes{card="card0"} 4294967296
+node_drm_gpu_busy_percent{card="card0"} 10
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus.len(), 1);
+        assert_eq!(metrics.gpus[0].vram_total_mb, Some(4096));
+    }
+
+    #[test]
+    fn drm_vram_total_overwrites_size_when_both_present() {
+        // total_bytes wins over size_bytes if both are present
+        let text = r#"node_drm_memory_vram_size_bytes{card="card0"} 1073741824
+node_drm_memory_vram_total_bytes{card="card0"} 4294967296
+node_drm_gpu_busy_percent{card="card0"} 5
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus[0].vram_total_mb, Some(4096)); // total wins
+    }
+
+    // ── Temperature parsing from hwmon ────────────────────────────────────
+
+    #[test]
+    fn hwmon_amdgpu_temperatures_parsed() {
+        let text = r#"node_hwmon_chip_names{chip="amdgpu-pci-0300",chip_name="amdgpu"} 1
+node_hwmon_temp_celsius{chip="amdgpu-pci-0300",sensor="temp1"} 58.0
+node_hwmon_temp_celsius{chip="amdgpu-pci-0300",sensor="temp2"} 72.0
+node_hwmon_temp_celsius{chip="amdgpu-pci-0300",sensor="temp3"} 65.0
+node_hwmon_power_average_watts{chip="amdgpu-pci-0300"} 145.5
+node_drm_gpu_busy_percent{card="card0"} 80
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus.len(), 1);
+        let gpu = &metrics.gpus[0];
+        assert_eq!(gpu.temp_c, Some(58.0));
+        assert_eq!(gpu.temp_junction_c, Some(72.0));
+        assert_eq!(gpu.temp_mem_c, Some(65.0));
+        assert_eq!(gpu.power_w, Some(145.5));
+    }
+
+    #[test]
+    fn hwmon_apu_chip_name_lookup_used_for_non_amdgpu_label() {
+        // AMD APU: chip label is PCI address, not "amdgpu-pci-*"
+        let text = r#"node_hwmon_chip_names{chip="0000:00:08_1_0000:c4:00_0",chip_name="amdgpu"} 1
+node_hwmon_temp_celsius{chip="0000:00:08_1_0000:c4:00_0",sensor="temp1"} 45.0
+node_hwmon_temp_celsius{chip="0000:00:08_1_0000:c4:00_0",sensor="temp2"} 60.0
+node_drm_gpu_busy_percent{card="card1"} 15
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus.len(), 1);
+        assert_eq!(metrics.gpus[0].card, "card1");
+        assert_eq!(metrics.gpus[0].temp_c, Some(45.0));
+        assert_eq!(metrics.gpus[0].temp_junction_c, Some(60.0));
+    }
+
+    #[test]
+    fn hwmon_power_average_watt_without_s_accepted() {
+        // Some node-exporter versions emit "watt" (no trailing 's')
+        let text = r#"node_hwmon_chip_names{chip="amdgpu-pci-0400",chip_name="amdgpu"} 1
+node_hwmon_power_average_watt{chip="amdgpu-pci-0400"} 200.0
+node_drm_gpu_busy_percent{card="card0"} 50
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus[0].power_w, Some(200.0));
+    }
+
+    // ── Empty / missing input → zero-value defaults ───────────────────────
+
+    #[test]
+    fn empty_input_returns_zero_defaults() {
+        let (metrics, snapshot) = parse_prometheus_metrics("");
+        assert_eq!(metrics.mem_total_mb, 0);
+        assert_eq!(metrics.mem_available_mb, 0);
+        assert_eq!(metrics.cpu_logical, 0);
+        assert_eq!(metrics.cpu_physical, None);
+        assert!(metrics.gpus.is_empty());
+        assert!(metrics.scrape_ok); // scrape_ok is always true in parser
+        assert_eq!(snapshot.idle, 0.0);
+        assert_eq!(snapshot.total, 0.0);
+    }
+
+    #[test]
+    fn comment_and_blank_lines_ignored() {
+        let text = "# HELP node_memory_MemTotal_bytes Total memory\n\
+                    # TYPE node_memory_MemTotal_bytes gauge\n\
+                    \n\
+                    node_memory_MemTotal_bytes 1073741824\n";
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.mem_total_mb, 1024);
+    }
+
+    // ── APU case: drm VRAM small but mem_available large ─────────────────
+
+    #[test]
+    fn apu_drm_vram_small_mem_available_large() {
+        // AMD Ryzen AI 395+: DRM reports ~2 GiB VRAM, system has 64 GiB RAM
+        let text = r#"node_memory_MemTotal_bytes 68719476736
+node_memory_MemAvailable_bytes 60129542144
+node_drm_memory_vram_total_bytes{card="card1"} 2147483648
+node_drm_memory_vram_used_bytes{card="card1"} 1073741824
+node_drm_gpu_busy_percent{card="card1"} 30
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        // mem_total = 64 GiB = 65536 MiB
+        assert_eq!(metrics.mem_total_mb, 65536);
+        // mem_available = ~57344 MiB
+        assert_eq!(metrics.mem_available_mb, 57344);
+        // DRM VRAM total = 2 GiB = 2048 MiB (small)
+        assert_eq!(metrics.gpus.len(), 1);
+        assert_eq!(metrics.gpus[0].vram_total_mb, Some(2048));
+        // The large mem_available is available for APU unified-memory inference
+        assert!(
+            metrics.mem_available_mb > metrics.gpus[0].vram_total_mb.unwrap_or(0) as u64 * 10,
+            "mem_available should be much larger than drm vram for APU"
+        );
+    }
+
+    // ── CPU snapshot accumulation ──────────────────────────────────────────
+
+    #[test]
+    fn cpu_snapshot_sums_all_modes_and_idle() {
+        let text = r#"node_cpu_seconds_total{cpu="0",mode="idle"} 500.0
+node_cpu_seconds_total{cpu="0",mode="user"} 100.0
+node_cpu_seconds_total{cpu="0",mode="system"} 50.0
+node_cpu_seconds_total{cpu="1",mode="idle"} 600.0
+node_cpu_seconds_total{cpu="1",mode="user"} 80.0
+"#;
+        let (_, snapshot) = parse_prometheus_metrics(text);
+        // idle = 500 + 600 = 1100
+        assert!((snapshot.idle - 1100.0).abs() < 0.01, "idle={}", snapshot.idle);
+        // total = 500 + 100 + 50 + 600 + 80 = 1330
+        assert!((snapshot.total - 1330.0).abs() < 0.01, "total={}", snapshot.total);
+    }
+
+    // ── hwmon-only fallback (no DRM collector) ────────────────────────────
+
+    #[test]
+    fn hwmon_only_no_drm_creates_synthetic_card() {
+        // When no DRM metrics exist but hwmon amdgpu chip is present,
+        // the parser creates a synthetic "card0" entry via the fallback path.
+        let text = r#"node_hwmon_chip_names{chip="amdgpu-pci-0300",chip_name="amdgpu"} 1
+node_hwmon_temp_celsius{chip="amdgpu-pci-0300",sensor="temp1"} 55.0
+node_hwmon_power_average_watts{chip="amdgpu-pci-0300"} 90.0
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus.len(), 1);
+        let gpu = &metrics.gpus[0];
+        assert_eq!(gpu.card, "card0"); // synthetic name from hwmon-only fallback
+        assert_eq!(gpu.temp_c, Some(55.0));
+        assert_eq!(gpu.power_w, Some(90.0));
+        assert_eq!(gpu.vram_total_mb, None); // no DRM data
+        assert_eq!(gpu.vram_used_mb, None);
+        assert_eq!(gpu.busy_pct, None);
+    }
+}
