@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use uuid::Uuid;
 
 use crate::application::ports::outbound::concurrency_port::{
@@ -51,6 +51,8 @@ struct ModelState {
     pre_hard_max_concurrent: AtomicU32,
     /// Governor dispatch cap for this AIMD cycle (0 = no governor cap active).
     governor_cap: AtomicU32,
+    /// Consecutive stable cycles for 3-cycle AIMD baseline update (reset on decrease).
+    stable_cycle_count: AtomicU32,
 }
 
 impl ModelState {
@@ -75,6 +77,7 @@ impl ModelState {
             dispatch_blocked: AtomicBool::new(false),
             pre_hard_max_concurrent: AtomicU32::new(0),
             governor_cap: AtomicU32::new(0),
+            stable_cycle_count: AtomicU32::new(0),
         }
     }
 }
@@ -88,6 +91,9 @@ struct ProviderVramState {
     safety_permil: AtomicU32,
     /// Model name → model state.
     models: DashMap<String, ModelState>,
+    /// Cached sum of weight_mb for all currently-loaded models (O(1) reads).
+    /// Updated atomically on mark_model_loaded / mark_model_unloaded.
+    cached_loaded_weight_mb: AtomicU32,
 
     // ── Phase 7 fields ──────────────────────────────────────────────────
 
@@ -95,6 +101,12 @@ struct ProviderVramState {
     is_standby: AtomicBool,
     /// Unix ms until which a state transition is in progress.
     transition_until: AtomicU64,
+    /// Last observed mem_available_mb (APU drift detection). 0 = not yet set.
+    last_mem_available_mb: AtomicU32,
+    /// Cached total active request count across all models — O(1) alternative to summing models.
+    total_active_count: Arc<AtomicU32>,
+    /// Σ max_concurrent snapshot at Hard throttle entry (for RampUp → Normal condition). 0 = not yet entered Hard.
+    provider_pre_hard_total: AtomicU32,
 }
 
 /// Default VRAM buffer reserved for system/driver overhead (MB).
@@ -103,6 +115,8 @@ const DEFAULT_BUFFER_MB: u32 = 512;
 const DEFAULT_SAFETY_PERMIL: u32 = 100;
 /// Safety margin increase on OOM (permil). 50 = 5%.
 const OOM_SAFETY_BUMP_PERMIL: u32 = 50;
+/// Safety margin decay per stable APU sync cycle (permil). 10 = 1%.
+const SAFETY_DECAY_PERMIL: u32 = 10;
 
 /// Maps provider_id → ProviderVramState.
 ///
@@ -115,6 +129,8 @@ pub struct VramPool {
     probe_permits: Arc<AtomicI32>,
     /// AIMD probe: every N arrivals at the limit, apply probe. 0 = disabled.
     probe_rate: Arc<AtomicU32>,
+    /// Global set of model names currently loaded on any provider — O(1) cross-provider lookup.
+    loaded_models_global: Arc<DashSet<String>>,
 }
 
 impl VramPool {
@@ -123,6 +139,7 @@ impl VramPool {
             providers: Arc::new(DashMap::new()),
             probe_permits: Arc::new(AtomicI32::new(1)),
             probe_rate: Arc::new(AtomicU32::new(3)),
+            loaded_models_global: Arc::new(DashSet::new()),
         }
     }
 
@@ -135,22 +152,23 @@ impl VramPool {
                     reserved_kv_mb: Arc::new(AtomicU32::new(0)),
                     safety_permil: AtomicU32::new(DEFAULT_SAFETY_PERMIL),
                     models: DashMap::new(),
+                    cached_loaded_weight_mb: AtomicU32::new(0),
                     is_standby: AtomicBool::new(false),
                     transition_until: AtomicU64::new(0),
+                    last_mem_available_mb: AtomicU32::new(0),
+                    total_active_count: Arc::new(AtomicU32::new(0)),
+                    provider_pre_hard_total: AtomicU32::new(0),
                 })
             })
             .value()
             .clone()
     }
 
-    /// Compute total weight of loaded models.
+    /// Total weight of loaded models — O(1) via cached_loaded_weight_mb.
+    /// Updated atomically by mark_model_loaded / mark_model_unloaded.
+    #[inline]
     fn loaded_weight_mb(state: &ProviderVramState) -> u32 {
-        state
-            .models
-            .iter()
-            .filter(|e| e.is_loaded)
-            .map(|e| e.weight_mb)
-            .sum()
+        state.cached_loaded_weight_mb.load(Ordering::Acquire)
     }
 
     /// Check adaptive concurrency limit with probe policy.
@@ -243,10 +261,12 @@ impl VramPoolPort for VramPool {
                 return None;
             }
             model_state.active_count.fetch_add(1, Ordering::AcqRel);
+            state.total_active_count.fetch_add(1, Ordering::AcqRel);
             let active_count = model_state.active_count.clone();
             let last_active = model_state.last_active_at.clone();
             let reserved_kv = state.reserved_kv_mb.clone();
-            return Some(VramPermit::with_last_active(0, reserved_kv, active_count, last_active));
+            let prov_active = state.total_active_count.clone();
+            return Some(VramPermit::with_last_active(0, reserved_kv, active_count, last_active, prov_active));
         }
 
         let model_entry = state.models.get(model);
@@ -307,7 +327,7 @@ impl VramPoolPort for VramPool {
             if available < kv_mb as i64 {
                 // Not enough VRAM — bump safety factor for next time.
                 let cur_safety = state.safety_permil.load(Ordering::Acquire);
-                let new_safety = (cur_safety + OOM_SAFETY_BUMP_PERMIL).min(300);
+                let new_safety = (cur_safety + OOM_SAFETY_BUMP_PERMIL).min(500);
                 state.safety_permil.store(new_safety, Ordering::Release);
                 return None;
             }
@@ -333,10 +353,12 @@ impl VramPoolPort for VramPool {
                 });
                 model_state.active_kv_mb.fetch_add(kv_mb, Ordering::AcqRel);
                 model_state.active_count.fetch_add(1, Ordering::AcqRel);
+                state.total_active_count.fetch_add(1, Ordering::AcqRel);
                 let active_count = model_state.active_count.clone();
                 let last_active = model_state.last_active_at.clone();
+                let prov_active = state.total_active_count.clone();
 
-                return Some(VramPermit::with_last_active(kv_mb, reserved_kv, active_count, last_active));
+                return Some(VramPermit::with_last_active(kv_mb, reserved_kv, active_count, last_active, prov_active));
             }
             // CAS failed — another thread won the race; retry.
         }
@@ -354,11 +376,7 @@ impl VramPoolPort for VramPool {
     fn used_vram_mb(&self, provider_id: Uuid) -> u32 {
         self.providers
             .get(&provider_id)
-            .map(|s| {
-                let loaded = Self::loaded_weight_mb(&s);
-                let kv = s.reserved_kv_mb.load(Ordering::Acquire);
-                loaded + kv
-            })
+            .map(|s| Self::loaded_weight_mb(&s) + s.reserved_kv_mb.load(Ordering::Acquire))
             .unwrap_or(0)
     }
 
@@ -388,6 +406,19 @@ impl VramPoolPort for VramPool {
 
     fn mark_model_loaded(&self, provider_id: Uuid, model: &str, weight_mb: u32) {
         let state = self.get_or_create(provider_id);
+        // Update cached weight: subtract old weight if already loaded, add new weight.
+        let prev = state.models.get(model).map(|ms| (ms.is_loaded, ms.weight_mb));
+        match prev {
+            Some((true, old_w)) if old_w != weight_mb => {
+                // Weight changed — swap delta in cache.
+                state.cached_loaded_weight_mb.fetch_add(weight_mb.saturating_sub(old_w), Ordering::AcqRel);
+            }
+            Some((false, _)) | None => {
+                // Newly loaded — add weight to cache.
+                state.cached_loaded_weight_mb.fetch_add(weight_mb, Ordering::AcqRel);
+            }
+            _ => {} // already loaded with same weight — no change
+        }
         state
             .models
             .entry(model.to_string())
@@ -396,16 +427,33 @@ impl VramPoolPort for VramPool {
                 ms.weight_mb = weight_mb;
             })
             .or_insert_with(|| ModelState::new(weight_mb, true, 128, 0));
+        self.loaded_models_global.insert(model.to_string());
     }
 
     fn mark_model_unloaded(&self, provider_id: Uuid, model: &str) {
         let state = self.get_or_create(provider_id);
         if let Some(mut ms) = state.models.get_mut(model) {
+            if ms.is_loaded {
+                // Subtract weight from cache when unloading.
+                state.cached_loaded_weight_mb.fetch_sub(ms.weight_mb.min(
+                    state.cached_loaded_weight_mb.load(Ordering::Acquire)
+                ), Ordering::AcqRel);
+            }
             ms.is_loaded = false;
             ms.sample_count.store(0, Ordering::Release);
             ms.is_preloading.store(false, Ordering::Release);
+            ms.baseline_tps.store(0, Ordering::Release);
+            ms.baseline_p95_ms.store(0, Ordering::Release);
+            ms.stable_cycle_count.store(0, Ordering::Release);
             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
             ms.learning_epoch_started_at.store(now_ms, Ordering::Release);
+        }
+        // Remove from global set if no provider has this model loaded anymore.
+        let still_loaded = self.providers.iter().any(|e| {
+            e.value().models.get(model).is_some_and(|ms| ms.is_loaded)
+        });
+        if !still_loaded {
+            self.loaded_models_global.remove(model);
         }
     }
 
@@ -419,7 +467,7 @@ impl VramPoolPort for VramPool {
     fn provider_active_requests(&self, provider_id: Uuid) -> u32 {
         self.providers
             .get(&provider_id)
-            .map(|s| s.models.iter().map(|ms| ms.active_count.load(Ordering::Acquire)).sum())
+            .map(|s| s.total_active_count.load(Ordering::Acquire))
             .unwrap_or(0)
     }
 
@@ -437,9 +485,7 @@ impl VramPoolPort for VramPool {
     }
 
     fn is_model_loaded(&self, model: &str) -> bool {
-        self.providers.iter().any(|entry| {
-            entry.value().models.get(model).is_some_and(|ms| ms.is_loaded)
-        })
+        self.loaded_models_global.contains(model)
     }
 
     fn set_max_concurrent(&self, provider_id: Uuid, model: &str, limit: u32) {
@@ -655,6 +701,65 @@ impl VramPoolPort for VramPool {
             })
             .unwrap_or(0)
     }
+
+    fn model_weight_mb(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.providers
+            .get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.weight_mb))
+            .unwrap_or(0)
+    }
+
+    fn stable_cycle_count(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.providers
+            .get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.stable_cycle_count.load(Ordering::Acquire)))
+            .unwrap_or(0)
+    }
+
+    fn increment_stable_cycle_count(&self, provider_id: Uuid, model: &str) {
+        let state = self.get_or_create(provider_id);
+        if let Some(ms) = state.models.get(model) {
+            ms.stable_cycle_count.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    fn reset_stable_cycle_count(&self, provider_id: Uuid, model: &str) {
+        let state = self.get_or_create(provider_id);
+        if let Some(ms) = state.models.get(model) {
+            ms.stable_cycle_count.store(0, Ordering::Release);
+        }
+    }
+
+    fn last_mem_available_mb(&self, provider_id: Uuid) -> u32 {
+        self.providers
+            .get(&provider_id)
+            .map(|s| s.last_mem_available_mb.load(Ordering::Acquire))
+            .unwrap_or(0)
+    }
+
+    fn set_last_mem_available_mb(&self, provider_id: Uuid, mb: u32) {
+        self.get_or_create(provider_id).last_mem_available_mb.store(mb, Ordering::Release);
+    }
+
+    fn decay_safety_permil(&self, provider_id: Uuid) {
+        let state = self.get_or_create(provider_id);
+        let cur = state.safety_permil.load(Ordering::Acquire);
+        if cur > DEFAULT_SAFETY_PERMIL {
+            let new = cur.saturating_sub(SAFETY_DECAY_PERMIL).max(DEFAULT_SAFETY_PERMIL);
+            state.safety_permil.store(new, Ordering::Release);
+        }
+    }
+
+    fn provider_pre_hard_total(&self, provider_id: Uuid) -> u32 {
+        self.providers
+            .get(&provider_id)
+            .map(|s| s.provider_pre_hard_total.load(Ordering::Acquire))
+            .unwrap_or(0)
+    }
+
+    fn set_provider_pre_hard_total(&self, provider_id: Uuid, total: u32) {
+        self.get_or_create(provider_id).provider_pre_hard_total.store(total, Ordering::Release);
+    }
 }
 
 #[cfg(test)]
@@ -746,8 +851,12 @@ mod tests {
             reserved_kv_mb: Arc::new(AtomicU32::new(kv)),
             safety_permil: AtomicU32::new(safety),
             models: DashMap::new(),
+            cached_loaded_weight_mb: AtomicU32::new(0),
             is_standby: AtomicBool::new(false),
             transition_until: AtomicU64::new(0),
+            last_mem_available_mb: AtomicU32::new(0),
+            total_active_count: Arc::new(AtomicU32::new(0)),
+            provider_pre_hard_total: AtomicU32::new(0),
         }
     }
 
@@ -762,6 +871,7 @@ mod tests {
         // total=10000, loaded=3000, kv=500, buffer=512, safety=10% of 10000=1000
         let state = make_provider_state(10000, 500, 100);
         let ms = ModelState::new(3000, true, 128, 4);
+        state.cached_loaded_weight_mb.store(3000, Ordering::Release); // keep cache consistent
         state.models.insert("model_a".to_string(), ms);
         let available = VramPool::compute_available(&state);
         // 10000 - 3000 - 500 - 512 - 1000 = 4988
@@ -791,6 +901,7 @@ mod tests {
         // Overcommitted: more loaded than total
         let state = make_provider_state(1000, 0, 100);
         let ms = ModelState::new(2000, true, 128, 4);
+        state.cached_loaded_weight_mb.store(2000, Ordering::Release); // keep cache consistent
         state.models.insert("big_model".to_string(), ms);
         let available = VramPool::compute_available(&state);
         assert!(available < 0, "available={available} should be negative");
@@ -974,8 +1085,8 @@ mod tests {
     fn in_transition_with_future_deadline() {
         let pool = VramPool::new();
         let pid = Uuid::now_v7();
-        let future_ms = chrono::Utc::now().timestamp_millis() as u64 + 60_000;
-        pool.set_transition_until(pid, future_ms);
+        // Use u64::MAX as deadline — deterministic, always in the future.
+        pool.set_transition_until(pid, u64::MAX);
         assert!(pool.in_transition(pid));
     }
 
@@ -983,7 +1094,7 @@ mod tests {
     fn in_transition_with_past_deadline() {
         let pool = VramPool::new();
         let pid = Uuid::now_v7();
-        pool.set_transition_until(pid, 1); // past
+        pool.set_transition_until(pid, 1); // epoch+1ms — always in the past
         assert!(!pool.in_transition(pid));
     }
 
@@ -1101,5 +1212,112 @@ mod tests {
             let blocked = VramPool::should_block(&ms, 0, 3);
             prop_assert_eq!(blocked, active >= limit);
         }
+    }
+
+    // ── stable_cycle_count tests ─────────────────────────────────────────────
+
+    #[test]
+    fn stable_cycle_count_increments_and_resets() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        // Initialise model entry.
+        pool.set_max_concurrent(pid, "m", 4);
+
+        assert_eq!(pool.stable_cycle_count(pid, "m"), 0);
+        pool.increment_stable_cycle_count(pid, "m");
+        assert_eq!(pool.stable_cycle_count(pid, "m"), 1);
+        pool.increment_stable_cycle_count(pid, "m");
+        assert_eq!(pool.stable_cycle_count(pid, "m"), 2);
+        pool.increment_stable_cycle_count(pid, "m");
+        assert_eq!(pool.stable_cycle_count(pid, "m"), 3);
+
+        pool.reset_stable_cycle_count(pid, "m");
+        assert_eq!(pool.stable_cycle_count(pid, "m"), 0);
+    }
+
+    #[test]
+    fn stable_cycle_baseline_gate_requires_three_cycles() {
+        // Simulate the AIMD stable-cycle loop manually:
+        // baseline update should only happen when count reaches >= 3.
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_max_concurrent(pid, "m", 4);
+
+        let update_would_fire = |p: &VramPool| {
+            p.increment_stable_cycle_count(pid, "m");
+            p.stable_cycle_count(pid, "m") >= 3
+        };
+
+        assert!(!update_would_fire(&pool), "1st stable cycle must NOT update baseline");
+        assert!(!update_would_fire(&pool), "2nd stable cycle must NOT update baseline");
+        assert!(update_would_fire(&pool),  "3rd stable cycle MUST update baseline");
+        assert!(update_would_fire(&pool),  "4th+ stable cycle MUST still update baseline");
+
+        pool.reset_stable_cycle_count(pid, "m");
+        assert!(!update_would_fire(&pool), "after reset: 1st stable cycle must NOT update");
+    }
+
+    #[test]
+    fn stable_cycle_count_unknown_model_returns_zero() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        assert_eq!(pool.stable_cycle_count(pid, "unknown"), 0);
+        // increment / reset on unknown model must not panic.
+        pool.increment_stable_cycle_count(pid, "unknown");
+        pool.reset_stable_cycle_count(pid, "unknown");
+    }
+
+    // ── FIX 7: provider_active_requests O(1) atomic cache ─────────────────
+
+    #[test]
+    fn provider_active_requests_is_zero_initially() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        assert_eq!(pool.provider_active_requests(pid), 0);
+    }
+
+    #[test]
+    fn provider_active_requests_tracks_permits() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.mark_model_loaded(pid, "m", 0);
+        pool.set_total_vram(pid, 0); // 0 = always allow
+
+        let permit1 = pool.try_reserve(pid, "m").expect("permit1");
+        assert_eq!(pool.provider_active_requests(pid), 1);
+
+        let permit2 = pool.try_reserve(pid, "m").expect("permit2");
+        assert_eq!(pool.provider_active_requests(pid), 2);
+
+        drop(permit1);
+        assert_eq!(pool.provider_active_requests(pid), 1);
+
+        drop(permit2);
+        assert_eq!(pool.provider_active_requests(pid), 0);
+    }
+
+    // ── FIX 8: is_model_loaded uses global DashSet ─────────────────────────
+
+    #[test]
+    fn is_model_loaded_returns_true_when_any_provider_has_it() {
+        let pool = VramPool::new();
+        let pid1 = Uuid::now_v7();
+        let pid2 = Uuid::now_v7();
+
+        assert!(!pool.is_model_loaded("llama3"));
+
+        pool.mark_model_loaded(pid1, "llama3", 1000);
+        assert!(pool.is_model_loaded("llama3"));
+
+        pool.mark_model_unloaded(pid1, "llama3");
+        assert!(!pool.is_model_loaded("llama3"), "removed when last provider unloads");
+
+        pool.mark_model_loaded(pid1, "llama3", 1000);
+        pool.mark_model_loaded(pid2, "llama3", 1000);
+        pool.mark_model_unloaded(pid1, "llama3");
+        assert!(pool.is_model_loaded("llama3"), "still loaded on pid2");
+
+        pool.mark_model_unloaded(pid2, "llama3");
+        assert!(!pool.is_model_loaded("llama3"), "removed when all providers unload");
     }
 }

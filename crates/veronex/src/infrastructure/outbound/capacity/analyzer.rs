@@ -626,6 +626,33 @@ pub async fn sync_provider(
         vram_pool.set_total_vram(provider_id, vram_total_mb);
     }
 
+    // APU mem drift: if mem_available_mb changed >15% from last observed value,
+    // reset AIMD learning epoch for all loaded models to prevent stale baselines.
+    if is_apu && mem_available_mb > 0 {
+        let last = vram_pool.last_mem_available_mb(provider_id);
+        if last > 0 {
+            let delta_pct = (mem_available_mb as f64 - last as f64).abs() / last as f64;
+            if delta_pct > 0.15 {
+                tracing::warn!(
+                    provider = %provider_name,
+                    last_mb = last,
+                    current_mb = mem_available_mb,
+                    delta_pct = format!("{:.1}%", delta_pct * 100.0),
+                    "APU mem drift >15% — resetting AIMD learning epoch for all loaded models"
+                );
+                for model_name in vram_pool.loaded_model_names(provider_id) {
+                    vram_pool.reset_stable_cycle_count(provider_id, &model_name);
+                    vram_pool.set_baseline_tps(provider_id, &model_name, 0);
+                    vram_pool.set_baseline_p95_ms(provider_id, &model_name, 0);
+                }
+            } else {
+                // Stable sync: gradually recover safety margin (undo OOM bumps).
+                vram_pool.decay_safety_permil(provider_id);
+            }
+        }
+        vram_pool.set_last_mem_available_mb(provider_id, mem_available_mb);
+    }
+
     // ── Governor: reset dispatch_blocked and governor_cap for all loaded models ──
     for name in vram_pool.loaded_model_names(provider_id) {
         vram_pool.set_dispatch_blocked(provider_id, &name, false);
@@ -637,33 +664,68 @@ pub async fn sync_provider(
     let governor_active = provider_total_active > num_parallel;
 
     if governor_active {
-        // Collect candidates: active_count > 0 OR demand_counter > 0
+        // Pass 1 — identify candidates: active_count > 0 OR demand_counter > 0.
         let loaded_names = vram_pool.loaded_model_names(provider_id);
-        let mut candidates: Vec<(String, u64)> = Vec::new(); // (model, oldest_queued_ms)
+        let mut candidate_names: Vec<String> = Vec::new();
 
         for name in &loaded_names {
             let active = vram_pool.active_requests(provider_id, name);
-            let demand_key = crate::domain::constants::demand_key(name);
             let demand: u64 = if let Some(pool) = valkey_pool {
                 use fred::prelude::*;
-                let v: Result<Option<String>, _> = pool.get(&demand_key).await;
+                let v: Result<Option<String>, _> =
+                    pool.get(&crate::domain::constants::demand_key(name)).await;
                 v.ok().flatten().and_then(|s| s.parse().ok()).unwrap_or(0)
             } else {
                 0
             };
             if active > 0 || demand > 0 {
-                // oldest_queued_ms: oldest job in ZSET (lower = older = higher priority)
-                let oldest = if let Some(pool) = valkey_pool {
-                    use fred::prelude::*;
-                    let queue_key = format!("veronex:queue:{name}");
-                    let result: Result<Vec<(String, f64)>, _> = pool.zrange(&queue_key, 0, 0, None, false, None, false).await;
-                    result.ok().and_then(|v| v.first().map(|(_, score)| score.round() as u64)).unwrap_or(u64::MAX)
-                } else {
-                    u64::MAX
-                };
-                candidates.push((name.clone(), oldest));
+                candidate_names.push(name.clone());
             }
         }
+
+        // Pass 2 — batch-fetch oldest enqueue_at_ms per candidate model.
+        // Uses QUEUE_MODEL_MAP (job_id → model) + QUEUE_ENQUEUE_AT (job_id → enqueue_at_ms)
+        // as the single source of truth (scheduler.md §8 governor spec).
+        let mut model_oldest: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        if !candidate_names.is_empty() {
+            if let Some(pool) = valkey_pool {
+                use fred::prelude::*;
+                use crate::domain::constants::{QUEUE_MODEL_MAP, QUEUE_ENQUEUE_AT};
+
+                let job_model: std::collections::HashMap<String, String> =
+                    pool.hgetall(QUEUE_MODEL_MAP).await.unwrap_or_default();
+
+                // Group job_ids by candidate model in a single pass.
+                let mut model_jobs: std::collections::HashMap<String, Vec<String>> =
+                    std::collections::HashMap::new();
+                for (job_id, model_name) in job_model {
+                    if candidate_names.contains(&model_name) {
+                        model_jobs.entry(model_name).or_default().push(job_id);
+                    }
+                }
+
+                // HMGET all enqueue timestamps per model; take the minimum (= oldest job).
+                for (model_name, job_ids) in model_jobs {
+                    let times: Vec<Option<String>> =
+                        pool.hmget(QUEUE_ENQUEUE_AT, job_ids).await.unwrap_or_default();
+                    let oldest = times
+                        .iter()
+                        .filter_map(|t| t.as_deref()?.parse::<u64>().ok())
+                        .min()
+                        .unwrap_or(u64::MAX);
+                    model_oldest.insert(model_name, oldest);
+                }
+            }
+        }
+
+        let mut candidates: Vec<(String, u64)> = candidate_names
+            .into_iter()
+            .map(|name| {
+                let oldest = model_oldest.get(&name).copied().unwrap_or(u64::MAX);
+                (name, oldest)
+            })
+            .collect();
 
         let n = candidates.len();
         let budget = num_parallel as usize;
@@ -801,20 +863,27 @@ pub async fn sync_provider(
 
             let new_limit = if ratio < 0.7 || p95_spike {
                 // Throughput 30%+ drop or p95 doubled → multiplicative decrease
+                vram_pool.reset_stable_cycle_count(provider_id, &model.name);
                 (current_limit * 3 / 4).max(1)
             } else if ratio >= 0.9 {
-                // Throughput maintained + p95 stable → additive increase
-                vram_pool.set_baseline_tps(
-                    provider_id,
-                    &model.name,
-                    baseline.max(current_tps_x100),
-                );
-                if baseline_p95 > 0 {
-                    vram_pool.set_baseline_p95_ms(
+                // Throughput maintained + p95 stable → increment stable cycle counter.
+                // Only update baseline after 3 consecutive stable cycles (reduce noise).
+                vram_pool.increment_stable_cycle_count(provider_id, &model.name);
+                let stable_cycles = vram_pool.stable_cycle_count(provider_id, &model.name);
+                if stable_cycles >= 3 {
+                    // 3rd+ consecutive stable cycle: update baseline.
+                    vram_pool.set_baseline_tps(
                         provider_id,
                         &model.name,
-                        baseline_p95.min(current_p95),
+                        baseline.max(current_tps_x100),
                     );
+                    if baseline_p95 > 0 {
+                        vram_pool.set_baseline_p95_ms(
+                            provider_id,
+                            &model.name,
+                            baseline_p95.min(current_p95),
+                        );
+                    }
                 }
                 current_limit.saturating_add(1).min(num_parallel)
             } else {
@@ -903,6 +972,17 @@ pub async fn sync_provider(
                 for mr in &rec.models {
                     if mr.recommended_max_concurrent == 0 {
                         continue; // LLM returned 0 = no opinion
+                    }
+                    // Gate: LLM correction is blocked during AIMD decrease cycles.
+                    // Require 3+ consecutive stable cycles before LLM can override.
+                    let stable_cycles = vram_pool.stable_cycle_count(provider_id, &mr.model);
+                    if stable_cycles < 3 {
+                        tracing::debug!(
+                            model = %mr.model,
+                            stable_cycles,
+                            "LLM correction gated (not in stable period)"
+                        );
+                        continue;
                     }
                     // Clamp to num_parallel upper bound and ±2 from current for stability (Phase 8)
                     let upper = num_parallel * 2;

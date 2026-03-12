@@ -44,7 +44,28 @@ const PRELOAD_LOCK_TTL: i64 = 180;
 /// Scale-Out decision lock TTL in Valkey (seconds).
 const SCALEOUT_DECISION_TTL: i64 = 30;
 
+fn preload_lock_key(model: &str, provider_id: Uuid) -> String {
+    format!("veronex:preloading:{model}:{provider_id}")
+}
+
+fn scaleout_decision_key(model: &str) -> String {
+    format!("veronex:scaleout:{model}")
+}
+
+/// Returns true if demand exceeds eligible capacity threshold (80%).
+pub(crate) fn is_scale_out_needed(demand: u64, eligible_capacity: u32) -> bool {
+    demand as f64 > eligible_capacity as f64 * SCALE_OUT_THRESHOLD
+}
+
+/// Returns true if an idle model should be evicted based on idle duration and standby state.
+pub(crate) fn should_evict(idle_secs: u64, is_standby: bool) -> bool {
+    let threshold = if is_standby { STANDBY_EVICT_IDLE_SECS } else { EVICT_IDLE_SECS };
+    idle_secs >= threshold
+}
+
 /// Run the placement planner loop.
+// 8 params: 5 Arc<dyn Port> registries + thermal + circuit_breaker + http_client.
+// Grouping into a struct would require boxing all ports twice at the call site — not worth it.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_placement_planner_loop(
     registry: Arc<dyn LlmProviderRegistry>,
@@ -77,6 +98,7 @@ pub async fn run_placement_planner_loop(
             &http_client,
             &instance_id,
             &mut scale_out_holddown,
+            &shutdown,
         ).await {
             tracing::warn!("placement planner tick failed: {e}");
         }
@@ -95,6 +117,7 @@ async fn planner_tick(
     http_client: &reqwest::Client,
     instance_id: &str,
     scale_out_holddown: &mut HashMap<Uuid, u64>,
+    shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
 
@@ -173,8 +196,8 @@ async fn planner_tick(
     let scale_out_needed: HashSet<String> = model_demand
         .iter()
         .filter(|(model, demand)| {
-            let cap = eligible_capacity.get(*model).copied().unwrap_or(0) as f64;
-            (**demand as f64) > cap * SCALE_OUT_THRESHOLD
+            let cap = eligible_capacity.get(*model).copied().unwrap_or(0);
+            is_scale_out_needed(**demand, cap)
         })
         .map(|(model, _)| model.clone())
         .collect();
@@ -201,10 +224,19 @@ async fn planner_tick(
         let loaded = vram_pool.loaded_model_names(p.id);
         let has_demand = loaded.iter().any(|m| model_demand.contains_key(m));
 
-        // Condition B: server is best_server for a scale_out_needed model
+        // Condition B: server is the best candidate (most free VRAM) for a scale_out_needed model.
+        // Mirrors Step① best_server selection: max provisional_free among eligible candidates.
         let is_best_for_scaleout = scale_out_needed.iter().any(|model| {
-            scale_out_candidates.iter().any(|c| c.id == p.id)
-                && !vram_pool.loaded_model_names(p.id).contains(&model.to_string())
+            let my_free = provisional_free.get(&p.id).copied().unwrap_or(0);
+            if my_free == 0 || vram_pool.loaded_model_names(p.id).contains(model) {
+                return false;
+            }
+            // Check this server has the most free VRAM among all eligible scale_out_candidates.
+            scale_out_candidates.iter().all(|c| {
+                c.id == p.id
+                    || vram_pool.loaded_model_names(c.id).contains(model)
+                    || provisional_free.get(&c.id).copied().unwrap_or(0) <= my_free
+            })
         });
 
         if has_demand || is_best_for_scaleout {
@@ -229,13 +261,15 @@ async fn planner_tick(
             continue;
         }
 
-        // Find best server: most free VRAM, not already loaded, not preload-excluded
+        // Find best server: most free VRAM, not already loaded, not preload-excluded,
+        // not in transition (STANDBY recovery guard from Step ④ — prevents conflict).
         let best_server = scale_out_candidates.iter()
             .filter(|p| {
                 !vram_pool.loaded_model_names(p.id).contains(&model.to_string())
                     && !vram_pool.is_preloading(p.id, model)
                     && !vram_pool.is_pulling(p.id, model)
                     && !vram_pool.is_preload_excluded(p.id, model)
+                    && !vram_pool.in_transition(p.id)
                     && provisional_free.get(&p.id).copied().unwrap_or(0) > 0
             })
             .max_by_key(|p| {
@@ -248,7 +282,7 @@ async fn planner_tick(
         };
 
         // Multi-instance dedup: Scale-Out decision lock
-        let decision_key = format!("veronex:scaleout:{model}");
+        let decision_key = scaleout_decision_key(model);
         match valkey.kv_get(&decision_key).await {
             Ok(Some(_)) => continue, // another replica is handling this model
             _ => {}
@@ -259,7 +293,7 @@ async fn planner_tick(
         }
 
         // Preload lock (NX): prevent duplicate preload of same model+server
-        let preload_key = format!("veronex:preloading:{}:{}", model, server.id);
+        let preload_key = preload_lock_key(model, server.id);
         match valkey.kv_get(&preload_key).await {
             Ok(Some(_)) => {
                 let _ = valkey.kv_del(&decision_key).await;
@@ -272,9 +306,11 @@ async fn planner_tick(
             continue;
         }
 
-        // Update provisional free VRAM
+        // Update provisional free VRAM with actual model weight (fallback to 2GB if unknown).
         if let Some(free) = provisional_free.get_mut(&server.id) {
-            *free = free.saturating_sub(2048); // conservative estimate
+            let model_weight = vram_pool.model_weight_mb(server.id, model);
+            let weight_estimate = if model_weight > 0 { model_weight } else { 2048 };
+            *free = free.saturating_sub(weight_estimate);
         }
         scale_out_servers.insert(server.id);
         scale_out_holddown.insert(server.id, now_ms + SCALE_OUT_HOLDDOWN_SECS * 1000);
@@ -289,10 +325,11 @@ async fn planner_tick(
         let valkey_c = valkey.clone();
         let preload_key_c = preload_key.clone();
         let decision_key_c = decision_key.clone();
+        let shutdown_c = shutdown.child_token();
 
         tokio::spawn(async move {
             let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
-                &http_c, &url, &model_c, provider_id, &vram_c, np,
+                &http_c, &url, &model_c, provider_id, &vram_c, np, shutdown_c,
             ).await;
             // Release locks
             let _ = valkey_c.kv_del(&preload_key_c).await;
@@ -314,6 +351,14 @@ async fn planner_tick(
         }
 
         for p in &ollama_providers {
+            // Skip thermally throttled providers (Soft/Hard/Cooldown).
+            if matches!(thermal.get_level(p.id), ThrottleLevel::Soft | ThrottleLevel::Hard | ThrottleLevel::Cooldown) {
+                continue;
+            }
+            // Skip standby providers — not eligible for new preloads until reactivated (Step ④).
+            if vram_pool.is_standby(p.id) {
+                continue;
+            }
             if vram_pool.loaded_model_names(p.id).contains(model) {
                 continue; // already loaded
             }
@@ -331,7 +376,7 @@ async fn planner_tick(
             }
 
             // Preload lock
-            let preload_key = format!("veronex:preloading:{}:{}", model, p.id);
+            let preload_key = preload_lock_key(model, p.id);
             match valkey.kv_get(&preload_key).await {
                 Ok(Some(_)) => continue,
                 _ => {}
@@ -341,7 +386,9 @@ async fn planner_tick(
             }
 
             if let Some(pf) = provisional_free.get_mut(&p.id) {
-                *pf = pf.saturating_sub(2048);
+                let model_weight = vram_pool.model_weight_mb(p.id, model);
+                let weight_estimate = if model_weight > 0 { model_weight } else { 2048 };
+                *pf = pf.saturating_sub(weight_estimate);
             }
             scale_out_servers.insert(p.id);
 
@@ -353,10 +400,11 @@ async fn planner_tick(
             let http_c = http_client.clone();
             let valkey_c = valkey.clone();
             let preload_key_c = preload_key.clone();
+            let shutdown_c = shutdown.child_token();
 
             tokio::spawn(async move {
                 let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
-                    &http_c, &url, &model_c, provider_id, &vram_c, np,
+                    &http_c, &url, &model_c, provider_id, &vram_c, np, shutdown_c,
                 ).await;
                 let _ = valkey_c.kv_del(&preload_key_c).await;
                 if success {
@@ -386,9 +434,8 @@ async fn planner_tick(
             }
 
             let idle_secs = vram_pool.idle_since_secs(p.id, &model);
-            let threshold = if vram_pool.is_standby(p.id) { STANDBY_EVICT_IDLE_SECS } else { EVICT_IDLE_SECS };
 
-            if idle_secs >= threshold {
+            if should_evict(idle_secs, vram_pool.is_standby(p.id)) {
                 vram_pool.mark_model_unloaded(p.id, &model);
                 tracing::info!(provider_id = %p.id, %model, idle_secs, "model evicted (demand=0)");
             }
@@ -436,4 +483,59 @@ async fn planner_tick(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_scale_out_needed ──────────────────────────────────────────────
+
+    #[test]
+    fn scale_out_not_needed_when_demand_below_threshold() {
+        // demand=8, capacity=10 → 8 > 10*0.8=8.0 → false (not strictly greater)
+        assert!(!is_scale_out_needed(8, 10));
+    }
+
+    #[test]
+    fn scale_out_needed_when_demand_exceeds_threshold() {
+        // demand=9, capacity=10 → 9 > 8.0 → true
+        assert!(is_scale_out_needed(9, 10));
+    }
+
+    #[test]
+    fn scale_out_not_needed_when_zero_demand() {
+        assert!(!is_scale_out_needed(0, 10));
+    }
+
+    #[test]
+    fn scale_out_needed_when_zero_capacity_and_any_demand() {
+        // demand=1, capacity=0 → 1.0 > 0.0 → true
+        assert!(is_scale_out_needed(1, 0));
+    }
+
+    // ── should_evict ────────────────────────────────────────────────────
+
+    #[test]
+    fn evict_when_idle_exceeds_normal_threshold() {
+        assert!(should_evict(EVICT_IDLE_SECS, false));
+        assert!(should_evict(EVICT_IDLE_SECS + 1, false));
+    }
+
+    #[test]
+    fn no_evict_when_idle_below_normal_threshold() {
+        assert!(!should_evict(EVICT_IDLE_SECS - 1, false));
+    }
+
+    #[test]
+    fn evict_standby_uses_shorter_threshold() {
+        // Standby threshold is 30s vs normal 180s
+        assert!(should_evict(STANDBY_EVICT_IDLE_SECS, true));
+        assert!(!should_evict(STANDBY_EVICT_IDLE_SECS - 1, true));
+    }
+
+    #[test]
+    fn standby_threshold_shorter_than_normal() {
+        assert!(STANDBY_EVICT_IDLE_SECS < EVICT_IDLE_SECS);
+    }
 }

@@ -29,6 +29,8 @@ pub struct VramPermit {
     release_tx: Option<tokio::sync::oneshot::Sender<u32>>,
     /// Updated to current Unix ms on drop (Phase 7: last_active_at tracking).
     last_active_at: Option<Arc<AtomicU64>>,
+    /// Provider-level total active count (decremented on drop for O(1) provider_active_requests).
+    provider_active_count: Option<Arc<AtomicU32>>,
 }
 
 impl VramPermit {
@@ -38,8 +40,16 @@ impl VramPermit {
         reserved_kv: Arc<AtomicU32>,
         active_count: Arc<AtomicU32>,
         last_active_at: Arc<AtomicU64>,
+        provider_active_count: Arc<AtomicU32>,
     ) -> Self {
-        Self { kv_mb, reserved_kv: Some(reserved_kv), active_count: Some(active_count), release_tx: None, last_active_at: Some(last_active_at) }
+        Self {
+            kv_mb,
+            reserved_kv: Some(reserved_kv),
+            active_count: Some(active_count),
+            release_tx: None,
+            last_active_at: Some(last_active_at),
+            provider_active_count: Some(provider_active_count),
+        }
     }
 
     /// Create a combined permit: local atomic decrement + distributed Valkey release.
@@ -48,29 +58,54 @@ impl VramPermit {
         reserved_kv: Arc<AtomicU32>,
         active_count: Arc<AtomicU32>,
         release_tx: tokio::sync::oneshot::Sender<u32>,
+        provider_active_count: Arc<AtomicU32>,
     ) -> Self {
-        Self { kv_mb, reserved_kv: Some(reserved_kv), active_count: Some(active_count), release_tx: Some(release_tx), last_active_at: None }
+        Self {
+            kv_mb,
+            reserved_kv: Some(reserved_kv),
+            active_count: Some(active_count),
+            release_tx: Some(release_tx),
+            last_active_at: None,
+            provider_active_count: Some(provider_active_count),
+        }
     }
 
     /// Extract internals, consuming this permit without triggering drop.
-    pub(crate) fn into_parts(mut self) -> Option<(Arc<AtomicU32>, Arc<AtomicU32>, u32)> {
+    pub(crate) fn into_parts(mut self) -> Option<(Arc<AtomicU32>, Arc<AtomicU32>, Arc<AtomicU32>, u32)> {
         let reserved = self.reserved_kv.take();
         let active = self.active_count.take();
+        let prov_active = self.provider_active_count.take();
         let kv = self.kv_mb;
         self.release_tx = None;
         self.last_active_at = None;
         std::mem::forget(self);
-        reserved.zip(active).map(|(r, a)| (r, a, kv))
+        reserved.zip(active).zip(prov_active).map(|((r, a), pa)| (r, a, pa, kv))
     }
 }
 
 impl Drop for VramPermit {
     fn drop(&mut self) {
         if let Some(ref reserved_kv) = self.reserved_kv {
-            reserved_kv.fetch_sub(self.kv_mb, Ordering::Release);
+            // Saturating sub: prevents u32 wrap-around if accounting diverges under bugs.
+            let mut cur = reserved_kv.load(Ordering::Acquire);
+            loop {
+                let next = cur.saturating_sub(self.kv_mb);
+                match reserved_kv.compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(_) => break,
+                    Err(actual) => cur = actual,
+                }
+            }
         }
         if let Some(ref active) = self.active_count {
-            active.fetch_sub(1, Ordering::Release);
+            // Same saturating pattern — active_count must never wrap below 0.
+            let mut cur = active.load(Ordering::Acquire);
+            loop {
+                let next = cur.saturating_sub(1);
+                match active.compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(_) => break,
+                    Err(actual) => cur = actual,
+                }
+            }
         }
         if let Some(ref last_active) = self.last_active_at {
             let now_ms = std::time::SystemTime::now()
@@ -78,6 +113,16 @@ impl Drop for VramPermit {
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
             last_active.store(now_ms, Ordering::Release);
+        }
+        if let Some(ref prov_active) = self.provider_active_count {
+            let mut cur = prov_active.load(Ordering::Acquire);
+            loop {
+                let next = cur.saturating_sub(1);
+                match prov_active.compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(_) => break,
+                    Err(actual) => cur = actual,
+                }
+            }
         }
         if let Some(tx) = self.release_tx.take() {
             let _ = tx.send(self.kv_mb);
@@ -215,4 +260,34 @@ pub trait VramPoolPort: Send + Sync {
 
     /// Sum of max_concurrent for all loaded models on a provider.
     fn sum_loaded_max_concurrent(&self, provider_id: Uuid) -> u32;
+
+    /// Get model weight in VRAM (0 if not known/unloaded).
+    fn model_weight_mb(&self, provider_id: Uuid, model: &str) -> u32;
+
+    /// Get stable cycle count (consecutive cycles with stable throughput, for 3-cycle AIMD baseline).
+    fn stable_cycle_count(&self, provider_id: Uuid, model: &str) -> u32;
+
+    /// Increment stable cycle count by 1.
+    fn increment_stable_cycle_count(&self, provider_id: Uuid, model: &str);
+
+    /// Reset stable cycle count to 0 (on AIMD decrease).
+    fn reset_stable_cycle_count(&self, provider_id: Uuid, model: &str);
+
+    /// Last observed mem_available_mb for APU providers (0 = not yet set).
+    fn last_mem_available_mb(&self, provider_id: Uuid) -> u32;
+
+    /// Update last observed mem_available_mb.
+    fn set_last_mem_available_mb(&self, provider_id: Uuid, mb: u32);
+
+    /// Decay APU safety margin by 10 permil per stable sync (min = DEFAULT_SAFETY_PERMIL = 100).
+    fn decay_safety_permil(&self, provider_id: Uuid);
+
+    /// Provider-wide Σ max_concurrent snapshot taken at Hard throttle entry.
+    ///
+    /// Used as the RampUp → Normal exit condition: AIMD must restore concurrency to this level.
+    /// Returns 0 if Hard throttle has never been entered for this provider.
+    fn provider_pre_hard_total(&self, provider_id: Uuid) -> u32;
+
+    /// Record provider-wide committed parallel snapshot at Hard throttle entry.
+    fn set_provider_pre_hard_total(&self, provider_id: Uuid, total: u32);
 }

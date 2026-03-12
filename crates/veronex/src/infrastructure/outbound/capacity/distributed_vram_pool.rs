@@ -134,7 +134,7 @@ impl VramPoolPort for DistributedVramPool {
     fn try_reserve(&self, provider_id: Uuid, model: &str) -> Option<VramPermit> {
         // Local reserve for per-instance VRAM control (sync, O(1)).
         let local_permit = self.local.try_reserve(provider_id, model)?;
-        let (reserved_kv, active_count, kv_mb) = local_permit.into_parts()?;
+        let (reserved_kv, active_count, prov_active, kv_mb) = local_permit.into_parts()?;
 
         // Publish reservation to Valkey async.
         let vram_key = format!("veronex:vram_reserved:{provider_id}");
@@ -173,7 +173,7 @@ impl VramPoolPort for DistributedVramPool {
             }
         });
 
-        Some(VramPermit::combined(kv_mb, reserved_kv, active_count, release_tx))
+        Some(VramPermit::combined(kv_mb, reserved_kv, active_count, release_tx, prov_active))
     }
 
     fn total_vram_mb(&self, provider_id: Uuid) -> u32 {
@@ -332,5 +332,41 @@ impl VramPoolPort for DistributedVramPool {
 
     fn sum_loaded_max_concurrent(&self, provider_id: Uuid) -> u32 {
         self.local.sum_loaded_max_concurrent(provider_id)
+    }
+
+    fn model_weight_mb(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.model_weight_mb(provider_id, model)
+    }
+
+    fn stable_cycle_count(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.stable_cycle_count(provider_id, model)
+    }
+
+    fn increment_stable_cycle_count(&self, provider_id: Uuid, model: &str) {
+        self.local.increment_stable_cycle_count(provider_id, model);
+    }
+
+    fn reset_stable_cycle_count(&self, provider_id: Uuid, model: &str) {
+        self.local.reset_stable_cycle_count(provider_id, model);
+    }
+
+    fn last_mem_available_mb(&self, provider_id: Uuid) -> u32 {
+        self.local.last_mem_available_mb(provider_id)
+    }
+
+    fn set_last_mem_available_mb(&self, provider_id: Uuid, mb: u32) {
+        self.local.set_last_mem_available_mb(provider_id, mb);
+    }
+
+    fn decay_safety_permil(&self, provider_id: Uuid) {
+        self.local.decay_safety_permil(provider_id);
+    }
+
+    fn provider_pre_hard_total(&self, provider_id: Uuid) -> u32 {
+        self.local.provider_pre_hard_total(provider_id)
+    }
+
+    fn set_provider_pre_hard_total(&self, provider_id: Uuid, total: u32) {
+        self.local.set_provider_pre_hard_total(provider_id, total);
     }
 }
