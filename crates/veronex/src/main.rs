@@ -114,6 +114,7 @@ async fn main() -> Result<()> {
         session_grouping_lock: handles.session_grouping_lock,
         sync_lock: handles.sync_lock,
         sse_connections: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        vram_budget_repo: repos.vram_budget_repo,
     };
 
     let app = build_app(state, config.cors_origins);

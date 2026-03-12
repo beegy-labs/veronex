@@ -539,7 +539,17 @@ pub async fn sync_provider(
     registry:        &dyn LlmProviderRegistry,
     ollama_model_repo: &dyn OllamaModelRepository,
     model_selection_repo: &dyn ProviderModelSelectionRepository,
+    vram_budget_repo: &dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository,
 ) -> Result<()> {
+    // 0. Restore safety_permil from DB (first call after restart will win; no-op if already set).
+    if let Ok(Some(budget)) = vram_budget_repo.get(provider_id).await {
+        let current = vram_pool.safety_permil(provider_id);
+        // Only restore if VramPool still shows the default (100) — i.e., not yet bumped by OOM.
+        if current == 100 && budget.safety_permil as u32 != 100 {
+            vram_pool.set_safety_permil(provider_id, budget.safety_permil as u32);
+        }
+    }
+
     // 1. Health check: GET /api/version
     let health_ok = client
         .get(format!("{ollama_url}/api/version"))
@@ -649,6 +659,15 @@ pub async fn sync_provider(
                 // Stable sync: gradually recover safety margin (undo OOM bumps).
                 vram_pool.decay_safety_permil(provider_id);
             }
+            // Persist safety_permil after any change (OOM bump or decay).
+            let current_permil = vram_pool.safety_permil(provider_id) as i32;
+            let budget = crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudget {
+                provider_id,
+                safety_permil: current_permil,
+                vram_total_source: "node_exporter".to_string(),
+                kv_cache_type: "q8_0".to_string(),
+            };
+            vram_budget_repo.upsert(&budget).await.ok();
         }
         vram_pool.set_last_mem_available_mb(provider_id, mem_available_mb);
     }
@@ -1050,6 +1069,7 @@ pub async fn run_sync_loop(
     client:                reqwest::Client,
     ollama_model_repo:     Arc<dyn OllamaModelRepository>,
     model_selection_repo:  Arc<dyn ProviderModelSelectionRepository>,
+    vram_budget_repo:      Arc<dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository>,
 ) {
     let mut ticker = tokio::time::interval(base_tick);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1109,6 +1129,7 @@ pub async fn run_sync_loop(
                 &*registry,
                 &*ollama_model_repo,
                 &*model_selection_repo,
+                &*vram_budget_repo,
             )
             .await
             {

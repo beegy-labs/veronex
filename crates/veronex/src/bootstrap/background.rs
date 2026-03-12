@@ -75,6 +75,7 @@ pub async fn spawn_background_tasks(
         infra.http_client.clone(),
         repos.ollama_model_repo.clone(),
         repos.model_selection_repo.clone(),
+        repos.vram_budget_repo.clone(),
     ));
     tracing::info!("sync loop started (analyzer: {})", config.analyzer_url);
 

@@ -546,6 +546,7 @@ pub async fn sync_single_provider(
         &*state.provider_registry,
         &*state.ollama_model_repo,
         &*state.model_selection_repo,
+        &*state.vram_budget_repo,
     )
     .await
     {

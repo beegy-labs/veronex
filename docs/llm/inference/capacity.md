@@ -578,16 +578,21 @@ PK: `(provider_id, model_name)`
 
 ### `provider_vram_budget`
 
-PK: `provider_id`
+PK: `provider_id` — FK → `llm_providers(id)` ON DELETE CASCADE
+
+Persists VRAM management state that must survive restarts. `num_parallel` and `vram_total_mb` live in `llm_providers` (managed via provider API); this table holds the dynamic learned state.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `provider_id` | UUID | Ollama provider |
-| `vram_total_mb` | INT NULL | Confirmed total VRAM (NULL = unknown) |
+| `provider_id` | UUID | FK → `llm_providers.id` |
+| `safety_permil` | INT | Safety margin ÷1000 (100=10%, max 500). +50 on OOM, -10 per stable cycle |
 | `vram_total_source` | TEXT | `probe` / `node_exporter` / `manual` |
-| `safety_factor` | FLOAT4 | 0.10 – 0.30 (increases on OOM) |
 | `kv_cache_type` | TEXT | `f16` / `q8_0` / `q4_0` |
-| `num_parallel` | SMALLINT | Ollama NUM_PARALLEL setting |
+| `updated_at` | TIMESTAMPTZ | Last persist timestamp |
+
+**Related fields in `llm_providers`**:
+- `total_vram_mb` — confirmed total VRAM (0 = unknown → pass-through)
+- `num_parallel` — Ollama NUM_PARALLEL setting (AIMD upper bound)
 
 ### `capacity_settings`
 

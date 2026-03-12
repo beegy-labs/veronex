@@ -279,6 +279,12 @@ pub trait VramPoolPort: Send + Sync {
     /// Update last observed mem_available_mb.
     fn set_last_mem_available_mb(&self, provider_id: Uuid, mb: u32);
 
+    /// Current safety_permil value for a provider (for persistence).
+    fn safety_permil(&self, provider_id: Uuid) -> u32;
+
+    /// Set safety_permil (used on startup restore from DB).
+    fn set_safety_permil(&self, provider_id: Uuid, permil: u32);
+
     /// Decay APU safety margin by 10 permil per stable sync (min = DEFAULT_SAFETY_PERMIL = 100).
     fn decay_safety_permil(&self, provider_id: Uuid);
 

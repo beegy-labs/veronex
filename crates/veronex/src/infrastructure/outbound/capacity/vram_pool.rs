@@ -741,6 +741,19 @@ impl VramPoolPort for VramPool {
         self.get_or_create(provider_id).last_mem_available_mb.store(mb, Ordering::Release);
     }
 
+    fn safety_permil(&self, provider_id: Uuid) -> u32 {
+        self.providers
+            .get(&provider_id)
+            .map(|s| s.safety_permil.load(Ordering::Acquire))
+            .unwrap_or(DEFAULT_SAFETY_PERMIL)
+    }
+
+    fn set_safety_permil(&self, provider_id: Uuid, permil: u32) {
+        self.get_or_create(provider_id)
+            .safety_permil
+            .store(permil, Ordering::Release);
+    }
+
     fn decay_safety_permil(&self, provider_id: Uuid) {
         let state = self.get_or_create(provider_id);
         let cur = state.safety_permil.load(Ordering::Acquire);

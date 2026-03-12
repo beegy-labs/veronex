@@ -358,6 +358,14 @@ impl VramPoolPort for DistributedVramPool {
         self.local.set_last_mem_available_mb(provider_id, mb);
     }
 
+    fn safety_permil(&self, provider_id: Uuid) -> u32 {
+        self.local.safety_permil(provider_id)
+    }
+
+    fn set_safety_permil(&self, provider_id: Uuid, permil: u32) {
+        self.local.set_safety_permil(provider_id, permil);
+    }
+
     fn decay_safety_permil(&self, provider_id: Uuid) {
         self.local.decay_safety_permil(provider_id);
     }
