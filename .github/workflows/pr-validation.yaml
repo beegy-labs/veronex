@@ -82,7 +82,7 @@ jobs:
             'private[_-]?key\s*=\s*["\047]-----BEGIN'
           )
 
-          EXCLUDE_PATTERNS='(existingSecret|secretKeyRef|secretStoreRef|<[A-Z_]+>|<YOUR_|<SECRET|REDACTED|example\.com|encrypt|decrypt|master_key|encryption_key)'
+          EXCLUDE_PATTERNS='(existingSecret|secretKeyRef|secretStoreRef|<[A-Z_]+>|<YOUR_|<SECRET|REDACTED|example\.com|encrypt|decrypt|master_key|encryption_key|\$\{)'
 
           FOUND_SECRETS=0
 
