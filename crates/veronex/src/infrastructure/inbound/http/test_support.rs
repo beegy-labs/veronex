@@ -13,6 +13,7 @@ use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::{OllamaProviderForModel, OllamaModelRepository, OllamaModelWithCount};
 use crate::application::ports::outbound::ollama_sync_job_repository::{OllamaSyncJob, OllamaSyncJobRepository};
+use crate::application::ports::outbound::provider_vram_budget_repository::{ProviderVramBudget, ProviderVramBudgetRepository};
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::domain::entities::{Account, ApiKey, GeminiRateLimitPolicy, GpuServer, LlmProvider, Session};
 use crate::domain::enums::{JobStatus, KeyTier, KeyType, LlmProviderStatus};
@@ -263,6 +264,14 @@ impl SessionRepository for MockSessionRepo {
     async fn update_last_used(&self, _jti: &Uuid) -> Result<()> { Ok(()) }
 }
 
+pub(crate) struct MockVramBudgetRepo;
+
+#[async_trait]
+impl ProviderVramBudgetRepository for MockVramBudgetRepo {
+    async fn get(&self, _provider_id: Uuid) -> Result<Option<ProviderVramBudget>> { Ok(None) }
+    async fn upsert(&self, _budget: &ProviderVramBudget) -> Result<()> { Ok(()) }
+}
+
 pub(crate) fn make_app() -> axum::Router {
     let fake_key = ApiKey {
         id: Uuid::now_v7(),
@@ -316,6 +325,7 @@ pub(crate) fn make_app() -> axum::Router {
         sync_lock: Arc::new(tokio::sync::Semaphore::new(1)),
         lab_settings_repo: Arc::new(MockLabSettingsRepo),
         sse_connections: Arc::new(AtomicU32::new(0)),
+        vram_budget_repo: Arc::new(MockVramBudgetRepo),
     };
     // Inject a fake ApiKey extension so handlers that extract it work in tests.
     router::build_api_router()
