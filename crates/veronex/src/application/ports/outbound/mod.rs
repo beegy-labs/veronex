@@ -3,6 +3,7 @@ pub mod provider_dispatch_port;
 pub mod circuit_breaker_port;
 pub mod concurrency_port;
 pub mod thermal_port;
+pub mod thermal_drain_port;
 pub mod message_store;
 pub mod lab_settings_repository;
 pub mod capacity_settings_repository;

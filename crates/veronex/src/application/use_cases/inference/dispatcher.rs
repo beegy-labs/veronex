@@ -327,6 +327,7 @@ pub(super) async fn queue_dispatcher_loop(
                             notify: Arc::new(Notify::new()),
                             cancel_notify: Arc::new(Notify::new()),
                             gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
+                            assigned_provider_id: None,
                         });
                         (j, None, None)
                     }
@@ -420,6 +421,9 @@ pub(super) async fn queue_dispatcher_loop(
             let is_free = cfg.is_free_tier;
             let adapter = provider_dispatch.build_adapter(&cfg);
             tracing::info!(%uuid, provider_id = %pid, name = %cfg.name, "dispatching");
+            if let Some(mut e) = jobs.get_mut(&uuid) {
+                e.assigned_provider_id = Some(pid);
+            }
 
             let owner_key = crate::domain::constants::job_owner_key(uuid);
             let _ = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await;

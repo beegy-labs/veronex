@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
+use crate::application::ports::outbound::thermal_drain_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::constants::demand_key;
@@ -75,6 +76,7 @@ pub async fn run_placement_planner_loop(
     valkey: Arc<dyn ValkeyPort>,
     http_client: reqwest::Client,
     instance_id: Arc<str>,
+    thermal_drain: Arc<dyn ThermalDrainPort>,
     shutdown: CancellationToken,
 ) {
     tracing::info!("placement planner started (interval=5s)");
@@ -97,6 +99,7 @@ pub async fn run_placement_planner_loop(
             &valkey,
             &http_client,
             &instance_id,
+            &thermal_drain,
             &mut scale_out_holddown,
             &shutdown,
         ).await {
@@ -116,6 +119,7 @@ async fn planner_tick(
     valkey: &Arc<dyn ValkeyPort>,
     http_client: &reqwest::Client,
     instance_id: &str,
+    thermal_drain: &Arc<dyn ThermalDrainPort>,
     scale_out_holddown: &mut HashMap<Uuid, u64>,
     shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
@@ -231,10 +235,14 @@ async fn planner_tick(
                     "WATCHDOG: Hard gate >90s drain stall — {active} active requests remain"
                 );
             } else if elapsed >= 60 {
+                // SDD §3: Hard 진입 후 60s 경과 + active>0 → in-flight jobs 강제 cancel.
+                // Cancelling drops VramPermit → active_count → 0 → Cooldown transition.
                 tracing::warn!(
                     provider_id = %p.id, elapsed_secs = elapsed, active_requests = active,
-                    "Hard gate 60s threshold: {active} requests still active, drain stalled"
+                    "Hard gate 60s: force-cancelling {active} in-flight jobs for thermal drain"
                 );
+                let cancelled = thermal_drain.cancel_jobs_for_provider(p.id);
+                tracing::warn!(provider_id = %p.id, cancelled, "Hard gate: cancel signals sent");
             }
         }
     }

@@ -19,6 +19,7 @@ use crate::application::ports::outbound::observability_port::ObservabilityPort;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
+use crate::application::ports::outbound::thermal_drain_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::entities::InferenceJob;
@@ -89,6 +90,26 @@ impl InferenceUseCaseImpl {
     pub fn cancel_notifiers(&self) -> Arc<DashMap<Uuid, Arc<Notify>>> {
         self.cancel_notifiers.clone()
     }
+
+    pub fn as_thermal_drain(&self) -> Arc<dyn ThermalDrainPort> {
+        Arc::new(ThermalDrainAdapter { jobs: self.jobs.clone() })
+    }
+}
+
+struct ThermalDrainAdapter {
+    jobs: Arc<DashMap<Uuid, JobEntry>>,
+}
+
+impl ThermalDrainPort for ThermalDrainAdapter {
+    fn cancel_jobs_for_provider(&self, provider_id: Uuid) -> usize {
+        self.jobs.iter()
+            .filter(|e| e.assigned_provider_id == Some(provider_id))
+            .map(|e| { e.cancel_notify.notify_one(); 1 })
+            .sum()
+    }
+}
+
+impl InferenceUseCaseImpl {
 
     pub fn start_job_sweeper(
         &self, shutdown: CancellationToken,
@@ -179,6 +200,7 @@ impl InferenceUseCaseImpl {
                 notify: Arc::new(Notify::new()),
                 cancel_notify: Arc::new(Notify::new()),
                 gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
+                assigned_provider_id: None,
             });
             // Re-enqueue to ZSET with emergency priority (recovered jobs get highest priority)
             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -239,6 +261,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             notify: Arc::new(Notify::new()), cancel_notify,
             gemini_tier: gemini_tier.clone(), key_tier,
             tpm_reservation_minute: Some(chrono::Utc::now().timestamp() / 60),
+            assigned_provider_id: None,
         });
 
         let uuid = job_id.0;

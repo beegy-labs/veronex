@@ -208,6 +208,7 @@ pub async fn spawn_background_tasks(
                 vk_port.clone(),
                 infra.http_client.clone(),
                 infra.instance_id.clone(),
+                use_case_impl.as_thermal_drain(),
                 shutdown.child_token(),
             ));
             tracing::info!("placement planner started (interval=5s)");
