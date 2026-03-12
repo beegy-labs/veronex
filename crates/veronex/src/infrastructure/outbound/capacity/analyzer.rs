@@ -844,11 +844,18 @@ pub async fn sync_provider(
         let current_limit = vram_pool.max_concurrent(provider_id, &model.name);
 
         if baseline == 0 {
-            // First data point → set baseline + initial limit from num_parallel (Phase 8)
+            // First data point → set baseline. Set initial max_concurrent only if preloader
+            // has not already initialized it (current_limit == 0). The preloader applies
+            // committed_parallel defense; overriding here would ignore that guard.
             if stats.sample_count > 0 {
                 vram_pool.set_baseline_tps(provider_id, &model.name, current_tps_x100);
-                let initial = num_parallel.max(1);
-                vram_pool.set_max_concurrent(provider_id, &model.name, initial);
+                if current_limit == 0 {
+                    // Preloader did not run (model was loaded before registration).
+                    // Apply same committed_parallel defense as preloader.
+                    let committed = vram_pool.sum_loaded_max_concurrent(provider_id);
+                    let initial = num_parallel.min(num_parallel.saturating_sub(committed)).max(1);
+                    vram_pool.set_max_concurrent(provider_id, &model.name, initial);
+                }
                 if stats.p95_latency_ms > 0.0 {
                     vram_pool.set_baseline_p95_ms(provider_id, &model.name, stats.p95_latency_ms as u32);
                 }
