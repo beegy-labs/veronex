@@ -325,11 +325,10 @@ async fn planner_tick(
         let valkey_c = valkey.clone();
         let preload_key_c = preload_key.clone();
         let decision_key_c = decision_key.clone();
-        let shutdown_c = shutdown.child_token();
 
         tokio::spawn(async move {
             let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
-                &http_c, &url, &model_c, provider_id, &vram_c, np, shutdown_c,
+                &http_c, &url, &model_c, provider_id, &vram_c, np,
             ).await;
             // Release locks
             let _ = valkey_c.kv_del(&preload_key_c).await;
@@ -400,11 +399,10 @@ async fn planner_tick(
             let http_c = http_client.clone();
             let valkey_c = valkey.clone();
             let preload_key_c = preload_key.clone();
-            let shutdown_c = shutdown.child_token();
 
             tokio::spawn(async move {
                 let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
-                    &http_c, &url, &model_c, provider_id, &vram_c, np, shutdown_c,
+                    &http_c, &url, &model_c, provider_id, &vram_c, np,
                 ).await;
                 let _ = valkey_c.kv_del(&preload_key_c).await;
                 if success {
