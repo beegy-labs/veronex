@@ -304,7 +304,7 @@ pub(crate) fn make_app() -> axum::Router {
         pg_pool,
         cpu_snapshot_cache: Arc::new(dashmap::DashMap::new()),
         vram_pool: Arc::new(crate::infrastructure::outbound::capacity::vram_pool::VramPool::new()) as Arc<dyn crate::application::ports::outbound::concurrency_port::VramPoolPort>,
-        thermal: Arc::new(crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap::new(60)),
+        thermal: Arc::new(crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap::new(300)),
         capacity_repo: Arc::new(MockCapacityRepo),
         capacity_settings_repo: Arc::new(MockCapacitySettingsRepo),
         sync_trigger: Arc::new(tokio::sync::Notify::new()),

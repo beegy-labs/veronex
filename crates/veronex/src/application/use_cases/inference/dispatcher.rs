@@ -17,13 +17,13 @@ use crate::application::ports::outbound::provider_model_selection::ProviderModel
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::entities::{InferenceJob, LlmProvider};
-use crate::domain::enums::{JobSource, JobStatus, KeyTier, ProviderType, ThrottleLevel};
+use crate::domain::enums::{JobStatus, KeyTier, ProviderType, ThrottleLevel};
 use crate::domain::value_objects::JobStatusEvent;
 use crate::domain::constants::{
     GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
     MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
-    QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID,
-    QUEUE_JOBS_TEST as QUEUE_KEY_TEST, QUEUE_POLL_INTERVAL, QUEUE_PROCESSING,
+    QUEUE_POLL_INTERVAL, QUEUE_PROCESSING,
+    LOCALITY_BONUS_MS, ZSET_PEEK_K, ZSET_PEEK_K_MAX,
 };
 use crate::application::ports::outbound::concurrency_port::VramPermit;
 
@@ -33,11 +33,12 @@ use super::runner::run_job;
 
 // ── Provider filtering ──────────────────────────────────────────────────────
 
-/// Three-stage filter: active+type+tier → model availability → model selection.
+/// Four-stage filter: active+type+tier → model availability → model selection → preload exclusion.
 async fn filter_candidates(
     registry: &dyn LlmProviderRegistry,
     ollama_model_repo: &Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: &Option<Arc<dyn ProviderModelSelectionRepository>>,
+    vram_pool: &dyn VramPoolPort,
     provider_type: ProviderType,
     model: &str,
     gemini_tier: Option<&str>,
@@ -81,10 +82,21 @@ async fn filter_candidates(
                 _ => result.push(b),
             }
         }
-        result
-    } else {
-        candidates
+        candidates = result;
     }
+
+    // Stage 4: preload exclusion (Phase 6) — skip model+provider pairs
+    // with 3 consecutive preload failures within the 300s exclusion window.
+    if provider_type == ProviderType::Ollama && !model.is_empty() {
+        let before = candidates.len();
+        candidates.retain(|b| !vram_pool.is_preload_excluded(b.id, model));
+        let excluded = before - candidates.len();
+        if excluded > 0 {
+            tracing::debug!(%model, excluded, "providers excluded due to preload failures");
+        }
+    }
+
+    candidates
 }
 
 /// Score by VRAM + locality bonus, sort by tier preference, claim first available slot.
@@ -132,8 +144,20 @@ async fn score_and_claim(
         .find_map(|(provider, _)| {
             if !cb.is_allowed(provider.id) { return None; }
             match thermal.get_level(provider.id) {
-                ThrottleLevel::Hard => return None,
+                ThrottleLevel::Hard | ThrottleLevel::Cooldown => return None,
                 ThrottleLevel::Soft if vram.provider_active_requests(provider.id) > 0 => return None,
+                ThrottleLevel::RampUp => {
+                    // Phase 8: Cooldown ramp-up — force max_concurrent=1 during RampUp.
+                    // AIMD loop will gradually increase back to normal.
+                    let current_mc = vram.max_concurrent(provider.id, model);
+                    if current_mc > 1 {
+                        // Save pre-Hard snapshot if not already saved
+                        if vram.pre_hard_max_concurrent(provider.id, model) == 0 {
+                            vram.set_pre_hard_max_concurrent(provider.id, model, current_mc);
+                        }
+                        vram.set_max_concurrent(provider.id, model, 1);
+                    }
+                }
                 _ => {}
             }
             vram.try_reserve(provider.id, model).map(|permit| (provider, permit))
@@ -208,7 +232,7 @@ pub(super) fn spawn_job_direct(
             return;
         }
         match thermal.get_level(provider_id) {
-            ThrottleLevel::Hard => { tracing::warn!(job_id = %uuid, "direct spawn skipped — hard throttle"); return; }
+            ThrottleLevel::Hard | ThrottleLevel::Cooldown => { tracing::warn!(job_id = %uuid, "direct spawn skipped — hard/cooldown throttle"); return; }
             ThrottleLevel::Soft if vram_pool.provider_active_requests(provider_id) > 0 => {
                 tracing::debug!(job_id = %uuid, "direct spawn skipped — soft throttle"); return;
             }
@@ -260,125 +284,189 @@ pub(super) async fn queue_dispatcher_loop(
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
     shutdown: CancellationToken,
 ) {
-    tracing::info!("queue dispatcher started — priority: {QUEUE_KEY_API_PAID} > {QUEUE_KEY_API} > {QUEUE_KEY_TEST}");
-    let source_queues: &[&str] = &[QUEUE_KEY_API_PAID, QUEUE_KEY_API, QUEUE_KEY_TEST];
+    tracing::info!("queue dispatcher started — ZSET scoring (locality + age × perf_factor)");
 
     loop {
-        let result = tokio::select! {
+        // ── 1. Peek top-K from ZSET ─────────────────────────────────────
+        let peek_result = tokio::select! {
             biased;
             _ = shutdown.cancelled() => break,
-            r = valkey.queue_priority_pop(source_queues, QUEUE_PROCESSING) => r,
+            r = valkey.zset_peek(adaptive_k(&valkey).await) => r,
         };
 
-        let payload = match result {
-            Ok(None) => { tokio::time::sleep(QUEUE_POLL_INTERVAL).await; continue; }
-            Ok(Some(v)) => v,
-            Err(e) => { tracing::error!("dispatcher pop error: {e}"); tokio::time::sleep(QUEUE_ERROR_BACKOFF).await; continue; }
+        let candidates_raw = match peek_result {
+            Ok(v) if v.is_empty() => { tokio::time::sleep(QUEUE_POLL_INTERVAL).await; continue; }
+            Ok(v) => v,
+            Err(e) => { tracing::error!("dispatcher ZSET peek error: {e}"); tokio::time::sleep(QUEUE_ERROR_BACKOFF).await; continue; }
         };
 
-        let uuid = match Uuid::parse_str(&payload) {
-            Ok(u) => u,
-            Err(e) => { tracing::error!("invalid UUID '{payload}': {e}"); continue; }
-        };
+        let now_ms = chrono::Utc::now().timestamp_millis() as f64;
 
-        // Load job from memory or DB
-        let (job, gemini_tier, key_tier) = if let Some(entry) = jobs.get(&uuid) {
-            (entry.job.clone(), entry.gemini_tier.clone(), entry.key_tier)
-        } else {
-            let job_id = crate::domain::value_objects::JobId(uuid);
-            match job_repo.get(&job_id).await {
-                Ok(Some(j)) => {
-                    jobs.entry(uuid).or_insert_with(|| JobEntry {
-                        job: j.clone(), status: j.status,
-                        tokens: Vec::with_capacity(INITIAL_TOKEN_CAPACITY),
-                        done: false, api_key_id: None,
-                        notify: Arc::new(Notify::new()),
-                        cancel_notify: Arc::new(Notify::new()),
-                        gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
-                    });
-                    (j, None, None)
+        // ── 2. Score each candidate in Rust ─────────────────────────────
+        // Load job metadata, compute final_score = zset_score - locality_bonus - age_bonus
+        let mut scored: Vec<(String, f64, crate::domain::entities::InferenceJob, Option<String>, Option<KeyTier>)> = Vec::new();
+
+        for (job_id_str, zset_score) in &candidates_raw {
+            let uuid = match Uuid::parse_str(job_id_str) {
+                Ok(u) => u,
+                Err(e) => { tracing::error!("invalid UUID '{job_id_str}': {e}"); continue; }
+            };
+
+            // Load job from memory or DB
+            let (job, gemini_tier, key_tier) = if let Some(entry) = jobs.get(&uuid) {
+                (entry.job.clone(), entry.gemini_tier.clone(), entry.key_tier)
+            } else {
+                let jid = crate::domain::value_objects::JobId(uuid);
+                match job_repo.get(&jid).await {
+                    Ok(Some(j)) => {
+                        jobs.entry(uuid).or_insert_with(|| JobEntry {
+                            job: j.clone(), status: j.status,
+                            tokens: Vec::with_capacity(INITIAL_TOKEN_CAPACITY),
+                            done: false, api_key_id: None,
+                            notify: Arc::new(Notify::new()),
+                            cancel_notify: Arc::new(Notify::new()),
+                            gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
+                        });
+                        (j, None, None)
+                    }
+                    Ok(None) => {
+                        tracing::warn!(%uuid, "queued job not in DB — removing from ZSET");
+                        let _ = valkey.zset_cancel(job_id_str, "").await;
+                        continue;
+                    }
+                    Err(e) => { tracing::error!(%uuid, "failed to load job: {e}"); continue; }
                 }
-                Ok(None) => { tracing::warn!(%uuid, "queued job not in DB — skipping"); continue; }
-                Err(e) => { tracing::error!(%uuid, "failed to load job: {e}"); continue; }
-            }
-        };
+            };
 
-        // Find provider + claim VRAM
-        let model = job.model_name.as_str();
-        let candidates = filter_candidates(
-            registry.as_ref(), &ollama_model_repo, &model_selection_repo,
-            job.provider_type, model, gemini_tier.as_deref(),
-        ).await;
+            let model = job.model_name.as_str();
 
-        // No eligible candidates → fail immediately (e.g. model disabled on all providers)
-        if candidates.is_empty() {
-            tracing::warn!(%uuid, model, "no eligible provider — failing job");
-            let uuid_str = uuid.to_string();
-            let _ = valkey.list_remove(QUEUE_PROCESSING, &uuid_str).await;
-            fail_job_no_provider(&jobs, &job_repo, uuid, "no eligible provider for this model").await;
+            // Locality bonus: model already loaded on some provider?
+            let locality = if vram_pool.is_model_loaded(model) {
+                LOCALITY_BONUS_MS
+            } else {
+                0.0
+            };
+
+            // Age bonus: wait_ms × 0.25 × perf_factor
+            let wait_ms = (now_ms - zset_score).max(0.0);
+            let pf = thermal.global_perf_factor();
+            let age = wait_ms * 0.25 * pf as f64;
+
+            let final_score = zset_score - locality - age;
+
+            scored.push((job_id_str.clone(), final_score, job, gemini_tier, key_tier));
+        }
+
+        if scored.is_empty() {
+            tokio::time::sleep(QUEUE_POLL_INTERVAL).await;
             continue;
         }
 
-        let claimed = score_and_claim(
-            candidates, provider_dispatch.as_ref(), vram_pool.as_ref(),
-            thermal.as_ref(), circuit_breaker.as_ref(), model,
-            key_tier.as_ref(), job.provider_type,
-        ).await;
+        // Sort by final_score ascending (lowest = highest priority)
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        match claimed {
-            Some((cfg, permit)) => {
-                let pid = cfg.id;
-                let is_free = cfg.is_free_tier;
-                let adapter = provider_dispatch.build_adapter(&cfg);
-                tracing::info!(%uuid, provider_id = %pid, name = %cfg.name, "dispatching");
+        // ── 3. Try to claim + dispatch the best candidate ───────────────
+        let mut dispatched = false;
 
-                let owner_key = crate::domain::constants::job_owner_key(uuid);
-                let _ = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await;
+        for (job_id_str, _final_score, job, gemini_tier, key_tier) in scored {
+            let uuid = Uuid::parse_str(&job_id_str).expect("already validated");
+            let model = job.model_name.as_str();
 
-                let (jobs_c, repo_c, vk_c, obs_c, mm_c) = (
-                    jobs.clone(), job_repo.clone(), valkey.clone(),
-                    observability.clone(), model_manager.clone(),
-                );
-                let (ev_c, cb_c, pd_c, iid_c, cn_c) = (
-                    event_tx.clone(), circuit_breaker.clone(), provider_dispatch.clone(),
-                    instance_id.clone(), cancel_notifiers.clone(),
-                );
-                let uuid_str = uuid.to_string();
+            // Find provider + claim VRAM
+            let candidates = filter_candidates(
+                registry.as_ref(), &ollama_model_repo, &model_selection_repo,
+                vram_pool.as_ref(), job.provider_type, model, gemini_tier.as_deref(),
+            ).await;
 
-                tokio::spawn(async move {
-                    let _permit = permit;
-                    match run_job(
-                        jobs_c, adapter, repo_c, Some(vk_c.clone()), obs_c, mm_c,
-                        pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
-                    ).await {
-                        Ok(Some(latency_ms)) => {
-                            cb_c.on_success(pid);
-                            cb_c.record_latency(pid, latency_ms as u64);
-                        }
-                        Ok(None) => {} // cancelled or ownership lost
-                        Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
-                    }
-                    let _ = vk_c.list_remove(QUEUE_PROCESSING, &uuid_str).await;
-                    let _ = vk_c.kv_del(&owner_key).await;
-                });
-            }
-            None => {
-                // Candidates exist but VRAM/thermal/circuit-breaker blocked — re-queue
-                tracing::debug!(%uuid, "no provider slot available, re-queuing");
-                let uuid_str = uuid.to_string();
-                let _ = valkey.list_remove(QUEUE_PROCESSING, &uuid_str).await;
-                let requeue = match (job.source, key_tier) {
-                    (JobSource::Test, _) => QUEUE_KEY_TEST,
-                    (_, Some(KeyTier::Paid)) => QUEUE_KEY_API_PAID,
-                    _ => QUEUE_KEY_API,
-                };
-                if let Err(e) = valkey.queue_push_front(requeue, uuid).await {
-                    tracing::error!(%uuid, "re-queue failed: {e}");
+            if candidates.is_empty() {
+                // No eligible provider → atomically remove from ZSET and fail
+                let claimed = valkey.zset_claim(&job_id_str, QUEUE_PROCESSING, model).await.unwrap_or(false);
+                if claimed {
+                    let _ = valkey.list_remove(QUEUE_PROCESSING, &job_id_str).await;
+                    fail_job_no_provider(&jobs, &job_repo, uuid, "no eligible provider for this model").await;
+                    dispatched = true;
                 }
-                tokio::time::sleep(NO_PROVIDER_BACKOFF).await;
+                continue;
             }
+
+            let claimed_provider = score_and_claim(
+                candidates, provider_dispatch.as_ref(), vram_pool.as_ref(),
+                thermal.as_ref(), circuit_breaker.as_ref(), model,
+                key_tier.as_ref(), job.provider_type,
+            ).await;
+
+            let Some((cfg, permit)) = claimed_provider else {
+                // Provider busy — skip this job, try next in window
+                continue;
+            };
+
+            // Atomic ZSET claim (ZREM + RPUSH processing + DECR demand)
+            match valkey.zset_claim(&job_id_str, QUEUE_PROCESSING, model).await {
+                Ok(true) => { /* claimed successfully */ }
+                Ok(false) => {
+                    // Another instance already took it — release VRAM and try next
+                    drop(permit);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!(%uuid, "ZSET claim error: {e}");
+                    drop(permit);
+                    continue;
+                }
+            }
+
+            let pid = cfg.id;
+            let is_free = cfg.is_free_tier;
+            let adapter = provider_dispatch.build_adapter(&cfg);
+            tracing::info!(%uuid, provider_id = %pid, name = %cfg.name, "dispatching");
+
+            let owner_key = crate::domain::constants::job_owner_key(uuid);
+            let _ = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await;
+
+            let (jobs_c, repo_c, vk_c, obs_c, mm_c) = (
+                jobs.clone(), job_repo.clone(), valkey.clone(),
+                observability.clone(), model_manager.clone(),
+            );
+            let (ev_c, cb_c, pd_c, iid_c, cn_c) = (
+                event_tx.clone(), circuit_breaker.clone(), provider_dispatch.clone(),
+                instance_id.clone(), cancel_notifiers.clone(),
+            );
+
+            tokio::spawn(async move {
+                let _permit = permit;
+                match run_job(
+                    jobs_c, adapter, repo_c, Some(vk_c.clone()), obs_c, mm_c,
+                    pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
+                ).await {
+                    Ok(Some(latency_ms)) => {
+                        cb_c.on_success(pid);
+                        cb_c.record_latency(pid, latency_ms as u64);
+                    }
+                    Ok(None) => {} // cancelled or ownership lost
+                    Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
+                }
+                let _ = vk_c.list_remove(QUEUE_PROCESSING, &job_id_str).await;
+                let _ = vk_c.kv_del(&owner_key).await;
+            });
+
+            dispatched = true;
+            break;
+        }
+
+        if !dispatched {
+            // All candidates in window had no available provider slots
+            tokio::time::sleep(NO_PROVIDER_BACKOFF).await;
         }
     }
 
     tracing::info!("queue dispatcher stopped");
+}
+
+/// Adaptive K: scale window size based on ZSET length.
+/// K = min(ZSET_size / 3, ZSET_PEEK_K_MAX), floor at ZSET_PEEK_K.
+async fn adaptive_k(valkey: &Arc<dyn ValkeyPort>) -> u64 {
+    match valkey.zset_len().await {
+        Ok(len) if len > ZSET_PEEK_K * 3 => (len / 3).min(ZSET_PEEK_K_MAX),
+        _ => ZSET_PEEK_K,
+    }
 }

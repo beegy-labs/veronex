@@ -10,7 +10,7 @@ use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::domain::services::encryption::{decrypt_or_legacy, encrypt};
 
 /// Column list shared by all SELECT queries on llm_providers.
-const PROVIDER_COLS: &str = "id, name, provider_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, is_free_tier, status, registered_at";
+const PROVIDER_COLS: &str = "id, name, provider_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, is_free_tier, num_parallel, status, registered_at";
 
 pub struct PostgresProviderRegistry {
     pool: PgPool,
@@ -53,6 +53,7 @@ fn row_to_provider(row: &sqlx::postgres::PgRow, master_key: &[u8; 32]) -> Result
     let gpu_index: Option<i16> = row.try_get("gpu_index").context("gpu_index")?;
     let server_id: Option<Uuid> = row.try_get("server_id").context("server_id")?;
     let is_free_tier: bool = row.try_get("is_free_tier").context("is_free_tier")?;
+    let num_parallel: i16 = row.try_get("num_parallel").context("num_parallel")?;
     let status_str: String = row.try_get("status").context("status")?;
     let registered_at: DateTime<Utc> = row.try_get("registered_at").context("registered_at")?;
 
@@ -75,6 +76,7 @@ fn row_to_provider(row: &sqlx::postgres::PgRow, master_key: &[u8; 32]) -> Result
         gpu_index,
         server_id,
         is_free_tier,
+        num_parallel,
         status: str_to_status(&status_str),
         registered_at,
     }, needs_re_encrypt))
@@ -119,8 +121,8 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
             "INSERT INTO llm_providers
                  (id, name, provider_type, url, api_key_encrypted, is_active,
                   total_vram_mb, gpu_index, server_id,
-                  is_free_tier, status, registered_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                  is_free_tier, num_parallel, status, registered_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(provider.id)
         .bind(&provider.name)
@@ -132,6 +134,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .bind(provider.gpu_index)
         .bind(provider.server_id)
         .bind(provider.is_free_tier)
+        .bind(provider.num_parallel)
         .bind(status_to_str(&provider.status))
         .bind(provider.registered_at)
         .execute(&self.pool)
@@ -244,8 +247,9 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
                  gpu_index = $5,
                  server_id = $6,
                  is_free_tier = $7,
-                 is_active = $8
-             WHERE id = $9",
+                 num_parallel = $8,
+                 is_active = $9
+             WHERE id = $10",
         )
         .bind(&provider.name)
         .bind(&provider.url)
@@ -254,6 +258,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .bind(provider.gpu_index)
         .bind(provider.server_id)
         .bind(provider.is_free_tier)
+        .bind(provider.num_parallel)
         .bind(provider.is_active)
         .bind(provider.id)
         .execute(&self.pool)

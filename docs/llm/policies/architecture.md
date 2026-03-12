@@ -83,9 +83,9 @@ Notable: `CachingProviderRegistry` decorates `PostgresProviderRegistry` (5s TTL)
 ## Multi-Provider Routing (Intelligence Scheduler)
 
 ```
-Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → RPUSH veronex:queue:jobs
-      OR POST /v1/test/completions  (Bearer JWT, source=Test)  → RPUSH veronex:queue:jobs:test
-       → queue_dispatcher_loop: Lua priority pop [paid, jobs, test] → processing list
+Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → ZADD queue:zset (score=now_ms-tier_bonus)
+      OR POST /v1/test/completions  (Bearer JWT, source=Test)  → ZADD queue:zset (score=now_ms-0)
+       → queue_dispatcher_loop: ZRANGE peek top-K → Rust scoring → Lua ZREM claim → processing list
          → 2-stage model filter:
            1. providers_for_model() → has the model installed?
            2. list_enabled() → model enabled on this provider?
@@ -94,7 +94,7 @@ Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → RPUSH verone
          → gate chain:
            circuit_breaker → thermal (per-provider, auto-detected GPU/CPU profile)
            → concurrency limit (AIMD-learned max_concurrent)
-           → vram_pool.try_reserve() → VramPermit or re-enqueue
+           → vram_pool.try_reserve() → VramPermit or skip to next in window
          → tokio::spawn run_job(permit)
            → OllamaAdapter | GeminiAdapter → SSE tokens
            → permit dropped (auto) → KV cache returned, weight stays
@@ -177,5 +177,5 @@ Background loops:
 | `CircuitBreakerPort` | `CircuitBreakerMap` | Per-provider failure isolation (Closed→Open→HalfOpen) |
 | `ThermalPort` | `ThermalThrottleMap` | Per-provider GPU thermal throttle level (Normal/Soft/Hard) |
 | `LabSettingsRepository` | `PostgresLabSettingsRepository` | Feature flags (gemini_function_calling) |
-| `ValkeyPort`             | `ValkeyAdapter`          | Queue (push/pop/priority), KV (set/get/del), counters, pub/sub |
+| `ValkeyPort`             | `ValkeyAdapter`          | ZSET queue (enqueue/peek/claim/cancel), LIST legacy, KV, counters, pub/sub |
 | `MessageStore` | `S3MessageStore` | MinIO/AWS S3 message storage |

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -9,6 +9,8 @@ use crate::application::ports::outbound::concurrency_port::{
 };
 
 /// Per-model state within a provider's VRAM pool.
+///
+/// Scope: model × provider pair. All `Atomic*` fields are concurrency-safe.
 struct ModelState {
     weight_mb: u32,
     is_loaded: bool,
@@ -25,6 +27,53 @@ struct ModelState {
     baseline_p95_ms: AtomicU32,
     /// Counter for probe-slot scheduling (incremented on limit hits).
     probe_counter: AtomicU32,
+
+    // ── Phase 7 fields ──────────────────────────────────────────────────
+
+    /// Unix ms of last request completion (updated on VramPermit::drop).
+    last_active_at: Arc<AtomicU64>,
+    /// Preloader currently running for this model+provider.
+    is_preloading: AtomicBool,
+    /// Pull (download) in progress for this model+provider.
+    is_pulling: AtomicBool,
+    /// AIMD sample count (reset on evict).
+    sample_count: AtomicU32,
+    /// Consecutive preload failure count (reset on success).
+    preload_fail_count: AtomicU32,
+    /// Unix ms when 3-consecutive preload failure started (0 = normal).
+    /// filter_candidates excludes model+provider when `now - preload_failed_at < 300_000ms`.
+    preload_failed_at: AtomicU64,
+    /// Epoch start for ClickHouse aggregation (updated on evict).
+    learning_epoch_started_at: AtomicU64,
+    /// Governor share=0 dispatch block flag (avoids max_concurrent=0 deadlock).
+    dispatch_blocked: AtomicBool,
+    /// max_concurrent snapshot before Hard throttle (for RampUp exit condition).
+    pre_hard_max_concurrent: AtomicU32,
+}
+
+impl ModelState {
+    fn new(weight_mb: u32, is_loaded: bool, kv_per_request_mb: u32, max_concurrent: u32) -> Self {
+        Self {
+            weight_mb,
+            is_loaded,
+            kv_per_request_mb,
+            active_kv_mb: Arc::new(AtomicU32::new(0)),
+            active_count: Arc::new(AtomicU32::new(0)),
+            max_concurrent: AtomicU32::new(max_concurrent),
+            baseline_tps: AtomicU32::new(0),
+            baseline_p95_ms: AtomicU32::new(0),
+            probe_counter: AtomicU32::new(0),
+            last_active_at: Arc::new(AtomicU64::new(0)),
+            is_preloading: AtomicBool::new(false),
+            is_pulling: AtomicBool::new(false),
+            sample_count: AtomicU32::new(0),
+            preload_fail_count: AtomicU32::new(0),
+            preload_failed_at: AtomicU64::new(0),
+            learning_epoch_started_at: AtomicU64::new(0),
+            dispatch_blocked: AtomicBool::new(false),
+            pre_hard_max_concurrent: AtomicU32::new(0),
+        }
+    }
 }
 
 /// Per-provider VRAM state.
@@ -36,6 +85,13 @@ struct ProviderVramState {
     safety_permil: AtomicU32,
     /// Model name → model state.
     models: DashMap<String, ModelState>,
+
+    // ── Phase 7 fields ──────────────────────────────────────────────────
+
+    /// Provider is in standby mode (no active models expected).
+    is_standby: AtomicBool,
+    /// Unix ms until which a state transition is in progress.
+    transition_until: AtomicU64,
 }
 
 /// Default VRAM buffer reserved for system/driver overhead (MB).
@@ -76,6 +132,8 @@ impl VramPool {
                     reserved_kv_mb: Arc::new(AtomicU32::new(0)),
                     safety_permil: AtomicU32::new(DEFAULT_SAFETY_PERMIL),
                     models: DashMap::new(),
+                    is_standby: AtomicBool::new(false),
+                    transition_until: AtomicU64::new(0),
                 })
             })
             .value()
@@ -163,17 +221,7 @@ impl VramPoolPort for VramPool {
             // Create a zero-cost permit that tracks request count only.
             // Cold start: new models default to max_concurrent=1 until learned.
             let model_state = state.models.entry(model.to_string()).or_insert_with(|| {
-                ModelState {
-                    weight_mb: 0,
-                    is_loaded: false,
-                    kv_per_request_mb: 0,
-                    active_kv_mb: Arc::new(AtomicU32::new(0)),
-                    active_count: Arc::new(AtomicU32::new(0)),
-                    max_concurrent: AtomicU32::new(1),
-                    baseline_tps: AtomicU32::new(0),
-                    baseline_p95_ms: AtomicU32::new(0),
-                    probe_counter: AtomicU32::new(0),
-                }
+                ModelState::new(0, false, 0, 1)
             });
             // Adaptive concurrency check (even when VRAM is not probed).
             let pp = self.probe_permits.load(Ordering::Acquire);
@@ -183,8 +231,9 @@ impl VramPoolPort for VramPool {
             }
             model_state.active_count.fetch_add(1, Ordering::AcqRel);
             let active_count = model_state.active_count.clone();
+            let last_active = model_state.last_active_at.clone();
             let reserved_kv = state.reserved_kv_mb.clone();
-            return Some(VramPermit::new(0, reserved_kv, active_count));
+            return Some(VramPermit::with_last_active(0, reserved_kv, active_count, last_active));
         }
 
         let model_entry = state.models.get(model);
@@ -262,38 +311,19 @@ impl VramPoolPort for VramPool {
                         .and_modify(|ms| {
                             ms.is_loaded = true;
                         })
-                        .or_insert_with(|| ModelState {
-                            weight_mb: weight_cost,
-                            is_loaded: true,
-                            kv_per_request_mb: kv_mb,
-                            active_kv_mb: Arc::new(AtomicU32::new(0)),
-                            active_count: Arc::new(AtomicU32::new(0)),
-                            max_concurrent: AtomicU32::new(1),
-                            baseline_tps: AtomicU32::new(0),
-                            baseline_p95_ms: AtomicU32::new(0),
-                            probe_counter: AtomicU32::new(0),
-                        });
+                        .or_insert_with(|| ModelState::new(weight_cost, true, kv_mb, 1));
                 }
 
                 // Track per-model active KV and count.
                 let model_state = state.models.entry(model.to_string()).or_insert_with(|| {
-                    ModelState {
-                        weight_mb: weight_cost,
-                        is_loaded: need_load_weight,
-                        kv_per_request_mb: kv_mb,
-                        active_kv_mb: Arc::new(AtomicU32::new(0)),
-                        active_count: Arc::new(AtomicU32::new(0)),
-                        max_concurrent: AtomicU32::new(1),
-                        baseline_tps: AtomicU32::new(0),
-                        baseline_p95_ms: AtomicU32::new(0),
-                        probe_counter: AtomicU32::new(0),
-                    }
+                    ModelState::new(weight_cost, need_load_weight, kv_mb, 1)
                 });
                 model_state.active_kv_mb.fetch_add(kv_mb, Ordering::AcqRel);
                 model_state.active_count.fetch_add(1, Ordering::AcqRel);
                 let active_count = model_state.active_count.clone();
+                let last_active = model_state.last_active_at.clone();
 
-                return Some(VramPermit::new(kv_mb, reserved_kv, active_count));
+                return Some(VramPermit::with_last_active(kv_mb, reserved_kv, active_count, last_active));
             }
             // CAS failed — another thread won the race; retry.
         }
@@ -340,17 +370,7 @@ impl VramPoolPort for VramPool {
                 ms.weight_mb = profile.weight_mb;
                 ms.kv_per_request_mb = profile.kv_per_request_mb;
             })
-            .or_insert_with(|| ModelState {
-                weight_mb: profile.weight_mb,
-                is_loaded: false,
-                kv_per_request_mb: profile.kv_per_request_mb,
-                active_kv_mb: Arc::new(AtomicU32::new(0)),
-                active_count: Arc::new(AtomicU32::new(0)),
-                max_concurrent: AtomicU32::new(0),
-                baseline_tps: AtomicU32::new(0),
-                baseline_p95_ms: AtomicU32::new(0),
-                probe_counter: AtomicU32::new(0),
-            });
+            .or_insert_with(|| ModelState::new(profile.weight_mb, false, profile.kv_per_request_mb, 0));
     }
 
     fn mark_model_loaded(&self, provider_id: Uuid, model: &str, weight_mb: u32) {
@@ -362,23 +382,17 @@ impl VramPoolPort for VramPool {
                 ms.is_loaded = true;
                 ms.weight_mb = weight_mb;
             })
-            .or_insert_with(|| ModelState {
-                weight_mb,
-                is_loaded: true,
-                kv_per_request_mb: 128,
-                active_kv_mb: Arc::new(AtomicU32::new(0)),
-                active_count: Arc::new(AtomicU32::new(0)),
-                max_concurrent: AtomicU32::new(0),
-                baseline_tps: AtomicU32::new(0),
-                baseline_p95_ms: AtomicU32::new(0),
-                probe_counter: AtomicU32::new(0),
-            });
+            .or_insert_with(|| ModelState::new(weight_mb, true, 128, 0));
     }
 
     fn mark_model_unloaded(&self, provider_id: Uuid, model: &str) {
         let state = self.get_or_create(provider_id);
         if let Some(mut ms) = state.models.get_mut(model) {
             ms.is_loaded = false;
+            ms.sample_count.store(0, Ordering::Release);
+            ms.is_preloading.store(false, Ordering::Release);
+            let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+            ms.learning_epoch_started_at.store(now_ms, Ordering::Release);
         }
     }
 
@@ -409,23 +423,19 @@ impl VramPoolPort for VramPool {
             .unwrap_or_default()
     }
 
+    fn is_model_loaded(&self, model: &str) -> bool {
+        self.providers.iter().any(|entry| {
+            entry.value().models.get(model).is_some_and(|ms| ms.is_loaded)
+        })
+    }
+
     fn set_max_concurrent(&self, provider_id: Uuid, model: &str, limit: u32) {
         let state = self.get_or_create(provider_id);
         state
             .models
             .entry(model.to_string())
             .and_modify(|ms| { ms.max_concurrent.store(limit, Ordering::Release); })
-            .or_insert_with(|| ModelState {
-                weight_mb: 0,
-                is_loaded: false,
-                kv_per_request_mb: 128,
-                active_kv_mb: Arc::new(AtomicU32::new(0)),
-                active_count: Arc::new(AtomicU32::new(0)),
-                max_concurrent: AtomicU32::new(limit),
-                baseline_tps: AtomicU32::new(0),
-                baseline_p95_ms: AtomicU32::new(0),
-                probe_counter: AtomicU32::new(0),
-            });
+            .or_insert_with(|| ModelState::new(0, false, 128, limit));
     }
 
     fn max_concurrent(&self, provider_id: Uuid, model: &str) -> u32 {
@@ -441,16 +451,10 @@ impl VramPoolPort for VramPool {
             .models
             .entry(model.to_string())
             .and_modify(|ms| { ms.baseline_tps.store(tps_x100, Ordering::Release); })
-            .or_insert_with(|| ModelState {
-                weight_mb: 0,
-                is_loaded: false,
-                kv_per_request_mb: 128,
-                active_kv_mb: Arc::new(AtomicU32::new(0)),
-                active_count: Arc::new(AtomicU32::new(0)),
-                max_concurrent: AtomicU32::new(1),
-                baseline_tps: AtomicU32::new(tps_x100),
-                baseline_p95_ms: AtomicU32::new(0),
-                probe_counter: AtomicU32::new(0),
+            .or_insert_with(|| {
+                let ms = ModelState::new(0, false, 128, 1);
+                ms.baseline_tps.store(tps_x100, Ordering::Release);
+                ms
             });
     }
 
@@ -467,16 +471,10 @@ impl VramPoolPort for VramPool {
             .models
             .entry(model.to_string())
             .and_modify(|ms| { ms.baseline_p95_ms.store(p95_ms, Ordering::Release); })
-            .or_insert_with(|| ModelState {
-                weight_mb: 0,
-                is_loaded: false,
-                kv_per_request_mb: 128,
-                active_kv_mb: Arc::new(AtomicU32::new(0)),
-                active_count: Arc::new(AtomicU32::new(0)),
-                max_concurrent: AtomicU32::new(1),
-                baseline_tps: AtomicU32::new(0),
-                baseline_p95_ms: AtomicU32::new(p95_ms),
-                probe_counter: AtomicU32::new(0),
+            .or_insert_with(|| {
+                let ms = ModelState::new(0, false, 128, 1);
+                ms.baseline_p95_ms.store(p95_ms, Ordering::Release);
+                ms
             });
     }
 
@@ -490,5 +488,438 @@ impl VramPoolPort for VramPool {
     fn set_probe_config(&self, permits: i32, rate: i32) {
         self.probe_permits.store(permits, Ordering::Release);
         self.probe_rate.store(rate.max(0) as u32, Ordering::Release);
+    }
+
+    // ── Phase 7: model state fields ─────────────────────────────────────
+
+    fn is_preloading(&self, provider_id: Uuid, model: &str) -> bool {
+        self.providers.get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.is_preloading.load(Ordering::Acquire)))
+            .unwrap_or(false)
+    }
+
+    fn set_preloading(&self, provider_id: Uuid, model: &str, value: bool) {
+        let state = self.get_or_create(provider_id);
+        if let Some(ms) = state.models.get(model) {
+            ms.is_preloading.store(value, Ordering::Release);
+        }
+    }
+
+    fn preload_fail_count(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.providers.get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.preload_fail_count.load(Ordering::Acquire)))
+            .unwrap_or(0)
+    }
+
+    fn record_preload_failure(&self, provider_id: Uuid, model: &str) {
+        let state = self.get_or_create(provider_id);
+        if let Some(ms) = state.models.get(model) {
+            let count = ms.preload_fail_count.fetch_add(1, Ordering::AcqRel) + 1;
+            if count >= 3 {
+                let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                ms.preload_failed_at.store(now_ms, Ordering::Release);
+                ms.preload_fail_count.store(0, Ordering::Release); // reset for next cycle
+            }
+        }
+    }
+
+    fn record_preload_success(&self, provider_id: Uuid, model: &str) {
+        let state = self.get_or_create(provider_id);
+        if let Some(ms) = state.models.get(model) {
+            ms.preload_fail_count.store(0, Ordering::Release);
+            ms.preload_failed_at.store(0, Ordering::Release);
+        }
+    }
+
+    fn preload_failed_at(&self, provider_id: Uuid, model: &str) -> u64 {
+        self.providers.get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.preload_failed_at.load(Ordering::Acquire)))
+            .unwrap_or(0)
+    }
+
+    fn is_preload_excluded(&self, provider_id: Uuid, model: &str) -> bool {
+        let failed_at = self.preload_failed_at(provider_id, model);
+        if failed_at == 0 { return false; }
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        now_ms.saturating_sub(failed_at) < 300_000
+    }
+
+    fn is_pulling(&self, provider_id: Uuid, model: &str) -> bool {
+        self.providers.get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.is_pulling.load(Ordering::Acquire)))
+            .unwrap_or(false)
+    }
+
+    fn set_pulling(&self, provider_id: Uuid, model: &str, value: bool) {
+        let state = self.get_or_create(provider_id);
+        if let Some(ms) = state.models.get(model) {
+            ms.is_pulling.store(value, Ordering::Release);
+        }
+    }
+
+    fn is_dispatch_blocked(&self, provider_id: Uuid, model: &str) -> bool {
+        self.providers.get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.dispatch_blocked.load(Ordering::Acquire)))
+            .unwrap_or(false)
+    }
+
+    fn set_dispatch_blocked(&self, provider_id: Uuid, model: &str, value: bool) {
+        let state = self.get_or_create(provider_id);
+        if let Some(ms) = state.models.get(model) {
+            ms.dispatch_blocked.store(value, Ordering::Release);
+        }
+    }
+
+    fn pre_hard_max_concurrent(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.providers.get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.pre_hard_max_concurrent.load(Ordering::Acquire)))
+            .unwrap_or(0)
+    }
+
+    fn set_pre_hard_max_concurrent(&self, provider_id: Uuid, model: &str, value: u32) {
+        let state = self.get_or_create(provider_id);
+        if let Some(ms) = state.models.get(model) {
+            ms.pre_hard_max_concurrent.store(value, Ordering::Release);
+        }
+    }
+
+    fn idle_since_secs(&self, provider_id: Uuid, model: &str) -> u64 {
+        let last = self.providers.get(&provider_id)
+            .and_then(|s| s.models.get(model).map(|ms| ms.last_active_at.load(Ordering::Acquire)))
+            .unwrap_or(0);
+        if last == 0 { return u64::MAX; } // never active
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        now_ms.saturating_sub(last) / 1000
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // ── should_block tests ───────────────────────────────────────────────
+
+    fn make_model_state(max_concurrent: u32, active: u32) -> ModelState {
+        let ms = ModelState::new(0, false, 0, max_concurrent);
+        ms.active_count.store(active, Ordering::Release);
+        ms
+    }
+
+    #[test]
+    fn unlimited_never_blocks() {
+        let ms = make_model_state(0, 1000);
+        assert!(!VramPool::should_block(&ms, 0, 3));
+        assert!(!VramPool::should_block(&ms, 5, 3));
+        assert!(!VramPool::should_block(&ms, -5, 3));
+    }
+
+    #[test]
+    fn no_probe_blocks_at_limit() {
+        let ms = make_model_state(4, 3);
+        assert!(!VramPool::should_block(&ms, 0, 3)); // below limit
+        let ms = make_model_state(4, 4);
+        assert!(VramPool::should_block(&ms, 0, 3)); // at limit
+        let ms = make_model_state(4, 5);
+        assert!(VramPool::should_block(&ms, 0, 3)); // above limit
+    }
+
+    #[test]
+    fn probe_up_hard_cap() {
+        // probe_permits=2, limit=4 → hard cap at 6
+        let ms = make_model_state(4, 6);
+        assert!(VramPool::should_block(&ms, 2, 3)); // at hard cap
+    }
+
+    #[test]
+    fn probe_up_allows_every_nth() {
+        // limit=4, active=4 (in probe zone), probe_rate=3
+        // Should allow every 3rd attempt
+        let ms = make_model_state(4, 4);
+        let results: Vec<bool> = (0..6)
+            .map(|_| VramPool::should_block(&ms, 2, 3))
+            .collect();
+        // probe_counter starts at 0: 0%3==0 → allow, 1%3!=0 → block, 2%3!=0 → block, 3%3==0 → allow...
+        assert_eq!(results, vec![false, true, true, false, true, true]);
+    }
+
+    #[test]
+    fn probe_down_blocks_every_nth() {
+        // limit=4, probe_permits=-1 → effective=3, active=3 (in probe zone), probe_rate=3
+        let ms = make_model_state(4, 3);
+        let results: Vec<bool> = (0..6)
+            .map(|_| VramPool::should_block(&ms, -1, 3))
+            .collect();
+        // 0%3==0 → block, 1%3!=0 → pass, 2%3!=0 → pass, 3%3==0 → block...
+        assert_eq!(results, vec![true, false, false, true, false, false]);
+    }
+
+    #[test]
+    fn probe_down_hard_limit_still_enforced() {
+        let ms = make_model_state(4, 4);
+        assert!(VramPool::should_block(&ms, -1, 3)); // at original limit
+    }
+
+    #[test]
+    fn probe_down_minimum_effective_is_1() {
+        // limit=2, probe_permits=-5 → effective = max(1, 2-5) = 1
+        let ms = make_model_state(2, 0);
+        assert!(!VramPool::should_block(&ms, -5, 3)); // active < effective
+    }
+
+    #[test]
+    fn probe_rate_zero_with_probe_up_blocks() {
+        let ms = make_model_state(4, 4);
+        assert!(VramPool::should_block(&ms, 2, 0)); // probe_rate=0 → always block in zone
+    }
+
+    // ── compute_available tests ──────────────────────────────────────────
+
+    fn make_provider_state(total: u32, kv: u32, safety: u32) -> ProviderVramState {
+        ProviderVramState {
+            total_mb: AtomicU32::new(total),
+            reserved_kv_mb: Arc::new(AtomicU32::new(kv)),
+            safety_permil: AtomicU32::new(safety),
+            models: DashMap::new(),
+            is_standby: AtomicBool::new(false),
+            transition_until: AtomicU64::new(0),
+        }
+    }
+
+    #[test]
+    fn zero_total_returns_max() {
+        let state = make_provider_state(0, 0, 100);
+        assert_eq!(VramPool::compute_available(&state), i64::MAX);
+    }
+
+    #[test]
+    fn available_deducts_all_components() {
+        // total=10000, loaded=3000, kv=500, buffer=512, safety=10% of 10000=1000
+        let state = make_provider_state(10000, 500, 100);
+        let ms = ModelState::new(3000, true, 128, 4);
+        state.models.insert("model_a".to_string(), ms);
+        let available = VramPool::compute_available(&state);
+        // 10000 - 3000 - 500 - 512 - 1000 = 4988
+        assert_eq!(available, 4988);
+    }
+
+    #[test]
+    fn unloaded_models_not_counted_in_weight() {
+        let state = make_provider_state(10000, 0, 100);
+        let ms = ModelState::new(5000, false, 128, 4); // not loaded
+        state.models.insert("model_a".to_string(), ms);
+        let available = VramPool::compute_available(&state);
+        // 10000 - 0(unloaded) - 0(kv) - 512 - 1000 = 8488
+        assert_eq!(available, 8488);
+    }
+
+    #[test]
+    fn safety_permil_200_is_20_percent() {
+        let state = make_provider_state(10000, 0, 200);
+        let available = VramPool::compute_available(&state);
+        // 10000 - 0 - 0 - 512 - 2000(20%) = 7488
+        assert_eq!(available, 7488);
+    }
+
+    #[test]
+    fn available_can_go_negative() {
+        // Overcommitted: more loaded than total
+        let state = make_provider_state(1000, 0, 100);
+        let ms = ModelState::new(2000, true, 128, 4);
+        state.models.insert("big_model".to_string(), ms);
+        let available = VramPool::compute_available(&state);
+        assert!(available < 0, "available={available} should be negative");
+    }
+
+    // ── VramPool integration tests ───────────────────────────────────────
+
+    #[test]
+    fn try_reserve_zero_total_always_allows() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        // total_vram=0 (not probed) → always allow
+        let permit = pool.try_reserve(pid, "test_model");
+        assert!(permit.is_some());
+    }
+
+    #[test]
+    fn try_reserve_respects_concurrency_limit() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_probe_config(0, 0); // no probing
+        pool.set_max_concurrent(pid, "model", 2);
+
+        let p1 = pool.try_reserve(pid, "model");
+        let p2 = pool.try_reserve(pid, "model");
+        let p3 = pool.try_reserve(pid, "model");
+
+        assert!(p1.is_some());
+        assert!(p2.is_some());
+        assert!(p3.is_none(), "should block at max_concurrent=2");
+
+        // Drop one permit → next should succeed
+        drop(p1);
+        let p4 = pool.try_reserve(pid, "model");
+        assert!(p4.is_some());
+    }
+
+    #[test]
+    fn try_reserve_vram_insufficient() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_total_vram(pid, 2000); // 2GB total
+        pool.mark_model_loaded(pid, "big_model", 1800); // 1.8GB loaded
+        pool.set_max_concurrent(pid, "big_model", 10);
+
+        // KV needs at least 32MB, but available = 2000 - 1800 - 0 - 512 - 200 < 0
+        let permit = pool.try_reserve(pid, "big_model");
+        assert!(permit.is_none(), "should fail: insufficient VRAM");
+    }
+
+    #[test]
+    fn try_reserve_apu_unified_memory_bypass() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_total_vram(pid, 1024); // DRM reports only 1GB
+        pool.mark_model_loaded(pid, "qwen3:8b", 5000); // 5GB loaded (exceeds DRM total)
+        pool.set_max_concurrent(pid, "qwen3:8b", 4);
+        pool.set_probe_config(0, 0);
+
+        // APU path: loaded_weight > total → trust concurrency limit, not VRAM
+        let permit = pool.try_reserve(pid, "qwen3:8b");
+        assert!(permit.is_some(), "APU path should allow when loaded > total");
+    }
+
+    #[test]
+    fn permit_drop_releases_kv_and_count() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_total_vram(pid, 50000);
+        pool.mark_model_loaded(pid, "model", 5000);
+        pool.set_max_concurrent(pid, "model", 10);
+        pool.set_probe_config(0, 0);
+
+        let p1 = pool.try_reserve(pid, "model").unwrap();
+        assert_eq!(pool.active_requests(pid, "model"), 1);
+        let used_before = pool.used_vram_mb(pid);
+
+        drop(p1);
+        assert_eq!(pool.active_requests(pid, "model"), 0);
+        let used_after = pool.used_vram_mb(pid);
+        assert!(used_after < used_before, "KV should be released on drop");
+    }
+
+    #[test]
+    fn safety_permil_bumps_on_oom() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_total_vram(pid, 1000);
+        pool.mark_model_loaded(pid, "model", 800);
+        pool.set_max_concurrent(pid, "model", 10);
+
+        // This should fail (not enough VRAM) and bump safety_permil
+        let _ = pool.try_reserve(pid, "model");
+
+        let state = pool.providers.get(&pid).unwrap();
+        let safety = state.safety_permil.load(Ordering::Acquire);
+        assert!(safety > DEFAULT_SAFETY_PERMIL, "safety_permil should increase on OOM: {safety}");
+    }
+
+    #[test]
+    fn mark_model_unloaded_resets_phase7_fields() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.mark_model_loaded(pid, "model", 5000);
+
+        // Set some phase 7 fields
+        pool.set_preloading(pid, "model", true);
+        {
+            let state = pool.providers.get(&pid).unwrap();
+            let ms = state.models.get("model").unwrap();
+            ms.sample_count.store(10, Ordering::Release);
+        }
+
+        pool.mark_model_unloaded(pid, "model");
+
+        // Verify resets
+        assert!(!pool.is_preloading(pid, "model"));
+        let state = pool.providers.get(&pid).unwrap();
+        let ms = state.models.get("model").unwrap();
+        assert_eq!(ms.sample_count.load(Ordering::Acquire), 0);
+        assert!(ms.learning_epoch_started_at.load(Ordering::Acquire) > 0);
+    }
+
+    #[test]
+    fn preload_failure_exclusion_after_3() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.mark_model_loaded(pid, "model", 1000);
+
+        pool.record_preload_failure(pid, "model");
+        assert!(!pool.is_preload_excluded(pid, "model"));
+        pool.record_preload_failure(pid, "model");
+        assert!(!pool.is_preload_excluded(pid, "model"));
+        pool.record_preload_failure(pid, "model"); // 3rd → exclusion
+        assert!(pool.is_preload_excluded(pid, "model"));
+    }
+
+    #[test]
+    fn preload_success_clears_exclusion() {
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.mark_model_loaded(pid, "model", 1000);
+
+        // Trigger exclusion
+        for _ in 0..3 {
+            pool.record_preload_failure(pid, "model");
+        }
+        assert!(pool.is_preload_excluded(pid, "model"));
+
+        pool.record_preload_success(pid, "model");
+        assert!(!pool.is_preload_excluded(pid, "model"));
+    }
+
+    // ── Property-based tests ─────────────────────────────────────────────
+
+    proptest! {
+        /// compute_available is always i64::MAX when total=0.
+        #[test]
+        fn zero_total_always_unlimited(kv in 0u32..10000, safety in 0u32..500) {
+            let state = make_provider_state(0, kv, safety);
+            prop_assert_eq!(VramPool::compute_available(&state), i64::MAX);
+        }
+
+        /// Higher safety_permil → lower available (monotonically decreasing).
+        #[test]
+        fn higher_safety_less_available(
+            total in 1000u32..100000,
+            kv in 0u32..1000,
+            safety_a in 0u32..500,
+            safety_b in 0u32..500,
+        ) {
+            let state_a = make_provider_state(total, kv, safety_a);
+            let state_b = make_provider_state(total, kv, safety_b);
+            let avail_a = VramPool::compute_available(&state_a);
+            let avail_b = VramPool::compute_available(&state_b);
+            if safety_a <= safety_b {
+                prop_assert!(avail_a >= avail_b, "safety {safety_a}→{avail_a} < safety {safety_b}→{avail_b}");
+            }
+        }
+
+        /// should_block with limit=0 (unlimited) never blocks.
+        #[test]
+        fn unlimited_never_blocks_prop(active in 0u32..1000, permits in -10i32..10, rate in 0u32..10) {
+            let ms = make_model_state(0, active);
+            prop_assert!(!VramPool::should_block(&ms, permits, rate));
+        }
+
+        /// should_block without probing: blocked iff active >= limit.
+        #[test]
+        fn no_probe_strict_limit(limit in 1u32..100, active in 0u32..200) {
+            let ms = make_model_state(limit, active);
+            let blocked = VramPool::should_block(&ms, 0, 3);
+            prop_assert_eq!(blocked, active >= limit);
+        }
     }
 }

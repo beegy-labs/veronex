@@ -43,29 +43,73 @@ Each process generates `instance_id = Uuid::new_v4()` at startup (in `main.rs`).
 
 The reaper deducts reserved HASH on lease expiry, preventing zombie reservations after instance crashes.
 
-## Reliable Queue
+## Reliable Queue (ZSET — Phase 3)
 
-**File**: `application/use_cases/inference.rs` — `queue_dispatcher_loop()`
+**File**: `application/use_cases/inference/dispatcher.rs` — `queue_dispatcher_loop()`
 
-| Before | After |
+| Before (LIST) | After (ZSET) |
 |--------|-------|
-| `BLPOP` from 3 queues (at-most-once) | Lua priority pop into `veronex:queue:processing` list |
+| 3 LIST queues (paid/standard/test) | Single ZSET `veronex:queue:zset` with tier-scored entries |
+| `BLPOP` / Lua LMOVE (at-most-once) | ZRANGE peek top-K → Rust scoring → Lua ZREM claim |
 | Crash after pop = lost job | Processing list + `veronex:job:owner:{job_id}` tracks ownership |
-| No crash recovery | Reaper re-enqueues orphaned jobs |
+| No crash recovery | Reaper + `recover_pending_jobs()` on startup |
 
-**Model filter**: Two-stage filtering for Ollama jobs in the queue dispatcher:
+**Model filter**: Four-stage filtering for Ollama jobs in the queue dispatcher:
 1. `providers_for_model()` — filters providers that have the requested model installed (OllamaModelRepository).
-2. `list_enabled()` — filters providers where the model is disabled in selection config (ProviderModelSelectionRepository). Same check as `provider_router`'s direct path.
+2. `list_enabled()` — filters providers where the model is disabled in selection config (ProviderModelSelectionRepository).
+3. Thermal + Circuit Breaker + Concurrency gates.
+4. Preload exclusion — `is_preload_excluded()` filters providers where the model had 3 consecutive preload failures within 300s.
 
 **Model stickiness**: Providers with the requested model already loaded in VRAM get a +100GB bonus in the availability sort, strongly favoring consecutive requests on the same provider over model switching.
 
-**Lua `LUA_PRIORITY_POP`**: Tries LMOVE from paid → standard → test into processing list. Returns nil if all empty. Dispatcher sleeps 500ms on nil.
+**Lua scripts** (3 atomic): Enqueue (ZCARD+demand guard+ZADD+INCR+HSET×2), Claim (ZREM+RPUSH+DECR+HDEL×2), Cancel (ZREM+DECR+HDEL×2). Dispatcher sleeps 500ms on empty ZSET.
 
 **ACK**: On job completion/failure, `LREM processing 1 {uuid}` + `DEL job:owner:{job_id}`.
 
-**Fail fast on no candidates**: If zero eligible providers remain after model filtering (e.g., model disabled on all providers), the job is failed immediately — not re-enqueued.
+**Fail fast on no candidates**: If zero eligible providers remain after model filtering, the job is ZSET-claimed then failed immediately.
 
-**Re-queue on no-provider (VRAM)**: If candidates exist but all fail gate checks (VRAM, thermal, concurrency), `LREM processing` + `LPUSH` back to source queue.
+**No-provider (VRAM blocked)**: Job stays in ZSET (not claimed), dispatcher skips to next in window. Adaptive K: `min(ZSET_size/3, 100)`, floor 20.
+
+### Tier Scoring + EMERGENCY_BONUS (Starvation Prevention)
+
+```
+ZSET score = now_ms - tier_bonus
+  TIER_BONUS_PAID     = 300,000ms
+  TIER_BONUS_STANDARD = 100,000ms
+  TIER_EXPIRE_SECS    = 250s
+```
+
+- Within 250s: paid always processes before standard (200,000ms gap, non-reversible)
+- After 250s: `promote_overdue` loop applies EMERGENCY_BONUS (300,000ms) → long-waiting requests overtake new paid requests
+
+**EMERGENCY_BONUS is applied exclusively by `promote_overdue`** (single responsibility):
+- Dispatcher's `final_score` uses raw ZSET score without EMERGENCY_BONUS deduction
+- `promote_overdue` loop (30s) updates ZSET score via `ZADD XX`: `new_score = enqueue_at_ms - EMERGENCY_BONUS`
+- This ensures overdue jobs enter top-K window and outrank new paid requests
+
+### Demand Counter
+
+Per-model queued job count, used by Placement Planner for scale-out decisions:
+
+- **INCR**: Lua enqueue script (atomic with ZADD)
+- **DECR**: Lua claim script + Lua cancel script (atomic with ZREM)
+- Tracks **queued only** — processing/inflight jobs are not counted
+- `demand_resync_loop` (60s): ZSET-based ground truth recount corrects any drift
+
+### Cancellation Contract (Queued vs Processing)
+
+Two completely separate paths:
+
+```
+Queued:     Lua ZREM + DECR demand + HDEL side hashes
+            ZREM returns 0 → already dispatched → fall through to processing path
+
+Processing: cancel_notify + LREM processing + VramPermit drop
+            Multi-instance: pub/sub cancel signal via veronex:pubsub:cancel:{job_id}
+```
+
+- Queued cancel is atomic (single Lua script) — no race with dispatcher claim
+- Processing cancel uses `cancel_notify` (tokio::Notify) for local jobs, pub/sub for remote
 
 ### Double-Execution Prevention
 
@@ -76,6 +120,43 @@ Three-layer defense against the same job running on two instances simultaneously
 3. **Ownership guard before final DB write** in `run_job()`: verifies `GET job:owner:{job_id}` still matches `instance_id` before persisting results. Aborts silently if ownership was transferred.
 
 **Ownerless jobs**: Reaper uses `LUA_REAP_OWNERLESS_JOB` with `SET NX` to claim ownership before re-enqueue, preventing multiple reapers from racing.
+
+## Queue Maintenance
+
+**File**: `infrastructure/outbound/queue_maintenance.rs`
+
+### promote_overdue_loop (30s)
+
+Prevents tier-based starvation for long-waiting requests:
+
+1. HSCAN `veronex:queue:enqueue_at` → iterate all `(job_id, enqueue_at_ms)` pairs
+2. Filter: `now_ms - enqueue_at_ms > 250,000ms`
+3. ZADD XX: `new_score = enqueue_at_ms - EMERGENCY_BONUS_MS` (only updates existing entries)
+4. Subsequent ZRANGE naturally selects overdue jobs into top-K window
+
+Side hash dependency: `veronex:queue:enqueue_at` stores original enqueue time (ZSET score alone is tier-adjusted, cannot recover original timestamp).
+
+### demand_resync_loop (60s)
+
+Corrects demand_counter drift from any source (Valkey restart, manual ops):
+
+1. ZSCAN `veronex:queue:zset` → collect all job_ids (ZSET is single source of truth)
+2. HMGET `veronex:queue:model` batch → map job_id → model
+3. Aggregate per-model counts → SET `demand:{model}` count
+4. **Stale GC**: remove `queue:enqueue_at` and `queue:model` entries for job_ids not in ZSET
+
+Design: ZSET is the sole source of truth. Side hash (`queue:model`) alone is never used for counting — stale entries would cause over-counting.
+
+### Startup Sequence (Crash Recovery)
+
+```
+① sync_providers_once()         ← establish is_loaded state first
+② recover_processing_queue()    ← re-enqueue orphaned jobs to ZSET
+③ resync_demand_counters()      ← ZSET ground-truth recount (after ② adds recovered jobs)
+④ spawn loops (dispatcher, placement_planner, sync, demand_resync, promote_overdue)
+```
+
+Order is critical: ③ before ② would miss recovered jobs in demand count → Scale-Out under-trigger.
 
 ## Cross-Instance Pub/Sub
 
@@ -147,8 +228,14 @@ All keys defined in `infrastructure/outbound/valkey_keys.rs`:
 |-----|------|-----|---------|
 | `veronex:heartbeat:{iid}` | STRING | 30s | Instance liveness |
 | `veronex:vram:{pid}` | HASH | - | Per-instance VRAM reservation state |
+| `veronex:queue:zset` | ZSET | - | Priority queue (score = `now_ms - tier_bonus`) |
 | `veronex:queue:processing` | LIST | - | Reliable queue processing set |
+| `veronex:queue:enqueue_at` | HASH | - | Side hash: `job_id → enqueue_at_ms` (promote_overdue) |
+| `veronex:queue:model` | HASH | - | Side hash: `job_id → model` (demand_resync) |
+| `veronex:demand:{model}` | STRING | - | Per-model queued job count (demand counter) |
 | `veronex:job:owner:{job_id}` | STRING | 300s | Which instance owns a running job |
+| `veronex:scaleout:{model}` | STRING | 30s | Scale-Out NX lock (Placement Planner dedup) |
+| `veronex:preloading:{model}:{pid}` | STRING | 180s | Preload NX lock (cross-instance dedup) |
 | `veronex:stream:tokens:{job_id}` | STREAM | 600s | Cross-instance token relay (XADD/XREAD) |
 | `veronex:pubsub:job_events` | PUB/SUB | - | Cross-instance job status events |
 | `veronex:pubsub:cancel:{job_id}` | PUB/SUB | - | Cross-instance cancel signals |

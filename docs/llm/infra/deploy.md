@@ -105,10 +105,14 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 
 | Key pattern | Purpose |
 |-------------|---------|
-| `veronex:queue:jobs:paid` | Paid-tier job queue (Lua priority pop, tried first) |
-| `veronex:queue:jobs` | Standard/free-tier job queue (polled second) |
-| `veronex:queue:jobs:test` | Test run queue (polled third) |
-| `veronex:queue:processing` | Processing list (BLMOVE destination for reliable queue) |
+| `veronex:queue:zset` | Unified ZSET priority queue (score = now_ms - tier_bonus) |
+| `veronex:queue:enqueue_at` | Side hash: job_id → enqueue_at_ms (for promote_overdue) |
+| `veronex:queue:model` | Side hash: job_id → model (for demand_resync) |
+| `veronex:demand:{model}` | Per-model demand counter (INCR on enqueue, DECR on dispatch/cancel) |
+| `veronex:queue:processing` | Processing list (RPUSH on Lua claim for reliable queue) |
+| `veronex:queue:jobs:paid` | (legacy, unused after Phase 3) |
+| `veronex:queue:jobs` | (legacy, unused after Phase 3) |
+| `veronex:queue:jobs:test` | (legacy, unused after Phase 3) |
 | `veronex:ratelimit:rpm:{key_id}` | API key RPM sorted set (sliding window) |
 | `veronex:ratelimit:tpm:{key_id}:{minute}` | API key TPM counter |
 | `veronex:gemini:rpm:{provider_id}:{model}:{minute}` | Gemini per-provider RPM |

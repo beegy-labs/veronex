@@ -119,6 +119,8 @@ pub struct RegisterProviderRequest {
     /// true = key is on a Google free-tier project.
     /// RPM/RPD limits are managed globally via `gemini_rate_limit_policies`.
     pub is_free_tier: Option<bool>,
+    /// Ollama num_parallel setting. Default 4. Used as AIMD upper bound.
+    pub num_parallel: Option<i16>,
 }
 
 /// Update request for `PATCH /v1/providers/{id}`.
@@ -137,6 +139,8 @@ pub struct UpdateProviderRequest {
     pub gpu_index: Option<i16>,
     pub server_id: Option<Uuid>,
     pub is_free_tier: Option<bool>,
+    /// Ollama num_parallel setting.
+    pub num_parallel: Option<i16>,
     /// Enable or disable the provider for routing.
     pub is_active: Option<bool>,
 }
@@ -152,6 +156,7 @@ pub struct ProviderSummary {
     pub gpu_index: Option<i16>,
     pub server_id: Option<Uuid>,
     pub is_free_tier: bool,
+    pub num_parallel: i16,
     pub status: String,
     pub registered_at: DateTime<Utc>,
     /// Masked API key shown in the management UI (e.g. `AIza...x1y2`). Gemini only.
@@ -173,6 +178,7 @@ impl From<LlmProvider> for ProviderSummary {
             gpu_index: b.gpu_index,
             server_id: b.server_id,
             is_free_tier: b.is_free_tier,
+            num_parallel: b.num_parallel,
             status,
             registered_at: b.registered_at,
             api_key_masked,
@@ -247,6 +253,7 @@ pub async fn register_provider(
         gpu_index: req.gpu_index,
         server_id: req.server_id,
         is_free_tier: req.is_free_tier.unwrap_or(false),
+        num_parallel: req.num_parallel.unwrap_or(4),
         status: LlmProviderStatus::Offline, // initial; overwritten by health check
         registered_at: Utc::now(),
     };
@@ -392,6 +399,7 @@ pub async fn update_provider(
     provider.gpu_index = req.gpu_index;   // null clears the field
     provider.server_id = req.server_id;  // null clears the field
     if let Some(v) = req.is_free_tier { provider.is_free_tier = v; }
+    if let Some(v) = req.num_parallel { provider.num_parallel = v; }
     if let Some(v) = req.is_active { provider.is_active = v; }
 
     if let Err(e) = registry.update(&provider).await {
@@ -530,6 +538,7 @@ pub async fn sync_single_provider(
         &provider.name,
         &provider.url,
         provider.total_vram_mb,
+        provider.num_parallel.max(1) as u32,
         &settings.analyzer_model,
         &*state.capacity_repo,
         &*state.vram_pool,
@@ -600,6 +609,7 @@ mod tests {
             gpu_index: Some(0),
             server_id: None,
                 is_free_tier: false,
+            num_parallel: 4,
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),
         };
@@ -624,6 +634,7 @@ mod tests {
             gpu_index: None,
             server_id: None,
                 is_free_tier: true,
+            num_parallel: 4,
             status: LlmProviderStatus::Offline,
             registered_at: Utc::now(),
         };

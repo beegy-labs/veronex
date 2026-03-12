@@ -30,6 +30,10 @@ pub struct HwMetrics {
     pub temp_mem_c: f32,
     pub mem_used_mb: u32,
     pub mem_total_mb: u32,
+    /// System RAM available in MiB (from node-exporter).
+    /// For APU unified memory, this replaces DRM VRAM as the capacity source.
+    #[serde(default)]
+    pub mem_available_mb: u32,
     /// GPU vendor from sysfs: "amd", "nvidia", or empty.
     #[serde(default)]
     pub gpu_vendor: String,

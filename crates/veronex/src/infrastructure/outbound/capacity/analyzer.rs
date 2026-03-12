@@ -103,6 +103,165 @@ fn compute_kv_per_request_mb(
     ((kv_bytes_per_token * tokens) / 1_048_576).max(32) as u32
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::ports::outbound::model_capacity_repository::ThroughputStats;
+    use proptest::prelude::*;
+
+    fn make_arch(layers: u32, kv_heads: u32, head_dim: u32, max_ctx: u32, cfg_ctx: u32) -> ModelArchProfile {
+        ModelArchProfile { num_layers: layers, num_kv_heads: kv_heads, head_dim: head_dim, max_ctx: max_ctx, configured_ctx: cfg_ctx }
+    }
+
+    fn make_stats(prompt: f64, output: f64) -> ThroughputStats {
+        ThroughputStats {
+            avg_prompt_tokens: prompt,
+            avg_output_tokens: output,
+            ..Default::default()
+        }
+    }
+
+    // ── Unit tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn zero_layers_returns_fallback() {
+        let arch = make_arch(0, 8, 128, 4096, 4096);
+        let stats = make_stats(100.0, 50.0);
+        assert_eq!(compute_kv_per_request_mb(&arch, &stats, 1), 128);
+    }
+
+    #[test]
+    fn minimum_32mb_enforced() {
+        // Tiny model: 1 layer, 1 head, 1 dim, 128 tokens → near-zero KV
+        let arch = make_arch(1, 1, 1, 4096, 4096);
+        let stats = make_stats(64.0, 64.0);
+        assert_eq!(compute_kv_per_request_mb(&arch, &stats, 1), 32);
+    }
+
+    #[test]
+    fn token_clamped_to_128_minimum() {
+        // avg_prompt + avg_output = 10 (below 128 minimum) → uses 128
+        let arch = make_arch(32, 8, 128, 4096, 4096);
+        let stats_low = make_stats(5.0, 5.0);
+        let stats_exact = make_stats(64.0, 64.0); // exactly 128
+        assert_eq!(
+            compute_kv_per_request_mb(&arch, &stats_low, 1),
+            compute_kv_per_request_mb(&arch, &stats_exact, 1),
+        );
+    }
+
+    #[test]
+    fn token_clamped_to_effective_ctx() {
+        // avg tokens = 10000, but effective_ctx = 4096 → uses 4096
+        let arch = make_arch(32, 8, 128, 4096, 4096);
+        let stats = make_stats(8000.0, 2000.0);
+        let stats_at_ctx = make_stats(2048.0, 2048.0);
+        assert_eq!(
+            compute_kv_per_request_mb(&arch, &stats, 1),
+            compute_kv_per_request_mb(&arch, &stats_at_ctx, 1),
+        );
+    }
+
+    #[test]
+    fn effective_ctx_uses_min_of_configured_and_max() {
+        let stats = make_stats(500.0, 500.0); // 1000 tokens, within both ctx
+        let arch_cfg_smaller = make_arch(32, 8, 128, 8192, 2048); // min(2048,8192) = 2048
+        let arch_max_smaller = make_arch(32, 8, 128, 2048, 8192); // min(8192,2048) = 2048
+        assert_eq!(
+            compute_kv_per_request_mb(&arch_cfg_smaller, &stats, 1),
+            compute_kv_per_request_mb(&arch_max_smaller, &stats, 1),
+        );
+    }
+
+    #[test]
+    fn effective_ctx_fallback_4096() {
+        // Both configured_ctx and max_ctx are 0 → fallback 4096
+        let arch = make_arch(32, 8, 128, 0, 0);
+        let stats = make_stats(2000.0, 2048.0); // 4048, clamped to 4096
+        let arch_explicit = make_arch(32, 8, 128, 4096, 4096);
+        assert_eq!(
+            compute_kv_per_request_mb(&arch, &stats, 1),
+            compute_kv_per_request_mb(&arch_explicit, &stats, 1),
+        );
+    }
+
+    #[test]
+    fn bytes_per_element_scales_approximately() {
+        let arch = make_arch(32, 8, 128, 4096, 4096);
+        let stats = make_stats(500.0, 500.0);
+        let result_1 = compute_kv_per_request_mb(&arch, &stats, 1);
+        let result_2 = compute_kv_per_request_mb(&arch, &stats, 2);
+        // Integer division may cause ±1 difference from exact 2x
+        let expected = result_1 * 2;
+        assert!(result_2 >= expected - 1 && result_2 <= expected + 1,
+            "result_2={result_2} should be ~2x result_1={result_1}");
+    }
+
+    #[test]
+    fn realistic_qwen3_8b() {
+        // qwen3:8b approximate: 32 layers, 8 kv_heads, 128 head_dim, q8_0 kv
+        let arch = make_arch(32, 8, 128, 32768, 4096);
+        let stats = make_stats(300.0, 200.0); // 500 tokens
+        let result = compute_kv_per_request_mb(&arch, &stats, 1); // bytes_per_element=1 for q8_0
+        // 2 * 32 * 8 * 128 * 1 * 500 / 1_048_576 = 31.25 → max(31, 32) = 32
+        assert_eq!(result, 32);
+    }
+
+    #[test]
+    fn realistic_llama3_70b() {
+        // llama3:70b approximate: 80 layers, 8 kv_heads, 128 head_dim, q8_0 kv
+        let arch = make_arch(80, 8, 128, 8192, 4096);
+        let stats = make_stats(600.0, 400.0); // 1000 tokens
+        let result = compute_kv_per_request_mb(&arch, &stats, 1);
+        // 2 * 80 * 8 * 128 * 1 * 1000 / 1_048_576 = 156.25 → 156
+        assert!(result >= 100 && result <= 200, "70B result={result}");
+    }
+
+    // ── Property-based tests ─────────────────────────────────────────────
+
+    proptest! {
+        /// Result is always >= 32 (minimum floor) unless zero layers fallback.
+        #[test]
+        fn result_at_least_32_or_128_fallback(
+            layers in 0u32..200,
+            kv_heads in 1u32..64,
+            head_dim in 1u32..256,
+            prompt in 0.0f64..10000.0,
+            output in 0.0f64..10000.0,
+            bpe in 1u64..4,
+        ) {
+            let arch = make_arch(layers, kv_heads, head_dim, 4096, 4096);
+            let stats = make_stats(prompt, output);
+            let result = compute_kv_per_request_mb(&arch, &stats, bpe);
+            if layers == 0 {
+                prop_assert_eq!(result, 128);
+            } else {
+                prop_assert!(result >= 32, "result={result} < 32");
+            }
+        }
+
+        /// More layers → same or higher KV (monotonic).
+        #[test]
+        fn more_layers_more_kv(
+            layers_a in 1u32..100,
+            layers_b in 1u32..100,
+            kv_heads in 1u32..32,
+            head_dim in 32u32..256,
+            prompt in 100.0f64..2000.0,
+            output in 100.0f64..2000.0,
+        ) {
+            let stats = make_stats(prompt, output);
+            let a = compute_kv_per_request_mb(&make_arch(layers_a, kv_heads, head_dim, 4096, 4096), &stats, 1);
+            let b = compute_kv_per_request_mb(&make_arch(layers_b, kv_heads, head_dim, 4096, 4096), &stats, 1);
+            if layers_a <= layers_b {
+                prop_assert!(a <= b, "layers {layers_a}→{a} > layers {layers_b}→{b}");
+            }
+        }
+    }
+}
+
 // ── LLM analysis response ─────────────────────────────────────────────────────
 
 #[derive(Deserialize, Default)]
@@ -372,6 +531,7 @@ pub async fn sync_provider(
     provider_name:   &str,
     ollama_url:      &str,
     provider_total_vram_mb: i64,
+    num_parallel:    u32,
     analyzer_model:  &str,
     capacity_repo:   &dyn ModelCapacityRepository,
     vram_pool:       &dyn VramPoolPort,
@@ -446,14 +606,15 @@ pub async fn sync_provider(
 
     // APU / unified-memory detection: AMD Ryzen AI (iGPU) and similar APUs report only
     // the dedicated BIOS-allocated VRAM via DRM (e.g. 1024 MiB), while Ollama transparently
-    // uses shared system RAM. Detect this when loaded model weight exceeds DRM VRAM and
-    // estimate total capacity as observed_weight × 1.15 (CDD: estimated_total = max_observed_sum_size_vram × 1.15).
-    let total_ps_weight_mb: u32 = ps.models.iter()
-        .map(|m| (m.size_vram / 1_048_576) as u32)
-        .sum();
-    let vram_total_mb = if drm_vram_mb > 0 && total_ps_weight_mb > drm_vram_mb {
-        // APU confirmed: estimated_total = observed_weight × 1.15 (CDD spec).
-        total_ps_weight_mb * 115 / 100
+    // uses shared system RAM. Use mem_available_mb from node-exporter as the real capacity.
+    let mem_available_mb = hw.as_ref().map(|h| h.mem_available_mb).unwrap_or(0);
+    let is_apu = hw.as_ref().is_some_and(|h| {
+        h.gpu_vendor == "amd" && drm_vram_mb > 0 && mem_available_mb > drm_vram_mb * 2
+    });
+    let vram_total_mb = if is_apu {
+        // APU unified memory: use node-exporter mem_available_mb as total VRAM.
+        // safety_permil in VramPool.compute_available() handles the buffer.
+        mem_available_mb
     } else {
         drm_vram_mb
     };
@@ -545,10 +706,10 @@ pub async fn sync_provider(
         let current_limit = vram_pool.max_concurrent(provider_id, &model.name);
 
         if baseline == 0 {
-            // First data point → set baseline + initial limit from weight
+            // First data point → set baseline + initial limit from num_parallel (Phase 8)
             if stats.sample_count > 0 {
                 vram_pool.set_baseline_tps(provider_id, &model.name, current_tps_x100);
-                let initial = initial_max_concurrent(weight_mb as u32);
+                let initial = num_parallel.max(1);
                 vram_pool.set_max_concurrent(provider_id, &model.name, initial);
                 if stats.p95_latency_ms > 0.0 {
                     vram_pool.set_baseline_p95_ms(provider_id, &model.name, stats.p95_latency_ms as u32);
@@ -578,7 +739,7 @@ pub async fn sync_provider(
                         baseline_p95.min(current_p95),
                     );
                 }
-                current_limit.saturating_add(1)
+                current_limit.saturating_add(1).min(num_parallel)
             } else {
                 current_limit
             };
@@ -666,9 +827,8 @@ pub async fn sync_provider(
                     if mr.recommended_max_concurrent == 0 {
                         continue; // LLM returned 0 = no opinion
                     }
-                    // Clamp to weight-based upper bound and ±2 from current for stability
-                    let snap = model_snapshots.iter().find(|s| s.name == mr.model);
-                    let upper = snap.map_or(8, |s| weight_based_max_concurrent(s.weight_mb) * 2);
+                    // Clamp to num_parallel upper bound and ±2 from current for stability (Phase 8)
+                    let upper = num_parallel * 2;
                     let current = vram_pool.max_concurrent(provider_id, &mr.model);
                     let change_floor = current.saturating_sub(2).max(1);
                     let change_ceil = current.saturating_add(2);
@@ -706,21 +866,8 @@ pub async fn sync_provider(
     Ok(())
 }
 
-/// Initial max_concurrent based on model weight (cold-start heuristic).
-/// Matches the weight-based caps table in docs/llm/inference/capacity.md.
-fn initial_max_concurrent(weight_mb: u32) -> u32 {
-    weight_based_max_concurrent(weight_mb)
-}
-
-/// Weight-based heuristic used as LLM analysis fallback.
-fn weight_based_max_concurrent(weight_mb: u32) -> u32 {
-    match weight_mb {
-        0..5120 => 8,
-        5120..20480 => 4,
-        20480..51200 => 2,
-        _ => 1,
-    }
-}
+// Phase 8: initial_max_concurrent / weight_based_max_concurrent removed.
+// Cold start initial = num_parallel (passed to sync_provider).
 
 // ── Sync loop ─────────────────────────────────────────────────────────────────
 
@@ -790,6 +937,7 @@ pub async fn run_sync_loop(
                 &provider.name,
                 &provider.url,
                 provider.total_vram_mb,
+                provider.num_parallel.max(1) as u32,
                 &settings.analyzer_model,
                 &*capacity_repo,
                 &*vram_pool,

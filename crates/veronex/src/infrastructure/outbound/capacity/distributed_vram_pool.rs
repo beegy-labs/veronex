@@ -216,6 +216,10 @@ impl VramPoolPort for DistributedVramPool {
         self.local.loaded_model_names(provider_id)
     }
 
+    fn is_model_loaded(&self, model: &str) -> bool {
+        self.local.is_model_loaded(model)
+    }
+
     fn set_max_concurrent(&self, provider_id: Uuid, model: &str, limit: u32) {
         self.local.set_max_concurrent(provider_id, model, limit);
     }
@@ -242,5 +246,63 @@ impl VramPoolPort for DistributedVramPool {
 
     fn set_probe_config(&self, permits: i32, rate: i32) {
         self.local.set_probe_config(permits, rate);
+    }
+
+    // ── Phase 7: model state fields (delegated to local) ──────────────
+
+    fn is_preloading(&self, provider_id: Uuid, model: &str) -> bool {
+        self.local.is_preloading(provider_id, model)
+    }
+
+    fn set_preloading(&self, provider_id: Uuid, model: &str, value: bool) {
+        self.local.set_preloading(provider_id, model, value);
+    }
+
+    fn preload_fail_count(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.preload_fail_count(provider_id, model)
+    }
+
+    fn record_preload_failure(&self, provider_id: Uuid, model: &str) {
+        self.local.record_preload_failure(provider_id, model);
+    }
+
+    fn record_preload_success(&self, provider_id: Uuid, model: &str) {
+        self.local.record_preload_success(provider_id, model);
+    }
+
+    fn preload_failed_at(&self, provider_id: Uuid, model: &str) -> u64 {
+        self.local.preload_failed_at(provider_id, model)
+    }
+
+    fn is_preload_excluded(&self, provider_id: Uuid, model: &str) -> bool {
+        self.local.is_preload_excluded(provider_id, model)
+    }
+
+    fn is_pulling(&self, provider_id: Uuid, model: &str) -> bool {
+        self.local.is_pulling(provider_id, model)
+    }
+
+    fn set_pulling(&self, provider_id: Uuid, model: &str, value: bool) {
+        self.local.set_pulling(provider_id, model, value);
+    }
+
+    fn is_dispatch_blocked(&self, provider_id: Uuid, model: &str) -> bool {
+        self.local.is_dispatch_blocked(provider_id, model)
+    }
+
+    fn set_dispatch_blocked(&self, provider_id: Uuid, model: &str, value: bool) {
+        self.local.set_dispatch_blocked(provider_id, model, value);
+    }
+
+    fn pre_hard_max_concurrent(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.pre_hard_max_concurrent(provider_id, model)
+    }
+
+    fn set_pre_hard_max_concurrent(&self, provider_id: Uuid, model: &str, value: u32) {
+        self.local.set_pre_hard_max_concurrent(provider_id, model, value);
+    }
+
+    fn idle_since_secs(&self, provider_id: Uuid, model: &str) -> u64 {
+        self.local.idle_since_secs(provider_id, model)
     }
 }

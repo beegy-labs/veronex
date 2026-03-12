@@ -171,8 +171,16 @@ pub struct LlmProvider {
     /// RPM/RPD limits are read from `gemini_rate_limit_policies` (per model, shared).
     #[serde(default)]
     pub is_free_tier: bool,
+    /// Maximum parallel requests per Ollama num_parallel setting.
+    /// Used as AIMD upper bound. Default 4.
+    #[serde(default = "default_num_parallel")]
+    pub num_parallel: i16,
     pub status: LlmProviderStatus,
     pub registered_at: DateTime<Utc>,
+}
+
+fn default_num_parallel() -> i16 {
+    4
 }
 
 /// Per-model Gemini rate limit policy (shared across all free-tier providers).
@@ -246,6 +254,7 @@ mod tests {
             gpu_index: None,
             server_id: None,
             is_free_tier: false,
+            num_parallel: 4,
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),
         }

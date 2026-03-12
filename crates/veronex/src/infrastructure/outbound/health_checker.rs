@@ -125,6 +125,7 @@ async fn poll_node_exporter_metrics(
         temp_mem_c: gpu.and_then(|g| g.temp_mem_c).unwrap_or(0.0) as f32,
         mem_used_mb: (node_metrics.mem_total_mb.saturating_sub(node_metrics.mem_available_mb)) as u32,
         mem_total_mb: node_metrics.mem_total_mb as u32,
+        mem_available_mb: node_metrics.mem_available_mb as u32,
         gpu_vendor,
     };
 
@@ -223,7 +224,7 @@ pub async fn run_health_checker_loop(
                                 tracing::warn!(
                                     provider = %provider.name,
                                     temp    = hw.max_temp_c(),
-                                    cooldown_secs = 60,
+                                    cooldown_secs = 300,
                                     "HARD THROTTLE: dispatch suspended, cooldown active"
                                 );
                                 use fred::prelude::*;
@@ -231,18 +232,33 @@ pub async fn run_health_checker_loop(
                                     .set(
                                         &valkey_keys::thermal_throttle(provider.id),
                                         "hard",
-                                        Some(Expiration::EX(90)),
+                                        Some(Expiration::EX(360)),
                                         None,
                                         false,
                                     )
                                     .await
                                     .unwrap_or(());
                             }
+                            ThrottleLevel::Cooldown => {
+                                tracing::warn!(
+                                    provider = %provider.name,
+                                    temp    = hw.max_temp_c(),
+                                    cooldown_secs = 300,
+                                    "COOLDOWN: waiting for hardware to cool"
+                                );
+                            }
+                            ThrottleLevel::RampUp => {
+                                tracing::info!(
+                                    provider = %provider.name,
+                                    temp    = hw.max_temp_c(),
+                                    "RAMP-UP: gradually restoring concurrency"
+                                );
+                            }
                             ThrottleLevel::Soft => {
                                 tracing::warn!(
                                     provider = %provider.name,
                                     temp    = hw.max_temp_c(),
-                                    "SOFT THROTTLE: capped to 1 slot"
+                                    "SOFT THROTTLE: new requests blocked"
                                 );
                             }
                             ThrottleLevel::Normal => {

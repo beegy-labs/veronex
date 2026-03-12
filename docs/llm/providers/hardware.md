@@ -1,6 +1,6 @@
 # Hardware — GPU Server & Metrics
 
-> SSOT | **Last Updated**: 2026-03-10 (rev: junction/memory temp, max_temp_c thermal)
+> SSOT | **Last Updated**: 2026-03-12 (rev: 5-state thermal machine, Cooldown/RampUp)
 
 ## Task Guide
 
@@ -13,6 +13,8 @@
 | Change history query bucket size | `gpu_server_handlers.rs` → `toStartOfInterval` SQL arg |
 | Support new GPU vendor (e.g. NVIDIA) | `hw_metrics.rs` → add metric parsing branch alongside existing AMD section |
 | Change thermal thresholds | `capacity/thermal.rs` → `ThermalThresholds` presets or `set_thresholds()` API |
+| Understand thermal state machine | `capacity/thermal.rs` → 5-state: Normal/Soft/Hard/Cooldown/RampUp |
+| Adjust cooldown duration | `capacity/thermal.rs` → `COOLDOWN_SECS` (default 300s) |
 
 ## Key Files
 
@@ -207,6 +209,67 @@ GROUP BY ts ORDER BY ts
 
 `toStartOfInterval` returns `DateTime` (not `DateTime64`) → use `clickhouse::serde::time::datetime`.
 `0.0` from `avgIf` with no data → converted to `None` in response.
+
+---
+
+## Thermal State Machine
+
+**File**: `crates/veronex/src/infrastructure/outbound/capacity/thermal.rs`
+
+5-state machine per provider, driven by `temp_c` from node-exporter (junction temp preferred for AMD):
+
+```
+Normal ──(≥ soft_at)──→ Soft ──(≥ hard_at)──→ Hard
+  ↑                       ↑                      │
+  │                       │                      │ (< normal_below)
+  │                       │                      ↓
+  │                       │                   Cooldown (60s hold)
+  │                       │                      │
+  │                       │                      ↓
+  └───────────────────────┴──────────────── RampUp (max_concurrent=1)
+                                               │ (AIMD restores → pre_hard level)
+                                               ↓
+                                            Normal
+```
+
+| State | Condition | Dispatch Effect |
+|-------|-----------|-----------------|
+| Normal | `temp < normal_below` | Full capacity |
+| Soft | `temp ≥ soft_at` | Block if provider has ANY active request |
+| Hard | `temp ≥ hard_at` | Block ALL requests |
+| Cooldown | Hard → `temp < normal_below`, 60s timer | Block ALL (cooling hold) |
+| RampUp | After Cooldown expires | `max_concurrent` forced to 1, AIMD gradually increases |
+
+### Threshold Profiles (auto-detected from gpu_vendor)
+
+| Profile | normal_below | soft_at | hard_at | Detection |
+|---------|-------------|---------|---------|-----------|
+| CPU (default) | 75°C | 82°C | 90°C | AMD (`0x1002`) or unknown |
+| GPU | 80°C | 88°C | 93°C | NVIDIA (`0x10de`) |
+
+### perf_factor (Temperature-Proportional)
+
+```
+perf_factor(temp_c) → 0.0 to 1.0
+  75°C → 1.0 (full performance)
+  90°C → 0.0 (zero performance)
+  Linear interpolation between thresholds
+```
+
+Used in ZSET scoring: `age_bonus = wait_secs × perf_factor(temp_c)` — hot servers get deprioritized for new work.
+
+### Admin API
+
+Thresholds are set automatically by `health_checker` every 30s cycle based on `gpu_vendor`. Custom thresholds can be set programmatically:
+
+```rust
+thermal.set_thresholds(provider_id, ThermalThresholds::GPU);
+thermal.set_thresholds(provider_id, ThermalThresholds {
+    normal_below: 70.0,
+    soft_at: 80.0,
+    hard_at: 88.0,
+});
+```
 
 ---
 

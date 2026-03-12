@@ -45,7 +45,7 @@ pub async fn spawn_background_tasks(
     shutdown: &CancellationToken,
     tasks: &mut JoinSet<()>,
 ) -> BackgroundHandles {
-    let thermal = Arc::new(ThermalThrottleMap::new(60)); // 60s cooldown
+    let thermal = Arc::new(ThermalThrottleMap::new(300)); // 300s cooldown (SDD §3)
     let circuit_breaker = Arc::new(CircuitBreakerMap::new());
     let sync_trigger = Arc::new(tokio::sync::Notify::new());
     let sync_lock = Arc::new(tokio::sync::Semaphore::new(1));
@@ -179,6 +179,38 @@ pub async fn spawn_background_tasks(
         ));
 
         tracing::info!("multi-instance coordination enabled (pub/sub + reaper)");
+
+        // ── Queue maintenance: promote_overdue + demand_resync (Phase 4) ──
+        use veronex::infrastructure::outbound::queue_maintenance;
+
+        tasks.spawn(queue_maintenance::run_promote_overdue_loop(
+            pool.clone(),
+            Duration::from_secs(veronex::domain::constants::OVERDUE_PROMOTE_SECS),
+            shutdown.child_token(),
+        ));
+
+        tasks.spawn(queue_maintenance::run_demand_resync_loop(
+            pool.clone(),
+            Duration::from_secs(veronex::domain::constants::DEMAND_RESYNC_SECS),
+            shutdown.child_token(),
+        ));
+
+        tracing::info!("queue maintenance loops started (promote_overdue=30s, demand_resync=60s)");
+
+        // ── Placement Planner (Phase 5) ──────────────────────────────────
+        if let Some(ref vk_port) = repos.valkey_port {
+            tasks.spawn(veronex::application::use_cases::placement_planner::run_placement_planner_loop(
+                repos.provider_registry.clone(),
+                repos.vram_pool.clone(),
+                thermal.clone(),
+                circuit_breaker.clone(),
+                vk_port.clone(),
+                infra.http_client.clone(),
+                infra.instance_id.clone(),
+                shutdown.child_token(),
+            ));
+            tracing::info!("placement planner started (interval=5s)");
+        }
     }
 
     let use_case: Arc<dyn InferenceUseCase> = use_case_impl;

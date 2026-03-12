@@ -20,4 +20,9 @@ server_id: string | null,
  * true = key is on a Google free-tier project.
  * RPM/RPD limits are read from `gemini_rate_limit_policies` (per model, shared).
  */
-is_free_tier: boolean, status: LlmProviderStatus, registered_at: string, };
+is_free_tier: boolean, 
+/**
+ * Maximum parallel requests per Ollama num_parallel setting.
+ * Used as AIMD upper bound. Default 4.
+ */
+num_parallel: number, status: LlmProviderStatus, registered_at: string, };

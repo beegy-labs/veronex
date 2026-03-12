@@ -27,9 +27,8 @@ use crate::domain::errors::DomainError;
 use crate::domain::value_objects::{JobId, JobStatusEvent, ModelName, Prompt, StreamToken};
 use crate::domain::constants::{
     INITIAL_TOKEN_CAPACITY,
-    QUEUE_JOBS as QUEUE_KEY_API,
-    QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID,
-    QUEUE_JOBS_TEST as QUEUE_KEY_TEST,
+    MAX_QUEUE_SIZE, MAX_QUEUE_PER_MODEL,
+    TIER_BONUS_PAID, TIER_BONUS_STANDARD, TIER_BONUS_TEST,
 };
 
 use super::JobEntry;
@@ -181,11 +180,14 @@ impl InferenceUseCaseImpl {
                 cancel_notify: Arc::new(Notify::new()),
                 gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
             });
-            let queue = if job.source == JobSource::Test { QUEUE_KEY_TEST } else { QUEUE_KEY_API };
-            if let Err(e) = valkey.queue_push(queue, uuid).await {
-                tracing::warn!(%uuid, "failed to re-enqueue: {e}");
-            } else {
-                tracing::info!(%uuid, "recovered job re-enqueued");
+            // Re-enqueue to ZSET with emergency priority (recovered jobs get highest priority)
+            let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+            let score = (now_ms.saturating_sub(TIER_BONUS_PAID)) as f64; // max priority for recovery
+            let model = job.model_name.as_str();
+            match valkey.zset_enqueue(uuid, score, model, now_ms, MAX_QUEUE_SIZE, MAX_QUEUE_PER_MODEL).await {
+                Ok(true) => tracing::info!(%uuid, "recovered job re-enqueued to ZSET"),
+                Ok(false) => tracing::warn!(%uuid, "ZSET full during recovery"),
+                Err(e) => tracing::warn!(%uuid, "failed to re-enqueue to ZSET: {e}"),
             }
         }
         Ok(())
@@ -246,17 +248,25 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             provider_type: job.provider_type.as_str().into(), latency_ms: None,
         }).await;
 
-        let queue_key = match (source, key_tier) {
-            (JobSource::Test, _) => QUEUE_KEY_TEST,
-            (_, Some(KeyTier::Paid)) => QUEUE_KEY_API_PAID,
-            _ => QUEUE_KEY_API,
+        // Compute ZSET score: now_ms - tier_bonus (lower = higher priority)
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        let tier_bonus = match (source, key_tier) {
+            (JobSource::Test, _) => TIER_BONUS_TEST,
+            (_, Some(KeyTier::Paid)) => TIER_BONUS_PAID,
+            _ => TIER_BONUS_STANDARD,
         };
+        let score = (now_ms.saturating_sub(tier_bonus)) as f64;
 
         if let Some(ref valkey) = self.valkey {
-            match valkey.queue_push(queue_key, uuid).await {
-                Ok(_) => tracing::debug!(%uuid, "job enqueued"),
+            match valkey.zset_enqueue(uuid, score, &model_name, now_ms, MAX_QUEUE_SIZE, MAX_QUEUE_PER_MODEL).await {
+                Ok(true) => tracing::debug!(%uuid, %score, "job enqueued to ZSET"),
+                Ok(false) => {
+                    // Queue full — fail immediately with 429-equivalent
+                    tracing::warn!(%uuid, "queue full, rejecting job");
+                    return Err(DomainError::QueueFull("queue capacity exceeded".into()));
+                }
                 Err(e) => {
-                    tracing::warn!(%uuid, "Valkey enqueue failed, direct spawn: {e}");
+                    tracing::warn!(%uuid, "Valkey ZSET enqueue failed, direct spawn: {e}");
                     spawn_job_direct(
                         self.jobs.clone(), self.job_repo.clone(), self.valkey.clone(),
                         self.observability.clone(), self.model_manager.clone(),
@@ -371,6 +381,14 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
         if !is_final {
             self.job_repo.cancel_job(job_id, chrono::Utc::now()).await?;
+
+            // Try to remove from ZSET queue (if still queued, before dispatch)
+            if let Some(ref vk) = self.valkey {
+                let model = self.jobs.get(&job_id.0)
+                    .map(|e| e.job.model_name.as_str().to_string())
+                    .unwrap_or_default();
+                let _ = vk.zset_cancel(&job_id.0.to_string(), &model).await;
+            }
         }
         if !is_local
             && let Some(ref vk) = self.valkey { vk.publish_cancel(job_id.0).await; }

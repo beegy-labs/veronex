@@ -1,0 +1,408 @@
+//! Placement Planner — 5s loop for automated model placement decisions (Phase 5).
+//!
+//! 2-pass structure:
+//!   Pass 0 (read-only): compute scale_out_candidates and scale_out_needed
+//!   Steps ④①②③⑤: STANDBY recovery, Scale-Out, Preload, Evict, Scale-In
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
+use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPort;
+use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
+use crate::application::ports::outbound::thermal_port::ThermalPort;
+use crate::application::ports::outbound::valkey_port::ValkeyPort;
+use crate::domain::constants::demand_key;
+use crate::domain::entities::LlmProvider;
+use crate::domain::enums::{ProviderType, ThrottleLevel};
+
+/// Placement planner loop interval.
+const PLANNER_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Scale-Out demand threshold (80% of eligible capacity).
+const SCALE_OUT_THRESHOLD: f64 = 0.80;
+
+/// Idle threshold before eviction (seconds).
+const EVICT_IDLE_SECS: u64 = 180;
+
+/// Shorter idle threshold for standby servers.
+const STANDBY_EVICT_IDLE_SECS: u64 = 30;
+
+/// Transition guard duration after STANDBY recovery (seconds).
+const TRANSITION_GUARD_SECS: u64 = 30;
+
+/// Scale-Out hold-down duration (seconds).
+const SCALE_OUT_HOLDDOWN_SECS: u64 = 60;
+
+/// Preload lock TTL in Valkey (seconds).
+const PRELOAD_LOCK_TTL: i64 = 180;
+
+/// Scale-Out decision lock TTL in Valkey (seconds).
+const SCALEOUT_DECISION_TTL: i64 = 30;
+
+/// Run the placement planner loop.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_placement_planner_loop(
+    registry: Arc<dyn LlmProviderRegistry>,
+    vram_pool: Arc<dyn VramPoolPort>,
+    thermal: Arc<dyn ThermalPort>,
+    circuit_breaker: Arc<dyn CircuitBreakerPort>,
+    valkey: Arc<dyn ValkeyPort>,
+    http_client: reqwest::Client,
+    instance_id: Arc<str>,
+    shutdown: CancellationToken,
+) {
+    tracing::info!("placement planner started (interval=5s)");
+
+    // Track Scale-Out hold-down per server to prevent immediate Scale-In
+    let mut scale_out_holddown: HashMap<Uuid, u64> = HashMap::new();
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            _ = tokio::time::sleep(PLANNER_INTERVAL) => {}
+        }
+
+        if let Err(e) = planner_tick(
+            &registry,
+            &vram_pool,
+            &thermal,
+            &circuit_breaker,
+            &valkey,
+            &http_client,
+            &instance_id,
+            &mut scale_out_holddown,
+        ).await {
+            tracing::warn!("placement planner tick failed: {e}");
+        }
+    }
+
+    tracing::info!("placement planner stopped");
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn planner_tick(
+    registry: &Arc<dyn LlmProviderRegistry>,
+    vram_pool: &Arc<dyn VramPoolPort>,
+    thermal: &Arc<dyn ThermalPort>,
+    circuit_breaker: &Arc<dyn CircuitBreakerPort>,
+    valkey: &Arc<dyn ValkeyPort>,
+    http_client: &reqwest::Client,
+    instance_id: &str,
+    scale_out_holddown: &mut HashMap<Uuid, u64>,
+) -> anyhow::Result<()> {
+    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+
+    // Clean up expired hold-downs
+    scale_out_holddown.retain(|_, until| *until > now_ms);
+
+    // ── Pass 0: Read-only snapshot ──────────────────────────────────────
+    let all_providers = registry.list_all().await.unwrap_or_default();
+    let ollama_providers: Vec<&LlmProvider> = all_providers
+        .iter()
+        .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
+        .collect();
+
+    if ollama_providers.is_empty() {
+        return Ok(());
+    }
+
+    // Scale-Out candidates: healthy servers with free VRAM
+    let scale_out_candidates: Vec<&LlmProvider> = ollama_providers
+        .iter()
+        .filter(|p| {
+            let level = thermal.get_level(p.id);
+            !matches!(level, ThrottleLevel::Soft | ThrottleLevel::Hard | ThrottleLevel::Cooldown)
+                && circuit_breaker.is_allowed(p.id)
+                && vram_pool.available_vram_mb(p.id) > 0
+        })
+        .copied()
+        .collect();
+
+    // Collect all unique models across providers
+    let mut all_models: HashSet<String> = HashSet::new();
+    for p in &ollama_providers {
+        for model in vram_pool.loaded_model_names(p.id) {
+            all_models.insert(model);
+        }
+    }
+
+    // Get demand for each model
+    let mut model_demand: HashMap<String, u64> = HashMap::new();
+    for model in &all_models {
+        let key = demand_key(model);
+        let demand: u64 = valkey.kv_get(&key).await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if demand > 0 {
+            model_demand.insert(model.clone(), demand);
+        }
+    }
+
+    // Compute eligible capacity per model (excluding standby, thermal-gated, etc.)
+    let mut eligible_capacity: HashMap<String, u32> = HashMap::new();
+    for p in &ollama_providers {
+        let level = thermal.get_level(p.id);
+        if matches!(level, ThrottleLevel::Soft | ThrottleLevel::Hard | ThrottleLevel::Cooldown) {
+            continue;
+        }
+        if !circuit_breaker.is_allowed(p.id) {
+            continue;
+        }
+
+        for model in vram_pool.loaded_model_names(p.id) {
+            if vram_pool.is_pulling(p.id, &model) {
+                continue;
+            }
+            if vram_pool.is_dispatch_blocked(p.id, &model) {
+                continue;
+            }
+            let mc = vram_pool.max_concurrent(p.id, &model);
+            *eligible_capacity.entry(model).or_insert(0) += mc;
+        }
+    }
+
+    // Scale-Out needed: demand > eligible_capacity × 0.80
+    let scale_out_needed: HashSet<String> = model_demand
+        .iter()
+        .filter(|(model, demand)| {
+            let cap = eligible_capacity.get(*model).copied().unwrap_or(0) as f64;
+            (**demand as f64) > cap * SCALE_OUT_THRESHOLD
+        })
+        .map(|(model, _)| model.clone())
+        .collect();
+
+    // Provisional free VRAM tracking (prevents multi-model collision in same cycle)
+    let mut provisional_free: HashMap<Uuid, u32> = HashMap::new();
+    for p in &scale_out_candidates {
+        provisional_free.insert(p.id, vram_pool.available_vram_mb(p.id));
+    }
+
+    // Track which servers were used for Scale-Out/Preload this cycle (protect from ⑤)
+    let mut scale_out_servers: HashSet<Uuid> = HashSet::new();
+
+    // ── Step ④: STANDBY recovery ────────────────────────────────────────
+    // Skip for now — standby management requires full integration (Phase 5 core)
+    // Condition A: server has loaded model with demand>0
+    // Condition B: server is best_server for a scale_out_needed model
+    // For single-server: typically no-op
+
+    // ── Step ①: Scale-Out ───────────────────────────────────────────────
+    for model in &scale_out_needed {
+        // Skip if preloading servers already cover demand
+        let preloading_count = ollama_providers.iter()
+            .filter(|p| vram_pool.is_preloading(p.id, model))
+            .count();
+        let avg_mc = eligible_capacity.get(model).copied().unwrap_or(1).max(1);
+        let demand = model_demand.get(model).copied().unwrap_or(0);
+        let needed_servers = ((demand as f64) / (avg_mc as f64)).ceil() as usize;
+        if preloading_count >= needed_servers {
+            continue;
+        }
+
+        // Find best server: most free VRAM, not already loaded, not preload-excluded
+        let best_server = scale_out_candidates.iter()
+            .filter(|p| {
+                !vram_pool.loaded_model_names(p.id).contains(&model.to_string())
+                    && !vram_pool.is_preloading(p.id, model)
+                    && !vram_pool.is_pulling(p.id, model)
+                    && !vram_pool.is_preload_excluded(p.id, model)
+                    && provisional_free.get(&p.id).copied().unwrap_or(0) > 0
+            })
+            .max_by_key(|p| {
+                let free = provisional_free.get(&p.id).copied().unwrap_or(0);
+                (free, std::cmp::Reverse(p.id)) // tie-break: provider_id ASC (Reverse for max_by)
+            });
+
+        let Some(server) = best_server else {
+            continue; // No eligible server (single-server: no-op)
+        };
+
+        // Multi-instance dedup: Scale-Out decision lock
+        let decision_key = format!("veronex:scaleout:{model}");
+        match valkey.kv_get(&decision_key).await {
+            Ok(Some(_)) => continue, // another replica is handling this model
+            _ => {}
+        }
+        // Acquire decision lock (NX)
+        if valkey.kv_set(&decision_key, instance_id, SCALEOUT_DECISION_TTL, false).await.is_err() {
+            continue;
+        }
+
+        // Preload lock (NX): prevent duplicate preload of same model+server
+        let preload_key = format!("veronex:preloading:{}:{}", model, server.id);
+        match valkey.kv_get(&preload_key).await {
+            Ok(Some(_)) => {
+                let _ = valkey.kv_del(&decision_key).await;
+                continue;
+            }
+            _ => {}
+        }
+        if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL, false).await.is_err() {
+            let _ = valkey.kv_del(&decision_key).await;
+            continue;
+        }
+
+        // Update provisional free VRAM
+        if let Some(free) = provisional_free.get_mut(&server.id) {
+            *free = free.saturating_sub(2048); // conservative estimate
+        }
+        scale_out_servers.insert(server.id);
+        scale_out_holddown.insert(server.id, now_ms + SCALE_OUT_HOLDDOWN_SECS * 1000);
+
+        // Spawn preload task
+        let url = server.url.clone();
+        let model_c = model.clone();
+        let provider_id = server.id;
+        let vram_c = vram_pool.clone();
+        let http_c = http_client.clone();
+        let valkey_c = valkey.clone();
+        let preload_key_c = preload_key.clone();
+        let decision_key_c = decision_key.clone();
+
+        tokio::spawn(async move {
+            let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
+                &http_c, &url, &model_c, provider_id, &vram_c,
+            ).await;
+            // Release locks
+            let _ = valkey_c.kv_del(&preload_key_c).await;
+            let _ = valkey_c.kv_del(&decision_key_c).await;
+
+            if success {
+                vram_c.mark_model_loaded(provider_id, &model_c, 0); // weight will be updated by sync loop
+                tracing::info!(%provider_id, model = %model_c, "Scale-Out preload completed");
+            }
+        });
+
+        tracing::info!(%model, provider_id = %server.id, "Scale-Out triggered — preloading");
+    }
+
+    // ── Step ②: Preload (demand>0 && !is_loaded && !is_preloading && has_room) ──
+    for (model, _demand) in &model_demand {
+        if scale_out_needed.contains(model) {
+            continue; // already handled in ①
+        }
+
+        for p in &ollama_providers {
+            if vram_pool.loaded_model_names(p.id).contains(model) {
+                continue; // already loaded
+            }
+            if vram_pool.is_preloading(p.id, model) || vram_pool.is_pulling(p.id, model) {
+                continue;
+            }
+            if vram_pool.is_preload_excluded(p.id, model) {
+                continue;
+            }
+            let free = provisional_free.get(&p.id).copied().unwrap_or(
+                vram_pool.available_vram_mb(p.id)
+            );
+            if free == 0 {
+                continue;
+            }
+
+            // Preload lock
+            let preload_key = format!("veronex:preloading:{}:{}", model, p.id);
+            match valkey.kv_get(&preload_key).await {
+                Ok(Some(_)) => continue,
+                _ => {}
+            }
+            if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL, false).await.is_err() {
+                continue;
+            }
+
+            if let Some(pf) = provisional_free.get_mut(&p.id) {
+                *pf = pf.saturating_sub(2048);
+            }
+            scale_out_servers.insert(p.id);
+
+            let url = p.url.clone();
+            let model_c = model.clone();
+            let provider_id = p.id;
+            let vram_c = vram_pool.clone();
+            let http_c = http_client.clone();
+            let valkey_c = valkey.clone();
+            let preload_key_c = preload_key.clone();
+
+            tokio::spawn(async move {
+                let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
+                    &http_c, &url, &model_c, provider_id, &vram_c,
+                ).await;
+                let _ = valkey_c.kv_del(&preload_key_c).await;
+                if success {
+                    vram_c.mark_model_loaded(provider_id, &model_c, 0);
+                }
+            });
+
+            tracing::debug!(provider_id = %p.id, %model, "Preload triggered for queued model");
+            break; // one preload per model per cycle
+        }
+    }
+
+    // ── Step ③: Evict (demand==0 && is_loaded && active==0 && idle threshold) ──
+    for p in &ollama_providers {
+        for model in vram_pool.loaded_model_names(p.id) {
+            // Skip if demand > 0
+            if model_demand.contains_key(&model) {
+                continue;
+            }
+            // Skip if active requests
+            if vram_pool.active_requests(p.id, &model) > 0 {
+                continue;
+            }
+            // Skip if preloading or pulling
+            if vram_pool.is_preloading(p.id, &model) || vram_pool.is_pulling(p.id, &model) {
+                continue;
+            }
+
+            let idle_secs = vram_pool.idle_since_secs(p.id, &model);
+            let threshold = EVICT_IDLE_SECS; // standby uses shorter threshold but skip for now
+
+            if idle_secs >= threshold {
+                vram_pool.mark_model_unloaded(p.id, &model);
+                tracing::info!(provider_id = %p.id, %model, idle_secs, "model evicted (demand=0)");
+            }
+        }
+    }
+
+    // ── Step ⑤: Scale-In (server_idle && !last_server && !in_transition) ──
+    // Skip if only one Ollama provider (last_server protection)
+    if ollama_providers.len() > 1 {
+        for p in &ollama_providers {
+            // Skip if this server was used in Scale-Out/Preload this cycle
+            if scale_out_servers.contains(&p.id) {
+                continue;
+            }
+            // Skip if in hold-down period
+            if scale_out_holddown.contains_key(&p.id) {
+                continue;
+            }
+            // Check server_idle: no loaded models with demand, no active requests
+            let loaded = vram_pool.loaded_model_names(p.id);
+            let has_demand = loaded.iter().any(|m| model_demand.contains_key(m));
+            if has_demand {
+                continue;
+            }
+            let total_active = vram_pool.provider_active_requests(p.id);
+            if total_active > 0 {
+                continue;
+            }
+            // Skip if any model is preloading
+            if loaded.iter().any(|m| vram_pool.is_preloading(p.id, m)) {
+                continue;
+            }
+
+            // Mark as standby (Scale-In)
+            // TODO: implement set_standby via ProviderVramState.is_standby
+            tracing::debug!(provider_id = %p.id, "Scale-In candidate identified (standby)");
+        }
+    }
+
+    Ok(())
+}

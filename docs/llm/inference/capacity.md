@@ -1,6 +1,6 @@
 # VRAM Pool Capacity Management
 
-> **Status**: Implemented | **Last Updated**: 2026-03-07 | Adaptive Learning + Thermal Auto-Detection + Model Stickiness
+> **Status**: Implemented | **Last Updated**: 2026-03-12 | Adaptive Learning + Thermal 5-State + AIMD num_parallel Cap + Placement Planner
 
 ## Core Intent
 
@@ -231,8 +231,10 @@ struct VramPool {
 struct ProviderVramState {
     total_mb: AtomicU32,
     reserved_kv_mb: Arc<AtomicU32>,   // global KV reservation across all models
-    safety_permil: AtomicU32,         // e.g. 200 = 20%, increases on OOM
+    safety_permil: AtomicU32,         // e.g. 200 = 20%, increases on OOM (range 100–500)
     models: DashMap<String, ModelState>,
+    is_standby: AtomicBool,           // Scale-In flag (routing excluded)
+    transition_until: AtomicU64,      // Scale-In/Out transition guard (Unix ms)
 }
 
 struct ModelState {
@@ -241,10 +243,20 @@ struct ModelState {
     kv_per_request_mb: u32,            // from throughput stats during sync
     active_kv_mb: Arc<AtomicU32>,      // per-model KV reservation
     active_count: Arc<AtomicU32>,      // per-model active request count
-    max_concurrent: AtomicU32,         // adaptive concurrency limit (0 = unlimited)
+    max_concurrent: AtomicU32,         // adaptive concurrency limit (0 = unlimited, capped at num_parallel)
     baseline_tps: AtomicU32,           // baseline tps × 100 for AIMD
     baseline_p95_ms: AtomicU32,        // baseline p95 latency (ms) for AIMD
     probe_counter: AtomicU32,          // per-model counter for probe scheduling
+    // Phase 7 fields
+    last_active_at: Arc<AtomicU64>,    // Unix ms, updated on VramPermit::drop
+    is_preloading: AtomicBool,         // prevents duplicate preload requests
+    is_pulling: AtomicBool,            // model pull in progress
+    sample_count: AtomicU32,           // AIMD measurement count (reset on evict)
+    preload_fail_count: AtomicU32,     // consecutive failures (reset on success)
+    preload_failed_at: AtomicU64,      // Unix ms of 3rd consecutive failure (300s exclusion)
+    learning_epoch_started_at: AtomicU64, // ClickHouse query window start
+    dispatch_blocked: AtomicBool,      // manual dispatch block
+    pre_hard_max_concurrent: AtomicU32,  // snapshot before Hard thermal (for RampUp restore)
 }
 ```
 
@@ -257,6 +269,7 @@ struct VramPermit {
     kv_mb: u32,
     reserved_kv: Option<Arc<AtomicU32>>,       // provider-global KV counter
     active_count: Option<Arc<AtomicU32>>,      // per-model request count
+    last_active_at: Option<Arc<AtomicU64>>,    // updates on drop for idle tracking
     release_tx: Option<oneshot::Sender<u32>>,  // distributed release (Valkey)
 }
 
@@ -264,6 +277,7 @@ impl Drop for VramPermit {
     fn drop(&mut self) {
         // Decrement provider-global KV reservation
         // Decrement per-model active request count
+        // Store current Unix ms in last_active_at (idle tracking for eviction)
         // Notify Valkey for distributed release (if present)
     }
 }
@@ -309,27 +323,44 @@ Even with sufficient VRAM, high concurrent requests on CPU-bound servers cause s
 
 | Phase | Trigger | max_concurrent | Method |
 |-------|---------|---------------|--------|
-| **Cold Start** | Provider first registered | 1 (all models) | Conservative: 1 request per model to collect baseline |
-| **AIMD** | baseline_tps collected (sample≥3) | AIMD adjusted | TPS ratio ≥0.9 → +1, <0.7 or p95 spike → ×3/4 |
-| **LLM Batch** | total samples ≥ 10 across all models | LLM recommended (±2 clamp) | All-model combination analysis |
+| **Cold Start** | Provider first registered / model evict+reload | `num_parallel` | Top-down: start at provider's NUM_PARALLEL, AIMD decreases if needed |
+| **AIMD** | sample_count ≥ 3 | AIMD adjusted, capped at `num_parallel` | TPS ratio ≥0.9 → +1 (capped), <0.7 or p95 spike → ×3/4 |
+| **LLM Batch** | total samples ≥ 10 across all models | LLM recommended (±2 clamp, upper = num_parallel×2) | All-model combination analysis |
 
-**Cold Start**:
-- All models start with max_concurrent = 1
-- Unlearned models also get max_concurrent=1 in `try_reserve`
-- Prevents OOM / throughput collapse without data
+**Cold Start** (`num_parallel` top-down policy):
+- New/reloaded models start with `max_concurrent = num_parallel` (from `provider_vram_budget.num_parallel`)
+- APU memory safety is handled independently by `try_reserve` + `safety_permil`, so starting high is safe
+- AIMD rapidly decreases if throughput degrades, converging to optimal within a few 30s cycles
+- Multi-model simultaneous cold start defense: Preloader sets `initial = min(num_parallel, num_parallel - committed_parallel)` where `committed_parallel` = sum of all loaded models' max_concurrent
 
 **AIMD**:
-- Activates when ≥ 3 completed jobs exist
-- TPS maintained + p95 stable → additive increase (+1)
-- TPS 30%+ drop **or p95 > 2× baseline** → multiplicative decrease (×3/4)
+- Activates when `sample_count ≥ 3` (per model×provider)
+- TPS maintained + p95 stable → additive increase (+1), **capped at `num_parallel`**
+- TPS 30%+ drop **or p95 > 2× baseline** → multiplicative decrease (×3/4), minimum 1
 - p95 spike detection: catches tail latency degradation even when average TPS looks normal
+- `sample_count` resets to 0 on model evict → Cold Start restarts with fresh `learning_epoch_started_at`
+- ClickHouse queries only aggregate data after `learning_epoch_started_at` to prevent stale measurements from contaminating new learning epochs
+
+**sample_count reset triggers**:
+- Model evict (idle 180s, demand=0): `sample_count=0`, `learning_epoch_started_at=now_ms`
+- Model pull (weight replacement): same reset + `baseline_tps=0`, `baseline_p95_ms=0`
+- External memory pressure (30s sync detects `mem_available_mb` drop ≥15%): all models on that provider reset
 
 **LLM Batch Analysis**:
 - Activates when total samples ≥ 10
 - Sends all loaded model snapshots to LLM
 - Analyzes model combination, VRAM usage, throughput patterns
 - **±2 change clamp** per cycle to prevent oscillation from LLM hallucination
-- Weight-based upper bound (×2) as safety cap
+- Upper bound: `num_parallel × 2` (replaced weight-based heuristic)
+
+### Cooldown RampUp
+
+When thermal state transitions from Hard → Normal (below `normal_below` threshold):
+- 60s Cooldown hold, then RampUp phase begins
+- During RampUp: `max_concurrent` is forced to **1** for all models on the provider
+- `pre_hard_max_concurrent` snapshot preserves the pre-Hard limit
+- RampUp ends when AIMD naturally reaches `pre_hard_max_concurrent` → full capacity restored
+- Prevents thermal oscillation from immediately resuming high concurrency after cooling
 
 ### DB Restore (on server restart)
 
@@ -384,14 +415,31 @@ at dispatch time (try_reserve):
     if active >= max_concurrent: block
 ```
 
-### Weight-Based Initial Caps
+---
 
-| Weight (MB) | Initial max_concurrent |
-|-------------|----------------------|
-| < 5,120 | 8 |
-| 5,120 – 20,480 | 4 |
-| 20,480 – 51,200 | 2 |
-| > 51,200 | 1 |
+## APU VRAM Management
+
+On APU systems (Ryzen AI 395+ — shared CPU/GPU memory), DRM reports ~1GB VRAM which is far below actual model sizes (5–51GB). The VramPool uses `mem_available_mb` from node-exporter instead.
+
+### VRAM Total Calculation
+
+```
+total_mb = mem_available_mb × (1 - safety_permil / 1000)
+```
+
+- `mem_available_mb`: system available memory from node-exporter, refreshed every 30s
+- `safety_permil`: safety margin in permil (default 100 = 10%), absorbs memory drift from non-Ollama processes
+
+### safety_permil Rules
+
+| Event | Change | Range |
+|-------|--------|-------|
+| OOM detected (try_reserve fail or Ollama 429) | `+50` | up to 500 (50%) |
+| 30s sync loop, no OOM (stable) | `-10` | down to 100 (10%) |
+
+**Recovery asymmetry is intentional**: `+50` recovery takes 5 cycles (150s) at `-10/30s`. Combined with AIMD `max_concurrent` recovery at `+1/30s`, this creates a ~150s low-utilization window after OOM. OOM can halt the entire service, so safety over speed is the correct trade-off.
+
+**OOM dual correction**: On OOM, both `safety_permil +50` (shrinks available VRAM ceiling) and `max_concurrent ×3/4` (AIMD multiplicative decrease) apply simultaneously. The two paths are independent — AIMD optimizes throughput, `try_reserve + safety_permil` ensures memory safety.
 
 ---
 
@@ -418,7 +466,7 @@ Detection path: `node-exporter` exposes sysfs vendor info → `health_checker` d
 | `CPU` (default) | 75°C | 82°C | 90°C | Ryzen AI 395+, CPU/iGPU inference |
 | `GPU` | 80°C | 88°C | 93°C | NVIDIA discrete GPU |
 
-### State Machine
+### State Machine (5-state)
 
 | Temperature | State | Effect |
 |-------------|-------|--------|
@@ -427,6 +475,7 @@ Detection path: `node-exporter` exposes sysfs vendor info → `health_checker` d
 | ≥ soft_at | Soft | Block if provider has ANY active request |
 | ≥ hard_at | Hard | Block all requests |
 | Hard → < normal_below | Cooldown (60s) | Hold before resuming |
+| Cooldown expired | RampUp | `max_concurrent=1`, AIMD ramps back up gradually |
 
 ### API
 
@@ -434,6 +483,17 @@ Detection path: `node-exporter` exposes sysfs vendor info → `health_checker` d
 thermal.set_thresholds(provider_id, ThermalThresholds::GPU);
 thermal.set_thresholds(provider_id, ThermalThresholds { normal_below: 70.0, soft_at: 80.0, hard_at: 88.0 });
 ```
+
+### Gate Chain Priority (Dispatch)
+
+```
+thermal(per-provider) → circuit_breaker → concurrency_limit(AIMD)
+```
+
+- Thermal checked first — Hard/Cooldown blocks regardless of other gates
+- Circuit breaker (existing impl in `score_and_claim()`): consecutive failure tracking, independent of thermal
+- Concurrency limit (AIMD): `max_concurrent` enforcement via `try_reserve`
+- During RampUp: thermal gate passes but AIMD forces `max_concurrent=1`
 
 ---
 
@@ -543,30 +603,35 @@ OLLAMA_LOAD_TIMEOUT=900           # 15 min for large model loading
   ├── model_manager = None (VramPool + OLLAMA_KEEP_ALIVE=-1 manages lifecycle)
   └── Restore max_concurrent / baseline_tps / baseline_p95_ms from DB
       → Learned models: DB limits apply immediately
-      → New models: cold start=1 in try_reserve
+      → New models: cold start = num_parallel (top-down)
 
 [Request arrival]
   ├── Model filter: providers_for_model() + list_enabled()
-  │     Applied in both direct path and queue path
+  │     + Stage 4: preload exclusion (3-fail 300s cooldown)
   ├── Model stickiness: +100GB sort bonus for providers with model loaded
+  ├── Gate chain: thermal → circuit_breaker → concurrency(AIMD)
+  │     RampUp: max_concurrent forced to 1
   ├── Adaptive concurrency (AIMD + probe policy)
-  │     Unlearned: max_concurrent=1 (cold start)
+  │     Cold start: max_concurrent = num_parallel
+  │     AIMD increase capped at num_parallel
   │     Learned: restored DB limit
   ├── VRAM gate: try_reserve() → VramPermit or reject
   │     Direct path: None → skip with warning
   │     Queue path: None → re-enqueue
   ├── Thermal gate (per-provider thresholds, auto-detected from gpu_vendor)
   │     Soft: block if provider has any active request
-  │     Hard: block all
+  │     Hard: block all → Cooldown(60s) → RampUp(max_concurrent=1)
   ├── Success → /api/ps measurement → VRAM profile learning
-  ├── Failure (OOM) → estimate ×1.2 → exclude after 3 consecutive
-  └── drop(VramPermit) → KV cache released
+  ├── Failure (OOM) → estimate ×1.2 + safety_permil +50 + max_concurrent ×3/4
+  └── drop(VramPermit) → KV cache released + last_active_at updated
 
-[Background sync (every N min)]
-  └── /api/ps → weight learning
-      /api/show → architecture parsing
-      → KV per request calculation
-      → AIMD: TPS ratio + p95 spike → max_concurrent adjustment
-      → LLM Batch: all-model analysis → ±2 clamp auto-applied
-      → DB persist → restored on restart
+[Background loops]
+  ├── Sync (30s): /api/ps weight + /api/show arch + KV calculation
+  │     AIMD: TPS ratio + p95 spike → max_concurrent (capped at num_parallel)
+  │     LLM Batch: all-model analysis → ±2 clamp
+  │     DB persist → restored on restart
+  ├── Placement Planner (5s): Scale-Out + Preload + Evict(idle 180s) + Scale-In
+  │     Evict resets: sample_count=0, learning_epoch_started_at=now
+  ├── Promote Overdue (30s): EMERGENCY_BONUS for jobs waiting >250s
+  └── Demand Resync (60s): ZSET-based ground truth → demand_counter correction
 ```

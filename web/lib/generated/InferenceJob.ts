@@ -3,8 +3,7 @@ import type { ApiFormat } from "./ApiFormat";
 import type { JobId } from "./JobId";
 import type { JobSource } from "./JobSource";
 import type { JobStatus } from "./JobStatus";
-// serde_json::Value — inlined to avoid cross-crate path in Docker builds.
-type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null;
+import type { JsonValue } from "../../../crates/veronex/bindings/serde_json/JsonValue";
 import type { ModelName } from "./ModelName";
 import type { Prompt } from "./Prompt";
 import type { ProviderType } from "./ProviderType";
