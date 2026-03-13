@@ -57,20 +57,19 @@ DATABASE_URL=postgres://veronex:veronex@localhost:5433/veronex
 VALKEY_URL=redis://localhost:6380/0   # DB index recommended when sharing Valkey
 OLLAMA_URL=http://localhost:11434
 GEMINI_API_KEY=<optional legacy>
-BOOTSTRAP_API_KEY=veronex-bootstrap-admin-key
 PORT=3000
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 JWT_SECRET=change-me-in-production
+GEMINI_ENCRYPTION_KEY=<64-char hex>  # REQUIRED (≥32 chars; 256-bit recommended) — encrypt Gemini API keys at rest; generate: openssl rand -hex 32
 # BOOTSTRAP_SUPER_USER=<username>     # optional: pre-seed super account
 # BOOTSTRAP_SUPER_PASS=<password>     # optional: omit for first-run setup flow
 CORS_ALLOWED_ORIGINS=*                # prod: "https://app.example.com,https://admin.example.com"
-S3_ENDPOINT=http://localhost:9010     # S3/MinIO (MANDATORY)
-S3_ACCESS_KEY=veronex
-S3_SECRET_KEY=veronex123
+S3_ENDPOINT=http://localhost:9010     # S3/MinIO (optional — omit to store messages in PostgreSQL only)
+S3_ACCESS_KEY=veronex                 # required when S3_ENDPOINT is set
+S3_SECRET_KEY=veronex123              # required when S3_ENDPOINT is set
 S3_BUCKET=veronex-messages
 S3_REGION=us-east-1
 CAPACITY_ANALYZER_OLLAMA_URL=http://localhost:11434
-OLLAMA_NUM_PARALLEL=1                # slot ceiling in capacity analyzer; must match Ollama StatefulSet env
 SESSION_GROUPING_INTERVAL_SECS=86400 # session grouping loop interval (default: 86400 = 24h)
 ANALYTICS_URL=http://localhost:3003
 ANALYTICS_SECRET=<shared-secret>
@@ -122,7 +121,7 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 | `veronex:pwreset:{token}` | Password-reset token (TTL 24h) |
 | `veronex:refresh_used:{hash}` | Refresh token replay prevention |
 | `veronex:login_attempts:{ip}` | IP-based login attempt counter (5-min window) |
-| `veronex:throttle:{provider_id}` | Thermal Hard throttle (TTL 90s) |
+| `veronex:throttle:{provider_id}` | Thermal Hard throttle (TTL 360s) |
 | `veronex:hw:{provider_id}` | hw_metrics JSON (TTL ~60s) |
 | `veronex:heartbeat:{instance_id}` | Instance heartbeat (EX 30s, refreshed every 10s) |
 | `veronex:slots:{provider_id}:{model}` | Distributed slot counts HASH (`{instance_id}` → count, `__max__` → max) |

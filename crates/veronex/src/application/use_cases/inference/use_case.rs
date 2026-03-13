@@ -34,7 +34,7 @@ use crate::domain::constants::{
 
 use super::JobEntry;
 use super::dispatcher::{queue_dispatcher_loop, spawn_job_direct};
-use super::helpers::broadcast_event;
+use super::helpers::{broadcast_event, schedule_cleanup};
 use super::runner::run_job;
 
 type Result<T> = std::result::Result<T, DomainError>;
@@ -284,8 +284,13 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             match valkey.zset_enqueue(uuid, score, &model_name, now_ms, MAX_QUEUE_SIZE, MAX_QUEUE_PER_MODEL).await {
                 Ok(true) => tracing::debug!(%uuid, %score, "job enqueued to ZSET"),
                 Ok(false) => {
-                    // Queue full — fail immediately with 429-equivalent
+                    // Queue full — mark DB job failed (orphan prevention) then reject.
                     tracing::warn!(%uuid, "queue full, rejecting job");
+                    self.jobs.remove(&uuid);
+                    self.cancel_notifiers.remove(&uuid);
+                    if let Err(e) = self.job_repo.update_status(&job_id, JobStatus::Failed).await {
+                        tracing::warn!(%uuid, "failed to mark queue-full job as failed: {e}");
+                    }
                     return Err(DomainError::QueueFull("queue capacity exceeded".into()));
                 }
                 Err(e) => {
@@ -416,6 +421,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         if !is_local
             && let Some(ref vk) = self.valkey { vk.publish_cancel(job_id.0).await; }
         self.cancel_notifiers.remove(&job_id.0);
+        // Schedule deferred removal from in-memory job map (queued jobs never reach runner cleanup).
+        if is_local && !is_final {
+            schedule_cleanup(&self.jobs, job_id.0, crate::domain::constants::JOB_CLEANUP_DELAY);
+        }
         Ok(())
     }
 }

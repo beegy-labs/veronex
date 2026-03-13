@@ -1,6 +1,6 @@
 # Hardware — GPU Server & Metrics
 
-> SSOT | **Last Updated**: 2026-03-12 (rev: 5-state thermal machine, Cooldown/RampUp)
+> SSOT | **Last Updated**: 2026-03-13 (rev: thermal state table corrected — Cooldown 300s/900s, Hard→Cooldown 300s fallback, RampUp→Normal invariant)
 
 ## Task Guide
 
@@ -106,7 +106,9 @@ pub struct NodeMetrics {
     pub scrape_ok: bool,
     pub mem_total_mb: u64,
     pub mem_available_mb: u64,
-    pub cpu_cores: u32,
+    pub cpu_logical: u32,           // logical threads from node_cpu_seconds_total
+    pub cpu_physical: Option<u32>,  // physical cores from node_cpu_info (None if not exported)
+    pub cpu_usage_pct: Option<f64>, // instantaneous CPU % (None on first scrape — delta required)
     pub gpus: Vec<GpuNodeMetrics>,
 }
 pub struct GpuNodeMetrics {
@@ -143,11 +145,13 @@ pub struct ServerMetricsPoint {
 |--------|------|
 | `node_memory_MemTotal_bytes` | Total RAM |
 | `node_memory_MemAvailable_bytes` | Available RAM |
-| `node_cpu_seconds_total{cpu="N"}` | CPU core count |
+| `node_cpu_seconds_total{cpu="N"}` | Logical CPU count + usage delta |
+| `node_cpu_info{cpu,core,package}` | Physical core count (optional, `--collector.cpu.info`) |
 | `node_hwmon_chip_names{chip_name="amdgpu"}` | AMD GPU chip ID |
 | `node_drm_gpu_busy_percent{card="cardN"}` | GPU utilization (`--collector.drm`) |
 | `node_drm_memory_vram_used_bytes` | VRAM used |
-| `node_drm_memory_vram_total_bytes` | VRAM total |
+| `node_drm_memory_vram_size_bytes` | VRAM total (older node-exporter) |
+| `node_drm_memory_vram_total_bytes` | VRAM total (newer node-exporter; overwrites `size_bytes` if both present) |
 | `node_hwmon_temp_celsius{sensor="temp1"}` | GPU edge temp (amdgpu only) |
 | `node_hwmon_temp_celsius{sensor="temp2"}` | GPU junction/hotspot temp |
 | `node_hwmon_temp_celsius{sensor="temp3"}` | GPU memory (HBM/GDDR) temp |
@@ -160,19 +164,20 @@ Identify via `node_hwmon_chip_names{chip_name="amdgpu"}`. Two-step query in `hw_
 
 ## GPU Vendor Detection via node-exporter
 
-GPU vendor is detected from sysfs `/sys/class/drm/cardN/device/vendor` via node-exporter metrics:
+GPU vendor is inferred from **DRM metric presence** — amdgpu kernel driver exposes DRM metrics via node-exporter; NVIDIA uses proprietary driver and does not:
 
-| Vendor ID | `gpu_vendor` | Thermal Profile |
+| Condition | `gpu_vendor` | Thermal Profile |
 |-----------|-------------|-----------------|
-| `0x1002` | `"amd"` | CPU (75/82/90°C) — Ryzen AI 395+ = APU/iGPU |
-| `0x10de` | `"nvidia"` | GPU (80/88/93°C) |
-| other/none | `"unknown"` | CPU (default) |
+| DRM GPU metrics present (`node_drm_*`) | `"amd"` | CPU (75/82/90°C) — covers AMD discrete + Ryzen AI APU |
+| No DRM GPU metrics | `""` (empty) | CPU (default) |
 
-The `gpu_vendor` field is derived from node-exporter metrics and cached in `HwMetrics`. The health_checker reads it every 30s cycle and calls `thermal.set_thresholds()` to configure per-provider thermal limits.
+The `gpu_vendor` field is set in `health_checker` (not from sysfs vendor IDs), cached in Valkey (`HwMetrics`), and used to call `thermal.set_thresholds()` every 30s cycle.
 
-**Agent GPU metrics by vendor**:
-- **AMD**: Full sysfs support — `mem_info_vram_used`, `mem_info_vram_total`, `gpu_busy_percent`, hwmon temp/power
-- **NVIDIA**: Card detection only via sysfs vendor ID. Detailed VRAM/temp metrics require nvidia-smi integration (future)
+**Note**: NVIDIA GPU thermal profile (`GPU`: 80/88/93°C) is defined but currently unreachable — NVIDIA does not expose DRM metrics via node-exporter. NVIDIA support requires nvidia-smi integration (future).
+
+**GPU metrics by driver**:
+- **AMD (amdgpu)**: Full DRM support — VRAM used/total, GPU busy %, hwmon temp (edge/junction/mem), power
+- **NVIDIA**: No DRM metrics → `gpu_vendor=""` → CPU thermal profile applied as fallback
 
 ---
 
@@ -223,7 +228,7 @@ Normal ──(≥ soft_at)──→ Soft ──(≥ hard_at)──→ Hard
   ↑                       ↑                      │
   │                       │                      │ (< normal_below)
   │                       │                      ↓
-  │                       │                   Cooldown (60s hold)
+  │                       │                   Cooldown (300s min, 900s max)
   │                       │                      │
   │                       │                      ↓
   └───────────────────────┴──────────────── RampUp (max_concurrent=1)
@@ -235,28 +240,32 @@ Normal ──(≥ soft_at)──→ Soft ──(≥ hard_at)──→ Hard
 | State | Condition | Dispatch Effect |
 |-------|-----------|-----------------|
 | Normal | `temp < normal_below` | Full capacity |
-| Soft | `temp ≥ soft_at` | Block if provider has ANY active request |
+| Soft | `temp ≥ soft_at` | Block dispatch when `active_count > 0` (drain-first); exit requires `temp < normal_below AND active_count == 0` |
 | Hard | `temp ≥ hard_at` | Block ALL requests |
-| Cooldown | Hard → `temp < normal_below`, 60s timer | Block ALL (cooling hold) |
-| RampUp | After Cooldown expires | `max_concurrent` forced to 1, AIMD gradually increases |
+| Cooldown | `set_cooldown()` when `active_count == 0` OR 300s elapsed (auto-fallback); requires `temp < hard_at` | Block ALL (300s min, 900s max); at 900s forced exit: `temp ≥ soft_at → Soft`, else `→ RampUp`; 90s = watchdog log only |
+| RampUp | After Cooldown expires (`cooldown_elapsed` AND `temp < soft_at`) | `max_concurrent` forced to 1, AIMD gradually increases |
+| RampUp → Normal | `sum_max_concurrent >= pre_hard_total` (all models restored) | Full capacity |
 
 ### Threshold Profiles (auto-detected from gpu_vendor)
 
 | Profile | normal_below | soft_at | hard_at | Detection |
 |---------|-------------|---------|---------|-----------|
-| CPU (default) | 75°C | 82°C | 90°C | AMD (`0x1002`) or unknown |
-| GPU | 80°C | 88°C | 93°C | NVIDIA (`0x10de`) |
+| CPU (default) | 75°C | 82°C | 90°C | AMD (DRM metrics present) or unknown (no DRM) |
+| GPU | 80°C | 88°C | 93°C | NVIDIA (future — currently unreachable; no DRM metrics) |
 
 ### perf_factor (Temperature-Proportional)
 
 ```
 perf_factor(temp_c) → 0.0 to 1.0
-  75°C → 1.0 (full performance)
-  90°C → 0.0 (zero performance)
-  Linear interpolation between thresholds
+  ≤75°C → 1.0  (full performance)
+   82°C → 0.70 (midpoint — piecewise linear bend)
+  ≥90°C → 0.0  (zero performance)
+
+  Segment 1 (75→82°C): 1.0 → 0.70  linear
+  Segment 2 (82→90°C): 0.70 → 0.0  linear
 ```
 
-Used in ZSET scoring: `age_bonus = wait_secs × perf_factor(temp_c)` — hot servers get deprioritized for new work.
+Used in ZSET scoring: `age_bonus = wait_ms × 0.25 × perf_factor` — hot servers get deprioritized for new work.
 
 ### Admin API
 

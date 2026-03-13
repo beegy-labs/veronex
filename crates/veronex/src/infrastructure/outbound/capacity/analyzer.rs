@@ -1010,10 +1010,11 @@ pub async fn sync_provider(
                         );
                         continue;
                     }
-                    // Clamp to num_parallel upper bound and ±2 from current for stability (Phase 8)
+                    // LLM correction is increase-only: floor = current, ceil = current+2.
+                    // AIMD is solely responsible for decreases; LLM can only nudge upward.
                     let upper = num_parallel * 2;
                     let current = vram_pool.max_concurrent(provider_id, &mr.model);
-                    let change_floor = current.saturating_sub(2).max(1);
+                    let change_floor = current; // never decrease via LLM
                     let change_ceil = current.saturating_add(2);
                     let recommended = mr.recommended_max_concurrent
                         .min(upper)

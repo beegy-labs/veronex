@@ -59,6 +59,7 @@ pub async fn spawn_background_tasks(
         thermal.clone(),
         shutdown.child_token(),
         infra.http_client.clone(),
+        repos.vram_pool.clone(),
     ));
 
     // ── Sync loop (unified: health + models + VRAM) ────────────────

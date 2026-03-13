@@ -287,13 +287,4 @@ pub trait VramPoolPort: Send + Sync {
 
     /// Decay APU safety margin by 10 permil per stable sync (min = DEFAULT_SAFETY_PERMIL = 100).
     fn decay_safety_permil(&self, provider_id: Uuid);
-
-    /// Provider-wide Σ max_concurrent snapshot taken at Hard throttle entry.
-    ///
-    /// Used as the RampUp → Normal exit condition: AIMD must restore concurrency to this level.
-    /// Returns 0 if Hard throttle has never been entered for this provider.
-    fn provider_pre_hard_total(&self, provider_id: Uuid) -> u32;
-
-    /// Record provider-wide committed parallel snapshot at Hard throttle entry.
-    fn set_provider_pre_hard_total(&self, provider_id: Uuid, total: u32);
 }

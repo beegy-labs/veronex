@@ -53,6 +53,9 @@ struct ThrottleState {
     hard_since: Option<Instant>,
     /// When Cooldown state was entered (for cooldown_secs tracking).
     cooldown_entered_at: Option<Instant>,
+    /// Σ max_concurrent across all loaded models at Hard entry.
+    /// Carried through Hard → Cooldown → RampUp for the RampUp → Normal exit condition.
+    pre_hard_total: u32,
 }
 
 /// Thread-safe map of provider_id → thermal throttle state.
@@ -93,12 +96,21 @@ impl ThermalThrottleMap {
     ///
     /// Implements the 5-state thermal machine:
     /// Normal → Soft → Hard → Cooldown → RampUp → Normal
-    pub fn update(&self, provider_id: Uuid, temp_c: f32) -> ThrottleLevel {
+    ///
+    /// `active_count`       — provider-wide in-flight request count (for Soft hysteresis).
+    /// `sum_max_concurrent` — Σ max_concurrent across loaded models (for RampUp → Normal check).
+    pub fn update(
+        &self,
+        provider_id: Uuid,
+        temp_c: f32,
+        active_count: u32,
+        sum_max_concurrent: u32,
+    ) -> ThrottleLevel {
         let prev = self.states.get(&provider_id)
-            .map(|s| (s.level, s.hard_since, s.cooldown_entered_at));
+            .map(|s| (s.level, s.hard_since, s.cooldown_entered_at, s.pre_hard_total));
 
-        let (prev_level, prev_hard_since, prev_cooldown_entered) = prev
-            .unwrap_or((ThrottleLevel::Normal, None, None));
+        let (prev_level, prev_hard_since, prev_cooldown_entered, prev_pre_hard_total) = prev
+            .unwrap_or((ThrottleLevel::Normal, None, None, 0));
 
         let th = self.get_thresholds(provider_id);
 
@@ -115,8 +127,9 @@ impl ThermalThrottleMap {
             ThrottleLevel::Soft => {
                 if temp_c >= th.hard_at {
                     ThrottleLevel::Hard
-                } else if temp_c < th.normal_below {
-                    // Hysteresis: must drop below normal_below (not just soft_at)
+                } else if temp_c < th.normal_below && active_count == 0 {
+                    // Hysteresis: temp must drop below normal_below AND all in-flight must finish.
+                    // active_count == 0 prevents releasing the gate mid-stream (SDD §3).
                     ThrottleLevel::Normal
                 } else {
                     ThrottleLevel::Soft
@@ -170,8 +183,13 @@ impl ThermalThrottleMap {
                 } else if temp_c >= th.soft_at {
                     ThrottleLevel::Soft
                 } else if temp_c < th.normal_below {
-                    // Simplified: full AIMD restoration check comes in Phase 8.
-                    ThrottleLevel::Normal
+                    // AIMD restoration check: current Σ max_concurrent must reach pre-Hard level.
+                    // pre_hard_total == 0 means Hard was never entered (e.g. direct RampUp test) → allow.
+                    if prev_pre_hard_total == 0 || sum_max_concurrent >= prev_pre_hard_total {
+                        ThrottleLevel::Normal
+                    } else {
+                        ThrottleLevel::RampUp // AIMD still restoring
+                    }
                 } else {
                     ThrottleLevel::RampUp
                 }
@@ -186,6 +204,7 @@ impl ThermalThrottleMap {
             ThrottleLevel::Soft => {
                 self.states.insert(provider_id, ThrottleState {
                     level: next, temp_c, hard_since: None, cooldown_entered_at: None,
+                    pre_hard_total: 0,
                 });
             }
             ThrottleLevel::Hard => {
@@ -194,8 +213,17 @@ impl ThermalThrottleMap {
                 } else {
                     Some(Instant::now())
                 };
+                // Snapshot Σ max_concurrent at first Hard entry.
+                // On re-entry (RampUp → Hard) preserve the existing snapshot so
+                // the RampUp exit condition is anchored to the original pre-Hard level.
+                let pre_hard_total = if prev_level == ThrottleLevel::Hard {
+                    prev_pre_hard_total
+                } else {
+                    sum_max_concurrent
+                };
                 self.states.insert(provider_id, ThrottleState {
                     level: next, temp_c, hard_since, cooldown_entered_at: None,
+                    pre_hard_total,
                 });
             }
             ThrottleLevel::Cooldown => {
@@ -206,13 +234,17 @@ impl ThermalThrottleMap {
                     // New Cooldown entry or timer reset on temp re-surge.
                     Some(Instant::now())
                 };
+                // Carry pre_hard_total through Cooldown for RampUp → Normal exit check.
                 self.states.insert(provider_id, ThrottleState {
                     level: next, temp_c, hard_since: None, cooldown_entered_at,
+                    pre_hard_total: prev_pre_hard_total,
                 });
             }
             ThrottleLevel::RampUp => {
+                // Carry pre_hard_total through RampUp until Normal is reached.
                 self.states.insert(provider_id, ThrottleState {
                     level: next, temp_c, hard_since: None, cooldown_entered_at: None,
+                    pre_hard_total: prev_pre_hard_total,
                 });
             }
         }
@@ -309,40 +341,59 @@ mod tests {
         assert!(mid2 > 0.0 && mid2 < 0.70, "mid2={mid2}");
     }
 
+    // Helper: call update with default active_count=0, sum_mc=10 (assume AIMD restored).
+    fn upd(map: &ThermalThrottleMap, id: Uuid, temp: f32) -> ThrottleLevel {
+        map.update(id, temp, 0, 10)
+    }
+
     #[test]
     fn normal_to_soft_to_hard() {
         let map = ThermalThrottleMap::new(300);
         let id = Uuid::now_v7();
 
-        assert_eq!(map.update(id, 70.0), ThrottleLevel::Normal);
-        assert_eq!(map.update(id, 83.0), ThrottleLevel::Soft);
-        assert_eq!(map.update(id, 91.0), ThrottleLevel::Hard);
+        assert_eq!(upd(&map, id, 70.0), ThrottleLevel::Normal);
+        assert_eq!(upd(&map, id, 83.0), ThrottleLevel::Soft);
+        assert_eq!(upd(&map, id, 91.0), ThrottleLevel::Hard);
     }
 
     #[test]
-    fn soft_hysteresis() {
+    fn soft_hysteresis_requires_active_zero() {
         let map = ThermalThrottleMap::new(300);
         let id = Uuid::now_v7();
 
-        map.update(id, 83.0); // → Soft
-        // Still in hysteresis zone (between normal_below and soft_at)
-        assert_eq!(map.update(id, 76.0), ThrottleLevel::Soft);
-        // Below normal_below → Normal
-        assert_eq!(map.update(id, 74.0), ThrottleLevel::Normal);
+        upd(&map, id, 83.0); // → Soft
+        // Below normal_below but active_count > 0 → stays Soft
+        assert_eq!(map.update(id, 74.0, 1, 10), ThrottleLevel::Soft);
+        // Below normal_below AND active_count == 0 → Normal
+        assert_eq!(map.update(id, 74.0, 0, 10), ThrottleLevel::Normal);
     }
 
     #[test]
-    fn rampup_to_normal() {
+    fn soft_hysteresis_temp_zone() {
+        let map = ThermalThrottleMap::new(300);
+        let id = Uuid::now_v7();
+
+        upd(&map, id, 83.0); // → Soft
+        // Still in hysteresis zone (between normal_below and soft_at), active=0
+        assert_eq!(map.update(id, 76.0, 0, 10), ThrottleLevel::Soft);
+        // Below normal_below, active=0 → Normal
+        assert_eq!(map.update(id, 74.0, 0, 10), ThrottleLevel::Normal);
+    }
+
+    #[test]
+    fn rampup_to_normal_requires_pre_hard_total() {
         let map = ThermalThrottleMap::new(0); // 0s cooldown for test
         let id = Uuid::now_v7();
 
-        map.update(id, 91.0); // → Hard
-        // With 0s cooldown, next update below hard_at goes to Cooldown
-        map.update(id, 80.0); // → Cooldown
+        // Enter Hard with sum_mc=8
+        map.update(id, 91.0, 0, 8); // → Hard, pre_hard_total=8
+        map.update(id, 80.0, 0, 8); // → Cooldown
         // With 0s cooldown elapsed and temp < soft_at → RampUp
-        assert_eq!(map.update(id, 70.0), ThrottleLevel::RampUp);
-        // temp < normal_below → Normal
-        assert_eq!(map.update(id, 70.0), ThrottleLevel::Normal);
+        assert_eq!(map.update(id, 70.0, 0, 8), ThrottleLevel::RampUp);
+        // AIMD not restored yet (sum_mc=4 < pre_hard_total=8) → stays RampUp
+        assert_eq!(map.update(id, 70.0, 0, 4), ThrottleLevel::RampUp);
+        // AIMD restored (sum_mc=8 >= pre_hard_total=8) → Normal
+        assert_eq!(map.update(id, 70.0, 0, 8), ThrottleLevel::Normal);
     }
 
     #[test]
@@ -350,10 +401,10 @@ mod tests {
         let map = ThermalThrottleMap::new(0);
         let id = Uuid::now_v7();
 
-        map.update(id, 91.0); // → Hard
-        map.update(id, 80.0); // → Cooldown
-        map.update(id, 70.0); // → RampUp
-        assert_eq!(map.update(id, 91.0), ThrottleLevel::Hard);
+        upd(&map, id, 91.0); // → Hard
+        upd(&map, id, 80.0); // → Cooldown
+        upd(&map, id, 70.0); // → RampUp
+        assert_eq!(upd(&map, id, 91.0), ThrottleLevel::Hard);
     }
 
     #[test]
@@ -361,18 +412,17 @@ mod tests {
         let map = ThermalThrottleMap::new(300);
         let id = Uuid::now_v7();
 
-        map.update(id, 91.0); // → Hard
-        // Simulate: Hard for long enough (we can't easily fast-forward Instant,
-        // but we test that temp >= hard_at keeps Cooldown resetting).
+        upd(&map, id, 91.0); // → Hard
         // Force into Cooldown by manipulating state directly.
         map.states.insert(id, ThrottleState {
             level: ThrottleLevel::Cooldown,
             temp_c: 80.0,
             hard_since: None,
             cooldown_entered_at: Some(Instant::now()),
+            pre_hard_total: 8,
         });
 
         // Temp re-surges → Cooldown timer resets
-        assert_eq!(map.update(id, 91.0), ThrottleLevel::Cooldown);
+        assert_eq!(upd(&map, id, 91.0), ThrottleLevel::Cooldown);
     }
 }

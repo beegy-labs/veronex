@@ -105,8 +105,6 @@ struct ProviderVramState {
     last_mem_available_mb: AtomicU32,
     /// Cached total active request count across all models — O(1) alternative to summing models.
     total_active_count: Arc<AtomicU32>,
-    /// Σ max_concurrent snapshot at Hard throttle entry (for RampUp → Normal condition). 0 = not yet entered Hard.
-    provider_pre_hard_total: AtomicU32,
 }
 
 /// Default VRAM buffer reserved for system/driver overhead (MB).
@@ -157,7 +155,6 @@ impl VramPool {
                     transition_until: AtomicU64::new(0),
                     last_mem_available_mb: AtomicU32::new(0),
                     total_active_count: Arc::new(AtomicU32::new(0)),
-                    provider_pre_hard_total: AtomicU32::new(0),
                 })
             })
             .value()
@@ -763,16 +760,6 @@ impl VramPoolPort for VramPool {
         }
     }
 
-    fn provider_pre_hard_total(&self, provider_id: Uuid) -> u32 {
-        self.providers
-            .get(&provider_id)
-            .map(|s| s.provider_pre_hard_total.load(Ordering::Acquire))
-            .unwrap_or(0)
-    }
-
-    fn set_provider_pre_hard_total(&self, provider_id: Uuid, total: u32) {
-        self.get_or_create(provider_id).provider_pre_hard_total.store(total, Ordering::Release);
-    }
 }
 
 #[cfg(test)]
@@ -869,7 +856,6 @@ mod tests {
             transition_until: AtomicU64::new(0),
             last_mem_available_mb: AtomicU32::new(0),
             total_active_count: Arc::new(AtomicU32::new(0)),
-            provider_pre_hard_total: AtomicU32::new(0),
         }
     }
 

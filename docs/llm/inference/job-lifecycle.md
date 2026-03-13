@@ -58,7 +58,7 @@ Jobs carry a `source` field that records their origin:
 
 ## ZSET Priority Queue (Phase 3)
 
-Every inference route goes through the Valkey ZSET queue — **no direct-to-provider path exists**.
+Every inference route attempts Valkey ZSET queuing first. If Valkey is unavailable or returns an error (or when `VALKEY_URL` is not configured), the job falls back to `spawn_job_direct()` — a direct async task without queue ordering or retry. On the direct path, if VRAM is unavailable at dispatch time, the job is silently dropped (warning logged) with no re-enqueue.
 Single unified ZSET with tier-based scoring (lower score = higher priority):
 
 ```
@@ -155,6 +155,7 @@ pub(crate) struct JobEntry {
     pub gemini_tier: Option<String>,
     pub key_tier: Option<KeyTier>,
     pub tpm_reservation_minute: Option<i64>, // minute bucket for TPM adjustment
+    pub assigned_provider_id: Option<Uuid>,  // dispatch 시점에 set (Hard drain cancel용)
 }
 ```
 

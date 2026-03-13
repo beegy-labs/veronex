@@ -370,11 +370,4 @@ impl VramPoolPort for DistributedVramPool {
         self.local.decay_safety_permil(provider_id);
     }
 
-    fn provider_pre_hard_total(&self, provider_id: Uuid) -> u32 {
-        self.local.provider_pre_hard_total(provider_id)
-    }
-
-    fn set_provider_pre_hard_total(&self, provider_id: Uuid, total: u32) {
-        self.local.set_provider_pre_hard_total(provider_id, total);
-    }
 }

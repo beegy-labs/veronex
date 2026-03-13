@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::domain::entities::LlmProvider;
@@ -159,6 +160,7 @@ pub async fn run_health_checker_loop(
     thermal:            Arc<ThermalThrottleMap>,
     shutdown:           CancellationToken,
     client:             reqwest::Client,
+    vram_pool:          Arc<dyn VramPoolPort>,
 ) {
     let interval = Duration::from_secs(interval_secs);
 
@@ -215,8 +217,10 @@ pub async fn run_health_checker_loop(
                     };
                     thermal.set_thresholds(provider.id, profile);
 
+                    let active_count = vram_pool.provider_active_requests(provider.id);
+                    let sum_mc       = vram_pool.sum_loaded_max_concurrent(provider.id);
                     let prev  = thermal.get(provider.id);
-                    let level = thermal.update(provider.id, hw.max_temp_c());
+                    let level = thermal.update(provider.id, hw.max_temp_c(), active_count, sum_mc);
 
                     if level != prev {
                         match &level {

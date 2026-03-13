@@ -28,13 +28,13 @@ Each process generates `instance_id = Uuid::new_v4()` at startup (in `main.rs`).
 
 | Component | Purpose |
 |-----------|---------|
-| `DistributedVramPool` | Implements `VramPoolPort` using local `VramPool` + Valkey pub/sub for state sync |
+| `DistributedVramPool` | Implements `VramPoolPort` using local `VramPool` + Valkey atomic Lua eval for VRAM reservation state |
 
-**Strategy**: Local `VramPool` provides fast sync reserve (per-instance). Valkey pub/sub broadcasts VRAM state changes across instances for visibility. Each instance maintains its own `ProviderVramState` (total_mb, reserved_kv_mb, loaded_models, model_profiles).
+**Strategy**: Local `VramPool` provides fast in-process reserve. Valkey Lua atomic evals (ACQUIRE/RELEASE/REAP) synchronize the shared reservation HASH and lease ZSET across instances. Each instance maintains its own `ProviderVramState` (total_mb, reserved_kv_mb, loaded_models, model_profiles).
 
 **RAII**: `VramPermit` releases KV cache on drop (weight stays loaded). This is synchronized across instances via async Valkey publish.
 
-**Lease management**: Each VRAM reservation creates a ZSET lease entry with 120s TTL. The lease member format is `instance_id:lease_id:kv_mb`, embedding the KV allocation size for crash recovery.
+**Lease management**: Each VRAM reservation creates a ZSET lease entry with `LEASE_DURATION_SECS=120` TTL. The lease member format is `instance_id|lease_id|kv_mb` (pipe-delimited — avoids collision with `:` in UUIDs and model names), embedding the KV allocation size for crash recovery.
 
 **Lease lifecycle** (Lua scripts):
 - `LUA_VRAM_ACQUIRE`: `HINCRBY reserved +kv` + `ZADD lease` (member includes kv_mb)
@@ -55,7 +55,7 @@ The reaper deducts reserved HASH on lease expiry, preventing zombie reservations
 | No crash recovery | Reaper + `recover_pending_jobs()` on startup |
 
 **Model filter**: Four-stage filtering for Ollama jobs in the queue dispatcher:
-1. `providers_for_model()` — filters providers that have the requested model installed (OllamaModelRepository).
+1. `providers_for_model()` — active + provider_type match + tier check + **standby exclusion** (`!vram_pool.is_standby()`). Also filters providers that have the requested model installed (OllamaModelRepository).
 2. `list_enabled()` — filters providers where the model is disabled in selection config (ProviderModelSelectionRepository).
 3. Thermal + Circuit Breaker + Concurrency gates.
 4. Preload exclusion — `is_preload_excluded()` filters providers where the model had 3 consecutive preload failures within 300s.
@@ -67,6 +67,12 @@ The reaper deducts reserved HASH on lease expiry, preventing zombie reservations
 **ACK**: On job completion/failure, `LREM processing 1 {uuid}` + `DEL job:owner:{job_id}`.
 
 **Fail fast on no candidates**: If zero eligible providers remain after model filtering, the job is ZSET-claimed then failed immediately.
+
+**Queue full rejection** (capacity exceeded): When ZSET enqueue returns `Ok(false)` (`MAX_QUEUE_SIZE` = 10,000 or `MAX_QUEUE_PER_MODEL` = 2,000 exceeded), the job is:
+1. Removed from in-memory DashMap + `cancel_notifiers`
+2. Marked `Failed` in DB (`update_status(Failed)`) — orphan prevention
+3. Returns `DomainError::QueueFull` to the caller
+Without step 2, the DB job would remain in `Pending` state permanently since no queue worker will ever pick it up.
 
 **No-provider (VRAM blocked)**: Job stays in ZSET (not claimed), dispatcher skips to next in window. Adaptive K: `min(ZSET_size/3, 100)`, floor 20.
 
@@ -81,6 +87,18 @@ ZSET score = now_ms - tier_bonus
 
 - Within 250s: paid always processes before standard (200,000ms gap, non-reversible)
 - After 250s: `promote_overdue` loop applies EMERGENCY_BONUS (300,000ms) → long-waiting requests overtake new paid requests
+
+**Rust-side scoring** (computed per job in top-K window before Lua claim):
+```
+final_score = zset_score - locality_bonus - age_bonus
+  locality_bonus = LOCALITY_BONUS_MS (20,000ms) if model is loaded on any provider, else 0
+  age_bonus      = wait_ms × 0.25 × perf_factor   (perf_factor from ThermalPort.global_perf_factor())
+```
+Lower `final_score` = higher priority. Locality bonus gives a ~20s priority boost to jobs whose model is already warm.
+
+**Note**: Two separate locality mechanisms:
+1. **ZSET-level** (`LOCALITY_BONUS_MS = 20,000ms`): reduces final_score when model is loaded on *any* provider → job gets sooner dispatch
+2. **Provider-selection** (`MODEL_LOCALITY_BONUS_MB = 100,000 MB ≈ 100GB`): sort bonus when selecting *which* provider to claim → favors provider that already has the model loaded
 
 **EMERGENCY_BONUS is applied exclusively by `promote_overdue`** (single responsibility):
 - Dispatcher's `final_score` uses raw ZSET score without EMERGENCY_BONUS deduction
@@ -109,6 +127,7 @@ Processing: cancel_notify + LREM processing + VramPermit drop
 ```
 
 - Queued cancel is atomic (single Lua script) — no race with dispatcher claim
+- After Lua cancel, `schedule_cleanup(jobs, uuid, JOB_CLEANUP_DELAY)` fires after 60s to remove the DashMap entry (sweeper only removes Pending entries; cancelled-but-never-dispatched jobs would leak without this)
 - Processing cancel uses `cancel_notify` (tokio::Notify) for local jobs, pub/sub for remote
 
 ### Double-Execution Prevention
@@ -150,13 +169,16 @@ Design: ZSET is the sole source of truth. Side hash (`queue:model`) alone is nev
 ### Startup Sequence (Crash Recovery)
 
 ```
-① sync_providers_once()         ← establish is_loaded state first
-② recover_processing_queue()    ← re-enqueue orphaned jobs to ZSET
-③ resync_demand_counters()      ← ZSET ground-truth recount (after ② adds recovered jobs)
-④ spawn loops (dispatcher, placement_planner, sync, demand_resync, promote_overdue)
+① spawn health_checker_loop, sync_loop, session_grouping_loop
+② use_case_impl.recover_pending_jobs()   ← re-enqueue DB-persisted Pending/Running jobs (explicit, non-fatal)
+③ spawn queue_worker + job_sweeper
+④ (Valkey only) spawn reaper, pub/sub subscribers, promote_overdue, demand_resync, placement_planner
 ```
 
-Order is critical: ③ before ② would miss recovered jobs in demand count → Scale-Out under-trigger.
+Notes:
+- `recover_pending_jobs()` (step ②) is the only explicit startup recovery call; it runs before queue_worker (step ③) to ensure orphaned jobs re-enter the ZSET before dispatching starts.
+- `demand_resync_loop` (60s periodic) corrects demand counter drift on an ongoing basis — there is no one-time pre-spawn resync step.
+- Reaper recovers Valkey processing-list orphans on its periodic tick, not a separate startup call.
 
 ## Cross-Instance Pub/Sub
 
@@ -200,7 +222,7 @@ Also cleans up corresponding `cancel_notifiers` entries to prevent notify handle
 | Task | Interval | Action |
 |------|----------|--------|
 | Heartbeat | 10s | `SET veronex:heartbeat:{instance_id} 1 EX 30` |
-| VRAM sync | on change | Publish VRAM state updates via Valkey pub/sub |
+| VRAM sync | on change | Atomic Lua eval (ACQUIRE/RELEASE) updates `veronex:vram_reserved:{pid}` HASH + `veronex:vram_leases:{pid}` ZSET |
 | Queue reaper | 60s | Lua CAS on processing list: atomically verify dead owner + re-enqueue |
 
 ## SSE Connection Limiter + Timeout
@@ -227,7 +249,8 @@ All keys defined in `infrastructure/outbound/valkey_keys.rs`:
 | Key | Type | TTL | Purpose |
 |-----|------|-----|---------|
 | `veronex:heartbeat:{iid}` | STRING | 30s | Instance liveness |
-| `veronex:vram:{pid}` | HASH | - | Per-instance VRAM reservation state |
+| `veronex:vram_reserved:{pid}` | HASH | - | Per-provider KV reservation totals (HINCRBY per acquire/release/reap) |
+| `veronex:vram_leases:{pid}` | ZSET | - | Per-provider lease tracking (score = expiry ts; reaper uses ZRANGEBYSCORE to recover crashed instance allocations) |
 | `veronex:queue:zset` | ZSET | - | Priority queue (score = `now_ms - tier_bonus`) |
 | `veronex:queue:processing` | LIST | - | Reliable queue processing set |
 | `veronex:queue:enqueue_at` | HASH | - | Side hash: `job_id → enqueue_at_ms` (promote_overdue) |
@@ -239,6 +262,7 @@ All keys defined in `infrastructure/outbound/valkey_keys.rs`:
 | `veronex:stream:tokens:{job_id}` | STREAM | 600s | Cross-instance token relay (XADD/XREAD) |
 | `veronex:pubsub:job_events` | PUB/SUB | - | Cross-instance job status events |
 | `veronex:pubsub:cancel:{job_id}` | PUB/SUB | - | Cross-instance cancel signals |
+| `veronex:throttle:{provider_id}` | STRING | 360s | Thermal Hard state persistence (set on Hard entry, deleted on Normal restore) |
 
 ## Wiring (`main.rs`)
 
@@ -300,10 +324,10 @@ Deduplication helpers in `infrastructure/inbound/http/`:
 | File | Change |
 |------|--------|
 | `valkey_keys.rs` | 8 key functions; token key changed from `pubsub:tokens` → `stream:tokens` |
-| `concurrency_port.rs` | `VramPoolPort` trait: `try_reserve()`, `VramPermit` RAII, `provider_active_requests()` |
-| `capacity/vram_pool.rs` | `VramPool` per-provider VRAM tracking + provider-total active count |
-| `capacity/analyzer.rs` | Unified sync: health + model + VRAM probe |
-| `capacity/thermal.rs` | Per-provider `ThermalThresholds` (GPU/CPU presets), auto-detect from `gpu_vendor` |
+| `concurrency_port.rs` | `VramPoolPort` trait: `try_reserve()`, `VramPermit` RAII, `provider_active_requests()` (O(1) via `total_active_count`) |
+| `capacity/vram_pool.rs` | `VramPool` per-provider VRAM tracking + O(1) provider-total active count (`total_active_count`) |
+| `capacity/analyzer.rs` | Unified sync: health + model + VRAM probe; LLM correction increase-only |
+| `capacity/thermal.rs` | Per-provider `ThermalThresholds` (GPU/CPU presets), `pre_hard_total` in `ThrottleState`, Soft hysteresis `active_count==0`, RampUp→Normal `Σmc≥pre_hard_total` |
 | **NEW** `capacity/distributed_vram_pool.rs` | `DistributedVramPool` with Valkey pub/sub sync |
 | `application/use_cases/inference.rs` | Lua priority pop, VRAM permit enforcement (direct+queue), model selection filter, stickiness bonus, thermal per-provider gate |
 | **NEW** `domain/constants.rs` | Application-layer constants (moved from infrastructure) |

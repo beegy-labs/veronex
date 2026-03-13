@@ -361,10 +361,10 @@ ollama pull llama3.3:70b  (Ollama 서버에서 직접)
 
 ### Health Checker (health_checker.rs)
 - Interval: 30 seconds
-- Ollama: covered by sync loop
-- Gemini: `POST /v1beta/models/gemini-2.0-flash:generateContent` (minimal prompt)
+- Ollama only: `GET {url}/api/version` (timeout: `OLLAMA_HEALTH_CHECK_TIMEOUT` = 5s) → 200 (background auto-check)
+- Gemini: **not auto-checked** — `GET /v1beta/models?pageSize=1` + `x-goog-api-key` header, called only on manual sync or per-row healthcheck button
 - After hw_metrics load: `thermal.update(provider_id, temp_c)` → Normal/Soft/Hard
-  - Sets/removes `veronex:throttle:{provider_id}` in Valkey (TTL 90s)
+  - Sets/removes `veronex:throttle:{provider_id}` in Valkey (TTL 360s)
 
 ---
 
