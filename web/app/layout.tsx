@@ -11,6 +11,7 @@ import { isLoggedIn } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { TimezoneProvider } from '@/components/timezone-provider'
 import { LabSettingsProvider } from '@/components/lab-settings-provider'
+import { STALE_TIME_FAST } from '@/lib/constants'
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -61,7 +62,7 @@ export default function RootLayout({
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 30_000,
+        staleTime: STALE_TIME_FAST,
         retry: 1,
         refetchOnWindowFocus: false,
       },

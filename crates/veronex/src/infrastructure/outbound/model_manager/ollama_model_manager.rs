@@ -76,10 +76,11 @@ impl OllamaModelManager {
     ///
     /// `max_loaded` controls how many models may stay loaded in GPU memory
     /// simultaneously.  Set to `1` for single-GPU deployments (greedy allocation).
-    pub fn new(base_url: impl Into<String>, max_loaded: usize) -> Self {
+    /// `client` should be a shared `reqwest::Client` from `AppState`.
+    pub fn new(base_url: impl Into<String>, max_loaded: usize, client: reqwest::Client) -> Self {
         Self {
             base_url: base_url.into(),
-            client: reqwest::Client::new(),
+            client,
             state: Arc::new(Mutex::new(LruState::new(max_loaded))),
         }
     }

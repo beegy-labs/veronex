@@ -10,6 +10,15 @@ use uuid::Uuid;
 
 pub use crate::domain::constants::{QUEUE_JOBS, QUEUE_JOBS_PAID, QUEUE_JOBS_TEST, QUEUE_PROCESSING};
 
+// ── ZSET queue keys (Phase 3 — SSOT in domain::constants) ────────────────────
+
+pub use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP};
+
+/// Demand counter key for a specific model.
+pub fn demand_counter(model: &str) -> String {
+    crate::domain::constants::demand_key(model)
+}
+
 // ── Rate limiting ────────────────────────────────────────────────────────────
 
 /// RPM (requests per minute) sorted-set key for an API key.

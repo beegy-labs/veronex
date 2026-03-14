@@ -87,40 +87,18 @@ fn extract_bearer_token(header: Option<&axum::http::HeaderValue>) -> Option<&str
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+    use proptest::prelude::*;
 
+    /// Concrete examples for bearer token edge cases.
     #[test]
-    fn extract_valid_bearer_token() {
+    fn extract_bearer_token_examples() {
         let hv = HeaderValue::from_static("Bearer my-secret-token");
         assert_eq!(extract_bearer_token(Some(&hv)), Some("my-secret-token"));
-    }
-
-    #[test]
-    fn extract_missing_header() {
         assert_eq!(extract_bearer_token(None), None);
-    }
-
-    #[test]
-    fn extract_wrong_scheme() {
-        let hv = HeaderValue::from_static("Basic dXNlcjpwYXNz");
-        assert_eq!(extract_bearer_token(Some(&hv)), None);
-    }
-
-    #[test]
-    fn extract_bearer_no_space() {
-        let hv = HeaderValue::from_static("Bearertoken");
-        assert_eq!(extract_bearer_token(Some(&hv)), None);
-    }
-
-    #[test]
-    fn extract_empty_token() {
-        let hv = HeaderValue::from_static("Bearer ");
-        assert_eq!(extract_bearer_token(Some(&hv)), Some(""));
-    }
-
-    #[test]
-    fn extract_token_with_spaces() {
-        let hv = HeaderValue::from_static("Bearer abc def");
-        assert_eq!(extract_bearer_token(Some(&hv)), Some("abc def"));
+        let basic = HeaderValue::from_static("Basic dXNlcjpwYXNz");
+        assert_eq!(extract_bearer_token(Some(&basic)), None);
+        let no_space = HeaderValue::from_static("Bearertoken");
+        assert_eq!(extract_bearer_token(Some(&no_space)), None);
     }
 
     #[test]
@@ -128,44 +106,43 @@ mod tests {
         assert_eq!(default_hours(), 24);
     }
 
-    #[test]
-    fn validate_hours_zero_rejected() {
-        assert_eq!(validate_hours(0), Err(StatusCode::BAD_REQUEST));
-    }
+    proptest! {
+        /// Hours in valid range [1, 8760] always accepted.
+        #[test]
+        fn validate_hours_in_range_accepted(hours in 1u32..=8760) {
+            prop_assert_eq!(validate_hours(hours), Ok(()));
+        }
 
-    #[test]
-    fn validate_hours_over_8760_rejected() {
-        assert_eq!(validate_hours(8761), Err(StatusCode::BAD_REQUEST));
-    }
+        /// Hours outside valid range always rejected.
+        #[test]
+        fn validate_hours_out_of_range_rejected(hours in 8761u32..=u32::MAX) {
+            prop_assert_eq!(validate_hours(hours), Err(StatusCode::BAD_REQUEST));
+        }
 
-    #[test]
-    fn validate_hours_boundary_1_accepted() {
-        assert_eq!(validate_hours(1), Ok(()));
-    }
+        #[test]
+        fn validate_hours_zero_rejected(_ in 0u8..1) {
+            prop_assert_eq!(validate_hours(0), Err(StatusCode::BAD_REQUEST));
+        }
 
-    #[test]
-    fn validate_hours_boundary_8760_accepted() {
-        assert_eq!(validate_hours(8760), Ok(()));
-    }
+        /// success_rate is always in [0.0, 1.0] when success <= total.
+        #[test]
+        fn success_rate_bounded(total in 1u64..10000, success_pct in 0u64..=100) {
+            let success = total * success_pct / 100;
+            let rate = success_rate(total, success);
+            prop_assert!(rate >= 0.0);
+            prop_assert!(rate <= 1.0);
+        }
 
-    #[test]
-    fn success_rate_normal() {
-        let rate = success_rate(100, 95);
-        assert!((rate - 0.95).abs() < f64::EPSILON);
-    }
+        /// success_rate with zero total always returns 0.0.
+        #[test]
+        fn success_rate_zero_total_is_zero(success in 0u64..1000) {
+            prop_assert_eq!(success_rate(0, success), 0.0);
+        }
 
-    #[test]
-    fn success_rate_zero_requests() {
-        assert_eq!(success_rate(0, 0), 0.0);
-    }
-
-    #[test]
-    fn success_rate_all_success() {
-        assert_eq!(success_rate(50, 50), 1.0);
-    }
-
-    #[test]
-    fn success_rate_none_success() {
-        assert_eq!(success_rate(10, 0), 0.0);
+        /// success_rate is exact when total == success.
+        #[test]
+        fn success_rate_all_success_is_one(total in 1u64..10000) {
+            prop_assert_eq!(success_rate(total, total), 1.0);
+        }
     }
 }

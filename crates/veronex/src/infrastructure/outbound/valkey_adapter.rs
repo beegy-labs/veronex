@@ -23,6 +23,51 @@ end
 return false
 "#;
 
+// ── ZSET queue Lua scripts (Phase 3) ──────────────────────────────────────
+
+/// Atomic enqueue: ZCARD guard + per-model demand guard + ZADD + INCR + HSET×2.
+/// KEYS[1]=queue:zset  KEYS[2]=demand:{model}  KEYS[3]=queue:enqueue_at  KEYS[4]=queue:model
+/// ARGV[1]=job_id  ARGV[2]=score  ARGV[3]=max_size  ARGV[4]=now_ms  ARGV[5]=model  ARGV[6]=max_per_model
+/// Returns: 1=ok, 0=global full, -1=per-model full
+const LUA_ZSET_ENQUEUE: &str = r#"
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then return 0 end
+local demand = tonumber(redis.call('GET', KEYS[2]) or '0')
+if demand >= tonumber(ARGV[6]) then return -1 end
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+redis.call('INCR', KEYS[2])
+redis.call('HSET', KEYS[3], ARGV[1], ARGV[4])
+redis.call('HSET', KEYS[4], ARGV[1], ARGV[5])
+return 1
+"#;
+
+/// Atomic claim: ZREM + RPUSH processing + DECR demand + HDEL side hashes.
+/// KEYS[1]=queue:zset  KEYS[2]=processing  KEYS[3]=demand:{model}
+/// KEYS[4]=queue:enqueue_at  KEYS[5]=queue:model
+/// ARGV[1]=job_id
+/// Returns: 1=claimed, 0=already taken
+const LUA_ZSET_CLAIM: &str = r#"
+if redis.call('ZREM', KEYS[1], ARGV[1]) == 0 then return 0 end
+redis.call('RPUSH', KEYS[2], ARGV[1])
+local v = redis.call('DECR', KEYS[3])
+if v < 0 then redis.call('SET', KEYS[3], 0) end
+redis.call('HDEL', KEYS[4], ARGV[1])
+redis.call('HDEL', KEYS[5], ARGV[1])
+return 1
+"#;
+
+/// Atomic cancel from ZSET: ZREM + DECR demand + HDEL side hashes.
+/// KEYS[1]=queue:zset  KEYS[2]=demand:{model}  KEYS[3]=queue:enqueue_at  KEYS[4]=queue:model
+/// ARGV[1]=job_id
+/// Returns: 1=removed, 0=not in ZSET
+const LUA_ZSET_CANCEL: &str = r#"
+if redis.call('ZREM', KEYS[1], ARGV[1]) == 0 then return 0 end
+local v = redis.call('DECR', KEYS[2])
+if v < 0 then redis.call('SET', KEYS[2], 0) end
+redis.call('HDEL', KEYS[3], ARGV[1])
+redis.call('HDEL', KEYS[4], ARGV[1])
+return 1
+"#;
+
 pub struct ValkeyAdapter {
     pool: Pool,
 }
@@ -75,6 +120,96 @@ impl ValkeyPort for ValkeyAdapter {
     async fn list_remove(&self, key: &str, value: &str) -> Result<()> {
         self.pool.lrem::<i64, _, _>(key, 1, value).await?;
         Ok(())
+    }
+
+    // ── ZSET queue operations (Phase 3) ──────────────────────────────
+
+    async fn zset_enqueue(
+        &self,
+        job_id: Uuid,
+        score: f64,
+        model: &str,
+        now_ms: u64,
+        max_size: u64,
+        max_per_model: u64,
+    ) -> Result<bool> {
+        use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP};
+
+        let demand_key = crate::domain::constants::demand_key(model);
+        let keys = vec![
+            QUEUE_ZSET.to_string(),
+            demand_key,
+            QUEUE_ENQUEUE_AT.to_string(),
+            QUEUE_MODEL_MAP.to_string(),
+        ];
+        let args = vec![
+            job_id.to_string(),
+            score.to_string(),
+            max_size.to_string(),
+            now_ms.to_string(),
+            model.to_string(),
+            max_per_model.to_string(),
+        ];
+
+        let result: i64 = self.pool.eval(LUA_ZSET_ENQUEUE, keys, args).await?;
+        if result == -1 {
+            tracing::warn!(%job_id, %model, "per-model queue limit reached");
+        }
+        Ok(result == 1)
+    }
+
+    async fn zset_peek(&self, k: u64) -> Result<Vec<(String, f64)>> {
+        use crate::domain::constants::QUEUE_ZSET;
+
+        let raw: Vec<(String, f64)> = self
+            .pool
+            .zrange(QUEUE_ZSET, 0, (k as i64) - 1, None, false, None, true)
+            .await?;
+        Ok(raw)
+    }
+
+    async fn zset_claim(
+        &self,
+        job_id: &str,
+        processing_key: &str,
+        model: &str,
+    ) -> Result<bool> {
+        use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP};
+
+        let demand_key = crate::domain::constants::demand_key(model);
+        let keys = vec![
+            QUEUE_ZSET.to_string(),
+            processing_key.to_string(),
+            demand_key,
+            QUEUE_ENQUEUE_AT.to_string(),
+            QUEUE_MODEL_MAP.to_string(),
+        ];
+        let args = vec![job_id.to_string()];
+
+        let result: i64 = self.pool.eval(LUA_ZSET_CLAIM, keys, args).await?;
+        Ok(result == 1)
+    }
+
+    async fn zset_cancel(&self, job_id: &str, model: &str) -> Result<bool> {
+        use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP};
+
+        let demand_key = crate::domain::constants::demand_key(model);
+        let keys = vec![
+            QUEUE_ZSET.to_string(),
+            demand_key,
+            QUEUE_ENQUEUE_AT.to_string(),
+            QUEUE_MODEL_MAP.to_string(),
+        ];
+        let args = vec![job_id.to_string()];
+
+        let result: i64 = self.pool.eval(LUA_ZSET_CANCEL, keys, args).await?;
+        Ok(result == 1)
+    }
+
+    async fn zset_len(&self) -> Result<u64> {
+        use crate::domain::constants::QUEUE_ZSET;
+        let len: u64 = self.pool.zcard(QUEUE_ZSET).await?;
+        Ok(len)
     }
 
     // ── Key-value operations ────────────────────────────────────────

@@ -8,15 +8,12 @@ use futures::StreamExt as _;
 use serde::{Deserialize, Serialize};
 
 use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
-use crate::domain::constants::PROVIDER_REQUEST_TIMEOUT;
+use crate::domain::constants::{MAX_LINE_BUFFER, PROVIDER_REQUEST_TIMEOUT};
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
 use crate::domain::value_objects::StreamToken;
 
 pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
-
-/// Maximum bytes allowed in the SSE line buffer before aborting.
-const MAX_LINE_BUFFER: usize = 1_048_576; // 1 MB
 
 pub struct GeminiAdapter {
     api_key: String,

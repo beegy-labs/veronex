@@ -81,7 +81,7 @@ export function DashboardTab({
     const m = serverMetricQueries[i]?.data
     const connected = m?.scrape_ok === true
     const maxTemp = connected && (m!.gpus?.length ?? 0) > 0
-      ? m!.gpus.reduce((max, g) => Math.max(max, g.temp_c ?? 0), 0)
+      ? m!.gpus.reduce((max, g) => Math.max(max, g.temp_junction_c ?? g.temp_c ?? 0, g.temp_mem_c ?? 0), 0)
       : null
     const thermal: ThermalLevel = maxTemp == null ? 'unknown'
       : maxTemp >= 90 ? 'critical'

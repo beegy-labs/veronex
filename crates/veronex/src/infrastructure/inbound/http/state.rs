@@ -91,4 +91,6 @@ pub struct AppState {
     /// Global concurrent SSE connection counter.
     /// Prevents resource exhaustion from too many open SSE streams.
     pub sse_connections: Arc<AtomicU32>,
+    /// Persistent VRAM budget state per provider (safety_permil, source, kv_cache_type).
+    pub vram_budget_repo: Arc<dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository>,
 }

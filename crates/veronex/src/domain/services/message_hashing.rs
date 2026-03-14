@@ -52,74 +52,18 @@ pub fn compute_message_hashes(messages: &serde_json::Value) -> Option<(String, S
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use serde_json::json;
 
+    /// Concrete examples: edge cases that return None.
     #[test]
-    fn consistent_output_for_same_input() {
-        let msgs = json!([{"role": "user", "content": "hello"}]);
-        let (h1, p1) = compute_message_hashes(&msgs).unwrap();
-        let (h2, p2) = compute_message_hashes(&msgs).unwrap();
-        assert_eq!(h1, h2);
-        assert_eq!(p1, p2);
+    fn returns_none_for_invalid_inputs() {
+        assert!(compute_message_hashes(&json!([])).is_none());
+        assert!(compute_message_hashes(&json!({"role": "user"})).is_none());
+        assert!(compute_message_hashes(&json!(null)).is_none());
     }
 
-    #[test]
-    fn different_inputs_produce_different_hashes() {
-        let a = json!([{"role": "user", "content": "hello"}]);
-        let b = json!([{"role": "user", "content": "world"}]);
-        let (ha, _) = compute_message_hashes(&a).unwrap();
-        let (hb, _) = compute_message_hashes(&b).unwrap();
-        assert_ne!(ha, hb);
-    }
-
-    #[test]
-    fn empty_array_returns_none() {
-        let msgs = json!([]);
-        assert!(compute_message_hashes(&msgs).is_none());
-    }
-
-    #[test]
-    fn non_array_returns_none() {
-        let msgs = json!({"role": "user", "content": "hello"});
-        assert!(compute_message_hashes(&msgs).is_none());
-    }
-
-    #[test]
-    fn null_returns_none() {
-        let msgs = json!(null);
-        assert!(compute_message_hashes(&msgs).is_none());
-    }
-
-    #[test]
-    fn hash_is_64_char_hex() {
-        let msgs = json!([{"role": "user", "content": "test"}]);
-        let (hash, _) = compute_message_hashes(&msgs).unwrap();
-        // Blake2b-256 => 32 bytes => 64 hex chars
-        assert_eq!(hash.len(), 64);
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn single_message_has_empty_prefix_hash() {
-        let msgs = json!([{"role": "user", "content": "hello"}]);
-        let (hash, prefix) = compute_message_hashes(&msgs).unwrap();
-        assert!(!hash.is_empty());
-        assert!(prefix.is_empty(), "single-turn should have empty prefix hash");
-    }
-
-    #[test]
-    fn multi_turn_prefix_hash_is_nonempty() {
-        let msgs = json!([
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "hi"},
-            {"role": "user", "content": "how are you"}
-        ]);
-        let (hash, prefix) = compute_message_hashes(&msgs).unwrap();
-        assert_eq!(hash.len(), 64);
-        assert_eq!(prefix.len(), 64);
-        assert_ne!(hash, prefix);
-    }
-
+    /// Concrete example: prefix hash matches subset full hash (chain linkage).
     #[test]
     fn prefix_hash_matches_subset_full_hash() {
         let msgs = json!([
@@ -128,13 +72,61 @@ mod tests {
             {"role": "user", "content": "bye"}
         ]);
         let (_, prefix) = compute_message_hashes(&msgs).unwrap();
-
-        // The prefix hash should equal the full hash of just the first two messages
         let first_two = json!([
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "hi"}
         ]);
         let (full_of_two, _) = compute_message_hashes(&first_two).unwrap();
         assert_eq!(prefix, full_of_two);
+    }
+
+    proptest! {
+        /// Hash is deterministic, 64-char hex for any single-message array.
+        #[test]
+        fn single_message_hash_properties(content in "\\PC{1,100}") {
+            let msgs = json!([{"role": "user", "content": content}]);
+            let (hash, prefix) = compute_message_hashes(&msgs).unwrap();
+            // Blake2b-256 = 64 hex chars
+            prop_assert_eq!(hash.len(), 64);
+            prop_assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+            // Single message → empty prefix
+            prop_assert!(prefix.is_empty());
+            // Deterministic
+            let (h2, p2) = compute_message_hashes(&msgs).unwrap();
+            prop_assert_eq!(&hash, &h2);
+            prop_assert_eq!(&prefix, &p2);
+        }
+
+        /// Different content always produces different hashes.
+        #[test]
+        fn different_content_different_hashes(
+            a in "[a-z]{5,50}",
+            b in "[a-z]{5,50}",
+        ) {
+            prop_assume!(a != b);
+            let ma = json!([{"role": "user", "content": a}]);
+            let mb = json!([{"role": "user", "content": b}]);
+            let (ha, _) = compute_message_hashes(&ma).unwrap();
+            let (hb, _) = compute_message_hashes(&mb).unwrap();
+            prop_assert_ne!(ha, hb);
+        }
+
+        /// Multi-turn: both hashes are 64-char hex and different from each other.
+        #[test]
+        fn multi_turn_hash_properties(
+            c1 in "[a-z]{1,30}",
+            c2 in "[a-z]{1,30}",
+            c3 in "[a-z]{1,30}",
+        ) {
+            let msgs = json!([
+                {"role": "user", "content": c1},
+                {"role": "assistant", "content": c2},
+                {"role": "user", "content": c3}
+            ]);
+            let (hash, prefix) = compute_message_hashes(&msgs).unwrap();
+            prop_assert_eq!(hash.len(), 64);
+            prop_assert_eq!(prefix.len(), 64);
+            prop_assert_ne!(&hash, &prefix);
+        }
     }
 }

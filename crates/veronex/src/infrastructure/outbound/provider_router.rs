@@ -487,7 +487,7 @@ async fn pick_gemini_provider(
 /// Return available VRAM in MiB for an Ollama provider.
 ///
 /// Priority:
-/// 1. Valkey hardware metrics cache (set by health_checker when agent_url is configured).
+/// 1. Valkey hardware metrics cache (set by health_checker when linked to a GpuServer).
 ///    Also enforces a temperature guard: providers at or above 85 °C are treated as
 ///    unavailable (returns `i64::MIN`).
 /// 2. Live Ollama `/api/ps` poll (fallback when no agent data is cached).
@@ -504,7 +504,7 @@ pub async fn get_ollama_available_vram_mb(
                 tracing::warn!(
                     provider_id = %provider.id,
                     name = %provider.name,
-                    temp = hw.temp_c,
+                    temp = hw.max_temp_c(),
                     "provider overheating — skipping dispatch"
                 );
                 return i64::MIN;

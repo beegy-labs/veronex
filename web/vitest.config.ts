@@ -6,6 +6,12 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     exclude: ['e2e/**', 'node_modules/**'],
+    pool: 'threads',
+    fileParallelism: true,
+    reporters: ['default'],
+    coverage: {
+      provider: 'v8',
+    },
   },
   resolve: {
     alias: {

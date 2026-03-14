@@ -62,6 +62,8 @@ pub struct MetricsPoint {
     pub mem_total_mb: u64,
     pub mem_avail_mb: u64,
     pub gpu_temp_c: Option<f64>,
+    pub gpu_temp_junction_c: Option<f64>,
+    pub gpu_temp_mem_c: Option<f64>,
     pub gpu_power_w: Option<f64>,
 }
 

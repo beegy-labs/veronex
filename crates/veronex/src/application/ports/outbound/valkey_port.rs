@@ -28,6 +28,39 @@ pub trait ValkeyPort: Send + Sync {
     /// LREM: remove one occurrence of a value from a list.
     async fn list_remove(&self, key: &str, value: &str) -> Result<()>;
 
+    // ── ZSET queue operations (Phase 3) ──────────────────────────────
+
+    /// Atomic Lua: ZCARD guard + ZADD + INCR demand + HSET enqueue_at + HSET model.
+    /// Returns `true` if enqueued, `false` if queue is full (429).
+    async fn zset_enqueue(
+        &self,
+        job_id: Uuid,
+        score: f64,
+        model: &str,
+        now_ms: u64,
+        max_size: u64,
+        max_per_model: u64,
+    ) -> Result<bool>;
+
+    /// ZRANGE 0..(k-1) WITHSCORES — peek top-K candidates without removing.
+    async fn zset_peek(&self, k: u64) -> Result<Vec<(String, f64)>>;
+
+    /// Atomic Lua: ZREM + RPUSH processing + DECR demand + HDEL enqueue_at + HDEL model.
+    /// Returns `true` if claimed (ZREM returned 1), `false` if another instance won.
+    async fn zset_claim(
+        &self,
+        job_id: &str,
+        processing_key: &str,
+        model: &str,
+    ) -> Result<bool>;
+
+    /// Atomic Lua: ZREM + DECR demand + HDEL enqueue_at + HDEL model.
+    /// Returns `true` if removed from ZSET.
+    async fn zset_cancel(&self, job_id: &str, model: &str) -> Result<bool>;
+
+    /// ZCARD — current ZSET queue length.
+    async fn zset_len(&self) -> Result<u64>;
+
     // ── Key-value operations ────────────────────────────────────────
 
     /// SET with EX (TTL in seconds). Optionally only-if-exists (XX flag).

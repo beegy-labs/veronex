@@ -10,6 +10,7 @@
 | Code Patterns (Rust) | `policies/patterns.md` | AppError, thiserror, sqlx query_as!, async-trait, tracing, DashMap, Valkey Lua |
 | Code Patterns (Frontend) | `policies/patterns-frontend.md` | TanStack Query v5, useOptimistic, Zod, Tailwind v4 |
 | Git Flow | `policies/git-flow.md` | branch, commit, squash, merge, conventional |
+| Testing Strategy | `policies/testing-strategy.md` | testing trophy, purity, proptest, cargo-mutants, OpenAPI schema, layer responsibility |
 | Terminology | `policies/terminology.md` | provider, provider_type, naming conventions |
 
 ---
@@ -61,6 +62,7 @@
 | OTel Pipeline | `infra/otel-pipeline.md` | OTel Collector, Redpanda, ClickHouse Kafka Engine, Chain 1 otel-logs MV |
 | OTel Pipeline Ops | `infra/otel-pipeline-ops.md` | Chains 2-3, gotchas, verification, data retention, Rust adapters, Redpanda, GPU server |
 | Distributed Coordination | `infra/distributed.md` | Instance ID, VRAM leases, reliable queue, model filter, stickiness, pubsub, crash recovery |
+| Build Optimization | `infra/build-optimization.md` | mold, cargo-chef, hakari, nextest, Docker cache mounts, cargo profiles |
 
 ---
 
@@ -157,3 +159,5 @@
 | Job dashboard API | `inference/job-api.md` |
 | Rust performance / allocator | `research/backend/rust-perf-2026.md` |
 | Add application constant | `policies/architecture.md` — Domain constants live in `domain/constants.rs` |
+| Testing strategy / purity | `policies/testing-strategy.md` — layer responsibility, decision checklist |
+| Build / compile speed | `infra/build-optimization.md` — mold, hakari, cargo-chef, profiles |

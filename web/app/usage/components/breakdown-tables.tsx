@@ -10,7 +10,7 @@ import { DataTable } from '@/components/data-table'
 import { fmtMs, fmtCompact } from '@/lib/chart-theme'
 import { useTranslation } from '@/i18n'
 import { BarChart2 } from 'lucide-react'
-import { PROVIDER_BADGE, PROVIDER_COLORS } from '@/lib/constants'
+import { PROVIDER_BADGE, PROVIDER_COLORS, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from '@/lib/constants'
 
 /* ─── Key breakdown table ─────────────────────────────────── */
 export function KeyBreakdownTable({
@@ -77,7 +77,7 @@ export function KeyBreakdownTable({
                 </div>
               </TableCell>
               <TableCell className="text-right">
-                <span className={`text-sm font-semibold tabular-nums ${k.success_rate >= 90 ? 'text-status-success-fg' : k.success_rate >= 70 ? 'text-status-warning-fg' : 'text-status-error-fg'}`}>
+                <span className={`text-sm font-semibold tabular-nums ${k.success_rate >= SUCCESS_RATE_GOOD ? 'text-status-success-fg' : k.success_rate >= SUCCESS_RATE_WARNING ? 'text-status-warning-fg' : 'text-status-error-fg'}`}>
                   {k.success_rate}%
                 </span>
               </TableCell>

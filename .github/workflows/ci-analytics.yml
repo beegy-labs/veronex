@@ -126,3 +126,15 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m "chore(veronex): update analytics image tag to ${{ needs.build.outputs.tag }}"
           git push
+
+  cleanup:
+    name: Cleanup Old Images
+    needs: build
+    if: github.ref_name == 'develop' || github.ref_name == 'main'
+    uses: ./.github/workflows/cleanup-images.yml
+    with:
+      image_name: veronex-analytics
+      branch: ${{ github.ref_name }}
+      keep: 5
+    secrets:
+      GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}

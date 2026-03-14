@@ -16,16 +16,19 @@ jobs:
         with:
           submodules: true
           ref: develop
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update submodule
         run: git submodule update --remote vendor/agentic-dev-protocol
 
       - name: Commit and push if changed
         run: |
-          if ! git diff --quiet; then
+          if ! git diff --quiet -- vendor/agentic-dev-protocol; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add vendor/agentic-dev-protocol
-            git commit -m "chore(policy): Update agentic-dev-protocol"
-            git push
+            git commit -m "chore(policy): update agentic-dev-protocol submodule"
+            git push origin develop
+          else
+            echo "Submodule already up to date, skipping commit."
           fi

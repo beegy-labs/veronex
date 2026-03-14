@@ -103,6 +103,165 @@ fn compute_kv_per_request_mb(
     ((kv_bytes_per_token * tokens) / 1_048_576).max(32) as u32
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::ports::outbound::model_capacity_repository::ThroughputStats;
+    use proptest::prelude::*;
+
+    fn make_arch(layers: u32, kv_heads: u32, head_dim: u32, max_ctx: u32, cfg_ctx: u32) -> ModelArchProfile {
+        ModelArchProfile { num_layers: layers, num_kv_heads: kv_heads, head_dim: head_dim, max_ctx: max_ctx, configured_ctx: cfg_ctx }
+    }
+
+    fn make_stats(prompt: f64, output: f64) -> ThroughputStats {
+        ThroughputStats {
+            avg_prompt_tokens: prompt,
+            avg_output_tokens: output,
+            ..Default::default()
+        }
+    }
+
+    // ── Unit tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn zero_layers_returns_fallback() {
+        let arch = make_arch(0, 8, 128, 4096, 4096);
+        let stats = make_stats(100.0, 50.0);
+        assert_eq!(compute_kv_per_request_mb(&arch, &stats, 1), 128);
+    }
+
+    #[test]
+    fn minimum_32mb_enforced() {
+        // Tiny model: 1 layer, 1 head, 1 dim, 128 tokens → near-zero KV
+        let arch = make_arch(1, 1, 1, 4096, 4096);
+        let stats = make_stats(64.0, 64.0);
+        assert_eq!(compute_kv_per_request_mb(&arch, &stats, 1), 32);
+    }
+
+    #[test]
+    fn token_clamped_to_128_minimum() {
+        // avg_prompt + avg_output = 10 (below 128 minimum) → uses 128
+        let arch = make_arch(32, 8, 128, 4096, 4096);
+        let stats_low = make_stats(5.0, 5.0);
+        let stats_exact = make_stats(64.0, 64.0); // exactly 128
+        assert_eq!(
+            compute_kv_per_request_mb(&arch, &stats_low, 1),
+            compute_kv_per_request_mb(&arch, &stats_exact, 1),
+        );
+    }
+
+    #[test]
+    fn token_clamped_to_effective_ctx() {
+        // avg tokens = 10000, but effective_ctx = 4096 → uses 4096
+        let arch = make_arch(32, 8, 128, 4096, 4096);
+        let stats = make_stats(8000.0, 2000.0);
+        let stats_at_ctx = make_stats(2048.0, 2048.0);
+        assert_eq!(
+            compute_kv_per_request_mb(&arch, &stats, 1),
+            compute_kv_per_request_mb(&arch, &stats_at_ctx, 1),
+        );
+    }
+
+    #[test]
+    fn effective_ctx_uses_min_of_configured_and_max() {
+        let stats = make_stats(500.0, 500.0); // 1000 tokens, within both ctx
+        let arch_cfg_smaller = make_arch(32, 8, 128, 8192, 2048); // min(2048,8192) = 2048
+        let arch_max_smaller = make_arch(32, 8, 128, 2048, 8192); // min(8192,2048) = 2048
+        assert_eq!(
+            compute_kv_per_request_mb(&arch_cfg_smaller, &stats, 1),
+            compute_kv_per_request_mb(&arch_max_smaller, &stats, 1),
+        );
+    }
+
+    #[test]
+    fn effective_ctx_fallback_4096() {
+        // Both configured_ctx and max_ctx are 0 → fallback 4096
+        let arch = make_arch(32, 8, 128, 0, 0);
+        let stats = make_stats(2000.0, 2048.0); // 4048, clamped to 4096
+        let arch_explicit = make_arch(32, 8, 128, 4096, 4096);
+        assert_eq!(
+            compute_kv_per_request_mb(&arch, &stats, 1),
+            compute_kv_per_request_mb(&arch_explicit, &stats, 1),
+        );
+    }
+
+    #[test]
+    fn bytes_per_element_scales_approximately() {
+        let arch = make_arch(32, 8, 128, 4096, 4096);
+        let stats = make_stats(500.0, 500.0);
+        let result_1 = compute_kv_per_request_mb(&arch, &stats, 1);
+        let result_2 = compute_kv_per_request_mb(&arch, &stats, 2);
+        // Integer division may cause ±1 difference from exact 2x
+        let expected = result_1 * 2;
+        assert!(result_2 >= expected - 1 && result_2 <= expected + 1,
+            "result_2={result_2} should be ~2x result_1={result_1}");
+    }
+
+    #[test]
+    fn realistic_qwen3_8b() {
+        // qwen3:8b approximate: 32 layers, 8 kv_heads, 128 head_dim, q8_0 kv
+        let arch = make_arch(32, 8, 128, 32768, 4096);
+        let stats = make_stats(300.0, 200.0); // 500 tokens
+        let result = compute_kv_per_request_mb(&arch, &stats, 1); // bytes_per_element=1 for q8_0
+        // 2 * 32 * 8 * 128 * 1 * 500 / 1_048_576 = 31.25 → max(31, 32) = 32
+        assert_eq!(result, 32);
+    }
+
+    #[test]
+    fn realistic_llama3_70b() {
+        // llama3:70b approximate: 80 layers, 8 kv_heads, 128 head_dim, q8_0 kv
+        let arch = make_arch(80, 8, 128, 8192, 4096);
+        let stats = make_stats(600.0, 400.0); // 1000 tokens
+        let result = compute_kv_per_request_mb(&arch, &stats, 1);
+        // 2 * 80 * 8 * 128 * 1 * 1000 / 1_048_576 = 156.25 → 156
+        assert!(result >= 100 && result <= 200, "70B result={result}");
+    }
+
+    // ── Property-based tests ─────────────────────────────────────────────
+
+    proptest! {
+        /// Result is always >= 32 (minimum floor) unless zero layers fallback.
+        #[test]
+        fn result_at_least_32_or_128_fallback(
+            layers in 0u32..200,
+            kv_heads in 1u32..64,
+            head_dim in 1u32..256,
+            prompt in 0.0f64..10000.0,
+            output in 0.0f64..10000.0,
+            bpe in 1u64..4,
+        ) {
+            let arch = make_arch(layers, kv_heads, head_dim, 4096, 4096);
+            let stats = make_stats(prompt, output);
+            let result = compute_kv_per_request_mb(&arch, &stats, bpe);
+            if layers == 0 {
+                prop_assert_eq!(result, 128);
+            } else {
+                prop_assert!(result >= 32, "result={result} < 32");
+            }
+        }
+
+        /// More layers → same or higher KV (monotonic).
+        #[test]
+        fn more_layers_more_kv(
+            layers_a in 1u32..100,
+            layers_b in 1u32..100,
+            kv_heads in 1u32..32,
+            head_dim in 32u32..256,
+            prompt in 100.0f64..2000.0,
+            output in 100.0f64..2000.0,
+        ) {
+            let stats = make_stats(prompt, output);
+            let a = compute_kv_per_request_mb(&make_arch(layers_a, kv_heads, head_dim, 4096, 4096), &stats, 1);
+            let b = compute_kv_per_request_mb(&make_arch(layers_b, kv_heads, head_dim, 4096, 4096), &stats, 1);
+            if layers_a <= layers_b {
+                prop_assert!(a <= b, "layers {layers_a}→{a} > layers {layers_b}→{b}");
+            }
+        }
+    }
+}
+
 // ── LLM analysis response ─────────────────────────────────────────────────────
 
 #[derive(Deserialize, Default)]
@@ -372,6 +531,7 @@ pub async fn sync_provider(
     provider_name:   &str,
     ollama_url:      &str,
     provider_total_vram_mb: i64,
+    num_parallel:    u32,
     analyzer_model:  &str,
     capacity_repo:   &dyn ModelCapacityRepository,
     vram_pool:       &dyn VramPoolPort,
@@ -379,7 +539,17 @@ pub async fn sync_provider(
     registry:        &dyn LlmProviderRegistry,
     ollama_model_repo: &dyn OllamaModelRepository,
     model_selection_repo: &dyn ProviderModelSelectionRepository,
+    vram_budget_repo: &dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository,
 ) -> Result<()> {
+    // 0. Restore safety_permil from DB (first call after restart will win; no-op if already set).
+    if let Ok(Some(budget)) = vram_budget_repo.get(provider_id).await {
+        let current = vram_pool.safety_permil(provider_id);
+        // Only restore if VramPool still shows the default (100) — i.e., not yet bumped by OOM.
+        if current == 100 && budget.safety_permil as u32 != 100 {
+            vram_pool.set_safety_permil(provider_id, budget.safety_permil as u32);
+        }
+    }
+
     // 1. Health check: GET /api/version
     let health_ok = client
         .get(format!("{ollama_url}/api/version"))
@@ -438,16 +608,179 @@ pub async fn sync_provider(
     } else {
         None
     };
-    let vram_total_mb = hw.as_ref().map(|h| h.vram_total_mb)
+    let drm_vram_mb = hw.as_ref().map(|h| h.vram_total_mb)
         .filter(|&v| v > 0)
         .unwrap_or({
             if provider_total_vram_mb > 0 { provider_total_vram_mb as u32 } else { 0 }
         });
-    let temp_c = hw.as_ref().map(|h| h.temp_c);
+
+    // APU / unified-memory detection: AMD Ryzen AI (iGPU) and similar APUs report only
+    // the dedicated BIOS-allocated VRAM via DRM (e.g. 1024 MiB), while Ollama transparently
+    // uses shared system RAM. Use mem_available_mb from node-exporter as the real capacity.
+    let mem_available_mb = hw.as_ref().map(|h| h.mem_available_mb).unwrap_or(0);
+    let is_apu = hw.as_ref().is_some_and(|h| {
+        h.gpu_vendor == "amd" && drm_vram_mb > 0 && mem_available_mb > drm_vram_mb * 2
+    });
+    let vram_total_mb = if is_apu {
+        // APU unified memory: use node-exporter mem_available_mb as total VRAM.
+        // safety_permil in VramPool.compute_available() handles the buffer.
+        mem_available_mb
+    } else {
+        drm_vram_mb
+    };
+
+    let temp_c = hw.as_ref().map(|h| h.max_temp_c());
 
     // Set total VRAM on the pool
     if vram_total_mb > 0 {
         vram_pool.set_total_vram(provider_id, vram_total_mb);
+    }
+
+    // APU mem drift: if mem_available_mb changed >15% from last observed value,
+    // reset AIMD learning epoch for all loaded models to prevent stale baselines.
+    if is_apu && mem_available_mb > 0 {
+        let last = vram_pool.last_mem_available_mb(provider_id);
+        if last > 0 {
+            let delta_pct = (mem_available_mb as f64 - last as f64).abs() / last as f64;
+            if delta_pct > 0.15 {
+                tracing::warn!(
+                    provider = %provider_name,
+                    last_mb = last,
+                    current_mb = mem_available_mb,
+                    delta_pct = format!("{:.1}%", delta_pct * 100.0),
+                    "APU mem drift >15% — resetting AIMD learning epoch for all loaded models"
+                );
+                for model_name in vram_pool.loaded_model_names(provider_id) {
+                    vram_pool.reset_stable_cycle_count(provider_id, &model_name);
+                    vram_pool.set_baseline_tps(provider_id, &model_name, 0);
+                    vram_pool.set_baseline_p95_ms(provider_id, &model_name, 0);
+                }
+            } else {
+                // Stable sync: gradually recover safety margin (undo OOM bumps).
+                vram_pool.decay_safety_permil(provider_id);
+            }
+            // Persist safety_permil after any change (OOM bump or decay).
+            let current_permil = vram_pool.safety_permil(provider_id) as i32;
+            let budget = crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudget {
+                provider_id,
+                safety_permil: current_permil,
+                vram_total_source: "node_exporter".to_string(),
+                kv_cache_type: "q8_0".to_string(),
+            };
+            vram_budget_repo.upsert(&budget).await.ok();
+        }
+        vram_pool.set_last_mem_available_mb(provider_id, mem_available_mb);
+    }
+
+    // ── Governor: reset dispatch_blocked and governor_cap for all loaded models ──
+    for name in vram_pool.loaded_model_names(provider_id) {
+        vram_pool.set_dispatch_blocked(provider_id, &name, false);
+        vram_pool.set_governor_cap(provider_id, &name, 0);
+    }
+
+    // ── Governor: fair-share pressure check ──
+    let provider_total_active = vram_pool.provider_active_requests(provider_id);
+    let governor_active = provider_total_active > num_parallel;
+
+    if governor_active {
+        // Pass 1 — identify candidates: active_count > 0 OR demand_counter > 0.
+        let loaded_names = vram_pool.loaded_model_names(provider_id);
+        let mut candidate_names: Vec<String> = Vec::new();
+
+        for name in &loaded_names {
+            let active = vram_pool.active_requests(provider_id, name);
+            let demand: u64 = if let Some(pool) = valkey_pool {
+                use fred::prelude::*;
+                let v: Result<Option<String>, _> =
+                    pool.get(&crate::domain::constants::demand_key(name)).await;
+                v.ok().flatten().and_then(|s| s.parse().ok()).unwrap_or(0)
+            } else {
+                0
+            };
+            if active > 0 || demand > 0 {
+                candidate_names.push(name.clone());
+            }
+        }
+
+        // Pass 2 — batch-fetch oldest enqueue_at_ms per candidate model.
+        // Uses QUEUE_MODEL_MAP (job_id → model) + QUEUE_ENQUEUE_AT (job_id → enqueue_at_ms)
+        // as the single source of truth (scheduler.md §8 governor spec).
+        let mut model_oldest: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        if !candidate_names.is_empty() {
+            if let Some(pool) = valkey_pool {
+                use fred::prelude::*;
+                use crate::domain::constants::{QUEUE_MODEL_MAP, QUEUE_ENQUEUE_AT};
+
+                let job_model: std::collections::HashMap<String, String> =
+                    pool.hgetall(QUEUE_MODEL_MAP).await.unwrap_or_default();
+
+                // Group job_ids by candidate model in a single pass.
+                let mut model_jobs: std::collections::HashMap<String, Vec<String>> =
+                    std::collections::HashMap::new();
+                for (job_id, model_name) in job_model {
+                    if candidate_names.contains(&model_name) {
+                        model_jobs.entry(model_name).or_default().push(job_id);
+                    }
+                }
+
+                // HMGET all enqueue timestamps per model; take the minimum (= oldest job).
+                for (model_name, job_ids) in model_jobs {
+                    let times: Vec<Option<String>> =
+                        pool.hmget(QUEUE_ENQUEUE_AT, job_ids).await.unwrap_or_default();
+                    let oldest = times
+                        .iter()
+                        .filter_map(|t| t.as_deref()?.parse::<u64>().ok())
+                        .min()
+                        .unwrap_or(u64::MAX);
+                    model_oldest.insert(model_name, oldest);
+                }
+            }
+        }
+
+        let mut candidates: Vec<(String, u64)> = candidate_names
+            .into_iter()
+            .map(|name| {
+                let oldest = model_oldest.get(&name).copied().unwrap_or(u64::MAX);
+                (name, oldest)
+            })
+            .collect();
+
+        let n = candidates.len();
+        let budget = num_parallel as usize;
+
+        if n > 0 {
+            // Sort by oldest_queued_ms ascending (oldest first = highest priority)
+            candidates.sort_by_key(|(_, oldest)| *oldest);
+
+            if n <= budget {
+                let base = budget / n;
+                let rem = budget % n;
+                for (i, (model, _)) in candidates.iter().enumerate() {
+                    let share = base as u32 + if i < rem { 1 } else { 0 };
+                    let mc = vram_pool.max_concurrent(provider_id, model);
+                    vram_pool.set_governor_cap(provider_id, model, mc.min(share));
+                }
+            } else {
+                // n > budget: top budget models get share=1, rest get share=0
+                for (i, (model, _)) in candidates.iter().enumerate() {
+                    if i < budget {
+                        let mc = vram_pool.max_concurrent(provider_id, model);
+                        vram_pool.set_governor_cap(provider_id, model, mc.min(1));
+                    } else {
+                        vram_pool.set_dispatch_blocked(provider_id, model, true);
+                    }
+                }
+            }
+
+            tracing::info!(
+                provider = %provider_name,
+                total_active = provider_total_active,
+                num_parallel,
+                governor_candidates = n,
+                "governor fair-share activated"
+            );
+        }
     }
 
     // Mark loaded models + unload models no longer in /api/ps
@@ -530,16 +863,24 @@ pub async fn sync_provider(
         let current_limit = vram_pool.max_concurrent(provider_id, &model.name);
 
         if baseline == 0 {
-            // First data point → set baseline + initial limit from weight
+            // First data point → set baseline. Set initial max_concurrent only if preloader
+            // has not already initialized it (current_limit == 0). The preloader applies
+            // committed_parallel defense; overriding here would ignore that guard.
             if stats.sample_count > 0 {
                 vram_pool.set_baseline_tps(provider_id, &model.name, current_tps_x100);
-                let initial = initial_max_concurrent(weight_mb as u32);
-                vram_pool.set_max_concurrent(provider_id, &model.name, initial);
+                if current_limit == 0 {
+                    // Preloader did not run (model was loaded before registration).
+                    // Apply same committed_parallel defense as preloader.
+                    let committed = vram_pool.sum_loaded_max_concurrent(provider_id);
+                    let initial = num_parallel.min(num_parallel.saturating_sub(committed)).max(1);
+                    vram_pool.set_max_concurrent(provider_id, &model.name, initial);
+                }
                 if stats.p95_latency_ms > 0.0 {
                     vram_pool.set_baseline_p95_ms(provider_id, &model.name, stats.p95_latency_ms as u32);
                 }
             }
-        } else if stats.sample_count >= 3 {
+        } else if stats.sample_count >= 3 && !governor_active {
+            // Governor active → suppress AIMD increase/decrease (fair-share cap is the final value)
             let ratio = current_tps_x100 as f64 / baseline as f64;
             let baseline_p95 = vram_pool.baseline_p95_ms(provider_id, &model.name);
             let current_p95 = stats.p95_latency_ms as u32;
@@ -548,22 +889,29 @@ pub async fn sync_provider(
 
             let new_limit = if ratio < 0.7 || p95_spike {
                 // Throughput 30%+ drop or p95 doubled → multiplicative decrease
+                vram_pool.reset_stable_cycle_count(provider_id, &model.name);
                 (current_limit * 3 / 4).max(1)
             } else if ratio >= 0.9 {
-                // Throughput maintained + p95 stable → additive increase
-                vram_pool.set_baseline_tps(
-                    provider_id,
-                    &model.name,
-                    baseline.max(current_tps_x100),
-                );
-                if baseline_p95 > 0 {
-                    vram_pool.set_baseline_p95_ms(
+                // Throughput maintained + p95 stable → increment stable cycle counter.
+                // Only update baseline after 3 consecutive stable cycles (reduce noise).
+                vram_pool.increment_stable_cycle_count(provider_id, &model.name);
+                let stable_cycles = vram_pool.stable_cycle_count(provider_id, &model.name);
+                if stable_cycles >= 3 {
+                    // 3rd+ consecutive stable cycle: update baseline.
+                    vram_pool.set_baseline_tps(
                         provider_id,
                         &model.name,
-                        baseline_p95.min(current_p95),
+                        baseline.max(current_tps_x100),
                     );
+                    if baseline_p95 > 0 {
+                        vram_pool.set_baseline_p95_ms(
+                            provider_id,
+                            &model.name,
+                            baseline_p95.min(current_p95),
+                        );
+                    }
                 }
-                current_limit.saturating_add(1)
+                current_limit.saturating_add(1).min(num_parallel)
             } else {
                 current_limit
             };
@@ -651,11 +999,22 @@ pub async fn sync_provider(
                     if mr.recommended_max_concurrent == 0 {
                         continue; // LLM returned 0 = no opinion
                     }
-                    // Clamp to weight-based upper bound and ±2 from current for stability
-                    let snap = model_snapshots.iter().find(|s| s.name == mr.model);
-                    let upper = snap.map_or(8, |s| weight_based_max_concurrent(s.weight_mb) * 2);
+                    // Gate: LLM correction is blocked during AIMD decrease cycles.
+                    // Require 3+ consecutive stable cycles before LLM can override.
+                    let stable_cycles = vram_pool.stable_cycle_count(provider_id, &mr.model);
+                    if stable_cycles < 3 {
+                        tracing::debug!(
+                            model = %mr.model,
+                            stable_cycles,
+                            "LLM correction gated (not in stable period)"
+                        );
+                        continue;
+                    }
+                    // LLM correction is increase-only: floor = current, ceil = current+2.
+                    // AIMD is solely responsible for decreases; LLM can only nudge upward.
+                    let upper = num_parallel * 2;
                     let current = vram_pool.max_concurrent(provider_id, &mr.model);
-                    let change_floor = current.saturating_sub(2).max(1);
+                    let change_floor = current; // never decrease via LLM
                     let change_ceil = current.saturating_add(2);
                     let recommended = mr.recommended_max_concurrent
                         .min(upper)
@@ -691,21 +1050,8 @@ pub async fn sync_provider(
     Ok(())
 }
 
-/// Initial max_concurrent: conservative cold-start = 1.
-/// Requests only 1 concurrent per model until LLM batch analysis recommends otherwise.
-fn initial_max_concurrent(_weight_mb: u32) -> u32 {
-    1
-}
-
-/// Weight-based heuristic used as LLM analysis fallback.
-fn weight_based_max_concurrent(weight_mb: u32) -> u32 {
-    match weight_mb {
-        0..5120 => 8,
-        5120..20480 => 4,
-        20480..51200 => 2,
-        _ => 1,
-    }
-}
+// Phase 8: initial_max_concurrent / weight_based_max_concurrent removed.
+// Cold start initial = num_parallel (passed to sync_provider).
 
 // ── Sync loop ─────────────────────────────────────────────────────────────────
 
@@ -724,6 +1070,7 @@ pub async fn run_sync_loop(
     client:                reqwest::Client,
     ollama_model_repo:     Arc<dyn OllamaModelRepository>,
     model_selection_repo:  Arc<dyn ProviderModelSelectionRepository>,
+    vram_budget_repo:      Arc<dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository>,
 ) {
     let mut ticker = tokio::time::interval(base_tick);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -775,6 +1122,7 @@ pub async fn run_sync_loop(
                 &provider.name,
                 &provider.url,
                 provider.total_vram_mb,
+                provider.num_parallel.max(1) as u32,
                 &settings.analyzer_model,
                 &*capacity_repo,
                 &*vram_pool,
@@ -782,6 +1130,7 @@ pub async fn run_sync_loop(
                 &*registry,
                 &*ollama_model_repo,
                 &*model_selection_repo,
+                &*vram_budget_repo,
             )
             .await
             {
