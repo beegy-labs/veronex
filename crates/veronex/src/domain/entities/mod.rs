@@ -118,6 +118,11 @@ pub struct InferenceJob {
     /// Empty string = first turn (no parent). Used to link child → parent in a session.
     #[serde(default)]
     pub messages_prefix_hash: Option<String>,
+    /// Machine-readable failure cause (G16). Set when status=Failed.
+    /// Values: queue_full, no_eligible_provider, thermal_hard_gate, drain_forced,
+    ///         queue_wait_exceeded, provider_error, token_budget_exceeded
+    #[serde(default)]
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +244,7 @@ mod tests {
             tool_calls_json: None,
             messages_hash: None,
             messages_prefix_hash: None,
+            failure_reason: None,
         }
     }
 
@@ -317,6 +323,7 @@ mod tests {
             tool_calls_json: None,
             messages_hash: None,
             messages_prefix_hash: None,
+            failure_reason: None,
             tools: None,
         };
         assert_eq!(job.status, JobStatus::Failed);

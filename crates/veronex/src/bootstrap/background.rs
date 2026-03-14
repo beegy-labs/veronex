@@ -197,7 +197,17 @@ pub async fn spawn_background_tasks(
             shutdown.child_token(),
         ));
 
-        tracing::info!("queue maintenance loops started (promote_overdue=30s, demand_resync=60s)");
+        if let Some(ref vk_port) = repos.valkey_port {
+            tasks.spawn(queue_maintenance::run_queue_wait_cancel_loop(
+                pool.clone(),
+                vk_port.clone(),
+                repos.job_repo.clone(),
+                Duration::from_secs(veronex::domain::constants::QUEUE_WAIT_CANCEL_SECS),
+                shutdown.child_token(),
+            ));
+        }
+
+        tracing::info!("queue maintenance loops started (promote_overdue=30s, demand_resync=60s, queue_wait_cancel=30s)");
 
         // ── Placement Planner (Phase 5) ──────────────────────────────────
         if let Some(ref vk_port) = repos.valkey_port {

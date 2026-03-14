@@ -128,6 +128,12 @@ pub const OVERDUE_PROMOTE_SECS: u64 = 30;
 /// Interval for the demand_resync background loop.
 pub const DEMAND_RESYNC_SECS: u64 = 60;
 
+/// Max time a job may wait in the ZSET queue before being auto-cancelled (§7).
+pub const MAX_QUEUE_WAIT_SECS: u64 = 300;
+
+/// Interval for the queue_wait_cancel background loop.
+pub const QUEUE_WAIT_CANCEL_SECS: u64 = 30;
+
 /// Default top-K window for ZSET peek in dispatcher.
 pub const ZSET_PEEK_K: u64 = 20;
 

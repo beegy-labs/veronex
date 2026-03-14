@@ -416,14 +416,24 @@ impl VramPoolPort for VramPool {
             }
             _ => {} // already loaded with same weight — no change
         }
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
         state
             .models
             .entry(model.to_string())
             .and_modify(|ms| {
                 ms.is_loaded = true;
                 ms.weight_mb = weight_mb;
+                // Initialize last_active_at if never set — prevents immediate eviction
+                // by placement planner (idle_since_secs() would return u64::MAX).
+                if ms.last_active_at.load(Ordering::Acquire) == 0 {
+                    ms.last_active_at.store(now_ms, Ordering::Release);
+                }
             })
-            .or_insert_with(|| ModelState::new(weight_mb, true, 128, 0));
+            .or_insert_with(|| {
+                let ms = ModelState::new(weight_mb, true, 128, 0);
+                ms.last_active_at.store(now_ms, Ordering::Release);
+                ms
+            });
         self.loaded_models_global.insert(model.to_string());
     }
 

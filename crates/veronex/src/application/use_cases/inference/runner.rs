@@ -74,6 +74,7 @@ async fn handle_stream_error(
         entry.status = JobStatus::Failed;
         entry.job.status = JobStatus::Failed;
         entry.job.error = Some(msg.clone());
+        entry.job.failure_reason = Some("provider_error".to_string());
         entry.done = true;
         let notify = entry.notify.clone();
         drop(entry);
@@ -82,6 +83,7 @@ async fn handle_stream_error(
 
     job.status = JobStatus::Failed;
     job.error = Some(msg.clone());
+    job.failure_reason = Some("provider_error".to_string());
     if let Err(db_err) = job_repo.save(job).await {
         tracing::warn!(job_id = %uuid, "failed to persist failed state: {db_err}");
     }
@@ -363,6 +365,7 @@ pub(super) async fn run_job(
                     entry.status = JobStatus::Failed;
                     entry.job.status = JobStatus::Failed;
                     entry.job.error = Some("token budget exceeded".into());
+                    entry.job.failure_reason = Some("token_budget_exceeded".to_string());
                     let notify = entry.notify.clone();
                     drop(entry);
                     notify.notify_one();

@@ -177,6 +177,7 @@ async fn fail_job_no_provider(
         entry.status = JobStatus::Failed;
         entry.job.status = JobStatus::Failed;
         entry.job.error = Some(reason.to_string());
+        entry.job.failure_reason = Some("no_eligible_provider".to_string());
         entry.done = true;
         let notify = entry.notify.clone();
         drop(entry);
@@ -184,12 +185,8 @@ async fn fail_job_no_provider(
     }
 
     let job_id = crate::domain::value_objects::JobId(uuid);
-    if let Ok(Some(mut job)) = job_repo.get(&job_id).await {
-        job.status = JobStatus::Failed;
-        job.error = Some(reason.to_string());
-        if let Err(e) = job_repo.save(&job).await {
-            tracing::warn!(job_id = %uuid, "failed to persist no-provider failure: {e}");
-        }
+    if let Err(e) = job_repo.fail_with_reason(&job_id, "no_eligible_provider", Some(reason)).await {
+        tracing::warn!(job_id = %uuid, "failed to persist no-provider failure: {e}");
     }
 
     schedule_cleanup(jobs, uuid, JOB_CLEANUP_DELAY);

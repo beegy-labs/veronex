@@ -490,6 +490,11 @@ async fn planner_tick(
             }
             // Check server_idle: no loaded models with demand, no active requests
             let loaded = vram_pool.loaded_model_names(p.id);
+            // Fresh provider (never synced) — no models in VramPool yet.
+            // Don't Scale-In until at least one capacity sync has occurred.
+            if loaded.is_empty() {
+                continue;
+            }
             let has_demand = loaded.iter().any(|m| model_demand.contains_key(m));
             if has_demand {
                 continue;

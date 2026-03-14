@@ -241,7 +241,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             source, provider_id: None, api_format, messages, tools,
             request_path, queue_time_ms: None, cancelled_at: None,
             conversation_id, tool_calls_json: None,
-            messages_hash: None, messages_prefix_hash: None,
+            messages_hash: None, messages_prefix_hash: None, failure_reason: None,
         };
 
         // Upload messages to S3
@@ -288,7 +288,9 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     tracing::warn!(%uuid, "queue full, rejecting job");
                     self.jobs.remove(&uuid);
                     self.cancel_notifiers.remove(&uuid);
-                    if let Err(e) = self.job_repo.update_status(&job_id, JobStatus::Failed).await {
+                    if let Err(e) = self.job_repo.fail_with_reason(
+                        &job_id, "queue_full", Some("queue capacity exceeded"),
+                    ).await {
                         tracing::warn!(%uuid, "failed to mark queue-full job as failed: {e}");
                     }
                     return Err(DomainError::QueueFull("queue capacity exceeded".into()));
