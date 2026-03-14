@@ -68,24 +68,28 @@ pub async fn fetch_gemini_models(client: &reqwest::Client, api_key: &str) -> any
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Concrete example kept as documentation.
     #[test]
-    fn mask_long_key() {
+    fn mask_long_key_example() {
         assert_eq!(mask_api_key("AIzaSyD1234567890abcdefg"), "AIza...defg");
     }
 
-    #[test]
-    fn mask_short_key() {
-        assert_eq!(mask_api_key("short"), "****");
-    }
+    proptest! {
+        #[test]
+        fn mask_short_key_fully_redacted(key in "[a-zA-Z0-9]{0,8}") {
+            prop_assert_eq!(mask_api_key(&key), "****");
+        }
 
-    #[test]
-    fn mask_exactly_eight_chars() {
-        assert_eq!(mask_api_key("12345678"), "****");
-    }
-
-    #[test]
-    fn mask_nine_chars() {
-        assert_eq!(mask_api_key("123456789"), "1234...6789");
+        #[test]
+        fn mask_long_key_preserves_first4_last4(key in "[a-zA-Z0-9]{9,64}") {
+            let masked = mask_api_key(&key);
+            prop_assert!(masked.starts_with(&key[..4]));
+            prop_assert!(masked.ends_with(&key[key.len()-4..]));
+            prop_assert!(masked.contains("..."));
+            // Format is always "XXXX...YYYY" = 11 chars, hides middle portion
+            prop_assert_eq!(masked.len(), 11);
+        }
     }
 }

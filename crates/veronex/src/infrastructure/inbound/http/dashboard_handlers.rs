@@ -235,9 +235,11 @@ fn build_capacity(state: &AppState, entries: Vec<crate::application::ports::outb
         let thermal_level = state.thermal.get(provider_id);
         let temp_c = state.thermal.temp_c(provider_id);
         let thermal_state = match thermal_level {
-            ThrottleLevel::Normal => "normal",
-            ThrottleLevel::Soft   => "soft",
-            ThrottleLevel::Hard   => "hard",
+            ThrottleLevel::Normal   => "normal",
+            ThrottleLevel::Soft     => "soft",
+            ThrottleLevel::Hard     => "hard",
+            ThrottleLevel::Cooldown => "cooldown",
+            ThrottleLevel::RampUp   => "rampup",
         };
 
         let loaded_models: Vec<LoadedModelInfo> = models

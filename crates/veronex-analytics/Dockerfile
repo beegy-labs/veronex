@@ -1,35 +1,33 @@
-FROM rust:1-alpine AS builder
-
-RUN apk add --no-cache musl-dev protoc
-
+FROM rust:1-alpine AS chef
+RUN apk add --no-cache musl-dev protoc mold clang
+RUN cargo install cargo-chef --locked
 WORKDIR /app
 
-# Copy workspace root manifests (Cargo.lock lives here)
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+COPY workspace-hack/ ./workspace-hack/
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Copy all workspace member Cargo.toml files (needed to resolve workspace)
-COPY crates/veronex/Cargo.toml ./crates/veronex/
-COPY crates/veronex-agent/Cargo.toml ./crates/veronex-agent/
-COPY crates/veronex-analytics/Cargo.toml ./crates/veronex-analytics/
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
+    cargo chef cook --release -p veronex-analytics --recipe-path recipe.json
 
-# Dummy source for all workspace members — caches dependency compilation
-RUN mkdir -p crates/veronex/src crates/veronex-agent/src crates/veronex-analytics/src && \
-    echo "fn main() {}" > crates/veronex/src/main.rs && \
-    echo "fn main() {}" > crates/veronex-agent/src/main.rs && \
-    echo "fn main() {}" > crates/veronex-analytics/src/main.rs
-RUN cargo build --release -p veronex-analytics 2>/dev/null || true
-
-# Real source
-COPY crates/veronex-analytics/src ./crates/veronex-analytics/src
-RUN touch crates/veronex-analytics/src/main.rs && \
-    cargo build --release -p veronex-analytics
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+COPY workspace-hack/ ./workspace-hack/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
+    cargo build --release -p veronex-analytics && \
+    cp /app/target/release/veronex-analytics /app/veronex-analytics
 
 FROM alpine:3.21
-
 RUN apk add --no-cache ca-certificates
-
 WORKDIR /app
-COPY --from=builder /app/target/release/veronex-analytics ./
-
+COPY --from=builder /app/veronex-analytics ./
 EXPOSE 3003
 CMD ["./veronex-analytics"]

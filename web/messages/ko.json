@@ -344,7 +344,9 @@
       "modelSelectionDesc": "이 백엔드로 라우팅할 모델만 활성화하세요.",
       "enabledCount": "{{enabled}}/{{total}} 활성화",
       "freeTier": "무료 티어",
-      "freeTierDesc": "이 백엔드를 무료 티어 API 키 요청 전용으로 설정합니다."
+      "freeTierDesc": "이 백엔드를 무료 티어 API 키 요청 전용으로 설정합니다.",
+      "noBackends": "등록된 Ollama 프로바이더가 없습니다",
+      "noBackendsHint": "로컬 Ollama 서버를 추가하여 인퍼런스 라우팅을 시작하세요."
     },
     "capacity": {
       "title": "동시성 제어",
@@ -436,7 +438,9 @@
       "syncStatus": "상태 동기화",
       "syncingStatus": "동기화 중…",
       "statusSyncDone": "상태 업데이트됨",
-      "noStatusResults": "등록된 활성 Gemini 프로바이더가 없습니다."
+      "noStatusResults": "등록된 활성 Gemini 프로바이더가 없습니다.",
+      "noBackends": "등록된 Gemini 프로바이더가 없습니다",
+      "noBackendsHint": "Gemini API 키를 추가하여 Google 클라우드 인퍼런스 라우팅을 시작하세요."
     },
     "healthcheck": "헬스체크",
     "runHealthcheck": "헬스체크 실행",

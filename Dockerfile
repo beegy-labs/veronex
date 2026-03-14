@@ -1,42 +1,35 @@
-FROM rust:1-alpine AS builder
-
-RUN apk add --no-cache musl-dev
-
+FROM rust:1-alpine AS chef
+RUN apk add --no-cache musl-dev mold clang
+RUN cargo install cargo-chef --locked
 WORKDIR /app
 
-# Copy workspace root manifests
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+COPY workspace-hack/ ./workspace-hack/
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Copy all workspace member Cargo.toml files
-COPY crates/veronex/Cargo.toml ./crates/veronex/
-COPY crates/veronex-agent/Cargo.toml ./crates/veronex-agent/
-COPY crates/veronex-analytics/Cargo.toml ./crates/veronex-analytics/
-
-# Dummy source for dependency caching
-RUN mkdir -p crates/veronex/src crates/veronex-agent/src crates/veronex-analytics/src && \
-    echo "fn main() {}" > crates/veronex/src/main.rs && \
-    echo "fn main() {}" > crates/veronex-agent/src/main.rs && \
-    echo "fn main() {}" > crates/veronex-analytics/src/main.rs
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    SQLX_OFFLINE=true cargo build --release -p veronex 2>/dev/null || true
+    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
+    cargo chef cook --release -p veronex --recipe-path recipe.json
 
-# Real source
-COPY crates/veronex/src ./crates/veronex/src
-COPY crates/veronex/migrations ./crates/veronex/migrations
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+COPY workspace-hack/ ./workspace-hack/
 COPY crates/veronex/.sqlx ./crates/veronex/.sqlx
+COPY crates/veronex/migrations ./crates/veronex/migrations
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    touch crates/veronex/src/main.rs && \
+    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
     SQLX_OFFLINE=true cargo build --release -p veronex && \
     cp /app/target/release/veronex /app/veronex
 
 FROM alpine:3.21
-
 RUN apk add --no-cache ca-certificates wget
-
 WORKDIR /app
 COPY --from=builder /app/veronex ./
-
 EXPOSE 3000
 CMD ["./veronex"]

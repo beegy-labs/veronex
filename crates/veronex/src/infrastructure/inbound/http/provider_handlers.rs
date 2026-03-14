@@ -14,7 +14,7 @@ use crate::infrastructure::outbound::health_checker::check_provider;
 use crate::infrastructure::outbound::valkey_keys;
 
 use super::audit_helpers::emit_audit;
-use super::error::AppError;
+use super::error::{AppError, db_error};
 use super::gemini_helpers;
 use super::provider_validation::{parse_provider_type, validate_provider_url};
 use super::state::AppState;
@@ -116,11 +116,11 @@ pub struct RegisterProviderRequest {
     pub gpu_index: Option<i16>,
     /// FK → gpu_servers. Optional; Gemini providers leave this null.
     pub server_id: Option<Uuid>,
-    /// veronex-agent URL (Phase 2, reserved). E.g. `"http://192.168.1.10:9091"`.
-    pub agent_url: Option<String>,
     /// true = key is on a Google free-tier project.
     /// RPM/RPD limits are managed globally via `gemini_rate_limit_policies`.
     pub is_free_tier: Option<bool>,
+    /// Ollama num_parallel setting. Default 4. Used as AIMD upper bound.
+    pub num_parallel: Option<i16>,
 }
 
 /// Update request for `PATCH /v1/providers/{id}`.
@@ -139,6 +139,8 @@ pub struct UpdateProviderRequest {
     pub gpu_index: Option<i16>,
     pub server_id: Option<Uuid>,
     pub is_free_tier: Option<bool>,
+    /// Ollama num_parallel setting.
+    pub num_parallel: Option<i16>,
     /// Enable or disable the provider for routing.
     pub is_active: Option<bool>,
 }
@@ -153,8 +155,8 @@ pub struct ProviderSummary {
     pub total_vram_mb: i64,
     pub gpu_index: Option<i16>,
     pub server_id: Option<Uuid>,
-    pub agent_url: Option<String>,
     pub is_free_tier: bool,
+    pub num_parallel: i16,
     pub status: String,
     pub registered_at: DateTime<Utc>,
     /// Masked API key shown in the management UI (e.g. `AIza...x1y2`). Gemini only.
@@ -175,8 +177,8 @@ impl From<LlmProvider> for ProviderSummary {
             total_vram_mb: b.total_vram_mb,
             gpu_index: b.gpu_index,
             server_id: b.server_id,
-            agent_url: b.agent_url,
             is_free_tier: b.is_free_tier,
+            num_parallel: b.num_parallel,
             status,
             registered_at: b.registered_at,
             api_key_masked,
@@ -200,7 +202,7 @@ pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvid
         .await
         .map_err(|e| {
             tracing::error!(%id, "failed to fetch provider: {e}");
-            AppError::Internal(anyhow::anyhow!("database error"))
+            db_error(e)
         })?
         .ok_or_else(|| AppError::NotFound("provider not found".into()))
 }
@@ -250,8 +252,8 @@ pub async fn register_provider(
         total_vram_mb: req.total_vram_mb.unwrap_or(0),
         gpu_index: req.gpu_index,
         server_id: req.server_id,
-        agent_url: req.agent_url.filter(|s| !s.is_empty()),
         is_free_tier: req.is_free_tier.unwrap_or(false),
+        num_parallel: req.num_parallel.unwrap_or(4),
         status: LlmProviderStatus::Offline, // initial; overwritten by health check
         registered_at: Utc::now(),
     };
@@ -266,7 +268,7 @@ pub async fn register_provider(
     let registry = &state.provider_registry;
     if let Err(e) = registry.register(&provider).await {
         tracing::error!("failed to register provider: {e}");
-        return AppError::Internal(anyhow::anyhow!("database error")).into_response();
+        return db_error(e).into_response();
     }
 
     let status_str = initial_status.as_str();
@@ -304,7 +306,7 @@ pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse 
         }
         Err(e) => {
             tracing::error!("failed to list providers: {e}");
-            AppError::Internal(anyhow::anyhow!("database error")).into_response()
+            db_error(e).into_response()
         }
     }
 }
@@ -330,7 +332,7 @@ pub async fn delete_provider(
         }
         Err(e) => {
             tracing::error!(%id, "failed to deactivate provider: {e}");
-            AppError::Internal(anyhow::anyhow!("database error")).into_response()
+            db_error(e).into_response()
         }
     }
 }
@@ -397,11 +399,12 @@ pub async fn update_provider(
     provider.gpu_index = req.gpu_index;   // null clears the field
     provider.server_id = req.server_id;  // null clears the field
     if let Some(v) = req.is_free_tier { provider.is_free_tier = v; }
+    if let Some(v) = req.num_parallel { provider.num_parallel = v; }
     if let Some(v) = req.is_active { provider.is_active = v; }
 
     if let Err(e) = registry.update(&provider).await {
         tracing::error!(%id, "update_provider: failed: {e}");
-        return AppError::Internal(anyhow::anyhow!("database error")).into_response();
+        return db_error(e).into_response();
     }
 
     let resource_type = provider.provider_type.resource_type();
@@ -535,6 +538,7 @@ pub async fn sync_single_provider(
         &provider.name,
         &provider.url,
         provider.total_vram_mb,
+        provider.num_parallel.max(1) as u32,
         &settings.analyzer_model,
         &*state.capacity_repo,
         &*state.vram_pool,
@@ -542,6 +546,7 @@ pub async fn sync_single_provider(
         &*state.provider_registry,
         &*state.ollama_model_repo,
         &*state.model_selection_repo,
+        &*state.vram_budget_repo,
     )
     .await
     {
@@ -604,8 +609,8 @@ mod tests {
             total_vram_mb: 8192,
             gpu_index: Some(0),
             server_id: None,
-            agent_url: None,
-            is_free_tier: false,
+                is_free_tier: false,
+            num_parallel: 4,
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),
         };
@@ -629,8 +634,8 @@ mod tests {
             total_vram_mb: 0,
             gpu_index: None,
             server_id: None,
-            agent_url: None,
-            is_free_tier: true,
+                is_free_tier: true,
+            num_parallel: 4,
             status: LlmProviderStatus::Offline,
             registered_at: Utc::now(),
         };

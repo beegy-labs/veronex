@@ -5,19 +5,9 @@ metadata:
   name: {{ .Release.Name }}-veronex-agent
   labels:
     {{- include "veronex.labels" . | nindent 4 }}
-    app.kubernetes.io/name: veronex-agent
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/component: agent
+    {{- include "veronex.agent.selectorLabels" . | nindent 4 }}
 spec:
-  type: ClusterIP
-  clusterIP: None  # Headless — each pod is directly addressable
+  clusterIP: None
   selector:
-    app.kubernetes.io/name: veronex-agent
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/component: agent
-  ports:
-    - name: http
-      port: {{ .Values.veronexAgent.port }}
-      targetPort: http
-      protocol: TCP
+    {{- include "veronex.agent.selectorLabels" . | nindent 4 }}
 {{- end }}

@@ -226,18 +226,22 @@ impl LlmProviderStatus {
     }
 }
 
-/// Three-level thermal throttling state for GPU providers.
+/// Five-level thermal throttling state for GPU/APU providers.
 ///
 /// Updated by the health checker every 30 s; read by the queue dispatcher
 /// on every job dispatch to gate concurrency limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThrottleLevel {
-    /// Temp < 78 °C — full concurrency allowed.
+    /// Temp < normal_below — full concurrency allowed.
     Normal,
-    /// 78 °C ≤ temp < 92 °C — new slots allowed only if none active.
+    /// soft_at ≤ temp < hard_at — new requests blocked (503).
     Soft,
-    /// temp ≥ 92 °C — no new slots until cooldown expires.
+    /// temp ≥ hard_at — all blocked, forced drain after 60s.
     Hard,
+    /// After Hard: waiting cooldown_secs for hardware to cool down. No new requests.
+    Cooldown,
+    /// After Cooldown: gradually restoring. New requests allowed, max_concurrent=1.
+    RampUp,
 }
 
 // ── API Key enums ────────────────────────────────────────────────────────────

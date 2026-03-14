@@ -25,6 +25,9 @@ Thumbs.db
 .env.local
 *.env
 
+# Proptest regression files
+**/proptest-regressions/
+
 # Build artifacts
 *.log
 web/tsconfig.tsbuildinfo

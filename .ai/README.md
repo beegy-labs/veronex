@@ -11,7 +11,7 @@ maximize cluster-wide throughput. OpenAI-compatible API + Next.js admin dashboar
 Three Rust crates:
 - `veronex` — main API server + scheduler (`crates/veronex/`)
 - `veronex-analytics` — internal analytics service (`crates/veronex-analytics/`, port 3003)
-- `veronex-agent` — per-node hardware metrics agent (`crates/veronex-agent/`)
+- `veronex-agent` — metrics collector, scrapes node-exporter + Ollama, OTLP push (`crates/veronex-agent/`)
 
 ## Navigation
 
@@ -21,6 +21,7 @@ Three Rust crates:
 | Architecture | `.ai/architecture.md` |
 | Security | `.ai/security.md` |
 | Code patterns (2026) | `docs/llm/policies/patterns.md` |
+| Testing strategy | `docs/llm/policies/testing-strategy.md` |
 | Git & commits | `.ai/git-flow.md` |
 | Full docs index | `docs/llm/README.md` |
 
@@ -31,6 +32,6 @@ Three Rust crates:
 | Auth | `docs/llm/auth/` | jwt-sessions (+impl), api-keys, security |
 | Inference | `docs/llm/inference/` | job-lifecycle, job-api, session-grouping, job-analytics, openai-compat, capacity, model-pricing, lab-features |
 | Providers | `docs/llm/providers/` | ollama (+impl), ollama-models, gemini, gemini-models, hardware |
-| Infra | `docs/llm/infra/` | deploy, otel-pipeline (+ops) |
+| Infra | `docs/llm/infra/` | deploy, otel-pipeline (+ops), build-optimization |
 | Frontend | `docs/llm/frontend/` | design-system (core, i18n, components), charts, pages/* |
 | Research | `docs/llm/research/` | 2026 best practices (frontend, backend, infra, security) |

@@ -31,8 +31,7 @@ async fn main() -> Result<()> {
     let masked_db_url = mask_database_url(&config.database_url);
     tracing::info!("connecting to postgres at {masked_db_url}");
     let pg_pool = database::connect(&config.database_url).await?;
-    sqlx::migrate!().run(&pg_pool).await?;
-    tracing::info!("postgres ready, migrations applied");
+    tracing::info!("postgres ready");
 
     // ── Valkey (optional) ──────────────────────────────────────────
     let valkey_pool = if let Some(ref url) = config.valkey_url {
@@ -115,6 +114,7 @@ async fn main() -> Result<()> {
         session_grouping_lock: handles.session_grouping_lock,
         sync_lock: handles.sync_lock,
         sse_connections: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        vram_budget_repo: repos.vram_budget_repo,
     };
 
     let app = build_app(state, config.cors_origins);

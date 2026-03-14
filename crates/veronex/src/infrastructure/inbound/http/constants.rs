@@ -78,5 +78,6 @@ pub const MODELS_CACHE_TTL: i64 = 3600;
 
 // ── Error messages ──────────────────────────────────────────────────────────
 
+pub const ERR_DATABASE: &str = "database error";
 pub const ERR_MODEL_INVALID: &str = "model name invalid or too long";
 pub const ERR_PROMPT_TOO_LARGE: &str = "content exceeds maximum length of 1MB";

@@ -1,0 +1,36 @@
+{{- if .Values.migrations.enabled }}
+---
+# PostgreSQL migration SQL files
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-migrate-postgres-sql
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  000001_init.up.sql: |
+    {{- .Files.Get "files/postgres/000001_init.up.sql" | nindent 4 }}
+  000001_init.down.sql: |
+    {{- .Files.Get "files/postgres/000001_init.down.sql" | nindent 4 }}
+---
+# ClickHouse migration SQL templates (placeholders resolved at runtime)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-migrate-clickhouse-sql
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  000001_init.up.sql: |
+    {{- .Files.Get "files/clickhouse/000001_init.up.sql" | nindent 4 }}
+  000001_init.down.sql: |
+    {{- .Files.Get "files/clickhouse/000001_init.down.sql" | nindent 4 }}
+{{- end }}

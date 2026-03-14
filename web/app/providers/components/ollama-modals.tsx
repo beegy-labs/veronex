@@ -20,6 +20,7 @@ import {
 import { useTranslation } from '@/i18n'
 import {
   PROVIDER_STATUS_DOT, PROVIDER_STATUS_BADGE, PROVIDER_STATUS_I18N,
+  STALE_TIME_FAST,
 } from '@/lib/constants'
 import { extractHost } from './shared'
 
@@ -35,7 +36,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
   const { data, isLoading } = useQuery<{ providers: OllamaProviderForModel[] }>({
     queryKey: ['ollama-model-providers', modelName],
     queryFn: () => api.ollamaModelProviders(modelName),
-    staleTime: 30_000,
+    staleTime: STALE_TIME_FAST,
   })
 
   const allProviders = data?.providers ?? []

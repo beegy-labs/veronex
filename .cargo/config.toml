@@ -1,0 +1,15 @@
+# Build performance: mold linker + split debuginfo
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = [
+    "-C", "link-arg=-fuse-ld=mold",
+    "-C", "split-debuginfo=unpacked",
+]
+
+# Sparse registry protocol (faster crate index)
+[registries.crates-io]
+protocol = "sparse"
+
+# sccache for compilation caching (uncomment after: cargo install sccache)
+# [build]
+# rustc-wrapper = "sccache"

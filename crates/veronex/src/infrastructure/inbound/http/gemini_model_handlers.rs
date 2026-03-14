@@ -11,7 +11,7 @@ use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 use crate::infrastructure::outbound::health_checker::check_provider;
 
 use super::audit_helpers::emit_audit;
-use super::error::AppError;
+use super::error::{AppError, db_error};
 use super::gemini_helpers;
 use super::state::AppState;
 
@@ -46,10 +46,7 @@ pub struct SyncModelsResponse {
 
 /// `GET /v1/gemini/sync-config` — return the masked admin API key (or null).
 pub async fn get_sync_config(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<Json<SyncConfigResponse>> {
-    let key = state.gemini_sync_config_repo.get_api_key().await.map_err(|e| {
-        tracing::error!("get_sync_config: {e}");
-        AppError::Internal(anyhow::anyhow!("database error"))
-    })?;
+    let key = state.gemini_sync_config_repo.get_api_key().await.map_err(db_error)?;
     let masked = key.as_deref().map(gemini_helpers::mask_api_key);
     Ok(Json(SyncConfigResponse { api_key_masked: masked }))
 }
@@ -64,10 +61,7 @@ pub async fn set_sync_config(
         return Err(AppError::BadRequest("api_key must not be empty".into()));
     }
 
-    state.gemini_sync_config_repo.set_api_key(req.api_key.trim()).await.map_err(|e| {
-        tracing::error!("set_sync_config: {e}");
-        AppError::Internal(anyhow::anyhow!("database error"))
-    })?;
+    state.gemini_sync_config_repo.set_api_key(req.api_key.trim()).await.map_err(db_error)?;
 
     emit_audit(&state, &claims, "update", "gemini_provider", "gemini_sync_config", "gemini_sync_config",
         "Gemini admin API key replaced (used for global model list sync)").await;
@@ -88,10 +82,7 @@ pub async fn sync_models(
                 "No admin API key configured. Use PUT /v1/gemini/sync-config first.".into(),
             ));
         }
-        Err(e) => {
-            tracing::error!("sync_models: failed to fetch config: {e}");
-            return Err(AppError::Internal(anyhow::anyhow!("database error")));
-        }
+        Err(e) => return Err(db_error(e)),
     };
 
     let models = gemini_helpers::fetch_gemini_models(&state.http_client, &api_key)
@@ -101,10 +92,7 @@ pub async fn sync_models(
             AppError::BadGateway(e.to_string())
         })?;
 
-    state.gemini_model_repo.sync_models(&models).await.map_err(|e| {
-        tracing::error!("sync_models: failed to persist: {e}");
-        AppError::Internal(anyhow::anyhow!("database error"))
-    })?;
+    state.gemini_model_repo.sync_models(&models).await.map_err(db_error)?;
 
     let count = models.len();
     tracing::info!(count, "global gemini model list synced");
@@ -134,10 +122,7 @@ pub struct GeminiSyncStatusResponse {
 /// Runs synchronously (fast — just one lightweight API call per provider).
 /// Returns the updated status for each provider.
 pub async fn sync_status(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<Json<GeminiSyncStatusResponse>> {
-    let providers = state.provider_registry.list_all().await.map_err(|e| {
-        tracing::error!("gemini sync_status: failed to list providers: {e}");
-        AppError::Internal(anyhow::anyhow!("database error"))
-    })?;
+    let providers = state.provider_registry.list_all().await.map_err(db_error)?;
 
     let gemini_active: Vec<_> = providers
         .into_iter()
@@ -171,10 +156,7 @@ pub async fn sync_status(RequireSuper(_claims): RequireSuper, State(state): Stat
 
 /// `GET /v1/gemini/models` — list the global Gemini model pool.
 pub async fn list_models(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<impl IntoResponse> {
-    let rows = state.gemini_model_repo.list().await.map_err(|e| {
-        tracing::error!("list_models: {e}");
-        AppError::Internal(anyhow::anyhow!("database error"))
-    })?;
+    let rows = state.gemini_model_repo.list().await.map_err(db_error)?;
     let dtos: Vec<GeminiModelDto> = rows
         .into_iter()
         .map(|m| GeminiModelDto {

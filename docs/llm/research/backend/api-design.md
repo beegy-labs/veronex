@@ -18,7 +18,7 @@ DELETE /v1/resource/{id}         # delete
 
 # Nested resources
 GET    /v1/servers/{id}/metrics          # server-scoped resource
-GET    /v1/ollama/backends/{id}/models   # sub-resource list
+GET    /v1/ollama/providers/{id}/models  # sub-resource list
 POST   /v1/ollama/models/sync            # action (verb as last segment)
 ```
 
@@ -75,12 +75,12 @@ Use `discriminator` + `oneOf` when a field type varies by a tag:
 ```yaml
 components:
   schemas:
-    BackendConfig:
+    ProviderConfig:
       oneOf:
         - $ref: '#/components/schemas/OllamaConfig'
         - $ref: '#/components/schemas/GeminiConfig'
       discriminator:
-        propertyName: backend_type
+        propertyName: provider_type
         mapping:
           ollama: '#/components/schemas/OllamaConfig'
           gemini: '#/components/schemas/GeminiConfig'
