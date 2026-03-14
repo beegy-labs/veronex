@@ -342,6 +342,8 @@
       "editTitle": "Ollamaプロバイダーの編集",
       "freeTier": "無料ティア",
       "freeTierDesc": "このバックエンドを無料ティアのAPIキーリクエスト専用にします。",
+      "noBackends": "Ollamaプロバイダーが登録されていません",
+      "noBackendsHint": "ローカルOllamaサーバーを追加して推論ルーティングを開始してください。",
       "modelSelection": "モデル選択",
       "modelSelectionDesc": "このバックエンドにルーティングするモデルのみ有効にしてください。",
       "enabledCount": "{{enabled}}/{{total}} 有効"
@@ -436,7 +438,9 @@
       "syncStatus": "ステータス同期",
       "syncingStatus": "同期中…",
       "statusSyncDone": "ステータス更新済み",
-      "noStatusResults": "登録済みのアクティブな Gemini プロバイダーがありません。"
+      "noStatusResults": "登録済みのアクティブな Gemini プロバイダーがありません。",
+      "noBackends": "Geminiプロバイダーが登録されていません",
+      "noBackendsHint": "Gemini APIキーを追加してGoogleクラウドへの推論ルーティングを開始してください。"
     },
     "healthcheck": "ヘルスチェック",
     "runHealthcheck": "ヘルスチェック実行",

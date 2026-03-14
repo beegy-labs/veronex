@@ -15,7 +15,7 @@ const JOB_COLS: &str = "id, prompt, model_name, provider_type, status, error, re
     created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, \
     prompt_tokens, completion_tokens, cached_tokens, source, provider_id, api_format, \
     request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, \
-    cancelled_at, messages_hash, messages_prefix_hash";
+    cancelled_at, messages_hash, messages_prefix_hash, failure_reason";
 
 pub struct PostgresJobRepository {
     pool: PgPool,
@@ -74,6 +74,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
     let cancelled_at: Option<DateTime<Utc>> = row.try_get("cancelled_at").unwrap_or(None);
     let messages_hash: Option<String> = row.try_get("messages_hash").unwrap_or(None);
     let messages_prefix_hash: Option<String> = row.try_get("messages_prefix_hash").unwrap_or(None);
+    let failure_reason: Option<String> = row.try_get("failure_reason").unwrap_or(None);
 
     Ok(InferenceJob {
         id: JobId(id),
@@ -105,6 +106,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         tool_calls_json,
         messages_hash,
         messages_prefix_hash,
+        failure_reason,
     })
 }
 
@@ -130,8 +132,8 @@ impl JobRepository for PostgresJobRepository {
 
         sqlx::query(
             "INSERT INTO inference_jobs
-                 (id, prompt, model_name, provider_type, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, provider_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at, messages_hash, messages_prefix_hash)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+                 (id, prompt, model_name, provider_type, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, provider_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at, messages_hash, messages_prefix_hash, failure_reason)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
              ON CONFLICT (id) DO UPDATE SET
                  status                = EXCLUDED.status,
                  error                 = EXCLUDED.error,
@@ -149,7 +151,8 @@ impl JobRepository for PostgresJobRepository {
                  queue_time_ms         = COALESCE(EXCLUDED.queue_time_ms, inference_jobs.queue_time_ms),
                  cancelled_at          = COALESCE(EXCLUDED.cancelled_at, inference_jobs.cancelled_at),
                  messages_hash         = COALESCE(EXCLUDED.messages_hash, inference_jobs.messages_hash),
-                 messages_prefix_hash  = COALESCE(EXCLUDED.messages_prefix_hash, inference_jobs.messages_prefix_hash)",
+                 messages_prefix_hash  = COALESCE(EXCLUDED.messages_prefix_hash, inference_jobs.messages_prefix_hash),
+                 failure_reason        = COALESCE(EXCLUDED.failure_reason, inference_jobs.failure_reason)",
         )
         .bind(job.id.0)
         .bind(job.prompt.as_str())
@@ -179,6 +182,7 @@ impl JobRepository for PostgresJobRepository {
         .bind(job.cancelled_at)
         .bind(messages_hash)
         .bind(messages_prefix_hash)
+        .bind(&job.failure_reason)
         .execute(&self.pool)
         .await
         .context("failed to save inference job")?;
@@ -225,6 +229,27 @@ impl JobRepository for PostgresJobRepository {
         .await
         .context("failed to cancel inference job")?;
 
+        Ok(())
+    }
+
+    async fn fail_with_reason(
+        &self,
+        job_id: &JobId,
+        reason: &str,
+        error_msg: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE inference_jobs
+             SET status = 'failed', failure_reason = $2, error = COALESCE($3, error)
+             WHERE id = $1
+               AND status NOT IN ('completed', 'failed', 'cancelled')",
+        )
+        .bind(job_id.0)
+        .bind(reason)
+        .bind(error_msg)
+        .execute(&self.pool)
+        .await
+        .context("failed to mark job as failed with reason")?;
         Ok(())
     }
 

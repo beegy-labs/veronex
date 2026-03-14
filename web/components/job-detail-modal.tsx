@@ -15,7 +15,7 @@ import { useTranslation } from '@/i18n'
 import { fmtMsNullable } from '@/lib/chart-theme'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDatetime, fmtNumber } from '@/lib/date'
-import { STATUS_STYLES, ROLE_STYLES } from '@/lib/constants'
+import { STATUS_STYLES, ROLE_STYLES, STALE_TIME_FAST } from '@/lib/constants'
 
 function StatusBadge({ status }: { status: string }) {
   return (
@@ -132,7 +132,7 @@ export function JobDetailModal({
     queryKey: ['job-detail', jobId],
     queryFn: () => api.jobDetail(jobId!),
     enabled: !!jobId && open,
-    staleTime: 30_000,
+    staleTime: STALE_TIME_FAST,
   })
 
   const cancelMutation = useMutation({

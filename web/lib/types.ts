@@ -255,6 +255,8 @@ export interface NodeMetrics {
 export interface GpuNodeMetrics {
   card: string
   temp_c: number | null
+  temp_junction_c: number | null
+  temp_mem_c: number | null
   power_w: number | null
   vram_used_mb: number | null
   vram_total_mb: number | null
@@ -272,8 +274,6 @@ export interface Provider {
   gpu_index: number | null
   /** FK → gpu_servers. null for cloud providers. */
   server_id: string | null
-  /** Reserved for Phase 2 sidecar. */
-  agent_url: string | null
   /** true = Google free-tier project; RPM/RPD limits come from gemini_rate_limit_policies. */
   is_free_tier: boolean
   status: LlmProviderStatus
@@ -290,7 +290,6 @@ export interface RegisterProviderRequest {
   total_vram_mb?: number
   gpu_index?: number
   server_id?: string
-  agent_url?: string
   is_free_tier?: boolean
 }
 
@@ -342,6 +341,8 @@ export interface ServerMetricsPoint {
   mem_total_mb: number
   mem_avail_mb: number
   gpu_temp_c: number | null
+  gpu_temp_junction_c: number | null
+  gpu_temp_mem_c: number | null
   gpu_power_w: number | null
 }
 

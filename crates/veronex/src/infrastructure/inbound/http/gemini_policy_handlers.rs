@@ -8,7 +8,7 @@ use crate::domain::entities::GeminiRateLimitPolicy;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 
 use super::audit_helpers::emit_audit;
-use super::error::AppError;
+use super::error::{AppError, db_error};
 use super::state::AppState;
 
 type HandlerResult<T> = Result<T, AppError>;
@@ -60,10 +60,7 @@ fn default_true() -> bool {
 ///
 /// Returns one row per model name. The `"*"` row is the global fallback.
 pub async fn list_gemini_policies(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<Json<Vec<GeminiPolicySummary>>> {
-    let policies = state.gemini_policy_repo.list_all().await.map_err(|e| {
-        tracing::error!("failed to list gemini policies: {e}");
-        AppError::Internal(anyhow::anyhow!("database error"))
-    })?;
+    let policies = state.gemini_policy_repo.list_all().await.map_err(|e| db_error(e))?;
     let summaries: Vec<GeminiPolicySummary> = policies.into_iter().map(Into::into).collect();
     Ok(Json(summaries))
 }
@@ -100,10 +97,7 @@ pub async fn upsert_gemini_policy(
         updated_at: Utc::now(),
     };
 
-    state.gemini_policy_repo.upsert(&policy).await.map_err(|e| {
-        tracing::error!("failed to upsert gemini policy: {e}");
-        AppError::Internal(anyhow::anyhow!("database error"))
-    })?;
+    state.gemini_policy_repo.upsert(&policy).await.map_err(|e| db_error(e))?;
 
     tracing::info!(
         model_name = %model_name,

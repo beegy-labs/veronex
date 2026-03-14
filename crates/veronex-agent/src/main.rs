@@ -1,440 +1,196 @@
-//! veronex-agent — lightweight hardware metrics HTTP server.
-//!
-//! Deploy one instance alongside each Ollama server.  The agent reads AMD GPU
-//! counters from sysfs, system RAM from `/proc/meminfo`, and loaded-model VRAM
-//! from Ollama `/api/ps`, then exposes the data as JSON on `GET /api/metrics`.
-//!
-//! ## Configuration (environment variables)
-//!
-//! | Variable      | Default                    | Description                       |
-//! |---------------|----------------------------|-----------------------------------|
-//! | `OLLAMA_URL`  | `http://localhost:11434`   | Ollama base URL                   |
-//! | `PORT`        | `9091`                     | HTTP listen port                  |
-//!
-//! ## Deployment examples
-//!
-//! ```bash
-//! # Docker
-//! docker run -d --name veronex-agent \
-//!   -p 9091:9091 \
-//!   -v /sys:/sys:ro \
-//!   -v /proc/meminfo:/proc/meminfo:ro \
-//!   -e OLLAMA_URL=http://host.docker.internal:11434 \
-//!   ghcr.io/beegy/veronex-agent:latest
-//!
-//! # Bare-metal
-//! ./veronex-agent
-//! ```
-
-use std::net::SocketAddr;
+/// veronex-agent: Collects hardware + Ollama metrics independently and pushes
+/// them to OTel Collector via OTLP HTTP.
+///
+/// Two target types, each collected on its own:
+///   type=server  — node-exporter (CPU, mem, GPU)
+///   type=ollama  — Ollama /api/ps (loaded models, VRAM)
+///
+/// When linked (server_id FK), analytics can correlate both.
+///
+/// Supports N replicas via modulus sharding — no external coordination.
+///
+/// Environment variables:
+///   VERONEX_API_URL    — veronex API base URL (default: http://localhost:3000)
+///   OTEL_HTTP_ENDPOINT — OTel Collector HTTP endpoint (default: http://localhost:4318)
+///   SCRAPE_INTERVAL_MS — milliseconds between scrape cycles (default: 15000)
+///   REPLICA_COUNT      — total number of agent pods (default: 1)
+///   RUST_LOG           — tracing filter (default: info)
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
-use axum::response::IntoResponse;
-use axum::routing::get;
-use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
-use tokio::fs;
+use anyhow::Result;
+use serde::Deserialize;
+use tokio::signal;
+use tokio::sync::Semaphore;
 
-// ── Config ─────────────────────────────────────────────────────────────────────
+mod otlp;
+mod scraper;
+mod shard;
+
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Max concurrent scrape tasks to prevent resource exhaustion.
+const MAX_CONCURRENT_SCRAPES: usize = 32;
+
+// ── Configuration ────────────────────────────────────────────────────────────
 
 struct Config {
-    ollama_url: String,
-    port: u16,
+    veronex_api_url: String,
+    otel_endpoint: String,
+    scrape_interval: Duration,
+    ordinal: u32,
+    replicas: u32,
 }
 
 impl Config {
     fn from_env() -> Self {
         Self {
-            ollama_url: std::env::var("OLLAMA_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
-            port: std::env::var("PORT")
+            veronex_api_url: std::env::var("VERONEX_API_URL")
+                .unwrap_or_else(|_| "http://localhost:3000".into()),
+            otel_endpoint: std::env::var("OTEL_HTTP_ENDPOINT")
+                .unwrap_or_else(|_| "http://localhost:4318".into()),
+            scrape_interval: Duration::from_millis(
+                std::env::var("SCRAPE_INTERVAL_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(15_000),
+            ),
+            ordinal: shard::ordinal_from_hostname(),
+            replicas: std::env::var("REPLICA_COUNT")
                 .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(9091),
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1),
         }
     }
 }
 
-// ── Response DTOs ──────────────────────────────────────────────────────────────
+// ── Target discovery ─────────────────────────────────────────────────────────
 
-#[derive(Serialize, Default)]
-struct GpuInfo {
-    vram_used_mb: u32,
-    vram_total_mb: u32,
-    gpu_util_pct: u8,
-    power_w: f32,
-    temp_c: f32,
-    /// GPU vendor: "amd", "nvidia", or "unknown".
-    /// Detected from sysfs `/sys/class/drm/cardN/device/vendor`.
-    #[serde(default)]
-    gpu_vendor: String,
+#[derive(Debug, Clone, Deserialize)]
+struct SdTarget {
+    targets: Vec<String>,
+    labels: HashMap<String, String>,
 }
 
-#[derive(Serialize, Default)]
-struct MemoryInfo {
-    used_mb: u32,
-    total_mb: u32,
-    available_mb: u32,
-}
-
-#[derive(Serialize, Default)]
-struct OllamaInfo {
-    loaded_model_count: u8,
-    /// Loaded model VRAM in MiB (sum of `size_vram` from `/api/ps`).
-    loaded_vram_mb: u32,
-}
-
-#[derive(Serialize)]
-struct MetricsResponse {
-    gpu: GpuInfo,
-    memory: MemoryInfo,
-    ollama: OllamaInfo,
-}
-
-// ── sysfs helpers ──────────────────────────────────────────────────────────────
-
-const SYSFS_DRM: &str = "/sys/class/drm";
-
-async fn read_u64(path: &str) -> Option<u64> {
-    fs::read_to_string(path)
-        .await
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
-}
-
-/// Vendor string from PCI vendor ID.
-fn vendor_name(vendor_id: &str) -> &'static str {
-    match vendor_id.trim() {
-        "0x1002" => "amd",
-        "0x10de" => "nvidia",
-        _ => "unknown",
-    }
-}
-
-/// Find the first GPU card index and its vendor from sysfs.
-///
-/// Checks AMD (0x1002) and NVIDIA (0x10de) vendors.
-/// For AMD: requires non-zero `mem_info_vram_total`.
-/// For NVIDIA: requires the vendor file to exist (VRAM read via nvidia-smi).
-async fn find_gpu_card() -> Option<(u8, &'static str)> {
-    let mut dir = fs::read_dir(SYSFS_DRM).await.ok()?;
-    loop {
-        let entry = match dir.next_entry().await {
-            Ok(Some(e)) => e,
-            _ => break,
-        };
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if !name_str.starts_with("card") || name_str.contains('-') {
-            continue;
+async fn discover_targets(client: &reqwest::Client, api_url: &str) -> Vec<SdTarget> {
+    let url = format!("{}/v1/metrics/targets", api_url.trim_end_matches('/'));
+    match client.get(&url).timeout(DISCOVERY_TIMEOUT).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<Vec<SdTarget>>().await.unwrap_or_default()
         }
-        let idx: u8 = match name_str[4..].parse() {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-        let vendor_path = format!("{SYSFS_DRM}/{name_str}/device/vendor");
-        let vendor_id = match fs::read_to_string(&vendor_path).await {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let vendor = vendor_name(&vendor_id);
-        match vendor {
-            "amd" => {
-                let vram_path = format!("{SYSFS_DRM}/{name_str}/device/mem_info_vram_total");
-                if let Some(v) = read_u64(&vram_path).await
-                    && v > 0 {
-                        return Some((idx, vendor));
-                    }
-            }
-            "nvidia" => {
-                // NVIDIA sysfs exists but VRAM is read differently.
-                // Card detection is enough — metrics collected via nvidia-smi fallback.
-                return Some((idx, vendor));
-            }
-            _ => continue,
+        Ok(resp) => {
+            tracing::debug!(status = %resp.status(), "target discovery returned non-success");
+            vec![]
         }
-    }
-    None
-}
-
-/// Return the first hwmon directory under a DRM card's device path.
-async fn find_hwmon(card: &str) -> Option<String> {
-    let base = format!("{SYSFS_DRM}/{card}/device/hwmon");
-    let mut dir = fs::read_dir(&base).await.ok()?;
-    match dir.next_entry().await {
-        Ok(Some(entry)) => Some(format!("{base}/{}", entry.file_name().to_string_lossy())),
-        _ => None,
-    }
-}
-
-async fn collect_gpu(card: Option<(u8, &str)>) -> GpuInfo {
-    let Some((idx, vendor)) = card else {
-        return GpuInfo::default();
-    };
-    let card_name = format!("card{idx}");
-    let dev = format!("{SYSFS_DRM}/{card_name}/device");
-
-    // AMD sysfs VRAM paths. NVIDIA uses different mechanism (nvidia-smi).
-    let (vram_used, vram_total, gpu_util) = if vendor == "amd" {
-        let used = read_u64(&format!("{dev}/mem_info_vram_used"))
-            .await
-            .map(|v| (v / 1_048_576) as u32)
-            .unwrap_or(0);
-        let total = read_u64(&format!("{dev}/mem_info_vram_total"))
-            .await
-            .map(|v| (v / 1_048_576) as u32)
-            .unwrap_or(0);
-        let util = read_u64(&format!("{dev}/gpu_busy_percent"))
-            .await
-            .unwrap_or(0)
-            .min(100) as u8;
-        (used, total, util)
-    } else {
-        (0, 0, 0)
-    };
-
-    let (power_w, temp_c) = if let Some(hwmon) = find_hwmon(&card_name).await {
-        let p = read_u64(&format!("{hwmon}/power1_average")).await.unwrap_or(0);
-        let t = read_u64(&format!("{hwmon}/temp1_input")).await.unwrap_or(0);
-        (p as f32 / 1_000_000.0, t as f32 / 1_000.0)
-    } else {
-        (0.0, 0.0)
-    };
-
-    GpuInfo {
-        vram_used_mb: vram_used,
-        vram_total_mb: vram_total,
-        gpu_util_pct: gpu_util,
-        power_w,
-        temp_c,
-        gpu_vendor: vendor.to_string(),
-    }
-}
-
-// ── /proc/meminfo ──────────────────────────────────────────────────────────────
-
-/// Parse `/proc/meminfo`-formatted content into a [`MemoryInfo`].
-fn parse_meminfo(content: &str) -> MemoryInfo {
-    let mut total_kb = 0u64;
-    let mut free_kb = 0u64;
-    let mut available_kb = 0u64;
-
-    for line in content.lines() {
-        let mut parts = line.split_whitespace();
-        match parts.next() {
-            Some("MemTotal:") => total_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-            Some("MemFree:") => free_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-            Some("MemAvailable:") => {
-                available_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0)
-            }
-            _ => {}
-        }
-    }
-
-    let used_kb = total_kb.saturating_sub(free_kb);
-    MemoryInfo {
-        total_mb: (total_kb / 1024) as u32,
-        used_mb: (used_kb / 1024) as u32,
-        available_mb: (available_kb / 1024) as u32,
-    }
-}
-
-async fn collect_memory() -> MemoryInfo {
-    // Try both the bind-mount path and the native path.
-    let content = match fs::read_to_string("/proc/meminfo").await {
-        Ok(c) => c,
-        Err(_) => fs::read_to_string("/host/proc/meminfo").await.unwrap_or_default(),
-    };
-    parse_meminfo(&content)
-}
-
-// ── Ollama /api/ps ─────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct OllamaPs {
-    models: Option<Vec<OllamaModel>>,
-}
-
-#[derive(Deserialize)]
-struct OllamaModel {
-    #[serde(default)]
-    size_vram: u64,
-}
-
-async fn collect_ollama(ollama_url: &str, client: &reqwest::Client) -> OllamaInfo {
-    let url = format!("{}/api/ps", ollama_url.trim_end_matches('/'));
-    let resp = match client.get(&url).timeout(Duration::from_secs(3)).send().await {
-        Ok(r) => r,
         Err(e) => {
-            tracing::warn!("ollama /api/ps request failed: {e}");
-            return OllamaInfo::default();
+            tracing::debug!("target discovery failed: {e}");
+            vec![]
         }
-    };
-    let ps: OllamaPs = match resp.json().await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!("ollama /api/ps response parse failed: {e}");
-            return OllamaInfo::default();
-        }
-    };
-    let models = ps.models.unwrap_or_default();
-    let count = models.len().min(255) as u8;
-    let loaded_vram_mb = models.iter().map(|m| m.size_vram / 1_048_576).sum::<u64>().min(u32::MAX as u64) as u32;
-    OllamaInfo { loaded_model_count: count, loaded_vram_mb }
+    }
 }
 
-// ── App state + handler ────────────────────────────────────────────────────────
-
-struct AppState {
-    ollama_url: String,
-    http: reqwest::Client,
-}
-
-async fn handler_metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let card = find_gpu_card().await;
-
-    let (gpu, memory, ollama) = tokio::join!(
-        collect_gpu(card),
-        collect_memory(),
-        collect_ollama(&state.ollama_url, &state.http),
-    );
-
-    Json(MetricsResponse { gpu, memory, ollama })
-}
-
-async fn handler_health() -> impl IntoResponse {
-    Json(serde_json::json!({"status": "ok"}))
-}
-
-// ── Main ───────────────────────────────────────────────────────────────────────
+// ── Main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| "info".into()),
         )
         .init();
 
-    let cfg = Config::from_env();
+    let config = Config::from_env();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let scrape_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_SCRAPES));
 
-    let state = Arc::new(AppState {
-        ollama_url: cfg.ollama_url.clone(),
-        http: reqwest::Client::new(),
-    });
+    tracing::info!(
+        api = %config.veronex_api_url,
+        otel = %config.otel_endpoint,
+        ordinal = config.ordinal,
+        replicas = config.replicas,
+        interval_ms = config.scrape_interval.as_millis() as u64,
+        "veronex-agent started"
+    );
 
-    let app = Router::new()
-        .route("/api/metrics", get(handler_metrics))
-        .route("/health", get(handler_health))
-        .with_state(state);
+    loop {
+        tokio::select! {
+            biased;
+            _ = signal::ctrl_c() => {
+                tracing::info!("shutdown signal received");
+                break;
+            }
+            _ = scrape_cycle(&client, &config, &scrape_semaphore) => {}
+        }
+        tokio::time::sleep(config.scrape_interval).await;
+    }
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
-    tracing::info!("veronex-agent listening on {addr} (ollama={ollama_url})", ollama_url = cfg.ollama_url);
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
+    tracing::info!("veronex-agent stopped");
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Shard key for a target — server_id for servers, provider_id for ollama.
+fn shard_key(t: &SdTarget) -> &str {
+    match t.labels.get("type").map(|s| s.as_str()) {
+        Some("server") => t.labels.get("server_id").map(|s| s.as_str()).unwrap_or(""),
+        Some("ollama") => t.labels.get("provider_id").map(|s| s.as_str()).unwrap_or(""),
+        _ => "",
+    }
+}
 
-    // ── vendor_name ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn vendor_name_amd() {
-        assert_eq!(vendor_name("0x1002"), "amd");
+async fn scrape_cycle(client: &reqwest::Client, config: &Config, semaphore: &Arc<Semaphore>) {
+    let targets = discover_targets(client, &config.veronex_api_url).await;
+    if targets.is_empty() {
+        tracing::debug!("no targets discovered");
+        return;
     }
 
-    #[test]
-    fn vendor_name_nvidia() {
-        assert_eq!(vendor_name("0x10de"), "nvidia");
+    let my_targets: Vec<_> = targets
+        .iter()
+        .filter(|t| shard::owns(shard_key(t), config.ordinal, config.replicas))
+        .collect();
+
+    if my_targets.is_empty() {
+        return;
     }
 
-    #[test]
-    fn vendor_name_unknown() {
-        assert_eq!(vendor_name("0x8086"), "unknown");
-        assert_eq!(vendor_name(""), "unknown");
-    }
+    let futures: Vec<_> = my_targets
+        .iter()
+        .filter_map(|t| {
+            let host_port = t.targets.first()?;
+            let target_type = t.labels.get("type")?.as_str();
+            let url = format!("http://{host_port}");
+            let labels = t.labels.clone();
+            let sem = semaphore.clone();
 
-    #[test]
-    fn vendor_name_trims_whitespace() {
-        assert_eq!(vendor_name("0x1002\n"), "amd");
-        assert_eq!(vendor_name("  0x10de  "), "nvidia");
-    }
+            Some(async move {
+                let _permit = sem.acquire().await;
+                match target_type {
+                    "server" => {
+                        let metrics = scraper::scrape_node_exporter(client, &url).await;
+                        (labels, metrics)
+                    }
+                    "ollama" => {
+                        let metrics = scraper::scrape_ollama(client, &url).await;
+                        (labels, metrics)
+                    }
+                    _ => (labels, vec![]),
+                }
+            })
+        })
+        .collect();
 
-    // ── parse_meminfo ───────────────────────────────────────────────────────
+    let results = futures::future::join_all(futures).await;
 
-    #[test]
-    fn parse_meminfo_typical() {
-        let content = "\
-MemTotal:       32768000 kB
-MemFree:         8192000 kB
-MemAvailable:   16384000 kB
-Buffers:          512000 kB
-Cached:          4096000 kB
-";
-        let info = parse_meminfo(content);
-        assert_eq!(info.total_mb, 32000);
-        assert_eq!(info.used_mb, 24000); // total - free
-        assert_eq!(info.available_mb, 16000);
-    }
-
-    #[test]
-    fn parse_meminfo_empty() {
-        let info = parse_meminfo("");
-        assert_eq!(info.total_mb, 0);
-        assert_eq!(info.used_mb, 0);
-        assert_eq!(info.available_mb, 0);
-    }
-
-    #[test]
-    fn parse_meminfo_partial() {
-        let content = "MemTotal:       1048576 kB\n";
-        let info = parse_meminfo(content);
-        assert_eq!(info.total_mb, 1024);
-        assert_eq!(info.used_mb, 1024); // total - free(0) = total
-        assert_eq!(info.available_mb, 0);
-    }
-
-    #[test]
-    fn parse_meminfo_malformed_values() {
-        let content = "\
-MemTotal:       notanumber kB
-MemFree:        1024 kB
-";
-        let info = parse_meminfo(content);
-        assert_eq!(info.total_mb, 0);
-        assert_eq!(info.used_mb, 0); // 0 - 1024 saturates to 0
-        assert_eq!(info.available_mb, 0);
-    }
-
-    // ── Config::from_env defaults ───────────────────────────────────────────
-
-    #[test]
-    fn config_defaults() {
-        // SAFETY: test runs single-threaded; no other thread reads these vars.
-        unsafe {
-            std::env::remove_var("OLLAMA_URL");
-            std::env::remove_var("PORT");
+    for (labels, metrics) in &results {
+        if metrics.is_empty() {
+            continue;
         }
-        let cfg = Config::from_env();
-        assert_eq!(cfg.ollama_url, "http://localhost:11434");
-        assert_eq!(cfg.port, 9091);
-    }
-
-    #[test]
-    fn loaded_vram_mb_overflow_protection() {
-        // Value in MB that exceeds u32::MAX — clamp prevents truncation
-        let vram_mb: u64 = u32::MAX as u64 + 1000;
-        let clamped = vram_mb.min(u32::MAX as u64) as u32;
-        assert_eq!(clamped, u32::MAX);
+        if let Err(e) = otlp::push_metrics(client, &config.otel_endpoint, labels, metrics).await {
+            tracing::warn!(target = ?labels.get("type"), "OTLP push failed: {e}");
+        }
     }
 }

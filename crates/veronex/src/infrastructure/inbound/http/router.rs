@@ -159,6 +159,7 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/gemini/sync-status", post(gemini_model_handlers::sync_status))
         // Ollama
         .route("/v1/ollama/models", get(ollama_model_handlers::list_models))
+        .route("/v1/ollama/models/pull", post(ollama_model_handlers::pull_model))
         .route("/v1/ollama/models/sync", post(ollama_model_handlers::sync_all_providers))
         .route("/v1/ollama/sync/status", get(ollama_model_handlers::get_sync_status))
         .route("/v1/ollama/models/{model_name}/providers", get(ollama_model_handlers::list_model_providers))

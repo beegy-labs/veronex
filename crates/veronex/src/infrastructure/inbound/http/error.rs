@@ -77,10 +77,29 @@ impl IntoResponse for AppError {
     }
 }
 
+/// Convenience constructor for database-related internal errors.
+///
+/// Logs the underlying error at ERROR level and wraps it as `AppError::Internal`
+/// with the shared `ERR_DATABASE` message.
+pub fn db_error(e: impl std::fmt::Display) -> AppError {
+    tracing::error!(error = %e, "{}", super::constants::ERR_DATABASE);
+    AppError::Internal(anyhow::anyhow!(super::constants::ERR_DATABASE))
+}
+
+/// Build a JSON error response tuple `(StatusCode, Json)` for handlers that
+/// return `impl IntoResponse` instead of `Result<T, AppError>`.
+///
+/// Produces `{"error": "<message>"}` — the same shape as `AppError::into_response`.
+pub fn error_json(
+    status: StatusCode,
+    message: impl Into<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (status, Json(json!({"error": message.into()})))
+}
+
 impl From<sqlx::Error> for AppError {
     fn from(e: sqlx::Error) -> Self {
-        tracing::error!(error = %e, "database error");
-        Self::Internal(anyhow::anyhow!("database error"))
+        db_error(e)
     }
 }
 

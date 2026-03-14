@@ -15,6 +15,14 @@ pub trait JobRepository: Send + Sync {
     /// Atomically mark a job as Cancelled and record the exact cancellation timestamp.
     /// No-op if the job is already in a terminal state (Completed / Failed).
     async fn cancel_job(&self, job_id: &JobId, cancelled_at: DateTime<Utc>) -> Result<()>;
+    /// Atomically mark a job as Failed with a machine-readable failure_reason.
+    /// Only affects non-terminal jobs (Pending/Running).
+    async fn fail_with_reason(
+        &self,
+        job_id: &JobId,
+        reason: &str,
+        error_msg: Option<&str>,
+    ) -> Result<()>;
     /// Return all jobs currently in Pending or Running state, ordered by created_at ASC.
     /// Used on startup to recover jobs that were in-flight when the server last stopped.
     async fn list_pending(&self) -> Result<Vec<InferenceJob>>;

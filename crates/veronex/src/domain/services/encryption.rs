@@ -85,9 +85,11 @@ pub fn derive_key(secret: &str) -> [u8; 32] {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Concrete example kept as documentation.
     #[test]
-    fn encrypt_decrypt_roundtrip() {
+    fn encrypt_decrypt_roundtrip_example() {
         let key = derive_key("test-master-key-for-unit-tests");
         let plaintext = "AIzaSyD-test-api-key-12345";
         let encrypted = encrypt(plaintext, &key).unwrap();
@@ -96,49 +98,73 @@ mod tests {
         assert_eq!(decrypted, plaintext);
     }
 
-    #[test]
-    fn different_nonces_produce_different_ciphertexts() {
-        let key = derive_key("test-master-key");
-        let plaintext = "same-input";
-        let a = encrypt(plaintext, &key).unwrap();
-        let b = encrypt(plaintext, &key).unwrap();
-        assert_ne!(a, b); // random nonce
-    }
-
-    #[test]
-    fn wrong_key_fails_decryption() {
-        let key1 = derive_key("key-one");
-        let key2 = derive_key("key-two");
-        let encrypted = encrypt("secret", &key1).unwrap();
-        assert!(decrypt(&encrypted, &key2).is_err());
-    }
-
-    #[test]
-    fn empty_string_roundtrip() {
-        let key = derive_key("key");
-        let encrypted = encrypt("", &key).unwrap();
-        let decrypted = decrypt(&encrypted, &key).unwrap();
-        assert_eq!(decrypted, "");
-    }
-
+    /// Unique edge case: legacy plaintext detection.
     #[test]
     fn legacy_plaintext_detected_as_needing_re_encrypt() {
         let key = derive_key("key");
-        // A typical API key that is NOT valid base64 ciphertext
         let (plaintext, needs) = decrypt_or_legacy("AIzaSyD-test-api-key", &key);
         assert_eq!(plaintext, "AIzaSyD-test-api-key");
         assert!(needs, "legacy plaintext should flag needs_re_encrypt");
     }
 
+    /// Unique edge case: corrupted ciphertext not treated as legacy.
     #[test]
     fn corrupted_ciphertext_not_treated_as_legacy() {
         let key1 = derive_key("key-one");
         let key2 = derive_key("key-two");
-        // Encrypt with key1 → try to decrypt with key2 → looks like ciphertext
         let encrypted = encrypt("secret-value", &key1).unwrap();
         let (value, needs) = decrypt_or_legacy(&encrypted, &key2);
-        // Should return raw ciphertext and NOT flag for re-encryption
         assert_eq!(value, encrypted);
         assert!(!needs, "corrupted ciphertext must not be flagged for re-encryption");
+    }
+
+    proptest! {
+        /// encrypt → decrypt roundtrip holds for arbitrary plaintext and key.
+        #[test]
+        fn encrypt_decrypt_roundtrip(
+            plaintext in "\\PC{0,200}",
+            key_secret in "[a-z]{5,30}",
+        ) {
+            let key = derive_key(&key_secret);
+            let encrypted = encrypt(&plaintext, &key).unwrap();
+            prop_assert_ne!(&encrypted, &plaintext, "ciphertext must differ from plaintext");
+            let decrypted = decrypt(&encrypted, &key).unwrap();
+            prop_assert_eq!(&decrypted, &plaintext);
+        }
+
+        /// Same plaintext encrypted twice produces different ciphertext (random nonce).
+        #[test]
+        fn different_nonces_produce_different_ciphertexts(
+            plaintext in "\\PC{1,100}",
+            key_secret in "[a-z]{5,20}",
+        ) {
+            let key = derive_key(&key_secret);
+            let a = encrypt(&plaintext, &key).unwrap();
+            let b = encrypt(&plaintext, &key).unwrap();
+            prop_assert_ne!(a, b);
+        }
+
+        /// Wrong key always fails decryption.
+        #[test]
+        fn wrong_key_fails_decryption(
+            plaintext in "\\PC{1,100}",
+            key1_secret in "[a-z]{5,20}",
+            key2_secret in "[A-Z]{5,20}",
+        ) {
+            let key1 = derive_key(&key1_secret);
+            let key2 = derive_key(&key2_secret);
+            prop_assume!(key1 != key2);
+            let encrypted = encrypt(&plaintext, &key1).unwrap();
+            prop_assert!(decrypt(&encrypted, &key2).is_err());
+        }
+
+        /// derive_key is deterministic.
+        #[test]
+        fn derive_key_deterministic(secret in "\\PC{1,100}") {
+            let k1 = derive_key(&secret);
+            let k2 = derive_key(&secret);
+            prop_assert_eq!(k1, k2);
+            prop_assert_eq!(k1.len(), 32);
+        }
     }
 }

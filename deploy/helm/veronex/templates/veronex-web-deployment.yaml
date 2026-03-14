@@ -40,6 +40,10 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
           env:
+            - name: PORT
+              value: {{ .Values.veronexWeb.service.port | quote }}
+            - name: HOSTNAME
+              value: "0.0.0.0"
             - name: NEXT_PUBLIC_VERONEX_API_URL
               value: "http://{{ .Release.Name }}-veronex:{{ .Values.veronex.service.port }}"
             {{- range $k, $v := .Values.veronexWeb.env }}

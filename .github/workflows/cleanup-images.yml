@@ -1,0 +1,88 @@
+name: Cleanup Old Images
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: 'Package name in Gitea (e.g. veronex, veronex-web)'
+        required: true
+        type: string
+      branch:
+        description: 'Branch name (develop or main)'
+        required: true
+        type: string
+      keep:
+        description: 'Number of images to keep per environment'
+        required: false
+        type: number
+        default: 5
+    secrets:
+      GITEA_TOKEN:
+        required: true
+
+jobs:
+  cleanup:
+    name: Cleanup ${{ inputs.image_name }} (${{ inputs.branch }})
+    runs-on: arc-runner-set
+    steps:
+      - name: Delete old images
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          BRANCH: ${{ inputs.branch }}
+          KEEP: ${{ inputs.keep }}
+        run: |
+          # develop → "develop-*" tags, main → sha-only tags (7 hex chars)
+          if [ "$BRANCH" = "develop" ]; then
+            TAG_FILTER="develop-"
+          else
+            TAG_FILTER=""
+          fi
+
+          # Fetch all versions for this package (max 50)
+          PACKAGES=$(curl -sf \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            "https://gitea.girok.dev/api/v1/packages/beegy-labs?type=container&q=${IMAGE_NAME}&limit=50" \
+            || echo "[]")
+
+          # Filter to matching env tags, sort by created desc, skip first KEEP, delete rest
+          PACKAGES_JSON="$PACKAGES" python3 <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.error
+
+          data   = json.loads(os.environ.get("PACKAGES_JSON", "[]"))
+          token  = os.environ["GITEA_TOKEN"]
+          name   = os.environ["IMAGE_NAME"]
+          branch = os.environ["BRANCH"]
+          keep   = int(os.environ["KEEP"])
+          prefix = "develop-" if branch == "develop" else ""
+
+          # Filter: develop keeps "develop-*", main keeps short sha tags (no prefix)
+          def match(pkg):
+              ver = pkg.get("version", "")
+              if prefix:
+                  return ver.startswith(prefix)
+              else:
+                  # main tags: 7-char hex, not develop-, not 'latest', not 'develop', not 'buildcache'
+                  return (len(ver) == 7
+                          and all(c in "0123456789abcdef" for c in ver))
+
+          candidates = [p for p in data if p.get("name") == name and match(p)]
+          candidates.sort(key=lambda p: p.get("created", ""), reverse=True)
+
+          to_delete = candidates[keep:]
+          if not to_delete:
+              print(f"Nothing to delete (found {len(candidates)}, keeping {keep})")
+              sys.exit(0)
+
+          print(f"Found {len(candidates)} images, keeping {keep}, deleting {len(to_delete)}")
+          for pkg in to_delete:
+              ver = pkg["version"]
+              url = f"https://gitea.girok.dev/api/v1/packages/beegy-labs/container/{name}/{ver}"
+              req = urllib.request.Request(url, method="DELETE",
+                    headers={"Authorization": f"token {token}"})
+              try:
+                  urllib.request.urlopen(req)
+                  print(f"  Deleted: {name}:{ver}")
+              except urllib.error.HTTPError as e:
+                  print(f"  Failed to delete {name}:{ver} — {e.code} {e.reason}")
+          PYEOF

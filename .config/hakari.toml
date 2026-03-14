@@ -1,0 +1,16 @@
+## Configuration for cargo-hakari
+
+# The workspace-hack package name
+hakari-package = "workspace-hack"
+
+# Use v2 resolver
+resolver = "2"
+
+# Platforms to generate for
+platforms = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+]
+
+# Skip build dependencies to minimize generated code
+dep-format-version = "4"

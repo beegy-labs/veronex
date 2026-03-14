@@ -3,13 +3,15 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::enums::ProviderType;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 
+use super::constants::ERR_DATABASE;
+use super::error::error_json;
 use super::state::AppState;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
@@ -62,11 +64,7 @@ pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
         }
         Err(e) => {
             tracing::error!("ollama list_models: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
         }
     }
 }
@@ -96,11 +94,7 @@ pub async fn list_model_providers(
         }
         Err(e) => {
             tracing::error!("ollama list_model_providers: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
         }
     }
 }
@@ -117,11 +111,7 @@ pub async fn list_provider_models(
         }
         Err(e) => {
             tracing::error!("ollama list_provider_models: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
         }
     }
 }
@@ -145,11 +135,7 @@ pub async fn sync_all_providers(
         }
         Err(e) => {
             tracing::error!("sync_all_providers: failed to list providers: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
+            return error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response();
         }
     };
 
@@ -166,21 +152,18 @@ pub async fn sync_all_providers(
         Ok(id) => id,
         Err(e) => {
             tracing::error!("sync_all_providers: failed to create sync job: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response();
+            return error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response();
         }
     };
 
     // Clone Arcs for the background task.
+    let http_client = state.http_client.clone();
     let ollama_model_repo = state.ollama_model_repo.clone();
     let ollama_sync_job_repo = state.ollama_sync_job_repo.clone();
     let model_selection_repo = state.model_selection_repo.clone();
 
     tokio::spawn(async move {
-        let client = reqwest::Client::new();
+        let client = http_client;
 
         for provider in providers {
             let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
@@ -296,11 +279,72 @@ pub async fn get_sync_status(
             .into_response(),
         Err(e) => {
             tracing::error!("get_sync_status: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "database error"})),
-            )
-                .into_response()
+            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
         }
     }
+}
+
+// ── Pull Drain (SDD §5) ────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct PullModelRequest {
+    pub model: String,
+    pub provider_id: Uuid,
+}
+
+/// `POST /v1/ollama/models/pull` — Pull drain sequence (SDD §5).
+///
+/// Sets is_pulling=true, waits for active_requests==0 (60s drain),
+/// executes Ollama pull, then resets AIMD epoch. Requires admin auth.
+/// Returns 202 Accepted immediately; pull runs in background.
+pub async fn pull_model(
+    _: RequireSuper,
+    State(state): State<AppState>,
+    Json(req): Json<PullModelRequest>,
+) -> impl IntoResponse {
+    let provider_id = req.provider_id;
+    let model = req.model.clone();
+
+    // Verify provider exists and is Ollama
+    let provider = match state.provider_registry.get(provider_id).await {
+        Ok(Some(p)) if p.provider_type == ProviderType::Ollama => p,
+        Ok(Some(_)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "provider is not Ollama type"})),
+            ).into_response();
+        }
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "provider not found"}))).into_response();
+        }
+        Err(e) => {
+            tracing::error!(%provider_id, "pull_model: registry lookup failed: {e}");
+            return error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response();
+        }
+    };
+
+    // Set is_pulling=true to block dispatch routing immediately
+    state.vram_pool.set_pulling(provider_id, &model, true);
+    tracing::info!(%provider_id, %model, "pull drain initiated — dispatch blocked");
+
+    // Spawn background: drain → pull → AIMD reset
+    let vram_c = state.vram_pool.clone();
+    let client = state.http_client.clone();
+    let base_url = provider.url.clone();
+    let model_c = model.clone();
+
+    tokio::spawn(async move {
+        crate::infrastructure::outbound::ollama::preloader::pull_and_reset(
+            &client, &base_url, &model_c, provider_id, &vram_c,
+        ).await;
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "message": "pull drain started",
+            "provider_id": provider_id,
+            "model": model,
+        })),
+    ).into_response()
 }

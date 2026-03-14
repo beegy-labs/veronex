@@ -167,11 +167,13 @@ impl ProviderUrl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     // ── Username ─────────────────────────────────────────────────────────
 
+    /// Concrete examples kept as documentation.
     #[test]
-    fn username_valid() {
+    fn username_valid_examples() {
         assert!(Username::new("alice").is_ok());
         assert!(Username::new("bob-123").is_ok());
         assert!(Username::new("c_d").is_ok());
@@ -182,71 +184,97 @@ mod tests {
         assert!(Username::new("").is_err());
     }
 
-    #[test]
-    fn username_too_long() {
-        let long = "a".repeat(256);
-        assert!(Username::new(&long).is_err());
-    }
+    proptest! {
+        #[test]
+        fn username_valid_chars_always_accepted(
+            s in "[a-zA-Z0-9_-]{1,255}"
+        ) {
+            let u = Username::new(&s).unwrap();
+            prop_assert_eq!(u.as_str(), s.as_str());
+        }
 
-    #[test]
-    fn username_max_length_ok() {
-        let max = "a".repeat(255);
-        assert!(Username::new(&max).is_ok());
-    }
+        #[test]
+        fn username_too_long_always_rejected(extra in 1u16..500) {
+            let s: String = "a".repeat(255 + extra as usize);
+            prop_assert!(Username::new(&s).is_err());
+        }
 
-    #[test]
-    fn username_invalid_chars() {
-        assert!(Username::new("no spaces").is_err());
-        assert!(Username::new("bad@char").is_err());
-        assert!(Username::new("hello!").is_err());
+        #[test]
+        fn username_with_special_chars_rejected(
+            prefix in "[a-z]{1,5}",
+            bad_char in "[^a-zA-Z0-9_-]",
+            suffix in "[a-z]{0,5}",
+        ) {
+            let s = format!("{prefix}{bad_char}{suffix}");
+            prop_assert!(Username::new(&s).is_err());
+        }
     }
 
     // ── Email ────────────────────────────────────────────────────────────
 
+    /// Concrete example kept as documentation.
     #[test]
-    fn email_valid() {
+    fn email_valid_example() {
         assert!(Email::new("a@b.com").is_ok());
-        assert!(Email::new("user@example.org").is_ok());
     }
 
-    #[test]
-    fn email_missing_at() {
-        assert!(Email::new("noatsign.com").is_err());
-    }
+    proptest! {
+        #[test]
+        fn email_with_at_sign_and_valid_length_accepted(
+            local in "[a-z]{1,50}",
+            domain in "[a-z]{1,50}\\.[a-z]{2,4}",
+        ) {
+            let email = format!("{local}@{domain}");
+            prop_assume!(email.len() <= 254);
+            let e = Email::new(&email).unwrap();
+            prop_assert_eq!(e.as_str(), email.as_str());
+        }
 
-    #[test]
-    fn email_too_long() {
-        let long = format!("{}@b.com", "a".repeat(250));
-        assert!(Email::new(&long).is_err());
-    }
+        #[test]
+        fn email_without_at_rejected(s in "[a-zA-Z0-9.]{1,100}") {
+            prop_assume!(!s.contains('@'));
+            prop_assert!(Email::new(&s).is_err());
+        }
 
-    #[test]
-    fn email_max_length_ok() {
-        let local = "a".repeat(246);
-        let email = format!("{local}@b.c");
-        assert_eq!(email.len(), 250);
-        assert!(Email::new(&email).is_ok());
+        #[test]
+        fn email_too_long_rejected(extra in 1u16..500) {
+            let local = "a".repeat(250 + extra as usize);
+            let email = format!("{local}@b.c");
+            prop_assert!(Email::new(&email).is_err());
+        }
     }
 
     // ── ProviderUrl ──────────────────────────────────────────────────────
 
+    /// Concrete example kept as documentation.
     #[test]
-    fn provider_url_valid_http() {
+    fn provider_url_valid_example() {
         assert!(ProviderUrl::new("http://localhost:11434").is_ok());
     }
 
-    #[test]
-    fn provider_url_valid_https() {
-        assert!(ProviderUrl::new("https://api.example.com").is_ok());
-    }
+    proptest! {
+        #[test]
+        fn provider_url_http_https_accepted(
+            host in "[a-z]{3,10}(\\.[a-z]{2,5})?",
+            port in prop::option::of(1000u16..65535),
+            use_https in proptest::bool::ANY,
+        ) {
+            let scheme = if use_https { "https" } else { "http" };
+            let url = match port {
+                Some(p) => format!("{scheme}://{host}:{p}"),
+                None => format!("{scheme}://{host}"),
+            };
+            let p = ProviderUrl::new(&url).unwrap();
+            prop_assert_eq!(p.as_str(), url.as_str());
+        }
 
-    #[test]
-    fn provider_url_missing_scheme() {
-        assert!(ProviderUrl::new("localhost:11434").is_err());
-    }
-
-    #[test]
-    fn provider_url_ftp_rejected() {
-        assert!(ProviderUrl::new("ftp://files.example.com").is_err());
+        #[test]
+        fn provider_url_non_http_scheme_rejected(
+            scheme in "(ftp|ssh|ws|wss|file)",
+            host in "[a-z]{3,10}",
+        ) {
+            let url = format!("{scheme}://{host}");
+            prop_assert!(ProviderUrl::new(&url).is_err());
+        }
     }
 }
