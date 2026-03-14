@@ -79,6 +79,74 @@ pub const QUEUE_PROCESSING: &str = "veronex:queue:processing";
 /// Scoring bonus (MB) for models already loaded in VRAM (locality preference).
 pub const MODEL_LOCALITY_BONUS_MB: i64 = 100_000;
 
+// ── ZSET queue (Phase 3) ──────────────────────────────────────────────────
+
+/// Unified priority queue (ZSET). Lower score = higher priority.
+pub const QUEUE_ZSET: &str = "veronex:queue:zset";
+
+/// Side hash: job_id → enqueue_at_ms (for promote_overdue & age_bonus).
+pub const QUEUE_ENQUEUE_AT: &str = "veronex:queue:enqueue_at";
+
+/// Side hash: job_id → model (for demand_resync).
+pub const QUEUE_MODEL_MAP: &str = "veronex:queue:model";
+
+/// Per-model demand counter prefix. Full key: `veronex:demand:{model}`.
+pub const DEMAND_PREFIX: &str = "veronex:demand:";
+
+/// Build the demand counter key for a model.
+pub fn demand_key(model: &str) -> String {
+    format!("{DEMAND_PREFIX}{model}")
+}
+
+/// Hard cap on ZSET queue size. Enqueue returns 429 when exceeded.
+pub const MAX_QUEUE_SIZE: u64 = 10_000;
+
+/// Per-model queue cap via demand counter. Prevents hot-model monopoly.
+pub const MAX_QUEUE_PER_MODEL: u64 = 2_000;
+
+/// Tier bonus (ms) subtracted from enqueue timestamp for paid-tier jobs.
+pub const TIER_BONUS_PAID: u64 = 300_000;
+
+/// Tier bonus (ms) for standard (free API key) tier.
+pub const TIER_BONUS_STANDARD: u64 = 100_000;
+
+/// Tier bonus (ms) for test/dashboard jobs.
+pub const TIER_BONUS_TEST: u64 = 0;
+
+/// After this many seconds in queue, promote_overdue applies EMERGENCY_BONUS.
+pub const TIER_EXPIRE_SECS: u64 = 250;
+
+/// Locality bonus (ms) in dispatcher scoring for already-loaded models.
+pub const LOCALITY_BONUS_MS: f64 = 20_000.0;
+
+/// Emergency bonus applied to overdue jobs (= TIER_BONUS_PAID).
+pub const EMERGENCY_BONUS_MS: u64 = 300_000;
+
+/// Interval for the promote_overdue background loop.
+pub const OVERDUE_PROMOTE_SECS: u64 = 30;
+
+/// Interval for the demand_resync background loop.
+pub const DEMAND_RESYNC_SECS: u64 = 60;
+
+/// Max time a job may wait in the ZSET queue before being auto-cancelled (§7).
+pub const MAX_QUEUE_WAIT_SECS: u64 = 300;
+
+/// Interval for the queue_wait_cancel background loop.
+pub const QUEUE_WAIT_CANCEL_SECS: u64 = 30;
+
+/// Default top-K window for ZSET peek in dispatcher.
+pub const ZSET_PEEK_K: u64 = 20;
+
+/// Maximum top-K window (adaptive scaling when queue is large).
+pub const ZSET_PEEK_K_MAX: u64 = 100;
+
+// ── Streaming buffer limits ─────────────────────────────────────────────────
+
+/// Maximum bytes allowed in an SSE/NDJSON line buffer before aborting.
+///
+/// Shared by Ollama (NDJSON) and Gemini (SSE) streaming adapters.
+pub const MAX_LINE_BUFFER: usize = 1_048_576; // 1 MB
+
 // ── HTTP request timeouts ──────────────────────────────────────────────────
 
 /// Timeout for inference requests to Ollama/Gemini providers (5 min).
@@ -92,9 +160,6 @@ pub const OLLAMA_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Timeout for Gemini health check (lightweight models list).
 pub const GEMINI_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Timeout for veronex-agent metrics fetch.
-pub const AGENT_METRICS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Timeout for LLM single-model analysis call.
 pub const LLM_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30);
@@ -161,3 +226,142 @@ pub const REAPER_SLOT_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Interval between orphaned-job queue reap passes.
 pub const REAPER_QUEUE_INTERVAL: Duration = Duration::from_secs(60);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // ── Scoring helper (pure function, extracted for testability) ─────────
+
+    /// Compute ZSET enqueue score. Pure function.
+    fn enqueue_score(now_ms: u64, tier_bonus: u64) -> f64 {
+        now_ms.saturating_sub(tier_bonus) as f64
+    }
+
+    /// Compute dispatcher final_score. Pure function.
+    fn final_score(zset_score: f64, locality_bonus: f64, wait_ms: f64, perf_factor: f64) -> f64 {
+        let age_bonus = wait_ms * 0.25 * perf_factor;
+        zset_score - locality_bonus - age_bonus
+    }
+
+    // ── Fixed assertions (structural invariants) ─────────────────────────
+
+    #[test]
+    fn emergency_equals_paid_bonus() {
+        assert_eq!(EMERGENCY_BONUS_MS, TIER_BONUS_PAID);
+    }
+
+    #[test]
+    fn queue_limits_reasonable() {
+        assert_eq!(MAX_QUEUE_SIZE, 10_000);
+        assert_eq!(MAX_QUEUE_PER_MODEL, 2_000);
+        assert!(MAX_QUEUE_PER_MODEL < MAX_QUEUE_SIZE);
+    }
+
+    #[test]
+    fn demand_key_format() {
+        assert_eq!(demand_key("llama3:70b"), "veronex:demand:llama3:70b");
+    }
+
+    #[test]
+    fn adaptive_k_bounds() {
+        assert!(ZSET_PEEK_K >= 20);
+        assert!(ZSET_PEEK_K_MAX <= 100);
+        assert!(ZSET_PEEK_K <= ZSET_PEEK_K_MAX);
+    }
+
+    // ── Property-based tests (proptest) ──────────────────────────────────
+
+    proptest! {
+        /// Tier ordering invariant: for any timestamp,
+        /// paid_score < standard_score < test_score (lower = higher priority).
+        #[test]
+        fn tier_ordering_invariant(now_ms in TIER_BONUS_PAID..=u64::MAX) {
+            let paid = enqueue_score(now_ms, TIER_BONUS_PAID);
+            let standard = enqueue_score(now_ms, TIER_BONUS_STANDARD);
+            let test = enqueue_score(now_ms, TIER_BONUS_TEST);
+
+            prop_assert!(paid < standard, "paid ({paid}) must < standard ({standard})");
+            prop_assert!(standard < test, "standard ({standard}) must < test ({test})");
+        }
+
+        /// Paid job submitted up to 199s after standard still wins.
+        /// At exactly 200s gap, they tie (boundary).
+        #[test]
+        fn paid_dominates_within_tier_window(
+            t0 in TIER_BONUS_PAID..=(u64::MAX - 200_000),
+            gap_ms in 0_u64..200_000,
+        ) {
+            let standard = enqueue_score(t0, TIER_BONUS_STANDARD);
+            let paid = enqueue_score(t0 + gap_ms, TIER_BONUS_PAID);
+            prop_assert!(paid <= standard,
+                "paid (gap={gap_ms}ms) score {paid} must <= standard {standard}");
+        }
+
+        /// Age bonus monotonicity: longer wait → larger age_bonus → lower final_score.
+        #[test]
+        fn age_bonus_monotonic(
+            zset_score in -1e15_f64..1e15,
+            wait1 in 0.0_f64..1e9,
+            extra in 0.001_f64..1e9,
+            pf in 0.01_f64..=1.0,
+        ) {
+            let wait2 = wait1 + extra;
+            let fs1 = final_score(zset_score, 0.0, wait1, pf);
+            let fs2 = final_score(zset_score, 0.0, wait2, pf);
+            prop_assert!(fs2 < fs1,
+                "longer wait ({wait2}) should yield lower final_score ({fs2}) than ({wait1}) → ({fs1})");
+        }
+
+        /// Locality boost: loaded model always gets lower final_score (higher priority).
+        #[test]
+        fn locality_boost_always_helps(
+            zset_score in -1e15_f64..1e15,
+            wait_ms in 0.0_f64..1e9,
+            pf in 0.0_f64..=1.0,
+        ) {
+            let with_locality = final_score(zset_score, LOCALITY_BONUS_MS, wait_ms, pf);
+            let without = final_score(zset_score, 0.0, wait_ms, pf);
+            prop_assert!(with_locality < without,
+                "locality ({with_locality}) must < no-locality ({without})");
+        }
+
+        /// perf_factor scaling: higher perf_factor → larger age_bonus → lower final_score.
+        #[test]
+        fn perf_factor_amplifies_age(
+            zset_score in -1e15_f64..1e15,
+            wait_ms in 1.0_f64..1e9,
+            pf_low in 0.0_f64..0.5,
+            pf_delta in 0.01_f64..0.5,
+        ) {
+            let pf_high = pf_low + pf_delta;
+            let fs_low = final_score(zset_score, 0.0, wait_ms, pf_low);
+            let fs_high = final_score(zset_score, 0.0, wait_ms, pf_high);
+            prop_assert!(fs_high < fs_low,
+                "higher perf_factor ({pf_high}) → lower final_score ({fs_high}) vs ({fs_low})");
+        }
+
+        /// Starvation guarantee: after TIER_EXPIRE_SECS, age_bonus can overcome
+        /// the tier gap (200,000ms) between paid and standard at perf_factor=1.0.
+        #[test]
+        fn starvation_breaks_within_tier_expire(
+            t0 in TIER_BONUS_PAID..=(u64::MAX - 300_000),
+        ) {
+            let standard_score = enqueue_score(t0, TIER_BONUS_STANDARD);
+            let t_new = t0 + TIER_EXPIRE_SECS * 1000;
+            let paid_score = enqueue_score(t_new, TIER_BONUS_PAID);
+
+            // Standard has been waiting TIER_EXPIRE_SECS, paid just arrived
+            let wait_standard = (TIER_EXPIRE_SECS * 1000) as f64;
+            let wait_paid = 0.0;
+
+            let fs_standard = final_score(standard_score, 0.0, wait_standard, 1.0);
+            let fs_paid = final_score(paid_score, 0.0, wait_paid, 1.0);
+
+            prop_assert!(fs_standard < fs_paid,
+                "standard waiting {}s must beat fresh paid: standard={fs_standard} vs paid={fs_paid}",
+                TIER_EXPIRE_SECS);
+        }
+    }
+}

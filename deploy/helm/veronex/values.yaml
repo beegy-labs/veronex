@@ -2,7 +2,7 @@
 
 veronex:
   image:
-    repository: ghcr.io/veronex/veronex
+    repository: gitea.girok.dev/beegy-labs/veronex
     tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 1
@@ -55,7 +55,7 @@ veronex:
 
 veronexAnalytics:
   image:
-    repository: ghcr.io/veronex/veronex-analytics
+    repository: gitea.girok.dev/beegy-labs/veronex-analytics
     tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 1
@@ -74,9 +74,28 @@ veronexAnalytics:
 
   env: {}
 
+veronexAgent:
+  enabled: true
+  image:
+    repository: gitea.girok.dev/beegy-labs/veronex-agent
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  # Scrape interval in milliseconds. Recommended: 15000 (15s) for production,
+  # 5000 (5s) for real-time dashboards, 500 for sub-second debugging.
+  scrapeIntervalMs: "15000"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  env: {}
+
 veronexWeb:
   image:
-    repository: ghcr.io/veronex/veronex-web
+    repository: gitea.girok.dev/beegy-labs/veronex-web
     tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 1
@@ -92,26 +111,6 @@ veronexWeb:
     limits:
       cpu: 500m
       memory: 256Mi
-
-  env: {}
-
-veronexAgent:
-  enabled: true
-  image:
-    repository: ghcr.io/veronex/veronex-agent
-    tag: latest
-    pullPolicy: IfNotPresent
-
-  # Agent listens on this port (per-node)
-  port: 9091
-
-  resources:
-    requests:
-      cpu: 50m
-      memory: 32Mi
-    limits:
-      cpu: 200m
-      memory: 64Mi
 
   env: {}
 
@@ -197,11 +196,24 @@ otelCollector:
   service:
     type: ClusterIP
 
-# ── ClickHouse Schema Init ───────────────────────────────────────────────────
+# ── Database Migrations ──────────────────────────────────────────────────────
+# Runs as pre-install,pre-upgrade Helm hook.
+# helm install/upgrade triggers migrations automatically.
 
-clickhouseInit:
+migrations:
   enabled: true
-  image: clickhouse/clickhouse-client:26.1
+  image: migrate/migrate
+  clickhouse:
+    # Wrapper image with envsubst + migrate
+    image: migrate/migrate
+    kafkaBroker: ""           # REQUIRED — e.g. redpanda:9092
+    kafkaUsername: ""
+    kafkaPassword: ""
+    kafkaSecurityProtocol: SASL_PLAINTEXT
+    kafkaSaslMechanism: SCRAM-SHA-512
+    retentionAnalyticsDays: 90
+    retentionMetricsDays: 30
+    retentionAuditDays: 365
 
 # ── ServiceAccount ───────────────────────────────────────────────────────────
 

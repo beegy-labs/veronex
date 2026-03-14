@@ -149,9 +149,9 @@ Use `useQueries` for dynamic parallel fetches (never `useQuery` in a loop):
 
 ```ts
 const results = useQueries({
-  queries: backends.map(b => ({
-    queryKey: ['server-metrics', b.id],
-    queryFn: () => api.serverMetrics(b.id),
+  queries: providers.map(p => ({
+    queryKey: ['server-metrics', p.id],
+    queryFn: () => api.serverMetrics(p.id),
     staleTime: 5_000,
   }))
 })

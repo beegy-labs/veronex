@@ -1,0 +1,109 @@
+{{- if .Values.migrations.enabled }}
+{{- $chHost := ternary (printf "%s-clickhouse" .Release.Name) .Values.externalClickhouse.host .Values.clickhouse.enabled }}
+---
+# ── PostgreSQL migration ──────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-migrate-postgres
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: {{ .Values.migrations.image }}
+          args:
+            - -path=/migrations
+            - -database={{ include "veronex.postgresUrl" . }}?sslmode=disable
+            - up
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: {{ .Release.Name }}-migrate-postgres-sql
+---
+# ── ClickHouse migration ──────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-migrate-clickhouse
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: substitute
+          image: alpine:3.21
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apk add --no-cache gettext -q
+              for f in /tpl/*.sql; do
+                sed \
+                  -e "s|__KAFKA_BROKER__|$(KAFKA_BROKER)|g" \
+                  -e "s|__KAFKA_SECURITY_PROTOCOL__|$(KAFKA_SECURITY_PROTOCOL)|g" \
+                  -e "s|__KAFKA_SASL_MECHANISM__|$(KAFKA_SASL_MECHANISM)|g" \
+                  -e "s|__KAFKA_USERNAME__|$(KAFKA_USERNAME)|g" \
+                  -e "s|__KAFKA_PASSWORD__|$(KAFKA_PASSWORD)|g" \
+                  -e "s|__CLICKHOUSE_DB__|{{ include "veronex.clickhouseDb" . }}|g" \
+                  -e "s|__RETENTION_ANALYTICS_DAYS__|{{ .Values.migrations.clickhouse.retentionAnalyticsDays }}|g" \
+                  -e "s|__RETENTION_METRICS_DAYS__|{{ .Values.migrations.clickhouse.retentionMetricsDays }}|g" \
+                  -e "s|__RETENTION_AUDIT_DAYS__|{{ .Values.migrations.clickhouse.retentionAuditDays }}|g" \
+                  "$f" > "/out/$(basename "$f")"
+              done
+          env:
+            - name: KAFKA_BROKER
+              value: {{ .Values.migrations.clickhouse.kafkaBroker | quote }}
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: {{ .Values.migrations.clickhouse.kafkaSecurityProtocol | quote }}
+            - name: KAFKA_SASL_MECHANISM
+              value: {{ .Values.migrations.clickhouse.kafkaSaslMechanism | quote }}
+            - name: KAFKA_USERNAME
+              value: {{ .Values.migrations.clickhouse.kafkaUsername | quote }}
+            - name: KAFKA_PASSWORD
+              value: {{ .Values.migrations.clickhouse.kafkaPassword | quote }}
+          volumeMounts:
+            - name: tpl
+              mountPath: /tpl
+            - name: rendered
+              mountPath: /out
+      containers:
+        - name: migrate
+          image: {{ .Values.migrations.image }}
+          args:
+            - -path=/migrations
+            - -database=clickhouse://{{ include "veronex.clickhouseUser" . }}:{{ include "veronex.clickhousePassword" . }}@{{ $chHost }}:9000/{{ include "veronex.clickhouseDb" . }}?x-multi-statement=true
+            - up
+          volumeMounts:
+            - name: rendered
+              mountPath: /migrations
+      volumes:
+        - name: tpl
+          configMap:
+            name: {{ .Release.Name }}-migrate-clickhouse-sql
+        - name: rendered
+          emptyDir: {}
+{{- end }}

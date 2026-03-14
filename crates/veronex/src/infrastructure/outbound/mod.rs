@@ -13,5 +13,6 @@ pub mod ollama;
 pub mod persistence;
 pub mod pubsub;
 pub mod session_grouping;
+pub mod queue_maintenance;
 pub mod valkey_adapter;
 pub mod valkey_keys;

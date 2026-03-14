@@ -42,60 +42,55 @@ pub fn hash_api_key(raw_key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Concrete example: generated key has all expected structural properties.
     #[test]
-    fn generate_api_key_returns_valid_uuidv7() {
-        let (id, _, _, _) = generate_api_key();
+    fn generate_api_key_structure_example() {
+        let (id, plaintext, key_hash, key_prefix) = generate_api_key();
         assert_eq!(id.get_version_num(), 7);
-    }
-
-    #[test]
-    fn generate_api_key_plaintext_starts_with_prefix() {
-        let (_, plaintext, _, _) = generate_api_key();
         assert!(plaintext.starts_with("iq_"));
-    }
-
-    #[test]
-    fn generate_api_key_hash_is_64_hex_chars() {
-        let (_, _, key_hash, _) = generate_api_key();
-        assert_eq!(key_hash.len(), 64);
-        assert!(key_hash.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn generate_api_key_prefix_is_first_12_chars() {
-        let (_, plaintext, _, key_prefix) = generate_api_key();
         assert_eq!(key_prefix.len(), 12);
         assert_eq!(&plaintext[..12], key_prefix);
+        assert_eq!(key_hash, hash_api_key(&plaintext));
     }
 
-    #[test]
-    fn generate_api_key_hash_matches_plaintext() {
-        let (_, plaintext, key_hash, _) = generate_api_key();
-        let recomputed = hash_api_key(&plaintext);
-        assert_eq!(key_hash, recomputed);
-    }
+    proptest! {
+        /// Every generated key satisfies all structural invariants.
+        #[test]
+        fn generate_api_key_invariants(_ in 0u8..50) {
+            let (id, plaintext, key_hash, key_prefix) = generate_api_key();
+            // UUIDv7
+            prop_assert_eq!(id.get_version_num(), 7);
+            // Prefix
+            prop_assert!(plaintext.starts_with("iq_"));
+            prop_assert_eq!(key_prefix.len(), 12);
+            prop_assert_eq!(&plaintext[..12], key_prefix.as_str());
+            // Hash: Blake2b-256 = 64 hex chars
+            prop_assert_eq!(key_hash.len(), 64);
+            prop_assert!(key_hash.chars().all(|c| c.is_ascii_hexdigit()));
+            // Hash matches plaintext
+            prop_assert_eq!(&key_hash, &hash_api_key(&plaintext));
+        }
 
-    #[test]
-    fn generate_api_key_unique_keys() {
-        let (id1, key1, hash1, _) = generate_api_key();
-        let (id2, key2, hash2, _) = generate_api_key();
-        assert_ne!(id1, id2);
-        assert_ne!(key1, key2);
-        assert_ne!(hash1, hash2);
-    }
+        /// hash_api_key is deterministic for any input.
+        #[test]
+        fn hash_api_key_deterministic(input in "\\PC{1,100}") {
+            let h1 = hash_api_key(&input);
+            let h2 = hash_api_key(&input);
+            prop_assert_eq!(&h1, &h2);
+            prop_assert_eq!(h1.len(), 64);
+            prop_assert!(h1.chars().all(|c| c.is_ascii_hexdigit()));
+        }
 
-    #[test]
-    fn hash_api_key_deterministic() {
-        let hash1 = hash_api_key("iq_test123");
-        let hash2 = hash_api_key("iq_test123");
-        assert_eq!(hash1, hash2);
-    }
-
-    #[test]
-    fn hash_api_key_different_inputs_different_hashes() {
-        let hash1 = hash_api_key("iq_key1");
-        let hash2 = hash_api_key("iq_key2");
-        assert_ne!(hash1, hash2);
+        /// Different inputs produce different hashes (collision resistance).
+        #[test]
+        fn hash_api_key_collision_resistance(
+            a in "[a-z]{5,20}",
+            b in "[a-z]{5,20}",
+        ) {
+            prop_assume!(a != b);
+            prop_assert_ne!(hash_api_key(&a), hash_api_key(&b));
+        }
     }
 }

@@ -40,11 +40,11 @@ export function ServerHistoryModal({
     ts: fmtTs(p.ts),
     memUsedPct: p.mem_total_mb > 0
       ? Math.round(((p.mem_total_mb - p.mem_avail_mb) / p.mem_total_mb) * 100) : 0,
-    gpuTemp: p.gpu_temp_c ?? undefined,
+    gpuTemp: p.gpu_temp_junction_c ?? p.gpu_temp_c ?? undefined,
     gpuPower: p.gpu_power_w !== null ? Math.round((p.gpu_power_w ?? 0) * 10) / 10 : undefined,
   }))
 
-  const hasGpu = (data ?? []).some((p) => p.gpu_temp_c !== null || p.gpu_power_w !== null)
+  const hasGpu = (data ?? []).some((p) => p.gpu_temp_junction_c !== null || p.gpu_temp_c !== null || p.gpu_power_w !== null)
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>

@@ -189,6 +189,8 @@
           "mem_total_mb": { "type": "integer" },
           "mem_avail_mb": { "type": "integer" },
           "gpu_temp_c": { "type": "number", "nullable": true },
+          "gpu_temp_junction_c": { "type": "number", "nullable": true },
+          "gpu_temp_mem_c": { "type": "number", "nullable": true },
           "gpu_power_w": { "type": "number", "nullable": true }
         }
       },
