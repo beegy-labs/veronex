@@ -183,6 +183,22 @@ fn get_label<'a>(metric_part: &'a str, key: &str) -> Option<&'a str> {
     Some(&metric_part[start..end])
 }
 
+/// Known GPU chip_names from hwmon sysfs:
+///   - "amdgpu"  : AMD dGPU / APU (full hwmon + DRM support)
+///   - "nouveau" : NVIDIA open-source driver (hwmon temp only; proprietary driver needs dcgm)
+///   - "i915"    : Intel integrated/discrete GPU (older kernel driver)
+///   - "xe"      : Intel discrete GPU (newer kernel driver, Arc series)
+const GPU_CHIP_NAMES: &[&str] = &["amdgpu", "nouveau", "i915", "xe"];
+
+/// Check if a hwmon chip label belongs to a GPU.
+/// Matches by chip label substring (e.g. "amdgpu-pci-0300") or chip_name_map lookup.
+fn is_gpu_chip(chip: &str, chip_name_map: &std::collections::HashMap<String, String>) -> bool {
+    GPU_CHIP_NAMES.iter().any(|name| chip.contains(name))
+        || chip_name_map
+            .get(chip)
+            .is_some_and(|n| GPU_CHIP_NAMES.contains(&n.as_str()))
+}
+
 fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
     use std::collections::{HashMap, HashSet};
 
@@ -203,16 +219,20 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
     let mut drm_vram_used: HashMap<String, f64> = HashMap::new();
     let mut drm_vram_total: HashMap<String, f64> = HashMap::new();
 
-    // hwmon chip name lookup: chip_label → chip_name (e.g. "amdgpu").
+    // hwmon chip name lookup: chip_label → chip_name (e.g. "amdgpu", "nouveau").
     // node_hwmon_chip_names{chip="0000:00:08_1_0000:c4:00_0",chip_name="amdgpu"} 1
     // Needed because AMD APU chips use PCI address labels, not "amdgpu-pci-*" labels.
     let mut chip_name_map: HashMap<String, String> = HashMap::new();
 
-    // hwmon metrics keyed by chip label; only amdgpu chips are collected.
+    // hwmon metrics keyed by chip label.
     // Keyed as "chip:sensor" for per-sensor lookup (temp1=edge, temp2=junction, temp3=memory).
+    // Supported GPU chip_names:
+    //   AMD:    "amdgpu"  — full hwmon (temp/power) + DRM (vram/busy)
+    //   NVIDIA: "nouveau" — hwmon temp only (open-source driver; proprietary needs dcgm-exporter)
+    //   Intel:  "i915", "xe" — hwmon temp (limited)
     let mut hwmon_temp: HashMap<String, f64> = HashMap::new();
     let mut hwmon_power: HashMap<String, f64> = HashMap::new();
-    let mut amdgpu_chips: HashSet<String> = HashSet::new();
+    let mut gpu_chips: HashSet<String> = HashSet::new();
 
     for line in text.lines() {
         let line = line.trim();
@@ -239,8 +259,12 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
         let name_only = metric_part.split('{').next().unwrap_or(metric_part);
 
         match name_only {
-            "node_memory_MemTotal_bytes" => mem_total_bytes = value,
-            "node_memory_MemAvailable_bytes" => mem_available_bytes = value,
+            // Linux: node_memory_MemTotal_bytes / node_memory_MemAvailable_bytes
+            // macOS: node_memory_total_bytes / node_memory_free_bytes
+            "node_memory_MemTotal_bytes" | "node_memory_total_bytes" => mem_total_bytes = value,
+            "node_memory_MemAvailable_bytes" | "node_memory_free_bytes" => {
+                mem_available_bytes = value
+            }
 
             "node_cpu_seconds_total" => {
                 if let Some(cpu) = get_label(metric_part, "cpu") {
@@ -265,10 +289,10 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
                 }
             }
 
-            // Build chip label → chip_name map for AMD APU hwmon lookup.
+            // Build chip label → chip_name map for GPU hwmon lookup.
             // AMD APU chips use PCI-address chip labels (e.g. "0000:00:08_1_0000:c4:00_0")
             // while chip_name="amdgpu". This lets us match them even without "amdgpu" in
-            // the chip label.
+            // the chip label. Same pattern applies to nouveau/i915/xe.
             "node_hwmon_chip_names" => {
                 if let (Some(chip), Some(chip_name)) = (
                     get_label(metric_part, "chip"),
@@ -303,12 +327,10 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
 
             "node_hwmon_temp_celsius" => {
                 if let Some(chip) = get_label(metric_part, "chip") {
-                    let is_amdgpu = chip.contains("amdgpu")
-                        || chip_name_map.get(chip).is_some_and(|n| n == "amdgpu");
-                    if is_amdgpu {
+                    if is_gpu_chip(chip, &chip_name_map) {
                         let sensor = get_label(metric_part, "sensor").unwrap_or("temp1");
                         hwmon_temp.insert(format!("{chip}:{sensor}"), value);
-                        amdgpu_chips.insert(chip.to_string());
+                        gpu_chips.insert(chip.to_string());
                     }
                 }
             }
@@ -316,11 +338,9 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
             // on some systems; accept both spellings.
             "node_hwmon_power_average_watts" | "node_hwmon_power_average_watt" => {
                 if let Some(chip) = get_label(metric_part, "chip") {
-                    let is_amdgpu = chip.contains("amdgpu")
-                        || chip_name_map.get(chip).is_some_and(|n| n == "amdgpu");
-                    if is_amdgpu {
+                    if is_gpu_chip(chip, &chip_name_map) {
                         hwmon_power.entry(chip.to_string()).or_insert(value);
-                        amdgpu_chips.insert(chip.to_string());
+                        gpu_chips.insert(chip.to_string());
                     }
                 }
             }
@@ -330,9 +350,9 @@ fn parse_prometheus_metrics(text: &str) -> (NodeMetrics, CpuSnapshot) {
     }
 
     // Build sorted GPU list.
-    // Primary source: DRM metrics (most complete for AMD GPUs with --collector.drm).
-    // Fallback: hwmon-only (if --collector.drm not enabled).
-    let mut chips_sorted: Vec<String> = amdgpu_chips.into_iter().collect();
+    // Primary source: DRM metrics (AMD GPUs with --collector.drm).
+    // Fallback: hwmon-only (NVIDIA nouveau, Intel i915/xe, or AMD without DRM collector).
+    let mut chips_sorted: Vec<String> = gpu_chips.into_iter().collect();
     chips_sorted.sort();
 
     let mut drm_cards: Vec<String> = drm_busy
@@ -649,5 +669,122 @@ node_hwmon_power_average_watts{chip="amdgpu-pci-0300"} 90.0
         assert_eq!(gpu.vram_total_mb, None); // no DRM data
         assert_eq!(gpu.vram_used_mb, None);
         assert_eq!(gpu.busy_pct, None);
+    }
+
+    // ── macOS memory metrics ─────────────────────────────────────────────
+
+    #[test]
+    fn macos_memory_metrics_parsed() {
+        let text = "node_memory_total_bytes 5.1539607552e+10\n\
+                    node_memory_free_bytes 1.1229134848e+10\n";
+        let (metrics, _) = parse_prometheus_metrics(text);
+        // 51539607552 / 1048576 ≈ 49152 MiB
+        assert_eq!(metrics.mem_total_mb, 49152);
+        // 11229134848 / 1048576 ≈ 10710 MiB
+        assert!(metrics.mem_available_mb > 10000);
+    }
+
+    // ── NVIDIA GPU via nouveau hwmon ─────────────────────────────────────
+
+    #[test]
+    fn nvidia_nouveau_hwmon_temp_parsed() {
+        // NVIDIA GPU with nouveau open-source driver — temp only, no power/DRM
+        let text = r#"node_hwmon_chip_names{chip="nouveau-pci-0100",chip_name="nouveau"} 1
+node_hwmon_temp_celsius{chip="nouveau-pci-0100",sensor="temp1"} 62.0
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus.len(), 1);
+        let gpu = &metrics.gpus[0];
+        assert_eq!(gpu.card, "card0");
+        assert_eq!(gpu.temp_c, Some(62.0));
+        assert_eq!(gpu.power_w, None); // nouveau doesn't expose power
+        assert_eq!(gpu.vram_total_mb, None); // no DRM for NVIDIA
+    }
+
+    #[test]
+    fn nvidia_nouveau_chip_name_map_lookup() {
+        // PCI address chip label with chip_name="nouveau" in map
+        let text = r#"node_hwmon_chip_names{chip="0000:01:00_0",chip_name="nouveau"} 1
+node_hwmon_temp_celsius{chip="0000:01:00_0",sensor="temp1"} 55.0
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus.len(), 1);
+        assert_eq!(metrics.gpus[0].temp_c, Some(55.0));
+    }
+
+    // ── Intel GPU via i915/xe hwmon ──────────────────────────────────────
+
+    #[test]
+    fn intel_i915_hwmon_temp_parsed() {
+        let text = r#"node_hwmon_chip_names{chip="i915-pci-0200",chip_name="i915"} 1
+node_hwmon_temp_celsius{chip="i915-pci-0200",sensor="temp1"} 48.0
+node_hwmon_power_average_watts{chip="i915-pci-0200"} 25.0
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus.len(), 1);
+        let gpu = &metrics.gpus[0];
+        assert_eq!(gpu.temp_c, Some(48.0));
+        assert_eq!(gpu.power_w, Some(25.0));
+    }
+
+    #[test]
+    fn intel_xe_hwmon_temp_parsed() {
+        // Intel Arc discrete GPU with xe kernel driver
+        let text = r#"node_hwmon_chip_names{chip="xe-pci-0300",chip_name="xe"} 1
+node_hwmon_temp_celsius{chip="xe-pci-0300",sensor="temp1"} 52.0
+node_hwmon_power_average_watt{chip="xe-pci-0300"} 75.0
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert_eq!(metrics.gpus.len(), 1);
+        let gpu = &metrics.gpus[0];
+        assert_eq!(gpu.temp_c, Some(52.0));
+        assert_eq!(gpu.power_w, Some(75.0));
+    }
+
+    // ── Multi-vendor mixed system ────────────────────────────────────────
+
+    #[test]
+    fn multi_vendor_gpus_all_collected() {
+        // System with AMD + NVIDIA GPUs
+        let text = r#"node_hwmon_chip_names{chip="amdgpu-pci-0300",chip_name="amdgpu"} 1
+node_hwmon_chip_names{chip="nouveau-pci-0400",chip_name="nouveau"} 1
+node_hwmon_temp_celsius{chip="amdgpu-pci-0300",sensor="temp1"} 58.0
+node_hwmon_temp_celsius{chip="amdgpu-pci-0300",sensor="temp2"} 72.0
+node_hwmon_temp_celsius{chip="nouveau-pci-0400",sensor="temp1"} 65.0
+node_hwmon_power_average_watts{chip="amdgpu-pci-0300"} 145.0
+node_drm_gpu_busy_percent{card="card0"} 80
+node_drm_memory_vram_used_bytes{card="card0"} 4294967296
+node_drm_memory_vram_total_bytes{card="card0"} 8589934592
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        // DRM card (AMD) + hwmon-only nouveau = 1 DRM card but 2 hwmon chips
+        // DRM path takes priority; nouveau falls into hwmon at position 1
+        assert!(!metrics.gpus.is_empty());
+        // AMD card has DRM data
+        let amd = &metrics.gpus[0];
+        assert_eq!(amd.card, "card0");
+        assert_eq!(amd.vram_total_mb, Some(8192));
+        assert_eq!(amd.busy_pct, Some(80.0));
+    }
+
+    // ── macOS: no GPU metrics, memory + CPU only ─────────────────────────
+
+    #[test]
+    fn macos_full_output_no_gpu() {
+        // macOS has no hwmon or DRM — only memory + CPU
+        let text = r#"node_memory_total_bytes 5.1539607552e+10
+node_memory_free_bytes 1.1229134848e+10
+node_memory_active_bytes 1.608425472e+10
+node_memory_wired_bytes 3.743793152e+09
+node_cpu_seconds_total{cpu="0",mode="idle"} 50000.0
+node_cpu_seconds_total{cpu="0",mode="user"} 10000.0
+node_cpu_seconds_total{cpu="1",mode="idle"} 51000.0
+node_cpu_seconds_total{cpu="1",mode="user"} 9000.0
+"#;
+        let (metrics, _) = parse_prometheus_metrics(text);
+        assert!(metrics.mem_total_mb > 40000); // ~49 GiB
+        assert!(metrics.mem_available_mb > 10000);
+        assert_eq!(metrics.cpu_logical, 2);
+        assert!(metrics.gpus.is_empty()); // no GPU on macOS node-exporter
     }
 }

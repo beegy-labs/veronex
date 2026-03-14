@@ -78,8 +78,8 @@ pub async fn get_server_metrics_history(
     let query_str = format!(
         "SELECT
             toStartOfInterval(ts, INTERVAL {bucket_interval}) AS ts,
-            toFloat64(maxIf(value, metric_name = 'node_memory_MemTotal_bytes') / 1048576.0) AS mem_total_mb,
-            toFloat64(avgIf(value, metric_name = 'node_memory_MemAvailable_bytes') / 1048576.0) AS mem_avail_mb,
+            toFloat64(maxIf(value, metric_name IN ('node_memory_MemTotal_bytes', 'node_memory_total_bytes')) / 1048576.0) AS mem_total_mb,
+            toFloat64(avgIf(value, metric_name IN ('node_memory_MemAvailable_bytes', 'node_memory_free_bytes')) / 1048576.0) AS mem_avail_mb,
             avgIf(value,
                 metric_name = 'node_hwmon_temp_celsius'
                 AND attributes['chip'] = ?

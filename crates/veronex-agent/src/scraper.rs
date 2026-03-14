@@ -29,8 +29,12 @@ const MAX_OLLAMA_MODELS: usize = 256;
 /// Metric name prefixes to forward from node-exporter.
 /// Everything else is dropped at the agent level.
 const NODE_EXPORTER_ALLOWLIST: &[&str] = &[
+    // Linux
     "node_memory_MemTotal_bytes",
     "node_memory_MemAvailable_bytes",
+    // macOS
+    "node_memory_total_bytes",
+    "node_memory_free_bytes",
     "node_cpu_seconds_total",
     "node_drm_",
     "node_hwmon_temp_celsius",
