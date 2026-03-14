@@ -42,7 +42,7 @@ jobs:
             echo "Checking commit: $hash"
             echo "  Message: $message"
 
-            if echo "$message" | grep -qE '^Merge [0-9a-f]{40} into [0-9a-f]{40}'; then
+            if echo "$message" | grep -qE '^Merge [0-9a-f]{40} into [0-9a-f]{40}|^Merge pull request #[0-9]+ from '; then
               echo "  ⏭️  Skipping merge commit"
               continue
             fi
