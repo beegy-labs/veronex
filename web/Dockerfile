@@ -1,9 +1,11 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci
-COPY . .
+COPY web/ .
+# Copy crates bindings referenced by ts-rs generated types
+COPY crates/veronex/bindings/ /crates/veronex/bindings/
 
 ARG NEXT_PUBLIC_VERONEX_API_URL=http://localhost:3001
 ARG NEXT_PUBLIC_VERONEX_ADMIN_KEY=
