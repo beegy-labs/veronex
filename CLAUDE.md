@@ -57,6 +57,12 @@
 | Frontend | `frontend/` | design-system (core, i18n, components), charts, pages/* |
 | Research | `research/` | 2026 best practices |
 
+## Workflows (ADD)
+
+| Action | Workflow | Reads |
+| ------ | -------- | ----- |
+| Code review / optimization | `.add/code-review.md` | Relevant CDD docs per domain |
+
 ---
 
 **Start**: [.ai/README.md](.ai/README.md)
