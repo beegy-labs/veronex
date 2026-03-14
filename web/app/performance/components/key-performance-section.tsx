@@ -1,6 +1,7 @@
 'use client'
 
 import { fmtCompact } from '@/lib/chart-theme'
+import { SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from '@/lib/constants'
 import { Key } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -56,8 +57,8 @@ export function KeyPerformanceSection({ keys }: { keys: KeyPerfRow[] }) {
                   <TableCell className="text-right tabular-nums font-semibold">{fmtCompact(k.request_count)}</TableCell>
                   <TableCell className="text-right">
                     <span className={`text-sm font-semibold tabular-nums ${
-                      k.success_rate >= 90 ? 'text-status-success-fg'
-                        : k.success_rate >= 70 ? 'text-status-warning-fg'
+                      k.success_rate >= SUCCESS_RATE_GOOD ? 'text-status-success-fg'
+                        : k.success_rate >= SUCCESS_RATE_WARNING ? 'text-status-warning-fg'
                         : 'text-status-error-fg'
                     }`}>
                       {k.success_rate}%

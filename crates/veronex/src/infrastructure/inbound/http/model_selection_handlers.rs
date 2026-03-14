@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::domain::enums::ProviderType;
 use crate::infrastructure::inbound::http::provider_handlers::get_provider;
 
-use super::error::AppError;
+use super::error::db_error;
 use super::state::AppState;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ pub async fn list_selected_models(
         Ok(s) => s,
         Err(e) => {
             tracing::error!(%id, "list_selected_models: failed to list selections: {e}");
-            return AppError::Internal(anyhow::anyhow!("database error")).into_response();
+            return db_error(e).into_response();
         }
     };
     let sel_map: HashMap<String, bool> = selections
@@ -66,7 +66,7 @@ pub async fn list_selected_models(
                 Ok(m) => m,
                 Err(e) => {
                     tracing::error!(%id, "list_selected_models: failed to list ollama models: {e}");
-                    return AppError::Internal(anyhow::anyhow!("database error")).into_response();
+                    return db_error(e).into_response();
                 }
             };
             let dtos: Vec<SelectedModelDto> = models
@@ -89,7 +89,7 @@ pub async fn list_selected_models(
                 Ok(g) => g,
                 Err(e) => {
                     tracing::error!(%id, "list_selected_models: failed to list global models: {e}");
-                    return AppError::Internal(anyhow::anyhow!("database error")).into_response();
+                    return db_error(e).into_response();
                 }
             };
             let dtos: Vec<SelectedModelDto> = global
@@ -122,7 +122,7 @@ pub async fn set_model_enabled(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::error!(%id, %model_name, "set_model_enabled: {e}");
-            AppError::Internal(anyhow::anyhow!("database error")).into_response()
+            db_error(e).into_response()
         }
     }
 }

@@ -68,63 +68,82 @@ fn is_link_local(ip: &std::net::IpAddr) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Concrete examples for unique SSRF edge cases.
     #[test]
-    fn parse_provider_type_case_insensitive() {
+    fn validate_provider_url_blocks_metadata_endpoints() {
+        assert!(validate_provider_url("http://metadata.google.internal/computeMetadata/v1/").is_err());
+        assert!(validate_provider_url("http://[fe80::1]:11434").is_err());
+        assert!(validate_provider_url("http://[::ffff:169.254.169.254]/latest/").is_err());
+        assert!(validate_provider_url("http://169.254.169.254/latest/meta-data/").is_err());
+    }
+
+    /// Concrete example: parse_provider_type case insensitivity.
+    #[test]
+    fn parse_provider_type_examples() {
         assert_eq!(parse_provider_type("Ollama"), Some(ProviderType::Ollama));
         assert_eq!(parse_provider_type("GEMINI"), Some(ProviderType::Gemini));
         assert_eq!(parse_provider_type("unknown"), None);
     }
 
-    #[test]
-    fn validate_provider_url_allows_http() {
-        assert!(validate_provider_url("http://192.168.1.10:11434").is_ok());
-    }
+    proptest! {
+        /// Any case variation of "ollama" or "gemini" is recognized.
+        #[test]
+        fn parse_provider_type_case_insensitive(
+            mixed_case in prop::sample::select(vec![
+                "ollama", "OLLAMA", "Ollama", "oLlAmA",
+                "gemini", "GEMINI", "Gemini", "gEmInI",
+            ])
+        ) {
+            let result = parse_provider_type(mixed_case);
+            let lower = mixed_case.to_lowercase();
+            match lower.as_str() {
+                "ollama" => prop_assert_eq!(result, Some(ProviderType::Ollama)),
+                "gemini" => prop_assert_eq!(result, Some(ProviderType::Gemini)),
+                _ => unreachable!(),
+            }
+        }
 
-    #[test]
-    fn validate_provider_url_allows_https() {
-        assert!(validate_provider_url("https://api.example.com").is_ok());
-    }
+        /// Any non-matching string returns None.
+        #[test]
+        fn parse_provider_type_unknown_returns_none(
+            s in "[a-z]{1,20}"
+        ) {
+            prop_assume!(s.to_lowercase() != "ollama" && s.to_lowercase() != "gemini");
+            prop_assert_eq!(parse_provider_type(&s), None);
+        }
 
-    #[test]
-    fn validate_provider_url_allows_localhost() {
-        assert!(validate_provider_url("http://localhost:11434").is_ok());
-    }
+        /// Valid http/https URLs with normal hosts always pass.
+        #[test]
+        fn validate_url_http_https_accepted(
+            host in "[a-z]{3,10}(\\.[a-z]{2,5})?",
+            port in 1000u16..65535,
+            use_https in proptest::bool::ANY,
+        ) {
+            let scheme = if use_https { "https" } else { "http" };
+            let url = format!("{scheme}://{host}:{port}");
+            prop_assert!(validate_provider_url(&url).is_ok());
+        }
 
-    #[test]
-    fn validate_provider_url_blocks_gcp_metadata() {
-        let err = validate_provider_url("http://metadata.google.internal/computeMetadata/v1/")
-            .unwrap_err();
-        assert!(err.to_string().contains("metadata"));
-    }
+        /// Non http/https schemes are always rejected.
+        #[test]
+        fn validate_url_non_http_rejected(
+            scheme in "(ftp|ssh|ws|wss|file|tcp|udp)",
+            host in "[a-z]{3,10}",
+        ) {
+            let url = format!("{scheme}://{host}");
+            prop_assert!(validate_provider_url(&url).is_err());
+        }
 
-    #[test]
-    fn validate_provider_url_blocks_ftp_scheme() {
-        let err = validate_provider_url("ftp://example.com").unwrap_err();
-        assert!(err.to_string().contains("http://"));
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_file_scheme() {
-        let err = validate_provider_url("file:///etc/passwd").unwrap_err();
-        assert!(err.to_string().contains("http://"));
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_ipv6_link_local() {
-        let err = validate_provider_url("http://[fe80::1]:11434").unwrap_err();
-        assert!(err.to_string().contains("metadata"));
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_ipv4_mapped_ipv6_metadata() {
-        let err = validate_provider_url("http://[::ffff:169.254.169.254]/latest/").unwrap_err();
-        assert!(err.to_string().contains("metadata"));
-    }
-
-    #[test]
-    fn validate_provider_url_blocks_ipv4_link_local() {
-        let err = validate_provider_url("http://169.254.169.254/latest/meta-data/").unwrap_err();
-        assert!(err.to_string().contains("metadata"));
+        /// IPv4 link-local range 169.254.x.x is always blocked.
+        #[test]
+        fn validate_url_link_local_ipv4_blocked(
+            a in 0u8..=255,
+            b in 0u8..=255,
+        ) {
+            let url = format!("http://169.254.{a}.{b}/");
+            prop_assert!(validate_provider_url(&url).is_err());
+        }
     }
 }

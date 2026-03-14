@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-07
+> SSOT | **Last Updated**: 2026-03-13
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision
@@ -10,7 +10,7 @@ Veronex is an **autonomous intelligence scheduler/gateway** for N Ollama servers
 - **Cluster-wide optimization**: maximize total throughput across all servers, not individual server performance
 - **Dynamic model allocation**: compute optimal "model combination + concurrent request count" per server in real-time
 - **Multi-model co-residence**: when VRAM allows, load multiple models simultaneously for parallel processing; when insufficient, FIFO + model locality to minimize switching cost
-- **3-phase adaptive learning**: Cold Start (limit=1) → AIMD (TPS+p95 per model) → LLM Batch (all-model combination tuning)
+- **3-phase adaptive learning**: Cold Start (`num_parallel` top-down, multi-model `committed_parallel` guard) → AIMD (TPS+p95 per model, capped at `num_parallel`) → LLM Batch (all-model combination tuning)
 - **Thermal protection**: auto decelerate → block → cooldown → gradual recovery (per-provider thresholds, auto-detected from GPU vendor)
 - **Self-healing**: circuit breaker per provider, crash recovery via Valkey, queue reaper for orphaned jobs
 
@@ -83,9 +83,9 @@ Notable: `CachingProviderRegistry` decorates `PostgresProviderRegistry` (5s TTL)
 ## Multi-Provider Routing (Intelligence Scheduler)
 
 ```
-Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → RPUSH veronex:queue:jobs
-      OR POST /v1/test/completions  (Bearer JWT, source=Test)  → RPUSH veronex:queue:jobs:test
-       → queue_dispatcher_loop: Lua priority pop [paid, jobs, test] → processing list
+Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → ZADD queue:zset (score=now_ms-tier_bonus)
+      OR POST /v1/test/completions  (Bearer JWT, source=Test)  → ZADD queue:zset (score=now_ms-0)
+       → queue_dispatcher_loop: ZRANGE peek top-K → Rust scoring → Lua ZREM claim → processing list
          → 2-stage model filter:
            1. providers_for_model() → has the model installed?
            2. list_enabled() → model enabled on this provider?
@@ -94,7 +94,7 @@ Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → RPUSH verone
          → gate chain:
            circuit_breaker → thermal (per-provider, auto-detected GPU/CPU profile)
            → concurrency limit (AIMD-learned max_concurrent)
-           → vram_pool.try_reserve() → VramPermit or re-enqueue
+           → vram_pool.try_reserve() → VramPermit or skip to next in window
          → tokio::spawn run_job(permit)
            → OllamaAdapter | GeminiAdapter → SSE tokens
            → permit dropped (auto) → KV cache returned, weight stays
@@ -110,7 +110,7 @@ Reconnect:
 Background loops:
   health_checker (30s):
     → provider health (Ollama/Gemini)
-    → agent metrics poll → Valkey cache (HwMetrics with gpu_vendor)
+    → hw_metrics fetch (node-exporter direct) → Valkey cache (HwMetrics with gpu_vendor)
     → thermal.set_thresholds(gpu_vendor) + thermal.update(temp_c)
   run_sync_loop (base tick 30s, per-provider sync_interval ~300s):
     → per Ollama provider: /api/version + /api/tags + /api/ps + /api/show
@@ -177,5 +177,5 @@ Background loops:
 | `CircuitBreakerPort` | `CircuitBreakerMap` | Per-provider failure isolation (Closed→Open→HalfOpen) |
 | `ThermalPort` | `ThermalThrottleMap` | Per-provider GPU thermal throttle level (Normal/Soft/Hard) |
 | `LabSettingsRepository` | `PostgresLabSettingsRepository` | Feature flags (gemini_function_calling) |
-| `ValkeyPort`             | `ValkeyAdapter`          | Queue (push/pop/priority), KV (set/get/del), counters, pub/sub |
+| `ValkeyPort`             | `ValkeyAdapter`          | ZSET queue (enqueue/peek/claim/cancel), LIST legacy, KV, counters, pub/sub |
 | `MessageStore` | `S3MessageStore` | MinIO/AWS S3 message storage |

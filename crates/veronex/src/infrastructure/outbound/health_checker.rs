@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
+use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
@@ -72,18 +74,30 @@ pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) ->
 
 // ── Node-exporter metrics polling ─────────────────────────────────────────────
 
-/// Poll node-exporter via the provider's `agent_url` (node-exporter URL),
-/// convert to `HwMetrics`, and cache in Valkey.
+/// Resolve node-exporter URL for a provider via its linked GpuServer.
 ///
+/// Path: `provider.server_id` → `GpuServer.node_exporter_url`
+async fn resolve_node_exporter_url(
+    provider: &LlmProvider,
+    gpu_server_registry: &dyn GpuServerRegistry,
+) -> Option<String> {
+    let server_id = provider.server_id?;
+    let server = gpu_server_registry.get(server_id).await.ok()??;
+    server.node_exporter_url.filter(|u| !u.is_empty())
+}
+
+/// Poll node-exporter via the provider's linked GpuServer, convert to
+/// `HwMetrics`, and cache in Valkey.
 async fn poll_node_exporter_metrics(
     provider: &LlmProvider,
     valkey_pool: &fred::clients::Pool,
+    gpu_server_registry: &dyn GpuServerRegistry,
 ) {
-    let Some(ref node_exporter_url) = provider.agent_url else {
+    let Some(node_exporter_url) = resolve_node_exporter_url(provider, gpu_server_registry).await else {
         return;
     };
 
-    let (node_metrics, _snapshot) = match fetch_node_metrics(node_exporter_url, None).await {
+    let (node_metrics, _snapshot) = match fetch_node_metrics(&node_exporter_url, None).await {
         Ok(result) => result,
         Err(e) => {
             tracing::warn!(
@@ -98,7 +112,8 @@ async fn poll_node_exporter_metrics(
     let gpu_idx = provider.gpu_index.unwrap_or(0) as usize;
     let gpu = node_metrics.gpus.get(gpu_idx);
 
-    // Detect GPU vendor from hwmon chip presence (amdgpu detection in parser)
+    // DRM metrics come from amdgpu kernel driver — if DRM GPU exists, it's AMD.
+    // NVIDIA GPUs use proprietary driver and don't expose DRM metrics via node-exporter.
     let gpu_vendor = if gpu.is_some() { "amd".to_string() } else { String::new() };
 
     let hw = HwMetrics {
@@ -107,8 +122,11 @@ async fn poll_node_exporter_metrics(
         gpu_util_pct: gpu.and_then(|g| g.busy_pct).unwrap_or(0.0) as u8,
         power_w: gpu.and_then(|g| g.power_w).unwrap_or(0.0) as f32,
         temp_c: gpu.and_then(|g| g.temp_c).unwrap_or(0.0) as f32,
+        temp_junction_c: gpu.and_then(|g| g.temp_junction_c).unwrap_or(0.0) as f32,
+        temp_mem_c: gpu.and_then(|g| g.temp_mem_c).unwrap_or(0.0) as f32,
         mem_used_mb: (node_metrics.mem_total_mb.saturating_sub(node_metrics.mem_available_mb)) as u32,
         mem_total_mb: node_metrics.mem_total_mb as u32,
+        mem_available_mb: node_metrics.mem_available_mb as u32,
         gpu_vendor,
     };
 
@@ -117,7 +135,7 @@ async fn poll_node_exporter_metrics(
         name = %provider.name,
         vram = "{}/{} MiB",
         hw.vram_used_mb, hw.vram_total_mb,
-        temp = hw.temp_c,
+        temp = hw.max_temp_c(),
         "node-exporter metrics collected"
     );
 
@@ -127,20 +145,22 @@ async fn poll_node_exporter_metrics(
 // ── Background task ────────────────────────────────────────────────────────────
 
 /// Background loop that checks all registered providers every `interval_secs`
-/// seconds: updates online/offline status and (when `agent_url` is set) polls hardware
-/// metrics and stores them in Valkey for the dispatcher.
+/// seconds: updates online/offline status and (when linked to a GpuServer with
+/// node_exporter_url) polls hardware metrics and stores them in Valkey.
 ///
 /// Also updates the `ThermalThrottleMap` on every cycle so the dispatcher can
 /// respect soft/hard thermal limits without any additional network calls.
 ///
 /// Exits cleanly when `shutdown` is cancelled.
 pub async fn run_health_checker_loop(
-    registry:    Arc<dyn LlmProviderRegistry>,
-    interval_secs: u64,
-    valkey_pool: Option<fred::clients::Pool>,
-    thermal:     Arc<ThermalThrottleMap>,
-    shutdown:    CancellationToken,
-    client:      reqwest::Client,
+    registry:           Arc<dyn LlmProviderRegistry>,
+    gpu_server_registry: Arc<dyn GpuServerRegistry>,
+    interval_secs:      u64,
+    valkey_pool:        Option<fred::clients::Pool>,
+    thermal:            Arc<ThermalThrottleMap>,
+    shutdown:           CancellationToken,
+    client:             reqwest::Client,
+    vram_pool:          Arc<dyn VramPoolPort>,
 ) {
     let interval = Duration::from_secs(interval_secs);
 
@@ -184,32 +204,31 @@ pub async fn run_health_checker_loop(
                 }
             }
 
-            // 2. Hardware metrics (only when node-exporter URL is configured)
+            // 2. Hardware metrics (only when linked to a GpuServer)
             if let Some(ref pool) = valkey_pool {
-                poll_node_exporter_metrics(&provider, pool).await;
+                poll_node_exporter_metrics(&provider, pool, gpu_server_registry.as_ref()).await;
 
                 // 3. Thermal throttle update from cached hw_metrics
                 if let Some(hw) = load_hw_metrics(pool, provider.id).await {
-                    // Set per-provider thermal profile from gpu_vendor.
-                    // NVIDIA discrete GPUs tolerate higher temps; AMD APU (Ryzen AI 395+)
-                    // uses CPU-class thresholds (more conservative).
                     use crate::infrastructure::outbound::capacity::thermal::ThermalThresholds;
                     let profile = match hw.gpu_vendor.as_str() {
                         "nvidia" => ThermalThresholds::GPU,
-                        _ => ThermalThresholds::CPU, // amd (APU/iGPU), unknown, empty
+                        _ => ThermalThresholds::CPU,
                     };
                     thermal.set_thresholds(provider.id, profile);
 
+                    let active_count = vram_pool.provider_active_requests(provider.id);
+                    let sum_mc       = vram_pool.sum_loaded_max_concurrent(provider.id);
                     let prev  = thermal.get(provider.id);
-                    let level = thermal.update(provider.id, hw.temp_c);
+                    let level = thermal.update(provider.id, hw.max_temp_c(), active_count, sum_mc);
 
                     if level != prev {
                         match &level {
                             ThrottleLevel::Hard => {
                                 tracing::warn!(
                                     provider = %provider.name,
-                                    temp    = hw.temp_c,
-                                    cooldown_secs = 60,
+                                    temp    = hw.max_temp_c(),
+                                    cooldown_secs = 300,
                                     "HARD THROTTLE: dispatch suspended, cooldown active"
                                 );
                                 use fred::prelude::*;
@@ -217,24 +236,39 @@ pub async fn run_health_checker_loop(
                                     .set(
                                         &valkey_keys::thermal_throttle(provider.id),
                                         "hard",
-                                        Some(Expiration::EX(90)),
+                                        Some(Expiration::EX(360)),
                                         None,
                                         false,
                                     )
                                     .await
                                     .unwrap_or(());
                             }
+                            ThrottleLevel::Cooldown => {
+                                tracing::warn!(
+                                    provider = %provider.name,
+                                    temp    = hw.max_temp_c(),
+                                    cooldown_secs = 300,
+                                    "COOLDOWN: waiting for hardware to cool"
+                                );
+                            }
+                            ThrottleLevel::RampUp => {
+                                tracing::info!(
+                                    provider = %provider.name,
+                                    temp    = hw.max_temp_c(),
+                                    "RAMP-UP: gradually restoring concurrency"
+                                );
+                            }
                             ThrottleLevel::Soft => {
                                 tracing::warn!(
                                     provider = %provider.name,
-                                    temp    = hw.temp_c,
-                                    "SOFT THROTTLE: capped to 1 slot"
+                                    temp    = hw.max_temp_c(),
+                                    "SOFT THROTTLE: new requests blocked"
                                 );
                             }
                             ThrottleLevel::Normal => {
                                 tracing::info!(
                                     provider = %provider.name,
-                                    temp    = hw.temp_c,
+                                    temp    = hw.max_temp_c(),
                                     "throttle lifted — normal ops"
                                 );
                                 use fred::prelude::*;

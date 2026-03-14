@@ -1,6 +1,6 @@
 # Infrastructure -- Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-03-07 (rev6: Helm chart overhaul — secrets mgmt, external infra, DaemonSet agent)
+> SSOT | **Last Updated**: 2026-03-10 (rev7: agent env vars, image registry, agent StatefulSet)
 
 ## Task Guide
 
@@ -41,9 +41,11 @@
 | veronex | local build | **3001**->3000 | Rust API server |
 | veronex-analytics | local build | internal 3003 | Analytics (OTel write + ClickHouse read) |
 | veronex-web | local build | 3002 | Next.js admin dashboard |
+| veronex-agent | local build | none (push-only) | OTLP push collector (node-exporter + Ollama → OTel Collector) |
 | otel-collector | docker/otel/Dockerfile | 4317, 4318, 13133 | Metrics + traces + logs -> Redpanda |
 
 > Port offsets (+1): 5432->5433, 6379->6380, 3000->3001 (vergate/Gitea conflicts)
+> Image registry: `gitea.girok.dev/beegy-labs/*` (veronex, veronex-analytics, veronex-agent, veronex-web)
 
 ---
 
@@ -55,20 +57,19 @@ DATABASE_URL=postgres://veronex:veronex@localhost:5433/veronex
 VALKEY_URL=redis://localhost:6380/0   # DB index recommended when sharing Valkey
 OLLAMA_URL=http://localhost:11434
 GEMINI_API_KEY=<optional legacy>
-BOOTSTRAP_API_KEY=veronex-bootstrap-admin-key
 PORT=3000
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 JWT_SECRET=change-me-in-production
+GEMINI_ENCRYPTION_KEY=<64-char hex>  # REQUIRED (≥32 chars; 256-bit recommended) — encrypt Gemini API keys at rest; generate: openssl rand -hex 32
 # BOOTSTRAP_SUPER_USER=<username>     # optional: pre-seed super account
 # BOOTSTRAP_SUPER_PASS=<password>     # optional: omit for first-run setup flow
 CORS_ALLOWED_ORIGINS=*                # prod: "https://app.example.com,https://admin.example.com"
-S3_ENDPOINT=http://localhost:9010     # S3/MinIO (MANDATORY)
-S3_ACCESS_KEY=veronex
-S3_SECRET_KEY=veronex123
+S3_ENDPOINT=http://localhost:9010     # S3/MinIO (optional — omit to store messages in PostgreSQL only)
+S3_ACCESS_KEY=veronex                 # required when S3_ENDPOINT is set
+S3_SECRET_KEY=veronex123              # required when S3_ENDPOINT is set
 S3_BUCKET=veronex-messages
 S3_REGION=us-east-1
 CAPACITY_ANALYZER_OLLAMA_URL=http://localhost:11434
-OLLAMA_NUM_PARALLEL=1                # slot ceiling in capacity analyzer; must match Ollama StatefulSet env
 SESSION_GROUPING_INTERVAL_SECS=86400 # session grouping loop interval (default: 86400 = 24h)
 ANALYTICS_URL=http://localhost:3003
 ANALYTICS_SECRET=<shared-secret>
@@ -86,6 +87,12 @@ CLICKHOUSE_RETENTION_ANALYTICS_DAYS=90   # set before first `docker compose up`
 CLICKHOUSE_RETENTION_METRICS_DAYS=30
 CLICKHOUSE_RETENTION_AUDIT_DAYS=365
 
+# veronex-agent (OTLP push collector — no HTTP server)
+VERONEX_API_URL=http://veronex:3000      # target discovery endpoint
+OTEL_HTTP_ENDPOINT=http://otel-collector:4318
+SCRAPE_INTERVAL_MS=15000                 # scrape cycle interval (default: 15000)
+REPLICA_COUNT=1                          # total StatefulSet replicas (modulus sharding)
+
 # Next.js web (veronex-web)
 NEXT_PUBLIC_VERONEX_API_URL=http://localhost:3001
 NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
@@ -97,10 +104,14 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 
 | Key pattern | Purpose |
 |-------------|---------|
-| `veronex:queue:jobs:paid` | Paid-tier job queue (Lua priority pop, tried first) |
-| `veronex:queue:jobs` | Standard/free-tier job queue (polled second) |
-| `veronex:queue:jobs:test` | Test run queue (polled third) |
-| `veronex:queue:processing` | Processing list (BLMOVE destination for reliable queue) |
+| `veronex:queue:zset` | Unified ZSET priority queue (score = now_ms - tier_bonus) |
+| `veronex:queue:enqueue_at` | Side hash: job_id → enqueue_at_ms (for promote_overdue) |
+| `veronex:queue:model` | Side hash: job_id → model (for demand_resync) |
+| `veronex:demand:{model}` | Per-model demand counter (INCR on enqueue, DECR on dispatch/cancel) |
+| `veronex:queue:processing` | Processing list (RPUSH on Lua claim for reliable queue) |
+| `veronex:queue:jobs:paid` | (legacy, unused after Phase 3) |
+| `veronex:queue:jobs` | (legacy, unused after Phase 3) |
+| `veronex:queue:jobs:test` | (legacy, unused after Phase 3) |
 | `veronex:ratelimit:rpm:{key_id}` | API key RPM sorted set (sliding window) |
 | `veronex:ratelimit:tpm:{key_id}:{minute}` | API key TPM counter |
 | `veronex:gemini:rpm:{provider_id}:{model}:{minute}` | Gemini per-provider RPM |
@@ -110,7 +121,7 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 | `veronex:pwreset:{token}` | Password-reset token (TTL 24h) |
 | `veronex:refresh_used:{hash}` | Refresh token replay prevention |
 | `veronex:login_attempts:{ip}` | IP-based login attempt counter (5-min window) |
-| `veronex:throttle:{provider_id}` | Thermal Hard throttle (TTL 90s) |
+| `veronex:throttle:{provider_id}` | Thermal Hard throttle (TTL 360s) |
 | `veronex:hw:{provider_id}` | hw_metrics JSON (TTL ~60s) |
 | `veronex:heartbeat:{instance_id}` | Instance heartbeat (EX 30s, refreshed every 10s) |
 | `veronex:slots:{provider_id}:{model}` | Distributed slot counts HASH (`{instance_id}` → count, `__max__` → max) |
@@ -241,6 +252,7 @@ helm install veronex deploy/helm/veronex/ \
 | `veronex-deployment.yaml` | Deployment | API server, `envFrom` secretRef |
 | `veronex-analytics-deployment.yaml` | Deployment | ClickHouse analytics service |
 | `veronex-web-deployment.yaml` | Deployment | Next.js dashboard |
+| `veronex-agent-statefulset.yaml` | StatefulSet + headless Service | Agent (ordinal-based sharding) |
 | `otel-collector-deployment.yaml` | Deployment | OTel Collector (optional) |
 | `clickhouse-init-job.yaml` | Job (hook) | Applies ClickHouse schema on install/upgrade |
 | `secret.yaml` | Secret | Chart-managed (skipped when ESO/CSI/existing) |

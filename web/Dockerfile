@@ -1,7 +1,8 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 COPY . .
 
 ARG NEXT_PUBLIC_VERONEX_API_URL=http://localhost:3001
@@ -9,7 +10,8 @@ ARG NEXT_PUBLIC_VERONEX_ADMIN_KEY=
 ENV NEXT_PUBLIC_VERONEX_API_URL=$NEXT_PUBLIC_VERONEX_API_URL
 ENV NEXT_PUBLIC_VERONEX_ADMIN_KEY=$NEXT_PUBLIC_VERONEX_ADMIN_KEY
 
-RUN npm run build
+RUN --mount=type=cache,target=/app/.next/cache \
+    npm run build
 
 FROM node:22-alpine
 WORKDIR /app

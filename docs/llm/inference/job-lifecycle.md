@@ -1,6 +1,6 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-03-07
+> SSOT | **Last Updated**: 2026-03-11
 
 ## Task Guide
 
@@ -8,7 +8,7 @@
 |------|------|----------------|
 | Change job status flow | `domain/enums.rs` → `JobStatus` + all `match` arms in `use_cases/inference/runner.rs` | |
 | Add new DB column to inference_jobs | `migrations/` + `domain/entities/mod.rs` + `persistence/job_repository.rs` `save()` | |
-| Change queue keys or poll interval | `domain/constants.rs` → `QUEUE_JOBS*` constants + `use_cases/inference/dispatcher.rs` → `queue_dispatcher_loop()` | |
+| Change queue keys or scoring | `domain/constants.rs` → `QUEUE_ZSET`, `TIER_BONUS_*`, `LOCALITY_BONUS_MS` + `dispatcher.rs` → `queue_dispatcher_loop()` | |
 | Change how tokens are counted | `use_cases/inference/runner.rs` → `run_job()` token processing block (streaming loop) | |
 | Add field to job list/detail response | See `docs/llm/inference/job-api.md` | |
 | Export training data | See `docs/llm/inference/session-grouping.md` | |
@@ -56,42 +56,46 @@ Jobs carry a `source` field that records their origin:
 
 ---
 
-## Tiered-Queue Architecture
+## ZSET Priority Queue (Phase 3)
 
-Every inference route goes through the Valkey queue — **no direct-to-provider path exists**.
-Three queues in strict priority order (Lua priority pop tries paid → standard → test):
+Every inference route attempts Valkey ZSET queuing first. If Valkey is unavailable or returns an error (or when `VALKEY_URL` is not configured), the job falls back to `spawn_job_direct()` — a direct async task without queue ordering or retry. On the direct path, if VRAM is unavailable at dispatch time, the job is silently dropped (warning logged) with no re-enqueue.
+Single unified ZSET with tier-based scoring (lower score = higher priority):
 
 ```
-Priority  Queue key                    Who gets it
-────────  ───────────────────────────  ────────────────────────────────
-  HIGH    veronex:queue:jobs:paid      API key tier = "paid"
-  MED     veronex:queue:jobs           API key tier = "free" / standard
-  LOW     veronex:queue:jobs:test      Test Run (Bearer JWT, no API key)
+score = now_ms - tier_bonus
 
-queue_dispatcher_loop:
-  Lua LMOVE [paid, jobs, test] → processing list  — paid tried first
+Tier       Bonus (ms)   Effect
+────────   ──────────   ─────────────────────────
+paid       300,000      Highest priority (lowest score)
+standard   100,000      Default API key tier
+test       0            Lowest priority (Test Run / dashboard)
 ```
 
-- API routes (source=Api) enqueue to `:paid` or `:jobs` based on `key.tier`.
-- Test Run routes (source=Test) always enqueue to `:test`.
+Enqueue: Lua atomic (ZCARD guard + per-model demand guard + ZADD + INCR demand + HSET×2).
+Dispatch: ZRANGE peek top-K → Rust scoring (locality + age × perf_factor) → Lua claim (ZREM + RPUSH processing + DECR).
 
 Constants in `domain/constants.rs`:
 ```rust
-pub const QUEUE_JOBS_PAID: &str = "veronex:queue:jobs:paid";   // tier="paid"
-pub const QUEUE_JOBS:      &str = "veronex:queue:jobs";         // tier="free"/standard
-pub const QUEUE_JOBS_TEST: &str = "veronex:queue:jobs:test";    // source=Test
+pub const QUEUE_ZSET: &str = "veronex:queue:zset";
+pub const TIER_BONUS_PAID: u64 = 300_000;
+pub const TIER_BONUS_STANDARD: u64 = 100_000;
+pub const TIER_BONUS_TEST: u64 = 0;
+pub const LOCALITY_BONUS_MS: f64 = 20_000.0;  // loaded model preference
+pub const MAX_QUEUE_SIZE: u64 = 10_000;        // global hard cap → 429
+pub const MAX_QUEUE_PER_MODEL: u64 = 2_000;    // per-model cap → 429
 ```
 
-- `submit()` selects queue by `key_tier` (for Api source) or `source=Test`.
-- `recover_pending_jobs()` re-enqueues to the correct queue on startup.
-- On no-provider-available: job is LPUSH-ed back to its original queue (preserving priority).
+- `submit()` computes score from `key_tier` / `source` and calls `zset_enqueue()`.
+- `recover_pending_jobs()` re-enqueues to ZSET with emergency priority on startup.
+- On cancel: Lua atomic ZREM + DECR demand + HDEL side hashes.
+- On no-provider (VRAM blocked): job stays in ZSET (not removed), dispatcher retries next loop.
 
 ## Job Lifecycle
 
 ```
-Client → inference route → submit(prompt, model, provider_type, ...) → Pending → RPUSH → queue
+Client → inference route → submit(prompt, model, ...) → Pending → ZADD queue:zset (score=now_ms-tier_bonus)
 
-queue_dispatcher_loop (Lua priority pop paid/jobs/test → processing):
+queue_dispatcher_loop (ZRANGE peek → Rust scoring → Lua ZREM claim → processing list):
   → thermal + slot check → run_job() → stream_tokens()
   → Completed: latency_ms, ttft_ms, tokens, result_text, tool_calls_json saved
   → ObservabilityPort → veronex-analytics → OTel → Redpanda → ClickHouse
@@ -151,6 +155,7 @@ pub(crate) struct JobEntry {
     pub gemini_tier: Option<String>,
     pub key_tier: Option<KeyTier>,
     pub tpm_reservation_minute: Option<i64>, // minute bucket for TPM adjustment
+    pub assigned_provider_id: Option<Uuid>,  // dispatch 시점에 set (Hard drain cancel용)
 }
 ```
 

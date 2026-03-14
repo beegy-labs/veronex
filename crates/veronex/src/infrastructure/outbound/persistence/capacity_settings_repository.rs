@@ -61,6 +61,14 @@ impl CapacitySettingsRepository for PostgresCapacitySettingsRepository {
         probe_rate: Option<i32>,
     ) -> Result<CapacitySettings> {
         sqlx::query(
+            "INSERT INTO capacity_settings (id) VALUES (1)
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .execute(&self.pool)
+        .await
+        .context("failed to ensure capacity_settings row")?;
+
+        sqlx::query(
             "UPDATE capacity_settings SET
                  analyzer_model     = COALESCE($1, analyzer_model),
                  sync_enabled       = COALESCE($2, sync_enabled),

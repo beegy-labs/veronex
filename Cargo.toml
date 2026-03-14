@@ -2,9 +2,25 @@
 members = [
     "crates/veronex",
     "crates/veronex-analytics",
+    "crates/veronex-agent",
+    "workspace-hack",
 ]
 resolver = "2"
+
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 lto = true
 codegen-units = 1
+
+[profile.ci]
+inherits = "release"
+lto = "thin"
+codegen-units = 4
+incremental = false

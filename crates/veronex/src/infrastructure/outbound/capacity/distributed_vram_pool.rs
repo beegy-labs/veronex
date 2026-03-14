@@ -134,7 +134,7 @@ impl VramPoolPort for DistributedVramPool {
     fn try_reserve(&self, provider_id: Uuid, model: &str) -> Option<VramPermit> {
         // Local reserve for per-instance VRAM control (sync, O(1)).
         let local_permit = self.local.try_reserve(provider_id, model)?;
-        let (reserved_kv, active_count, kv_mb) = local_permit.into_parts()?;
+        let (reserved_kv, active_count, prov_active, kv_mb) = local_permit.into_parts()?;
 
         // Publish reservation to Valkey async.
         let vram_key = format!("veronex:vram_reserved:{provider_id}");
@@ -173,7 +173,7 @@ impl VramPoolPort for DistributedVramPool {
             }
         });
 
-        Some(VramPermit::combined(kv_mb, reserved_kv, active_count, release_tx))
+        Some(VramPermit::combined(kv_mb, reserved_kv, active_count, release_tx, prov_active))
     }
 
     fn total_vram_mb(&self, provider_id: Uuid) -> u32 {
@@ -216,6 +216,10 @@ impl VramPoolPort for DistributedVramPool {
         self.local.loaded_model_names(provider_id)
     }
 
+    fn is_model_loaded(&self, model: &str) -> bool {
+        self.local.is_model_loaded(model)
+    }
+
     fn set_max_concurrent(&self, provider_id: Uuid, model: &str, limit: u32) {
         self.local.set_max_concurrent(provider_id, model, limit);
     }
@@ -243,4 +247,127 @@ impl VramPoolPort for DistributedVramPool {
     fn set_probe_config(&self, permits: i32, rate: i32) {
         self.local.set_probe_config(permits, rate);
     }
+
+    // ── Phase 7: model state fields (delegated to local) ──────────────
+
+    fn is_preloading(&self, provider_id: Uuid, model: &str) -> bool {
+        self.local.is_preloading(provider_id, model)
+    }
+
+    fn set_preloading(&self, provider_id: Uuid, model: &str, value: bool) {
+        self.local.set_preloading(provider_id, model, value);
+    }
+
+    fn preload_fail_count(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.preload_fail_count(provider_id, model)
+    }
+
+    fn record_preload_failure(&self, provider_id: Uuid, model: &str) {
+        self.local.record_preload_failure(provider_id, model);
+    }
+
+    fn record_preload_success(&self, provider_id: Uuid, model: &str) {
+        self.local.record_preload_success(provider_id, model);
+    }
+
+    fn preload_failed_at(&self, provider_id: Uuid, model: &str) -> u64 {
+        self.local.preload_failed_at(provider_id, model)
+    }
+
+    fn is_preload_excluded(&self, provider_id: Uuid, model: &str) -> bool {
+        self.local.is_preload_excluded(provider_id, model)
+    }
+
+    fn is_pulling(&self, provider_id: Uuid, model: &str) -> bool {
+        self.local.is_pulling(provider_id, model)
+    }
+
+    fn set_pulling(&self, provider_id: Uuid, model: &str, value: bool) {
+        self.local.set_pulling(provider_id, model, value);
+    }
+
+    fn is_dispatch_blocked(&self, provider_id: Uuid, model: &str) -> bool {
+        self.local.is_dispatch_blocked(provider_id, model)
+    }
+
+    fn set_dispatch_blocked(&self, provider_id: Uuid, model: &str, value: bool) {
+        self.local.set_dispatch_blocked(provider_id, model, value);
+    }
+
+    fn pre_hard_max_concurrent(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.pre_hard_max_concurrent(provider_id, model)
+    }
+
+    fn set_pre_hard_max_concurrent(&self, provider_id: Uuid, model: &str, value: u32) {
+        self.local.set_pre_hard_max_concurrent(provider_id, model, value);
+    }
+
+    fn idle_since_secs(&self, provider_id: Uuid, model: &str) -> u64 {
+        self.local.idle_since_secs(provider_id, model)
+    }
+
+    fn set_standby(&self, provider_id: Uuid, value: bool) {
+        self.local.set_standby(provider_id, value);
+    }
+
+    fn is_standby(&self, provider_id: Uuid) -> bool {
+        self.local.is_standby(provider_id)
+    }
+
+    fn set_transition_until(&self, provider_id: Uuid, until_ms: u64) {
+        self.local.set_transition_until(provider_id, until_ms);
+    }
+
+    fn in_transition(&self, provider_id: Uuid) -> bool {
+        self.local.in_transition(provider_id)
+    }
+
+    fn governor_cap(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.governor_cap(provider_id, model)
+    }
+
+    fn set_governor_cap(&self, provider_id: Uuid, model: &str, cap: u32) {
+        self.local.set_governor_cap(provider_id, model, cap);
+    }
+
+    fn sum_loaded_max_concurrent(&self, provider_id: Uuid) -> u32 {
+        self.local.sum_loaded_max_concurrent(provider_id)
+    }
+
+    fn model_weight_mb(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.model_weight_mb(provider_id, model)
+    }
+
+    fn stable_cycle_count(&self, provider_id: Uuid, model: &str) -> u32 {
+        self.local.stable_cycle_count(provider_id, model)
+    }
+
+    fn increment_stable_cycle_count(&self, provider_id: Uuid, model: &str) {
+        self.local.increment_stable_cycle_count(provider_id, model);
+    }
+
+    fn reset_stable_cycle_count(&self, provider_id: Uuid, model: &str) {
+        self.local.reset_stable_cycle_count(provider_id, model);
+    }
+
+    fn last_mem_available_mb(&self, provider_id: Uuid) -> u32 {
+        self.local.last_mem_available_mb(provider_id)
+    }
+
+    fn set_last_mem_available_mb(&self, provider_id: Uuid, mb: u32) {
+        self.local.set_last_mem_available_mb(provider_id, mb);
+    }
+
+    fn safety_permil(&self, provider_id: Uuid) -> u32 {
+        self.local.safety_permil(provider_id)
+    }
+
+    fn set_safety_permil(&self, provider_id: Uuid, permil: u32) {
+        self.local.set_safety_permil(provider_id, permil);
+    }
+
+    fn decay_safety_permil(&self, provider_id: Uuid) {
+        self.local.decay_safety_permil(provider_id);
+    }
+
 }

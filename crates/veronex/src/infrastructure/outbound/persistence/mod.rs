@@ -38,3 +38,4 @@ pub mod ollama_model_repository;
 pub mod ollama_sync_job_repository;
 pub mod session_repository;
 pub mod ttl_cache;
+pub mod provider_vram_budget_repository;

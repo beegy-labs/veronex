@@ -42,6 +42,7 @@
 | `backend/rust-axum-shutdown.md` | Graceful shutdown, JoinSet, CancellationToken, BLPOP cancel | verified |
 | `backend/api-design.md` | REST design, versioning, OpenAPI 3.1, rate limit headers, pagination | verified |
 | `backend/rust-perf-2026.md` | mimalloc, LTO, streaming hash, enum as_str(), reserve | verified |
+| `backend/llm-scheduling-2026.md` | Multi-server LLM scheduling, bin packing, KV cache routing, queue demand sampling | research |
 
 ## Infrastructure (`infrastructure/`)
 
@@ -62,6 +63,7 @@
 
 | Need to implement... | Read |
 |----------------------|------|
+| Multi-server model scheduling / placement | `backend/llm-scheduling-2026.md` |
 | Animated particles / visualization | `frontend/css-animations.md` |
 | Complex UI state (reducers, cleanup) | `frontend/react.md` |
 | Polling / background data sync | `frontend/data-fetching.md` |

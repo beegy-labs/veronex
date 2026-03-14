@@ -119,9 +119,19 @@ export function fmtPct(n: number): string {
   return `${Math.round(n)}%`
 }
 
-// ── Memory size formatter ─────────────────────────────────────────────────────
+// ── Memory size formatters ────────────────────────────────────────────────────
 
-/** Format megabytes as a short string. Example: 2048 → "2.0 GB", 512 → "512 MB", 0 → "—" */
+/**
+ * Format megabytes with binary prefix (GiB / MiB).
+ * Used in server metrics cells and provider modals.
+ * Example: 2048 → "2.0 GiB", 512 → "512 MiB"
+ */
+export function fmtMb(mb: number): string {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GiB`
+  return `${mb} MiB`
+}
+
+/** Format megabytes as a short string (decimal prefix). Example: 2048 → "2.0 GB", 512 → "512 MB", 0 → "—" */
 export function fmtMbShort(mb: number): string {
   if (mb === 0) return '—'
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`

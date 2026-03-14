@@ -1,20 +1,17 @@
 # SDD (Spec-Driven Development)
 
-> WHAT to build | Policy: `docs/llm/policies/sdd.md` (via agentic-dev-protocol)
+> WHAT to build | Policy: `vendor/agentic-dev-protocol/docs/llm/policies/sdd.md`
 
 ## Structure
 
 ```
-.specs/inferq/
+.specs/veronex/
+├── {feature}.md            # Spec (What to build)
 ├── roadmap.md              # L1: Master direction (planning only)
 ├── scopes/                 # L2: Active scope
-│   └── 2026-Q1.md
+│   └── {scope}.md
 ├── tasks/                  # L3: Detailed tasks (LLM executes)
-│   └── 2026-Q1/
-│       ├── index.md
-│       └── *.md
-├── references/             # Best practices & research
-│   └── best-practices.md
+│   └── {scope}.md
 └── history/                # Completed scopes
 ```
 
@@ -23,5 +20,5 @@
 | Situation | Load | Skip |
 |-----------|------|------|
 | Planning | `roadmap.md` | scopes, tasks, history |
-| Work start | `scopes/2026-Q1.md` + `tasks/2026-Q1/index.md` | roadmap, history |
-| Working | `tasks/2026-Q1/*.md` | everything else |
+| Work start | `scopes/{scope}.md` + `tasks/{scope}.md` | roadmap, history |
+| Working | `tasks/{scope}.md` | everything else |

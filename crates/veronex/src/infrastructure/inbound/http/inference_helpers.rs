@@ -149,61 +149,23 @@ pub fn build_sse_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
+    /// Concrete examples kept as documentation.
     #[test]
-    fn validate_model_name_rejects_empty() {
+    fn validate_model_name_examples() {
         assert!(validate_model_name("").is_err());
-    }
-
-    #[test]
-    fn validate_model_name_accepts_normal() {
         assert!(validate_model_name("llama3.2:latest").is_ok());
     }
 
     #[test]
-    fn validate_model_name_rejects_too_long() {
-        let long = "a".repeat(MAX_MODEL_NAME_BYTES + 1);
-        assert!(validate_model_name(&long).is_err());
-    }
-
-    #[test]
-    fn validate_content_length_accepts_under_limit() {
-        assert!(validate_content_length(1000).is_ok());
-    }
-
-    #[test]
-    fn validate_content_length_rejects_over_limit() {
-        assert!(validate_content_length(MAX_PROMPT_BYTES + 1).is_err());
-    }
-
-    #[test]
-    fn validate_tool_call_accepts_valid() {
-        let call = serde_json::json!({"function": {"name": "get_weather", "arguments": {}}});
-        assert!(validate_tool_call(&call));
-    }
-
-    #[test]
-    fn validate_tool_call_rejects_missing_function() {
-        let call = serde_json::json!({"name": "get_weather"});
-        assert!(!validate_tool_call(&call));
-    }
-
-    #[test]
-    fn validate_tool_call_rejects_empty_name() {
-        let call = serde_json::json!({"function": {"name": "", "arguments": {}}});
-        assert!(!validate_tool_call(&call));
-    }
-
-    #[test]
-    fn validate_tool_call_rejects_control_chars() {
-        let call = serde_json::json!({"function": {"name": "get\nweather", "arguments": {}}});
-        assert!(!validate_tool_call(&call));
-    }
-
-    #[test]
-    fn validate_tool_call_accepts_dotted_name() {
-        let call = serde_json::json!({"function": {"name": "tools.weather:get-forecast", "arguments": {}}});
-        assert!(validate_tool_call(&call));
+    fn validate_tool_call_examples() {
+        let valid = serde_json::json!({"function": {"name": "get_weather", "arguments": {}}});
+        assert!(validate_tool_call(&valid));
+        let dotted = serde_json::json!({"function": {"name": "tools.weather:get-forecast", "arguments": {}}});
+        assert!(validate_tool_call(&dotted));
+        let missing = serde_json::json!({"name": "get_weather"});
+        assert!(!validate_tool_call(&missing));
     }
 
     #[test]
@@ -220,5 +182,49 @@ mod tests {
     fn extract_last_user_prompt_fallback() {
         let msgs = vec![serde_json::json!({"role": "system", "content": "sys"})];
         assert_eq!(extract_last_user_prompt(&msgs), "chat");
+    }
+
+    proptest! {
+        #[test]
+        fn validate_model_name_within_limit_accepted(
+            name in "[a-zA-Z0-9.:_-]{1,256}"
+        ) {
+            prop_assert!(validate_model_name(&name).is_ok());
+        }
+
+        #[test]
+        fn validate_model_name_over_limit_rejected(extra in 1usize..500) {
+            let name = "a".repeat(MAX_MODEL_NAME_BYTES + extra);
+            prop_assert!(validate_model_name(&name).is_err());
+        }
+
+        #[test]
+        fn validate_content_length_boundary(size in 0usize..=MAX_PROMPT_BYTES) {
+            prop_assert!(validate_content_length(size).is_ok());
+        }
+
+        #[test]
+        fn validate_content_length_over_limit_rejected(extra in 1usize..10000) {
+            prop_assert!(validate_content_length(MAX_PROMPT_BYTES + extra).is_err());
+        }
+
+        #[test]
+        fn validate_tool_call_safe_names_accepted(
+            name in "[a-zA-Z][a-zA-Z0-9_.:_-]{0,50}"
+        ) {
+            let call = serde_json::json!({"function": {"name": name, "arguments": {}}});
+            prop_assert!(validate_tool_call(&call));
+        }
+
+        #[test]
+        fn validate_tool_call_control_chars_rejected(
+            prefix in "[a-z]{1,5}",
+            bad in "[\x00-\x1f]",
+            suffix in "[a-z]{0,5}",
+        ) {
+            let name = format!("{prefix}{bad}{suffix}");
+            let call = serde_json::json!({"function": {"name": name, "arguments": {}}});
+            prop_assert!(!validate_tool_call(&call));
+        }
     }
 }

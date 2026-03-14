@@ -3,19 +3,7 @@ extensions:
     endpoint: 0.0.0.0:13133
 
 receivers:
-  # Scrape node-exporter instances deployed alongside Ollama servers.
-  # Targets are fetched dynamically from veronex via Prometheus HTTP SD.
-  # Register node-exporter URLs in the veronex admin → Providers page.
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: node-exporter
-          scrape_interval: 30s
-          http_sd_configs:
-            - url: http://veronex:3000/v1/metrics/targets
-              refresh_interval: 30s
-
-  # OTLP receiver for application traces (veronex service).
+  # OTLP receiver for metrics (veronex-agent), traces, and logs.
   otlp:
     protocols:
       grpc:
@@ -36,7 +24,6 @@ processors:
 exporters:
   # Kafka/Redpanda exporters — Redpanda is the single message bus.
   # ClickHouse consumes these topics via Kafka Engine → Materialized View.
-  # Swap broker address to migrate to Kafka cluster (zero code changes).
   kafka/metrics:
     brokers: [redpanda:9092]
     topic: otel-metrics
@@ -84,7 +71,7 @@ service:
   extensions: [health_check]
   pipelines:
     metrics:
-      receivers: [prometheus]
+      receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [kafka/metrics]
     traces:
