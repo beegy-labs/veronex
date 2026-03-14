@@ -231,17 +231,19 @@ hdr "SDD §2: Tier Priority — paid vs standard (ZSET score ordering)"
 
 # paid: tier_bonus=300,000ms / standard: tier_bonus=100,000ms → paid score < standard score
 if [ -n "${API_KEY_PAID:-}" ] && [ -n "${API_KEY_STANDARD:-}" ]; then
-  PAID_JOB=$(curl -s --max-time 5 "$API/v1/inference" \
+  _TIER_PAID=$(mktemp); _TIER_STD=$(mktemp)
+  (curl -s --max-time 5 "$API/v1/inference" \
     -H "Authorization: Bearer $API_KEY_PAID" -H "Content-Type: application/json" \
     -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"tier paid\"}],\"max_tokens\":3,\"stream\":false}" \
-    2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || echo "") &
-  STD_JOB=$(curl -s --max-time 5 "$API/v1/inference" \
+    2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || true) > "$_TIER_PAID" &
+  (curl -s --max-time 5 "$API/v1/inference" \
     -H "Authorization: Bearer $API_KEY_STANDARD" -H "Content-Type: application/json" \
     -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"tier standard\"}],\"max_tokens\":3,\"stream\":false}" \
-    2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || echo "") &
+    2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || true) > "$_TIER_STD" &
   wait 2>/dev/null
-  PAID_JOB=$(echo "$PAID_JOB" | tr -d '\n')
-  STD_JOB=$(echo "$STD_JOB" | tr -d '\n')
+  PAID_JOB=$(tr -d '\n' < "$_TIER_PAID")
+  STD_JOB=$(tr -d '\n' < "$_TIER_STD")
+  rm -f "$_TIER_PAID" "$_TIER_STD"
 
   if [ -n "$PAID_JOB" ] && [ -n "$STD_JOB" ]; then
     PAID_SCORE=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$PAID_JOB" 2>/dev/null | tr -d ' \r\n' || echo "")

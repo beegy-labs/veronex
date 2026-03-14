@@ -79,8 +79,20 @@ for i in "${!PARALLEL_PIDS[@]}"; do
   fi
 done
 
+# ── Sequential post-parallel phase: SDD advanced tests ──────────────────────
+echo ""
+echo -e "${CYAN}${BOLD}[08] SDD Advanced: AIMD decrease, multi-model, scale-in/out, thermal${NC}"
+SDD_COUNTS="$COUNTS_FILE.08-sdd-advanced"
+: > "$SDD_COUNTS"
+if E2E_COUNTS_FILE="$SDD_COUNTS" bash "$E2E_DIR/08-sdd-advanced.sh"; then
+  true
+else
+  echo -e "${RED}[ERROR]${NC} 08-sdd-advanced.sh exited non-zero" >&2
+  PARALLEL_EXIT=1
+fi
+
 # ── Aggregate results ─────────────────────────────────────────────────────────
-ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}")
+ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}" "$SDD_COUNTS")
 TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
 for cf in "${ALL_COUNTS_FILES[@]}"; do
   [ -f "$cf" ] || continue
