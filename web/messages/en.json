@@ -344,7 +344,9 @@
       "modelSelectionDesc": "Enable only the models you want to route to this provider.",
       "enabledCount": "{{enabled}}/{{total}} enabled",
       "freeTier": "Free Tier",
-      "freeTierDesc": "Reserve this provider for free-tier API key requests."
+      "freeTierDesc": "Reserve this provider for free-tier API key requests.",
+      "noBackends": "No Ollama providers registered",
+      "noBackendsHint": "Add a local Ollama server to start routing inference."
     },
     "capacity": {
       "title": "Concurrency Control",
@@ -436,7 +438,9 @@
       "syncStatus": "Sync Status",
       "syncingStatus": "Syncing…",
       "statusSyncDone": "Status updated",
-      "noStatusResults": "No active Gemini providers registered."
+      "noStatusResults": "No active Gemini providers registered.",
+      "noBackends": "No Gemini providers registered",
+      "noBackendsHint": "Add a Gemini API key to start routing inference to Google cloud."
     },
     "healthcheck": "Healthcheck",
     "runHealthcheck": "Run health check",

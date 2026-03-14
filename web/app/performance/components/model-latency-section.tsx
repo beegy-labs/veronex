@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/table'
 import { DataTable } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
-import { PROVIDER_BADGE } from '@/lib/constants'
+import { PROVIDER_BADGE, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from '@/lib/constants'
 
 interface ModelPerfRow {
   model_name: string
@@ -75,8 +75,8 @@ export function ModelLatencySection({ models }: { models: ModelPerfRow[] }) {
                   <TableCell className="text-right">
                     {m.success_rate != null ? (
                       <span className={`text-sm font-semibold tabular-nums ${
-                        m.success_rate >= 90 ? 'text-status-success-fg'
-                          : m.success_rate >= 70 ? 'text-status-warning-fg'
+                        m.success_rate >= SUCCESS_RATE_GOOD ? 'text-status-success-fg'
+                          : m.success_rate >= SUCCESS_RATE_WARNING ? 'text-status-warning-fg'
                           : 'text-status-error-fg'
                       }`}>
                         {fmtPct(m.success_rate)}

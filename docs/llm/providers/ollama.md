@@ -47,7 +47,6 @@ pub struct LlmProvider {
   pub total_vram_mb: i64,               // 0 = unlimited
   pub gpu_index: Option<i16>,           // 0-based GPU index on host
   pub server_id: Option<Uuid>,          // FK -> gpu_servers (Gemini = NULL)
-  pub agent_url: Option<String>,        // deprecated, unused
   pub is_free_tier: bool,               // Gemini only
   pub status: LlmProviderStatus,        // Online | Offline | Degraded
   pub registered_at: DateTime<Utc>,
@@ -67,7 +66,6 @@ CREATE TABLE llm_providers (
   total_vram_mb     BIGINT       NOT NULL DEFAULT 0,
   gpu_index         SMALLINT,
   server_id         UUID REFERENCES gpu_servers(id) ON DELETE SET NULL,
-  agent_url         TEXT,                          -- deprecated, unused
   is_free_tier      BOOLEAN      NOT NULL DEFAULT false,
   status            VARCHAR(20)  NOT NULL DEFAULT 'offline',
   registered_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
@@ -363,10 +361,10 @@ ollama pull llama3.3:70b  (Ollama 서버에서 직접)
 
 ### Health Checker (health_checker.rs)
 - Interval: 30 seconds
-- Ollama: covered by sync loop
-- Gemini: `POST /v1beta/models/gemini-2.0-flash:generateContent` (minimal prompt)
+- Ollama only: `GET {url}/api/version` (timeout: `OLLAMA_HEALTH_CHECK_TIMEOUT` = 5s) → 200 (background auto-check)
+- Gemini: **not auto-checked** — `GET /v1beta/models?pageSize=1` + `x-goog-api-key` header, called only on manual sync or per-row healthcheck button
 - After hw_metrics load: `thermal.update(provider_id, temp_c)` → Normal/Soft/Hard
-  - Sets/removes `veronex:throttle:{provider_id}` in Valkey (TTL 90s)
+  - Sets/removes `veronex:throttle:{provider_id}` in Valkey (TTL 360s)
 
 ---
 

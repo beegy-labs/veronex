@@ -54,6 +54,41 @@ FROM (
     GROUP BY hour, api_key_id, tenant_id
 );
 
+-- OTel logs — unified event store for inference + audit events.
+-- Distinguish via LogAttributes['event.name']:
+--   'inference.completed' | 'audit.action'
+-- Populated by Kafka Engine MV below (veronex-analytics → OTLP → OTel Collector → Redpanda).
+CREATE TABLE IF NOT EXISTS otel_logs (
+    Timestamp          DateTime64(9),
+    TraceId            String,
+    SpanId             String,
+    SeverityText       LowCardinality(String),
+    SeverityNumber     Int32,
+    ServiceName        LowCardinality(String),
+    Body               String,
+    ResourceAttributes Map(LowCardinality(String), String),
+    LogAttributes      Map(LowCardinality(String), String)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(Timestamp)
+ORDER BY (ServiceName, Timestamp)
+TTL toDate(Timestamp) + INTERVAL __RETENTION_ANALYTICS_DAYS__ DAY;
+
+-- Audit events (DEPRECATED — superseded by otel_logs)
+CREATE TABLE IF NOT EXISTS audit_events (
+    event_time    DateTime64(3),
+    account_id    UUID,
+    account_name  LowCardinality(String),
+    action        LowCardinality(String),
+    resource_type LowCardinality(String),
+    resource_id   String,
+    resource_name String,
+    ip_address    String,
+    details       String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(event_time)
+ORDER BY (event_time, resource_type, resource_id)
+TTL toDate(event_time) + INTERVAL __RETENTION_AUDIT_DAYS__ DAY;
+
 -- ── Derived MVs: otel_logs → specialized tables ──────────────────────────────
 -- These MVs extract structured events from the unified otel_logs table
 -- into domain-specific MergeTree tables for efficient analytical queries.
@@ -91,35 +126,19 @@ SELECT
 FROM otel_logs
 WHERE LogAttributes['event.name'] = 'audit.action';
 
--- OTel metrics gauge — populated by Kafka Engine MV below
+-- OTel metrics gauge — lean schema, only columns used by queries.
+-- Populated by Kafka Engine MV below.
+-- Agent sends: metric_name, value, server_id (resource attr), attributes (per-metric labels).
 CREATE TABLE IF NOT EXISTS otel_metrics_gauge (
-    ResourceAttributes      Map(LowCardinality(String), String),
-    ResourceSchemaUrl       String,
-    ScopeName               LowCardinality(String),
-    ScopeVersion            String,
-    ScopeAttributes         Map(LowCardinality(String), String),
-    ScopeDroppedAttrCount   UInt32,
-    ScopeSchemaUrl          String,
-    ServiceName             LowCardinality(String),
-    MetricName              LowCardinality(String),
-    MetricDescription       String,
-    MetricUnit              String,
-    Attributes              Map(LowCardinality(String), String),
-    StartTimeUnix           DateTime64(9),
-    TimeUnix                DateTime64(9),
-    Value                   Float64,
-    Flags                   UInt32,
-    Exemplars Nested (
-        FilteredAttributes  Map(LowCardinality(String), String),
-        TimeUnix            DateTime64(9),
-        Value               Float64,
-        SpanId              String,
-        TraceId             String
-    )
+    ts           DateTime64(9),
+    server_id    LowCardinality(String),
+    metric_name  LowCardinality(String),
+    value        Float64,
+    attributes   Map(LowCardinality(String), String)
 ) ENGINE = MergeTree()
-PARTITION BY toDate(TimeUnix)
-ORDER BY (MetricName, TimeUnix)
-TTL toDate(TimeUnix) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
+PARTITION BY toDate(ts)
+ORDER BY (metric_name, server_id, ts)
+TTL toDate(ts) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
 
 -- OTel traces raw — populated by Kafka Engine MV below
 CREATE TABLE IF NOT EXISTS otel_traces_raw (
@@ -130,66 +149,14 @@ PARTITION BY toYYYYMM(received_at)
 ORDER BY received_at
 TTL toDate(received_at) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
 
--- OTel logs — unified event store for inference + audit events.
--- Distinguish via LogAttributes['event.name']:
---   'inference.completed' | 'audit.action'
--- Populated by Kafka Engine MV below (veronex-analytics → OTLP → OTel Collector → Redpanda).
-CREATE TABLE IF NOT EXISTS otel_logs (
-    Timestamp          DateTime64(9),
-    TraceId            String,
-    SpanId             String,
-    SeverityText       LowCardinality(String),
-    SeverityNumber     Int32,
-    ServiceName        LowCardinality(String),
-    Body               String,
-    ResourceAttributes Map(LowCardinality(String), String),
-    LogAttributes      Map(LowCardinality(String), String)
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(Timestamp)
-ORDER BY (ServiceName, Timestamp)
-TTL toDate(Timestamp) + INTERVAL __RETENTION_ANALYTICS_DAYS__ DAY;
-
--- Audit events (DEPRECATED — superseded by otel_logs)
-CREATE TABLE IF NOT EXISTS audit_events (
-    event_time    DateTime64(3),
-    account_id    UUID,
-    account_name  LowCardinality(String),
-    action        LowCardinality(String),
-    resource_type LowCardinality(String),
-    resource_id   String,
-    resource_name String,
-    ip_address    String,
-    details       String
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(event_time)
-ORDER BY (event_time, resource_type, resource_id)
-TTL toDate(event_time) + INTERVAL __RETENTION_AUDIT_DAYS__ DAY;
-
--- node-exporter curated metrics (dashboard queries)
-CREATE TABLE IF NOT EXISTS node_metrics (
-    ts              DateTime64(3),
-    instance        LowCardinality(String),
-    gpu_index       UInt8,
-    gpu_vram_used_bytes   UInt64,
-    gpu_vram_total_bytes  UInt64,
-    gpu_util_ratio        Float32,
-    gpu_temp_celsius      Float32,
-    gpu_power_watts       Float32,
-    mem_total_bytes       UInt64,
-    mem_available_bytes   UInt64
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(ts)
-ORDER BY (instance, gpu_index, ts)
-TTL toDate(ts) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
-
 -- ── Kafka Engine tables + Materialized Views ───────────────────────────────────
 -- Pipeline:
---   veronex-analytics → OTel OTLP HTTP → OTel Collector → Redpanda [otel-logs]
---                                                         → kafka_otel_logs_mv → otel_logs
---   OTel Collector (prometheus) → Redpanda [otel-metrics]
---                                 → kafka_otel_metrics_mv → otel_metrics_gauge
---   OTel Collector (otlp)       → Redpanda [otel-traces]
---                                 → kafka_otel_traces_mv  → otel_traces_raw
+--   veronex-analytics → OTel OTLP → OTel Collector → Redpanda [otel-logs]
+--                                                     → kafka_otel_logs_mv → otel_logs
+--   veronex-agent → OTel Collector (otlp) → Redpanda [otel-metrics]
+--                                           → kafka_otel_metrics_mv → otel_metrics_gauge
+--   OTel Collector (otlp) → Redpanda [otel-traces]
+--                           → kafka_otel_traces_mv  → otel_traces_raw
 
 -- otel-logs → otel_logs
 -- OTLP JSON: { "resourceLogs": [{ "resource": {...}, "scopeLogs": [{ "logRecords": [...] }] }] }
@@ -199,7 +166,7 @@ CREATE TABLE IF NOT EXISTS kafka_otel_logs (
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list          = '__KAFKA_BROKER__',
-    kafka_topic_list           = 'otel.audit.logs',
+    kafka_topic_list           = 'otel-logs',
     kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-logs',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
@@ -267,7 +234,7 @@ CREATE TABLE IF NOT EXISTS kafka_otel_metrics (
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list          = '__KAFKA_BROKER__',
-    kafka_topic_list           = 'otel.audit.metrics',
+    kafka_topic_list           = 'otel-metrics',
     kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-metrics',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,
@@ -280,26 +247,12 @@ SETTINGS
 CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_metrics_mv
 TO otel_metrics_gauge AS
 SELECT
-    CAST(
-        arrayMap(
-            x -> (
-                JSONExtractString(x, 'key'),
-                JSONExtractString(JSONExtractRaw(x, 'value'), 'stringValue')
-            ),
-            JSONExtractArrayRaw(rm, 'resource.attributes')
-        ),
-        'Map(LowCardinality(String), String)'
-    ) AS ResourceAttributes,
-    '' AS ResourceSchemaUrl,
-    '' AS ScopeName,
-    '' AS ScopeVersion,
-    CAST(map(), 'Map(LowCardinality(String), String)') AS ScopeAttributes,
-    0  AS ScopeDroppedAttrCount,
-    '' AS ScopeSchemaUrl,
-    '' AS ServiceName,
-    JSONExtractString(metric, 'name')        AS MetricName,
-    JSONExtractString(metric, 'description') AS MetricDescription,
-    JSONExtractString(metric, 'unit')        AS MetricUnit,
+    fromUnixTimestamp64Nano(
+        toInt64OrZero(JSONExtractString(dp, 'timeUnixNano'))
+    ) AS ts,
+    ResAttrs['server_id'] AS server_id,
+    JSONExtractString(metric, 'name') AS metric_name,
+    JSONExtractFloat(dp, 'asDouble') AS value,
     CAST(
         arrayMap(
             x -> (
@@ -309,30 +262,31 @@ SELECT
             JSONExtractArrayRaw(dp, 'attributes')
         ),
         'Map(LowCardinality(String), String)'
-    ) AS Attributes,
-    fromUnixTimestamp64Nano(
-        toInt64OrZero(JSONExtractString(dp, 'startTimeUnixNano'))
-    ) AS StartTimeUnix,
-    fromUnixTimestamp64Nano(
-        toInt64OrZero(JSONExtractString(dp, 'timeUnixNano'))
-    ) AS TimeUnix,
-    JSONExtractFloat(dp, 'asDouble') AS Value,
-    0  AS Flags,
-    CAST([], 'Array(Map(LowCardinality(String), String))') AS `Exemplars.FilteredAttributes`,
-    CAST([], 'Array(DateTime64(9))')                       AS `Exemplars.TimeUnix`,
-    CAST([], 'Array(Float64)')                             AS `Exemplars.Value`,
-    CAST([], 'Array(String)')                              AS `Exemplars.SpanId`,
-    CAST([], 'Array(String)')                              AS `Exemplars.TraceId`
+    ) AS attributes
 FROM (
     SELECT
-        arrayJoin(JSONExtractArrayRaw(raw, 'resourceMetrics'))              AS rm,
-        arrayJoin(JSONExtractArrayRaw(rm, 'scopeMetrics'))                  AS sm,
-        arrayJoin(JSONExtractArrayRaw(sm, 'metrics'))                       AS metric,
-        arrayJoin(
-            JSONExtractArrayRaw(JSONExtractRaw(metric, 'gauge'), 'dataPoints')
-        ) AS dp
-    FROM kafka_otel_metrics
-    WHERE JSONHas(metric, 'gauge')
+        rm, metric, dp,
+        CAST(
+            arrayMap(
+                x -> (
+                    JSONExtractString(x, 'key'),
+                    JSONExtractString(JSONExtractRaw(x, 'value'), 'stringValue')
+                ),
+                JSONExtractArrayRaw(JSONExtractRaw(rm, 'resource'), 'attributes')
+            ),
+            'Map(LowCardinality(String), String)'
+        ) AS ResAttrs
+    FROM (
+        SELECT
+            arrayJoin(JSONExtractArrayRaw(raw, 'resourceMetrics'))              AS rm,
+            arrayJoin(JSONExtractArrayRaw(rm, 'scopeMetrics'))                  AS sm,
+            arrayJoin(JSONExtractArrayRaw(sm, 'metrics'))                       AS metric,
+            arrayJoin(
+                JSONExtractArrayRaw(JSONExtractRaw(metric, 'gauge'), 'dataPoints')
+            ) AS dp
+        FROM kafka_otel_metrics
+        WHERE JSONHas(metric, 'gauge')
+    )
 );
 
 -- otel-traces → otel_traces_raw
@@ -341,7 +295,7 @@ CREATE TABLE IF NOT EXISTS kafka_otel_traces (
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list          = '__KAFKA_BROKER__',
-    kafka_topic_list           = 'otel.audit.traces',
+    kafka_topic_list           = 'otel-traces',
     kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-traces',
     kafka_format               = 'JSONAsString',
     kafka_num_consumers        = 1,

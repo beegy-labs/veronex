@@ -28,4 +28,6 @@ pub(crate) struct JobEntry {
     pub gemini_tier: Option<String>,
     pub key_tier: Option<KeyTier>,
     pub tpm_reservation_minute: Option<i64>,
+    /// Provider this job was dispatched to (set at dispatch time, used for Hard drain cancel).
+    pub assigned_provider_id: Option<Uuid>,
 }

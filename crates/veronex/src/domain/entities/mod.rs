@@ -118,6 +118,11 @@ pub struct InferenceJob {
     /// Empty string = first turn (no parent). Used to link child → parent in a session.
     #[serde(default)]
     pub messages_prefix_hash: Option<String>,
+    /// Machine-readable failure cause (G16). Set when status=Failed.
+    /// Values: queue_full, no_eligible_provider, thermal_hard_gate, drain_forced,
+    ///         queue_wait_exceeded, provider_error, token_budget_exceeded
+    #[serde(default)]
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,16 +172,20 @@ pub struct LlmProvider {
     /// FK → gpu_servers. `None` for cloud providers (Gemini, etc.).
     #[serde(default)]
     pub server_id: Option<Uuid>,
-    /// node-exporter URL for hardware metrics polling.
-    /// e.g. `http://192.168.1.10:9100`
-    #[serde(default)]
-    pub agent_url: Option<String>,
     /// true = key is on a Google free-tier project.
     /// RPM/RPD limits are read from `gemini_rate_limit_policies` (per model, shared).
     #[serde(default)]
     pub is_free_tier: bool,
+    /// Maximum parallel requests per Ollama num_parallel setting.
+    /// Used as AIMD upper bound. Default 4.
+    #[serde(default = "default_num_parallel")]
+    pub num_parallel: i16,
     pub status: LlmProviderStatus,
     pub registered_at: DateTime<Utc>,
+}
+
+fn default_num_parallel() -> i16 {
+    4
 }
 
 /// Per-model Gemini rate limit policy (shared across all free-tier providers).
@@ -235,6 +244,7 @@ mod tests {
             tool_calls_json: None,
             messages_hash: None,
             messages_prefix_hash: None,
+            failure_reason: None,
         }
     }
 
@@ -249,8 +259,8 @@ mod tests {
             total_vram_mb: 24576,
             gpu_index: None,
             server_id: None,
-            agent_url: None,
             is_free_tier: false,
+            num_parallel: 4,
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),
         }
@@ -313,6 +323,7 @@ mod tests {
             tool_calls_json: None,
             messages_hash: None,
             messages_prefix_hash: None,
+            failure_reason: None,
             tools: None,
         };
         assert_eq!(job.status, JobStatus::Failed);

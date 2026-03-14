@@ -19,6 +19,7 @@ use veronex::application::ports::outbound::observability_port::ObservabilityPort
 use veronex::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use veronex::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository;
 use veronex::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
+use veronex::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository;
 use veronex::application::ports::outbound::session_repository::SessionRepository;
 use veronex::infrastructure::outbound::analytics::HttpAnalyticsClient;
 use veronex::infrastructure::outbound::capacity::vram_pool::VramPool;
@@ -40,6 +41,7 @@ use veronex::infrastructure::outbound::persistence::ollama_model_repository::Pos
 use veronex::infrastructure::outbound::persistence::ollama_sync_job_repository::PostgresOllamaSyncJobRepository;
 use veronex::infrastructure::outbound::persistence::provider_model_selection::PostgresProviderModelSelectionRepository;
 use veronex::infrastructure::outbound::persistence::provider_registry::PostgresProviderRegistry;
+use veronex::infrastructure::outbound::persistence::provider_vram_budget_repository::PostgresProviderVramBudgetRepository;
 use veronex::infrastructure::outbound::persistence::session_repository::PostgresSessionRepository;
 use veronex::infrastructure::outbound::s3::message_store::S3MessageStore;
 use veronex::infrastructure::outbound::valkey_adapter::ValkeyAdapter;
@@ -71,6 +73,7 @@ pub struct Repositories {
     pub model_manager: Option<Arc<dyn ModelManagerPort>>,
     pub vram_pool: Arc<dyn VramPoolPort>,
     pub message_store: Option<Arc<dyn MessageStore>>,
+    pub vram_budget_repo: Arc<dyn ProviderVramBudgetRepository>,
 }
 
 /// Wire all repositories from database pools and configuration.
@@ -258,6 +261,9 @@ pub async fn wire_repositories(
         }
     }
 
+    let vram_budget_repo: Arc<dyn ProviderVramBudgetRepository> =
+        Arc::new(PostgresProviderVramBudgetRepository::new(pg_pool.clone()));
+
     Ok(Repositories {
         account_repo,
         api_key_repo,
@@ -281,6 +287,7 @@ pub async fn wire_repositories(
         model_manager,
         vram_pool,
         message_store,
+        vram_budget_repo,
     })
 }
 

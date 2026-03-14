@@ -43,6 +43,23 @@ export const STALE_TIME_FAST = 29_000
 /** Refetch interval for near-realtime data. */
 export const REFETCH_INTERVAL_FAST = 30_000
 
+// ── Metric thresholds — SSOT for colour-coded health indicators ─────────────
+
+/** GPU temperature (°C): critical ≥ this value. */
+export const GPU_TEMP_CRITICAL = 85
+/** GPU temperature (°C): warning ≥ this value. */
+export const GPU_TEMP_WARNING = 70
+
+/** CPU / Memory usage (%): critical ≥ this value. */
+export const RESOURCE_CRITICAL = 90
+/** CPU / Memory usage (%): warning ≥ this value. */
+export const RESOURCE_WARNING = 75
+
+/** Success rate (%): values ≥ this are "good". */
+export const SUCCESS_RATE_GOOD = 90
+/** Success rate (%): values ≥ this (but < GOOD) are "warning". */
+export const SUCCESS_RATE_WARNING = 70
+
 /** Chat message role → Tailwind badge class. */
 export const ROLE_STYLES: Record<string, string> = {
   system:    'bg-muted text-muted-foreground border-border',
