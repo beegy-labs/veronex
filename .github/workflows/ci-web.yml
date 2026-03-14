@@ -136,7 +136,11 @@ jobs:
           git add -A
           git diff --cached --quiet && exit 0
           git commit -m "chore(veronex): update web image tag to ${{ needs.build.outputs.tag }}"
-          git push
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1
 
   cleanup:
     name: Cleanup Old Images
