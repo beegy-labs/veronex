@@ -46,10 +46,10 @@ jobs:
             || echo "[]")
 
           # Filter to matching env tags, sort by created desc, skip first KEEP, delete rest
-          echo "$PACKAGES" | python3 - <<'PYEOF'
+          PACKAGES_JSON="$PACKAGES" python3 <<'PYEOF'
           import json, os, sys, urllib.request, urllib.error
 
-          data   = json.load(sys.stdin)
+          data   = json.loads(os.environ.get("PACKAGES_JSON", "[]"))
           token  = os.environ["GITEA_TOKEN"]
           name   = os.environ["IMAGE_NAME"]
           branch = os.environ["BRANCH"]
