@@ -153,7 +153,7 @@ service:
 
 > ClickHouse exporter **removed** -- ClickHouse consumes via Kafka Engine only.
 > `otlp` receiver is shared by all three pipelines (metrics, traces, logs).
-> No `prometheus` receiver — agent handles external node-exporter scraping (K8s 외부 bare-metal 지원).
+> No `prometheus` receiver — agent handles external node-exporter scraping (supports bare-metal outside K8s).
 
 ---
 

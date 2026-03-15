@@ -155,10 +155,10 @@ SQL for PATCH: `COALESCE($3, api_key_encrypted)` preserves existing key when `ap
 
 ## Automatic Ollama Allocation — End-to-End Flow
 
-Ollama 프로바이더를 등록하면 모든 것이 자동으로 동작한다: 모델 동기화, VRAM 관리, 동시성 제한, throughput 학습.
-관리자는 프로바이더를 등록하고 서버를 연결하면 끝이다.
+Once an Ollama provider is registered, everything works automatically: model sync, VRAM management, concurrency limits, and throughput learning.
+Admins just register the provider and link a server — that's it.
 
-### 전체 라이프사이클
+### Full Lifecycle
 
 ```
 1. REGISTER     POST /v1/providers {name, provider_type: "ollama", url}
@@ -178,168 +178,168 @@ Ollama 프로바이더를 등록하면 모든 것이 자동으로 동작한다: 
                 → 3+ samples: AIMD adjusts max_concurrent
                 → 10+ samples: LLM batch recommends optimal allocation
 
-5. RESTART      Server restart → DB에서 학습 데이터 복원 → 즉시 적용
+5. RESTART      Server restart → restore learned data from DB → apply immediately
 ```
 
-### Phase 1: Provider 등록 → 자동 모델 발견
+### Phase 1: Provider Registration → Automatic Model Discovery
 
 ```
 POST /v1/providers {name: "gpu-server", provider_type: "ollama", url: "https://ollama.example.com"}
   │
   ├── health check: GET {url}/api/version
-  │   → online: status = "online", 모델 sync 가능
-  │   → offline: status = "offline", sync 건너뜀
+  │   → online: status = "online", model sync available
+  │   → offline: status = "offline", sync skipped
   │
   ├── model sync: GET {url}/api/tags
-  │   → ollama_models 테이블에 저장 (provider별)
-  │   → provider_selected_models에 기본 is_enabled=true로 등록
+  │   → saved to ollama_models table (per provider)
+  │   → registered in provider_selected_models with default is_enabled=true
   │   → Valkey cache: veronex:models:{provider_id} (TTL 30s)
   │
-  └── 서버 연결 (선택):
+  └── server link (optional):
       POST /v1/servers {name, node_exporter_url}
       PATCH /v1/providers/{id} {server_id, gpu_index: 0}
-      → node-exporter에서 GPU VRAM, 온도 수집 가능
+      → enables GPU VRAM and temperature collection from node-exporter
 ```
 
-### Phase 2: 요청 → Provider 선택 → 할당
+### Phase 2: Request → Provider Selection → Allocation
 
 ```
 POST /v1/chat/completions {model: "qwen3:8b", messages: [...]}
   │
-  ├── 1. API Key 인증 → account_id, tier (free/paid) 확인
+  ├── 1. API Key auth → verify account_id, tier (free/paid)
   │
-  ├── 2. Valkey 큐에 등록 (티어별 우선순위)
-  │     paid → veronex:queue:jobs:paid   (최우선)
-  │     free → veronex:queue:jobs        (표준)
-  │     test → veronex:queue:jobs:test   (최후순위)
+  ├── 2. Enqueue in Valkey (tier-based priority)
+  │     paid → veronex:queue:jobs:paid   (highest priority)
+  │     free → veronex:queue:jobs        (standard)
+  │     test → veronex:queue:jobs:test   (lowest priority)
   │
-  ├── 3. queue_dispatcher_loop가 Lua priority pop으로 꺼냄
+  ├── 3. queue_dispatcher_loop pops via Lua priority pop
   │
-  ├── 4. Provider 선택 (pick_best_provider)
-  │     a. active Ollama providers 목록
-  │     b. 모델 필터: ollama_models에서 해당 모델 보유한 provider만
-  │     c. 모델 선택 필터: provider_selected_models에서 enabled인 것만
-  │     d. VRAM 정렬: available VRAM 높은 순 (여러 서버 중 가장 여유 있는 서버)
-  │     e. 티어 정렬: paid key → non-free-tier 우선, free key → free-tier 우선
+  ├── 4. Provider selection (pick_best_provider)
+  │     a. List active Ollama providers
+  │     b. Model filter: only providers that have the model in ollama_models
+  │     c. Selection filter: only enabled entries in provider_selected_models
+  │     d. VRAM sort: highest available VRAM first (most headroom among servers)
+  │     e. Tier sort: paid key → non-free-tier first, free key → free-tier first
   │
-  ├── 5. Gate 통과 (순서대로)
-  │     a. Circuit Breaker: 연속 실패 provider 스킵
-  │     b. Thermal: ≥85°C Soft (active>0이면 스킵), ≥92°C Hard (완전 스킵)
-  │     c. Concurrency: max_concurrent 초과 → 블록 (cold start=1)
-  │     d. VRAM: vram_pool.try_reserve() → KV cache + (필요시 weight) 예약
+  ├── 5. Gate checks (in order)
+  │     a. Circuit Breaker: skip providers with consecutive failures
+  │     b. Thermal: ≥85°C Soft (skip if active>0), ≥92°C Hard (fully blocked)
+  │     c. Concurrency: block if exceeds max_concurrent (cold start=1)
+  │     d. VRAM: vram_pool.try_reserve() → reserve KV cache + (weight if needed)
   │
   ├── 6. Dispatch → Ollama API
   │     OllamaAdapter: POST {url}/api/chat (streaming)
-  │     model 미로드 시 Ollama가 자동 로드 (weight는 VRAM에 유지)
+  │     If model not loaded, Ollama auto-loads (weight stays in VRAM)
   │
-  └── 7. 완료 → 정리
-        Drop(VramPermit) → KV cache 반환, active_count -= 1
+  └── 7. Completion → Cleanup
+        Drop(VramPermit) → release KV cache, active_count -= 1
         circuit_breaker.on_success/on_failure
-        inference_jobs 테이블에 결과 저장
+        Save result to inference_jobs table
 ```
 
-### Phase 3: 자동 학습 — Cold Start → AIMD → LLM Batch
+### Phase 3: Automatic Learning — Cold Start → AIMD → LLM Batch
 
 ```
                      ┌─────────────────────────────────────────────────┐
                      │          Sync Loop (30s tick)                   │
                      │                                                 │
   ┌──────────┐       │  ┌─────────────┐   ┌─────────┐   ┌──────────┐ │
-  │ 프로바이더 │──────▶│  │ Cold Start  │──▶│  AIMD   │──▶│ LLM Batch│ │
-  │ 등록      │       │  │ limit = 1   │   │ ±조정   │   │ 최적 추천 │ │
-  │           │       │  │ (모든 모델)  │   │ (모델별) │   │ (전체 조합)│ │
+  │ Provider  │──────▶│  │ Cold Start  │──▶│  AIMD   │──▶│ LLM Batch│ │
+  │ Register  │       │  │ limit = 1   │   │ ±adjust │   │ optimal  │ │
+  │           │       │  │ (all models)│   │(per-model)│  │(all combos)│ │
   └──────────┘       │  └──────┬──────┘   └────┬────┘   └─────┬────┘ │
                      │         │               │              │       │
                      │    sample=0         sample≥3       sample≥10   │
-                     │    baseline=0       ratio 기반     LLM 분석     │
+                     │    baseline=0       ratio based    LLM analysis │
                      │                                                 │
                      │  ┌──────────────────────────────────────────┐   │
                      │  │ DB persist: model_vram_profiles          │   │
                      │  │  max_concurrent, baseline_tps            │   │
-                     │  │  → 서버 재시작 시 자동 복원               │   │
+                     │  │  → auto-restored on server restart       │   │
                      │  └──────────────────────────────────────────┘   │
                      └─────────────────────────────────────────────────┘
 ```
 
-| Phase | 조건 | max_concurrent | 동작 |
-|-------|------|---------------|------|
-| **Cold Start** | 새 모델, 데이터 없음 | 1 | 모델당 1건씩만. baseline 수집 |
-| **AIMD** | sample ≥ 3, baseline 있음 | 자동 조정 | ratio ≥ 0.9 → +1, < 0.7 → ×3/4 |
-| **LLM Batch** | 총 sample ≥ 10 | LLM 추천 | 모든 모델 조합 + VRAM + throughput 분석 |
+| Phase | Condition | max_concurrent | Behavior |
+|-------|-----------|---------------|----------|
+| **Cold Start** | New model, no data | 1 | 1 request per model. Collect baseline |
+| **AIMD** | sample ≥ 3, baseline exists | Auto-adjusted | ratio ≥ 0.9 → +1, < 0.7 → ×3/4 |
+| **LLM Batch** | total sample ≥ 10 | LLM recommended | All model combinations + VRAM + throughput analysis |
 
-### Phase 4: 멀티 서버 / 멀티 모델 자동 라우팅
+### Phase 4: Multi-Server / Multi-Model Automatic Routing
 
-여러 Ollama 서버를 등록하면 자동으로 최적 서버에 라우팅된다.
+Registering multiple Ollama servers enables automatic routing to the optimal server.
 
 ```
-예시: 3대 서버, 다양한 모델
+Example: 3 servers, various models
 
 Server A (128GB GPU)                    Server B (24GB GPU)          Server C (CPU only)
 ├── qwen3:72b (40GB)    limit=2        ├── qwen3:8b (5GB)  limit=4  ├── qwen3:1.7b  limit=3
 ├── deepseek-r1:70b (45GB) limit=1     └── phi4:14b (9GB)  limit=3  └── phi4-mini   limit=5
 └── available: 35GB                        available: 8GB
 
-요청: model=qwen3:8b
-  → Server B 선택 (모델 보유 + VRAM 여유)
-  → limit=4, active=2 → 허용
+Request: model=qwen3:8b
+  → Server B selected (has model + VRAM headroom)
+  → limit=4, active=2 → allowed
 
-요청: model=deepseek-r1:70b
-  → Server A 선택 (유일하게 보유)
-  → limit=1, active=1 → 큐 대기 (cold start 또는 AIMD 제한)
+Request: model=deepseek-r1:70b
+  → Server A selected (only server with model)
+  → limit=1, active=1 → queued (cold start or AIMD limit)
 
-요청: model=qwen3:1.7b
-  → Server C 선택 (모델 보유)
-  → VRAM=0 (CPU) → Ollama에 위임, concurrency gate만 적용
+Request: model=qwen3:1.7b
+  → Server C selected (has model)
+  → VRAM=0 (CPU) → delegated to Ollama, only concurrency gate applied
 ```
 
-**라우팅 우선순위**:
-1. 해당 모델을 보유한 provider만 후보
-2. model selection에서 enabled인 provider만
-3. VRAM 여유가 많은 provider 우선
-4. 동일 VRAM이면 paid tier key → non-free-tier provider 우선
-5. Thermal/Circuit Breaker 통과 필수
+**Routing priority**:
+1. Only providers that have the requested model are candidates
+2. Only providers with model enabled in model selection
+3. Prefer providers with more available VRAM
+4. On equal VRAM, paid tier key → non-free-tier provider first
+5. Must pass Thermal/Circuit Breaker gates
 
-### Phase 5: 새 모델 추가 시 동작
+### Phase 5: Adding a New Model
 
-Ollama에 새 모델을 pull하면 다음 sync에서 자동 감지된다.
+When a new model is pulled on Ollama, it is auto-detected on the next sync.
 
 ```
-ollama pull llama3.3:70b  (Ollama 서버에서 직접)
+ollama pull llama3.3:70b  (directly on the Ollama server)
   │
-  ├── 다음 sync (≤300s)
-  │   GET /api/tags → 새 모델 발견
-  │   → ollama_models 테이블에 자동 추가
-  │   → provider_selected_models에 is_enabled=true로 등록
+  ├── Next sync (≤300s)
+  │   GET /api/tags → new model discovered
+  │   → auto-added to ollama_models table
+  │   → registered in provider_selected_models with is_enabled=true
   │
-  ├── 첫 요청 도착
-  │   → try_reserve: max_concurrent=1 (cold start, 학습 데이터 없음)
-  │   → Ollama가 모델 자동 로드 → weight VRAM 점유
+  ├── First request arrives
+  │   → try_reserve: max_concurrent=1 (cold start, no learned data)
+  │   → Ollama auto-loads the model → weight occupies VRAM
   │
-  ├── 첫 sync with loaded model
-  │   → /api/ps에서 weight 측정 → model_vram_profiles에 저장
-  │   → /api/show에서 architecture 파싱 → KV cache 계산
-  │   → baseline_tps 설정 (첫 throughput 데이터)
+  ├── First sync with loaded model
+  │   → weight measured from /api/ps → saved to model_vram_profiles
+  │   → architecture parsed from /api/show → KV cache calculated
+  │   → baseline_tps set (first throughput data)
   │
-  └── 이후 자동 학습
-      → AIMD: sample ≥ 3부터 자동 조정
-      → LLM Batch: 총 sample ≥ 10부터 전체 모델 조합 분석
+  └── Subsequent automatic learning
+      → AIMD: auto-adjusts from sample ≥ 3
+      → LLM Batch: full model combination analysis from total sample ≥ 10
 ```
 
-**수동 개입이 필요한 경우**:
-- 특정 모델을 특정 provider에서 비활성화: `PATCH /v1/providers/{id}/selected-models/{model} {is_enabled: false}`
-- Probe 정책 변경: `PATCH /v1/dashboard/capacity/settings {probe_permits, probe_rate}`
-- 즉시 sync 트리거: `POST /v1/providers/sync`
+**Cases requiring manual intervention**:
+- Disable a specific model on a specific provider: `PATCH /v1/providers/{id}/selected-models/{model} {is_enabled: false}`
+- Change probe policy: `PATCH /v1/dashboard/capacity/settings {probe_permits, probe_rate}`
+- Trigger immediate sync: `POST /v1/providers/sync`
 
-### 설정 참조
+### Configuration Reference
 
-| 항목 | 기본값 | 위치 | 설명 |
-|------|--------|------|------|
-| sync_interval_secs | 300 | capacity_settings | 자동 sync 주기 |
-| sync_enabled | true | capacity_settings | 자동 sync ON/OFF |
-| analyzer_model | qwen2.5:3b | capacity_settings | LLM 분석용 모델 |
-| probe_permits | 1 | capacity_settings | +N(위로 탐색), -N(아래로 탐색), 0=비활성 |
-| probe_rate | 3 | capacity_settings | 매 N번 limit 도달 시 1회 probe |
-| CAPACITY_ANALYZER_OLLAMA_URL | (provider URL) | env | LLM 분석 호출 대상 (분리 가능) |
+| Setting | Default | Location | Description |
+|---------|---------|----------|-------------|
+| sync_interval_secs | 300 | capacity_settings | Auto sync interval |
+| sync_enabled | true | capacity_settings | Auto sync ON/OFF |
+| analyzer_model | qwen2.5:3b | capacity_settings | Model for LLM analysis |
+| probe_permits | 1 | capacity_settings | +N (probe up), -N (probe down), 0=disabled |
+| probe_rate | 3 | capacity_settings | 1 probe per N limit hits |
+| CAPACITY_ANALYZER_OLLAMA_URL | (provider URL) | env | LLM analysis target (can be separate) |
 
 ---
 
@@ -347,15 +347,15 @@ ollama pull llama3.3:70b  (Ollama 서버에서 직접)
 
 ### Sync Loop (run_sync_loop — analyzer.rs)
 - Tick: 30s, Cooldown: `capacity_settings.sync_interval_secs` (default 300s)
-- Manual trigger: `POST /v1/providers/sync` (cooldown 무시)
+- Manual trigger: `POST /v1/providers/sync` (ignores cooldown)
 - Per Ollama provider:
   1. `/api/version` → health check
   2. `/api/tags` → model sync (DB + Valkey cache)
-  3. `/api/ps` → loaded model weight 측정
-  4. `/api/show` → architecture 파싱 (hybrid Mamba+Attention 대응)
-  5. throughput stats (PG) → KV per request 계산
-  6. AIMD → max_concurrent 조정
-  7. LLM batch → 전체 모델 조합 분석 (sample ≥ 10)
+  3. `/api/ps` → loaded model weight measurement
+  4. `/api/show` → architecture parsing (hybrid Mamba+Attention support)
+  5. throughput stats (PG) → KV per request calculation
+  6. AIMD → max_concurrent adjustment
+  7. LLM batch → all-model combination analysis (sample ≥ 10)
   8. DB persist → model_vram_profiles
 - Gemini: not included (no VRAM concept)
 

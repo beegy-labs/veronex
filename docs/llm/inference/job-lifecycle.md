@@ -155,7 +155,7 @@ pub(crate) struct JobEntry {
     pub gemini_tier: Option<String>,
     pub key_tier: Option<KeyTier>,
     pub tpm_reservation_minute: Option<i64>, // minute bucket for TPM adjustment
-    pub assigned_provider_id: Option<Uuid>,  // dispatch 시점에 set (Hard drain cancel용)
+    pub assigned_provider_id: Option<Uuid>,  // set at dispatch time (for Hard drain cancel)
 }
 ```
 

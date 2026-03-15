@@ -1,5 +1,5 @@
 # Architecture
-> CDD Tier 1 — Hexagonal Architecture pointer (≤50 lines) | **Last Updated**: 2026-03-07
+> CDD Layer 1 — Hexagonal Architecture pointer (≤50 lines) | **Last Updated**: 2026-03-15
 
 ## Structure
 

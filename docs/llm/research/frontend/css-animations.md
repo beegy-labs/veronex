@@ -1,7 +1,7 @@
 # CSS Animations — 2026 Research
 
 > **Last Researched**: 2026-03-01 | **Source**: Web search + verified in production
-> **Status**: ✅ Verified — used in `provider-flow-panel.tsx`, `server-dispatch-panel.tsx`
+> **Status**: Verified — used in `provider-flow-panel.tsx`, `server-dispatch-panel.tsx`
 
 ---
 
@@ -9,11 +9,11 @@
 
 | | CSS Motion Path | SVG SMIL `animateMotion` |
 |--|----------------|--------------------------|
-| **GPU composited** | ✅ Yes — runs on compositor thread | ❌ No — main thread |
-| **Dynamic spawn** | ✅ CSS `animation` starts on mount | ⚠️ Requires `begin="indefinite"` + `beginElement()` |
-| **Cleanup** | ✅ `onAnimationEnd` event | ⚠️ `setTimeout` or SMIL `end` event |
-| **Browser support** | ✅ All modern browsers (2023+) | ⚠️ Firefox dropped full SMIL support |
-| **Tooling** | ✅ CSS devtools | ⚠️ Limited devtools support |
+| **GPU composited** | Yes — runs on compositor thread | No — main thread |
+| **Dynamic spawn** | Yes — CSS `animation` starts on mount | Caution — Requires `begin="indefinite"` + `beginElement()` |
+| **Cleanup** | Yes — `onAnimationEnd` event | Caution — `setTimeout` or SMIL `end` event |
+| **Browser support** | Yes — All modern browsers (2023+) | Caution — Firefox dropped full SMIL support |
+| **Tooling** | Yes — CSS devtools | Caution — Limited devtools support |
 
 **Recommendation**: Always use CSS `offset-path: path(...)` for particle/motion animations.
 

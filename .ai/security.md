@@ -1,6 +1,6 @@
 # Security
 
-> CDD Tier 1 — Security indicator | **Last Updated**: 2026-03-07
+> CDD Layer 1 — Security indicator | **Last Updated**: 2026-03-15
 
 ## Quick Navigation
 
