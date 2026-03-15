@@ -34,12 +34,36 @@ spec:
               value: {{ .Values.veronexAgent.scrapeIntervalMs | quote }}
             - name: REPLICA_COUNT
               value: {{ .Values.veronexAgent.replicaCount | quote }}
+            - name: HEALTH_PORT
+              value: {{ .Values.veronexAgent.healthPort | quote }}
             - name: RUST_LOG
               value: "info"
             {{- range $k, $v := .Values.veronexAgent.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.veronexAgent.healthPort }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: health
+            failureThreshold: 12
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            periodSeconds: 15
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: 30
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.veronexAgent.resources | nindent 12 }}
 {{- end }}

@@ -121,7 +121,6 @@ function CreateAccountModal({
   onClose: () => void
 }) {
   const { t } = useTranslation()
-  const qc = useQueryClient()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
@@ -131,14 +130,10 @@ function CreateAccountModal({
   const [position, setPosition] = useState('')
   const [created, setCreated] = useState<CreateAccountResponse | null>(null)
 
-  const mutation = useMutation({
-    mutationFn: () =>
-      api.createAccount({ username, password, name, email: email || undefined, role, department: department || undefined, position: position || undefined }),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['accounts'] })
-      setCreated(data)
-    },
-  })
+  const mutation = useApiMutation(
+    (_: void) => api.createAccount({ username, password, name, email: email || undefined, role, department: department || undefined, position: position || undefined }),
+    { invalidateKey: ['accounts'], onSuccess: (data) => setCreated(data) },
+  )
 
   function handleClose() {
     setUsername('')

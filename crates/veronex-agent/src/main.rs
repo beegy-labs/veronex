@@ -12,18 +12,21 @@
 /// Environment variables:
 ///   VERONEX_API_URL    — veronex API base URL (default: http://localhost:3000)
 ///   OTEL_HTTP_ENDPOINT — OTel Collector HTTP endpoint (default: http://localhost:4318)
-///   SCRAPE_INTERVAL_MS — milliseconds between scrape cycles (default: 15000)
+///   SCRAPE_INTERVAL_MS — milliseconds between scrape cycles (default: 60000)
 ///   REPLICA_COUNT      — total number of agent pods (default: 1)
+///   HEALTH_PORT        — health probe HTTP port (default: 9091)
 ///   RUST_LOG           — tracing filter (default: info)
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::Deserialize;
 use tokio::signal;
 use tokio::sync::Semaphore;
 
+mod health;
 mod otlp;
 mod scraper;
 mod shard;
@@ -41,6 +44,11 @@ struct Config {
     scrape_interval: Duration,
     ordinal: u32,
     replicas: u32,
+    health_port: u16,
+}
+
+fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
 impl Config {
@@ -50,19 +58,44 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:3000".into()),
             otel_endpoint: std::env::var("OTEL_HTTP_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:4318".into()),
-            scrape_interval: Duration::from_millis(
-                std::env::var("SCRAPE_INTERVAL_MS")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(15_000),
-            ),
+            scrape_interval: Duration::from_millis(parse_env("SCRAPE_INTERVAL_MS", 60_000)),
             ordinal: shard::ordinal_from_hostname(),
-            replicas: std::env::var("REPLICA_COUNT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1),
+            replicas: parse_env("REPLICA_COUNT", 1),
+            health_port: parse_env("HEALTH_PORT", 9091),
         }
     }
+}
+
+// ── Health state ────────────────────────────────────────────────────────────
+
+/// Shared health state between scrape loop and health HTTP server.
+pub struct HealthState {
+    pub started: AtomicBool,
+    pub ready: AtomicBool,
+    pub alive: AtomicBool,
+}
+
+impl HealthState {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            started: AtomicBool::new(false),
+            ready: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+        })
+    }
+}
+
+// ── Agent stats ─────────────────────────────────────────────────────────────
+
+struct CycleResult {
+    duration_secs: f64,
+    targets_scraped: usize,
+    gauges_collected: usize,
+    success: bool,
+}
+
+struct AgentStats {
+    scrape_errors: AtomicU64,
 }
 
 // ── Target discovery ─────────────────────────────────────────────────────────
@@ -77,10 +110,16 @@ async fn discover_targets(client: &reqwest::Client, api_url: &str) -> Vec<SdTarg
     let url = format!("{}/v1/metrics/targets", api_url.trim_end_matches('/'));
     match client.get(&url).timeout(DISCOVERY_TIMEOUT).send().await {
         Ok(resp) if resp.status().is_success() => {
-            resp.json::<Vec<SdTarget>>().await.unwrap_or_default()
+            match resp.json::<Vec<SdTarget>>().await {
+                Ok(targets) => targets,
+                Err(e) => {
+                    tracing::warn!(url = %url, "target discovery JSON parse failed: {e}");
+                    vec![]
+                }
+            }
         }
         Ok(resp) => {
-            tracing::debug!(status = %resp.status(), "target discovery returned non-success");
+            tracing::warn!(status = %resp.status(), "target discovery returned non-success");
             vec![]
         }
         Err(e) => {
@@ -103,9 +142,22 @@ async fn main() -> Result<()> {
 
     let config = Config::from_env();
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(DISCOVERY_TIMEOUT)
         .build()?;
     let scrape_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_SCRAPES));
+    let health = HealthState::new();
+    let stats = Arc::new(AgentStats {
+        scrape_errors: AtomicU64::new(0),
+    });
+
+    // Start health HTTP server
+    let health_clone = health.clone();
+    let health_port = config.health_port;
+    tokio::spawn(async move {
+        if let Err(e) = health::serve(health_port, health_clone).await {
+            tracing::error!("health server failed: {e}");
+        }
+    });
 
     tracing::info!(
         api = %config.veronex_api_url,
@@ -113,6 +165,7 @@ async fn main() -> Result<()> {
         ordinal = config.ordinal,
         replicas = config.replicas,
         interval_ms = config.scrape_interval.as_millis() as u64,
+        health_port = health_port,
         "veronex-agent started"
     );
 
@@ -121,15 +174,45 @@ async fn main() -> Result<()> {
             biased;
             _ = signal::ctrl_c() => {
                 tracing::info!("shutdown signal received");
+                health.alive.store(false, Ordering::Relaxed);
                 break;
             }
-            _ = scrape_cycle(&client, &config, &scrape_semaphore) => {}
+            result = scrape_cycle(&client, &config, &scrape_semaphore, &stats) => {
+                // Update health state
+                health.started.store(true, Ordering::Relaxed);
+                health.ready.store(result.success, Ordering::Relaxed);
+                if !result.success {
+                    stats.scrape_errors.fetch_add(1, Ordering::Relaxed);
+                }
+
+                // Push self-metrics
+                let self_gauges = agent_self_gauges(&stats, &result);
+                if !self_gauges.is_empty() {
+                    let self_labels: HashMap<String, String> =
+                        [("service.name".into(), "veronex-agent".into())].into();
+                    if let Err(e) = otlp::push_metrics(&client, &config.otel_endpoint, &self_labels, &self_gauges).await {
+                        tracing::debug!("self-metrics push failed: {e}");
+                    }
+                }
+            }
         }
         tokio::time::sleep(config.scrape_interval).await;
     }
 
     tracing::info!("veronex-agent stopped");
     Ok(())
+}
+
+// ── Self-metrics ────────────────────────────────────────────────────────────
+
+fn agent_self_gauges(stats: &AgentStats, cycle: &CycleResult) -> Vec<scraper::Gauge> {
+    vec![
+        scraper::Gauge { name: "veronex_agent_up".into(), value: 1.0, labels: vec![] },
+        scraper::Gauge { name: "veronex_agent_scrape_duration_seconds".into(), value: cycle.duration_secs, labels: vec![] },
+        scraper::Gauge { name: "veronex_agent_scrape_targets_total".into(), value: cycle.targets_scraped as f64, labels: vec![] },
+        scraper::Gauge { name: "veronex_agent_gauges_collected_total".into(), value: cycle.gauges_collected as f64, labels: vec![] },
+        scraper::Gauge { name: "veronex_agent_scrape_errors_total".into(), value: stats.scrape_errors.load(Ordering::Relaxed) as f64, labels: vec![] },
+    ]
 }
 
 /// Shard key for a target — server_id for servers, provider_id for ollama.
@@ -141,11 +224,80 @@ fn shard_key(t: &SdTarget) -> &str {
     }
 }
 
-async fn scrape_cycle(client: &reqwest::Client, config: &Config, semaphore: &Arc<Semaphore>) {
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn self_gauges_always_five() {
+        let stats = AgentStats { scrape_errors: AtomicU64::new(0) };
+        let cycle = CycleResult { duration_secs: 0.0, targets_scraped: 0, gauges_collected: 0, success: true };
+        let gauges = agent_self_gauges(&stats, &cycle);
+        assert_eq!(gauges.len(), 5);
+        let names: Vec<&str> = gauges.iter().map(|g| g.name.as_str()).collect();
+        assert!(names.contains(&"veronex_agent_up"));
+        assert!(names.contains(&"veronex_agent_scrape_duration_seconds"));
+        assert!(names.contains(&"veronex_agent_scrape_targets_total"));
+        assert!(names.contains(&"veronex_agent_gauges_collected_total"));
+        assert!(names.contains(&"veronex_agent_scrape_errors_total"));
+    }
+
+    proptest! {
+        /// Self-gauges reflect cycle values accurately for any input.
+        #[test]
+        fn self_gauges_reflect_values(
+            duration in 0.0_f64..1000.0,
+            targets in 0_usize..100,
+            collected in 0_usize..10000,
+            errors in 0_u64..1000,
+        ) {
+            let stats = AgentStats { scrape_errors: AtomicU64::new(errors) };
+            let cycle = CycleResult { duration_secs: duration, targets_scraped: targets, gauges_collected: collected, success: true };
+            let gauges = agent_self_gauges(&stats, &cycle);
+            let find = |name: &str| gauges.iter().find(|g| g.name == name).unwrap().value;
+
+            prop_assert_eq!(find("veronex_agent_up"), 1.0);
+            prop_assert!((find("veronex_agent_scrape_duration_seconds") - duration).abs() < f64::EPSILON);
+            prop_assert_eq!(find("veronex_agent_scrape_targets_total"), targets as f64);
+            prop_assert_eq!(find("veronex_agent_gauges_collected_total"), collected as f64);
+            prop_assert_eq!(find("veronex_agent_scrape_errors_total"), errors as f64);
+        }
+    }
+
+    #[test]
+    fn health_state_defaults() {
+        let state = HealthState::new();
+        assert!(!state.started.load(Ordering::Relaxed));
+        assert!(!state.ready.load(Ordering::Relaxed));
+        assert!(state.alive.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn health_state_transitions() {
+        let state = HealthState::new();
+        state.started.store(true, Ordering::Relaxed);
+        state.ready.store(true, Ordering::Relaxed);
+        assert!(state.started.load(Ordering::Relaxed));
+        assert!(state.ready.load(Ordering::Relaxed));
+        state.alive.store(false, Ordering::Relaxed);
+        assert!(!state.alive.load(Ordering::Relaxed));
+    }
+}
+
+async fn scrape_cycle(
+    client: &reqwest::Client,
+    config: &Config,
+    semaphore: &Arc<Semaphore>,
+    _stats: &Arc<AgentStats>,
+) -> CycleResult {
+    let start = Instant::now();
+
     let targets = discover_targets(client, &config.veronex_api_url).await;
     if targets.is_empty() {
         tracing::debug!("no targets discovered");
-        return;
+        return CycleResult { duration_secs: start.elapsed().as_secs_f64(), targets_scraped: 0, gauges_collected: 0, success: true };
     }
 
     let my_targets: Vec<_> = targets
@@ -154,8 +306,10 @@ async fn scrape_cycle(client: &reqwest::Client, config: &Config, semaphore: &Arc
         .collect();
 
     if my_targets.is_empty() {
-        return;
+        return CycleResult { duration_secs: start.elapsed().as_secs_f64(), targets_scraped: 0, gauges_collected: 0, success: true };
     }
+
+    let targets_scraped = my_targets.len();
 
     let futures: Vec<_> = my_targets
         .iter()
@@ -185,12 +339,24 @@ async fn scrape_cycle(client: &reqwest::Client, config: &Config, semaphore: &Arc
 
     let results = futures::future::join_all(futures).await;
 
+    let mut gauges_collected = 0;
+    let mut any_error = false;
+
     for (labels, metrics) in &results {
+        gauges_collected += metrics.len();
         if metrics.is_empty() {
             continue;
         }
         if let Err(e) = otlp::push_metrics(client, &config.otel_endpoint, labels, metrics).await {
             tracing::warn!(target = ?labels.get("type"), "OTLP push failed: {e}");
+            any_error = true;
         }
+    }
+
+    CycleResult {
+        duration_secs: start.elapsed().as_secs_f64(),
+        targets_scraped,
+        gauges_collected,
+        success: !any_error,
     }
 }

@@ -18,6 +18,15 @@ export const PROVIDER_COLORS: Record<string, string> = {
   gemini: 'var(--theme-status-info)',
 }
 
+/** Job status → chart/SVG colour (CSS variable). */
+export const JOB_STATUS_COLORS: Record<string, string> = {
+  completed: 'var(--theme-status-success)',
+  failed:    'var(--theme-status-error)',
+  running:   'var(--theme-status-info)',
+  cancelled: 'var(--theme-status-cancelled)',
+  pending:   'var(--theme-status-warning)',
+}
+
 /** Finish reason → chart colour. */
 export const FINISH_COLORS: Record<string, string> = {
   stop:      'var(--theme-status-success)',
@@ -34,6 +43,26 @@ export const FINISH_BG: Record<string, string> = {
   cancelled: 'bg-muted text-muted-foreground border-border',
 }
 
+// ── Image defaults ──────────────────────────────────────────────────────────
+
+/** Default max images per request (matches Rust LabSettings::default()). */
+export const DEFAULT_MAX_IMAGES = 4
+
+/** Upper bound for max_images_per_request setting. */
+export const MAX_IMAGES_LIMIT = 20
+
+/** Default max image base64 bytes (matches Rust LabSettings::default()). */
+export const DEFAULT_MAX_IMAGE_B64_BYTES = 2 * 1024 * 1024
+
+/** Max file size before compression (UX guard, not a security boundary). */
+export const MAX_FILE_BYTES = 10 * 1024 * 1024
+
+/** Delay (ms) before invalidating queries after a sync operation. */
+export const SYNC_INVALIDATE_DELAY_MS = 3000
+
+/** Duration (ms) to show copy-success feedback before resetting. */
+export const COPY_FEEDBACK_MS = 2000
+
 /** Stale time for data that changes infrequently (keys, usage, models). */
 export const STALE_TIME_SLOW = 59_000
 
@@ -42,6 +71,12 @@ export const STALE_TIME_FAST = 29_000
 
 /** Refetch interval for near-realtime data. */
 export const REFETCH_INTERVAL_FAST = 30_000
+
+/** Refetch interval for data that changes infrequently (keys, usage, models). */
+export const REFETCH_INTERVAL_SLOW = 60_000
+
+/** Refetch interval for historical data (power history, metric history). */
+export const REFETCH_INTERVAL_HISTORY = 5 * 60_000
 
 // ── Metric thresholds — SSOT for colour-coded health indicators ─────────────
 

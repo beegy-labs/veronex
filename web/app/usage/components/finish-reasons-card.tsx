@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DonutChart } from '@/components/donut-chart'
 import { useTranslation } from '@/i18n'
 import { FINISH_COLORS, FINISH_BG } from '@/lib/constants'
+import { calcPercentage } from '@/lib/utils'
 
 export function FinishReasonsCard({ data }: { data: AnalyticsStats }) {
   const { t } = useTranslation()
@@ -12,7 +13,7 @@ export function FinishReasonsCard({ data }: { data: AnalyticsStats }) {
   const donutData = data.finish_reasons.map((r) => ({
     name: r.reason,
     value: r.count,
-    pct: total > 0 ? Math.round((r.count / total) * 100) : 0,
+    pct: calcPercentage(r.count, total),
   }))
   if (donutData.length === 0) return null
 

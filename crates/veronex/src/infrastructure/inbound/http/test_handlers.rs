@@ -45,6 +45,8 @@ pub struct TestCompletionRequest {
     pub model: String,
     pub messages: Vec<TestChatMessage>,
     pub provider_type: Option<String>,
+    #[serde(default)]
+    pub images: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -82,6 +84,15 @@ pub async fn test_completions(
             .into_response();
     }
 
+    // Validate images against lab_settings
+    if req.images.is_some() {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        if let Some(msg) = super::inference_helpers::validate_images(&req.images, &lab) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": {"message": msg}}))).into_response();
+        }
+    }
+
     let (provider_type, gemini_tier) = match req.provider_type.as_deref().unwrap_or(PROVIDER_OLLAMA) {
         "gemini-free" => (ProviderType::Gemini, Some(GEMINI_TIER_FREE.to_string())),
         PROVIDER_GEMINI => (ProviderType::Gemini, None),
@@ -106,6 +117,7 @@ pub async fn test_completions(
             request_path: Some("/v1/test/completions".to_string()),
             conversation_id: None,
             key_tier: None,
+            images: req.images,
         })
         .await
     {
@@ -300,6 +312,7 @@ pub async fn test_ollama_chat(
             request_path: Some("/v1/test/api/chat".to_string()),
             conversation_id: None,
             key_tier: None,
+            images: None,
         })
         .await
     {
@@ -352,6 +365,7 @@ pub async fn test_ollama_generate(
             request_path: Some("/v1/test/api/generate".to_string()),
             conversation_id: None,
             key_tier: None,
+            images: None,
         })
         .await
     {
@@ -534,6 +548,7 @@ pub async fn test_gemini_request(
             request_path: Some("/v1/test/v1beta/models".to_string()),
             conversation_id: None,
             key_tier: None,
+            images: None,
         })
         .await
     {

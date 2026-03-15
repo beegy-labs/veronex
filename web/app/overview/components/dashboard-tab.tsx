@@ -16,22 +16,22 @@ import {
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
   AXIS_TICK, CURSOR_FILL,
-  fmtMs, fmtMsNullable, fmtCompact,
+  fmtMs, fmtMsNullable, fmtCompact, fmtTemp,
 } from '@/lib/chart-theme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtHourLabel } from '@/lib/date'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
+import { PROVIDER_GEMINI, GPU_TEMP_CRITICAL, GPU_TEMP_WARNING } from '@/lib/constants'
+import { getOllamaProviders, getGeminiProviders, successRateCls } from '@/lib/utils'
 import {
   RequestTrendSection, TopModelsSection, RecentJobsSection, TokenSummarySection,
 } from './dashboard-lower-sections'
 
 import {
   type ThermalLevel,
-  successRateCls, providerValueCls, pendingValueCls, latencyColor,
-  countByStatus,
+  providerValueCls, pendingValueCls, latencyColor,
   THERMAL_ROW_CLS, THERMAL_NAME_CLS,
   StatSkeleton, ProviderRow, ThermalBadge, ConnectionDot,
 } from './dashboard-helpers'
@@ -66,11 +66,8 @@ export function DashboardTab({
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   /* ── derived: providers ─────────────────────────────────── */
-  const LOCAL_TYPES = [PROVIDER_OLLAMA] as const
-  const localBs = providers?.filter(b => (LOCAL_TYPES as readonly string[]).includes(b.provider_type)) ?? []
-  const apiBs   = geminiEnabled
-    ? (providers?.filter(b => b.provider_type === PROVIDER_GEMINI) ?? [])
-    : []
+  const localBs = getOllamaProviders(providers)
+  const apiBs   = geminiEnabled ? getGeminiProviders(providers) : []
   // visibleBs = only providers that are currently shown (respects lab flags)
   const visibleBs = [...localBs, ...apiBs]
   const onlineAll = visibleBs.filter(b => b.status === 'online').length
@@ -84,8 +81,8 @@ export function DashboardTab({
       ? m!.gpus.reduce((max, g) => Math.max(max, g.temp_junction_c ?? g.temp_c ?? 0, g.temp_mem_c ?? 0), 0)
       : null
     const thermal: ThermalLevel = maxTemp == null ? 'unknown'
-      : maxTemp >= 90 ? 'critical'
-      : maxTemp >= 80 ? 'warning'
+      : maxTemp >= GPU_TEMP_CRITICAL ? 'critical'
+      : maxTemp >= GPU_TEMP_WARNING ? 'warning'
       : 'normal'
     return { id: s.id, name: s.name, connected, maxTemp, thermal }
   })
@@ -241,7 +238,7 @@ export function DashboardTab({
               >
                 <Thermometer className="h-3 w-3 flex-shrink-0" />
                 <span className="truncate max-w-[120px]">{s.name}</span>
-                {s.maxTemp != null && <span className="tabular-nums font-bold">{s.maxTemp.toFixed(0)}°C</span>}
+                {s.maxTemp != null && <span className="tabular-nums font-bold">{fmtTemp(s.maxTemp)}</span>}
                 <span className="opacity-70">
                   {s.thermal === 'critical' ? t('overview.tempCritical') : t('overview.tempWarning')}
                 </span>

@@ -56,7 +56,8 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/api/tags",        get(ollama_compat_handlers::list_local_models))
         .route("/api/version",     get(ollama_compat_handlers::version))
         .route("/api/ps",          get(ollama_compat_handlers::ps))
-        .route("/api/generate",    post(ollama_compat_handlers::generate))
+        .route("/api/generate",    post(ollama_compat_handlers::generate)
+            .layer(DefaultBodyLimit::max(super::constants::IMAGE_BODY_LIMIT)))
         .route("/api/chat",        post(ollama_compat_handlers::chat))
         .route("/api/show",        post(ollama_compat_handlers::show))
         .route("/api/embed",       post(ollama_compat_handlers::embed))
@@ -89,7 +90,8 @@ pub fn build_api_router() -> Router<AppState> {
 fn build_test_router() -> Router<AppState> {
     Router::new()
         // OpenAI-compat (web test panel)
-        .route("/v1/test/completions", post(test_handlers::test_completions))
+        .route("/v1/test/completions", post(test_handlers::test_completions)
+            .layer(DefaultBodyLimit::max(super::constants::IMAGE_BODY_LIMIT)))
         .route("/v1/test/jobs/{job_id}/stream", get(test_handlers::stream_test_job))
         // Ollama native test endpoints
         .route("/v1/test/api/chat", post(test_handlers::test_ollama_chat))

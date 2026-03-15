@@ -30,6 +30,8 @@ pub struct SubmitJobRequest {
     /// Billing tier of the API key: `Some(KeyTier::Paid)` routes to the high-priority queue.
     /// `None` or `Some(KeyTier::Free)` uses the standard queue.
     pub key_tier: Option<KeyTier>,
+    /// Base64 images for vision inference (/api/generate).
+    pub images: Option<Vec<String>>,
 }
 
 /// Inbound port for inference operations.

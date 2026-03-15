@@ -304,6 +304,8 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
 #[derive(Serialize)]
 pub struct LabSettingsResponse {
     pub gemini_function_calling: bool,
+    pub max_images_per_request: i32,
+    pub max_image_b64_bytes: i32,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -350,6 +352,8 @@ pub async fn get_dashboard_overview(
     let lab_settings = lab_res.unwrap_or_default();
     let lab = LabSettingsResponse {
         gemini_function_calling: lab_settings.gemini_function_calling,
+        max_images_per_request: lab_settings.max_images_per_request,
+        max_image_b64_bytes: lab_settings.max_image_b64_bytes,
         updated_at: lab_settings.updated_at,
     };
 
@@ -555,21 +559,16 @@ pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Re
 /// `GET /v1/dashboard/lab` — return current lab feature flags.
 pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     match state.lab_settings_repo.get().await {
-        Ok(s) => (
-            axum::http::StatusCode::OK,
-            Json(serde_json::json!({
-                "gemini_function_calling": s.gemini_function_calling,
-                "updated_at": s.updated_at,
-            })),
-        )
-            .into_response(),
+        Ok(s) => Json(LabSettingsResponse {
+            gemini_function_calling: s.gemini_function_calling,
+            max_images_per_request: s.max_images_per_request,
+            max_image_b64_bytes: s.max_image_b64_bytes,
+            updated_at: s.updated_at,
+        }).into_response(),
         Err(e) => {
             tracing::warn!("get_lab_settings: {e}");
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response()
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+             Json(serde_json::json!({"error": e.to_string()}))).into_response()
         }
     }
 }
@@ -577,6 +576,8 @@ pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::respo
 #[derive(serde::Deserialize)]
 pub struct PatchLabSettingsBody {
     pub gemini_function_calling: Option<bool>,
+    pub max_images_per_request: Option<i32>,
+    pub max_image_b64_bytes: Option<i32>,
 }
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
@@ -585,19 +586,21 @@ pub async fn patch_lab_settings(
     State(state): State<AppState>,
     Json(body): Json<PatchLabSettingsBody>,
 ) -> impl axum::response::IntoResponse {
-    match state.lab_settings_repo.update(body.gemini_function_calling).await {
+    match state.lab_settings_repo.update(
+        body.gemini_function_calling,
+        body.max_images_per_request,
+        body.max_image_b64_bytes,
+    ).await {
         Ok(s) => {
             emit_audit(&state, &claims, "update", "lab_settings", "lab_settings", "lab_settings",
-                &format!("Lab feature flags updated: gemini_function_calling={:?}",
-                    body.gemini_function_calling)).await;
-            (
-                axum::http::StatusCode::OK,
-                Json(serde_json::json!({
-                    "gemini_function_calling": s.gemini_function_calling,
-                    "updated_at": s.updated_at,
-                })),
-            )
-                .into_response()
+                &format!("Lab settings updated: gemini_function_calling={:?}, max_images={:?}",
+                    body.gemini_function_calling, body.max_images_per_request)).await;
+            Json(LabSettingsResponse {
+                gemini_function_calling: s.gemini_function_calling,
+                max_images_per_request: s.max_images_per_request,
+                max_image_b64_bytes: s.max_image_b64_bytes,
+                updated_at: s.updated_at,
+            }).into_response()
         }
         Err(e) => {
             tracing::warn!("patch_lab_settings: {e}");

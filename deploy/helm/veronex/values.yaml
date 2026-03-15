@@ -81,9 +81,10 @@ veronexAgent:
     tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 1
-  # Scrape interval in milliseconds. Recommended: 15000 (15s) for production,
-  # 5000 (5s) for real-time dashboards, 500 for sub-second debugging.
-  scrapeIntervalMs: "15000"
+  # Scrape interval in milliseconds. Thermal protection runs inside the agent,
+  # so 60s is sufficient for metric collection.
+  scrapeIntervalMs: "60000"
+  healthPort: 9091
   resources:
     requests:
       cpu: 50m
@@ -211,9 +212,11 @@ migrations:
     kafkaPassword: ""
     kafkaSecurityProtocol: SASL_PLAINTEXT
     kafkaSaslMechanism: SCRAM-SHA-512
-    retentionAnalyticsDays: 90
-    retentionMetricsDays: 30
-    retentionAuditDays: 365
+    retentionMetricsDays: 14
+    retentionLogsDays: 7
+    retentionInferenceDays: 90
+    retentionAuditDays: 90
+    retentionTracesDays: 7
 
 # ── ServiceAccount ───────────────────────────────────────────────────────────
 
