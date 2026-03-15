@@ -595,7 +595,12 @@
     "sourceFilter": "ソース",
     "sourceAll": "すべて",
     "sourceApi": "API",
-    "sourceTest": "テスト"
+    "sourceTest": "テスト",
+    "imageAttach": "画像を添付",
+    "imageRemove": "削除",
+    "imageCompressing": "圧縮中…",
+    "imageTooLarge": "画像が10MBを超えています",
+    "imageTooMany": "最大4枚まで (Ollama制限)"
   },
   "apiDocs": {
     "title": "APIドキュメント",

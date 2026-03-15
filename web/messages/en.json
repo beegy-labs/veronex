@@ -595,7 +595,12 @@
     "sourceFilter": "Source",
     "sourceAll": "All",
     "sourceApi": "API",
-    "sourceTest": "Test"
+    "sourceTest": "Test",
+    "imageAttach": "Attach images",
+    "imageRemove": "Remove",
+    "imageCompressing": "Compressing…",
+    "imageTooLarge": "Image exceeds 10 MB limit",
+    "imageTooMany": "Maximum 4 images (Ollama limit)"
   },
   "apiDocs": {
     "title": "API Documentation",

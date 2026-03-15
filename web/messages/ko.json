@@ -595,7 +595,12 @@
     "sourceFilter": "소스",
     "sourceAll": "전체",
     "sourceApi": "API",
-    "sourceTest": "테스트"
+    "sourceTest": "테스트",
+    "imageAttach": "이미지 첨부",
+    "imageRemove": "제거",
+    "imageCompressing": "압축 중…",
+    "imageTooLarge": "이미지가 10MB를 초과합니다",
+    "imageTooMany": "최대 4장까지 가능합니다 (Ollama 제한)"
   },
   "apiDocs": {
     "title": "API 문서",
