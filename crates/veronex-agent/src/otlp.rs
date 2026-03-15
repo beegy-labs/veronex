@@ -8,10 +8,10 @@ use serde_json::{json, Value};
 
 use crate::scraper::Gauge;
 
+const OTLP_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Push a batch of gauge metrics to the OTel Collector via OTLP HTTP.
-///
-/// Resource attributes are built from the target labels — type, server_id,
-/// provider_id, etc. are all forwarded so downstream can correlate.
+/// Retries once with 5s backoff on failure.
 pub async fn push_metrics(
     client: &reqwest::Client,
     otel_endpoint: &str,
@@ -65,17 +65,35 @@ pub async fn push_metrics(
         }]
     });
 
-    let resp = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await?;
+    for attempt in 0..2 {
+        let result = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("OTLP push failed: {status} — {body}");
+        match result {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_else(|_| "<unreadable>".into());
+                if attempt == 0 {
+                    tracing::debug!(status = %status, "OTLP push failed, retrying in 5s: {body}");
+                    tokio::time::sleep(OTLP_RETRY_BACKOFF).await;
+                } else {
+                    anyhow::bail!("OTLP push failed after retry: {status} — {body}");
+                }
+            }
+            Err(e) => {
+                if attempt == 0 {
+                    tracing::debug!("OTLP push error, retrying in 5s: {e}");
+                    tokio::time::sleep(OTLP_RETRY_BACKOFF).await;
+                } else {
+                    anyhow::bail!("OTLP push failed after retry: {e}");
+                }
+            }
+        }
     }
 
     Ok(())

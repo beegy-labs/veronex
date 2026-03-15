@@ -255,6 +255,7 @@ async fn stream_generate(
             request_path: Some(request_path),
             conversation_id,
             key_tier: Some(api_key.tier),
+            images: None,
         })
         .await
     {
@@ -345,6 +346,7 @@ async fn generate_content(
             request_path: Some(request_path),
             conversation_id,
             key_tier: Some(api_key.tier),
+            images: None,
         })
         .await
     {

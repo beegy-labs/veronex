@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS inference_logs (
     status            LowCardinality(String)
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(event_time)
-ORDER BY (api_key_id, event_time);
+ORDER BY (api_key_id, event_time)
+TTL toDate(event_time) + INTERVAL __RETENTION_INFERENCE_DAYS__ DAY;
 
 CREATE TABLE IF NOT EXISTS api_key_usage_hourly (
     hour              DateTime,
@@ -66,7 +67,7 @@ CREATE TABLE IF NOT EXISTS otel_logs (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(Timestamp)
 ORDER BY (ServiceName, Timestamp)
-TTL toDate(Timestamp) + INTERVAL __RETENTION_ANALYTICS_DAYS__ DAY;
+TTL toDate(Timestamp) + INTERVAL __RETENTION_LOGS_DAYS__ DAY;
 
 -- Audit events (DEPRECATED — superseded by otel_logs)
 CREATE TABLE IF NOT EXISTS audit_events (
@@ -136,7 +137,7 @@ CREATE TABLE IF NOT EXISTS otel_traces_raw (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(received_at)
 ORDER BY received_at
-TTL toDate(received_at) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
+TTL toDate(received_at) + INTERVAL __RETENTION_TRACES_DAYS__ DAY;
 
 -- ── Kafka Engine tables + Materialized Views ───────────────────────────────────
 

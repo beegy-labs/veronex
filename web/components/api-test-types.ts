@@ -15,6 +15,7 @@ export interface Run {
   status: StreamStatus
   text: string
   errorMsg: string
+  images?: string[]  // raw base64 (no data URL prefix)
 }
 
 export type RunAction =

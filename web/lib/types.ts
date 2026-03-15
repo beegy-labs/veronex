@@ -516,11 +516,15 @@ export interface PatchSyncSettings {
 
 export interface LabSettings {
   gemini_function_calling: boolean
+  max_images_per_request: number
+  max_image_b64_bytes: number
   updated_at: string
 }
 
 export interface PatchLabSettings {
   gemini_function_calling?: boolean
+  max_images_per_request?: number
+  max_image_b64_bytes?: number
 }
 
 /** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/capacity/queue/lab queries. */

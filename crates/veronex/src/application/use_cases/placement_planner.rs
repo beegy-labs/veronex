@@ -46,11 +46,11 @@ const PRELOAD_LOCK_TTL: i64 = 180;
 const SCALEOUT_DECISION_TTL: i64 = 30;
 
 fn preload_lock_key(model: &str, provider_id: Uuid) -> String {
-    format!("veronex:preloading:{model}:{provider_id}")
+    crate::domain::constants::preload_lock_key(model, provider_id)
 }
 
 fn scaleout_decision_key(model: &str) -> String {
-    format!("veronex:scaleout:{model}")
+    crate::domain::constants::scaleout_decision_key(model)
 }
 
 /// Returns true if demand exceeds eligible capacity threshold (80%).
@@ -121,7 +121,7 @@ async fn planner_tick(
     instance_id: &str,
     thermal_drain: &Arc<dyn ThermalDrainPort>,
     scale_out_holddown: &mut HashMap<Uuid, u64>,
-    shutdown: &CancellationToken,
+    _shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
 

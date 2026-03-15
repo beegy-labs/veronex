@@ -107,6 +107,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         messages_hash,
         messages_prefix_hash,
         failure_reason,
+        images: None,
     })
 }
 

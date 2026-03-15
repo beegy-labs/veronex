@@ -6,7 +6,7 @@ import { api } from '@/lib/api'
 import type { Provider, GpuServer, RegisterProviderRequest, UpdateProviderRequest } from '@/lib/types'
 import { serverMetricsQuery } from '@/lib/queries'
 import { Server, Key } from 'lucide-react'
-import { fmtMb } from '@/lib/chart-theme'
+import { fmtMb, fmtTemp, fmtPower } from '@/lib/chart-theme'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -116,8 +116,8 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
                       {gpuCards.map((gpu, i) => (
                         <SelectItem key={gpu.card} value={String(i)}>
                           GPU {i} ({gpu.card})
-                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${(gpu.temp_junction_c ?? gpu.temp_c)!.toFixed(0)}°C` : ''}
-                          {gpu.power_w != null ? ` · ${gpu.power_w.toFixed(0)}W` : ''}
+                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${fmtTemp(gpu.temp_junction_c ?? gpu.temp_c)}` : ''}
+                          {gpu.power_w != null ? ` · ${fmtPower(gpu.power_w)}` : ''}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -296,8 +296,8 @@ export function RegisterModal({
                       {gpuCards.map((gpu, i) => (
                         <SelectItem key={gpu.card} value={String(i)}>
                           GPU {i} ({gpu.card})
-                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${(gpu.temp_junction_c ?? gpu.temp_c)!.toFixed(0)}°C` : ''}
-                          {gpu.power_w != null ? ` · ${gpu.power_w.toFixed(0)}W` : ''}
+                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${fmtTemp(gpu.temp_junction_c ?? gpu.temp_c)}` : ''}
+                          {gpu.power_w != null ? ` · ${fmtPower(gpu.power_w)}` : ''}
                         </SelectItem>
                       ))}
                     </SelectContent>

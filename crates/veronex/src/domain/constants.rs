@@ -204,6 +204,16 @@ pub fn ratelimit_tpm_key(key_id: uuid::Uuid, minute: i64) -> String {
     format!("veronex:ratelimit:tpm:{key_id}:{minute}")
 }
 
+/// Lock key preventing duplicate preload requests for a (model, provider) pair.
+pub fn preload_lock_key(model: &str, provider_id: uuid::Uuid) -> String {
+    format!("veronex:preloading:{model}:{provider_id}")
+}
+
+/// Scale-out decision dedup key for a model.
+pub fn scaleout_decision_key(model: &str) -> String {
+    format!("veronex:scaleout:{model}")
+}
+
 // ── Circuit breaker / reaper ─────────────────────────────────────────────
 
 /// Cooldown before half-open probe after circuit opens.

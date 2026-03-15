@@ -41,6 +41,9 @@ export const TOOLTIP_ITEM_STYLE = { color: 'var(--theme-text-primary)' }
 /** <XAxis tick={AXIS_TICK}> / <YAxis tick={AXIS_TICK}> */
 export const AXIS_TICK = { fill: 'var(--theme-text-secondary)', fontSize: 11 }
 
+/** Smaller axis tick for compact charts (history modals, sparklines). */
+export const AXIS_TICK_SM = { fontSize: 10, fill: 'var(--theme-text-faint)' }
+
 // ── Legend ───────────────────────────────────────────────────────────────────
 
 /** <Legend wrapperStyle={LEGEND_STYLE}> */
@@ -136,4 +139,31 @@ export function fmtMbShort(mb: number): string {
   if (mb === 0) return '—'
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`
   return `${mb} MB`
+}
+
+// ── Temperature / Power / Cost formatters ─────────────────────────────────
+
+/** Format temperature in Celsius. Example: 72.3 → "72°C", null → "—" */
+export function fmtTemp(celsius: number | null | undefined): string {
+  if (celsius == null) return '—'
+  return `${celsius.toFixed(0)}°C`
+}
+
+/** Format power in watts. Example: 45.7 → "46W", null → "—" */
+export function fmtPower(watts: number | null | undefined): string {
+  if (watts == null) return '—'
+  return `${watts.toFixed(0)}W`
+}
+
+/** Format ISO timestamp as HH:MM for chart axis labels. */
+export function fmtTimeHHMM(iso: string): string {
+  const d = new Date(iso)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/** Format USD cost. Example: 0.0012 → "$0.0012", 0 → "free", null → "—" */
+export function fmtCost(usd: number | null | undefined): string {
+  if (usd == null) return '—'
+  if (usd === 0) return 'free'
+  return `$${usd.toFixed(4)}`
 }

@@ -29,21 +29,41 @@ const MAX_OLLAMA_MODELS: usize = 256;
 /// Metric name prefixes to forward from node-exporter.
 /// Everything else is dropped at the agent level.
 const NODE_EXPORTER_ALLOWLIST: &[&str] = &[
-    // Linux
+    // Linux memory
     "node_memory_MemTotal_bytes",
     "node_memory_MemAvailable_bytes",
-    // macOS
+    // macOS memory
     "node_memory_total_bytes",
     "node_memory_free_bytes",
+    // CPU utilisation (mode-filtered separately via CPU_MODE_ALLOWLIST)
     "node_cpu_seconds_total",
+    // GPU (AMD DRM)
     "node_drm_",
+    // Hardware sensors — temperature and power only (chip_names/sensor_label dropped: static labels, no analysis value)
     "node_hwmon_temp_celsius",
     "node_hwmon_power_average_watt",
-    "node_hwmon_chip_names",
 ];
+
+/// CPU modes worth tracking. All others (nice, irq, softirq, steal, guest,
+/// guest_nice) are dropped — they add ~55% of cpu row volume with no benefit
+/// for GPU-server monitoring.
+const CPU_MODE_ALLOWLIST: &[&str] = &["user", "system", "iowait", "idle"];
 
 fn is_allowed(name: &str) -> bool {
     NODE_EXPORTER_ALLOWLIST.iter().any(|prefix| name.starts_with(prefix))
+}
+
+/// Returns false when the metric is `node_cpu_seconds_total` and its `mode`
+/// label is not in CPU_MODE_ALLOWLIST. All other metrics pass through.
+fn is_cpu_mode_allowed(name: &str, labels: &[(String, String)]) -> bool {
+    if name != "node_cpu_seconds_total" {
+        return true;
+    }
+    labels
+        .iter()
+        .find(|(k, _)| k == "mode")
+        .map(|(_, v)| CPU_MODE_ALLOWLIST.contains(&v.as_str()))
+        .unwrap_or(false)
 }
 
 /// A single gauge metric — raw name, raw value, raw labels from the source.
@@ -114,10 +134,14 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
             continue;
         }
 
+        let labels = parse_labels(metric_part);
+        if !is_cpu_mode_allowed(name, &labels) {
+            continue;
+        }
         gauges.push(Gauge {
             name: name.to_string(),
             value,
-            labels: parse_labels(metric_part),
+            labels,
         });
     }
 
@@ -305,6 +329,36 @@ some_random_metric 999
         assert!(parse_labels("foo").is_empty());
     }
 
+    /// CPU mode filtering: allowed modes pass, blocked modes are dropped.
+    #[test]
+    fn cpu_mode_filtering() {
+        let allowed = ["user", "system", "iowait", "idle"];
+        let blocked = ["nice", "irq", "softirq", "steal", "guest", "guest_nice"];
+
+        for mode in &allowed {
+            let text = format!("node_cpu_seconds_total{{cpu=\"0\",mode=\"{mode}\"}} 1.0");
+            let gauges = parse_node_exporter(&text);
+            assert_eq!(gauges.len(), 1, "mode={mode} should pass");
+        }
+        for mode in &blocked {
+            let text = format!("node_cpu_seconds_total{{cpu=\"0\",mode=\"{mode}\"}} 1.0");
+            let gauges = parse_node_exporter(&text);
+            assert!(gauges.is_empty(), "mode={mode} should be filtered");
+        }
+        // No mode label → filtered (unknown mode)
+        let text = "node_cpu_seconds_total{cpu=\"0\"} 1.0";
+        let gauges = parse_node_exporter(text);
+        assert!(gauges.is_empty(), "missing mode label should be filtered");
+    }
+
+    /// node_hwmon_chip_names is not in the allowlist (removed — static label, no analysis value).
+    #[test]
+    fn chip_names_filtered() {
+        let text = "node_hwmon_chip_names{chip=\"0000:c4:00_0\",chip_name=\"amdgpu\"} 1";
+        let gauges = parse_node_exporter(text);
+        assert!(gauges.is_empty());
+    }
+
     proptest! {
         /// Allowed metrics always pass through with correct value and name.
         #[test]
@@ -312,11 +366,9 @@ some_random_metric 999
             prefix in prop::sample::select(vec![
                 "node_memory_MemTotal_bytes",
                 "node_memory_MemAvailable_bytes",
-                "node_cpu_seconds_total",
                 "node_drm_gpu_busy",
                 "node_hwmon_temp_celsius",
                 "node_hwmon_power_average_watt",
-                "node_hwmon_chip_names",
             ]),
             value in 0.0f64..1e15,
         ) {
@@ -326,6 +378,31 @@ some_random_metric 999
             prop_assert_eq!(gauges.len(), 1);
             prop_assert_eq!(&gauges[0].name, &prefix);
             prop_assert!((gauges[0].value - value).abs() < 1.0);
+        }
+
+        /// node_cpu_seconds_total with an allowed mode always passes.
+        #[test]
+        fn cpu_allowed_mode_passes(
+            mode in prop::sample::select(vec!["user", "system", "iowait", "idle"]),
+            value in 0.0f64..1e15,
+        ) {
+            prop_assume!(value.is_finite());
+            let text = format!("node_cpu_seconds_total{{cpu=\"0\",mode=\"{mode}\"}} {value}");
+            let gauges = parse_node_exporter(&text);
+            prop_assert_eq!(gauges.len(), 1);
+            prop_assert!((gauges[0].value - value).abs() < 1.0);
+        }
+
+        /// node_cpu_seconds_total with a blocked mode is always filtered.
+        #[test]
+        fn cpu_blocked_mode_filtered(
+            mode in prop::sample::select(vec!["nice", "irq", "softirq", "steal", "guest", "guest_nice"]),
+            value in 0.0f64..1e15,
+        ) {
+            prop_assume!(value.is_finite());
+            let text = format!("node_cpu_seconds_total{{cpu=\"0\",mode=\"{mode}\"}} {value}");
+            let gauges = parse_node_exporter(&text);
+            prop_assert!(gauges.is_empty());
         }
 
         /// Non-allowed metrics are always filtered out.

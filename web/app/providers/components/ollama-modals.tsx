@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { Provider, ProviderSelectedModel, OllamaProviderForModel } from '@/lib/types'
-import { selectedModelsQuery } from '@/lib/queries'
+import { selectedModelsQuery, ollamaModelProvidersQuery } from '@/lib/queries'
 import { Search, Cpu, ChevronLeft, ChevronRight, ListFilter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,7 +20,6 @@ import {
 import { useTranslation } from '@/i18n'
 import {
   PROVIDER_STATUS_DOT, PROVIDER_STATUS_BADGE, PROVIDER_STATUS_I18N,
-  STALE_TIME_FAST,
 } from '@/lib/constants'
 import { extractHost } from './shared'
 
@@ -33,11 +32,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
 
-  const { data, isLoading } = useQuery<{ providers: OllamaProviderForModel[] }>({
-    queryKey: ['ollama-model-providers', modelName],
-    queryFn: () => api.ollamaModelProviders(modelName),
-    staleTime: STALE_TIME_FAST,
-  })
+  const { data, isLoading } = useQuery(ollamaModelProvidersQuery(modelName))
 
   const allProviders = data?.providers ?? []
   const filtered = allProviders.filter((b) =>

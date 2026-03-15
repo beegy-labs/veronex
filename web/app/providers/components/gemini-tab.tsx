@@ -24,7 +24,7 @@ import {
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
-import { PROVIDER_GEMINI } from '@/lib/constants'
+import { getGeminiProviders, countByStatus } from '@/lib/utils'
 import { StatusBadge } from './shared'
 import { ApiKeyCell, ModelSelectionModal } from './modals'
 import { PAGE_SIZE } from './ollama-sections'
@@ -59,14 +59,10 @@ export function GeminiTab({
 }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const gemini = providers?.filter((b) => b.provider_type === PROVIDER_GEMINI) ?? []
-  const geminiCounts = gemini.reduce((acc, b) => {
-    acc[b.status] = (acc[b.status] ?? 0) + 1
-    if (b.is_active) acc['_active'] = (acc['_active'] ?? 0) + 1
-    return acc
-  }, {} as Record<string, number>)
+  const gemini = getGeminiProviders(providers)
+  const geminiCounts = countByStatus(gemini)
+  const activeCount = gemini.filter(b => b.is_active).length
   const onlineCount = geminiCounts['online'] ?? 0
-  const activeCount = geminiCounts['_active'] ?? 0
   const degradedCount = geminiCounts['degraded'] ?? 0
   const offlineCount = geminiCounts['offline'] ?? 0
   const [modelSelectionProvider, setModelSelectionProvider] = useState<Provider | null>(null)
@@ -233,7 +229,7 @@ export function GeminiTab({
                               <RefreshCw className="h-4 w-4" />
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>Sync</TooltipContent>
+                          <TooltipContent>{t('common.sync')}</TooltipContent>
                         </Tooltip>
                         {!b.is_free_tier && (
                           <Tooltip>

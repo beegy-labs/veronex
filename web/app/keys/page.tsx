@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { keysQuery } from '@/lib/queries'
+import { keysQuery, resourceAuditQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, AuditEvent, CreateKeyResponse } from '@/lib/types'
 import { Plus, Trash2, BarChart2, RefreshCw, History } from 'lucide-react'
@@ -183,10 +183,7 @@ function KeyCreatedModal({ resp, onClose }: { resp: CreateKeyResponse; onClose: 
 function KeyHistoryModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => void }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const { data: events, isLoading } = useQuery({
-    queryKey: ['audit', 'api_key', apiKey.id],
-    queryFn: () => api.auditEvents({ resource_type: 'api_key', resource_id: apiKey.id, limit: 50 }),
-  })
+  const { data: events, isLoading } = useQuery(resourceAuditQuery('api_key', apiKey.id))
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -248,14 +245,13 @@ export default function KeysPage() {
     { invalidateKey: ['keys'] },
   )
 
-  const regenerateMutation = useMutation({
-    mutationFn: (id: string) => api.regenerateKey(id),
-    onSuccess: (data) => {
-      setRegenerateTarget(null)
-      setCreatedKey(data)
-      queryClient.invalidateQueries({ queryKey: ['keys'] })
+  const regenerateMutation = useApiMutation(
+    (id: string) => api.regenerateKey(id),
+    {
+      invalidateKey: ['keys'],
+      onSuccess: (data) => { setRegenerateTarget(null); setCreatedKey(data) },
     },
-  })
+  )
 
   function handleCreated(resp: CreateKeyResponse) {
     setShowCreate(false)

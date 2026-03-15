@@ -425,4 +425,14 @@ mod tests {
         // Temp re-surges → Cooldown timer resets
         assert_eq!(upd(&map, id, 91.0), ThrottleLevel::Cooldown);
     }
+
+    /// Graceful degradation: unknown provider returns Normal (no panic).
+    #[test]
+    fn unknown_provider_returns_normal() {
+        let map = ThermalThrottleMap::new(300);
+        let unknown = Uuid::now_v7();
+        assert_eq!(map.get(unknown), ThrottleLevel::Normal);
+        assert!(map.temp_c(unknown).is_none());
+        assert_eq!(map.perf_factor(unknown), 1.0);
+    }
 }

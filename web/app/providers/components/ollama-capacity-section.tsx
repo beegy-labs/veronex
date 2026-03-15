@@ -22,7 +22,8 @@ import {
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
 import { fmtMbShort } from '@/lib/chart-theme'
-import { RESOURCE_CRITICAL, RESOURCE_WARNING } from '@/lib/constants'
+import { calcPercentage } from '@/lib/utils'
+import { RESOURCE_CRITICAL, RESOURCE_WARNING, SYNC_INVALIDATE_DELAY_MS } from '@/lib/constants'
 import { useLabSettings } from '@/components/lab-settings-provider'
 
 export function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
@@ -46,7 +47,7 @@ export function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
 
 export function VramBar({ used, total }: { used: number; total: number }) {
   if (total === 0) return <span className="text-xs text-muted-foreground italic">unknown</span>
-  const pct = Math.min(100, Math.round((used / total) * 100))
+  const pct = Math.min(100, calcPercentage(used, total))
   const color = pct > RESOURCE_CRITICAL ? 'bg-status-error' : pct > RESOURCE_WARNING ? 'bg-status-warn' : 'bg-status-success'
   return (
     <div className="flex items-center gap-2 min-w-32">
@@ -100,7 +101,7 @@ export function OllamaCapacitySection() {
         queryClient.invalidateQueries({ queryKey: ['sync-settings'] })
         queryClient.invalidateQueries({ queryKey: ['providers'] })
         queryClient.invalidateQueries({ queryKey: ['ollama-models'] })
-      }, 3000)
+      }, SYNC_INVALIDATE_DELAY_MS)
     },
   })
 
@@ -132,9 +133,9 @@ export function OllamaCapacitySection() {
     if (!iso) return t('providers.capacity.never')
     const diff = Date.now() - new Date(iso).getTime()
     const mins = Math.floor(diff / 60_000)
-    if (mins < 1) return '< 1 min ago'
-    if (mins < 60) return `${mins} min ago`
-    return `${Math.floor(mins / 60)}h ago`
+    if (mins < 1) return t('providers.capacity.lessThanMinAgo')
+    if (mins < 60) return t('providers.capacity.minsAgo', { n: mins })
+    return t('providers.capacity.hoursAgo', { n: Math.floor(mins / 60) })
   }
 
   return (
@@ -225,7 +226,7 @@ export function OllamaCapacitySection() {
             </div>
 
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Probe Permits</Label>
+              <Label className="text-xs text-muted-foreground">{t('providers.capacity.probePermits')}</Label>
               <Input
                 type="number"
                 className="h-8 text-sm w-20"
@@ -235,7 +236,7 @@ export function OllamaCapacitySection() {
             </div>
 
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Probe Rate</Label>
+              <Label className="text-xs text-muted-foreground">{t('providers.capacity.probeRate')}</Label>
               <Input
                 type="number"
                 min={0}
@@ -307,10 +308,10 @@ export function OllamaCapacitySection() {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
-                      <th className="px-4 py-2 text-left font-medium text-muted-foreground">Model</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">Weight</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">KV/req</th>
-                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">Active / Limit</th>
+                      <th className="px-4 py-2 text-left font-medium text-muted-foreground">{t('providers.capacity.colModel')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.colWeight')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.colKvPerReq')}</th>
+                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('providers.capacity.colActiveLimit')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">

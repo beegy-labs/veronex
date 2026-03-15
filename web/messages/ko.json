@@ -79,6 +79,8 @@
     "labFeaturesDesc": "실험적 기능 — 불안정할 수 있습니다.",
     "labGeminiFunctionCalling": "Gemini 함수 호출",
     "labGeminiFunctionCallingDesc": "Gemini 호환 엔드포인트를 통한 도구 사용을 활성화합니다. 아직 개발 중입니다.",
+    "maxImagesPerRequest": "요청당 최대 이미지 수",
+    "maxImagesPerRequestDesc": "추론 요청당 허용되는 최대 이미지 수. 0이면 이미지 입력이 비활성화됩니다.",
     "menu": "메뉴",
     "expand": "펼치기",
     "collapse": "접기",
@@ -157,7 +159,10 @@
     "unreachable": "연결실패",
     "tempNormal": "정상",
     "noServers": "등록된 서버 없음",
-    "daysData": "{{n}}일 데이터"
+    "daysData": "{{n}}일 데이터",
+    "flowHttpGateway": "HTTP 게이트웨이",
+    "flowOnlineCount": "{online}/{total} 온라인",
+    "flowNoProviders": "프로바이더 없음"
   },
   "jobs": {
     "title": "작업",
@@ -377,7 +382,16 @@
         "hard": "강제 차단"
       },
       "concern": "LLM 경고",
-      "reason": "이유"
+      "reason": "이유",
+      "probePermits": "프로브 허용 수",
+      "probeRate": "프로브 속도",
+      "lessThanMinAgo": "< 1분 전",
+      "minsAgo": "{n}분 전",
+      "hoursAgo": "{n}시간 전",
+      "colModel": "모델",
+      "colWeight": "가중치",
+      "colKvPerReq": "KV/요청",
+      "colActiveLimit": "활성 / 제한"
     },
     "gemini": {
       "title": "Gemini API 키",
@@ -533,7 +547,11 @@
     "tokensCol": "토큰",
     "callPct": "호출 %",
     "avgLatencyCol": "평균 지연",
-    "free": "무료"
+    "free": "무료",
+    "tokenComposition": "토큰 구성",
+    "tokenCompositionDesc": "프롬프트 vs 완성 토큰 비율",
+    "nTokens": "{n} 토큰",
+    "totalNTokens": "전체 {n} 토큰"
   },
   "performance": {
     "title": "성능",
@@ -595,7 +613,12 @@
     "sourceFilter": "소스",
     "sourceAll": "전체",
     "sourceApi": "API",
-    "sourceTest": "테스트"
+    "sourceTest": "테스트",
+    "imageAttach": "이미지 첨부",
+    "imageRemove": "제거",
+    "imageCompressing": "압축 중…",
+    "imageTooLarge": "이미지가 10MB를 초과합니다",
+    "imageTooMany": "최대 4장까지 가능합니다 (Ollama 제한)"
   },
   "apiDocs": {
     "title": "API 문서",
