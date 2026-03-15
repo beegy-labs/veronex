@@ -1,7 +1,7 @@
 # Observability (OTel) — 2026 Research
 
 > **Last Researched**: 2026-03-01 | **Source**: OTel docs + verified in production
-> **Status**: ✅ Verified — used in docker-compose + `crates/veronex-analytics/`
+> **Status**: Verified — used in docker-compose + `crates/veronex-analytics/`
 
 ---
 

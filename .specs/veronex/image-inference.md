@@ -444,8 +444,8 @@ Added props: `images: string[]`, `onImagesChange: (imgs: string[]) => void`, `is
 UI layout:
 ```
 [ Provider ▼ ] [ Model ▼ ]
-[ Prompt textarea              ] [🖼] [▶]
-[ 🖼 thumb1 ×] [ 🖼 thumb2 ×]   (compressing: spinner)
+[ Prompt textarea              ] [IMG] [>]
+[ IMG thumb1 x] [ IMG thumb2 x]   (compressing: spinner)
 ```
 
 - File select → call `compressImage()` → `isCompressing: true` (button disabled)

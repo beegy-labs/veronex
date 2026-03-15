@@ -1,6 +1,6 @@
 # Research — 2026 Best Practices
 
-> **CDD Layer 2** | Editable | Last Updated: 2026-03-03
+> **CDD Layer 2** | Editable | **Last Updated**: 2026-03-03
 >
 > Web-searched, implementation-verified findings.
 > Each file records **what** was decided, **why**, and **where** it is used in this codebase.

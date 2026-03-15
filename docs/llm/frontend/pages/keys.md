@@ -1,6 +1,6 @@
 # Web — API Keys Page (/keys)
 
-> SSOT | Last Updated: 2026-03-04 (rev2: KeyUsageModal)
+> SSOT | **Last Updated**: 2026-03-04 (rev2: KeyUsageModal)
 
 ## Task Guide
 

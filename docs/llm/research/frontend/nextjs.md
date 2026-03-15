@@ -1,7 +1,7 @@
 # Next.js 16 — Research
 
 > **Last Researched**: 2026-03-02 | **Source**: Implementation experience + web search
-> **Status**: ✅ Verified — all patterns researched and documented
+> **Status**: Verified — all patterns researched and documented
 
 ---
 

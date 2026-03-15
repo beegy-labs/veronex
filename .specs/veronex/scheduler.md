@@ -253,8 +253,8 @@ Verification example (T_old = standard enqueue time, T_now = T_old + 251,000):
   After promote_overdue, standard score: T_old - 300,000
   New paid (wait=1s):      final = (T_now - 300,000) - locality - age ≈ T_now - 300,250
   standard (wait=251s):    final = (T_old - 300,000) - locality - age
-                           = (T_now - 251,000 - 300,000) - 62,750  = T_now - 613,750  ✅ standard wins
-  paid (wait=251s):        after promote_overdue score = T_old - 300,000 → same score as standard  ✅ fair race
+                           = (T_now - 251,000 - 300,000) - 62,750  = T_now - 613,750  -> standard wins
+  paid (wait=251s):        after promote_overdue score = T_old - 300,000 → same score as standard  -> fair race
 
 **Intent**: requests waiting 250s+ always take priority over new requests regardless of tier.
   Standard starvation does not occur even under continuous paid inflow.

@@ -1,6 +1,6 @@
 # Roadmap — Veronex
 
-> L1: Master direction | Load on planning only | Last Updated: 2026-03-11
+> L1: Master direction | Load on planning only | **Last Updated**: 2026-03-11
 
 ## 2026
 

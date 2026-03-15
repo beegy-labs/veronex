@@ -1,7 +1,7 @@
 # Tailwind CSS v4 — Research
 
 > **Last Researched**: 2026-03-02 | **Source**: Official docs + web search + implementation
-> **Status**: ✅ Verified — 4-layer token architecture in production (`web/app/tokens.css`)
+> **Status**: Verified — 4-layer token architecture in production (`web/app/tokens.css`)
 
 ---
 

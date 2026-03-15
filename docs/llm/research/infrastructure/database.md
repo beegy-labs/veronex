@@ -1,7 +1,7 @@
 # Database — 2026 Research
 
 > **Last Researched**: 2026-03-01 | **Source**: Implementation + PG docs
-> **Status**: ✅ Partial — PG18 uuidv7 verified | 📋 ClickHouse optimization to research
+> **Status**: Partial — PG18 uuidv7 verified | ClickHouse optimization to research
 
 ---
 

@@ -1,7 +1,7 @@
 # Authentication & Sessions — 2026 Research
 
 > **Last Researched**: 2026-03-01 | **Source**: JWT best practices + verified in production
-> **Status**: ✅ Verified — used in `crates/veronex/src/infrastructure/inbound/http/middleware/`
+> **Status**: Verified — used in `crates/veronex/src/infrastructure/inbound/http/middleware/`
 
 ---
 

@@ -15,21 +15,21 @@
 ┌─────────────────────────────────────────────────────────┐
 │         Server info available (node-exporter healthy)    │
 │                                                         │
-│  ✅ VRAM-aware dispatch (routing based on live VRAM)    │
-│  ✅ Thermal gate (auto-block above 85°C)                │
-│  ✅ AIMD stabilization (load-based request rate tuning) │
-│  ✅ Capacity learning (capacity learning & prediction)  │
-│  ✅ ClickHouse metrics analysis                         │
+│  [Yes] VRAM-aware dispatch (routing based on live VRAM)    │
+│  [Yes] Thermal gate (auto-block above 85°C)                │
+│  [Yes] AIMD stabilization (load-based request rate tuning) │
+│  [Yes] Capacity learning (capacity learning & prediction)  │
+│  [Yes] ClickHouse metrics analysis                         │
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
 │       No server info (node-exporter / agent failure)     │
 │                                                         │
-│  ✅ Inference request processing (basic dispatch cont.)  │
-│  ✅ Static registered VRAM-based routing (stale fallback)│
-│  ⚠️  Thermal gate disabled (no temperature data)         │
-│  ⚠️  AIMD/capacity degraded (no metrics)                 │
-│  ❌ Real-time VRAM analysis unavailable                  │
+│  [Yes] Inference request processing (basic dispatch cont.)  │
+│  [Yes] Static registered VRAM-based routing (stale fallback)│
+│  [Degraded]  Thermal gate disabled (no temperature data)         │
+│  [Degraded]  AIMD/capacity degraded (no metrics)                 │
+│  [No] Real-time VRAM analysis unavailable                  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -65,7 +65,7 @@ get_ollama_available_vram_mb() cache miss
   ├── total_vram_mb == 0 → i64::MAX (treated as unlimited, provider_router.rs:520)
   └── total_vram_mb  > 0 → static registered VRAM value (provider_router.rs:523)
   ↓
-dispatcher: continues dispatch ✅
+dispatcher: continues dispatch [OK]
 ```
 
 **Already works** — inference continues regardless of node-exporter failure.
@@ -74,7 +74,7 @@ dispatcher: continues dispatch ✅
 |------|-------------------|----------------------|
 | VRAM accuracy | Real-time | Static registered value (stale) |
 | Thermal gate | Blocks above 85°C | **Disabled** (assumes 0°C) |
-| Inference available | ✅ | ✅ |
+| Inference available | Yes | Yes |
 
 > **Tradeoff**: thermal protection is disabled when node-exporter fails.
 > Inference cannot be blocked when GPU temperature is unknown, so this behavior is intentional.
@@ -128,7 +128,7 @@ dispatcher: continues dispatch ✅
 | DOS protection | `scraper.rs` | body size, label count, model count all limited |
 | CPU mode filter | `scraper.rs` | only user/system/iowait/idle pass (55% volume reduction) |
 | Metrics allowlist | `scraper.rs` | appropriate for GPU server monitoring |
-| **Graceful Degradation** | `thermal.rs:260`, `provider_router.rs:520` | Without server info: `ThrottleLevel::Normal` + static VRAM — basic dispatch continues ✅ |
+| **Graceful Degradation** | `thermal.rs:260`, `provider_router.rs:520` | Without server info: `ThrottleLevel::Normal` + static VRAM — basic dispatch continues [OK] |
 
 ### Items Needing Improvement
 
