@@ -58,6 +58,10 @@ pub struct OllamaGenerateBody {
     /// How long to keep the model loaded after this request.
     #[serde(default)]
     keep_alive: Option<serde_json::Value>,
+    /// `false` → collect all tokens and return a single JSON response.
+    /// `true` or absent → default NDJSON streaming.
+    #[serde(default)]
+    stream: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +81,10 @@ pub struct OllamaChatBody {
     /// How long to keep the model loaded.
     #[serde(default)]
     keep_alive: Option<serde_json::Value>,
+    /// `false` → collect all tokens and return a single JSON response.
+    /// `true` or absent → default NDJSON streaming.
+    #[serde(default)]
+    stream: Option<bool>,
 }
 
 // ── Model listing (Veronex-owned) ───────────────────────────────────────────────
@@ -189,6 +197,37 @@ pub async fn generate(
         }
     };
 
+    // ── Non-streaming path (`stream: false`) ────────────────────────────────
+    if req.stream == Some(false) {
+        let mut content = String::new();
+        let mut prompt_tokens = 0u32;
+        let mut eval_tokens = 0u32;
+
+        let mut token_stream = state.use_case.stream(&job_id);
+        while let Some(result) = token_stream.next().await {
+            match result {
+                Ok(t) if t.is_final => {
+                    prompt_tokens = t.prompt_tokens.unwrap_or(0);
+                    eval_tokens = t.completion_tokens.unwrap_or(0);
+                }
+                Ok(t) => content.push_str(&t.value),
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": sanitize_sse_error(&e)})),
+                    )
+                        .into_response();
+                }
+            }
+        }
+        let created_at = chrono::Utc::now().to_rfc3339();
+        return Json(build_generate_response(
+            &model, &created_at, content, prompt_tokens, eval_tokens,
+        ))
+        .into_response();
+    }
+
+    // ── Streaming path (default) ────────────────────────────────────────────
     let token_stream = state.use_case.stream(&job_id);
     let model_clone = model.clone();
 
@@ -305,6 +344,39 @@ pub async fn chat(
         }
     };
 
+    // ── Non-streaming path (`stream: false`) ────────────────────────────────
+    if req.stream == Some(false) {
+        let mut content = String::new();
+        let mut tool_calls: Option<serde_json::Value> = None;
+        let mut prompt_tokens = 0u32;
+        let mut eval_tokens = 0u32;
+
+        let mut token_stream = state.use_case.stream(&job_id);
+        while let Some(result) = token_stream.next().await {
+            match result {
+                Ok(t) if t.tool_calls.is_some() => tool_calls = t.tool_calls,
+                Ok(t) if t.is_final => {
+                    prompt_tokens = t.prompt_tokens.unwrap_or(0);
+                    eval_tokens = t.completion_tokens.unwrap_or(0);
+                }
+                Ok(t) => content.push_str(&t.value),
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": sanitize_sse_error(&e)})),
+                    )
+                        .into_response();
+                }
+            }
+        }
+        let created_at = chrono::Utc::now().to_rfc3339();
+        return Json(build_chat_response(
+            &model, &created_at, content, tool_calls, prompt_tokens, eval_tokens,
+        ))
+        .into_response();
+    }
+
+    // ── Streaming path (default) ────────────────────────────────────────────
     let token_stream = state.use_case.stream(&job_id);
     let model_clone = model.clone();
 
@@ -358,6 +430,74 @@ pub async fn chat(
         .header("X-Accel-Buffering", "no")
         .body(Body::from_stream(guarded))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+// ── Non-streaming response builders ────────────────────────────────────────────
+//
+// Pure functions — no I/O, no async. Extracted for unit testability.
+
+/// Build a single-shot `/api/chat` response for `stream: false`.
+///
+/// When `tool_calls` is `Some`, emits `done_reason: "tool_calls"` and
+/// `message.content: ""` per the Ollama spec. Otherwise `done_reason: "stop"`.
+fn build_chat_response(
+    model: &str,
+    created_at: &str,
+    content: String,
+    tool_calls: Option<serde_json::Value>,
+    prompt_tokens: u32,
+    eval_tokens: u32,
+) -> serde_json::Value {
+    let (done_reason, message) = if let Some(tc) = tool_calls {
+        (
+            "tool_calls",
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": tc}),
+        )
+    } else {
+        (
+            "stop",
+            serde_json::json!({"role": "assistant", "content": content}),
+        )
+    };
+    serde_json::json!({
+        "model":               model,
+        "created_at":          created_at,
+        "message":             message,
+        "done_reason":         done_reason,
+        "done":                true,
+        "total_duration":      0,
+        "load_duration":       0,
+        "prompt_eval_count":   prompt_tokens,
+        "prompt_eval_duration":0,
+        "eval_count":          eval_tokens,
+        "eval_duration":       0,
+    })
+}
+
+/// Build a single-shot `/api/generate` response for `stream: false`.
+///
+/// Uses `response` (not `message`) per the Ollama generate spec.
+/// Timing fields are fixed at 0 — Veronex does not measure them.
+fn build_generate_response(
+    model: &str,
+    created_at: &str,
+    content: String,
+    prompt_tokens: u32,
+    eval_tokens: u32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "model":               model,
+        "created_at":          created_at,
+        "response":            content,
+        "done_reason":         "stop",
+        "done":                true,
+        "total_duration":      0,
+        "load_duration":       0,
+        "prompt_eval_count":   prompt_tokens,
+        "prompt_eval_duration":0,
+        "eval_count":          eval_tokens,
+        "eval_duration":       0,
+    })
 }
 
 // ── Management proxy endpoints ────────────────────────────────────────────────
@@ -508,4 +648,95 @@ async fn pick_ollama(state: &AppState) -> Result<LlmProvider, Response> {
             )
                 .into_response()
         })
+}
+
+// ── Unit tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 1. /api/chat stream:false — text response: done:true, message.content accumulated
+    #[test]
+    fn chat_response_text_content() {
+        let resp = build_chat_response(
+            "llama3.2",
+            "2026-03-15T00:00:00Z",
+            "Hello World".to_string(),
+            None,
+            10,
+            5,
+        );
+        assert_eq!(resp["done"], true);
+        assert_eq!(resp["done_reason"], "stop");
+        assert_eq!(resp["message"]["role"], "assistant");
+        assert_eq!(resp["message"]["content"], "Hello World");
+        assert_eq!(resp["prompt_eval_count"], 10);
+        assert_eq!(resp["eval_count"], 5);
+    }
+
+    // 2. /api/generate stream:false — response field populated
+    #[test]
+    fn generate_response_field() {
+        let resp = build_generate_response(
+            "llama3.2",
+            "2026-03-15T00:00:00Z",
+            "Paris".to_string(),
+            8,
+            3,
+        );
+        assert_eq!(resp["done"], true);
+        assert_eq!(resp["done_reason"], "stop");
+        assert_eq!(resp["response"], "Paris");
+        assert!(resp.get("message").is_none(), "generate must not have 'message' field");
+        assert_eq!(resp["prompt_eval_count"], 8);
+        assert_eq!(resp["eval_count"], 3);
+    }
+
+    // 3. /api/chat stream:false + tool call — done_reason:"tool_calls", content:""
+    #[test]
+    fn chat_response_tool_calls() {
+        let tc = serde_json::json!([{
+            "function": {"name": "get_weather", "arguments": {"location": "Seoul"}}
+        }]);
+        let resp = build_chat_response(
+            "llama3.2",
+            "2026-03-15T00:00:00Z",
+            String::new(),
+            Some(tc.clone()),
+            15,
+            20,
+        );
+        assert_eq!(resp["done_reason"], "tool_calls");
+        assert_eq!(resp["message"]["content"], "");
+        assert_eq!(resp["message"]["tool_calls"], tc);
+        assert_eq!(resp["done"], true);
+    }
+
+    // 4. Both response types include all required Ollama timing fields (all 0)
+    #[test]
+    fn response_has_timing_fields() {
+        for resp in [
+            build_generate_response("m", "t", String::new(), 0, 0),
+            build_chat_response("m", "t", String::new(), None, 0, 0),
+        ] {
+            assert_eq!(resp["total_duration"], 0);
+            assert_eq!(resp["load_duration"], 0);
+            assert_eq!(resp["prompt_eval_duration"], 0);
+            assert_eq!(resp["eval_duration"], 0);
+        }
+    }
+
+    // 5. Response includes model name and created_at timestamp
+    #[test]
+    fn response_includes_model_and_timestamp() {
+        let ts = "2026-03-15T12:00:00Z";
+        let chat = build_chat_response("llava:7b", ts, String::new(), None, 0, 0);
+        let generate = build_generate_response("llava:7b", ts, String::new(), 0, 0);
+        for resp in [&chat, &generate] {
+            assert_eq!(resp["model"], "llava:7b");
+            assert_eq!(resp["created_at"], ts);
+            assert_eq!(resp["done"], true);
+        }
+    }
 }
