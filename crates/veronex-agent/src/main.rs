@@ -12,7 +12,7 @@
 /// Environment variables:
 ///   VERONEX_API_URL    — veronex API base URL (default: http://localhost:3000)
 ///   OTEL_HTTP_ENDPOINT — OTel Collector HTTP endpoint (default: http://localhost:4318)
-///   SCRAPE_INTERVAL_MS — milliseconds between scrape cycles (default: 15000)
+///   SCRAPE_INTERVAL_MS — milliseconds between scrape cycles (default: 30000)
 ///   REPLICA_COUNT      — total number of agent pods (default: 1)
 ///   RUST_LOG           — tracing filter (default: info)
 use std::collections::HashMap;
@@ -54,7 +54,7 @@ impl Config {
                 std::env::var("SCRAPE_INTERVAL_MS")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(15_000),
+                    .unwrap_or(30_000),
             ),
             ordinal: shard::ordinal_from_hostname(),
             replicas: std::env::var("REPLICA_COUNT")
