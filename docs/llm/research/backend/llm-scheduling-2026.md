@@ -1,6 +1,6 @@
 # LLM Multi-Server Scheduling — 2026 Best Practices
 
-> **Tier 2 CDD** | Editable | Last Updated: 2026-03-11
+> **CDD Layer 2** | Editable | Last Updated: 2026-03-11
 >
 > Web-searched findings on queue-aware model assignment for N-server, M-model Ollama clusters.
 > Status: `research` — not yet implemented in Veronex.

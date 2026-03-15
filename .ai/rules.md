@@ -1,21 +1,20 @@
 # Core Development Rules
 
-> CDD Tier 1 — Essential rules for AI assistants | **Last Updated**: 2026-03-11
+> CDD Layer 1 — Essential rules for AI assistants | **Last Updated**: 2026-03-15
 
 ## Language Policy
 
 **ALL code, documentation, and commits MUST be in English.**
 
-## Documentation Policy (4-Tier)
+## Documentation Policy (3-Layer)
 
-| Tier | Path | LLM Editable | Purpose |
-| ---- | ---- | ------------ | ------- |
+| Layer | Path | Editable | Purpose |
+| ----- | ---- | -------- | ------- |
 | 1 | `.ai/` | **YES** | Pointer (≤50 lines) |
-| 2 | `docs/llm/` | **YES** | SSOT (domain-based) |
-| 3 | `docs/en/` | **NO** | Generated |
-| 4 | `docs/kr/` | **NO** | Translated |
+| 2 | `docs/llm/` | **YES** | SSOT (domain-based, machine-optimized) |
+| 3 | `docs/en/`, `docs/kr/` | **NO** | Human understanding (generated/translated) |
 
-**Never edit `docs/en/` or `docs/kr/` directly.**
+**Never edit Layer 3 directly. Edit Layer 1 or Layer 2 only.**
 
 ## Architecture: Hexagonal
 

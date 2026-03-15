@@ -22,7 +22,7 @@ Every doc, component, and i18n key MUST follow these definitions.
 
 ## UI Label Rules
 
-| Context | Correct Term | Incorrect ❌ |
+| Context | Correct Term | Incorrect |
 |---------|-------------|-------------|
 | Nav sidebar entry for Ollama/Gemini | Providers | Backends |
 | Section header in usage breakdown | By Provider | By Backend |

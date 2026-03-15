@@ -1,10 +1,30 @@
 # AGENTS.md
 
-> Universal LLM entry point | **Last Updated**: 2026-03-14
+> Universal LLM entry point | **Last Updated**: 2026-03-15
 
 ## Start
 
 Read [.ai/README.md](.ai/README.md)
+
+## Identity
+
+| Term | Definition |
+| ---- | ---------- |
+| CDD | System SSOT and reconstruction baseline |
+| SDD | CDD-derived change plan |
+| ADD | Autonomous execution and policy selection engine |
+
+Core loop: `CDD → SDD → ADD → CDD (feedback)`
+
+Full definitions: [docs/llm/policies/identity.md](docs/llm/policies/identity.md)
+
+## Frameworks
+
+| Directory | Framework | Role |
+| --------- | --------- | ---- |
+| `.ai/` + `docs/llm/` | CDD | System SSOT — rules, patterns, architecture, constraints |
+| `.specs/` | SDD | Change plans — specs, tasks, scope |
+| `.add/` | ADD | Execution — workflow prompts, policy selection |
 
 ## Commit Rules
 
@@ -13,14 +33,6 @@ Read [.ai/README.md](.ai/README.md)
 | No AI mention | Never reference Claude, GPT, Copilot, AI, LLM in commits, PR titles, PR bodies |
 | No AI co-author | No Co-Authored-By AI trailers |
 | Full spec | [.ai/git-flow.md](.ai/git-flow.md) |
-
-## Frameworks
-
-| Directory | Framework | Role |
-| --------- | --------- | ---- |
-| `.ai/` + `docs/llm/` | CDD | Knowledge |
-| `.specs/` | SDD | Design |
-| `.add/` | ADD | Execution |
 
 ## Doc Formatting
 

@@ -1,6 +1,6 @@
 # Rust Performance Best Practices (2026)
 
-> **Tier 2 CDD** | Editable | Last Updated: 2026-03-03
+> **CDD Layer 2** | Editable | Last Updated: 2026-03-03
 >
 > Runtime performance optimizations applied to Veronex.
 > No functional changes — same API responses and DB results.

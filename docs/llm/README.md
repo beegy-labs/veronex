@@ -1,17 +1,25 @@
 # docs/llm — SSOT Index
 
-> Tier 2 CDD documents (LLM-facing, editable) | **Last Updated**: 2026-03-07
+> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-03-15
 
 ## Policies (Cross-Cutting)
 
 | Document | Path | Keywords |
 |----------|------|---------|
+| Identity Anchor | `policies/identity.md` | CDD, SDD, ADD fixed definitions, core loop |
+| CDD Policy | `policies/cdd.md` | layers, reconstructability, constitutional, operational |
+| SDD Policy | `policies/sdd.md` | change plan, scope, impact, completion criteria |
+| ADD Policy | `policies/add.md` | work type, policy selection, autonomous execution |
 | Architecture | `policies/architecture.md` | hexagonal, ports, adapters, layers, AppState, dependency rule |
 | Code Patterns (Rust) | `policies/patterns.md` | AppError, thiserror, sqlx query_as!, async-trait, tracing, DashMap, Valkey Lua |
 | Code Patterns (Frontend) | `policies/patterns-frontend.md` | TanStack Query v5, useOptimistic, Zod, Tailwind v4 |
 | Git Flow | `policies/git-flow.md` | branch, commit, squash, merge, conventional |
 | Testing Strategy | `policies/testing-strategy.md` | testing trophy, purity, proptest, cargo-mutants, OpenAPI schema, layer responsibility |
 | Terminology | `policies/terminology.md` | provider, provider_type, naming conventions |
+| Token Optimization | `policies/token-optimization.md` | format rules, no emoji, tables over prose |
+| Development Methodology | `policies/development-methodology.md` | AI-native, methodology overview |
+| Monorepo | `policies/monorepo.md` | project structure, backend/frontend layout |
+| Agents Customization | `policies/agents-customization.md` | AGENTS.md guide, LLM config |
 
 ---
 
@@ -114,6 +122,7 @@
 | Rust / Axum Shutdown | `research/backend/rust-axum-shutdown.md` | verified |
 | API Design | `research/backend/api-design.md` | verified |
 | Rust Performance | `research/backend/rust-perf-2026.md` | verified |
+| LLM Scheduling | `research/backend/llm-scheduling-2026.md` | research |
 | Observability | `research/infrastructure/observability.md` | verified |
 | Database | `research/infrastructure/database.md` | verified |
 | Auth Sessions | `research/security/auth.md` | verified |
