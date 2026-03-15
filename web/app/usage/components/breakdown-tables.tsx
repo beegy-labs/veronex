@@ -7,7 +7,8 @@ import {
   TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { DataTable } from '@/components/data-table'
-import { fmtMs, fmtCompact } from '@/lib/chart-theme'
+import { fmtMs, fmtCompact, fmtCost } from '@/lib/chart-theme'
+import { calcPercentage } from '@/lib/utils'
 import { useTranslation } from '@/i18n'
 import { BarChart2 } from 'lucide-react'
 import { PROVIDER_BADGE, PROVIDER_COLORS, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from '@/lib/constants'
@@ -48,7 +49,7 @@ export function KeyBreakdownTable({
       </TableHeader>
       <TableBody>
         {data.by_key.map((k) => {
-          const pct = total > 0 ? Math.round((k.request_count / total) * 100) : 0
+          const pct = calcPercentage(k.request_count, total)
           const totalTok = k.prompt_tokens + k.completion_tokens
           const apiKey = keyMap.get(k.key_id)
           const isSelected = selectedKeyId === k.key_id

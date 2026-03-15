@@ -10,14 +10,12 @@ import {
 import { useTranslation } from '@/i18n'
 import type { ProviderOption } from '@/components/api-test-types'
 
-const MAX_IMAGES = 4
-const MAX_FILE_BYTES = 10 * 1024 * 1024  // 10MB pre-compress UX limit
-
 interface ApiTestFormProps {
   providerType: string
   model: string
   prompt: string
   images: string[]          // raw base64 (no data URL prefix)
+  maxImages: number         // from lab_settings.max_images_per_request
   isCompressing: boolean
   availableOptions: ProviderOption[]
   availableModels: string[]
@@ -28,7 +26,6 @@ interface ApiTestFormProps {
   onProviderChange: (v: string) => void
   onModelChange: (v: string) => void
   onPromptChange: (v: string) => void
-  onImagesChange: (imgs: string[]) => void
   onImageAdd: (files: FileList) => void
   onImageRemove: (index: number) => void
   onRun: () => void
@@ -36,7 +33,7 @@ interface ApiTestFormProps {
 
 export function ApiTestForm({
   providerType, model, prompt,
-  images, isCompressing,
+  images, maxImages, isCompressing,
   availableOptions, availableModels, isGeminiProvider,
   isAnyStreaming, canRun, authUsername,
   onProviderChange, onModelChange, onPromptChange,
@@ -53,7 +50,7 @@ export function ApiTestForm({
     e.target.value = ''
   }
 
-  const canAddMore = images.length < MAX_IMAGES && !isGeminiProvider
+  const canAddMore = images.length < maxImages && !isGeminiProvider && maxImages > 0
 
   return (
     <form onSubmit={(e) => { e.preventDefault(); onRun() }} className="space-y-4 pb-4">

@@ -4,6 +4,7 @@ import type { UsageBreakdown } from '@/lib/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { fmtCompact } from '@/lib/chart-theme'
+import { calcPercentage } from '@/lib/utils'
 import { useTranslation } from '@/i18n'
 import { PROVIDER_BADGE, PROVIDER_COLORS } from '@/lib/constants'
 
@@ -17,7 +18,7 @@ export function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {data.by_providers.map((b) => {
-        const pct = total > 0 ? Math.round((b.request_count / total) * 100) : 0
+        const pct = calcPercentage(b.request_count, total)
         const color = PROVIDER_COLORS[b.provider_type] ?? 'var(--theme-primary)'
         const totalTok = b.prompt_tokens + b.completion_tokens
         return (

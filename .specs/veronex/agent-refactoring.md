@@ -389,19 +389,16 @@ struct HealthState {
 
 | # | Task | 파일 | Status |
 |---|------|------|--------|
-| 1 | `HealthState` 공유 구조체 + health HTTP server (`/startup`, `/ready`, `/health`) | `main.rs` | pending |
-| 2 | `startupProbe` (GET /startup, 12×5s=60s) | `veronex-agent-statefulset.yaml` | pending |
-| 3 | `readinessProbe` (GET /ready, 15s period, 2× fail) | `veronex-agent-statefulset.yaml` | pending |
-| 4 | `livenessProbe` (GET /health, 30s period, 3× fail) | `veronex-agent-statefulset.yaml` | pending |
-| 5 | `veronexAgent.healthPort: 9091` values 추가 | `values.yaml` | pending |
-| 4 | `AgentStats`, `CycleResult` 구조체 추가 | `main.rs` | pending |
-| 5 | `scrape_cycle()` → `CycleResult` 반환하도록 변경 | `main.rs` | pending |
-| 6 | `agent_self_gauges()` 구현 + gauges에 extend | `main.rs` | pending |
-| 7 | OTLP push 1회 재시도 추가 | `otlp.rs` | pending |
-| 8 | OTLP response body 에러 처리 개선 | `otlp.rs` | pending |
-| 9 | Target discovery JSON 파싱 실패 시 warn 추가 | `main.rs` | pending |
-| 10 | `/startup`, `/ready`, `/health` 단위 테스트 | `main.rs` | pending |
-| 11 | `agent_self_gauges()` 단위 테스트 | `main.rs` | pending |
-| 12 | 기존 테스트 시그니처 업데이트 | `main.rs` | pending |
-| 13 | **Graceful Degradation regression test**: node-exporter 없을 때 `ThrottleLevel::Normal` 반환 검증 | `thermal.rs` | pending |
-| 14 | **Graceful Degradation regression test**: Valkey cache miss 시 static VRAM 폴백 검증 | `provider_router.rs` | pending |
+| 1 | `HealthState` 공유 구조체 + health HTTP server (`/startup`, `/ready`, `/health`) | `main.rs`, `health.rs` | **done** |
+| 2 | `startupProbe` (GET /startup, 12×5s=60s) | `veronex-agent-statefulset.yaml` | **done** |
+| 3 | `readinessProbe` (GET /ready, 15s period, 2× fail) | `veronex-agent-statefulset.yaml` | **done** |
+| 4 | `livenessProbe` (GET /health, 30s period, 3× fail) | `veronex-agent-statefulset.yaml` | **done** |
+| 5 | `veronexAgent.healthPort: 9091` values 추가 | `values.yaml` | **done** |
+| 6 | `AgentStats`, `CycleResult` 구조체 추가 | `main.rs` | **done** |
+| 7 | `scrape_cycle()` → `CycleResult` 반환하도록 변경 | `main.rs` | **done** |
+| 8 | `agent_self_gauges()` 구현 + self-metrics OTLP push | `main.rs` | **done** |
+| 9 | OTLP push 1회 재시도 + 5s backoff | `otlp.rs` | **done** |
+| 10 | OTLP response body 에러 처리 개선 | `otlp.rs` | **done** |
+| 11 | Target discovery JSON 파싱 실패 시 warn 추가 | `main.rs` | **done** |
+| 12 | **Graceful Degradation regression test**: node-exporter 없을 때 `ThrottleLevel::Normal` 반환 검증 | `thermal.rs` | **done** |
+| 13 | **Graceful Degradation regression test**: Valkey cache miss 시 static VRAM 폴백 검증 | `provider_router.rs` | **done** |

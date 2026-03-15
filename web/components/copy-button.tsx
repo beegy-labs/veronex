@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { COPY_FEEDBACK_MS } from '@/lib/constants'
 import { useTranslation } from '@/i18n'
 
 export function CopyButton({ text, className = 'h-7 w-7' }: { text: string; className?: string }) {
@@ -12,7 +13,7 @@ export function CopyButton({ text, className = 'h-7 w-7' }: { text: string; clas
   async function handleCopy() {
     await navigator.clipboard.writeText(text)
     setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    setTimeout(() => setCopied(false), COPY_FEEDBACK_MS)
   }
 
   return (

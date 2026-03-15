@@ -232,7 +232,7 @@ Json(serde_json::json!({
 
 | # | Task | 파일 | Status |
 |---|------|------|--------|
-| 1 | `OllamaChatBody` / `OllamaGenerateBody`에 `stream: Option<bool>` 추가 | `ollama_compat_handlers.rs` | pending |
-| 2 | `/api/chat` non-streaming 경로 구현 (tool_calls 포함) | `ollama_compat_handlers.rs` | pending |
-| 3 | `/api/generate` non-streaming 경로 구현 | `ollama_compat_handlers.rs` | pending |
-| 4 | 테스트 추가 (5개 케이스) | `ollama_compat_handlers.rs` | pending |
+| 1 | `OllamaChatBody` / `OllamaGenerateBody`에 `stream: Option<bool>` 추가 | `ollama_compat_handlers.rs` | **done** |
+| 2 | `/api/chat` non-streaming 경로 구현 (tool_calls 포함) | `ollama_compat_handlers.rs` | **done** |
+| 3 | `/api/generate` non-streaming 경로 구현 | `ollama_compat_handlers.rs` | **done** |
+| 4 | 테스트 추가 (7개 케이스 + proptest) | `ollama_compat_handlers.rs` | **done** |

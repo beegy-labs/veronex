@@ -33,7 +33,7 @@ Agent → OTel Collector → Redpanda → ClickHouse 파이프라인에서
 | `otel_logs` | 1.0M | 70.6 MiB | 2,714 rows |
 | `audit_events` | 9 | 2.16 KiB | — |
 
-> TTL 없음 → 데이터 무기한 보관.
+> TTL은 init migration에 placeholder로 설정됨 → Helm values에서 metrics 30일, analytics 90일, audit 365일로 배포 시 치환.
 
 ### Agent 수집 메트릭 분석 (시간당, 상위)
 
@@ -134,7 +134,7 @@ ALTER TABLE veronex.otel_logs
 | # | Task | 대상 | Status |
 |---|------|------|--------|
 | 1 | Redpanda topic retention 설정 | platform-gitops | pending |
-| 2 | ClickHouse `otel_metrics_gauge` TTL 30일 추가 | migration SQL | pending |
-| 3 | ClickHouse `otel_logs` TTL 7일 추가 | migration SQL | pending |
-| 4 | Agent allowlist 4개 항목 제거 | scraper.rs | pending |
-| 5 | Scrape interval 60초로 조정 | values.yaml | pending |
+| 2 | ClickHouse `otel_metrics_gauge` TTL 30일 | migration SQL | **done** (init migration TTL placeholder + Helm values) |
+| 3 | ClickHouse `otel_logs` TTL 90일 | migration SQL | **done** (init migration TTL placeholder + Helm values) |
+| 4 | Agent allowlist 4개 항목 제거 | scraper.rs | **done** (allowlist에 미포함 상태) |
+| 5 | Scrape interval 60초로 조정 | values.yaml | **done** |

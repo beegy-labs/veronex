@@ -9,7 +9,8 @@ import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { BASE } from '@/lib/api'
 import { compressImage } from '@/lib/compress-image'
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
+import { PROVIDER_OLLAMA, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
+import { useLabSettings } from '@/components/lab-settings-provider'
 import type { OpenAIChunk, Run, ProviderOption } from '@/components/api-test-types'
 import { runsReducer, MAX_RUNS } from '@/components/api-test-types'
 import { ApiTestForm } from '@/components/api-test-form'
@@ -24,6 +25,7 @@ interface Props {
 
 export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const { t } = useTranslation()
+  const { labSettings } = useLabSettings()
 
   const authUser = getAuthUser()
 
@@ -177,11 +179,10 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   }
 
   // ── Image handlers ────────────────────────────────────────────────────────────
-  const MAX_IMAGES = 4
-  const MAX_FILE_BYTES = 10 * 1024 * 1024
+  const maxImages = labSettings?.max_images_per_request ?? DEFAULT_MAX_IMAGES
 
   const handleImageAdd = useCallback(async (files: FileList) => {
-    const remaining = MAX_IMAGES - images.length
+    const remaining = maxImages - images.length
     if (remaining <= 0) return
 
     const toProcess = Array.from(files).slice(0, remaining)
@@ -194,13 +195,13 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     setIsCompressing(true)
     try {
       const compressed = await Promise.all(toProcess.map((f) => compressImage(f)))
-      setImages((prev) => [...prev, ...compressed].slice(0, MAX_IMAGES))
+      setImages((prev) => [...prev, ...compressed].slice(0, maxImages))
     } catch {
       // Compression failure — skip silently, file not added
     } finally {
       setIsCompressing(false)
     }
-  }, [images.length])
+  }, [images.length, maxImages])
 
   const handleImageRemove = useCallback((index: number) => {
     setImages((prev) => prev.filter((_, i) => i !== index))
@@ -301,6 +302,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           model={model}
           prompt={prompt}
           images={images}
+          maxImages={maxImages}
           isCompressing={isCompressing}
           availableOptions={availableOptions}
           availableModels={availableModels}
@@ -311,7 +313,6 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           onProviderChange={setProviderType}
           onModelChange={setModel}
           onPromptChange={setPrompt}
-          onImagesChange={setImages}
           onImageAdd={handleImageAdd}
           onImageRemove={handleImageRemove}
           onRun={handleRun}

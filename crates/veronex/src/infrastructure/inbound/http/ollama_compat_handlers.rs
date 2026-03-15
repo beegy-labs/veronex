@@ -27,11 +27,46 @@ use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
 use super::handlers::sanitize_sse_error;
 use super::inference_helpers::{validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
+use super::inference_helpers::validate_images;
 use super::state::AppState;
+
+/// Collected output from a non-streaming token stream.
+struct CollectedStream {
+    content: String,
+    tool_calls: Option<serde_json::Value>,
+    prompt_tokens: u32,
+    eval_tokens: u32,
+}
+
+/// Drain a token stream into collected output. Returns error response on failure.
+async fn collect_stream(state: &AppState, job_id: &crate::domain::value_objects::JobId) -> Result<CollectedStream, Response> {
+    let mut content = String::new();
+    let mut tool_calls: Option<serde_json::Value> = None;
+    let mut prompt_tokens = 0u32;
+    let mut eval_tokens = 0u32;
+
+    let mut stream = state.use_case.stream(job_id);
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(t) if t.tool_calls.is_some() => tool_calls = t.tool_calls,
+            Ok(t) if t.is_final => {
+                prompt_tokens = t.prompt_tokens.unwrap_or(0);
+                eval_tokens = t.completion_tokens.unwrap_or(0);
+            }
+            Ok(t) => content.push_str(&t.value),
+            Err(e) => return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": sanitize_sse_error(&e)})),
+            ).into_response()),
+        }
+    }
+    Ok(CollectedStream { content, tool_calls, prompt_tokens, eval_tokens })
+}
 
 // ── Inference request body types ────────────────────────────────────────────────
 
-/// Fields deserialized for Ollama API compatibility but not all are forwarded.
+/// Ollama `/api/generate` request body. Fields are read by serde but not
+/// accessed directly in Rust code — `dead_code` is expected.
 #[derive(Deserialize)]
 #[allow(dead_code)]
 pub struct OllamaGenerateBody {
@@ -64,6 +99,7 @@ pub struct OllamaGenerateBody {
     stream: Option<bool>,
 }
 
+/// Ollama `/api/chat` request body. Fields read by serde, not accessed directly.
 #[derive(Deserialize)]
 #[allow(dead_code)]
 pub struct OllamaChatBody {
@@ -165,6 +201,14 @@ pub async fn generate(
             .into_response();
     }
 
+    // Validate images against lab_settings
+    if req.images.is_some() {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        if let Some(msg) = validate_images(&req.images, &lab) {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response();
+        }
+    }
+
     let model = req.model.clone();
 
     let job_id = match state
@@ -183,6 +227,7 @@ pub async fn generate(
             request_path: Some("/api/generate".to_string()),
             conversation_id,
             key_tier: Some(api_key.tier),
+            images: req.images,
         })
         .await
     {
@@ -199,32 +244,14 @@ pub async fn generate(
 
     // ── Non-streaming path (`stream: false`) ────────────────────────────────
     if req.stream == Some(false) {
-        let mut content = String::new();
-        let mut prompt_tokens = 0u32;
-        let mut eval_tokens = 0u32;
-
-        let mut token_stream = state.use_case.stream(&job_id);
-        while let Some(result) = token_stream.next().await {
-            match result {
-                Ok(t) if t.is_final => {
-                    prompt_tokens = t.prompt_tokens.unwrap_or(0);
-                    eval_tokens = t.completion_tokens.unwrap_or(0);
-                }
-                Ok(t) => content.push_str(&t.value),
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": sanitize_sse_error(&e)})),
-                    )
-                        .into_response();
-                }
-            }
-        }
+        let c = match collect_stream(&state, &job_id).await {
+            Ok(c) => c,
+            Err(resp) => return resp,
+        };
         let created_at = chrono::Utc::now().to_rfc3339();
         return Json(build_generate_response(
-            &model, &created_at, content, prompt_tokens, eval_tokens,
-        ))
-        .into_response();
+            &model, &created_at, c.content, c.prompt_tokens, c.eval_tokens,
+        )).into_response();
     }
 
     // ── Streaming path (default) ────────────────────────────────────────────
@@ -330,6 +357,7 @@ pub async fn chat(
             request_path: Some("/api/chat".to_string()),
             conversation_id,
             key_tier: Some(api_key.tier),
+            images: None,
         })
         .await
     {
@@ -346,34 +374,14 @@ pub async fn chat(
 
     // ── Non-streaming path (`stream: false`) ────────────────────────────────
     if req.stream == Some(false) {
-        let mut content = String::new();
-        let mut tool_calls: Option<serde_json::Value> = None;
-        let mut prompt_tokens = 0u32;
-        let mut eval_tokens = 0u32;
-
-        let mut token_stream = state.use_case.stream(&job_id);
-        while let Some(result) = token_stream.next().await {
-            match result {
-                Ok(t) if t.tool_calls.is_some() => tool_calls = t.tool_calls,
-                Ok(t) if t.is_final => {
-                    prompt_tokens = t.prompt_tokens.unwrap_or(0);
-                    eval_tokens = t.completion_tokens.unwrap_or(0);
-                }
-                Ok(t) => content.push_str(&t.value),
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": sanitize_sse_error(&e)})),
-                    )
-                        .into_response();
-                }
-            }
-        }
+        let c = match collect_stream(&state, &job_id).await {
+            Ok(c) => c,
+            Err(resp) => return resp,
+        };
         let created_at = chrono::Utc::now().to_rfc3339();
         return Json(build_chat_response(
-            &model, &created_at, content, tool_calls, prompt_tokens, eval_tokens,
-        ))
-        .into_response();
+            &model, &created_at, c.content, c.tool_calls, c.prompt_tokens, c.eval_tokens,
+        )).into_response();
     }
 
     // ── Streaming path (default) ────────────────────────────────────────────
@@ -727,7 +735,29 @@ mod tests {
         }
     }
 
-    // 5. Response includes model name and created_at timestamp
+    // 5. OllamaGenerateBody with images deserializes correctly
+    #[test]
+    fn generate_body_with_images() {
+        let body: OllamaGenerateBody = serde_json::from_str(r#"{
+            "model": "llava:7b",
+            "prompt": "describe this",
+            "images": ["abc123", "def456"]
+        }"#).unwrap();
+        assert_eq!(body.images.as_ref().unwrap().len(), 2);
+        assert_eq!(body.images.as_ref().unwrap()[0], "abc123");
+    }
+
+    // 6. OllamaGenerateBody without images has None
+    #[test]
+    fn generate_body_without_images() {
+        let body: OllamaGenerateBody = serde_json::from_str(r#"{
+            "model": "llama3.2",
+            "prompt": "hello"
+        }"#).unwrap();
+        assert!(body.images.is_none());
+    }
+
+    // 7. Response includes model name and created_at timestamp
     #[test]
     fn response_includes_model_and_timestamp() {
         let ts = "2026-03-15T12:00:00Z";
@@ -739,4 +769,5 @@ mod tests {
             assert_eq!(resp["done"], true);
         }
     }
+
 }

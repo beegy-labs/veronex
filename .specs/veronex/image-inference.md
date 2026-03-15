@@ -511,21 +511,21 @@ images: images.length > 0 ? images : undefined,
 
 | # | Task | 파일 | Status |
 |---|------|------|--------|
-| 1 | 이미지 라우트 body limit 20MB override | `router.rs` | pending |
-| 2 | DB migration: `lab_settings`에 `max_images_per_request`, `max_image_b64_bytes` 컬럼 추가 | `migrations/*.sql` | pending |
-| 3 | `LabSettings` struct + `LabSettingsRepository::update()` 파라미터 확장 | `lab_settings_repository.rs` | pending |
-| 4 | `PatchLabSettingsBody` + GET/PATCH 핸들러 응답에 새 필드 추가 | `dashboard_handlers.rs` | pending |
-| 5 | `SubmitJobRequest`에 `images` 필드 추가 | `inference_use_case.rs` | pending |
-| 6 | `InferenceJob`에 `images` 필드 추가 | `domain/entities/mod.rs` | pending |
-| 7 | `TestCompletionRequest`에 `images` + lab_settings 기반 동적 검증 | `test_handlers.rs` | pending |
-| 8 | `generate()` 핸들러에서 `images` 연결 + lab_settings 기반 동적 검증 | `ollama_compat_handlers.rs` | pending |
-| 9 | `use_case.submit()`에서 `InferenceJob.images` 연결 | `use_case.rs` | pending |
-| 10 | `stream_generate()`에 `images` 파라미터 추가 + body 포함 | `ollama/adapter.rs` | pending |
+| 1 | 이미지 라우트 body limit 20MB override | `router.rs` | **done** |
+| 2 | DB migration: `lab_settings`에 `max_images_per_request`, `max_image_b64_bytes` 컬럼 추가 | `migrations/*.sql` | **done** |
+| 3 | `LabSettings` struct + `LabSettingsRepository::update()` 파라미터 확장 | `lab_settings_repository.rs` | **done** |
+| 4 | `PatchLabSettingsBody` + GET/PATCH 핸들러 응답에 새 필드 추가 | `dashboard_handlers.rs` | **done** |
+| 5 | `SubmitJobRequest`에 `images` 필드 추가 | `inference_use_case.rs` | **done** |
+| 6 | `InferenceJob`에 `images` 필드 추가 | `domain/entities/mod.rs` | **done** |
+| 7 | `TestCompletionRequest`에 `images` + lab_settings 기반 동적 검증 | `test_handlers.rs` | **done** |
+| 8 | `generate()` 핸들러에서 `images` 연결 + lab_settings 기반 동적 검증 | `ollama_compat_handlers.rs` | **done** |
+| 9 | `use_case.submit()`에서 `InferenceJob.images` 연결 | `use_case.rs` | **done** |
+| 10 | `stream_generate()`에 `images` 파라미터 추가 + body 포함 | `ollama/adapter.rs` | **done** |
 | 11 | `compressImage()` 구현 (`browser-image-compression`, 1024px JPEG 0.85, raw base64) | `web/lib/compress-image.ts` | **done** |
 | 12 | `ApiTestForm`에 이미지 첨부 + 압축 + 썸네일 UI | `web/components/api-test-form.tsx` | **done** |
 | 13 | `ApiTestPanel`에 images 상태 + fetch body 포함 | `web/components/api-test-panel.tsx` | **done** |
-| 14 | `ApiTestPanel`에서 `labSettingsQuery`로 `max_images_per_request` 동적 적용 | `web/components/api-test-panel.tsx` | pending |
+| 14 | `ApiTestPanel`에서 `labSettings`로 `max_images_per_request` 동적 적용 | `web/components/api-test-panel.tsx` | **done** |
 | 15 | i18n 메시지 추가 | `web/messages/*.json` | **done** |
-| 16 | Admin Lab Settings 화면에 `max_images_per_request` 설정 UI 추가 | `web/components/lab-settings*.tsx` | pending |
-| 17 | 백엔드 유닛 테스트 (adapter + 동적 검증 로직) | `adapter.rs`, `test_handlers.rs` | pending |
-| 18 | `compressImage()` 유닛 테스트 | Vitest | pending |
+| 16 | Admin Lab Settings 화면에 `max_images_per_request` 설정 UI 추가 | `web/components/nav-settings-dialog.tsx` | **done** |
+| 17 | 백엔드 유닛 테스트 (adapter + 동적 검증 로직) | `ollama_compat_handlers.rs` | **done** |
+| 18 | `compressImage()` 유닛 테스트 | Vitest | **done** |

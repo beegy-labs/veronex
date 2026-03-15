@@ -79,6 +79,8 @@
     "labFeaturesDesc": "Experimental features — may be unstable.",
     "labGeminiFunctionCalling": "Gemini function calling",
     "labGeminiFunctionCallingDesc": "Enable tool use (function calling) through the Gemini-compatible endpoint. Still in development.",
+    "maxImagesPerRequest": "Max images per request",
+    "maxImagesPerRequestDesc": "Maximum images per inference request. 0 disables image input.",
     "menu": "Menu",
     "expand": "Expand",
     "collapse": "Collapse",
@@ -157,7 +159,10 @@
     "unreachable": "Unreachable",
     "tempNormal": "Normal",
     "noServers": "No servers registered",
-    "daysData": "{{n}} days of data"
+    "daysData": "{{n}} days of data",
+    "flowHttpGateway": "HTTP gateway",
+    "flowOnlineCount": "{online}/{total} online",
+    "flowNoProviders": "no providers"
   },
   "jobs": {
     "title": "Jobs",
@@ -377,7 +382,16 @@
         "hard": "Hard Throttle"
       },
       "concern": "LLM Concern",
-      "reason": "Reason"
+      "reason": "Reason",
+      "probePermits": "Probe Permits",
+      "probeRate": "Probe Rate",
+      "lessThanMinAgo": "< 1 min ago",
+      "minsAgo": "{n} min ago",
+      "hoursAgo": "{n}h ago",
+      "colModel": "Model",
+      "colWeight": "Weight",
+      "colKvPerReq": "KV/req",
+      "colActiveLimit": "Active / Limit"
     },
     "gemini": {
       "title": "Gemini API Keys",
@@ -533,7 +547,11 @@
     "tokensCol": "Tokens",
     "callPct": "Call %",
     "avgLatencyCol": "Avg Latency",
-    "free": "Free"
+    "free": "Free",
+    "tokenComposition": "Token Composition",
+    "tokenCompositionDesc": "Prompt vs Completion token split",
+    "nTokens": "{n} tokens",
+    "totalNTokens": "Total {n} tokens"
   },
   "performance": {
     "title": "Performance",

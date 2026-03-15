@@ -15,3 +15,10 @@ export const auditQuery = (action: string, resourceType: string) => queryOptions
   staleTime: STALE_TIME_FAST,
   retry: false,
 })
+
+/** Audit events for a specific resource (e.g., API key history modal). */
+export const resourceAuditQuery = (resourceType: string, resourceId: string) => queryOptions({
+  queryKey: ['audit', resourceType, resourceId] as const,
+  queryFn: () => api.auditEvents({ resource_type: resourceType, resource_id: resourceId, limit: 50 }),
+  retry: false,
+})

@@ -24,14 +24,15 @@ import type { Provider } from '@/lib/types'
 import type { FlowEvent } from '@/hooks/use-inference-stream'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
+import { PROVIDER_OLLAMA, PROVIDER_GEMINI, JOB_STATUS_COLORS } from '@/lib/constants'
+import { getOllamaProviders, getGeminiProviders } from '@/lib/utils'
 
 /* ─── viewport ──────────────────────────────────────────────── */
 const VIEW_W = 540
 const VIEW_H = 264
 const MAX_BEES = 30
 const BEE_DURATION_MS = 1400
-const ENQUEUE_COLOR = '#facc15'
+const ENQUEUE_COLOR = 'var(--theme-status-warning)'
 
 /* ─── Column 1: Veronex API ─────────────────────────────────── */
 const API_CX = 72
@@ -80,13 +81,7 @@ const PATH_GEMINI_API =
 
 /* ─── helpers ────────────────────────────────────────────────── */
 function statusColor(status: string): string {
-  switch (status) {
-    case 'completed': return 'var(--theme-status-success)'
-    case 'failed':    return 'var(--theme-status-error)'
-    case 'running':   return 'var(--theme-status-info)'
-    case 'cancelled': return 'var(--theme-status-cancelled)'
-    default:          return 'var(--theme-status-warning)'
-  }
+  return JOB_STATUS_COLORS[status] ?? 'var(--theme-status-warning)'
 }
 
 function providerStroke(providers: Provider[]): string {
@@ -141,9 +136,9 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
   const [scale,  setScale]  = useReducer((_: number, v: number) => v, 1)
   const [bees,   dispatch]  = useReducer(beeReducer, [])
 
-  const localBs = useMemo(() => providers.filter(b => b.provider_type === PROVIDER_OLLAMA), [providers])
+  const localBs = useMemo(() => getOllamaProviders(providers), [providers])
   const apiBs   = useMemo(
-    () => geminiEnabled ? providers.filter(b => b.provider_type === PROVIDER_GEMINI) : [],
+    () => geminiEnabled ? getGeminiProviders(providers) : [],
     [providers, geminiEnabled],
   )
 
@@ -267,7 +262,7 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
               </text>
               <text x={API_CX + 2} y={API_CY + 10} textAnchor="middle"
                 style={{ fill: 'var(--theme-text-secondary)', fontSize: 9 }}>
-                HTTP gateway
+                {t('overview.flowHttpGateway')}
               </text>
 
               {/* ── Node 2: Queue (Valkey) — cylinder ────────────────── */}
@@ -303,12 +298,12 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
                   <rect
                     x={QUEUE_CX - 24} y={QUEUE_BOT_Y + QUEUE_RY + 3}
                     width={48} height={15} rx={7}
-                    style={{ fill: '#facc1520', stroke: '#facc15', strokeWidth: 1 }}
+                    style={{ fill: 'color-mix(in srgb, var(--theme-status-warning) 12%, transparent)', stroke: 'var(--theme-status-warning)', strokeWidth: 1 }}
                   />
                   <text
                     x={QUEUE_CX} y={QUEUE_BOT_Y + QUEUE_RY + 13}
                     textAnchor="middle"
-                    style={{ fill: '#facc15', fontSize: 9, fontWeight: 700 }}
+                    style={{ fill: 'var(--theme-status-warning)', fontSize: 9, fontWeight: 700 }}
                   >
                     {t('overview.queueWaiting', { count: queueDepth })}
                   </text>
@@ -332,8 +327,8 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
               <text x={PROV_CX} y={OLLAMA_CY + 10} textAnchor="middle"
                 style={{ fill: 'var(--theme-text-secondary)', fontSize: 8 }}>
                 {localBs.length > 0
-                  ? `${localBs.filter(b => b.status === 'online').length}/${localBs.length} online`
-                  : 'no providers'}
+                  ? t('overview.flowOnlineCount', { online: localBs.filter(b => b.status === 'online').length, total: localBs.length })
+                  : t('overview.flowNoProviders')}
               </text>
 
               {/* ── Node 3b: Gemini — octagon (lab-gated) ───────────── */}
@@ -355,8 +350,8 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
                   <text x={PROV_CX} y={GEMINI_CY + 10} textAnchor="middle"
                     style={{ fill: 'var(--theme-text-secondary)', fontSize: 8 }}>
                     {apiBs.length > 0
-                      ? `${apiBs.filter(b => b.status === 'online').length}/${apiBs.length} online`
-                      : 'no providers'}
+                      ? t('overview.flowOnlineCount', { online: apiBs.filter(b => b.status === 'online').length, total: apiBs.length })
+                      : t('overview.flowNoProviders')}
                   </text>
                 </>
               )}

@@ -76,6 +76,11 @@ pub const REFRESH_TOKEN_MAX_AGE: u32 = 604800;
 /// After this period a cache miss triggers a live fetch from the provider.
 pub const MODELS_CACHE_TTL: i64 = 3600;
 
+// ── Body limits ─────────────────────────────────────────────────────────────
+
+/// Body limit for image-capable endpoints (20 MB).
+pub const IMAGE_BODY_LIMIT: usize = 20 * 1024 * 1024;
+
 // ── Error messages ──────────────────────────────────────────────────────────
 
 pub const ERR_DATABASE: &str = "database error";
