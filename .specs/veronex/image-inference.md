@@ -167,20 +167,120 @@ pub struct InferenceJob {
 
 ---
 
-### Phase 3 — 검증 상수 추가 (Backend)
+### Phase 3 — 이미지 제한 어드민 설정화 (Backend)
 
-**`constants.rs`**:
+#### 배경
+
+`MAX_IMAGES` 제한은 Ollama 서버 자체 제약이 아님.
+- Ollama 서버: 이미지 수 제한 없음, 몇 장이든 수신
+- Qwen3 VL 등 vision 모델: N장 멀티 이미지 아키텍처 지원
+- 이슈 #7477: 특정 버전/모델 조합의 stall 버그 — 하드코딩 근거로 부적절
+- **결론**: 어드민이 모델/환경에 맞게 조정할 수 있어야 함
+
+#### 추천 방식: `lab_settings` 확장
+
+새 endpoint 불필요. 기존 `lab_settings` 테이블/port/adapter에 컬럼 추가.
+
+- `lab_settings`는 실질적으로 "admin 운영 설정" 테이블로 쓰임
+- migration 1개, 기존 plumbing (port/adapter/handler/route) 재사용
+- `0` = 이미지 기능 비활성화 (disable all images)
+
+**Migration**:
+
+```sql
+ALTER TABLE lab_settings
+    ADD COLUMN max_images_per_request INTEGER NOT NULL DEFAULT 4,
+    ADD COLUMN max_image_b64_bytes    INTEGER NOT NULL DEFAULT 2097152;
+-- DEFAULT 4: 보수적 기본값 (Ollama #7477 회피)
+-- DEFAULT 2097152: 2MB base64 per image
+```
+
+**`lab_settings_repository.rs`** — `LabSettings` struct:
 
 ```rust
-/// Maximum images per request. Ollama stalls with 4+ images (issue #7477).
-pub const MAX_IMAGES: usize = 4;
+pub struct LabSettings {
+    pub gemini_function_calling: bool,
+    /// Max images per inference request. 0 = image input disabled.
+    /// Ollama has no server-side limit; this guards against model/version stalls.
+    pub max_images_per_request: i32,
+    /// Max base64 bytes per image (default 2MB).
+    pub max_image_b64_bytes: i32,
+    pub updated_at: DateTime<Utc>,
+}
 
-/// Maximum base64 string length per image.
-/// 1024px JPEG 85% ≈ 200KB → base64 ≈ 267KB.
-/// Limit set to 2MB (raw ~1.5MB) to allow uncompressed small images.
-/// base64 overhead: exactly 4/3 × original bytes.
-pub const MAX_IMAGE_B64_BYTES: usize = 2 * 1024 * 1024; // 2MB base64
+impl Default for LabSettings {
+    fn default() -> Self {
+        Self {
+            gemini_function_calling: false,
+            max_images_per_request: 4,
+            max_image_b64_bytes: 2 * 1024 * 1024,
+            updated_at: Utc::now(),
+        }
+    }
+}
 ```
+
+**`PatchLabSettingsBody`**:
+
+```rust
+pub struct PatchLabSettingsBody {
+    pub gemini_function_calling: Option<bool>,
+    pub max_images_per_request:  Option<i32>,  // None = keep current
+    pub max_image_b64_bytes:     Option<i32>,
+}
+```
+
+**핸들러 검증** (`test_handlers.rs`, `ollama_compat_handlers.rs`):
+
+```rust
+// 상수 대신 lab_settings에서 동적으로 읽기
+let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+let max_images = lab.max_images_per_request as usize;
+
+if let Some(imgs) = &req.images {
+    if max_images == 0 {
+        return bad_request("image input is disabled");
+    }
+    if imgs.len() > max_images {
+        return bad_request(format!("too many images (max {max_images})"));
+    }
+    for img in imgs {
+        if img.len() > lab.max_image_b64_bytes as usize {
+            return bad_request("image too large");
+        }
+    }
+}
+```
+
+**`constants.rs`** — fallback 상수만 남김:
+
+```rust
+/// Fallback max images when lab_settings unavailable.
+pub const MAX_IMAGE_B64_BYTES_FALLBACK: usize = 2 * 1024 * 1024;
+```
+
+#### API 응답 (`GET /v1/dashboard/lab`)
+
+```json
+{
+  "gemini_function_calling": false,
+  "max_images_per_request": 4,
+  "max_image_b64_bytes": 2097152,
+  "updated_at": "2026-03-15T00:00:00Z"
+}
+```
+
+#### 프론트엔드 반영
+
+`ApiTestPanel`에서 `useQuery(labSettingsQuery)`로 `max_images_per_request` 읽어
+`MAX_IMAGES` 상수 대신 동적으로 사용:
+
+```ts
+const { data: labSettings } = useQuery(labSettingsQuery)
+const maxImages = labSettings?.max_images_per_request ?? 4
+```
+
+어드민 Lab Settings 화면에서 슬라이더 또는 숫자 입력으로 조정 가능.
 
 ---
 
@@ -393,8 +493,8 @@ images: images.length > 0 ? images : undefined,
 
 | 항목 | 값 | 검증 위치 | 근거 |
 |------|-----|-----------|------|
-| 이미지 최대 개수 | **4장** | **백엔드** | Ollama issue #7477 — 4장 이상 stall |
-| 장당 base64 최대 크기 | **2MB** | **백엔드** | 1024px JPEG 85% 기준 ~267KB, 여유 8× |
+| 이미지 최대 개수 | **어드민 설정** (기본 4) | **백엔드** (lab_settings) | Ollama 서버 제한 아님 — 모델/버전별 stall 가능성 회피용. Qwen3 VL은 N장 지원 |
+| 장당 base64 최대 크기 | **어드민 설정** (기본 2MB) | **백엔드** (lab_settings) | 1024px JPEG 85% 기준 ~267KB, 기본 여유 8× |
 | HTTP body limit (이미지 라우트) | **20MB** | **router.rs override** | 전역 1MB 제한 우회 필요 |
 | 원본 파일 최대 크기 | 10MB/장 | 프론트엔드 (UX) | 브라우저 메모리 보호 |
 | 압축 해상도 | 1024px (긴 변) | 프론트엔드 | 모든 Ollama vision 모델 안전 상한 |
@@ -412,16 +512,20 @@ images: images.length > 0 ? images : undefined,
 | # | Task | 파일 | Status |
 |---|------|------|--------|
 | 1 | 이미지 라우트 body limit 20MB override | `router.rs` | pending |
-| 2 | `MAX_IMAGES=4`, `MAX_IMAGE_B64_BYTES=2MB` 상수 추가 | `constants.rs` | pending |
-| 3 | `SubmitJobRequest`에 `images` 필드 추가 | `inference_use_case.rs` | pending |
-| 4 | `InferenceJob`에 `images` 필드 추가 | `domain/entities/mod.rs` | pending |
-| 5 | `TestCompletionRequest`에 `images` + 개수/크기 검증 | `test_handlers.rs` | pending |
-| 6 | `generate()` 핸들러에서 `images` 연결 + 검증 | `ollama_compat_handlers.rs` | pending |
-| 7 | `use_case.submit()`에서 `InferenceJob.images` 연결 | `use_case.rs` | pending |
-| 8 | `stream_generate()`에 `images` 파라미터 추가 + body 포함 | `ollama/adapter.rs` | pending |
-| 9 | `compressImage()` 구현 (`browser-image-compression`, 1024px JPEG 0.85, raw base64) | `web/lib/compress-image.ts` | pending |
-| 10 | `ApiTestForm`에 이미지 첨부 + 압축 + 썸네일 UI | `web/components/api-test-form.tsx` | pending |
-| 11 | `ApiTestPanel`에 images 상태 + fetch body 포함 | `web/components/api-test-panel.tsx` | pending |
-| 12 | i18n 메시지 추가 | `web/messages/*.json` | pending |
-| 13 | 백엔드 유닛 테스트 (adapter + 검증 로직) | `adapter.rs`, `test_handlers.rs` | pending |
-| 14 | `compressImage()` 유닛 테스트 | Vitest | pending |
+| 2 | DB migration: `lab_settings`에 `max_images_per_request`, `max_image_b64_bytes` 컬럼 추가 | `migrations/*.sql` | pending |
+| 3 | `LabSettings` struct + `LabSettingsRepository::update()` 파라미터 확장 | `lab_settings_repository.rs` | pending |
+| 4 | `PatchLabSettingsBody` + GET/PATCH 핸들러 응답에 새 필드 추가 | `dashboard_handlers.rs` | pending |
+| 5 | `SubmitJobRequest`에 `images` 필드 추가 | `inference_use_case.rs` | pending |
+| 6 | `InferenceJob`에 `images` 필드 추가 | `domain/entities/mod.rs` | pending |
+| 7 | `TestCompletionRequest`에 `images` + lab_settings 기반 동적 검증 | `test_handlers.rs` | pending |
+| 8 | `generate()` 핸들러에서 `images` 연결 + lab_settings 기반 동적 검증 | `ollama_compat_handlers.rs` | pending |
+| 9 | `use_case.submit()`에서 `InferenceJob.images` 연결 | `use_case.rs` | pending |
+| 10 | `stream_generate()`에 `images` 파라미터 추가 + body 포함 | `ollama/adapter.rs` | pending |
+| 11 | `compressImage()` 구현 (`browser-image-compression`, 1024px JPEG 0.85, raw base64) | `web/lib/compress-image.ts` | **done** |
+| 12 | `ApiTestForm`에 이미지 첨부 + 압축 + 썸네일 UI | `web/components/api-test-form.tsx` | **done** |
+| 13 | `ApiTestPanel`에 images 상태 + fetch body 포함 | `web/components/api-test-panel.tsx` | **done** |
+| 14 | `ApiTestPanel`에서 `labSettingsQuery`로 `max_images_per_request` 동적 적용 | `web/components/api-test-panel.tsx` | pending |
+| 15 | i18n 메시지 추가 | `web/messages/*.json` | **done** |
+| 16 | Admin Lab Settings 화면에 `max_images_per_request` 설정 UI 추가 | `web/components/lab-settings*.tsx` | pending |
+| 17 | 백엔드 유닛 테스트 (adapter + 동적 검증 로직) | `adapter.rs`, `test_handlers.rs` | pending |
+| 18 | `compressImage()` 유닛 테스트 | Vitest | pending |
