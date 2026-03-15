@@ -5,92 +5,91 @@
 
 ---
 
-## 목표
+## Goal
 
-Agent → OTel Collector → Redpanda → ClickHouse 파이프라인에서
-저장 용량을 최소화한다.
+Minimize storage volume in the Agent → OTel Collector → Redpanda → ClickHouse pipeline.
 
 ---
 
-## 현황 (2026-03-15 측정)
+## Current State (measured 2026-03-15)
 
-### Redpanda (50G PVC, 3.9G 사용)
+### Redpanda (50G PVC, 3.9G used)
 
-| Topic | 용량 | 원인 |
+| Topic | Size | Cause |
 |-------|------|------|
-| `otel.audit.metrics` | 2.1G | retention 없음 → 무한 축적 |
-| `otel.audit.logs` | 1.2G | retention 없음 → 무한 축적 |
-| `otel.audit.traces` | 97M | retention 없음 |
+| `otel.audit.metrics` | 2.1G | no retention → unbounded accumulation |
+| `otel.audit.logs` | 1.2G | no retention → unbounded accumulation |
+| `otel.audit.traces` | 97M | no retention |
 
-> Kafka/Redpanda는 consumer가 소비해도 retention 설정 없으면 삭제 안 함.
-> ClickHouse가 거의 실시간으로 소비하지만 메시지는 계속 남아있음.
+> Kafka/Redpanda does not delete messages even after consumer consumption without retention settings.
+> ClickHouse consumes near real-time but messages remain.
 
 ### ClickHouse (veronex DB)
 
-| 테이블 | 행 수 | 용량 | 시간당 수집 |
+| Table | Row count | Size | Hourly ingestion |
 |--------|-------|------|------------|
 | `otel_metrics_gauge` | 16.3M | 121 MiB | 806,420 rows |
 | `otel_logs` | 1.0M | 70.6 MiB | 2,714 rows |
 | `audit_events` | 9 | 2.16 KiB | — |
 
-> TTL은 init migration에 placeholder로 설정됨 → Helm values에서 metrics 30일, analytics 90일, audit 365일로 배포 시 치환.
+> TTL set as placeholder in init migration → substituted at deploy via Helm values: metrics 30d, analytics 90d, audit 365d.
 
-### Agent 수집 메트릭 분석 (시간당, 상위)
+### Agent Collected Metrics Analysis (hourly, top)
 
-| Metric | rows/hr | 비중 | 필요성 |
+| Metric | rows/hr | Share | Necessity |
 |--------|---------|------|--------|
-| `node_cpu_seconds_total` | 187,460 | 23% | Partial — user/system/iowait만 필요 |
-| `node_network_*` (25종) | ~250,000 | 31% | 불필요 — 현재 allowlist에 없으나 ClickHouse에 과거 데이터 존재 |
-| `node_cpu_scaling_governor` | 31,633 | 4% | 불필요 |
-| `node_cpu_guest_seconds_total` | 31,633 | 4% | 불필요 |
-| `node_cpu_scaling_frequency_*` (4종) | 63,000 | 8% | 불필요 |
-| `node_hwmon_chip_names` | 4,066 | 0.5% | 불필요 (static label) |
-| `node_hwmon_sensor_label` | 6,226 | 0.8% | 불필요 (static label) |
-| `node_drm_*`, `node_hwmon_temp_*` | ~15,000 | 2% | 필요 (GPU 모니터링 핵심) |
-| `node_memory_*`, `ollama_*` | ~8,000 | 1% | 필요 |
+| `node_cpu_seconds_total` | 187,460 | 23% | Partial — only user/system/iowait needed |
+| `node_network_*` (25 types) | ~250,000 | 31% | Unnecessary — not in current allowlist but historical data exists in ClickHouse |
+| `node_cpu_scaling_governor` | 31,633 | 4% | Unnecessary |
+| `node_cpu_guest_seconds_total` | 31,633 | 4% | Unnecessary |
+| `node_cpu_scaling_frequency_*` (4 types) | 63,000 | 8% | Unnecessary |
+| `node_hwmon_chip_names` | 4,066 | 0.5% | Unnecessary (static label) |
+| `node_hwmon_sensor_label` | 6,226 | 0.8% | Unnecessary (static label) |
+| `node_drm_*`, `node_hwmon_temp_*` | ~15,000 | 2% | Required (core GPU monitoring) |
+| `node_memory_*`, `ollama_*` | ~8,000 | 1% | Required |
 
 ---
 
-## 최적화 계획
+## Optimization Plan
 
-### Phase 1 — Redpanda Retention 설정 (최고 효과)
+### Phase 1 — Redpanda Retention Configuration (highest impact)
 
-**대상**: platform-gitops `clusters/home/values/redpanda-values.yaml`
+**Target**: platform-gitops `clusters/home/values/redpanda-values.yaml`
 
-모든 otel topic에 retention 설정:
+Set retention on all otel topics:
 
-| Topic | Retention | 근거 |
+| Topic | Retention | Rationale |
 |-------|-----------|------|
-| `otel.audit.metrics` | 2시간 | ClickHouse 실시간 소비, buffer 여유만 필요 |
-| `otel.audit.logs` | 2시간 | 동일 |
-| `otel.audit.traces` | 2시간 | 동일 |
+| `otel.audit.metrics` | 2 hours | ClickHouse consumes real-time, only buffer headroom needed |
+| `otel.audit.logs` | 2 hours | Same |
+| `otel.audit.traces` | 2 hours | Same |
 
-**예상 효과**: 3.4G → ~200MB (98% 감소)
+**Expected impact**: 3.4G → ~200MB (98% reduction)
 
-### Phase 2 — Agent Allowlist 정밀화
+### Phase 2 — Agent Allowlist Refinement
 
-**대상**: `crates/veronex-agent/src/scraper.rs`
+**Target**: `crates/veronex-agent/src/scraper.rs`
 
-현재 `NODE_EXPORTER_ALLOWLIST`에서 제거/수정:
+Remove/modify from current `NODE_EXPORTER_ALLOWLIST`:
 
-| 변경 | 항목 | 이유 |
+| Change | Item | Reason |
 |------|------|------|
-| 제거 | `node_cpu_scaling_governor` | 클럭 거버너 — 분석 불필요 |
-| 제거 | `node_cpu_guest_seconds_total` | VM guest CPU — 베어메탈 불필요 |
-| 제거 | `node_hwmon_chip_names` | static label, value 무의미 |
-| 제거 | `node_hwmon_sensor_label` | static label, value 무의미 |
-| 유지 | `node_cpu_seconds_total` | 전체 mode 유지 (mode 필터는 OTel에서) |
-| 유지 | `node_drm_*` | GPU 모니터링 핵심 |
-| 유지 | `node_hwmon_temp_celsius` | 열 보호 핵심 |
-| 유지 | `node_hwmon_power_average_watt` | 전력 모니터링 |
-| 유지 | `node_memory_*` | 메모리 모니터링 핵심 |
-| 유지 | `ollama_*` | Ollama 상태 핵심 |
+| Remove | `node_cpu_scaling_governor` | Clock governor — analysis unnecessary |
+| Remove | `node_cpu_guest_seconds_total` | VM guest CPU — unnecessary for bare metal |
+| Remove | `node_hwmon_chip_names` | static label, value meaningless |
+| Remove | `node_hwmon_sensor_label` | static label, value meaningless |
+| Keep | `node_cpu_seconds_total` | Keep all modes (mode filter in OTel) |
+| Keep | `node_drm_*` | Core GPU monitoring |
+| Keep | `node_hwmon_temp_celsius` | Core thermal protection |
+| Keep | `node_hwmon_power_average_watt` | Power monitoring |
+| Keep | `node_memory_*` | Core memory monitoring |
+| Keep | `ollama_*` | Core Ollama status |
 
-**예상 효과**: metrics 수집량 ~12% 감소 (67K rows/hr 감소)
+**Expected impact**: ~12% reduction in metrics collection (67K rows/hr reduction)
 
-### Phase 3 — ClickHouse TTL 추가
+### Phase 3 — ClickHouse TTL Addition
 
-**대상**: `migrations/clickhouse/000001_init.up.sql` + 4개 SQL 파일
+**Target**: `migrations/clickhouse/000001_init.up.sql` + 4 SQL files
 
 ```sql
 -- otel_metrics_gauge
@@ -102,39 +101,39 @@ ALTER TABLE veronex.otel_logs
   MODIFY TTL toDateTime(Timestamp) + INTERVAL 7 DAY;
 ```
 
-| 테이블 | TTL | 근거 |
+| Table | TTL | Rationale |
 |--------|-----|------|
-| `otel_metrics_gauge` | 30일 | 월별 트렌드 분석 필요 |
-| `otel_logs` | 7일 | 최근 로그만 디버깅에 유용 |
+| `otel_metrics_gauge` | 30 days | Monthly trend analysis needed |
+| `otel_logs` | 7 days | Only recent logs useful for debugging |
 
-**예상 효과**: 장기 무한 증가 방지, 현재 데이터는 30일 후 정리 시작
+**Expected impact**: prevents unbounded long-term growth, current data starts cleanup after 30 days
 
-### Phase 4 — Scrape Interval 조정 (선택)
+### Phase 4 — Scrape Interval Adjustment (optional)
 
-**대상**: `clusters/home/values/veronex-dev-values.yaml` + prod values
+**Target**: `clusters/home/values/veronex-dev-values.yaml` + prod values
 
-현재 `scrapeIntervalMs: 15000` → `60000` (15초 → 60초)
+Current `scrapeIntervalMs: 15000` → `60000` (15s → 60s)
 
-**효과**: metrics 4배 감소 (806K → ~200K rows/hr)
-**트레이드오프**: GPU 온도 모니터링 실시간성 1분 지연 → thermal 보호는 agent 내부 로직이므로 무관
+**Impact**: 4× metrics reduction (806K → ~200K rows/hr)
+**Tradeoff**: 1-minute delay in GPU temperature monitoring real-time → irrelevant since thermal protection is agent-internal logic
 
 ---
 
-## 구현 순서
+## Implementation Order
 
-| 순서 | Phase | 예상 감소 | 비고 |
+| Order | Phase | Expected reduction | Notes |
 |------|-------|----------|------|
-| 1 | Redpanda Retention | Redpanda 98% | GitOps → Terraform, 즉시 효과 |
-| 2 | ClickHouse TTL | 장기 무한 증가 방지 | DB migration |
-| 3 | Agent Allowlist | metrics 12% 감소 | 코드 변경 + 빌드/배포 |
-| 4 | Scrape Interval | metrics 75% 감소 | values.yaml 변경 |
+| 1 | Redpanda Retention | Redpanda 98% | GitOps → Terraform, immediate effect |
+| 2 | ClickHouse TTL | Prevent unbounded long-term growth | DB migration |
+| 3 | Agent Allowlist | metrics 12% reduction | Code change + build/deploy |
+| 4 | Scrape Interval | metrics 75% reduction | values.yaml change |
 
 ## Tasks
 
-| # | Task | 대상 | Status |
+| # | Task | Target | Status |
 |---|------|------|--------|
-| 1 | Redpanda topic retention 설정 | platform-gitops | pending |
-| 2 | ClickHouse `otel_metrics_gauge` TTL 30일 | migration SQL | **done** (init migration TTL placeholder + Helm values) |
-| 3 | ClickHouse `otel_logs` TTL 90일 | migration SQL | **done** (init migration TTL placeholder + Helm values) |
-| 4 | Agent allowlist 4개 항목 제거 | scraper.rs | **done** (allowlist에 미포함 상태) |
-| 5 | Scrape interval 60초로 조정 | values.yaml | **done** |
+| 1 | Redpanda topic retention configuration | platform-gitops | pending |
+| 2 | ClickHouse `otel_metrics_gauge` TTL 30 days | migration SQL | **done** (init migration TTL placeholder + Helm values) |
+| 3 | ClickHouse `otel_logs` TTL 90 days | migration SQL | **done** (init migration TTL placeholder + Helm values) |
+| 4 | Agent allowlist remove 4 items | scraper.rs | **done** (not included in allowlist) |
+| 5 | Scrape interval adjusted to 60s | values.yaml | **done** |

@@ -1,7 +1,7 @@
 # API Design — 2026 Research
 
 > **Last Researched**: 2026-03-02 | **Source**: Implementation patterns + web search
-> **Status**: ✅ Verified — all topics researched and documented
+> **Status**: Verified — all topics researched and documented
 
 ---
 
@@ -117,9 +117,9 @@ info:
 
 | Strategy | Example | Verdict |
 |----------|---------|---------|
-| URL path (current) | `/v1/chat/completions` | ✅ Use this — easy to debug, CDN-friendly, visible in logs |
-| Header (`API-Version: 2`) | `POST /chat/completions` + header | ❌ Hard to test in browser, invisible in logs |
-| Accept header | `Accept: application/vnd.api.v2+json` | ❌ Complex, rarely used in practice |
+| URL path (current) | `/v1/chat/completions` | Yes — Use this — easy to debug, CDN-friendly, visible in logs |
+| Header (`API-Version: 2`) | `POST /chat/completions` + header | No — Hard to test in browser, invisible in logs |
+| Accept header | `Accept: application/vnd.api.v2+json` | No — Complex, rarely used in practice |
 
 **Decision:** URL path versioning (`/v1/`) is the pragmatic 2026 choice for:
 - OpenAI compatibility (`/v1/chat/completions`)
