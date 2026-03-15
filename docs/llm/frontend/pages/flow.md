@@ -1,6 +1,6 @@
 # Web — Flow Page (/flow)
 
-> SSOT | Tier 2 | **Last Updated**: 2026-03-04
+> CDD Layer 2 | **Last Updated**: 2026-03-04
 
 ## Task Guide
 

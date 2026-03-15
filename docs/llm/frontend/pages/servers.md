@@ -44,10 +44,10 @@ Physical GPU servers — one node-exporter per server.
 
 Name         node-exporter endpoint       Live Metrics (30s auto-refresh)    Registered  Actions
 ──────────────────────────────────────────────────────────────────────────────────────────────
-gpu-node-1   http://192.168.1.10:9100     MEM 28.5/64.0 GB  32%              Feb 26      [📊][✏️][🗑]
+gpu-node-1   http://192.168.1.10:9100     MEM 28.5/64.0 GB  32%              Feb 26      [History][Edit][Delete]
                                           CPU 32 cores
                                           GPU card0 · 32°C · 10W
-gpu-node-2   not configured               —                                   Feb 26      [📊][✏️][🗑]
+gpu-node-2   not configured               —                                   Feb 26      [History][Edit][Delete]
 
                  [← 1 / 2 →]   ← pagination controls (hidden when ≤ PAGE_SIZE rows)
 ```

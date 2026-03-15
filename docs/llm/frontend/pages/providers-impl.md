@@ -68,8 +68,8 @@ No props. Placed after `<OllamaSyncSection />` in OllamaTab.
 | `analyzerModel` | `<select>` from `settings.available_models` grouped by provider type (Ollama/Gemini). Backend: Ollama via `/api/tags`, Gemini via `gemini_models` DB with Gemini API fallback when DB empty |
 | `syncEnabled` | Switch; off = auto-sync paused (manual sync still works) |
 | `syncIntervalSecs` | Number input (min: 60, step: 30) |
-| `probePermits` | Number input; AIMD probe: +N(위로 탐색), -N(아래로 탐색), 0=비활성 |
-| `probeRate` | Number input (min: 0); 매 N번 limit 도달 시 1회 probe |
+| `probePermits` | Number input; AIMD probe: +N (probe up), -N (probe down), 0=disabled |
+| `probeRate` | Number input (min: 0); 1 probe per N limit hits |
 | Save | Invalidates `['sync-settings']` |
 | Sync Now | Toast "Sync triggered" -- invalidates `['capacity', 'sync-settings']` after 3s delay |
 
