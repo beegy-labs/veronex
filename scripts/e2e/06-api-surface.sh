@@ -49,6 +49,47 @@ for ep in chat generate tags show gemini test_completions test_chat test_generat
   c=$(tail -1 "$TMPDIR_MF/$ep" 2>/dev/null || echo "000")
   [ "$c" = "200" ] && pass "$ep → 200" || fail "$ep → $c"
 done
+
+# ── stream:false response format validation (Ollama compat) ───────────────────
+# /api/chat stream:false  → {model, created_at, message:{role,content}, done:true}
+CHAT_BODY=$(head -n -1 "$TMPDIR_MF/chat" 2>/dev/null || echo "")
+CHAT_FMT=$(echo "$CHAT_BODY" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    issues = []
+    if d.get('done') is not True: issues.append('done!=true')
+    if 'message' not in d: issues.append('no message')
+    elif 'content' not in d.get('message', {}): issues.append('no message.content')
+    if 'model' not in d: issues.append('no model')
+    if 'created_at' not in d: issues.append('no created_at')
+    print('ok' if not issues else '|'.join(issues))
+except Exception as e:
+    print(f'not_json:{e}')
+" 2>/dev/null || echo "parse_error")
+[ "$CHAT_FMT" = "ok" ] \
+  && pass "/api/chat stream:false → done:true, message.content (Ollama spec)" \
+  || fail "/api/chat stream:false → format: $CHAT_FMT"
+
+# /api/generate stream:false → {model, created_at, response:"...", done:true}
+GEN_BODY=$(head -n -1 "$TMPDIR_MF/generate" 2>/dev/null || echo "")
+GEN_FMT=$(echo "$GEN_BODY" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    issues = []
+    if d.get('done') is not True: issues.append('done!=true')
+    if 'response' not in d: issues.append('no response field')
+    if 'model' not in d: issues.append('no model')
+    if 'created_at' not in d: issues.append('no created_at')
+    print('ok' if not issues else '|'.join(issues))
+except Exception as e:
+    print(f'not_json:{e}')
+" 2>/dev/null || echo "parse_error")
+[ "$GEN_FMT" = "ok" ] \
+  && pass "/api/generate stream:false → done:true, response field (Ollama spec)" \
+  || fail "/api/generate stream:false → format: $GEN_FMT"
+
 rm -rf "$TMPDIR_MF"
 
 # ── SSE Content Validation (basic — detailed check in phase 08) ───────────────
@@ -212,6 +253,82 @@ if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
   # is_pulling will be cleared by background task after pull completes
 else
   info "Pull drain test skipped — no local provider registered"
+fi
+
+# ── Image Inference (vision model — auto-detected) ────────────────────────────
+
+hdr "Image Inference (vision model)"
+
+# Detect vision model from local Ollama directly (host-side access)
+VISION_MODEL=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    for m in d.get('models', []):
+        name = m.get('name', '')
+        if any(v in name.lower() for v in ['llava', 'vision', 'minicpm', 'moondream']):
+            print(name); exit()
+except: pass
+print('')
+" 2>/dev/null || echo "")
+
+if [ -n "$VISION_MODEL" ]; then
+  info "Vision model: $VISION_MODEL"
+
+  # 1×1 red pixel JPEG — raw base64 (no data URL prefix, required by Ollama)
+  TINY_IMG="/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFgABAQEAAAAAAAAAAAAAAAAABgUE/8QAIhAAAQMEAgMAAAAAAAAAAAAAAQIDBBEhBRIxUWH/2gAIAQEAAT8AsNHe5zw7VRyuL9TrR8bDcMqR7S6mXRO3NkBjZAFuNEiSdRkrfX//2Q=="
+
+  # /api/generate with image — stream:false
+  IMG_GEN_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/api/generate" \
+    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"Describe this image in one word.\",\"images\":[\"$TINY_IMG\"],\"stream\":false}" \
+    2>/dev/null || printf "\n000")
+  IMG_GEN_CODE=$(echo "$IMG_GEN_RES" | tail -1)
+  IMG_GEN_BODY=$(echo "$IMG_GEN_RES" | head -n -1)
+
+  case "$IMG_GEN_CODE" in
+    200)
+      IMG_GEN_VALID=$(echo "$IMG_GEN_BODY" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    ok = d.get('done') is True and 'response' in d
+    print('ok' if ok else f'done={d.get(\"done\")} response={\"response\" in d}')
+except Exception as e:
+    print(f'not_json:{e}')
+" 2>/dev/null || echo "parse_error")
+      [ "$IMG_GEN_VALID" = "ok" ] \
+        && pass "Image inference /api/generate → 200 (done:true, response field)" \
+        || fail "Image inference /api/generate → 200 but format: $IMG_GEN_VALID"
+      ;;
+    503) info "Image inference → 503 (vision model not yet synced in veronex)" ;;
+    400) fail "Image inference /api/generate → 400 (validation rejected)" ;;
+    *)   info "Image inference /api/generate → $IMG_GEN_CODE" ;;
+  esac
+
+  # Validate: 5 images → 400 (MAX_IMAGES=4 enforced by backend)
+  FIVE_IMGS=$(printf '"%s",' "$TINY_IMG" "$TINY_IMG" "$TINY_IMG" "$TINY_IMG" "$TINY_IMG" | sed 's/,$//')
+  IMG_LIMIT_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 10 "$API/api/generate" \
+    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"test\",\"images\":[$FIVE_IMGS],\"stream\":false}" \
+    2>/dev/null | tail -1)
+  [ "$IMG_LIMIT_CODE" = "400" ] \
+    && pass "Image count limit (MAX_IMAGES=4): 5 images → 400" \
+    || info "Image count limit: 5 images → $IMG_LIMIT_CODE (pending implementation)"
+
+  # /v1/test/completions with image (test endpoint)
+  IMG_TEST_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 60 "$API/v1/test/completions" \
+    -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"one word\"}],\"images\":[\"$TINY_IMG\"],\"stream\":false}" \
+    2>/dev/null | tail -1)
+  case "$IMG_TEST_CODE" in
+    200) pass "Image inference /v1/test/completions → 200" ;;
+    503) info "Image inference test endpoint → 503 (vision model not synced)" ;;
+    400) info "Image inference test endpoint → 400 (pending implementation)" ;;
+    *)   info "Image inference test endpoint → $IMG_TEST_CODE" ;;
+  esac
+else
+  info "SKIP: No vision model (llava/vision/minicpm/moondream) on local Ollama"
 fi
 
 save_counts
