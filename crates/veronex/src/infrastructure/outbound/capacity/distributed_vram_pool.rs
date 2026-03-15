@@ -137,8 +137,8 @@ impl VramPoolPort for DistributedVramPool {
         let (reserved_kv, active_count, prov_active, kv_mb) = local_permit.into_parts()?;
 
         // Publish reservation to Valkey async.
-        let vram_key = format!("veronex:vram_reserved:{provider_id}");
-        let leases_key = format!("veronex:vram_leases:{provider_id}");
+        let vram_key = crate::infrastructure::outbound::valkey_keys::vram_reserved(provider_id);
+        let leases_key = crate::infrastructure::outbound::valkey_keys::vram_leases(provider_id);
         let lease_id = Uuid::new_v4().to_string();
         let instance_id = self.instance_id.to_string();
 

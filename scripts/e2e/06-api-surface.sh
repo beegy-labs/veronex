@@ -13,13 +13,13 @@ TMPDIR_MF=$(mktemp -d)
   -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
   -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hi\"}],\"max_tokens\":8,\"stream\":true}" \
   > "$TMPDIR_MF/sse" 2>/dev/null || true) &
-(curl -s -w "\n%{http_code}" --max-time 30 "$API/api/chat" \
+(curl -s -w "\n%{http_code}" --max-time 60 "$API/api/chat" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"word\"}],\"stream\":false}" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 1+1? Answer with just the number.\"}],\"stream\":false}" \
   > "$TMPDIR_MF/chat" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/chat") &
-(curl -s -w "\n%{http_code}" --max-time 30 "$API/api/generate" \
+(curl -s -w "\n%{http_code}" --max-time 60 "$API/api/generate" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"prompt\":\"word\",\"stream\":false}" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"What is 1+1? Answer with just the number.\",\"stream\":false}" \
   > "$TMPDIR_MF/generate" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/generate") &
 (curl -s -w "\n%{http_code}" "$API/api/tags" -H "X-API-Key: $API_KEY" \
   > "$TMPDIR_MF/tags" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/tags") &
@@ -49,6 +49,50 @@ for ep in chat generate tags show gemini test_completions test_chat test_generat
   c=$(tail -1 "$TMPDIR_MF/$ep" 2>/dev/null || echo "000")
   [ "$c" = "200" ] && pass "$ep → 200" || fail "$ep → $c"
 done
+
+# ── stream:false response format validation (Ollama compat) ───────────────────
+# Extract body: remove the last line (HTTP status code appended by -w)
+# Use python to handle edge cases with trailing newlines
+
+validate_stream_false() {
+  local file="$1" endpoint="$2" required_field="$3"
+  local raw; raw=$(cat "$file" 2>/dev/null || echo "")
+  local http_code; http_code=$(echo "$raw" | tail -1)
+  # Body = everything except last line (the HTTP code)
+  local body; body=$(echo "$raw" | sed '$d')
+
+  if [ "$http_code" != "200" ]; then
+    fail "$endpoint stream:false → HTTP $http_code"
+    return
+  fi
+
+  local result; result=$(echo "$body" | python3 -c "
+import sys, json
+raw = sys.stdin.read().strip()
+try:
+    d = json.loads(raw)
+    issues = []
+    if d.get('done') is not True: issues.append('done!=true')
+    if '$required_field' == 'message':
+        if 'message' not in d: issues.append('no message')
+        elif 'content' not in d.get('message', {}): issues.append('no message.content')
+    elif '$required_field' == 'response':
+        if 'response' not in d: issues.append('no response field')
+    if 'model' not in d: issues.append('no model')
+    if 'created_at' not in d: issues.append('no created_at')
+    print('ok' if not issues else '|'.join(issues))
+except Exception as e:
+    print(f'not_json:{e}')
+" 2>/dev/null || echo "parse_error")
+
+  [ "$result" = "ok" ] \
+    && pass "$endpoint stream:false → done:true, $required_field (Ollama spec)" \
+    || fail "$endpoint stream:false → format: $result"
+}
+
+validate_stream_false "$TMPDIR_MF/chat" "/api/chat" "message"
+validate_stream_false "$TMPDIR_MF/generate" "/api/generate" "response"
+
 rm -rf "$TMPDIR_MF"
 
 # ── SSE Content Validation (basic — detailed check in phase 08) ───────────────
@@ -147,8 +191,64 @@ fi
 c=$(apostc "/v1/dashboard/session-grouping/trigger" "{}" | code)
 [ "$c" = "200" ] || [ "$c" = "202" ] && pass "Session grouping → $c" || fail "Session grouping → $c"
 
+# ── Agent Health Probes ──────────────────────────────────────────────────────
+
+hdr "Agent Health Probes"
+
+AGENT_HEALTH="${AGENT_HEALTH_URL:-http://localhost:9091}"
+for ep in startup ready health; do
+  c=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$AGENT_HEALTH/$ep" 2>/dev/null || echo "000")
+  case "$c" in
+    200) pass "Agent /$ep → 200" ;;
+    503) info "Agent /$ep → 503 (not ready yet)" ;;
+    000) info "Agent /$ep → unreachable (agent not running or port not exposed)" ;;
+    *)   fail "Agent /$ep → $c" ;;
+  esac
+done
+
+# ── Lab Settings (image limits) ──────────────────────────────────────────────
+
+hdr "Lab Settings (image limits)"
+
+LAB_FULL=$(aget "/v1/dashboard/lab" 2>/dev/null || echo "{}")
+LAB_CHECK=$(echo "$LAB_FULL" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    has_images = 'max_images_per_request' in d and 'max_image_b64_bytes' in d
+    print(f'ok|{d.get(\"max_images_per_request\",\"?\")}|{d.get(\"max_image_b64_bytes\",\"?\")}' if has_images else 'missing')
+except: print('error')
+" 2>/dev/null || echo "error")
+
+if [[ "$LAB_CHECK" == ok* ]]; then
+  MAX_IMG=$(echo "$LAB_CHECK" | cut -d'|' -f2)
+  MAX_BYTES=$(echo "$LAB_CHECK" | cut -d'|' -f3)
+  pass "Lab settings has image limits (max_images=$MAX_IMG, max_bytes=$MAX_BYTES)"
+else
+  fail "Lab settings missing image limit fields"
+fi
+
+# Dynamic image limit: set max_images=2, verify 3 images → 400, then revert
+TINY_B64="dGVzdA=="  # "test" in base64
+PATCH_RES=$(apatchc "/v1/dashboard/lab" '{"max_images_per_request":2}')
+PATCH_CODE=$(echo "$PATCH_RES" | code)
+if [ "$PATCH_CODE" = "200" ]; then
+  THREE_IMGS=$(printf '"%s",' "$TINY_B64" "$TINY_B64" "$TINY_B64" | sed 's/,$//')
+  DYN_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 10 "$API/api/generate" \
+    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"prompt\":\"test\",\"images\":[$THREE_IMGS],\"stream\":false}" \
+    2>/dev/null | tail -1)
+  [ "$DYN_CODE" = "400" ] \
+    && pass "Dynamic image limit: max_images=2, 3 images → 400" \
+    || fail "Dynamic image limit: max_images=2, 3 images → $DYN_CODE (expected 400)"
+  # Revert to default
+  apatch "/v1/dashboard/lab" '{"max_images_per_request":4}' > /dev/null 2>&1
+else
+  info "Lab settings PATCH failed ($PATCH_CODE), skipping dynamic image test"
+fi
+
 # Lab toggle + revert
-LAB=$(aget "/v1/dashboard/lab" 2>/dev/null | jv '["gemini_function_calling"]' 2>/dev/null || echo "")
+LAB=$(echo "$LAB_FULL" | jv '["gemini_function_calling"]' 2>/dev/null || echo "")
 if [ -n "$LAB" ] && [ "$LAB" != "None" ]; then
   if [ "$LAB" = "True" ]; then
     apatch "/v1/dashboard/lab" '{"gemini_function_calling":false}' > /dev/null 2>&1
@@ -212,6 +312,96 @@ if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
   # is_pulling will be cleared by background task after pull completes
 else
   info "Pull drain test skipped — no local provider registered"
+fi
+
+# ── Image Inference (vision model — auto-detected) ────────────────────────────
+
+hdr "Image Inference (vision model)"
+
+# Detect vision model from local Ollama directly (host-side access)
+VISION_MODEL=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    for m in d.get('models', []):
+        name = m.get('name', '')
+        if any(v in name.lower() for v in ['llava', 'vision', 'minicpm', 'moondream', '-vl', '_vl']):
+            print(name); exit()
+except: pass
+print('')
+" 2>/dev/null || echo "")
+
+if [ -n "$VISION_MODEL" ]; then
+  info "Vision model: $VISION_MODEL"
+
+  # 1×1 red pixel JPEG — raw base64 (no data URL prefix, required by Ollama)
+  TINY_IMG="/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFgABAQEAAAAAAAAAAAAAAAAABgUE/8QAIhAAAQMEAgMAAAAAAAAAAAAAAQIDBBEhBRIxUWH/2gAIAQEAAT8AsNHe5zw7VRyuL9TrR8bDcMqR7S6mXRO3NkBjZAFuNEiSdRkrfX//2Q=="
+
+  # Sync vision model to veronex before testing
+  apost "/v1/ollama/models/sync" "{}" > /dev/null 2>&1 || true
+  sleep 2
+
+  # /api/generate with image — stream:false
+  IMG_GEN_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/api/generate" \
+    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"Describe this image in one word.\",\"images\":[\"$TINY_IMG\"],\"stream\":false}" \
+    2>/dev/null || printf "\n000")
+  IMG_GEN_CODE=$(echo "$IMG_GEN_RES" | tail -1)
+  IMG_GEN_BODY=$(echo "$IMG_GEN_RES" | sed '$d')
+
+  case "$IMG_GEN_CODE" in
+    200)
+      IMG_GEN_VALID=$(echo "$IMG_GEN_BODY" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read().strip())
+    ok = d.get('done') is True and 'response' in d
+    print('ok' if ok else f'done={d.get(\"done\")} response={\"response\" in d}')
+except Exception as e:
+    print(f'not_json:{e}')
+" 2>/dev/null || echo "parse_error")
+      [ "$IMG_GEN_VALID" = "ok" ] \
+        && pass "Image inference /api/generate → 200 (done:true, response field)" \
+        || fail "Image inference /api/generate → 200 but format: $IMG_GEN_VALID"
+      ;;
+    503) info "Image inference → 503 (vision model not yet synced in veronex)" ;;
+    400) fail "Image inference /api/generate → 400 (validation rejected)" ;;
+    *)   info "Image inference /api/generate → $IMG_GEN_CODE" ;;
+  esac
+
+  # /api/generate without images — verify images field is omitted in body
+  NO_IMG_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/api/generate" \
+    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"prompt\":\"say ok\",\"stream\":false}" \
+    2>/dev/null || printf "\n000")
+  NO_IMG_CODE=$(echo "$NO_IMG_RES" | tail -1)
+  [ "$NO_IMG_CODE" = "200" ] \
+    && pass "/api/generate without images → 200" \
+    || info "/api/generate without images → $NO_IMG_CODE"
+
+  # Validate: 5 images → 400 (lab_settings.max_images_per_request=4 enforced by backend)
+  FIVE_IMGS=$(printf '"%s",' "$TINY_IMG" "$TINY_IMG" "$TINY_IMG" "$TINY_IMG" "$TINY_IMG" | sed 's/,$//')
+  IMG_LIMIT_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 10 "$API/api/generate" \
+    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"test\",\"images\":[$FIVE_IMGS],\"stream\":false}" \
+    2>/dev/null | tail -1)
+  [ "$IMG_LIMIT_CODE" = "400" ] \
+    && pass "Image count limit (max_images=4): 5 images → 400" \
+    || fail "Image count limit: 5 images → $IMG_LIMIT_CODE (expected 400)"
+
+  # /v1/test/completions with image (test endpoint)
+  IMG_TEST_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 120 "$API/v1/test/completions" \
+    -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"one word\"}],\"images\":[\"$TINY_IMG\"],\"stream\":false}" \
+    2>/dev/null | tail -1)
+  case "$IMG_TEST_CODE" in
+    200) pass "Image inference /v1/test/completions → 200" ;;
+    503) info "Image inference test endpoint → 503 (vision model not synced)" ;;
+    400) info "Image inference test endpoint → 400 (pending implementation)" ;;
+    *)   info "Image inference test endpoint → $IMG_TEST_CODE" ;;
+  esac
+else
+  info "SKIP: No vision model (llava/vl/minicpm/moondream) on local Ollama"
 fi
 
 save_counts

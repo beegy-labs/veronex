@@ -69,9 +69,11 @@ spec:
                   -e "s|__KAFKA_USERNAME__|$(KAFKA_USERNAME)|g" \
                   -e "s|__KAFKA_PASSWORD__|$(KAFKA_PASSWORD)|g" \
                   -e "s|__CLICKHOUSE_DB__|{{ include "veronex.clickhouseDb" . }}|g" \
-                  -e "s|__RETENTION_ANALYTICS_DAYS__|{{ .Values.migrations.clickhouse.retentionAnalyticsDays }}|g" \
                   -e "s|__RETENTION_METRICS_DAYS__|{{ .Values.migrations.clickhouse.retentionMetricsDays }}|g" \
+                  -e "s|__RETENTION_LOGS_DAYS__|{{ .Values.migrations.clickhouse.retentionLogsDays }}|g" \
+                  -e "s|__RETENTION_INFERENCE_DAYS__|{{ .Values.migrations.clickhouse.retentionInferenceDays }}|g" \
                   -e "s|__RETENTION_AUDIT_DAYS__|{{ .Values.migrations.clickhouse.retentionAuditDays }}|g" \
+                  -e "s|__RETENTION_TRACES_DAYS__|{{ .Values.migrations.clickhouse.retentionTracesDays }}|g" \
                   "$f" > "/out/$(basename "$f")"
               done
           env:

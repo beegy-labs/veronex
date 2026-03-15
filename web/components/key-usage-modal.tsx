@@ -12,6 +12,7 @@ import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
   AXIS_TICK, LEGEND_STYLE, CURSOR_FILL, fmtCompact,
 } from '@/lib/chart-theme'
+import { calcPercentage } from '@/lib/utils'
 import { Hash, Coins, CheckCircle, XCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -55,7 +56,7 @@ export function KeyUsageModal({
   const totalSuccess  = chartData.reduce((s, h) => s + h.success, 0)
   const totalErrors   = chartData.reduce((s, h) => s + h.errors, 0)
   const successRate   = totalRequests > 0
-    ? Math.round((totalSuccess / totalRequests) * 100) : 0
+    ? calcPercentage(totalSuccess, totalRequests) : 0
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>

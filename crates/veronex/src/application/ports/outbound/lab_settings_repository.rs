@@ -6,8 +6,11 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone)]
 pub struct LabSettings {
     /// Gemini function-calling (tool use) support.
-    /// Disabled by default — still in active development.
     pub gemini_function_calling: bool,
+    /// Max images per inference request. 0 = image input disabled.
+    pub max_images_per_request: i32,
+    /// Max base64 bytes per image (default 2MB).
+    pub max_image_b64_bytes: i32,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -15,6 +18,8 @@ impl Default for LabSettings {
     fn default() -> Self {
         Self {
             gemini_function_calling: false,
+            max_images_per_request: 4,
+            max_image_b64_bytes: 2 * 1024 * 1024,
             updated_at: Utc::now(),
         }
     }
@@ -26,5 +31,7 @@ pub trait LabSettingsRepository: Send + Sync {
     async fn update(
         &self,
         gemini_function_calling: Option<bool>,
+        max_images_per_request: Option<i32>,
+        max_image_b64_bytes: Option<i32>,
     ) -> Result<LabSettings>;
 }

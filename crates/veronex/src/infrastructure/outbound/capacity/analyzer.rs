@@ -587,7 +587,7 @@ pub async fn sync_provider(
     // Update Valkey cache
     if let Some(pool) = valkey_pool {
         use fred::prelude::*;
-        let cache_key = format!("veronex:models:{provider_id}");
+        let cache_key = crate::infrastructure::outbound::valkey_keys::provider_models(provider_id);
         let json = serde_json::to_string(&model_names).unwrap_or_default();
         let ttl = crate::infrastructure::inbound::http::constants::MODELS_CACHE_TTL;
         let _: Result<(), _> = pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await;

@@ -7,6 +7,7 @@ import {
   usageBreakdownQuery, keysQuery,
 } from '@/lib/queries'
 import { fmtCompact } from '@/lib/chart-theme'
+import { calcPercentage } from '@/lib/utils'
 import {
   Hash, Coins, CheckCircle, XCircle, AlertTriangle,
   Bot, Server, Key, DollarSign, Search,
@@ -37,7 +38,7 @@ export default function UsagePage() {
   const { data: keys } = useQuery(keysQuery)
 
   const errorRate = agg && agg.request_count > 0
-    ? Math.round((agg.error_count / agg.request_count) * 100) : 0
+    ? calcPercentage(agg.error_count, agg.request_count) : 0
 
   const currentLabel = TIME_LABEL_MAP.get(hours) ?? `${hours}h`
 
@@ -81,7 +82,7 @@ export default function UsagePage() {
             subtitle={`${fmtCompact(agg.prompt_tokens)} prompt · ${fmtCompact(agg.completion_tokens)} compl`}
             icon={<Coins className="h-5 w-5" />} />
           <StatsCard title={t('usage.success')}
-            value={agg.request_count > 0 ? `${Math.round((agg.success_count / agg.request_count) * 100)}%` : '—'}
+            value={agg.request_count > 0 ? `${calcPercentage(agg.success_count, agg.request_count)}%` : '—'}
             subtitle={`${fmtCompact(agg.success_count)} ${t('usage.completed')}`}
             icon={<CheckCircle className="h-5 w-5" />} />
           <StatsCard title={t('usage.errors')} value={fmtCompact(agg.error_count)}

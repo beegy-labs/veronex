@@ -13,6 +13,9 @@ use anyhow::Result;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+
+/// Maximum time to wait for background tasks during graceful shutdown.
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 use tracing_subscriber::EnvFilter;
 
 use veronex::infrastructure::inbound::http::router::build_app;
@@ -146,7 +149,7 @@ async fn main() -> Result<()> {
             }
         }
     };
-    if tokio::time::timeout(Duration::from_secs(30), drain)
+    if tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, drain)
         .await
         .is_err()
     {

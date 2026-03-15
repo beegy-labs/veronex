@@ -123,6 +123,11 @@ pub struct InferenceJob {
     ///         queue_wait_exceeded, provider_error, token_budget_exceeded
     #[serde(default)]
     pub failure_reason: Option<String>,
+    /// Base64 images for vision inference (/api/generate).
+    /// Not persisted to DB — in-memory only during dispatch.
+    #[serde(default)]
+    #[ts(skip)]
+    pub images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +250,7 @@ mod tests {
             messages_hash: None,
             messages_prefix_hash: None,
             failure_reason: None,
+            images: None,
         }
     }
 
@@ -325,6 +331,7 @@ mod tests {
             messages_prefix_hash: None,
             failure_reason: None,
             tools: None,
+            images: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());
@@ -402,6 +409,25 @@ mod tests {
         assert_eq!(deserialized.url, provider.url);
         assert_eq!(deserialized.is_active, provider.is_active);
         assert_eq!(deserialized.status, provider.status);
+    }
+
+    #[test]
+    fn inference_job_with_images() {
+        let mut job = make_inference_job();
+        job.images = Some(vec!["abc123".to_string(), "def456".to_string()]);
+        let json = serde_json::to_string(&job).unwrap();
+        let deserialized: InferenceJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.images.as_ref().unwrap().len(), 2);
+        assert_eq!(deserialized.images.as_ref().unwrap()[0], "abc123");
+    }
+
+    #[test]
+    fn inference_job_without_images_defaults_none() {
+        let job = make_inference_job();
+        assert!(job.images.is_none());
+        let json = serde_json::to_string(&job).unwrap();
+        let deserialized: InferenceJob = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.images.is_none());
     }
 
     #[test]

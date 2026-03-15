@@ -26,7 +26,7 @@ import {
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
-import { PROVIDER_OLLAMA } from '@/lib/constants'
+import { getOllamaProviders, countByStatus } from '@/lib/utils'
 import { extractHost, StatusBadge } from './shared'
 import { OllamaProviderModelsModal } from './modals'
 import { PAGE_SIZE, OllamaSyncSection, OllamaCapacitySection } from './ollama-sections'
@@ -60,12 +60,9 @@ export function OllamaTab({
 }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const ollama = providers?.filter((b) => b.provider_type === PROVIDER_OLLAMA) ?? []
+  const ollama = getOllamaProviders(providers)
   const serverMap = new Map(servers.map((s) => [s.id, s]))
-  const ollamaCounts = ollama.reduce((acc, b) => {
-    acc[b.status] = (acc[b.status] ?? 0) + 1
-    return acc
-  }, {} as Record<string, number>)
+  const ollamaCounts = countByStatus(ollama)
   const onlineCount = ollamaCounts['online'] ?? 0
   const offlineCount = ollamaCounts['offline'] ?? 0
   const degradedCount = ollamaCounts['degraded'] ?? 0

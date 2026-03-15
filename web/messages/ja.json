@@ -79,6 +79,8 @@
     "labFeaturesDesc": "実験的機能 — 不安定な場合があります。",
     "labGeminiFunctionCalling": "Gemini 関数呼び出し",
     "labGeminiFunctionCallingDesc": "Gemini 互換エンドポイントを通じたツール使用（関数呼び出し）を有効にします。開発中です。",
+    "maxImagesPerRequest": "リクエストあたりの最大画像数",
+    "maxImagesPerRequestDesc": "推論リクエストあたりの最大画像数。0で画像入力を無効にします。",
     "menu": "メニュー",
     "expand": "展開",
     "collapse": "折りたたむ",
@@ -157,7 +159,10 @@
     "unreachable": "接続失敗",
     "tempNormal": "正常",
     "noServers": "サーバー未登録",
-    "daysData": "{{n}}日分のデータ"
+    "daysData": "{{n}}日分のデータ",
+    "flowHttpGateway": "HTTPゲートウェイ",
+    "flowOnlineCount": "{online}/{total} オンライン",
+    "flowNoProviders": "プロバイダーなし"
   },
   "jobs": {
     "title": "ジョブ",
@@ -377,7 +382,16 @@
         "hard": "強制停止"
       },
       "concern": "LLM警告",
-      "reason": "理由"
+      "reason": "理由",
+      "probePermits": "プローブ許可数",
+      "probeRate": "プローブレート",
+      "lessThanMinAgo": "< 1分前",
+      "minsAgo": "{n}分前",
+      "hoursAgo": "{n}時間前",
+      "colModel": "モデル",
+      "colWeight": "重み",
+      "colKvPerReq": "KV/リクエスト",
+      "colActiveLimit": "アクティブ / 制限"
     },
     "gemini": {
       "title": "Gemini APIキー",
@@ -533,7 +547,11 @@
     "tokensCol": "トークン",
     "callPct": "呼出 %",
     "avgLatencyCol": "平均レイテンシ",
-    "free": "無料"
+    "free": "無料",
+    "tokenComposition": "トークン構成",
+    "tokenCompositionDesc": "プロンプト vs 完了トークンの分割",
+    "nTokens": "{n} トークン",
+    "totalNTokens": "合計 {n} トークン"
   },
   "performance": {
     "title": "パフォーマンス",
@@ -595,7 +613,12 @@
     "sourceFilter": "ソース",
     "sourceAll": "すべて",
     "sourceApi": "API",
-    "sourceTest": "テスト"
+    "sourceTest": "テスト",
+    "imageAttach": "画像を添付",
+    "imageRemove": "削除",
+    "imageCompressing": "圧縮中…",
+    "imageTooLarge": "画像が10MBを超えています",
+    "imageTooMany": "最大4枚まで (Ollama制限)"
   },
   "apiDocs": {
     "title": "APIドキュメント",

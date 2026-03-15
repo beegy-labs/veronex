@@ -224,7 +224,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         let SubmitJobRequest {
             prompt, model_name, provider_type, gemini_tier, api_key_id,
             account_id, source, api_format, messages, tools, request_path,
-            conversation_id, key_tier,
+            conversation_id, key_tier, images,
         } = req;
 
         let job_id = JobId::new();
@@ -242,6 +242,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             request_path, queue_time_ms: None, cancelled_at: None,
             conversation_id, tool_calls_json: None,
             messages_hash: None, messages_prefix_hash: None, failure_reason: None,
+            images,
         };
 
         // Upload messages to S3

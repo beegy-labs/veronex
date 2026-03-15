@@ -244,10 +244,10 @@ pub(crate) struct MockLabSettingsRepo;
 #[async_trait]
 impl LabSettingsRepository for MockLabSettingsRepo {
     async fn get(&self) -> Result<LabSettings> {
-        Ok(LabSettings { gemini_function_calling: false, updated_at: chrono::Utc::now() })
+        Ok(LabSettings::default())
     }
-    async fn update(&self, _gemini_function_calling: Option<bool>) -> Result<LabSettings> {
-        Ok(LabSettings { gemini_function_calling: false, updated_at: chrono::Utc::now() })
+    async fn update(&self, _gemini_function_calling: Option<bool>, _max_images: Option<i32>, _max_image_bytes: Option<i32>) -> Result<LabSettings> {
+        Ok(LabSettings::default())
     }
 }
 

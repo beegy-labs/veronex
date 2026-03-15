@@ -31,18 +31,13 @@ pub(super) type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>>
 /// to prevent leaking internal implementation details to clients.
 pub(super) fn sanitize_sse_error(e: &dyn std::fmt::Display) -> String {
     let msg = e.to_string();
-    let safe = if msg.contains("database") || msg.contains("sqlx") || msg.contains("postgres") {
-        "internal processing error".to_string()
-    } else if msg.contains("reqwest") || msg.contains("connect") || msg.contains("timeout") {
-        "provider communication error".to_string()
-    } else if msg.contains("capacity") || msg.contains("slot") {
-        "service at capacity".to_string()
-    } else if msg.contains("cancelled") || msg.contains("canceled") {
-        "request cancelled".to_string()
-    } else if msg.contains("token") && msg.contains("limit") {
-        "token limit exceeded".to_string()
-    } else {
-        "inference failed".to_string()
+    let safe = match &*msg {
+        m if m.contains("database") || m.contains("sqlx") || m.contains("postgres") => "internal processing error",
+        m if m.contains("reqwest") || m.contains("connect") || m.contains("timeout") => "provider communication error",
+        m if m.contains("capacity") || m.contains("slot") => "service at capacity",
+        m if m.contains("cancelled") || m.contains("canceled") => "request cancelled",
+        m if m.contains("token") && m.contains("limit") => "token limit exceeded",
+        _ => "inference failed",
     };
     // Escape CRLF to prevent SSE frame injection
     safe.replace('\r', "\\r").replace('\n', "\\n")
@@ -187,6 +182,7 @@ pub async fn submit_inference(
             request_path: Some("/v1/inference".to_string()),
             conversation_id: None,
             key_tier: Some(api_key.tier),
+            images: None,
         })
         .await?;
 

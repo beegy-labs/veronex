@@ -8,6 +8,12 @@ use crate::application::ports::outbound::model_capacity_repository::{
     ModelVramProfileEntry, ModelCapacityRepository, ThroughputStats,
 };
 
+/// Explicit column list for `model_vram_profiles` SELECT queries (SQL fragment SSOT).
+const VRAM_PROFILE_COLS: &str = "\
+    provider_id, model_name, weight_mb, weight_estimated, kv_per_request_mb, \
+    num_layers, num_kv_heads, head_dim, configured_ctx, failure_count, \
+    llm_concern, llm_reason, max_concurrent, baseline_tps, baseline_p95_ms, updated_at";
+
 pub struct PostgresModelCapacityRepository {
     pool: PgPool,
 }
@@ -70,7 +76,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
 
     async fn get(&self, provider_id: Uuid, model: &str) -> Result<Option<ModelVramProfileEntry>> {
         let row = sqlx::query_as::<_, VramProfileRow>(
-            "SELECT * FROM model_vram_profiles WHERE provider_id = $1 AND model_name = $2",
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = $1 AND model_name = $2"),
         )
         .bind(provider_id)
         .bind(model)
@@ -83,7 +89,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
 
     async fn list_all(&self) -> Result<Vec<ModelVramProfileEntry>> {
         let rows = sqlx::query_as::<_, VramProfileRow>(
-            "SELECT * FROM model_vram_profiles ORDER BY provider_id, model_name",
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles ORDER BY provider_id, model_name"),
         )
         .fetch_all(&self.pool)
         .await
@@ -94,7 +100,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
 
     async fn list_by_provider(&self, provider_id: Uuid) -> Result<Vec<ModelVramProfileEntry>> {
         let rows = sqlx::query_as::<_, VramProfileRow>(
-            "SELECT * FROM model_vram_profiles WHERE provider_id = $1 ORDER BY model_name",
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = $1 ORDER BY model_name"),
         )
         .bind(provider_id)
         .fetch_all(&self.pool)

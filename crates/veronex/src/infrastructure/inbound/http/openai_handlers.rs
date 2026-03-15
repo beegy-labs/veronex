@@ -242,6 +242,7 @@ async fn ollama_chat_proxy(
             request_path: Some("/v1/chat/completions".to_string()),
             conversation_id,
             key_tier: Some(api_key.tier),
+            images: None,
         })
         .await
     {
@@ -461,6 +462,7 @@ async fn legacy_queue_chat(
             request_path: Some("/v1/chat/completions".to_string()),
             conversation_id,
             key_tier: Some(api_key.tier),
+            images: None,
         })
         .await
     {

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { Provider, ProviderSelectedModel, GeminiRateLimitPolicy } from '@/lib/types'
-import { selectedModelsQuery } from '@/lib/queries'
+import { selectedModelsQuery, providerKeyQuery } from '@/lib/queries'
 import { Key, ShieldCheck, Eye, EyeOff, ListFilter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -109,11 +109,7 @@ export function ApiKeyCell({ providerId, masked }: { providerId: string; masked:
   const { t } = useTranslation()
   const [revealed, setRevealed] = useState(false)
 
-  const { data, isFetching, refetch } = useQuery({
-    queryKey: ['provider-key', providerId],
-    queryFn: () => api.providerKey(providerId),
-    enabled: false,
-  })
+  const { data, isFetching, refetch } = useQuery(providerKeyQuery(providerId))
 
   async function handleReveal() {
     if (revealed) { setRevealed(false); return }

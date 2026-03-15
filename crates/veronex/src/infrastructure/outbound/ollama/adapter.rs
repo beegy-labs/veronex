@@ -136,7 +136,7 @@ impl InferenceProviderPort for OllamaAdapter {
         if let Some(messages) = &job.messages {
             return self.stream_chat(job.model_name.as_str(), messages.clone(), job.tools.clone());
         }
-        self.stream_generate(job.model_name.as_str(), job.prompt.as_str())
+        self.stream_generate(job.model_name.as_str(), job.prompt.as_str(), job.images.clone())
     }
 }
 
@@ -146,6 +146,7 @@ impl OllamaAdapter {
         &self,
         model: &str,
         prompt: &str,
+        images: Option<Vec<String>>,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
         let url = format!("{}/api/generate", self.base_url);
         let client = self.client.clone();
@@ -155,17 +156,20 @@ impl OllamaAdapter {
         let num_ctx = model_effective_num_ctx(&model);
 
         Box::pin(async_stream::try_stream! {
+            let mut body = serde_json::json!({
+                "model":   model,
+                "prompt":  prompt,
+                "stream":  true,
+                "think":   false,
+                "options": { "num_ctx": num_ctx },
+            });
+            if let Some(imgs) = images {
+                body["images"] = serde_json::json!(imgs);
+            }
+
             let response = client
                 .post(&url)
-                .json(&serde_json::json!({
-                    "model":   model,
-                    "prompt":  prompt,
-                    "stream":  true,
-                    // Disable extended thinking — keeps eval_count accurate for
-                    // visible output only and removes <think>…</think> from the stream.
-                    "think":   false,
-                    "options": { "num_ctx": num_ctx },
-                }))
+                .json(&body)
                 .send()
                 .await?;
 

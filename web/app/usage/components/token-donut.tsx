@@ -3,6 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DonutChart } from '@/components/donut-chart'
 import { fmtCompact } from '@/lib/chart-theme'
+import { calcPercentage } from '@/lib/utils'
 import { useTranslation } from '@/i18n'
 
 export function TokenDonut({ prompt, completion }: { prompt: number; completion: number }) {
@@ -10,14 +11,14 @@ export function TokenDonut({ prompt, completion }: { prompt: number; completion:
   const total = prompt + completion
   if (total === 0) return null
   const data = [
-    { name: t('usage.promptTokens'), value: prompt,     pct: Math.round((prompt / total) * 100) },
-    { name: t('usage.completionTokens'), value: completion, pct: Math.round((completion / total) * 100) },
+    { name: t('usage.promptTokens'), value: prompt,     pct: calcPercentage(prompt, total) },
+    { name: t('usage.completionTokens'), value: completion, pct: calcPercentage(completion, total) },
   ]
   return (
     <Card className="h-full">
       <CardHeader>
-        <CardTitle className="text-base">Token Composition</CardTitle>
-        <p className="text-xs text-muted-foreground">Prompt vs Completion token split</p>
+        <CardTitle className="text-base">{t('usage.tokenComposition')}</CardTitle>
+        <p className="text-xs text-muted-foreground">{t('usage.tokenCompositionDesc')}</p>
       </CardHeader>
       <CardContent>
         <div className="flex items-center gap-8">
@@ -46,11 +47,11 @@ export function TokenDonut({ prompt, completion }: { prompt: number; completion:
                   <div className="h-full rounded-full transition-all"
                     style={{ width: `${d.pct}%`, background: i === 0 ? 'var(--theme-primary)' : 'var(--theme-status-info)' }} />
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">{fmtCompact(d.value)} tokens</p>
+                <p className="text-xs text-muted-foreground mt-1">{t('usage.nTokens', { n: fmtCompact(d.value) })}</p>
               </div>
             ))}
             <p className="text-xs text-muted-foreground pt-1 border-t border-border">
-              Total <span className="font-bold text-foreground">{fmtCompact(total)}</span> tokens
+              {t('usage.totalNTokens', { n: fmtCompact(total) })}
             </p>
           </div>
         </div>
