@@ -1,6 +1,6 @@
 # Testing Strategy
 
-> SSOT | **Last Updated**: 2026-03-10
+> SSOT | **Last Updated**: 2026-03-15 | Classification: Operational
 
 ## Methodology: Testing Trophy + Contract Testing
 

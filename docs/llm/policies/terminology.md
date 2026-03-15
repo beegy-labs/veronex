@@ -1,6 +1,6 @@
 # Terminology Policy
 
-> SSOT | **Last Updated**: 2026-03-03
+> SSOT | **Last Updated**: 2026-03-15 | Classification: Reference
 
 This is the single source of truth for all user-facing and internal terminology across the Veronex codebase.
 Every doc, component, and i18n key MUST follow these definitions.

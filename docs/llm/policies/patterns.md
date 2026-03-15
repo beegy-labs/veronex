@@ -1,6 +1,6 @@
 # Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-07
+> SSOT | **Last Updated**: 2026-03-15 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Rust Edition 2024 · Axum 0.8 · sqlx 0.8
 > Frontend patterns -> `policies/patterns-frontend.md`
 

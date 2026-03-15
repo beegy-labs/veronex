@@ -16,6 +16,8 @@
 
 **Never edit Layer 3 directly. Edit Layer 1 or Layer 2 only.**
 
+Layer 3 strategy: Policy docs use vendor symlinks. Project-specific Layer 3 generation is deferred until team onboarding requires it.
+
 ## Architecture: Hexagonal
 
 ```

@@ -2,10 +2,9 @@
 
 > Universal LLM entry point | **Last Updated**: 2026-03-15
 
-## Start
-
 Read [.ai/README.md](.ai/README.md)
 
+<!-- BEGIN: STANDARD POLICY -->
 ## Identity
 
 | Term | Definition |
@@ -14,9 +13,7 @@ Read [.ai/README.md](.ai/README.md)
 | SDD | CDD-derived change plan |
 | ADD | Autonomous execution and policy selection engine |
 
-Core loop: `CDD → SDD → ADD → CDD (feedback)`
-
-Full definitions: [docs/llm/policies/identity.md](docs/llm/policies/identity.md)
+Core loop: `CDD → SDD → ADD → CDD (feedback)` | Full definitions: [docs/llm/policies/identity.md](docs/llm/policies/identity.md)
 
 ## Frameworks
 
@@ -43,22 +40,47 @@ Applies to `.ai/`, `docs/llm/`, `.add/`. Full spec: [docs/llm/policies/token-opt
 | No emoji | No Unicode emoji |
 | No decorative ASCII | No borders, box-drawing chars |
 | No prose/filler | Tables over sentences |
-| Indent | 2-space, max 2 levels |
-| Headers | H1 + H2 + H3 (limited), no H4+ |
+| Indent / Headers | 2-space max 2 levels; H1+H2+H3 only |
 | Format priority | Tables > YAML > bullets > code > prose |
+<!-- END: STANDARD POLICY -->
 
-## Workflows (ADD)
+<!-- BEGIN: PROJECT CUSTOM -->
+## Architecture and Stack
 
-| Action | Workflow |
-| ------ | -------- |
-| Code review | `.add/code-review.md` |
-| Doc sync | `.add/doc-sync.md` |
+| Layer | Tech |
+| ----- | ---- |
+| Backend | Rust + Axum (hexagonal) |
+| Frontend | Next.js 16 + React 19 |
+| Cache/Queue | Valkey (ZSET priority queue) |
+| RDBMS / Analytics | PostgreSQL 18, ClickHouse |
+| Streaming / Observability | Redpanda (Kafka API), OpenTelemetry Collector |
 
-## LLM Config
+## Core Rules
 
-| Tool | Config |
+| Rule | Detail |
 | ---- | ------ |
-| Claude Code | `CLAUDE.md` |
-| OpenAI Codex | `AGENTS.md` |
-| Gemini CLI | `GEMINI.md` (future) |
-| Cursor | `.cursorrules` (future) |
+| Queue dispatch | ZSET priority queue (`veronex:queue:zset`, tier-scored) |
+| Capacity control | AIMD + p95 fast adapt, LLM Batch tuning |
+| Thermal | Auto-detect gpu_vendor (nvidia->GPU, amd->CPU), per-provider thresholds |
+| Lab settings | Gate features via `useLabSettings()` / `LabSettingsRepository` |
+
+## Integration Points
+
+| System | Protocol | Doc |
+| ------ | -------- | --- |
+| Ollama | HTTP + SSE streaming | `providers/ollama.md` |
+| Gemini | REST + SSE | `providers/gemini.md` |
+| OTel Collector | gRPC OTLP | `infra/otel-pipeline.md` |
+| Redpanda | Kafka protocol | `infra/otel-pipeline-ops.md` |
+<!-- END: PROJECT CUSTOM -->
+
+## Workflows and Config
+
+| Type | Key | Value |
+| ---- | --- | ----- |
+| ADD | Code review | `.add/code-review.md` |
+| ADD | Doc sync | `.add/doc-sync.md` |
+| LLM | Claude Code | `CLAUDE.md` |
+| LLM | OpenAI Codex | `AGENTS.md` |
+| LLM | Gemini CLI | `GEMINI.md` (future) |
+| LLM | Cursor | `.cursorrules` (future) |

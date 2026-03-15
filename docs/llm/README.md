@@ -71,6 +71,7 @@
 | OTel Pipeline Ops | `infra/otel-pipeline-ops.md` | Chains 2-3, gotchas, verification, data retention, Rust adapters, Redpanda, GPU server |
 | Distributed Coordination | `infra/distributed.md` | Instance ID, VRAM leases, reliable queue, model filter, stickiness, pubsub, crash recovery |
 | Build Optimization | `infra/build-optimization.md` | mold, cargo-chef, hakari, nextest, Docker cache mounts, cargo profiles |
+| Crate Structure | `infra/crate-structure.md` | workspace members, dependency rules, veronex, veronex-agent, veronex-analytics |
 
 ---
 

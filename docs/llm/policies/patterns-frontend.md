@@ -1,6 +1,6 @@
 # Code Patterns: Frontend — 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-07
+> SSOT | **Last Updated**: 2026-03-15 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Next.js 16 · React 19 · TanStack Query v5 · Tailwind v4 · Zod
 > Rust patterns -> `policies/patterns.md`
 
