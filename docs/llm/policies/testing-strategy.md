@@ -4,40 +4,40 @@
 
 ## Methodology: Testing Trophy + Contract Testing
 
-Integration 테스트 중심, 중복 배제, 레이어별 책임 분리.
+Integration-test focused, no duplication, clear layer responsibility separation.
 
-### Layer Responsibility (중복 금지)
+### Layer Responsibility (No Duplication)
 
 | Layer | Verifies | Tool | Anti-Pattern |
 |-------|----------|------|-------------|
-| **Static** | Types, lint | TypeScript, Clippy | 타입으로 잡히는 건 테스트 안 씀 |
-| **Unit** | 순수 함수 로직 | cargo test, vitest | HTTP/DB 검증 금지 |
-| **Integration** | API 계약 (schema) | OpenAPI 검증, vitest | E2E와 같은 경로 중복 금지 |
-| **E2E** | 사용자 흐름 | bash e2e, Playwright | 개별 함수 검증 금지 |
+| **Static** | Types, lint | TypeScript, Clippy | Don't test what types already catch |
+| **Unit** | Pure function logic | cargo test, vitest | No HTTP/DB verification |
+| **Integration** | API contracts (schema) | OpenAPI validation, vitest | No overlap with E2E paths |
+| **E2E** | User flows | bash e2e, Playwright | No individual function verification |
 
-### Decision Checklist (테스트 작성 전)
+### Decision Checklist (Before Writing Tests)
 
 ```
-1. 타입으로 잡히나?       → Yes → 테스트 불필요
-2. 순수 함수인가?         → Yes → Unit (proptest 우선)
-3. 외부 의존성?           → Yes → Integration (mock/schema)
-4. 사용자 흐름?           → Yes → E2E (최소한만)
-5. 다른 레이어에서 검증?  → Yes → 작성하지 않음
+1. Caught by types?              → Yes → No test needed
+2. Pure function?                → Yes → Unit (proptest preferred)
+3. External dependency?          → Yes → Integration (mock/schema)
+4. User flow?                    → Yes → E2E (minimal only)
+5. Already verified at another layer? → Yes → Don't write it
 ```
 
 ---
 
-## Test Purity (순수성 원칙)
+## Test Purity Principle
 
-**"함수 수정 → unit만 깨짐 → E2E 불변"**
+**"Function change → only unit breaks → E2E unchanged"**
 
-| 변경 유형 | Unit | Integration | E2E |
-|----------|------|------------|-----|
-| 내부 함수 로직 | FAIL | PASS | PASS |
-| API 응답 스키마 | PASS | FAIL | FAIL |
-| 사용자 흐름 | PASS | PASS | FAIL |
+| Change Type | Unit | Integration | E2E |
+|------------|------|------------|-----|
+| Internal function logic | FAIL | PASS | PASS |
+| API response schema | PASS | FAIL | FAIL |
+| User flow | PASS | PASS | FAIL |
 
-E2E가 내부 함수 변경에 깨지면 → **테스트 설계 결함** (레이어 침범).
+If E2E breaks on internal function change → **test design flaw** (layer violation).
 
 ---
 
@@ -47,9 +47,9 @@ E2E가 내부 함수 변경에 깨지면 → **테스트 설계 결함** (레이
 
 | Tool | Purpose | When |
 |------|---------|------|
-| `cargo nextest` | 병렬 테스트 실행 | 항상 |
-| `proptest` | Property-based testing (순수 함수) | unit 작성 시 |
-| `cargo-mutants` | 죽은 테스트 식별 | 릴리스 전 1회 |
+| `cargo nextest` | Parallel test execution | Always |
+| `proptest` | Property-based testing (pure functions) | When writing units |
+| `cargo-mutants` | Dead test detection | Once before release |
 
 ### TypeScript (Web)
 
@@ -57,14 +57,14 @@ E2E가 내부 함수 변경에 깨지면 → **테스트 설계 결함** (레이
 |------|---------|--------|
 | vitest | Unit + Integration | `pool: threads`, `fileParallelism: true` |
 | Playwright | E2E | `fullyParallel: true`, CI workers=4 |
-| vitest-openapi | API 스키마 검증 | OpenAPI spec 기반 |
+| vitest-openapi | API schema validation | OpenAPI spec based |
 
 ### Bash E2E
 
 | Pattern | Implementation |
 |---------|---------------|
-| Sequential | 01-setup → 02-inference (상태 생성) |
-| Parallel | 03~06 동시 실행 (독립 counts file) |
+| Sequential | 01-setup → 02-inference (state creation) |
+| Parallel | 03~06 concurrent execution (independent counts file) |
 
 ---
 
@@ -72,9 +72,9 @@ E2E가 내부 함수 변경에 깨지면 → **테스트 설계 결함** (레이
 
 | Phase | Action | ROI |
 |-------|--------|-----|
-| **1** | OpenAPI 스키마 검증 → E2E 중복 제거 | 높음 |
-| **2** | proptest → 순수 함수 (normalize, parse) | 중간 |
-| **3** | cargo-mutants 1회 감사 | 낮음 (1회성) |
+| **1** | OpenAPI schema validation → remove E2E duplication | High |
+| **2** | proptest → pure functions (normalize, parse) | Medium |
+| **3** | cargo-mutants one-time audit | Low (one-time) |
 
 ---
 

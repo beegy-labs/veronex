@@ -13,5 +13,5 @@
 
 ## Dependencies
 
-- Intelligence Scheduler → Multi-server Scale-Out (단일 서버 검증 후 확장)
-- Intelligence Scheduler → NVIDIA support (thermal profile 확장)
+- Intelligence Scheduler → Multi-server Scale-Out (expand after single-server validation)
+- Intelligence Scheduler → NVIDIA support (thermal profile extension)

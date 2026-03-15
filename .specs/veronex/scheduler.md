@@ -1,693 +1,693 @@
 # Intelligence Serving — Scheduler SDD
 
 > **Status**: Implemented | **Last Updated**: 2026-03-14
-> **Target**: AMD Ryzen AI Max+ 395 (APU, 통합메모리) · k8s-worker-ai-01 (RAM 124GB)
+> **Target**: AMD Ryzen AI Max+ 395 (APU, unified memory) · k8s-worker-ai-01 (RAM 124GB)
 
 ---
 
-## 목표
+## Goals
 
-**Veronex = N개 Ollama 서버를 통합하는 Intelligence Gateway**
+**Veronex = Intelligence Gateway that unifies N Ollama servers**
 
-단순 리버스 프록시가 아니다. 서버 집합 전체를 하나의 컴퓨트 풀로 취급하고
-자율적으로 최적 동작을 학습·결정한다.
+Not a simple reverse proxy. Treats the entire server fleet as a single compute pool
+and autonomously learns/decides optimal behavior.
 
 ```
-클라이언트
+Client
     ▼
 [Veronex Gateway]  ← K8s multi-replica
     ├──► Ollama A  (k8s-worker-ai-01, 124GB)
-    ├──► Ollama B  (추후 확장)
+    ├──► Ollama B  (future expansion)
     └──► Ollama N
 ```
 
-**레벨 1 — 단일 서버 극한 활용**
+**Level 1 — Maximize single-server utilization**
 
-각 Ollama 서버의 모델 할당과 동시 처리량을 극한까지 끌어올린다.
+Push each Ollama server's model allocation and concurrent throughput to the limit.
 
-- 서버마다 VRAM·num_parallel이 다름 (비균등). AIMD가 서버×모델 쌍별 독립 학습.
-- APU(AMD Ryzen AI Max+ 395): 통합 메모리 124GB, 대역폭 256GB/s가 병목.
-  DRM VRAM 1GB 오보고 → node-exporter 실측값으로 대체.
-- 모델을 VRAM에 상주시켜 재로드 없이 연속 처리. Lazy Eviction으로 필요할 때만 회수.
-- 큐: FIFO + Locality(로드 모델 우선) + Age(오래 기다린 요청 역전) 복합 스케줄링.
+- Each server has different VRAM/num_parallel (heterogeneous). AIMD learns independently per server×model pair.
+- APU (AMD Ryzen AI Max+ 395): unified memory 124GB, bandwidth 256GB/s is the bottleneck.
+  DRM VRAM reports 1GB incorrectly → replaced with node-exporter measured values.
+- Keep models resident in VRAM for continuous processing without reloads. Lazy Eviction reclaims only when needed.
+- Queue: composite scheduling with FIFO + Locality (prefer loaded models) + Age (promote long-waiting requests).
 
-**레벨 2 — 클러스터 처리율 최대화 + 전력 최적화**
+**Level 2 — Maximize cluster throughput + power optimization**
 
-서버 집합 전체의 처리율(Goodput)을 최대화하되, 자원 낭비를 최소화한다.
+Maximize throughput (Goodput) across the entire server fleet while minimizing resource waste.
 
-- 자원 최적 활용 1순위: 처리량 충분 → 최소 서버 수 운용. 부족 → Scale-Out. 남음 → 즉시 회수.
-- 전력 효율화: 유휴 서버 모델을 Lazy Eviction으로 자연 회수 → Ollama 메모리 해제.
-  서버 OS 종료 없이 idle 상태를 실질 저전력 수단으로 활용.
-  (모델 미상주 ~5W vs 상주 ~70W)
+- Optimal resource utilization is priority #1: sufficient throughput → run minimum servers. Insufficient → Scale-Out. Excess → reclaim immediately.
+- Power efficiency: reclaim idle server models via Lazy Eviction → Ollama memory release.
+  Use idle state as effective low-power mode without OS shutdown.
+  (no model resident ~5W vs resident ~70W)
 
-**레벨 3 — 하드웨어 보호 (Thermal)**
+**Level 3 — Hardware protection (Thermal)**
 
-하드웨어를 한계까지 쓰되, 온도 위험 구간 진입 시 자동 감쇄/차단으로 서버를 보호한다.
+Push hardware to its limits, but protect servers via automatic throttling/blocking when entering temperature danger zones.
 
-- perf_factor: 온도 비례 스케줄링 감쇄 → 과열 서버에서 모델 전환 억제.
-- Soft Gate(82°C): 신규 요청 차단 + Preload/Scale-Out 금지.
-- Hard Gate(90°C): 전면 차단 → Cooldown 300s → Ramp-up → Normal 점진 복귀.
-- 임계값: 벤더별 기본값 + 어드민 provider별 오버라이드.
+- perf_factor: temperature-proportional scheduling throttle → suppress model switching on overheated servers.
+- Soft Gate (82°C): block new requests + prohibit Preload/Scale-Out.
+- Hard Gate (90°C): full block → Cooldown 300s → Ramp-up → gradual Normal recovery.
+- Thresholds: vendor-specific defaults + admin per-provider override.
 
-**추가 설계 목표**
+**Additional design goals**
 
-- 크래시 복구: Lua atomic handoff로 job 유실 방지. at-least-once + idempotent.
-- 모델 Pull 드레인: pull 중 자동 요청 차단 → drain → pull → 자동 재로드.
-- 멀티인스턴스 안전: Lua ZREM 원자적 선점. 복수 인스턴스 중복 처리 방지.
-- 단일 서버 환경(현재 실측: k8s-worker-ai-01 1대): Scale-Out은 no-op.
-  멀티 서버 확장을 전제하되 단일 서버에서 안전하게 동작.
+- Crash recovery: Lua atomic handoff prevents job loss. at-least-once + idempotent.
+- Model Pull drain: automatic request blocking during pull → drain → pull → automatic reload.
+- Multi-instance safety: Lua ZREM atomic claim. Prevents duplicate processing across instances.
+- Single-server environment (current setup: k8s-worker-ai-01, 1 node): Scale-Out is no-op.
+  Designed for multi-server expansion but operates safely on a single server.
 
 ---
 
-## 실측 환경 및 Ollama 설정
+## Measured Environment and Ollama Configuration
 
 ```
 RAM 124GB · mem_available 120GB · DRM VRAM 1GB(BIOS) · GTT 128GB
-모델: qwen3-coder-next 51GB · qwen3:30b 18GB · qwen3:8b 5GB · nomic-embed 274MB
+Models: qwen3-coder-next 51GB · qwen3:30b 18GB · qwen3:8b 5GB · nomic-embed 274MB
 ```
 
-**Ollama 권장 설정**:
+**Recommended Ollama settings**:
 
 ```
-OLLAMA_NUM_PARALLEL=<num_parallel>   ← 프로바이더 등록 시 설정값과 동일, AIMD 상한
-OLLAMA_KEEP_ALIVE=-1                 ← Veronex Lazy Eviction 직접 제어
-OLLAMA_MAX_LOADED_MODELS=0           ← VramPool이 VRAM 기준 제어
+OLLAMA_NUM_PARALLEL=<num_parallel>   ← same as provider registration value, AIMD upper bound
+OLLAMA_KEEP_ALIVE=-1                 ← Veronex Lazy Eviction direct control
+OLLAMA_MAX_LOADED_MODELS=0           ← VramPool controls via VRAM budget
 OLLAMA_FLASH_ATTENTION=1
 OLLAMA_KV_CACHE_TYPE=q8_0
 ```
 
 ---
 
-## N×N×N 구조 (서버별 비균등)
+## N×N×N Architecture (heterogeneous per server)
 
 ```
-Gateway → N개 서버 (서버마다 VRAM · num_parallel · 지원 모델 상이)
-              └─ 서버당 N개 모델 동시 상주 (VRAM 허용 범위)
-                      └─ 모델당 N개 동시 요청 (num_parallel 이하, AIMD 학습)
+Gateway → N servers (each with different VRAM · num_parallel · supported models)
+              └─ N models co-resident per server (within VRAM budget)
+                      └─ N concurrent requests per model (up to num_parallel, AIMD-learned)
 ```
 
-AIMD는 `provider_id × model` 쌍 독립 학습. 서버 A의 qwen3:8b와 서버 B의 qwen3:8b는 별개.
+AIMD learns independently per `provider_id × model` pair. qwen3:8b on server A and qwen3:8b on server B are separate.
 
-**VramPool 구조**:
+**VramPool structure**:
 
 ```
-ProviderVramState (서버별)
+ProviderVramState (per server)
   ├── total_mb         ← mem_available_mb × (1 - safety_permil/1000)
-  │                      node-exporter 실측. APU drift 흡수용 safety_permil 적용.
-  ├── reserved_kv_mb   ← 전체 KV 합산 (원자적 CAS)
-  ├── safety_permil    ← 기본 100 (10%). OOM 감지 시 +50 증가, 회복 후 -10 점진 감소.
-  │                      최대 500 (50%). OOM = try_reserve 실패 or Ollama 429 응답.
-  └── is_standby       ← AtomicBool (Scale-In 시 라우팅 제외)
+  │                      node-exporter measured. safety_permil absorbs APU drift.
+  ├── reserved_kv_mb   ← total KV sum (atomic CAS)
+  ├── safety_permil    ← default 100 (10%). +50 on OOM detection, -10 gradual recovery.
+  │                      max 500 (50%). OOM = try_reserve failure or Ollama 429.
+  └── is_standby       ← AtomicBool (excluded from routing on Scale-In)
 
-ModelState (모델별)
+ModelState (per model)
   ├── weight_mb / kv_per_request_mb
-  ├── is_loaded / is_preloading    ← AtomicBool (중복 Preload 방지)
-  ├── active_count / max_concurrent ← AIMD 학습값 (≤ num_parallel)
-  ├── sample_count                 ← AtomicU32 (evict 시 0 리셋)
+  ├── is_loaded / is_preloading    ← AtomicBool (prevents duplicate Preload)
+  ├── active_count / max_concurrent ← AIMD-learned value (≤ num_parallel)
+  ├── sample_count                 ← AtomicU32 (reset to 0 on evict)
   ├── baseline_tps / baseline_p95_ms
-  └── last_active_at               ← AtomicU64 (Lazy Eviction 기준)
+  └── last_active_at               ← AtomicU64 (Lazy Eviction criterion)
 ```
 
-**비용 규칙**: 로드됨 → KV only / 미로드 → weight+KV / 완료 → KV 반환, weight 상주.
+**Cost rules**: loaded → KV only / not loaded → weight+KV / completed → KV released, weight stays resident.
 
-**APU mem_available_mb 오차 처리**: Ollama 외 프로세스 메모리 소비로 인한 drift는
-`safety_permil`(기본 10%)이 흡수. 30s sync 루프에서 node-exporter 재측정 후 갱신.
+**APU mem_available_mb drift handling**: drift from non-Ollama process memory consumption is
+absorbed by `safety_permil` (default 10%). Re-measured via node-exporter in 30s sync loop.
 
 ---
 
-## 핵심 메커니즘
+## Core Mechanisms
 
-### 1. AIMD — 서버×모델별 최적 동시 요청 수 자율 학습
+### 1. AIMD — Autonomous per-server×model optimal concurrency learning
 
-APU는 메모리 대역폭(256 GB/s)이 병목. AIMD가 포화점을 자동 탐색.
+APU is memory bandwidth-bound (256 GB/s). AIMD automatically finds the saturation point.
 
-| 단계 | 조건 | max_concurrent |
-|------|------|---------------|
-| Cold Start | sample = 0 | `num_parallel` (상한에서 시작 → 하향 탐색) |
-| AIMD | sample ≥ 3 | TPS ratio < 0.7 or p95 spike → max(1, current×3/4) 즉시 적용 / ratio ≥ 0.9 → +1 |
-| LLM 보정 | sample ≥ 10, AIMD 적용 후 | **증가 방향에만** 최대 +2 후처리 |
-| 재시작 | DB 복구 | 직전 학습값 즉시 적용 |
+| Phase | Condition | max_concurrent |
+|-------|-----------|---------------|
+| Cold Start | sample = 0 | `num_parallel` (start from upper bound → search downward) |
+| AIMD | sample ≥ 3 | TPS ratio < 0.7 or p95 spike → max(1, current×3/4) immediate / ratio ≥ 0.9 → +1 |
+| LLM correction | sample ≥ 10, after AIMD | **increase direction only**, max +2 post-processing |
+| Restart | DB recovery | apply last learned value immediately |
 
-> **Cold Start 정책 변경** (기존 `capacity.md` cold_start=1과 다름):
-> APU에서 메모리 안전은 try_reserve + safety_permil이 독립적으로 담당하므로
-> 초기값을 1로 보수적으로 시작할 필요가 없다. num_parallel에서 시작해 AIMD가
-> 빠르게 하향 조정하는 방식이 초기 처리량 확보에 유리하다.
-> `docs/llm/inference/capacity.md`가 이 Cold Start 정책을 반영한다.
+> **Cold Start policy change** (differs from `capacity.md` cold_start=1):
+> On APU, memory safety is independently handled by try_reserve + safety_permil, so
+> there is no need to start conservatively at 1. Starting from num_parallel and letting AIMD
+> quickly adjust downward is better for initial throughput.
+> `docs/llm/inference/capacity.md` reflects this Cold Start policy.
 
-피드백: 30s마다 ClickHouse `inference_events` (`learning_epoch_started_at` 이후, 최대 1h) 기준. 결과 DB 저장.
-  이유: evict→재로드 후 이전 환경의 측정치가 섞이면 Cold Start 재학습이 무효화됨.
-        learning_epoch_started_at 이후 데이터만 집계해야 sample_count=0 리셋이 실제로 의미를 가짐.
-  ClickHouse 쿼리 타임아웃: ClickHouse 응답 지연이 30s를 초과하면 AIMD 루프 전체가 블로킹됨.
-    쿼리 타임아웃 = 10s. 초과 시 해당 사이클 AIMD 업데이트 스킵 (이전 max_concurrent 유지).
-    연속 3회 타임아웃 시 경고 로그. ClickHouse 장애가 AIMD를 멈추게 하지 않음.
-  외부 메모리 환경 급변 시: 30s sync 루프에서 mem_available_mb가 이전 값 대비 ≥15% 감소하면
-    모든 ModelState의 sample_count=0 + learning_epoch_started_at=now_ms 리셋.
-    이유: evict/pull 없이도 외부 프로세스가 메모리를 20GB+ 소비하면 이전 baseline이 무의미해짐.
-    15% = 120GB × 15% = 18GB 임계값 (qwen3:8b 모델 1개 수준, 의미있는 환경 변화 기준).
-LLM 보정은 AIMD 계산 완료 후 동일 30s 루프 내 후처리로 적용한다. 순서: AIMD → LLM 보정.
-LLM 보정은 증가 방향에만 적용하며, 감소 방향 판단은 AIMD가 전담한다.
-같은 루프에서 AIMD 감쇄(×3/4)가 발생한 경우 LLM 상향 보정은 금지한다.
-즉, AIMD 감쇄 결과가 그 사이클의 최종값이다.
+Feedback: every 30s from ClickHouse `inference_events` (since `learning_epoch_started_at`, max 1h). Results saved to DB.
+  Reason: if measurements from the previous environment mix in after evict→reload, Cold Start relearning is invalidated.
+          Only data after learning_epoch_started_at should be aggregated for sample_count=0 reset to be meaningful.
+  ClickHouse query timeout: if ClickHouse response exceeds 30s, the entire AIMD loop blocks.
+    Query timeout = 10s. On timeout, skip AIMD update for that cycle (keep previous max_concurrent).
+    Warn log after 3 consecutive timeouts. ClickHouse failure does not stop AIMD.
+  Sudden external memory change: if mem_available_mb drops ≥15% from the previous value in the 30s sync loop,
+    reset all ModelState sample_count=0 + learning_epoch_started_at=now_ms.
+    Reason: external processes consuming 20GB+ memory invalidates previous baselines even without evict/pull.
+    15% = 120GB × 15% = 18GB threshold (roughly one qwen3:8b model, meaningful environment change).
+LLM correction is applied as post-processing within the same 30s loop after AIMD calculation. Order: AIMD → LLM correction.
+LLM correction applies only in the increase direction; decrease decisions are AIMD's sole responsibility.
+If AIMD decay (×3/4) occurred in the same loop, LLM upward correction is prohibited.
+That is, the AIMD decay result is the final value for that cycle.
 
-**baseline_tps / baseline_p95_ms 갱신 규칙**:
+**baseline_tps / baseline_p95_ms update rules**:
 
-"첫 안정 측정값" 정의: `sample_count ≥ 3` 이 되는 시점 (AIMD 최초 활성화 기준과 동일)
+"First stable measurement" definition: the point when `sample_count ≥ 3` (same as AIMD first activation criterion)
 
-| 이벤트 | baseline_tps | baseline_p95_ms |
-|--------|-------------|-----------------|
-| 초기화 (sample_count ≥ 3 첫 루프) | `current_tps` 로 설정 | `current_p95_ms` 로 설정 |
-| 감쇄 발생한 사이클 | freeze (갱신 안 함) | freeze (갱신 안 함) |
-| `ratio ≥ 0.9` 3회 연속 (안정 확인) | `current_tps` 로 상향 | `current_p95_ms` 로 하향 (latency 개선 반영) |
-| evict → `sample_count = 0` | `0` 초기화 | `0` 초기화 |
+| Event | baseline_tps | baseline_p95_ms |
+|-------|-------------|-----------------|
+| Initialization (first loop with sample_count ≥ 3) | set to `current_tps` | set to `current_p95_ms` |
+| Cycle where decay occurred | freeze (no update) | freeze (no update) |
+| `ratio ≥ 0.9` for 3 consecutive cycles (stability confirmed) | update upward to `current_tps` | update downward to `current_p95_ms` (reflects latency improvement) |
+| evict → `sample_count = 0` | reset to `0` | reset to `0` |
 
-p95 spike 감쇄 조건: `current_p95_ms > baseline_p95_ms × 2`
-  → baseline_p95_ms = 0 이면 (초기화 전) p95 spike 조건 비활성화, TPS ratio만으로 판단.
+p95 spike decay condition: `current_p95_ms > baseline_p95_ms × 2`
+  → if baseline_p95_ms = 0 (before initialization), p95 spike condition is disabled; only TPS ratio is used.
 
-**APU 특수**: DRM 1GB → 모델(5~51GB) 항상 초과 → VRAM 게이트 우회.
-역할 분리: AIMD = 처리량 최적화 / try_reserve + safety_permil = 메모리 안전. 두 경로 독립 작동.
-OOM (Ollama 429 or try_reserve 실패) 시:
-  - safety_permil +50 → 가용 메모리 상한 즉시 축소
-  - 해당 model×provider max_concurrent 즉시 max(1, current×3/4) (AIMD 감쇄 규칙 즉시 적용)
-    **하한 = 1 필수**: u32 정수 반복 감쇄 시 4→3→2→1→0 도달 가능.
-    max_concurrent=0이면 요청 수용 불가 → sample 미수집 → AIMD 증가 조건 불충족 → 복구 불가 deadlock.
-  - 이후 30s AIMD 루프에서 정상 학습 재개
-  **OOM 회복 불균형은 의도된 보수적 설계**:
-    safety_permil 회복: -10/30s → +50 복구에 150s. max_concurrent 회복: +1/30s.
-    두 경로 속도 불균형으로 150s간 저활용 구간 발생. 이는 의도됨.
-    OOM은 서비스 전체 중단으로 이어지므로, 빠른 회복보다 안전 우선이 합리적.
+**APU specifics**: DRM 1GB → models (5~51GB) always exceed → VRAM gate bypassed.
+Role separation: AIMD = throughput optimization / try_reserve + safety_permil = memory safety. Two paths operate independently.
+On OOM (Ollama 429 or try_reserve failure):
+  - safety_permil +50 → immediately reduce available memory ceiling
+  - Immediately apply max(1, current×3/4) to the model×provider max_concurrent (AIMD decay rule)
+    **Floor = 1 is mandatory**: repeated u32 integer decay can reach 4→3→2→1→0.
+    max_concurrent=0 means no requests accepted → no samples collected → AIMD increase condition unmet → unrecoverable deadlock.
+  - Normal AIMD learning resumes in subsequent 30s loops
+  **Asymmetric OOM recovery is intentional conservative design**:
+    safety_permil recovery: -10/30s → 150s to recover from +50. max_concurrent recovery: +1/30s.
+    Speed asymmetry between the two paths creates a ~150s underutilization window. This is intentional.
+    OOM can cause full service disruption, so safety-first over fast recovery is rational.
 
-### 2. 스케줄링 — FIFO + Locality + Age
+### 2. Scheduling — FIFO + Locality + Age
 
-**큐**: Valkey ZSET. enqueue score = `now_ms - tier_bonus` (고정). dispatch 시 보정.
+**Queue**: Valkey ZSET. enqueue score = `now_ms - tier_bonus` (fixed). Adjusted at dispatch.
 
-**최대 큐 사이즈**: `MAX_QUEUE_SIZE = 10_000`. ZCARD 초과 시 enqueue 거부 → 429 Too Many Requests.
-  이유: 무제한 ZSET 성장 방지. Valkey 메모리 보호 + K=100 scoring 비용 상한.
-  **원자화 필수**: 비원자 ZCARD 체크 후 ZADD 사이에 다른 writer가 끼어들면 10,000 초과 가능(overshoot).
-  **모델/티어별 독점 방지**: 전역 상한만 두면 hot model 또는 paid tier가 10,000 슬롯을 독점해
-    다른 모델/티어의 신규 요청이 전면 차단됨.
-    per-model 상한: `MAX_QUEUE_PER_MODEL = 2_000` (demand_counter가 이미 모델별 집계 제공).
-    enqueue Lua에서 demand:{model} ≥ MAX_QUEUE_PER_MODEL 이면 해당 모델만 429 반환.
-    (전역 ZCARD 체크 AND per-model demand 체크 — 둘 중 하나라도 초과 시 거부)
-  구현: Lua 단일 스크립트 — ZCARD 체크 + ZADD + INCR demand를 원자 실행.
+**Max queue size**: `MAX_QUEUE_SIZE = 10_000`. Reject enqueue on ZCARD overflow → 429 Too Many Requests.
+  Reason: prevent unbounded ZSET growth. Valkey memory protection + K=100 scoring cost ceiling.
+  **Atomicity required**: non-atomic ZCARD check followed by ZADD allows another writer to interleave → overshoot past 10,000.
+  **Per-model/tier monopoly prevention**: a global cap alone lets a hot model or paid tier monopolize all 10,000 slots,
+    fully blocking new requests for other models/tiers.
+    Per-model cap: `MAX_QUEUE_PER_MODEL = 2_000` (demand_counter already provides per-model counts).
+    In enqueue Lua, if demand:{model} ≥ MAX_QUEUE_PER_MODEL, reject only that model with 429.
+    (Global ZCARD check AND per-model demand check — reject if either exceeds)
+  Implementation: single Lua script — atomic ZCARD check + ZADD + INCR demand.
   ```lua
-  -- Lua enqueue: 원자 ZCARD 체크 + ZADD + demand INCR + side hash 기록
+  -- Lua enqueue: atomic ZCARD check + ZADD + demand INCR + side hash write
   -- KEYS[1]=queue:zset  KEYS[2]=demand:{model}  KEYS[3]=queue:enqueue_at  KEYS[4]=queue:model
   -- ARGV[1]=job_id  ARGV[2]=score  ARGV[3]=max_size  ARGV[4]=now_ms  ARGV[5]=model
   if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then return 0 end  -- 429
   redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
   redis.call('INCR', KEYS[2])
-  redis.call('HSET', KEYS[3], ARGV[1], ARGV[4])  -- enqueue_at 저장 (promote_overdue 역산용)
-  redis.call('HSET', KEYS[4], ARGV[1], ARGV[5])  -- model 저장 (demand_resync 역산용)
+  redis.call('HSET', KEYS[3], ARGV[1], ARGV[4])  -- store enqueue_at (for promote_overdue lookup)
+  redis.call('HSET', KEYS[4], ARGV[1], ARGV[5])  -- store model (for demand_resync lookup)
   return 1
   ```
-  dispatch Lua handoff, queued cancel Lua에도 `HDEL veronex:queue:enqueue_at {job_id}` 추가.
+  dispatch Lua handoff and queued cancel Lua also include `HDEL veronex:queue:enqueue_at {job_id}`.
 
-**job→model 매핑 side hash** (demand_resync 용):
-  enqueue Lua 스크립트에 추가: `HSET veronex:queue:model {job_id} {model}`
-  dispatch/cancel Lua에 추가: `HDEL veronex:queue:model {job_id}`
-  이유: demand_resync_loop(60s)는 ZSET member(job_id)로부터 model을 역산해야 하나
-        ZSET member에 model 정보가 없음. side hash로 해결.
-        promote_overdue_loop도 이 hash에서 model 확인 가능.
+**job→model mapping side hash** (for demand_resync):
+  Added to enqueue Lua script: `HSET veronex:queue:model {job_id} {model}`
+  Added to dispatch/cancel Lua: `HDEL veronex:queue:model {job_id}`
+  Reason: demand_resync_loop (60s) needs to derive model from ZSET member (job_id),
+          but ZSET members contain no model info. Resolved via side hash.
+          promote_overdue_loop can also look up model from this hash.
 
-**Tier 우선순위 (대기 250s 이내 절대적, 이후 공정 경쟁)**:
+**Tier priority (absolute within 250s wait, fair competition after)**:
 ```
 TIER_BONUS_PAID     = 300,000ms
 TIER_BONUS_STANDARD = 100,000ms
 TIER_BONUS_TEST     = 0ms
-TIER_EXPIRE_SECS    = 250s   ← 이 시간 초과 시 tier_bonus 무효화
+TIER_EXPIRE_SECS    = 250s   ← tier_bonus invalidated after this time
 ```
-대기 250s 이내: paid가 standard보다 항상 먼저 처리 (200,000ms 격차, 역전 불가).
-대기 250s 초과: tier_bonus 무효화 + EMERGENCY_BONUS 적용 → **장기 대기 요청이 신규 paid보다 우선**.
-  보장 정밀도: promote_overdue 루프 주기 30s로 인해 실제 승격 시점은 250s~280s 구간 어딘가.
-  "250s 이후 반드시 즉시 앞선다"가 아니라 "최대 280s 이내 반드시 앞서게 됨"이 정확한 계약.
+Within 250s wait: paid is always processed before standard (200,000ms gap, no reversal possible).
+Beyond 250s wait: tier_bonus invalidated + EMERGENCY_BONUS applied → **long-waiting requests take priority over new paid**.
+  Precision guarantee: due to promote_overdue loop period of 30s, actual promotion occurs somewhere in the 250s~280s range.
+  The exact contract is "guaranteed to be ahead within 280s at most", not "immediately ahead after 250s".
 
 ```
 EMERGENCY_BONUS = TIER_BONUS_PAID = 300,000ms
 
-final_score = zset_score                                ← raw ZSET score 그대로 사용
-            - locality_bonus  (모델 로드됨: 20,000ms / 미로드: 0)
+final_score = zset_score                                ← use raw ZSET score as-is
+            - locality_bonus  (model loaded: 20,000ms / not loaded: 0)
             - age_bonus       (wait_ms × 0.25 × perf_factor(temp_c))
-낮을수록 먼저 처리.
+Lower score = higher priority.
 ```
 
-**EMERGENCY_BONUS 적용 경로 — promote_overdue 단일 책임**:
-  dispatch의 final_score 계산에서는 EMERGENCY_BONUS를 적용하지 않는다.
-  EMERGENCY_BONUS는 `promote_overdue` 루프(30s)에서 ZADD XX로 ZSET score를 직접 갱신하는
-  방식으로만 적용된다. dispatch는 갱신된 raw score를 신뢰한다.
-  이유: dispatch에서도 EMERGENCY_BONUS를 빼면 promote_overdue와 이중 차감됨.
-        단일 책임으로 분리해야 보정 로직이 한 곳에만 존재.
+**EMERGENCY_BONUS application path — promote_overdue sole responsibility**:
+  dispatch's final_score calculation does not apply EMERGENCY_BONUS.
+  EMERGENCY_BONUS is applied only via `promote_overdue` loop (30s) which directly updates ZSET score with ZADD XX.
+  dispatch trusts the updated raw score.
+  Reason: applying EMERGENCY_BONUS in dispatch too would cause double deduction with promote_overdue.
+          Single responsibility ensures correction logic exists in only one place.
 
-tier_bonus 제거만으로 부족한 이유: paid가 지속 유입되면 250s를 넘긴 standard도
-  원래 score = T_old - 100,000 이고, 신규 paid score = T_new - 300,000.
-  T_new = T_old + 250,000 이면 신규 paid score = T_old - 50,000.
-  ZSET은 낮은 score가 우선이므로: standard(T_old - 100,000) < paid(T_old - 50,000) → standard가 이김.
-  // ↑ 단순 tier_bonus 제거("overdue score = T_old") 방식에서는:
-  //   overdue standard score = T_old, 신규 paid score = T_old - 50,000
-  //   T_old - 50,000 < T_old → paid가 이김 — 기아가 해소되지 않음.
-  // 따라서 tier_bonus를 단순 제거하는 것이 아닌 EMERGENCY_BONUS를 더해야 함:
-  //   overdue standard score = T_old - 300,000 → paid(T_old - 50,000)보다 낮아 standard 우선.
-promote_overdue가 overdue standard의 score를 enqueue_at - EMERGENCY_BONUS로 갱신하면:
-  overdue standard score = T_old - 300,000 → 신규 paid(T_old - 50,000)보다 확실히 낮음 → standard 우선.
+Why simply removing tier_bonus is insufficient: with continuous paid inflow, a standard request past 250s
+  has original score = T_old - 100,000, and new paid score = T_new - 300,000.
+  If T_new = T_old + 250,000 then new paid score = T_old - 50,000.
+  ZSET prioritizes lower scores: standard(T_old - 100,000) < paid(T_old - 50,000) → standard wins.
+  // ↑ With naive tier_bonus removal ("overdue score = T_old"):
+  //   overdue standard score = T_old, new paid score = T_old - 50,000
+  //   T_old - 50,000 < T_old → paid wins — starvation is not resolved.
+  // Therefore, EMERGENCY_BONUS must be added rather than simply removing tier_bonus:
+  //   overdue standard score = T_old - 300,000 → lower than paid(T_old - 50,000) → standard wins.
+When promote_overdue updates overdue standard's score to enqueue_at - EMERGENCY_BONUS:
+  overdue standard score = T_old - 300,000 → definitively lower than new paid(T_old - 50,000) → standard wins.
 
-검증 예시 (T_old = standard enqueue 시각, T_now = T_old + 251,000):
-  promote_overdue 후 standard score: T_old - 300,000
-  신규 paid (wait=1s):     final = (T_now - 300,000) - locality - age ≈ T_now - 300,250
+Verification example (T_old = standard enqueue time, T_now = T_old + 251,000):
+  After promote_overdue, standard score: T_old - 300,000
+  New paid (wait=1s):      final = (T_now - 300,000) - locality - age ≈ T_now - 300,250
   standard (wait=251s):    final = (T_old - 300,000) - locality - age
-                           = (T_now - 251,000 - 300,000) - 62,750  = T_now - 613,750  ✅ standard 우선
-  paid (wait=251s):        promote_overdue 후 score = T_old - 300,000 → standard와 동일 score  ✅ fair race
+                           = (T_now - 251,000 - 300,000) - 62,750  = T_now - 613,750  ✅ standard wins
+  paid (wait=251s):        after promote_overdue score = T_old - 300,000 → same score as standard  ✅ fair race
 
-**의도**: 250s 이상 대기한 요청은 tier와 무관하게 신규 요청보다 반드시 앞선다.
-  paid 연속 유입 환경에서도 standard 기아가 발생하지 않는다.
+**Intent**: requests waiting 250s+ always take priority over new requests regardless of tier.
+  Standard starvation does not occur even under continuous paid inflow.
 
-**EMERGENCY_BONUS top-K 진입 보장**:
-  dispatch의 final_score는 raw ZSET score를 사용하므로, overdue job의 ZSET score를
-  직접 갱신해 top-K 안으로 끌어올려야 한다.
-  과부하 환경에서 paid가 K=20~100 슬롯을 채우면 overdue standard는
-  score가 높아 top-K 진입 자체가 불가하기 때문이다.
+**EMERGENCY_BONUS top-K entry guarantee**:
+  Since dispatch's final_score uses raw ZSET score, overdue jobs' ZSET scores must be
+  directly updated to pull them into the top-K window.
+  Under heavy load, if paid jobs fill K=20~100 slots, overdue standard jobs
+  have high scores and cannot enter top-K at all.
 
-  해결: `promote_overdue` 패스 — 별도 30s 루프에서 **enqueue_at 기반 전체 커서 스캔**:
-    1. HSCAN veronex:queue:enqueue_at CURSOR COUNT 200 → (job_id, enqueue_at_ms) 전체 순회
-    2. wait_ms = now_ms - enqueue_at_ms > 250,000 인 job만 필터
-    3. 해당 job의 ZSET score를 ZADD XX로 갱신:
+  Solution: `promote_overdue` pass — separate 30s loop with **enqueue_at-based full cursor scan**:
+    1. HSCAN veronex:queue:enqueue_at CURSOR COUNT 200 → iterate all (job_id, enqueue_at_ms)
+    2. Filter only jobs where wait_ms = now_ms - enqueue_at_ms > 250,000
+    3. Update the job's ZSET score via ZADD XX:
          new_score = enqueue_at_ms - EMERGENCY_BONUS
-    4. 이후 ZRANGE는 raw score 기준으로 overdue job을 자연히 top-K 안으로 선출.
-  보장 범위 변화: "top-K 진입 후 standard 우선" + "top-K 진입 보장" 모두 성립.
+    4. Subsequent ZRANGE naturally selects overdue jobs into top-K based on raw score.
+  Guarantee scope: both "standard priority after top-K entry" + "top-K entry guaranteed" hold.
 
-  **ZSET score 상위 K*3 스캔이 부족한 이유**:
-    ZRANGEBYSCORE LIMIT 0 {K*3}은 score가 낮은(=우선순위 높은) 상위만 본다.
-    paid 수천 건이 쌓이면 overdue standard/test는 score가 높아 K*3 밖에 묻혀
-    영구적으로 승격되지 않을 수 있다. enqueue_at side hash를 HSCAN으로 전체 순회하면
-    score 순서와 무관하게 모든 overdue job을 감지할 수 있다.
-    MAX_QUEUE_SIZE=10,000 × HSCAN COUNT 200 = 최대 50회 반복. 30s 주기에 충분히 가볍다.
+  **Why scanning top K*3 ZSET scores is insufficient**:
+    ZRANGEBYSCORE LIMIT 0 {K*3} only sees the top entries with low scores (=high priority).
+    With thousands of paid jobs queued, overdue standard/test jobs have high scores buried beyond K*3
+    and may never be promoted. HSCAN over the enqueue_at side hash iterates all jobs regardless
+    of score order, detecting every overdue job.
+    MAX_QUEUE_SIZE=10,000 × HSCAN COUNT 200 = max 50 iterations. Light enough for a 30s cycle.
 
-  **tier 역산 문제 해결**:
-  ZSET score = `now_ms - tier_bonus`이므로 score만으로는 원래 enqueue_at_ms를 알 수 없음.
-  해결: enqueue 시 `HSET veronex:queue:enqueue_at {job_id} {now_ms}` side hash에 저장.
-    enqueue Lua 스크립트에 HSET 추가 (원자 실행).
-    promote_overdue: HSCAN veronex:queue:enqueue_at → enqueue_at_ms 획득.
-    dispatch/cancel 시: `HDEL veronex:queue:enqueue_at {job_id}` 정리.
-    new_score = enqueue_at_ms - EMERGENCY_BONUS  (tier_bonus 역산 불필요, enqueue_at 직접 사용)
+  **Tier reverse-lookup problem solved**:
+  ZSET score = `now_ms - tier_bonus`, so the original enqueue_at_ms cannot be derived from score alone.
+  Solution: store `HSET veronex:queue:enqueue_at {job_id} {now_ms}` in a side hash at enqueue.
+    HSET added to enqueue Lua script (atomic execution).
+    promote_overdue: HSCAN veronex:queue:enqueue_at → obtain enqueue_at_ms.
+    On dispatch/cancel: `HDEL veronex:queue:enqueue_at {job_id}` cleanup.
+    new_score = enqueue_at_ms - EMERGENCY_BONUS  (no tier_bonus reverse-lookup needed, uses enqueue_at directly)
 
-**기아 방지**: age_bonus ≥ locality_bonus 역전 시점 → ≤75°C: 80s / 82°C: 114s.
-max_queue_wait(300s) 이내에 역전 발생 보장. 미로드 모델도 ~2분 내 역전 → 모델 전환 강제.
-SLA 정책: 대화형·배치 구분 없음. 모델별 차등 없음.
+**Starvation prevention**: age_bonus ≥ locality_bonus reversal point → ≤75°C: 80s / 82°C: 114s.
+Reversal guaranteed within max_queue_wait (300s). Unloaded models also reverse within ~2min → forces model switch.
+SLA policy: no distinction between interactive/batch. No per-model differentiation.
 
-**perf_factor × age_bonus 설계 의도**: 온도가 높을수록 age_bonus가 줄어 모델 전환이
-더 늦게 일어난다. 이는 의도된 동작이다. 과열 서버에서 모델 재로드(VRAM 재할당)는 추가
-연산 부하를 유발하므로, thermal 보호 차원에서 기존 로드 모델에 더 오래 집중하는 것이 유리하다.
+**perf_factor × age_bonus design intent**: higher temperatures reduce age_bonus, delaying model switches.
+This is intentional. Model reload (VRAM reallocation) on an overheated server creates additional
+compute load, so for thermal protection it is better to keep serving the currently loaded model longer.
 
-**멀티인스턴스 안전**: ZRANGE K=20 peek (read-only) → Rust scoring → Lua ZREM 원자적.
-ZREM 반환값 0 = 다른 인스턴스가 선점 → 즉시 재시도.
-K=20 윈도우 공정성: age_bonus는 top-K 후보 선정 이후 Rust scoring 단계에서 적용되므로
-  K 밖의 job을 ZSET 상위로 끌어올리는 효과가 없다.
-  K 밖 job의 공정성은 promote_overdue 루프(30s)가 ZSET score를 직접 갱신하는 방식으로만 보장된다.
-  age_bonus 누적이 K 진입을 보장한다는 설명은 틀렸다 — promote_overdue가 단일 책임자다.
-큐 적체 시 보완: ZSET 크기가 K×3(60) 초과 시 K를 동적으로 min(ZSET_size/3, 100)으로
-확장. dispatcher 루프마다 ZCARD로 확인. 상한 100은 scoring 비용 제한.
+**Multi-instance safety**: ZRANGE K=20 peek (read-only) → Rust scoring → Lua ZREM atomic.
+ZREM return 0 = another instance claimed → immediate retry.
+K=20 window fairness: age_bonus is applied during Rust scoring after top-K candidate selection,
+  so it has no effect on pulling jobs from outside K into the top of the ZSET.
+  Fairness for jobs outside K is guaranteed only by the promote_overdue loop (30s) directly updating ZSET scores.
+  The claim that cumulative age_bonus guarantees K entry is incorrect — promote_overdue is the sole responsible party.
+Queue congestion mitigation: when ZSET size exceeds K×3 (60), dynamically expand K to min(ZSET_size/3, 100).
+Checked via ZCARD on each dispatcher loop. Upper bound of 100 limits scoring cost.
 
-**perf_factor(temp_c)**: ≤75°C → 1.0 / 82°C → 0.70 / ≥90°C → 0.0 (선형 보간, thermal.rs).
+**perf_factor(temp_c)**: ≤75°C → 1.0 / 82°C → 0.70 / ≥90°C → 0.0 (linear interpolation, thermal.rs).
 
-**demand_counter**: `veronex:demand:{model}` (Valkey). 의미 = **ZSET 대기열 길이(queued only)**.
-- INCR: job이 ZSET에 진입할 때 (enqueue)
-- DECR: dispatch 시 Lua handoff 스크립트 내 원자적 처리 (ZREM + LPUSH + DECR 단일 스크립트)
-- DECR: cancel/timeout 경로 — queued cancel Lua 스크립트(ZREM + DECR)로 원자 처리 (§7 참고)
-- inflight(processing) 중인 job은 카운트하지 않음
-- resync: 60s마다 ZSET member 기준으로 집계 후 덮어씀 → INCR/DECR drift 자동 보정
-          (ZSET이 단일 진실 소스: ZSCAN → HMGET queue:model → 집계. side hash stale entry 자동 제외)
+**demand_counter**: `veronex:demand:{model}` (Valkey). Semantics = **ZSET queue length (queued only)**.
+- INCR: when job enters ZSET (enqueue)
+- DECR: atomic within Lua handoff script at dispatch (ZREM + LPUSH + DECR single script)
+- DECR: cancel/timeout path — queued cancel Lua script (ZREM + DECR) atomic (see §7)
+- In-flight (processing) jobs are not counted
+- resync: every 60s, recount from ZSET members and overwrite → automatic INCR/DECR drift correction
+          (ZSET is single source of truth: ZSCAN → HMGET queue:model → aggregate. Side hash stale entries auto-excluded)
 
-**원자성 범위 명세**:
-- enqueue: `ZCARD` + `ZADD queue:zset` + `INCR demand:{model}` — **Lua 단일 스크립트 (원자)**
-  이유: 비원자 ZCARD → ZADD 사이에 다른 writer가 끼어들면 MAX_QUEUE_SIZE overshoot 가능.
-        Lua로 묶어 hard cap 보장 (반환 0 = 큐 포화 → 429).
-- dispatch: `ZREM + LPUSH + DECR` — **Lua 단일 스크립트 (원자)**
-- cancel/timeout: `ZREM + DECR` — **Lua 단일 스크립트 (원자)**
+**Atomicity scope specification**:
+- enqueue: `ZCARD` + `ZADD queue:zset` + `INCR demand:{model}` — **single Lua script (atomic)**
+  Reason: non-atomic ZCARD → ZADD allows another writer to interleave → MAX_QUEUE_SIZE overshoot.
+          Lua bundling guarantees hard cap (return 0 = queue full → 429).
+- dispatch: `ZREM + LPUSH + DECR` — **single Lua script (atomic)**
+- cancel/timeout: `ZREM + DECR` — **single Lua script (atomic)**
 
-**drift 안전성 근거**:
-- DECR 단독 실패 불가: DECR은 항상 Lua 스크립트 내에서 ZREM과 함께 실행됨
-- enqueue drift 제거됨: ZCARD + ZADD + INCR이 Lua 단일 스크립트이므로
-  "ZADD 성공 후 INCR 전 크래시" 시나리오가 원천 차단됨
-- resync 존재 이유: Lua 외부 예외(Valkey 재시작, 운영자 수동 ZSET 조작 등) 방어 차원.
-  60s resync가 ZSCAN(ZSET 단일 진실 소스) 기반으로 demand_counter를 재산정해 어떠한 예외적 drift도 자동 보정.
-  side hash(queue:model) 단독 HSCAN 사용 금지 — stale entry로 인한 과대복구 발생.
-- 결론: enqueue drift 경로 없음. dispatch/cancel은 Lua 원자. 60s resync가 최종 방어선.
-  영구 drift 불가.
+**Drift safety rationale**:
+- Standalone DECR failure impossible: DECR always runs alongside ZREM within a Lua script
+- Enqueue drift eliminated: ZCARD + ZADD + INCR in single Lua script, so
+  "crash after ZADD succeeds but before INCR" scenario is structurally prevented
+- Resync exists for: defense against external exceptions (Valkey restart, operator manual ZSET manipulation, etc.).
+  60s resync recalculates demand_counter from ZSCAN (ZSET as single source of truth), auto-correcting any exceptional drift.
+  Standalone HSCAN of side hash (queue:model) prohibited — causes over-recovery from stale entries.
+- Conclusion: no enqueue drift path. dispatch/cancel are Lua-atomic. 60s resync is the final safety net.
+  Permanent drift is impossible.
 
-### 3. Thermal 보호 — 요청 차단 및 복구
+### 3. Thermal Protection — Request blocking and recovery
 
-**임계값 기준**: AMD Ryzen AI 395+ APU 공식 junction temp 한계(105°C) 기준으로
-운영 안전 마진 확보. 75°C(정상)/82°C(경고)/90°C(위험) 3구간.
-어드민이 provider별로 오버라이드 가능. 벤더별 기본값:
+**Threshold basis**: AMD Ryzen AI 395+ APU official junction temp limit (105°C) with
+operational safety margin. 75°C (normal) / 82°C (warning) / 90°C (critical) 3 zones.
+Admin can override per provider. Vendor defaults:
 - AMD APU (Ryzen AI Max+ 395): normal_below=75 / soft_at=82 / hard_at=90 / cooldown_secs=300
 - NVIDIA GPU: normal_below=80 / soft_at=88 / hard_at=93 / cooldown_secs=300
-- unknown: AMD APU 기본값 적용
+- unknown: AMD APU defaults applied
 
-**cooldown_secs=300 근거**: GPU/APU thermal throttling은 소프트웨어가 부하를 멈춰도 하드웨어
-클럭 복구 + 센서 안정화에 수분이 필요하다. 60s로 재개하면 "부하 재개 → 즉시 throttling"
-무한 루프 확률이 높다. 300s(5분)이 APU 실제 쿨다운에 충분한 최소값. 어드민 오버라이드 가능.
+**cooldown_secs=300 rationale**: GPU/APU thermal throttling requires minutes for hardware clock
+recovery + sensor stabilization even after software stops the load. Resuming at 60s has high probability
+of "resume load → immediate throttling" infinite loop. 300s (5min) is the minimum sufficient for APU cooldown. Admin override available.
 
-health_checker 30s 루프 → node-exporter 스크랩 → `thermal.update(temp_c)` → 상태 갱신.
-dispatcher `score_and_claim()` 호출 시 현재 thermal 상태 읽기 (atomic load).
+health_checker 30s loop → node-exporter scrape → `thermal.update(temp_c)` → state update.
+dispatcher reads current thermal state on `score_and_claim()` call (atomic load).
 
 **Soft Gate (≥ soft_at, 82°C)**:
 ```
-신규 요청: 차단 (503)
-진행 중인 요청: 완료까지 허용
-해제 조건(Hysteresis): temp < normal_below AND provider_total_active == 0 일 때 Normal 복귀
-  // normal_below: provider별 자동 설정 (gpu_vendor=amd → CPU thermal 기준 75°C, nvidia → GPU thermal 기준)
-  // SDD 초기 80°C → 75°C 변경 이유: AMD APU는 CPU thermal이 GPU thermal보다 지연 반영되므로
-  //   더 넓은 hysteresis 마진(soft_at 82 - normal_below 75 = 7°C)이 진동 방지에 효과적.
+New requests: blocked (503)
+In-flight requests: allowed to complete
+Release condition (Hysteresis): return to Normal when temp < normal_below AND provider_total_active == 0
+  // normal_below: auto-set per provider (gpu_vendor=amd → CPU thermal baseline 75°C, nvidia → GPU thermal baseline)
+  // SDD initial 80°C → 75°C change reason: AMD APU CPU thermal lags behind GPU thermal,
+  //   so wider hysteresis margin (soft_at 82 - normal_below 75 = 7°C) is more effective at preventing oscillation.
   // provider_total_active = Σ active_count(model, provider) for all loaded models on this provider
-  // active_count는 ModelState 단위(model+provider 쌍)이므로, provider-wide 합산이 해제 조건이다.
-  // model-wide active_count 단독이 아님 — 해당 provider의 모든 모델 in-flight 종료가 조건.
-의도: 82°C 경계에서 요청 1개 단위로 Gate가 여닫히는 진동(Oscillation) 방지.
-      provider_total_active == 0 단독으로는 해제되지 않음 — 온도가 normal_below 이하로 내려가야 재개.
-해제 체크 주기: health_checker 30s 루프에서만 수행. 이벤트 드리븐 즉시 해제 없음.
-  (provider_total_active==0 이벤트 시점에도 온도 재체크는 다음 30s 루프까지 대기 — 보수적 의도)
-장기 스트림 고착 방지: SSE_HARD_TIMEOUT_SECS = 600 (상수).
-  이 값은 dispatcher.rs 및 runner.rs에서 강제 종료 기준으로 사용됨.
-  Soft Gate 진입 후 600s 이내에 모든 in-flight 스트림이 종료됨 — 무기한 고착 불가.
-  // 이 보장은 scheduler.md가 단독으로 완결한다. distributed.md 참조 없이도 성립.
-  // SSE_HARD_TIMEOUT_SECS 변경 시 이 보장이 깨지므로 두 문서 동기화 필수.
+  // active_count is per ModelState (model+provider pair), so provider-wide sum is the release condition.
+  // Not model-wide active_count alone — all in-flight requests across all models on that provider must finish.
+Intent: prevent oscillation where gate opens/closes per single request at the 82°C boundary.
+        provider_total_active == 0 alone does not release — temperature must drop below normal_below to resume.
+Release check frequency: only in health_checker 30s loop. No event-driven immediate release.
+  (even when provider_total_active==0 event fires, temperature recheck waits for next 30s loop — conservative intent)
+Long-stream stuck prevention: SSE_HARD_TIMEOUT_SECS = 600 (constant).
+  Used as forced termination threshold in dispatcher.rs and runner.rs.
+  All in-flight streams terminate within 600s after Soft Gate entry — indefinite stuck impossible.
+  // This guarantee is self-contained in scheduler.md. Holds without referencing distributed.md.
+  // Changing SSE_HARD_TIMEOUT_SECS breaks this guarantee, so both documents must stay in sync.
 ```
 
 **Hard Gate (≥ hard_at, 90°C)**:
 ```
-신규 요청: 모두 차단 (503)
-진행 중인 요청: 완료까지 허용 (단, 최대 60s drain 상한)
-  이유: 무기한 drain은 실질 쿨다운 시간을 보장하지 못함.
-        긴 SSE가 200초 더 돌면 cooldown 300s 중 100초만 실제 냉각됨 → 300s 근거 무효.
-// 용어 정의 — 혼동 방지:
-//   forced_drain_timeout = 60s  : Hard 진입 후 in-flight을 강제 종료하기까지의 최대 대기 시간.
-//                                  cooldown 기간(300s)과 무관. drain이 빠르면 0s에 완료될 수도 있음.
-//   cooldown_secs = 300s        : Cooldown 상태 지속 시간. 실제 하드웨어 냉각 시간.
-//                                  기존 코드 7,200s → 300s로 변경 (근거: L322-324).
-Cooldown timer 시작 — 단일 정의:
+New requests: all blocked (503)
+In-flight requests: allowed to complete (max 60s drain cap)
+  Reason: unbounded drain cannot guarantee actual cooldown time.
+          If a long SSE runs 200s more, only 100s of the 300s cooldown is actual cooling → 300s rationale invalidated.
+// Terminology — to avoid confusion:
+//   forced_drain_timeout = 60s  : max wait time after Hard entry before force-terminating in-flight.
+//                                  Unrelated to cooldown period (300s). If drain finishes quickly, it may complete in 0s.
+//   cooldown_secs = 300s        : Cooldown state duration. Actual hardware cooling time.
+//                                  Changed from legacy 7,200s → 300s (rationale: L322-324).
+Cooldown timer start — single definition:
   timer_start_at = first_time_provider_total_active_reaches_0
-  // = Hard 진입 후 provider_total_active(모든 모델 active_count 합)가 0이 되는 시점.
-  // VramPermit drop(단계 5 완료)이 active_count를 감소시키므로, 실제 하드웨어 부하 종료 후 시작.
-  // forced drain(60s 상한)으로 인해 Hard 진입 후 최대 60s + cancel→VramPermit drop 지연(수초) 이내.
-  // "min(hard_entered_at+60s, active==0)" 방식은 VramPermit drop 전(단계 5 이전)에 timer를 시작해
-  // 하드웨어가 아직 부하 중인 상태에서 cooldown이 카운트다운됨 — 사용 금지.
-  watchdog: Hard 진입 후 90s(=60s drain + 30s 버퍼)가 지나도 active>0이면 오류 로그 기록 후
-            timer_start_at = hard_entered_at + 90s 강제 설정 (블로킹 방지).
-  이유: cancel() 완료를 무기한 대기하면 안 되므로 90s watchdog이 최종 보장.
-추가 dispatch: Hard 진입 후 없음. drain 중 완료된 요청은 후속 dispatch 없음.
+  // = point after Hard entry when provider_total_active (sum of all model active_counts) reaches 0.
+  // VramPermit drop (step 5 completion) decrements active_count, so timer starts after actual hardware load ends.
+  // Due to forced drain (60s cap), this is within max 60s + cancel→VramPermit drop delay (seconds) after Hard entry.
+  // "min(hard_entered_at+60s, active==0)" approach starts timer before VramPermit drop (before step 5),
+  // counting down cooldown while hardware is still under load — prohibited.
+  watchdog: if active>0 after 90s (=60s drain + 30s buffer) since Hard entry, log error and
+            force-set timer_start_at = hard_entered_at + 90s (prevent blocking).
+  Reason: cannot wait indefinitely for cancel() completion, so 90s watchdog is the final guarantee.
+Additional dispatch: none after Hard entry. No follow-up dispatch for requests completing during drain.
 
-[Hard Gate forced drain cancel — 60s 상한 초과 시 강제 중단 계약]
-  트리거: Hard 진입 후 60s 경과 && active_count > 0 (drain 미완료)
-  처리 (§7 processing cancel 경로와 동일):
-    1. 각 in-flight job의 Job Runner에 cancel 신호 전송
-    2. SSE error event 전송 (스트림이 아직 열려 있을 때):
+[Hard Gate forced drain cancel — forced termination contract when 60s cap exceeded]
+  Trigger: 60s elapsed after Hard entry && active_count > 0 (drain incomplete)
+  Processing (same as §7 processing cancel path):
+    1. Send cancel signal to each in-flight job's Job Runner
+    2. Send SSE error event (if stream is still open):
          data: {"error":{"type":"thermal_hard_gate","message":"server temperature critical"}}\n\n
     3. LREM processing {job_id}
     4. DB job status = "failed", failure_reason = "thermal_hard_gate"
-    5. VramPermit drop → KV 반환, active_count 감소
-  순서 보장: 1→2→3→4→5.
-  // Cooldown timer 시작점: 단계 5 완료(VramPermit drop → active_count 감소) 후
-  // provider_total_active == 0이 되는 시점. 90s watchdog이 최종 보장 (위 단일 정의 참고).
-  // 강제 drain cancel 발동(60s) 후 단계 5가 완료되어야 active==0이 확정됨.
-  // "cancel 발동 시점(60s)"으로 timer를 시작하면 하드웨어가 아직 연산 중 — 사용 금지.
-  중복 terminal 방지: CancelOnDrop과 동일 메커니즘 — cancel() 후 runner가 DB 상태를 이미 썼으면 스킵.
-  VramPermit drop 타이밍 계약:
-    cancel() 신호 발송 → Job Runner SSE 루프 중단 → 단계 2~4 완료 → 단계 5 VramPermit drop.
-    Ollama는 RST_STREAM(HTTP/2) 또는 연결 끊김 이벤트로 KV 슬롯 해제를 시작.
-    Veronex의 VramPermit drop은 Ollama 내부 해제 완료를 확인하지 않는다.
-    (try_reserve 기반 소프트 예약이므로 Ollama 429 재발 시 AIMD/OOM 경로로 자연 보정됨)
+    5. VramPermit drop → KV released, active_count decremented
+  Order guaranteed: 1→2→3→4→5.
+  // Cooldown timer start: after step 5 completion (VramPermit drop → active_count decrement),
+  // when provider_total_active == 0. 90s watchdog is the final guarantee (see single definition above).
+  // Step 5 must complete after forced drain cancel fires (60s) before active==0 is confirmed.
+  // Starting timer at "cancel fire time (60s)" means hardware is still computing — prohibited.
+  Duplicate terminal prevention: same mechanism as CancelOnDrop — skip if runner already wrote DB status after cancel().
+  VramPermit drop timing contract:
+    cancel() signal sent → Job Runner SSE loop breaks → steps 2~4 complete → step 5 VramPermit drop.
+    Ollama begins KV slot release via RST_STREAM (HTTP/2) or connection close event.
+    Veronex's VramPermit drop does not confirm Ollama's internal release completion.
+    (soft reservation via try_reserve, so Ollama 429 recurrence is naturally corrected via AIMD/OOM path)
 ```
 
-**Thermal 상태 머신**:
+**Thermal state machine**:
 ```
 Normal ──[≥soft_at]──► Soft ──[≥hard_at]──► Hard ──[active==0 OR 60s drain]──► Cooldown
   ▲                     │                     ▲                                       │
-  └─[<normal_below/hyst]─┘                     │               cooldown_secs 경과      │
-                                               │                    → RampUp 진입 ────┘
-RampUp (별도 상태):
-  - **신규 요청 수용** (차단 없음). max_concurrent=1 상한만 적용.
-    Soft(503 차단)와 다름. Normal 복귀 전 점진적 서빙 재개 단계.
-  - max_concurrent = 1 강제
-  - 30s마다 온도 체크 후 분기:
-      temp < soft_at              → AIMD +1 재개 (계속 RampUp)
-      soft_at ≤ temp < hard_at   → Soft 전이 (신규 요청 차단 재개)
-      temp ≥ hard_at             → Hard 전이 (즉시 차단 + Cooldown 재진입)
-  - provider 전체 복귀 조건 → Normal 완전 복귀:
+  └─[<normal_below/hyst]─┘                     │               cooldown_secs elapsed   │
+                                               │                    → enter RampUp ────┘
+RampUp (separate state):
+  - **Accepts new requests** (no blocking). Only max_concurrent=1 cap applied.
+    Different from Soft (503 blocking). Gradual serving resumption stage before Normal return.
+  - max_concurrent = 1 forced
+  - Temperature check every 30s with branching:
+      temp < soft_at              → resume AIMD +1 (continue RampUp)
+      soft_at ≤ temp < hard_at   → transition to Soft (resume request blocking)
+      temp ≥ hard_at             → transition to Hard (immediate block + re-enter Cooldown)
+  - Provider-wide recovery condition → full Normal return:
       temp < normal_below
       AND Σ max_concurrent(model, provider) for all loaded models ≥ provider_pre_hard_total
-    // provider_pre_hard_total: Hard 진입 직전 provider_total_committed_parallel 스냅샷 (ProviderVramState에 저장).
-    // per-model pre_hard_max_concurrent 기준이 아닌 provider-wide 합산 기준.
-    // 이유: thermal은 provider 전체 온도이므로 복귀 조건도 provider-wide여야 일관됨.
-    //   model 1개가 pre_hard에 도달해도 다른 모델이 아직 1이면 실제 부하는 pre_hard 수준 미도달.
-    // RampUp → Hard 재전이: 이미 저장된 provider_pre_hard_total 유지 (재정의 안 함).
-    //   RampUp 중 Hard 재진입 시 RampUp의 reduced 상태가 덮어써지지 않아야 함.
-    // pre_hard_max_concurrent(per-model): RampUp 진행 표시용으로 유지. provider-wide 조건의 보조.
+    // provider_pre_hard_total: snapshot of provider_total_committed_parallel just before Hard entry (stored in ProviderVramState).
+    // Provider-wide sum criterion, not per-model pre_hard_max_concurrent.
+    // Reason: thermal is provider-wide temperature, so recovery condition should also be provider-wide for consistency.
+    //   Even if 1 model reaches pre_hard, if other models are still at 1 then actual load hasn't reached pre_hard level.
+    // RampUp → Hard re-transition: keep existing provider_pre_hard_total (do not redefine).
+    //   On Hard re-entry during RampUp, RampUp's reduced state must not be overwritten.
+    // pre_hard_max_concurrent (per-model): kept for RampUp progress display. Auxiliary to provider-wide condition.
 
-Cooldown 중 온도 재상승:
-  temp ≥ hard_at → Cooldown timer 리셋 (cooldown_secs 재시작)
-  Cooldown 종료 조건: cooldown_secs 경과 AND temp < soft_at
-    (종료 시 온도가 여전히 soft_at 이상이면 Cooldown 유지)
-  **Cooldown 최대 대기 상한**: 최초 Cooldown 진입 시각으로부터 cooldown_secs × 3 경과 (기본 900s = 15분)
-    timer reset과 무관한 절대 상한. cooldown_entered_at는 Hard→Cooldown 전이 시 1회 기록, reset 시 갱신 안 함.
-    상한 도달 시: 전이 직전 온도 체크 후 분기
-      temp ≥ hard_at   → Hard 재진입 (Cooldown timer 리셋, RampUp 진입 안 함)
-      soft_at ≤ temp < hard_at → Soft 전이 (신규 요청 차단 재개)
-      temp < soft_at   → RampUp 전이
-    이유: 외부 열원(다른 워크로드)으로 temp가 82~89°C에 고정되면 Cooldown이 무기한 연장됨.
-          상한 도달 시 무조건 RampUp 진입하면 hard_at 이상에서 최대 30s간 신규 요청이
-          수용되는 안전 공백이 발생. 온도 체크 후 분기로 이를 차단.
-          어드민 알림 로그 기록.
+Temperature re-rise during Cooldown:
+  temp ≥ hard_at → Cooldown timer reset (restart cooldown_secs)
+  Cooldown exit condition: cooldown_secs elapsed AND temp < soft_at
+    (if temperature is still ≥ soft_at at expiry, remain in Cooldown)
+  **Cooldown max wait cap**: cooldown_secs × 3 from initial Cooldown entry time (default 900s = 15min)
+    Absolute cap independent of timer resets. cooldown_entered_at recorded once at Hard→Cooldown transition, not updated on reset.
+    On cap reached: check temperature before transition, then branch
+      temp ≥ hard_at   → re-enter Hard (reset Cooldown timer, do not enter RampUp)
+      soft_at ≤ temp < hard_at → transition to Soft (resume request blocking)
+      temp < soft_at   → transition to RampUp
+    Reason: if external heat source (other workloads) holds temp at 82~89°C, Cooldown extends indefinitely.
+            Unconditional RampUp entry on cap would create a safety gap where new requests are
+            accepted for up to 30s at ≥hard_at. Temperature check branching prevents this.
+            Admin alert log recorded.
 ```
 
-**전이 완전성 보장** (모든 경로 정의):
+**Transition completeness guarantee** (all paths defined):
 ```
 Normal    → Soft      : temp ≥ soft_at
 Soft      → Hard      : temp ≥ hard_at
 Soft      → Normal    : temp < normal_below AND provider_total_active == 0 (hysteresis)
-Hard      → Cooldown  : provider_total_active == 0 (Hard 진입 후 최대 60s forced drain, 90s watchdog 최종 보장)
-Cooldown  → Cooldown  : temp ≥ hard_at (timer 리셋) 또는 아직 temp ≥ soft_at (대기)
-Cooldown  → RampUp    : cooldown_secs 경과 AND temp < soft_at
-Cooldown  → Hard      : cooldown_secs × 3 경과 AND temp ≥ hard_at (Hard 재진입)
-Cooldown  → Soft      : cooldown_secs × 3 경과 AND soft_at ≤ temp < hard_at
-Cooldown  → RampUp    : cooldown_secs × 3 경과 AND temp < soft_at
-RampUp    → RampUp    : temp < soft_at, AIMD 학습 진행 중
+Hard      → Cooldown  : provider_total_active == 0 (max 60s forced drain after Hard entry, 90s watchdog final guarantee)
+Cooldown  → Cooldown  : temp ≥ hard_at (timer reset) or still temp ≥ soft_at (wait)
+Cooldown  → RampUp    : cooldown_secs elapsed AND temp < soft_at
+Cooldown  → Hard      : cooldown_secs × 3 elapsed AND temp ≥ hard_at (Hard re-entry)
+Cooldown  → Soft      : cooldown_secs × 3 elapsed AND soft_at ≤ temp < hard_at
+Cooldown  → RampUp    : cooldown_secs × 3 elapsed AND temp < soft_at
+RampUp    → RampUp    : temp < soft_at, AIMD learning in progress
 RampUp    → Soft      : soft_at ≤ temp < hard_at
 RampUp    → Hard      : temp ≥ hard_at
 RampUp    → Normal    : AIMD current ≥ pre_hard_max_concurrent AND temp < normal_below
 ```
 
-**Circuit Breaker vs Thermal Gate 우선순위**:
+**Circuit Breaker vs Thermal Gate priority**:
 ```
-Circuit Breaker: provider 응답 없음/타임아웃 → 해당 provider 전체 차단
-Thermal Gate:    온도 초과 → 해당 provider 신규 요청 차단
-동시 활성화: Circuit Breaker 우선 (더 강한 차단). CB 해제 후 Thermal 상태 재평가.
-해제 순서: Thermal cooldown 완료 → CB 반개(half-open) → 탐색 요청 성공 시 CB 해제.
+Circuit Breaker: provider unresponsive/timeout → block entire provider
+Thermal Gate:    temperature exceeded → block new requests on that provider
+Simultaneous activation: Circuit Breaker takes priority (stronger block). Re-evaluate Thermal state after CB release.
+Release order: Thermal cooldown complete → CB half-open → CB release on successful probe request.
 ```
 
-**전 provider 불능 시 동작 — 두 경로 단일 정의**:
+**All-provider unavailable behavior — two paths, single definition**:
 ```
-// 경로 A (pre-handoff): ZRANGE peek 단계에서 filter_candidates()=0 감지
-//   → dispatch 사이클 전체 스킵. ZREM 미수행. 모든 job 큐에 보존.
-//   → 다음 루프까지 대기 (QUEUE_POLL_INTERVAL).
-//   이유: HOL blocking 방지. 큐 front를 소모하면 다음 사이클도 동일 상태에서 연속 소모·실패.
-//   클라이언트 처리: max_queue_wait(300s) 이내 provider 복구 → 정상 dispatch.
-//                    복구 안 됨 → max_queue_wait 초과 → queued cancel 경로(§7) → SSE error event.
+// Path A (pre-handoff): filter_candidates()=0 detected at ZRANGE peek stage
+//   → skip entire dispatch cycle. No ZREM. All jobs preserved in queue.
+//   → wait until next loop (QUEUE_POLL_INTERVAL).
+//   Reason: prevent HOL blocking. Consuming queue front would cause repeated consume-fail in same state next cycle.
+//   Client handling: provider recovers within max_queue_wait (300s) → normal dispatch.
+//                    No recovery → max_queue_wait exceeded → queued cancel path (§7) → SSE error event.
 
-// 경로 B (post-handoff 예외): score_and_claim() 내부에서 provider 상태 변경으로 eligible=0
-//   → job은 이미 processing 상태. 즉시 아래 처리 시퀀스 실행.
-//   이유: ZREM 완료 후 큐에 돌려놓을 수 없음. processing 상태 job은 즉시 종결해야 함.
+// Path B (post-handoff exception): provider state change within score_and_claim() → eligible=0
+//   → job is already in processing state. Execute processing sequence below immediately.
+//   Reason: cannot return to queue after ZREM completed. Processing-state jobs must be terminated immediately.
 
-dispatch 흐름:
-  1. ZRANGE peek → top-K 후보 수집
-  2. filter_candidates() 호출 — eligible provider가 0개이면:
-       경로 A: 사이클 전체 스킵 (ZREM 미수행). QUEUE_POLL_INTERVAL 후 재시도.
-  3. eligible provider가 존재하면 Rust window scoring → best job 선정 → Lua handoff
-  4. score_and_claim() — 이 단계에서 eligible=0 감지 시 경로 B 실행
+Dispatch flow:
+  1. ZRANGE peek → collect top-K candidates
+  2. filter_candidates() call — if 0 eligible providers:
+       Path A: skip entire cycle (no ZREM). Retry after QUEUE_POLL_INTERVAL.
+  3. If eligible providers exist → Rust window scoring → select best job → Lua handoff
+  4. score_and_claim() — if eligible=0 detected at this stage, execute Path B
 
-경로 B 처리 시퀀스 (케이스별 failure_reason만 다름):
-  케이스 A: 전부 Hard gate / Circuit Breaker / is_pulling → failure_reason="no_eligible_provider"
-  케이스 B: 전부 Soft gate (또는 혼합) → failure_reason="all_providers_soft_gated"
+Path B processing sequence (only failure_reason differs per case):
+  Case A: all Hard gate / Circuit Breaker / is_pulling → failure_reason="no_eligible_provider"
+  Case B: all Soft gate (or mixed) → failure_reason="all_providers_soft_gated"
 
-  1. LREM processing {job_id}   ← processing 리스트 정리 (ZREM 완료 상태이므로 필수)
-  2. DB status="failed", failure_reason 기록
-  3. 클라이언트 응답 (HTTP 응답 시작 여부에 따라 분기):
-       [아직 200 OK 미전송] → 503 + Retry-After 헤더 반환
-       [이미 SSE heartbeat 전송됨 (200 OK + SSE 헤더)] → SSE error event 전송 후 스트림 종료:
+  1. LREM processing {job_id}   ← cleanup processing list (required since ZREM already completed)
+  2. DB status="failed", failure_reason recorded
+  3. Client response (branch based on whether HTTP response has started):
+       [200 OK not yet sent] → return 503 + Retry-After header
+       [SSE heartbeat already sent (200 OK + SSE headers)] → send SSE error event then close stream:
          data: {"error":{"type":"no_eligible_provider","message":"...","retry_after_secs":N}}\n\n
-       이유: HTTP 응답이 시작된 후에는 상태 코드를 변경할 수 없음.
+       Reason: status code cannot be changed after HTTP response has begun.
 
-Retry-After 계산 규칙 (경로 B에만 적용, 구현 단일 정의):
-  Hard gate: max(0, cooldown_secs - elapsed_cooldown_secs). cooldown 미진입이면 cooldown_secs.
-  Circuit Breaker: CB half-open 대기 시간 (CB 구현이 제공하는 next_attempt_at - now).
-  is_pulling: max_pull_secs 기본값 사용 (남은 시간 미예측). 기본 300s.
-  Soft gate: health_checker 30s 루프 주기 기준. 기본 30s.
-  복수 상태 혼합: 위 값 중 최솟값.
-  알 수 없는 경우: 기본 60s.
+Retry-After calculation rules (Path B only, single implementation definition):
+  Hard gate: max(0, cooldown_secs - elapsed_cooldown_secs). If not yet in cooldown, use cooldown_secs.
+  Circuit Breaker: CB half-open wait time (next_attempt_at - now, provided by CB implementation).
+  is_pulling: use max_pull_secs default (remaining time unpredictable). Default 300s.
+  Soft gate: based on health_checker 30s loop period. Default 30s.
+  Multiple states mixed: minimum of above values.
+  Unknown: default 60s.
 ```
 
-### 4. 3-State 모델 생명주기
+### 4. 3-State Model Lifecycle
 
 ```
-IDLE ──[demand>0 + Preloader]──► COLD START ──[로드 완료]──► STEADY STATE
+IDLE ──[demand>0 + Preloader]──► COLD START ──[load complete]──► STEADY STATE
  ▲                                                                 │
  └──────────────── Lazy Eviction ─────────────────────────────────┘
-      ① 다른 모델 VRAM 필요 (APU: ②③만으로 발화)
+      ① Another model needs VRAM (APU: ②③ alone trigger eviction)
       ② active_requests == 0
-      ③ idle ≥ 180s  (is_standby=true 서버: idle ≥ 30s로 단축 — 전력 최적화 우선)
-      → evict 시: sample_count = 0, learning_epoch_started_at = now_ms
-               (재로드 시 Cold Start 재시작 + 새 epoch 기준으로 ClickHouse 집계 시작)
+      ③ idle ≥ 180s  (is_standby=true server: shortened to idle ≥ 30s — power optimization priority)
+      → on evict: sample_count = 0, learning_epoch_started_at = now_ms
+                  (Cold Start restarts on reload + ClickHouse aggregation starts from new epoch)
 ```
 
-Preloader: POST `/api/generate` `num_predict=0`. is_preloading 플래그로 중복 방지.
+Preloader: POST `/api/generate` `num_predict=0`. is_preloading flag prevents duplicates.
 
-**Preload 실패 처리**:
+**Preload failure handling**:
 ```
-120s 타임아웃 또는 오류 → is_preloading=false → 다음 5s 루프 재시도
-클라이언트 타임아웃 방어:
-  - 큐에 쌓인 요청은 대기 중 SSE heartbeat("data: \n\n") 30s마다 전송 (연결 유지)
-  - max_queue_wait = 300s. 초과 시 job → failed, 클라이언트 응답:
-      SSE heartbeat 전송 전: 503 반환
-      SSE heartbeat 전송 후: SSE error event 전송 후 스트림 종료
+120s timeout or error → is_preloading=false → retry on next 5s loop
+Client timeout defense:
+  - Queued requests receive SSE heartbeat ("data: \n\n") every 30s during wait (keep connection alive)
+  - max_queue_wait = 300s. On exceed → job → failed, client response:
+      Before SSE heartbeat sent: return 503
+      After SSE heartbeat sent: send SSE error event then close stream
         data: {"error":{"type":"timeout","message":"queue wait exceeded"}}\n\n
-  - Preload 3회 연속 실패 시: 해당 **model+provider 조합**만 300s 제외
-      다른 healthy provider가 있으면 → 해당 provider로 계속 라우팅
-      모든 provider가 제외될 때만 → 해당 모델 요청에 503 반환
-      이유: "해당 모델 요청 전체 503"은 멀티 provider 환경에서 healthy provider까지 막아 가용성을 깨뜨림.
-  - 3회 실패 후 장기 복구: 300s 대기 후 preload_fail_count=0 리셋 → 자동 재시도 재개
-    300s 동안 해당 model+provider 조합은 dispatcher filter_candidates()와 Planner ①② 루프에서 제외
+  - After 3 consecutive preload failures: exclude only that **model+provider pair** for 300s
+      If other healthy providers exist → continue routing to those providers
+      Only when all providers are excluded → return 503 for that model's requests
+      Reason: "503 for all requests of that model" blocks healthy providers in multi-provider setups, breaking availability.
+  - Long-term recovery after 3 failures: reset preload_fail_count=0 after 300s → auto-retry resumes
+    During 300s the model+provider pair is excluded from dispatcher filter_candidates() and Planner ①② loops
 ```
 
-### 5. 모델 Pull — 요청 드레인
+### 5. Model Pull — Request Drain
 
-Ollama 모델 추가/교체 시 자동으로 요청을 차단하고 완료 후 재개한다.
+Automatically blocks requests during Ollama model add/replace and resumes after completion.
 
-**권한**: 모든 Pull/Drain API는 JWT admin 이상 필요. 일반 API 키로는 접근 불가.
-  이유: 50GB+ 모델 pull은 서버를 최대 4시간 점유 — 일반 사용자 트리거 허용 시 DoS 가능.
+**Permissions**: all Pull/Drain APIs require JWT admin or higher. Not accessible via regular API keys.
+  Reason: 50GB+ model pull occupies server for up to 4 hours — allowing regular user triggers enables DoS.
 
 ```
 POST   /v1/ollama/models/pull {model, provider_id}   ← RequireAdmin
-// DELETE /v1/ollama/models/pull/{provider_id}/{model} — 단순화: 미구현.
-//   max_pull_secs(4h) 타임아웃으로 자동 해제되므로 수동 취소 불필요.
-//   향후 필요 시 구현. (G13 참고)
+// DELETE /v1/ollama/models/pull/{provider_id}/{model} — simplified: not implemented.
+//   Auto-released via max_pull_secs (4h) timeout, so manual cancel unnecessary.
+//   Implement when needed. (See G13)
 
 POST /v1/ollama/models/pull {model, provider_id}
-  → is_pulling=true 설정
-  → 신규 요청: 해당 model+provider → 503 (pull in progress), is_pulling 해제까지 유지
+  → set is_pulling=true
+  → new requests: that model+provider → 503 (pull in progress), held until is_pulling cleared
 
-  [1단계 — Drain] active_count==0 될 때까지 대기
-    drain timeout 60s 초과 시: 강제 진행 (§7 processing cancel 경로 전체 수행)
-      → in-flight SSE 처리 (이미 200 OK + SSE 헤더 전송됨이므로 503 불가):
-          1. Job Runner에 cancel 신호 전송
-          2. SSE error event 전송 후 스트림 종료:
+  [Stage 1 — Drain] wait until active_count==0
+    If drain timeout exceeds 60s: force proceed (full §7 processing cancel path)
+      → In-flight SSE handling (503 impossible since 200 OK + SSE headers already sent):
+          1. Send cancel signal to Job Runner
+          2. Send SSE error event then close stream:
                data: {"error":{"type":"service_update","message":"model pull in progress"}}\n\n
-          3. LREM processing {job_id}     ← 누락 시 zombie job 잔존
+          3. LREM processing {job_id}     ← omission leaves zombie jobs
           4. DB job status = "failed", failure_reason = "drain_forced"
-          5. VramPermit drop → KV 반환, active_count 감소
-          순서 보장: 1→2→3→4→5 (§7과 동일)
-      → pull 강행 후 Ollama가 모델 교체 중이므로 해당 model+provider는 is_pulling=true 유지
+          5. VramPermit drop → KV released, active_count decremented
+          Order guaranteed: 1→2→3→4→5 (same as §7)
+      → Force pull proceeds; model+provider remains is_pulling=true since Ollama is replacing the model
 
-  [2단계 — Pull] ollama pull 실행
-    추적 필드:
-      started_at:    pull 시작 시각
-      max_pull_secs: 기본 14400 (4h), 어드민 오버라이드 가능
-      // heartbeat_at — 단순화: 미구현. max_pull_secs 단일 타임아웃으로 충분.
-      //   Ollama pull progress 스트림 파싱 없이 started_at + max_pull_secs로 timeout 판정. (G14 참고)
-    timeout 판정: (now - started_at) > max_pull_secs
-    timeout 초과 시: is_pulling=false 강제 해제, 에러 로그, Planner 재개
-    이유: pull hang으로 인한 특정 모델 서빙의 영구적 마비 방지.
+  [Stage 2 — Pull] execute ollama pull
+    Tracking fields:
+      started_at:    pull start time
+      max_pull_secs: default 14400 (4h), admin override available
+      // heartbeat_at — simplified: not implemented. Single max_pull_secs timeout is sufficient.
+      //   Timeout determined by started_at + max_pull_secs without parsing Ollama pull progress stream. (See G14)
+    Timeout determination: (now - started_at) > max_pull_secs
+    On timeout: force-clear is_pulling=false, error log, resume Planner
+    Reason: prevent permanent serving paralysis of a specific model due to pull hang.
 
-  [3단계 — 재개] 완료:
+  [Stage 3 — Resume] on completion:
     is_pulling=false, is_loaded=false
     sample_count=0, learning_epoch_started_at=now_ms
     baseline_tps=0, baseline_p95_ms=0
-    preload_fail_count=0, preload_failed_at=0   ← 명시적 초기화 (stale 제외 방지)
-    이유: pull은 모델 가중치 교체 이벤트 — evict보다 큰 환경 변화.
-          epoch를 갱신하지 않으면 과거 1h 데이터가 새 재학습에 섞임 → Cold Start 무효화.
-          baseline도 리셋하지 않으면 구 모델 기준값으로 AIMD가 잘못 수렴.
-    → Placement Planner 다음 5s 루프에서 Preloader 자동 재로드 (Cold Start 재시작)
+    preload_fail_count=0, preload_failed_at=0   ← explicit initialization (prevent stale exclusion)
+    Reason: pull is a model weight replacement event — larger environment change than evict.
+            Without epoch update, past 1h data mixes into new relearning → Cold Start invalidated.
+            Without baseline reset, AIMD converges incorrectly using old model baselines.
+    → Placement Planner auto-reloads via Preloader on next 5s loop (Cold Start restarts)
 ```
 
-**수동 차단**: `PATCH /v1/providers/{id}/selected-models/{model}` ← RequireAdmin → `is_enabled=false`
-로 pull 전 직접 차단 가능. 완료 후 `is_enabled=true` 재활성화.
+**Manual block**: `PATCH /v1/providers/{id}/selected-models/{model}` ← RequireAdmin → `is_enabled=false`
+to block directly before pull. Re-enable with `is_enabled=true` after completion.
 
-### 6. Hard Gate Forced Drain Cancel 계약
+### 6. Hard Gate Forced Drain Cancel Contract
 
-Hard Gate 60s forced drain cancel 처리 계약은 §3 Hard Gate 항목에 정의됨 (§3 참고).
-§7과 동일한 processing cancel 경로를 따름. failure_reason = "thermal_hard_gate".
+The Hard Gate 60s forced drain cancel processing contract is defined in §3 Hard Gate (see §3).
+Follows the same processing cancel path as §7. failure_reason = "thermal_hard_gate".
 
-### 7. 취소·타임아웃 계약 (Cancellation Contract)
+### 7. Cancellation and Timeout Contract
 
-**배경**: 현재 코드(`cancel_guard.rs`, `runner.rs`, `use_case.rs`)에는 processing 상태 job의
-cancel 경로(CancelOnDrop → cancel() → DB cancelled + publish)가 구현돼 있다.
-그러나 queued 상태(Valkey ZSET에 있는) job의 ZREM + demand DECR 경로는 코드상 없다.
-이를 SDD에서 명시적으로 정의한다.
+**Background**: current code (`cancel_guard.rs`, `runner.rs`, `use_case.rs`) implements the processing-state
+job cancel path (CancelOnDrop → cancel() → DB cancelled + publish).
+However, the ZREM + demand DECR path for queued-state (in Valkey ZSET) jobs does not exist in code.
+This SDD explicitly defines it.
 
-**두 상태의 cancel 경로 분리**:
+**Two-state cancel path separation**:
 
 ```
-[queued cancel]  job이 ZSET에 있는 상태 (아직 dispatch 전)
-  공통 처리 (트리거 무관):
-    1. Lua 원자 스크립트: ZREM queue:zset {job_id} + DECR demand:{model}
+[queued cancel]  job is in ZSET (not yet dispatched)
+  Common processing (trigger-agnostic):
+    1. Lua atomic script: ZREM queue:zset {job_id} + DECR demand:{model}
                           + HDEL queue:model {job_id} + HDEL queue:enqueue_at {job_id}
-       (ZREM 반환 0 = 이미 dispatch됨 → processing cancel로 전환)
-    2. DB job status / 클라이언트 응답은 트리거별로 분기:
+       (ZREM return 0 = already dispatched → switch to processing cancel)
+    2. DB job status / client response branches per trigger:
 
   [client disconnect]   DB status = "cancelled"
-                        SSE 응답 전송 없음 (연결이 이미 끊김)
+                        No SSE response sent (connection already closed)
 
-  [max_queue_wait 초과] DB status = "failed", failure_reason = "queue_wait_exceeded"
-                        // G15: queue_maintenance.rs::run_queue_wait_cancel_loop() 구현 완료
-                        SSE heartbeat 연결에 에러 이벤트 후 종료:
+  [max_queue_wait exceeded] DB status = "failed", failure_reason = "queue_wait_exceeded"
+                        // G15: queue_maintenance.rs::run_queue_wait_cancel_loop() implemented
+                        Error event on SSE heartbeat connection then close:
                           data: {"error":{"type":"timeout","message":"queue wait exceeded"}}\n\n
 
-  [수동 취소 API]       DB status = "cancelled"
-                        SSE heartbeat 연결에 취소 이벤트 후 종료:
+  [manual cancel API]   DB status = "cancelled"
+                        Cancel event on SSE heartbeat connection then close:
                           data: {"error":{"type":"cancelled","message":"request cancelled"}}\n\n
 
-[processing cancel]  job이 processing 리스트에 있는 상태 (runner 실행 중)
-  트리거: 클라이언트 연결 끊김(CancelOnDrop) / runner 내부 오류 / pull drain 강제 중단
-  처리:
-    1. cancel() 호출 → runner SSE loop 중단
-    2. SSE error event 전송 (스트림이 아직 열려 있을 때): drain_forced 또는 client_disconnect
+[processing cancel]  job is in processing list (runner executing)
+  Triggers: client disconnect (CancelOnDrop) / runner internal error / pull drain forced termination
+  Processing:
+    1. cancel() call → runner SSE loop breaks
+    2. SSE error event sent (if stream still open): drain_forced or client_disconnect
     3. LREM processing {job_id}
     4. DB job status:
-         클라이언트 연결 끊김 → "cancelled"
-         pull drain 강제 / runner 오류 / timeout → "failed" (failure_reason 상황별)
-    5. VramPermit drop → KV 반환
+         client disconnect → "cancelled"
+         pull drain forced / runner error / timeout → "failed" (failure_reason varies)
+    5. VramPermit drop → KV released
 
-[timeout cancel]  max_queue_wait(300s) 초과
-  queued 상태면 → queued cancel 경로
-  processing 상태면 → Ollama response timeout → runner error → processing cancel 경로
+[timeout cancel]  max_queue_wait (300s) exceeded
+  If queued → queued cancel path
+  If processing → Ollama response timeout → runner error → processing cancel path
 ```
 
-**통합 Cancellation Contract**:
+**Unified Cancellation Contract**:
 
 ```
-취소 사유              | 상태       | Valkey 처리               | DB 상태   | 클라이언트
+Cancel reason          | State      | Valkey handling           | DB status | Client
 -----------------------|------------|--------------------------|-----------|------------------
-client disconnect      | queued     | ZREM + DECR (Lua atomic) | cancelled | SSE heartbeat 종료
-client disconnect      | processing | cancel() + LREM          | cancelled | 연결 끊김
+client disconnect      | queued     | ZREM + DECR (Lua atomic) | cancelled | SSE heartbeat closed
+client disconnect      | processing | cancel() + LREM          | cancelled | connection closed
 max_queue_wait         | queued     | ZREM + DECR (Lua atomic) | failed    | SSE error event
 pull drain forced      | processing | cancel() + LREM          | failed    | SSE error event
 Ollama timeout         | processing | cancel() + LREM          | failed    | SSE error event
 thermal hard forced    | processing | cancel() + LREM          | failed    | SSE error event
-수동 취소 API          | queued     | ZREM + DECR (Lua atomic) | cancelled | SSE error event
-수동 취소 API          | processing | cancel() + LREM          | cancelled | SSE error event
-no_eligible_provider   | processing | LREM                     | failed    | 503 또는 SSE error (§3 참고)
+manual cancel API      | queued     | ZREM + DECR (Lua atomic) | cancelled | SSE error event
+manual cancel API      | processing | cancel() + LREM          | cancelled | SSE error event
+no_eligible_provider   | processing | LREM                     | failed    | 503 or SSE error (see §3)
 ```
 
-**LREM 보장 원칙**: Job Runner 종료 경로(정상 완료·오류·timeout 포함) 모두에서
-`LREM processing {job_id}`를 반드시 수행한다.
-cancel() 호출 여부와 무관하게 LREM은 최종 cleanup의 일부다.
-미수행 시 processing 리스트에 zombie job 잔존 → startup recover 시 재실행 오염.
+**LREM guarantee principle**: all Job Runner exit paths (normal completion, error, timeout included)
+must perform `LREM processing {job_id}`.
+LREM is part of final cleanup regardless of whether cancel() was called.
+Failure to perform leaves zombie jobs in the processing list → contaminates startup recovery re-execution.
 
-**멀티인스턴스 안전**: queued cancel Lua 스크립트의 ZREM 반환값이 0이면
-  다른 인스턴스가 이미 dispatch한 것 → processing cancel로 전환.
-  k8s 환경에서 인스턴스 A가 queued cancel을, 인스턴스 B가 dispatch를 동시에 시도해도
-  Lua 원자성으로 둘 중 하나만 성공한다.
+**Multi-instance safety**: if queued cancel Lua script's ZREM returns 0,
+  another instance already dispatched → switch to processing cancel.
+  In k8s, even if instance A attempts queued cancel while instance B attempts dispatch simultaneously,
+  Lua atomicity ensures only one succeeds.
 
-**단일 서버 환경**: 동일하게 동작. Lua ZREM 원자성은 인스턴스 수와 무관.
+**Single-server environment**: operates identically. Lua ZREM atomicity is instance-count independent.
 
-### 8. Gateway Intelligence — 서버 할당 자동화
+### 8. Gateway Intelligence — Automated Server Assignment
 
-**Scale-Out** (수평 확장, per-model 기준):
+**Scale-Out** (horizontal expansion, per-model basis):
 ```
 demand_counter(model) > eligible_capacity(model) × 0.80
   eligible_capacity = Σ max_concurrent(model, S)
@@ -696,370 +696,370 @@ demand_counter(model) > eligible_capacity(model) × 0.80
                         && !S.circuit_open && !S.is_standby
                         && !ModelState(model, S).is_pulling
                         && !ModelState(model, S).dispatch_blocked
-  // dispatch_blocked==true인 모델은 governor에 의해 실제 dispatch 불가.
-  // capacity 계산에 포함하면 Scale-Out 조건이 충족되지 않아 확장이 억제됨.
-  // governor가 cap을 적용 중일 때는 effective max_concurrent = governor_cap(model, S) 사용.
-  //   eligible_capacity = Σ governor_cap(model, S)  (governor 활성 서버)
-  //                     + Σ max_concurrent(model, S) (governor 비활성 서버)
-  // total_capacity(모든 loaded 포함) 사용 금지: soft/hard gate·pull·CB open 상태인 provider는
-  // 실제 신규 요청 수용 불가이므로 capacity에서 제외해야 Scale-Out 오발동 방지.
-  // 예: Provider A loaded max=8 but Soft Gate → eligible=0.
-  //     demand=6, eligible_capacity=0 → 0.80×0=0 → Scale-Out 발동 ✅
+  // Models with dispatch_blocked==true cannot actually be dispatched by governor.
+  // Including them in capacity calculation prevents Scale-Out condition from being met, suppressing expansion.
+  // When governor is applying a cap, use effective max_concurrent = governor_cap(model, S).
+  //   eligible_capacity = Σ governor_cap(model, S)  (governor-active servers)
+  //                     + Σ max_concurrent(model, S) (governor-inactive servers)
+  // total_capacity (all loaded included) must not be used: providers in soft/hard gate, pull, or CB open state
+  // cannot accept new requests, so must be excluded from capacity to prevent Scale-Out misfires.
+  // Example: Provider A loaded max=8 but Soft Gate → eligible=0.
+  //          demand=6, eligible_capacity=0 → 0.80×0=0 → Scale-Out triggers correctly
 → target = argmax(free_vram, servers where !ModelState(model, S).is_loaded && Pass 0 candidates)
-    // !is_loaded는 "해당 모델이 해당 서버에 로드되지 않음" — model+provider 쌍 기준.
-    // 동일 모델이 이미 로드된 서버는 Scale-Out 대상 제외 (이미 serving 중).
-    // is_standby 서버도 Pass 0 candidates에 포함되므로 ④ 복귀 후 선택 가능.
-    동점 처리: free_vram 동일 시 provider_id ASC (결정적 순서 → 멀티 인스턴스 split-brain 방지)
-    후보 0개 (단일 서버 환경): no-op (Preloader 호출 없이 조용히 스킵)
-→ Preloader(target, model) 전 Valkey atomic 선점:
+    // !is_loaded means "that model is not loaded on that server" — model+provider pair basis.
+    // Servers where the same model is already loaded are excluded from Scale-Out (already serving).
+    // is_standby servers are also in Pass 0 candidates, so selectable after ④ recovery.
+    Tiebreak: if free_vram is equal, use provider_id ASC (deterministic order → prevents multi-instance split-brain)
+    0 candidates (single-server environment): no-op (silently skip without Preloader call)
+→ Valkey atomic claim before Preloader(target, model):
     Lua: SET preloading:{model}:{provider_id} 1 NX EX 180
-    반환 nil = 다른 인스턴스가 이미 선점 → 스킵
-    이유: 멀티 인스턴스에서 동일 모델+서버 중복 Preload 방지
+    Returns nil = another instance already claimed → skip
+    Reason: prevent duplicate Preload of same model+server across instances
 
-**선점 락 lifecycle**:
-  획득 성공 → Preloader 실행
-    정상 완료: DEL preloading:{model}:{provider_id} 즉시 해제
-              (is_loaded=true가 되면 다음 Scale-Out은 !is_loaded 조건 불충족 → 자동 스킵)
-    즉시 실패 (VramPool has_room 미충족): DEL 즉시 해제 → 다음 5s 루프 재평가
-    timeout/오류 (3회 이내): DEL 즉시 해제 → preload_fail_count++ → 재시도 가능
-    3회 실패: DEL 즉시 해제 + preload_failed_at 설정 → 300s 제외 (§4 규칙)
-    Veronex 크래시: TTL 180s 자연 만료 → 다른 인스턴스 재시도 허용
+**Claim lock lifecycle**:
+  Acquired → Preloader executes
+    Normal completion: DEL preloading:{model}:{provider_id} immediate release
+                       (once is_loaded=true, next Scale-Out fails !is_loaded condition → auto-skip)
+    Immediate failure (VramPool has_room not met): DEL immediate release → re-evaluate on next 5s loop
+    timeout/error (within 3 attempts): DEL immediate release → preload_fail_count++ → retry allowed
+    3 failures: DEL immediate release + set preload_failed_at → 300s exclusion (§4 rules)
+    Veronex crash: TTL 180s natural expiry → other instances can retry
 
-Scale-Out 후 hold-down: 해당 server를 60s 동안 Scale-In 후보에서 제외.
-(Preload 완료 → 큐 소진 → 즉시 Scale-In 과확장-과수축 진동 방지)
+Post-Scale-Out hold-down: exclude that server from Scale-In candidates for 60s.
+(Prevents overexpansion-overcontraction oscillation: Preload complete → queue drained → immediate Scale-In)
 ```
 
-**Scale-In** (전력 절감, per-server 기준):
+**Scale-In** (power savings, per-server basis):
 ```
 server_idle(S): demand==0 for all loaded models AND active_requests==0 AND !last_server
-과도 상태 보호: is_preloading==true OR standby 복귀 후 30s 이내 → Scale-In 스킵
-→ is_standby = true → Lazy Eviction 자연 발화 → Ollama 메모리 해제
+Transient state protection: is_preloading==true OR within 30s of standby recovery → skip Scale-In
+→ is_standby = true → Lazy Eviction fires naturally → Ollama memory released
 ```
 
-**STANDBY → ACTIVE 복귀**: demand > 0 감지 → is_standby=false → 즉시 라우팅 재개.
-모델이 아직 로드된 상태면 즉시 서빙 가능. 언로드된 경우 Preloader가 재로드.
+**STANDBY → ACTIVE recovery**: demand > 0 detected → is_standby=false → routing resumes immediately.
+If model is still loaded, serving starts immediately. If unloaded, Preloader reloads.
 
-**Placement Planner 루프 (5s)**:
+**Placement Planner loop (5s)**:
 
-2-pass 구조:
-  [Pass 0 — 사전 계산 (루프 시작 시 1회)]
+2-pass structure:
+  [Pass 0 — Pre-computation (once at loop start)]
     scale_out_candidates = candidate_servers_for_scale_out()
       = {server | !server.thermal_soft_gated && !server.thermal_hard_gated
                   && !server.circuit_open
                   && free_vram(server) > 0}
-      // standby 서버도 포함 (④에서 복귀 후 ①이 즉시 사용 가능하도록)
-      // preload_failed_at은 model+provider 쌍 속성 → server 집합 필터 사용 금지.
-      //   모델별 preload_failed_at 체크는 ①②에서 per-model로 수행한다.
-      // is_pulling도 model+provider 쌍 속성 → 동일하게 ①②에서 per-model 처리.
-      // thermal/CB를 Pass 0에서 제외해야 ④가 unusable 서버를 STANDBY 복귀 후보로 선정하지 않음.
+      // Standby servers included (so ① can use them immediately after ④ recovery)
+      // preload_failed_at is a model+provider pair attribute → must not filter at server set level.
+      //   Per-model preload_failed_at check is done in ①② on a per-model basis.
+      // is_pulling is also a model+provider pair attribute → likewise handled per-model in ①②.
+      // thermal/CB must be excluded in Pass 0 so ④ does not select unusable servers as STANDBY recovery candidates.
     scale_out_needed = {model | demand(model) > total_capacity_excl_standby(model) × 0.80}
-    // total_capacity 계산 시 governor_cap / dispatch_blocked 반영 (eligible_capacity §8 정의 참고)
+    // governor_cap / dispatch_blocked reflected in total_capacity calculation (see eligible_capacity §8 definition)
 
-  Pass 0은 상태 변경 없음 (read-only). ④①②③⑤ 모두 이 스냅샷을 기준으로 동작.
+  Pass 0 makes no state changes (read-only). ④①②③⑤ all operate based on this snapshot.
 
-  **서버 단위 provisional VRAM reservation** (같은 사이클 다모델 충돌 방지):
-    Pass 0에서 각 서버의 free_vram 스냅샷을 `provisional_free: HashMap<ProviderId, u32>` 로 복사.
-    ①② 단계에서 Preloader 대상으로 선정될 때마다:
+  **Per-server provisional VRAM reservation** (prevents multi-model collision in same cycle):
+    Copy each server's free_vram snapshot from Pass 0 into `provisional_free: HashMap<ProviderId, u32>`.
+    Each time a server is selected as Preloader target in ①②:
       provisional_free[server] -= model.weight_mb + model.kv_per_request_mb
-    이후 같은 사이클의 ①②에서 다른 모델이 동일 서버를 선택할 때:
-      provisional_free[server] < model.weight_mb → 해당 서버 후보에서 제외
-    이유: Pass 0의 free_vram 스냅샷을 공유하면 여러 모델이 같은 서버를 동시에 선택.
-          실제 has_room 체크는 Preloader 실행 시점에서 수행되지만,
-          planner가 인위적 충돌을 유발하면 preload 실패 카운트 증가 → 300s 제외로 이어짐.
-          provisional reservation으로 planner 단계에서 충돌을 선제 차단.
-  **멀티 replica provisional_free 비결정성**:
-    provisional_free는 각 replica의 in-memory 상태이므로 replica 간 공유되지 않음.
-    두 replica가 동시에 다른 서버를 best_server로 선정하면 같은 모델을 두 서버에 동시 preload.
-    (NX 락은 {model}:{provider_id} 단위이므로 서로 다른 서버 = 서로 다른 락 = 둘 다 성공)
-    결과: 과도한 preload. 부하 경감보다 낭비.
-    대응: Valkey에 `Scale-Out 결정 락`: `SET scaleout:{model} {replica_id} NX EX 30`
-      반환 nil = 다른 replica가 이 모델의 Scale-Out 결정 중 → 스킵.
-      30s TTL = 다음 Planner 사이클 전 자동 만료. 결정 완료(preload NX 락 획득) 후 DEL.
+    When another model selects the same server in ①② of the same cycle:
+      provisional_free[server] < model.weight_mb → exclude that server from candidates
+    Reason: sharing Pass 0's free_vram snapshot lets multiple models select the same server simultaneously.
+            Actual has_room check runs at Preloader execution time, but
+            if planner causes artificial collisions, preload failure count increases → leads to 300s exclusion.
+            Provisional reservation preemptively prevents collisions at the planner stage.
+  **Multi-replica provisional_free non-determinism**:
+    provisional_free is each replica's in-memory state, not shared across replicas.
+    If two replicas simultaneously select different servers as best_server, the same model preloads on two servers.
+    (NX lock is per {model}:{provider_id}, so different servers = different locks = both succeed)
+    Result: excessive preload. Waste rather than load relief.
+    Mitigation: Valkey `Scale-Out decision lock`: `SET scaleout:{model} {replica_id} NX EX 30`
+      Returns nil = another replica is making Scale-Out decision for this model → skip.
+      30s TTL = auto-expires before next Planner cycle. DEL after decision complete (preload NX lock acquired).
 
 ```
-④ STANDBY 복귀: standby_server가 다음 중 하나를 만족할 때 → is_standby=false
-     조건 A: 해당 서버에 is_loaded==true인 모델 중 demand>0인 것이 있음 (즉시 서빙 가능)
-     조건 B: Pass 0의 scale_out_needed × scale_out_candidates 교차에서 해당 서버가 best_server로 선정됨
-   (이유: ①보다 먼저 실행하되 ①의 계산 결과를 참조하려면 Pass 0에서 선행 계산해야 함.
-          `any demand>0` 대신 실제로 서빙하거나 Scale-Out에 쓸 서버만 선별 복귀.)
-① Scale-Out:   scale_out_needed 모델에 대해 Pass 0 candidate 중 best_server 선정
-               (이미 ④에서 is_standby=false 처리됐으므로 total_capacity에 포함됨)
+④ STANDBY recovery: when standby_server meets either condition → is_standby=false
+     Condition A: server has is_loaded==true model with demand>0 (can serve immediately)
+     Condition B: server selected as best_server in Pass 0 scale_out_needed × scale_out_candidates intersection
+   (Reason: runs before ① but needs ①'s computation results → must pre-compute in Pass 0.
+            Selectively recovers only servers that will actually serve or be used for Scale-Out, not `any demand>0`.)
+① Scale-Out:   select best_server from Pass 0 candidates for scale_out_needed models
+               (already set is_standby=false in ④, so included in total_capacity)
                && now_ms - preload_failed_at(model, best_server) >= 300_000
                → Preloader(best_server, model)
 ② Preload:     demand>0 && !is_loaded && !is_preloading && has_room
                && now_ms - preload_failed_at(model, provider) >= 300_000
                → Preloader
-   (이유: §4의 3회 실패 300s 제외를 filter_candidates()뿐 아니라 Planner 루프에도 직접 적용.
-          미적용 시 Planner가 5s마다 같은 preload를 반복 시도 — 300s 제외가 무효화됨)
+   (Reason: applies §4's 3-failure 300s exclusion directly to Planner loop, not just filter_candidates().
+            Without this, Planner retries the same preload every 5s — 300s exclusion is nullified)
 ③ Evict:       demand==0 && is_loaded && active==0 &&
                (idle ≥ 180s  OR  (is_standby && idle ≥ 30s))
                → evict; sample_count=0
 ⑤ Scale-In:    server_idle && !last_server && !in_transition → is_standby=true
 
-충돌 방지: ①에서 Scale-Out 후보로 선정된 서버는 같은 사이클 ⑤에서 Scale-In 제외.
-           ④에서 복귀한 서버는 30s transition guard → ⑤ 스킵.
-           ②와 ⑤: ②에서 Preload 대상이 된 서버는 같은 사이클 ⑤에서 Scale-In 제외.
-           ③와 ④: ④에서 복귀한 서버의 모델은 같은 사이클 ③ Evict 후보에서 제외
-                   (복귀 직후 idle 조건 불충족으로 자연 제외됨).
-Thermal 연동: thermal hard_gate 또는 soft_gate 활성 시 ①② 스킵.
-             (soft gate: 추가 모델 로드 시 I/O 부하가 온도를 hard_gate로 밀 수 있음)
-Pull 연동:   is_pulling은 ModelState 단위 (model+provider 쌍)이며 ProviderVramState 전체가 아님.
-             단계별 제외 규칙:
-             ① Scale-Out:  해당 model+provider 조합만 후보 제외. 같은 provider의 다른 model은 영향 없음.
-             ② Preload:    해당 model+provider 조합만 후보 제외 (pull 중 동일 모델 재로드 금지).
-             ③ Evict:      pull 중인 model 자체는 evict 제외. 같은 provider의 다른 model은 evict 허용.
-             ④/⑤ STANDBY/Scale-In: provider의 해당 model capacity를 0으로 계산. 다른 model capacity는 정상 포함.
-Scale-Out 중복 방지 (Dedup):
-  - 이미 is_preloading==true && Thermal Normal인 서버 수 ≥ needed_servers이면 ① 스킵.
+Collision prevention: servers selected as Scale-Out candidates in ① are excluded from Scale-In in ⑤ of the same cycle.
+           Servers recovered in ④ have 30s transition guard → ⑤ skipped.
+           ② and ⑤: servers targeted for Preload in ② are excluded from Scale-In in ⑤ of the same cycle.
+           ③ and ④: models on servers recovered in ④ are excluded from ③ Evict candidates of the same cycle
+                     (naturally excluded since idle condition is not met immediately after recovery).
+Thermal integration: skip ①② when thermal hard_gate or soft_gate is active.
+             (soft gate: loading additional models may push temperature toward hard_gate due to I/O load)
+Pull integration: is_pulling is per ModelState (model+provider pair), not the entire ProviderVramState.
+             Per-step exclusion rules:
+             ① Scale-Out:  exclude only that model+provider pair from candidates. Other models on same provider unaffected.
+             ② Preload:    exclude only that model+provider pair (reloading the same model during pull prohibited).
+             ③ Evict:      model being pulled is excluded from evict. Other models on same provider can be evicted.
+             ④/⑤ STANDBY/Scale-In: compute that model's capacity as 0 for the provider. Other models' capacity included normally.
+Scale-Out deduplication:
+  - Skip ① if count of servers with is_preloading==true && Thermal Normal ≥ needed_servers.
     needed_servers = ceil(demand_counter(model) / avg_max_concurrent(model))
-    // 단순 "1개라도 preloading이면 스킵"은 급증 수요에서 확장을 직렬화함 (수요 2배인데 서버 1개씩 추가).
-    // needed_servers 기준으로 동시 Scale-Out을 허용해 급증 수요에 병렬 대응한다.
-    // 단일 서버 환경: needed_servers 계산 무의미, 그냥 no-op.
-  - preloading 서버가 Soft/Hard 상태 진입 시 cleanup 절차:
-      1. 해당 Preloader task에 cancel 신호 전송 (tokio CancellationToken)
-      2. DEL preloading:{model}:{provider_id} (Valkey NX 락 즉시 해제)
-      3. is_preloading=false (VramPool ModelState 원자적 리셋)
-      순서 보장: 1→2→3. cancel 후 락 해제해야 다른 인스턴스가 즉시 재선점 가능.
-      이후 다른 서버 Scale-Out 허용 (다음 5s 루프에서 재평가).
+    // Simple "skip if any preloading" serializes expansion during demand surges (2x demand but adding 1 server at a time).
+    // needed_servers criterion allows concurrent Scale-Out to handle demand surges in parallel.
+    // Single-server environment: needed_servers calculation is meaningless, just no-op.
+  - Cleanup procedure when preloading server enters Soft/Hard state:
+      1. Send cancel signal to that Preloader task (tokio CancellationToken)
+      2. DEL preloading:{model}:{provider_id} (immediate Valkey NX lock release)
+      3. is_preloading=false (VramPool ModelState atomic reset)
+      Order guaranteed: 1→2→3. Lock must be released after cancel so other instances can reclaim immediately.
+      Other server Scale-Out allowed afterward (re-evaluated on next 5s loop).
 ```
 
 ---
 
-## 전체 데이터 흐름
+## End-to-End Data Flow
 
 ```
-클라이언트  POST /v1/chat/completions
+Client  POST /v1/chat/completions
     ▼
 Veronex API  auth + rate limit → Job DB INSERT (status="queued")
-    │  Lua enqueue_atomic: ZCARD < MAX_QUEUE_SIZE → ZADD + INCR demand  (원자, 큐 포화 시 429)
-    │    enqueue 실패(429) 시: DB job status → "failed", failure_reason = "queue_full" (orphan 방지)
-    │    (비원자 ZCARD+ZADD 금지 — overshoot 가능. §2 MAX_QUEUE_SIZE 원자화 명세 참고)
-    │  SSE heartbeat 30s마다 (모델 로드 대기 중 연결 유지)
+    │  Lua enqueue_atomic: ZCARD < MAX_QUEUE_SIZE → ZADD + INCR demand  (atomic, 429 on queue full)
+    │    On enqueue failure (429): DB job status → "failed", failure_reason = "queue_full" (prevent orphans)
+    │    (Non-atomic ZCARD+ZADD prohibited — overshoot possible. See §2 MAX_QUEUE_SIZE atomicity spec)
+    │  SSE heartbeat every 30s (keep connection alive while waiting for model load)
     ▼
 Valkey ZSET
-    │  Dispatcher 루프 (인스턴스마다)  ※ 마이그레이션 중: ZSET(1순위) + LIST drain(2순위) 병행 — Phase -1 참고
+    │  Dispatcher loop (per instance)  ※ Migration: ZSET (primary) + LIST drain (secondary) in parallel — see Phase -1
     │  ZRANGE K=20 → Rust window scoring
     │  Lua atomic handoff: ZREM queue:zset + LPUSH processing + DECR demand:{model}
-    │    단일 스크립트로 원자 실행. 스크립트 실패(ZREM=0) = 선점 → 재시도.
-    │    gap 없음: ZSET에서 사라진 job은 반드시 processing에 존재.
+    │    Executed atomically as single script. Script failure (ZREM=0) = preempted → retry.
+    │    No gap: job removed from ZSET is guaranteed to exist in processing.
     ▼
 Dispatcher
     │  filter_candidates()  active + type + model + !is_standby
     │  score_and_claim()    CB → thermal_gate → AIMD gate → try_reserve()
-    │                       CB 우선, thermal hard_gate는 CB 해제 후 재평가
-    │  LREM processing (ACK) — demand DECR은 위 handoff에서 완료됨
+    │                       CB takes priority, thermal hard_gate re-evaluated after CB release
+    │  LREM processing (ACK) — demand DECR already completed in handoff above
     ▼
-Job Runner → Ollama SSE → 클라이언트
-    │  응답 헤더: X-Job-Id: {job_id}  (최초 200 OK 응답 시 포함)
-    │  이유: at-least-once 재실행 시 클라이언트가 중복 응답 여부를 job_id로 판단 가능
+Job Runner → Ollama SSE → Client
+    │  Response header: X-Job-Id: {job_id}  (included in initial 200 OK response)
+    │  Reason: enables client to determine duplicate responses via job_id on at-least-once re-execution
     ▼
-VramPermit drop  → KV 반환 · last_active_at 갱신 · PostgreSQL+ClickHouse 기록
+VramPermit drop  → KV released · last_active_at updated · PostgreSQL+ClickHouse recorded
 
 [Startup]
-  sync_providers_once()       ← /api/ps → is_loaded 갱신 (dispatcher 전에)
-  recover_pending_jobs()      ← DB 기반 잔존 job 복구 (Valkey LRANGE 대신 DB 스캔)
-                                 // 의도적 개선: Valkey는 휘발성이므로 DB를 SSOT로 사용.
-                                 //   Valkey 크래시/재시작 시에도 DB에서 완전 복구 가능.
-                                 1. DB 스캔: status IN ('pending', 'running') 인 job 목록 수집
-                                    - status=pending: 큐잉 전 또는 큐잉 후 dispatch 전 크래시
-                                    - status=running: dispatch 후 완료 전 크래시
-                                 2. 각 복구 대상 job을 Lua 원자 스크립트로 재큐:
+  sync_providers_once()       ← /api/ps → update is_loaded (before dispatcher)
+  recover_pending_jobs()      ← DB-based residual job recovery (DB scan instead of Valkey LRANGE)
+                                 // Intentional improvement: Valkey is volatile, so DB is used as SSOT.
+                                 //   Full recovery possible from DB even after Valkey crash/restart.
+                                 1. DB scan: collect jobs with status IN ('pending', 'running')
+                                    - status=pending: crash before or after queuing, before dispatch
+                                    - status=running: crash after dispatch, before completion
+                                 2. Re-queue each recovery target job via Lua atomic script:
                                     score = enqueued_at_ms - tier_bonus(job.tier)
                                     ZADD queue:zset {score} {job_id}
                                     HSET queue:model {job_id} {model}
                                     HSET queue:enqueue_at {job_id} {enqueued_at_ms}
-                                 // DB 기반이므로 LREM processing 불필요 — Valkey 상태를 처음부터 재구성.
-                                 중복 응답 방지: DB에서 job status=completed/failed 확인 후
-                                 이미 terminal 상태인 job은 ZADD 제외 (at-least-once → idempotent)
-                                 **TPM 이중 차감 방지**: 재실행 job은 TPM을 재차감하지 않음.
-                                   DB job의 reserved_tokens가 이미 존재하면 차감 스킵.
-                                 **API 계약**: at-least-once. 크래시 후 재시도 시 중복 응답 가능.
-                                   응답 헤더 X-Job-Id로 job_id 노출 → 클라이언트 멱등성 판단 가능.
-  resync_demand_counters()    ← ZSET 실측 기반 demand_counter 재산정
+                                 // DB-based, so LREM processing unnecessary — Valkey state rebuilt from scratch.
+                                 Duplicate response prevention: check job status=completed/failed in DB,
+                                 exclude already-terminal jobs from ZADD (at-least-once → idempotent)
+                                 **TPM double-deduction prevention**: re-executed jobs do not re-deduct TPM.
+                                   Skip deduction if DB job's reserved_tokens already exists.
+                                 **API contract**: at-least-once. Duplicate responses possible on retry after crash.
+                                   Response header X-Job-Id exposes job_id → enables client idempotency checks.
+  resync_demand_counters()    ← recalculate demand_counter from actual ZSET state
   spawn dispatcher · placement_planner · sync_loop · demand_resync_loop(60s)
 ```
 
 ---
 
-## 구현 상태
+## Implementation Status
 
-> **완료**: 전체 구현 + gap 보정 완료 (2026-03-14, SDD 감사 반영)
-> 의도적 개선 2건, 허용 단순화 4건 (G11-G14), 구현 완료 2건 (G15-G16)
+> **Complete**: full implementation + gap correction done (2026-03-14, SDD audit reflected)
+> 2 intentional improvements, 4 accepted simplifications (G11-G14), 2 implemented (G15-G16)
 
-### 핵심 구현 현황
+### Core Implementation Status
 
-| 항목 | 구현 위치 | 비고 |
+| Item | Implementation location | Notes |
 |------|----------|------|
-| ZSET 큐 + Lua atomic scripts | `application/ports/outbound/valkey_port.rs` | enqueue/dispatch/cancel 3종 스크립트 |
-| MAX_QUEUE_SIZE = 10,000 / PER_MODEL = 2,000 | `domain/constants.rs` | 원자 체크 (Lua 단일 스크립트) |
-| Queue Full 시 DB 고아 방지 | `use_case.rs` | `Ok(false)` → jobs 정리 + DB status=Failed |
+| ZSET queue + Lua atomic scripts | `application/ports/outbound/valkey_port.rs` | enqueue/dispatch/cancel 3 scripts |
+| MAX_QUEUE_SIZE = 10,000 / PER_MODEL = 2,000 | `domain/constants.rs` | atomic check (single Lua script) |
+| Queue Full DB orphan prevention | `use_case.rs` | `Ok(false)` → cleanup jobs + DB status=Failed |
 | AIMD (sample≥3, ratio<0.7/≥0.9, p95 spike) | `capacity/analyzer.rs` | baseline freeze on decay, 3-cycle stable update |
-| LLM 보정 (stable_cycles≥3, **증가 전용**, +2 상한) | `capacity/analyzer.rs` | `change_floor = current` — 감소 불가 |
-| OOM 대응 (safety_permil +50, max_concurrent ×3/4) | `capacity/vram_pool.rs` + `analyzer.rs` | -10 점진 회복, 최대 500 |
+| LLM correction (stable_cycles≥3, **increase only**, +2 cap) | `capacity/analyzer.rs` | `change_floor = current` — decrease impossible |
+| OOM response (safety_permil +50, max_concurrent ×3/4) | `capacity/vram_pool.rs` + `analyzer.rs` | -10 gradual recovery, max 500 |
 | Thermal 5-state machine | `capacity/thermal.rs` | Normal/Soft/Hard/Cooldown/RampUp |
-| Soft Gate 해제 조건 | `capacity/thermal.rs` | `temp < normal_below AND active_count == 0` |
-| Hard Gate 60s forced drain | `ThermalDrainPort` + `ThermalDrainAdapter` | `placement_planner.rs` 60s 경과 시 cancel |
-| Hard Gate 90s watchdog | `placement_planner.rs` | 90s 초과 시 에러 로그 + 강제 타이머 설정 |
-| Cooldown 300s + max 900s 상한 + 온도 분기 | `capacity/thermal.rs` | cooldown_secs × 3 절대 상한 |
-| RampUp max_concurrent=1 + 요청 수용 | `inference/dispatcher.rs` | Soft와 달리 503 차단 없음 |
-| **RampUp → Normal: Σmax_concurrent ≥ pre_hard_total** | `capacity/thermal.rs` | Hard 진입 시 스냅샷 저장, 복원 확인 후 전이 |
-| Placement Planner 5s loop (Pass 0 + ④①②③⑤) | `placement_planner.rs` | provisional_free, Scale-Out 결정 락 |
-| Preload 3-fail 300s 제외 | `capacity/vram_pool.rs` + dispatcher + planner | filter_candidates + ①② 모두 체크 |
+| Soft Gate release condition | `capacity/thermal.rs` | `temp < normal_below AND active_count == 0` |
+| Hard Gate 60s forced drain | `ThermalDrainPort` + `ThermalDrainAdapter` | `placement_planner.rs` cancel on 60s elapsed |
+| Hard Gate 90s watchdog | `placement_planner.rs` | error log + force timer set on 90s exceeded |
+| Cooldown 300s + max 900s cap + temperature branching | `capacity/thermal.rs` | cooldown_secs × 3 absolute cap |
+| RampUp max_concurrent=1 + accept requests | `inference/dispatcher.rs` | no 503 blocking unlike Soft |
+| **RampUp → Normal: Σmax_concurrent ≥ pre_hard_total** | `capacity/thermal.rs` | snapshot saved on Hard entry, transition after restoration confirmed |
+| Placement Planner 5s loop (Pass 0 + ④①②③⑤) | `placement_planner.rs` | provisional_free, Scale-Out decision lock |
+| Preload 3-fail 300s exclusion | `capacity/vram_pool.rs` + dispatcher + planner | checked in both filter_candidates + ①② |
 | Lazy Eviction (idle 180s / standby 30s) | `placement_planner.rs` | ③ Evict |
 | promote_overdue (30s) | `queue_maintenance.rs` | HSCAN + ZADD XX EMERGENCY_BONUS |
-| demand_resync (60s) | `queue_maintenance.rs` | ZSCAN → HMGET → 재산정 |
-| Multi-instance pub/sub + reaper | `pubsub/relay.rs`, `pubsub/reaper.rs` | 크래시 복구, 고아 job 재큐 |
-| provider_vram_budget 영속화 | `provider_vram_budget_repository` | safety_permil DB 저장 |
-| Startup recovery | `use_case.rs::recover_pending_jobs()` | DB 스캔 기반 (Valkey LRANGE 대신) — 의도적 개선 |
-| failure_reason 컬럼 (G16) | `job_repository.rs::fail_with_reason()` | migration 000004 + 모든 실패 경로 기록 |
+| demand_resync (60s) | `queue_maintenance.rs` | ZSCAN → HMGET → recalculate |
+| Multi-instance pub/sub + reaper | `pubsub/relay.rs`, `pubsub/reaper.rs` | crash recovery, orphan job re-queue |
+| provider_vram_budget persistence | `provider_vram_budget_repository` | safety_permil DB storage |
+| Startup recovery | `use_case.rs::recover_pending_jobs()` | DB scan based (instead of Valkey LRANGE) — intentional improvement |
+| failure_reason column (G16) | `job_repository.rs::fail_with_reason()` | migration 000004 + all failure paths recorded |
 | max_queue_wait 300s cancel (G15) | `queue_maintenance.rs::run_queue_wait_cancel_loop()` | 30s HSCAN → zset_cancel + DB fail |
 
-### 설계 단순화 항목 (Accepted Simplifications)
+### Accepted Simplifications
 
-다음 항목은 동작에 이상이 없으나 SDD 원문과 구현이 의도적으로 다르다.
+The following items work correctly but the implementation intentionally differs from the SDD original.
 
-#### G11 — eligible_capacity에 governor_cap 미반영
+#### G11 — governor_cap not reflected in eligible_capacity
 
-**현재 구현**: `placement_planner.rs`의 eligible_capacity 계산 시 governor가 활성 상태인 서버도 raw `max_concurrent` 사용.
+**Current implementation**: `placement_planner.rs` eligible_capacity calculation uses raw `max_concurrent` even for governor-active servers.
 
-**허용 이유**:
-- governor_cap이 0 (dispatch_blocked)이면 `is_dispatch_blocked()` 필터에서 이미 제외됨 (line 191).
-- governor_cap이 1~N (fair-share 제한)이면 실제 dispatch 처리량이 다소 낮게 평가되어 Scale-Out이 **조금 더 일찍 발동**될 수 있음.
-- Scale-Out 조기 발동은 Scale-Out 억제보다 안전한 방향의 오차 (보수적). 단일 서버 환경에서는 no-op이므로 실질 영향 없음.
+**Accepted because**:
+- governor_cap of 0 (dispatch_blocked) is already excluded by `is_dispatch_blocked()` filter (line 191).
+- governor_cap of 1~N (fair-share limit) may slightly underestimate actual dispatch throughput, causing Scale-Out to **trigger slightly earlier**.
+- Early Scale-Out trigger is a safer error direction than Scale-Out suppression (conservative). No practical impact in single-server environment since it's no-op.
 
-**향후 정밀화 조건**: 멀티 서버 환경에서 governor가 상시 활성화되어 Scale-Out 진동이 관측될 경우 `governor_cap`을 eligible_capacity에 반영한다.
+**Future refinement condition**: if governor is constantly active in multi-server environment and Scale-Out oscillation is observed, reflect `governor_cap` in eligible_capacity.
 
 ```rust
-// 현재 (단순화)
+// current (simplified)
 let mc = vram_pool.max_concurrent(p.id, &model);
-// 정밀화 시
+// when refined
 let cap = vram_pool.governor_cap(p.id, &model);
 let mc  = if cap > 0 { cap } else { vram_pool.max_concurrent(p.id, &model) };
 ```
 
-#### G12 — Thermal Soft/Hard 진입 시 Preload 태스크 정리 미구현
+#### G12 — Preload task cleanup on Thermal Soft/Hard entry not implemented
 
-**현재 구현**: Soft/Hard 진입 시 진행 중인 Preloader 태스크를 명시적으로 취소하지 않음.
+**Current implementation**: in-progress Preloader tasks are not explicitly cancelled on Soft/Hard entry.
 
-**허용 이유**:
-- Placement Planner가 5s 루프마다 thermal 상태를 확인하고 Soft/Hard/Cooldown인 서버에 대해 ①② (Scale-Out, Preload) 단계를 **완전히 스킵**함 (thermal 연동 규칙 참고).
-- 실행 중인 Preloader 태스크는 자체 타임아웃(120s) 또는 성공/실패로 자연 종료됨. 종료 시 `is_preloading=false` + NX 락 DEL이 항상 수행됨.
-- 최대 120s 동안 Ollama에 preload HTTP 요청이 남아 있을 수 있으나, thermal Hard 상태에서 Ollama가 부하를 받는 것은 in-flight 요청이 이미 있는 상황과 동일 — VramPermit은 preload 중 발급되지 않으므로 추가 VRAM 오용 없음.
+**Accepted because**:
+- Placement Planner checks thermal state every 5s loop and **completely skips** ①② (Scale-Out, Preload) steps for servers in Soft/Hard/Cooldown (see thermal integration rules).
+- Running Preloader tasks terminate naturally via their own timeout (120s) or success/failure. `is_preloading=false` + NX lock DEL always performed on termination.
+- Preload HTTP requests may remain on Ollama for up to 120s, but Ollama receiving load in thermal Hard state is equivalent to having existing in-flight requests — VramPermit is not issued during preload, so no additional VRAM misuse.
 
-**향후 구현 조건**: Preloader가 Soft/Hard 진입에도 Ollama 부하를 유발하는 것이 실측으로 확인될 경우, placement_planner에 `active_preload_tokens: HashMap<(Uuid, String), CancellationToken>` 구조를 추가해 즉시 취소 구현.
+**Future implementation condition**: if Preloader is measured to cause Ollama load even during Soft/Hard entry, add `active_preload_tokens: HashMap<(Uuid, String), CancellationToken>` to placement_planner for immediate cancellation.
 
-#### G13 — Pull cancel DELETE 엔드포인트 미구현
+#### G13 — Pull cancel DELETE endpoint not implemented
 
-**현재 구현**: `DELETE /v1/ollama/models/pull/{provider_id}/{model}` 엔드포인트 없음.
+**Current implementation**: no `DELETE /v1/ollama/models/pull/{provider_id}/{model}` endpoint.
 
-**허용 이유**:
-- `max_pull_secs` (기본 4h) 타임아웃으로 hang된 pull이 자동 해제됨.
-- Pull 빈도가 낮아 (모델 교체 시에만) 수동 취소의 실질적 필요성이 낮음.
-- `is_pulling=false` 강제 해제는 DB 직접 업데이트로 비상 대응 가능.
+**Accepted because**:
+- `max_pull_secs` (default 4h) timeout auto-releases hung pulls.
+- Pull frequency is low (only on model replacement), so practical need for manual cancel is low.
+- Emergency `is_pulling=false` force-clear possible via direct DB update.
 
-**향후 구현 조건**: Pull 빈도 증가 또는 대용량 모델(50GB+)의 4h 타임아웃이 운영에 부담되는 경우.
+**Future implementation condition**: if pull frequency increases or 4h timeout for large models (50GB+) becomes operationally burdensome.
 
-#### G14 — Pull heartbeat_at 모니터링 미구현
+#### G14 — Pull heartbeat_at monitoring not implemented
 
-**현재 구현**: Ollama pull progress 스트림을 파싱하여 `heartbeat_at`을 갱신하지 않음. `started_at + max_pull_secs` 단일 타임아웃만 사용.
+**Current implementation**: Ollama pull progress stream is not parsed to update `heartbeat_at`. Only `started_at + max_pull_secs` single timeout used.
 
-**허용 이유**:
-- Ollama pull progress 스트림 파싱은 추가 복잡도 (JSON line parsing + 30s 갱신 로직) 대비 이점이 적음.
-- `max_pull_secs` 4h 상한이 hang 방지를 충분히 보장.
-- heartbeat_at 300s 미갱신 감지는 "pull이 실제로 진행 중인지" 더 정밀하게 판단하지만, 4h 상한으로도 실질적 마비는 방지됨.
+**Accepted because**:
+- Parsing Ollama pull progress stream adds complexity (JSON line parsing + 30s update logic) with limited benefit.
+- `max_pull_secs` 4h cap sufficiently prevents hangs.
+- heartbeat_at 300s stale detection provides finer judgment of "is pull actually progressing", but 4h cap prevents practical paralysis.
 
-**향후 구현 조건**: 네트워크 불안정으로 pull이 중간에 끊기되 연결은 유지되는 케이스가 실측될 경우.
+**Future implementation condition**: if network instability causes pulls to stall mid-stream while the connection stays open, measured in production.
 
-#### G15 — max_queue_wait 300s 배경 cancel 루프
+#### G15 — max_queue_wait 300s background cancel loop
 
-**구현 완료**: `queue_maintenance.rs::run_queue_wait_cancel_loop()` (30s interval).
-HSCAN `queue:enqueue_at` → 300s 초과 job 감지 → `zset_cancel()` + `fail_with_reason("queue_wait_exceeded")`.
+**Implemented**: `queue_maintenance.rs::run_queue_wait_cancel_loop()` (30s interval).
+HSCAN `queue:enqueue_at` → detect jobs exceeding 300s → `zset_cancel()` + `fail_with_reason("queue_wait_exceeded")`.
 
-#### G16 — failure_reason 컬럼
+#### G16 — failure_reason column
 
-**구현 완료**: migration `000004_add_failure_reason.{up,down}.sql` + `InferenceJob.failure_reason` 필드.
-실패 원인별 값: `queue_full`, `no_eligible_provider`, `provider_error`, `token_budget_exceeded`, `queue_wait_exceeded`.
+**Implemented**: migration `000004_add_failure_reason.{up,down}.sql` + `InferenceJob.failure_reason` field.
+Per-failure values: `queue_full`, `no_eligible_provider`, `provider_error`, `token_budget_exceeded`, `queue_wait_exceeded`.
 
-#### G17 — queue_wait_exceeded SSE 에러 이벤트 미전송
+#### G17 — queue_wait_exceeded SSE error event not sent
 
-**현재 구현**: `queue_wait_cancel_loop`이 DB `failure_reason` + ZSET cancel만 수행. 대기 중인 SSE 클라이언트에 에러 이벤트를 push하지 않음.
+**Current implementation**: `queue_wait_cancel_loop` only performs DB `failure_reason` + ZSET cancel. Does not push error event to waiting SSE clients.
 
-**허용 이유**:
-- SSE 클라이언트는 connection timeout (브라우저 기본 또는 앱 설정)으로 자연 종료됨.
-- 재연결 시 `/v1/inference/{job_id}` 조회로 `status=failed`, `failure_reason=queue_wait_exceeded`를 확인 가능.
-- queue_wait_cancel은 300s 대기 후 발동 — 이 시점에서 대부분의 클라이언트는 이미 타임아웃으로 연결을 끊은 상태.
-- SSE push를 위해서는 `DashMap<Uuid, Sender>` 구조를 queue_maintenance에 전달해야 하며, 모듈 결합도가 크게 증가함.
+**Accepted because**:
+- SSE clients terminate naturally via connection timeout (browser default or app setting).
+- On reconnection, `status=failed`, `failure_reason=queue_wait_exceeded` can be verified via `/v1/inference/{job_id}` query.
+- queue_wait_cancel fires after 300s wait — most clients have already disconnected via timeout at this point.
+- SSE push would require passing `DashMap<Uuid, Sender>` to queue_maintenance, significantly increasing module coupling.
 
-**향후 구현 조건**: 프론트엔드에서 300s+ 대기 후 "무반응" UX 이슈가 실측될 경우, `job_event_tx` broadcast를 통해 SSE 에러 이벤트 전송 추가.
+**Future implementation condition**: if "no response" UX issues after 300s+ wait are measured in the frontend, add SSE error event delivery via `job_event_tx` broadcast.
 
 ---
 
-## TDD — 테스트 전략
+## TDD — Testing Strategy
 
-> 정책 원문: `docs/llm/policies/testing-strategy.md`
-> 방법론: Testing Trophy + Contract Testing. **Integration 중심, 중복 배제, 레이어별 책임 분리.**
+> Policy source: `docs/llm/policies/testing-strategy.md`
+> Methodology: Testing Trophy + Contract Testing. **Integration-focused, no duplication, layer-separated responsibilities.**
 
-### 레이어별 테스트 책임
+### Per-Layer Test Responsibilities
 
-| Layer | 검증 대상 | 도구 | Anti-Pattern |
+| Layer | Verification target | Tools | Anti-Pattern |
 |-------|----------|------|-------------|
-| **Static** | Types, lint | Rust 타입 시스템, Clippy | 타입으로 잡히는 건 테스트 안 씀 |
-| **Unit** | 순수 함수 로직 | `cargo nextest`, `proptest` | HTTP/DB 검증 금지 |
-| **Integration** | API 계약 (schema), port 계약 | mock port, OpenAPI 검증 | E2E와 같은 경로 중복 금지 |
-| **E2E** | 사용자 흐름 | bash e2e | 개별 함수 검증 금지 |
+| **Static** | Types, lint | Rust type system, Clippy | Do not write tests for type-catchable issues |
+| **Unit** | Pure function logic | `cargo nextest`, `proptest` | No HTTP/DB verification |
+| **Integration** | API contract (schema), port contract | mock port, OpenAPI validation | No duplication with E2E paths |
+| **E2E** | User flows | bash e2e | No individual function verification |
 
-**테스트 순수성 원칙**: 내부 함수 수정 → unit만 깨짐 → E2E 불변.
-E2E가 내부 함수 변경에 깨지면 → **테스트 설계 결함** (레이어 침범).
+**Test purity principle**: internal function change → only unit tests break → E2E unchanged.
+If E2E breaks from internal function changes → **test design flaw** (layer violation).
 
-### 테스트 작성 결정 체크리스트
+### Test Writing Decision Checklist
 
 ```
-1. 타입으로 잡히나?             → Yes → 테스트 불필요 (Rust 타입 시스템 신뢰)
-2. 순수 함수인가?               → Yes → Unit (proptest 우선)
-   ex. window_score(), perf_factor(), thermal 상태 전이 로직
-3. 외부 의존성? (Valkey/DB)     → Yes → Integration (mock port 사용)
-   ex. Lua atomic 스크립트, Placement Planner port 계약, ThermalDrainPort
-4. 사용자 흐름?                 → Yes → E2E (최소한만)
-   ex. end-to-end inference, cancel 흐름, queue wait timeout
-5. 다른 레이어에서 검증?        → Yes → 작성하지 않음
+1. Catchable by type system?    → Yes → No test needed (trust Rust type system)
+2. Pure function?               → Yes → Unit (prefer proptest)
+   ex. window_score(), perf_factor(), thermal state transition logic
+3. External dependency? (Valkey/DB)  → Yes → Integration (use mock port)
+   ex. Lua atomic scripts, Placement Planner port contract, ThermalDrainPort
+4. User flow?                   → Yes → E2E (minimal only)
+   ex. end-to-end inference, cancel flow, queue wait timeout
+5. Verified in another layer?   → Yes → Do not write
 ```
 
-### Scheduler 컴포넌트별 테스트 범위
+### Scheduler Per-Component Test Scope
 
 **Unit (`cargo nextest` + `proptest`)**:
 
-| 컴포넌트 | 테스트 대상 | 도구 |
+| Component | Test target | Tools |
 |----------|------------|------|
-| `thermal.rs` | 상태 머신 전이 (Normal→Soft→Hard→Cooldown→RampUp), 경계값 | proptest |
-| `dispatcher.rs` | `window_score()`, `filter_candidates()` 후보 필터 | proptest |
-| `valkey_keys.rs` | key 생성 함수 정확성 | cargo nextest |
-| AIMD 계산 | TPS ratio, p95 spike 감쇄 조건, LLM 보정 방향 제약 | proptest |
-| `perf_factor()` | 온도 구간별 선형 보간 (0.0~1.0) | proptest |
+| `thermal.rs` | State machine transitions (Normal→Soft→Hard→Cooldown→RampUp), boundary values | proptest |
+| `dispatcher.rs` | `window_score()`, `filter_candidates()` candidate filter | proptest |
+| `valkey_keys.rs` | Key generation function correctness | cargo nextest |
+| AIMD calculation | TPS ratio, p95 spike decay conditions, LLM correction direction constraints | proptest |
+| `perf_factor()` | Per-temperature-zone linear interpolation (0.0~1.0) | proptest |
 
 **Integration (mock port)**:
 
-| 컴포넌트 | 테스트 대상 |
+| Component | Test target |
 |----------|------------|
-| `ThermalDrainPort` | Hard Gate 60s 초과 시 `cancel_jobs_for_provider()` 호출 검증 |
-| `VramPool` | `try_reserve()` / `release()` 원자성, standby 플래그 격리 |
-| Placement Planner | `ThermalDrainPort` mock으로 drain 계약 검증 |
-| Lua 스크립트 | enqueue/dispatch/cancel atomic handoff 계약 (Valkey testcontainer) |
+| `ThermalDrainPort` | Verify `cancel_jobs_for_provider()` called when Hard Gate 60s exceeded |
+| `VramPool` | `try_reserve()` / `release()` atomicity, standby flag isolation |
+| Placement Planner | Drain contract verification via `ThermalDrainPort` mock |
+| Lua scripts | enqueue/dispatch/cancel atomic handoff contracts (Valkey testcontainer) |
 
 **E2E (bash scripts)**:
 
-| 스크립트 | 검증 흐름 |
+| Script | Verification flow |
 |----------|----------|
-| `02-inference.sh` | queued → processing → completed 기본 흐름 |
-| `04-security.sh` | admin-only pull drain API 권한 |
-| `06-lifecycle.sh` | job cancel, queue wait timeout 흐름 |
+| `02-inference.sh` | queued → processing → completed basic flow |
+| `04-security.sh` | admin-only pull drain API permissions |
+| `06-lifecycle.sh` | job cancel, queue wait timeout flow |
 
-**cargo-mutants**: 릴리스 전 1회. Thermal 상태 머신 + AIMD 핵심 로직 우선 감사.
+**cargo-mutants**: once before release. Prioritize Thermal state machine + AIMD core logic audit.
 
-### 테스트 금지 패턴
+### Prohibited Test Patterns
 
 ```
-✗ Thermal 상태 변경에 E2E가 깨짐 → 레이어 침범 (unit 책임)
-✗ is_loaded / active_count DB 직접 검증 → unit/integration 책임
-✗ Lua 스크립트 로직을 Rust mock으로 대체 → 계약 공동화 (Valkey testcontainer 사용)
-✗ window_score()를 E2E에서 검증 → 순수 함수이므로 unit 책임
+✗ E2E breaks on Thermal state change → layer violation (unit responsibility)
+✗ Direct DB verification of is_loaded / active_count → unit/integration responsibility
+✗ Replacing Lua script logic with Rust mocks → contract hollowing (use Valkey testcontainer)
+✗ Verifying window_score() in E2E → pure function, unit responsibility
 ```

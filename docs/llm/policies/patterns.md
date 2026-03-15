@@ -373,25 +373,25 @@ let err = json!({"error": {"message": sanitize_sse_error(&e)}});
 
 | Rule | Rationale |
 |------|-----------|
-| **순수 함수 테스트** | 외부 상태(env, fs, network, shared mutex) 금지 — `cargo test` 병렬 안전 |
-| **중복 테스트 지양** | 동일 속성을 검증하는 테스트는 하나로 통합 (예: 결정성 ⊂ 유일성이면 유일성 테스트만 유지) |
-| **1 test = 1 property** | 각 테스트는 고유한 속성 하나를 검증 — 이름이 곧 스펙 |
-| **env var 테스트** | `env::var()` 직접 호출 금지 → 파싱 로직만 인라인으로 검증 (race condition 방지) |
-| **DOS 경계값** | `MAX_*` 상수에 대한 캡 테스트 필수 |
+| **Pure function tests** | No external state (env, fs, network, shared mutex) — `cargo test` parallel safe |
+| **Avoid duplicate tests** | Merge tests verifying the same property (e.g., if determinism ⊂ uniqueness, keep only the uniqueness test) |
+| **1 test = 1 property** | Each test verifies one unique property — the name is the spec |
+| **env var tests** | Never call `env::var()` directly → validate parsing logic inline only (prevents race conditions) |
+| **DOS boundary values** | Cap tests for `MAX_*` constants are required |
 
 ```rust
-// Good: 순수, 개별, 비중복
+// Good: pure, individual, non-overlapping
 #[test]
-fn no_duplicates() {  // 유일성 검증 (결정성 포함)
+fn no_duplicates() {  // uniqueness check (implies determinism)
     for id in &["a", "b", "c"] {
         let owners: Vec<u32> = (0..3).filter(|&o| owns(id, o, 3)).collect();
         assert_eq!(owners.len(), 1);
     }
 }
 
-// Bad: 중복 (위 테스트의 부분집합)
+// Bad: duplicate (subset of the above test)
 #[test]
-fn deterministic_assignment() {  // 유일성이 증명되면 결정성은 자명
+fn deterministic_assignment() {  // determinism is trivial once uniqueness is proven
     assert!(owns("a", owner, 3));
 }
 ```
