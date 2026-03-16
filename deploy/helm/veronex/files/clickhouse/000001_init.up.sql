@@ -1,3 +1,9 @@
+-- ============================================================
+-- Veronex ClickHouse schema (consolidated init)
+-- Generated from migrations 000001–000002
+-- Last updated: 2026-03-16
+-- ============================================================
+
 -- ── MergeTree target tables ────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS inference_logs (
@@ -210,6 +216,7 @@ FROM (
 );
 
 -- otel-metrics → otel_metrics_gauge
+-- Supports both Gauge and Sum (counter) metric types.
 CREATE TABLE IF NOT EXISTS kafka_otel_metrics (
     raw String
 ) ENGINE = Kafka
@@ -262,11 +269,15 @@ FROM (
             arrayJoin(JSONExtractArrayRaw(raw, 'resourceMetrics'))              AS rm,
             arrayJoin(JSONExtractArrayRaw(rm, 'scopeMetrics'))                  AS sm,
             arrayJoin(JSONExtractArrayRaw(sm, 'metrics'))                       AS metric,
+            -- Extract dataPoints from gauge OR sum (counters like node_cpu_seconds_total)
             arrayJoin(
-                JSONExtractArrayRaw(JSONExtractRaw(metric, 'gauge'), 'dataPoints')
+                if(JSONHas(metric, 'gauge'),
+                    JSONExtractArrayRaw(JSONExtractRaw(metric, 'gauge'), 'dataPoints'),
+                    JSONExtractArrayRaw(JSONExtractRaw(metric, 'sum'), 'dataPoints')
+                )
             ) AS dp
         FROM kafka_otel_metrics
-        WHERE JSONHas(metric, 'gauge')
+        WHERE JSONHas(metric, 'gauge') OR JSONHas(metric, 'sum')
     )
 );
 

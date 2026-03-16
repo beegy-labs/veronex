@@ -1,6 +1,7 @@
 -- ============================================================
 -- Veronex complete database schema (consolidated init)
--- Last updated: 2026-03-03
+-- Generated from migrations 000001–000006
+-- Last updated: 2026-03-16
 -- ============================================================
 
 -- ── Accounts ──────────────────────────────────────────────────────────────────
@@ -98,11 +99,13 @@ CREATE TABLE llm_providers (
     registered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     gpu_index         SMALLINT,
     server_id         UUID        REFERENCES gpu_servers(id) ON DELETE SET NULL,
-    is_free_tier      BOOLEAN     NOT NULL DEFAULT false
+    is_free_tier      BOOLEAN     NOT NULL DEFAULT false,
+    num_parallel      SMALLINT    NOT NULL DEFAULT 4
 );
 
 CREATE INDEX ix_llm_providers_is_active ON llm_providers(is_active);
 CREATE INDEX ix_llm_providers_status    ON llm_providers(status);
+CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
 
 -- ── Inference Jobs ────────────────────────────────────────────────────────────
 
@@ -134,7 +137,9 @@ CREATE TABLE inference_jobs (
     queue_time_ms        INT,
     cancelled_at         TIMESTAMPTZ,
     messages_hash        TEXT,
-    messages_prefix_hash TEXT
+    messages_prefix_hash TEXT,
+    failure_reason       TEXT,
+    image_keys           TEXT[]
 );
 
 CREATE INDEX ix_inference_jobs_status     ON inference_jobs(status);
@@ -249,6 +254,19 @@ CREATE TABLE model_vram_profiles (
     PRIMARY KEY (provider_id, model_name)
 );
 
+-- ── Provider VRAM Budget ──────────────────────────────────────────────────────
+-- Persistent VRAM management state per Ollama provider.
+-- Complements llm_providers (which holds num_parallel and total_vram_mb).
+-- Survives server restart so AIMD safety margins and source attribution are preserved.
+
+CREATE TABLE provider_vram_budget (
+    provider_id       UUID        PRIMARY KEY REFERENCES llm_providers(id) ON DELETE CASCADE,
+    safety_permil     INT         NOT NULL DEFAULT 100,      -- safety margin ÷1000; 100=10%, max 500
+    vram_total_source TEXT        NOT NULL DEFAULT 'probe',  -- 'probe' | 'node_exporter' | 'manual'
+    kv_cache_type     TEXT        NOT NULL DEFAULT 'q8_0',   -- 'f16' | 'q8_0' | 'q4_0'
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ── Capacity Settings ─────────────────────────────────────────────────────────
 
 CREATE TABLE capacity_settings (
@@ -280,5 +298,9 @@ CREATE TABLE model_pricing (
 CREATE TABLE lab_settings (
     id                      INT     PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     gemini_function_calling BOOLEAN NOT NULL DEFAULT false,
+    max_images_per_request  INTEGER NOT NULL DEFAULT 4,
+    max_image_b64_bytes     INTEGER NOT NULL DEFAULT 2097152,
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+INSERT INTO lab_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
