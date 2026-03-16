@@ -27,16 +27,37 @@ data:
           - {{ required "OTel collector requires a Redpanda/Kafka broker: set redpandaEnabled=true or externalRedpanda.brokers" (include "veronex.redpandaBroker" .) }}
         topic: otel-logs
         encoding: otlp_json
+        {{- if ne (.Values.otelCollector.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
+        auth:
+          sasl:
+            username: ${KAFKA_USERNAME}
+            password: ${KAFKA_PASSWORD}
+            mechanism: ${KAFKA_SASL_MECHANISM}
+        {{- end }}
       kafka/metrics:
         brokers:
           - {{ required "OTel collector requires a Redpanda/Kafka broker: set redpandaEnabled=true or externalRedpanda.brokers" (include "veronex.redpandaBroker" .) }}
         topic: otel-metrics
         encoding: otlp_json
+        {{- if ne (.Values.otelCollector.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
+        auth:
+          sasl:
+            username: ${KAFKA_USERNAME}
+            password: ${KAFKA_PASSWORD}
+            mechanism: ${KAFKA_SASL_MECHANISM}
+        {{- end }}
       kafka/traces:
         brokers:
           - {{ required "OTel collector requires a Redpanda/Kafka broker: set redpandaEnabled=true or externalRedpanda.brokers" (include "veronex.redpandaBroker" .) }}
         topic: otel-traces
         encoding: otlp_json
+        {{- if ne (.Values.otelCollector.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
+        auth:
+          sasl:
+            username: ${KAFKA_USERNAME}
+            password: ${KAFKA_PASSWORD}
+            mechanism: ${KAFKA_SASL_MECHANISM}
+        {{- end }}
 
     service:
       pipelines:

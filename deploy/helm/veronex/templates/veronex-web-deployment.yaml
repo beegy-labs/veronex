@@ -44,8 +44,9 @@ spec:
               value: {{ .Values.veronexWeb.service.port | quote }}
             - name: HOSTNAME
               value: "0.0.0.0"
-            - name: NEXT_PUBLIC_VERONEX_API_URL
-              value: "http://{{ .Release.Name }}-veronex:{{ .Values.veronex.service.port }}"
+            {{- /* NEXT_PUBLIC_VERONEX_API_URL is baked into the browser bundle at image build time.
+                 Set it via Docker --build-arg to the public Ingress URL (e.g. https://veronex.example.com).
+                 A runtime env var here has no effect on client-side JS. */}}
             {{- range $k, $v := .Values.veronexWeb.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
