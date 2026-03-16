@@ -6,7 +6,7 @@ import { Thermometer, Zap, MemoryStick, WifiOff, RefreshCw, Cpu } from 'lucide-r
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
-import { fmtMb, fmtTemp, fmtPower } from '@/lib/chart-theme'
+import { fmtMb, fmtTemp, fmtPower, fmtPct } from '@/lib/chart-theme'
 import { calcPercentage } from '@/lib/utils'
 import {
   GPU_TEMP_CRITICAL, GPU_TEMP_WARNING,
@@ -30,7 +30,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
           <WifiOff className="h-3 w-3 mr-1.5" />{t('providers.servers.unreachable')}
         </Badge>
         <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground"
-          onClick={() => refetch()} disabled={isFetching} title={t('common.retry')}>
+          aria-label={t('common.retry')} onClick={() => refetch()} disabled={isFetching} title={t('common.retry')}>
           <RefreshCw className={isFetching ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
         </Button>
       </div>
@@ -94,7 +94,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
             </span>
           )}
           {gpu.busy_pct != null && (
-            <span className="text-muted-foreground tabular-nums">{gpu.busy_pct.toFixed(0)}%</span>
+            <span className="text-muted-foreground tabular-nums">{fmtPct(gpu.busy_pct)}</span>
           )}
         </div>
         )
@@ -128,7 +128,7 @@ export function ServerMetricsCompact({
   const tempCls = gpuTemp != null && gpuTemp >= GPU_TEMP_CRITICAL
     ? 'text-status-error-fg'
     : gpuTemp != null && gpuTemp >= GPU_TEMP_WARNING
-    ? 'text-status-warn-fg'
+    ? 'text-status-warning-fg'
     : 'text-muted-foreground'
 
   return (

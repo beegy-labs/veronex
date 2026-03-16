@@ -12,6 +12,7 @@ use veronex::application::ports::outbound::gemini_sync_config_repository::Gemini
 use veronex::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use veronex::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
 use veronex::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
+use veronex::application::ports::outbound::image_store::ImageStore;
 use veronex::application::ports::outbound::message_store::MessageStore;
 use veronex::application::ports::outbound::model_capacity_repository::ModelCapacityRepository;
 use veronex::application::ports::outbound::model_manager_port::ModelManagerPort;
@@ -43,6 +44,7 @@ use veronex::infrastructure::outbound::persistence::provider_model_selection::Po
 use veronex::infrastructure::outbound::persistence::provider_registry::PostgresProviderRegistry;
 use veronex::infrastructure::outbound::persistence::provider_vram_budget_repository::PostgresProviderVramBudgetRepository;
 use veronex::infrastructure::outbound::persistence::session_repository::PostgresSessionRepository;
+use veronex::infrastructure::outbound::s3::image_store::S3ImageStore;
 use veronex::infrastructure::outbound::s3::message_store::S3MessageStore;
 use veronex::infrastructure::outbound::valkey_adapter::ValkeyAdapter;
 
@@ -73,6 +75,7 @@ pub struct Repositories {
     pub model_manager: Option<Arc<dyn ModelManagerPort>>,
     pub vram_pool: Arc<dyn VramPoolPort>,
     pub message_store: Option<Arc<dyn MessageStore>>,
+    pub image_store: Option<Arc<dyn ImageStore>>,
     pub vram_budget_repo: Arc<dyn ProviderVramBudgetRepository>,
 }
 
@@ -186,6 +189,37 @@ pub async fn wire_repositories(
         None
     };
 
+    // ── S3 / MinIO image store ────────────────────────────────────
+    let image_store: Option<Arc<dyn ImageStore>> = if let Some(ref endpoint) = s3_endpoint {
+        let access_key = std::env::var("S3_ACCESS_KEY").expect("S3_ACCESS_KEY is required");
+        let secret_key = std::env::var("S3_SECRET_KEY").expect("S3_SECRET_KEY is required");
+        let bucket = std::env::var("S3_IMAGE_BUCKET").unwrap_or_else(|_| "veronex-images".to_string());
+        let region = std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+
+        use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+        let creds = Credentials::new(&access_key, &secret_key, None, None, "veronex");
+        let s3_config = aws_sdk_s3::Config::builder()
+            .endpoint_url(endpoint)
+            .region(Region::new(region))
+            .credentials_provider(creds)
+            .force_path_style(true)
+            .behavior_version(BehaviorVersion::latest())
+            .build();
+        let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
+        let endpoint_url = std::env::var("S3_IMAGE_PUBLIC_URL")
+            .unwrap_or_else(|_| format!("{}/{}", endpoint.trim_end_matches('/'), &bucket));
+        let store = S3ImageStore::new(s3_client, &bucket, endpoint_url);
+
+        if let Err(e) = store.ensure_bucket().await {
+            tracing::warn!("S3 image bucket init failed (non-fatal): {e}");
+        }
+
+        tracing::info!("S3 image store enabled (endpoint={endpoint}, bucket={bucket})");
+        Some(Arc::new(store))
+    } else {
+        None
+    };
+
     // ── Model manager ──────────────────────────────────────────────
     let model_manager: Option<Arc<dyn ModelManagerPort>> = None;
     tracing::info!("model manager disabled — VramPool manages model lifecycle");
@@ -287,6 +321,7 @@ pub async fn wire_repositories(
         model_manager,
         vram_pool,
         message_store,
+        image_store,
         vram_budget_repo,
     })
 }

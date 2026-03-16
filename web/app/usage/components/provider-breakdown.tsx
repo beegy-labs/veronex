@@ -3,10 +3,12 @@
 import type { UsageBreakdown } from '@/lib/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { fmtCompact } from '@/lib/chart-theme'
+import { fmtCompact, fmtCost } from '@/lib/chart-theme'
 import { calcPercentage } from '@/lib/utils'
 import { useTranslation } from '@/i18n'
 import { PROVIDER_BADGE, PROVIDER_COLORS } from '@/lib/constants'
+import { tokens } from '@/lib/design-tokens'
+import { ProgressBar } from '@/components/progress-bar'
 
 export function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
   const { t } = useTranslation()
@@ -19,7 +21,7 @@ export function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {data.by_providers.map((b) => {
         const pct = calcPercentage(b.request_count, total)
-        const color = PROVIDER_COLORS[b.provider_type] ?? 'var(--theme-primary)'
+        const color = PROVIDER_COLORS[b.provider_type] ?? tokens.brand.primary
         const totalTok = b.prompt_tokens + b.completion_tokens
         return (
           <Card key={b.provider_type} className="overflow-hidden">
@@ -35,11 +37,9 @@ export function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
                   <span>{t('usage.callShare')}</span>
                   <span className="font-semibold tabular-nums" style={{ color }}>{pct}%</span>
                 </div>
-                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                  <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
-                </div>
+                <ProgressBar pct={pct} colorStyle={color} />
               </div>
-              <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                 <div>
                   <p className="text-muted-foreground">{t('usage.successCol')}</p>
                   <p className="font-semibold tabular-nums text-status-success-fg">{b.success_rate}%</p>
@@ -59,7 +59,7 @@ export function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
                 <div className="pt-2 border-t border-border text-xs flex justify-between items-center">
                   <span className="text-muted-foreground">{t('usage.estimatedCost')}</span>
                   <span className={`font-semibold tabular-nums font-mono ${b.estimated_cost_usd > 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
-                    {b.estimated_cost_usd === 0 ? t('usage.free') : `$${b.estimated_cost_usd.toFixed(4)}`}
+                    {b.estimated_cost_usd === 0 ? t('usage.free') : fmtCost(b.estimated_cost_usd)}
                   </span>
                 </div>
               )}

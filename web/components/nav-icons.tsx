@@ -1,3 +1,5 @@
+import { tokens } from '@/lib/design-tokens'
+
 export function HexLogo({ className }: { className?: string }) {
   return (
     <svg
@@ -9,8 +11,8 @@ export function HexLogo({ className }: { className?: string }) {
     >
       <defs>
         <linearGradient id="hex-grad" x1="2.5" y1="4.3" x2="29.5" y2="27.7" gradientUnits="userSpaceOnUse">
-          <stop offset="0%"   style={{ stopColor: 'var(--theme-logo-start)' }} />
-          <stop offset="100%" style={{ stopColor: 'var(--theme-logo-end)' }} />
+          <stop offset="0%"   style={{ stopColor: tokens.logo.start }} />
+          <stop offset="100%" style={{ stopColor: tokens.logo.end }} />
         </linearGradient>
       </defs>
       <polygon
@@ -20,7 +22,7 @@ export function HexLogo({ className }: { className?: string }) {
       <polygon
         points="25,16 20.5,23.8 11.5,23.8 7,16 11.5,8.2 20.5,8.2"
         fill="none"
-        stroke="var(--theme-logo-inner)"
+        stroke={tokens.logo.inner}
         strokeWidth="1.5"
       />
     </svg>

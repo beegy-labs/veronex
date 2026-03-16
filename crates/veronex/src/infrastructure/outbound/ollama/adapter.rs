@@ -97,6 +97,12 @@ impl InferenceProviderPort for OllamaAdapter {
         let url = format!("{}/api/generate", self.base_url);
         let num_ctx = model_effective_num_ctx(job.model_name.as_str());
 
+        let mut options = serde_json::json!({ "num_ctx": num_ctx });
+        if let Some(s) = job.seed { options["seed"] = serde_json::json!(s); }
+        if let Some(fp) = job.frequency_penalty { options["frequency_penalty"] = serde_json::json!(fp); }
+        if let Some(pp) = job.presence_penalty { options["presence_penalty"] = serde_json::json!(pp); }
+        if let Some(ref st) = job.stop { options["stop"] = st.clone(); }
+
         let resp: GenerateResponse = self
             .client
             .post(&url)
@@ -105,7 +111,7 @@ impl InferenceProviderPort for OllamaAdapter {
                 "prompt":  job.prompt.as_str(),
                 "stream":  false,
                 "think":   false,
-                "options": { "num_ctx": num_ctx },
+                "options": options,
             }))
             .send()
             .await?
@@ -114,6 +120,11 @@ impl InferenceProviderPort for OllamaAdapter {
             .await?;
 
         let latency_ms = start.elapsed().as_millis() as u32;
+        let finish_reason = match resp.done_reason.as_deref() {
+            Some("length") => FinishReason::Length,
+            Some("load") | None => FinishReason::Stop, // "load" is a VRAM notification, treat as stop
+            _ => FinishReason::Stop,
+        };
 
         Ok(InferenceResult {
             job_id: job.id.clone(),
@@ -123,7 +134,7 @@ impl InferenceProviderPort for OllamaAdapter {
             latency_ms,
             ttft_ms: None,
             tokens: vec![resp.response],
-            finish_reason: FinishReason::Stop,
+            finish_reason,
         })
     }
 
@@ -134,9 +145,16 @@ impl InferenceProviderPort for OllamaAdapter {
         // Use /api/chat when the request has multi-turn messages (e.g. Ollama chat, Gemini compat).
         // Fall back to /api/generate for single-prompt requests.
         if let Some(messages) = &job.messages {
-            return self.stream_chat(job.model_name.as_str(), messages.clone(), job.tools.clone());
+            return self.stream_chat(
+                job.model_name.as_str(), messages.clone(), job.tools.clone(),
+                job.stop.clone(), job.seed, job.response_format.clone(),
+                job.frequency_penalty, job.presence_penalty,
+            );
         }
-        self.stream_generate(job.model_name.as_str(), job.prompt.as_str(), job.images.clone())
+        self.stream_generate(
+            job.model_name.as_str(), job.prompt.as_str(), job.images.clone(),
+            job.stop.clone(), job.seed, job.frequency_penalty, job.presence_penalty,
+        )
     }
 }
 
@@ -147,6 +165,10 @@ impl OllamaAdapter {
         model: &str,
         prompt: &str,
         images: Option<Vec<String>>,
+        stop: Option<serde_json::Value>,
+        seed: Option<u32>,
+        frequency_penalty: Option<f64>,
+        presence_penalty: Option<f64>,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
         let url = format!("{}/api/generate", self.base_url);
         let client = self.client.clone();
@@ -156,12 +178,18 @@ impl OllamaAdapter {
         let num_ctx = model_effective_num_ctx(&model);
 
         Box::pin(async_stream::try_stream! {
+            let mut options = serde_json::json!({ "num_ctx": num_ctx });
+            if let Some(s) = seed { options["seed"] = serde_json::json!(s); }
+            if let Some(fp) = frequency_penalty { options["frequency_penalty"] = serde_json::json!(fp); }
+            if let Some(pp) = presence_penalty { options["presence_penalty"] = serde_json::json!(pp); }
+            if let Some(ref st) = stop { options["stop"] = st.clone(); }
+
             let mut body = serde_json::json!({
                 "model":   model,
                 "prompt":  prompt,
                 "stream":  true,
                 "think":   false,
-                "options": { "num_ctx": num_ctx },
+                "options": options,
             });
             if let Some(imgs) = images {
                 body["images"] = serde_json::json!(imgs);
@@ -190,14 +218,16 @@ impl OllamaAdapter {
 
                 // Consume complete newline-delimited JSON lines
                 while let Some(nl) = buf.find('\n') {
-                    let line = buf[..nl].trim().to_string();
-                    buf = buf[nl + 1..].to_string();
+                    // Drain the line in-place to avoid a full-buffer re-allocation on every iteration.
+                    let line: String = buf.drain(..nl).collect();
+                    buf.remove(0); // consume the '\n'
+                    let line = line.trim();
 
                     if line.is_empty() {
                         continue;
                     }
 
-                    let chunk: GenerateResponse = serde_json::from_str(&line)
+                    let chunk: GenerateResponse = serde_json::from_str(line)
                         .map_err(|e| anyhow::anyhow!("failed to parse Ollama generate response: {e}: {line}"))?;
 
                     // Ollama sends a done_reason:"load" chunk when the model is first
@@ -221,6 +251,11 @@ impl OllamaAdapter {
                         completion_tokens,
                         cached_tokens: None,
                         tool_calls: None,
+                        finish_reason: if chunk.done {
+                            chunk.done_reason.clone().filter(|r| r != "load")
+                        } else {
+                            None
+                        },
                     };
 
                     if chunk.done {
@@ -245,6 +280,11 @@ impl OllamaAdapter {
         model: &str,
         messages: serde_json::Value,
         tools: Option<serde_json::Value>,
+        stop: Option<serde_json::Value>,
+        seed: Option<u32>,
+        response_format: Option<serde_json::Value>,
+        frequency_penalty: Option<f64>,
+        presence_penalty: Option<f64>,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
         let url = format!("{}/api/chat", self.base_url);
         let client = self.client.clone();
@@ -252,17 +292,32 @@ impl OllamaAdapter {
         let model = model.to_string();
 
         Box::pin(async_stream::try_stream! {
+            let mut options = serde_json::json!({ "num_ctx": num_ctx });
+            if let Some(s) = seed { options["seed"] = serde_json::json!(s); }
+            if let Some(fp) = frequency_penalty { options["frequency_penalty"] = serde_json::json!(fp); }
+            if let Some(pp) = presence_penalty { options["presence_penalty"] = serde_json::json!(pp); }
+            if let Some(ref st) = stop { options["stop"] = st.clone(); }
+
             let mut body = serde_json::json!({
                 "model":    model,
                 "messages": messages,
                 "stream":   true,
                 "think":    false,
-                "options":  { "num_ctx": num_ctx },
+                "options":  options,
             });
 
             // Forward tool definitions so the model can produce tool_calls responses.
             if let Some(t) = tools {
                 body["tools"] = t;
+            }
+
+            // Map OpenAI response_format to Ollama format field.
+            if let Some(rf) = response_format {
+                if rf.get("type").and_then(|t| t.as_str()) == Some("json_object") {
+                    body["format"] = serde_json::json!("json");
+                } else if let Some(schema) = rf.get("json_schema").and_then(|s| s.get("schema")) {
+                    body["format"] = schema.clone();
+                }
             }
 
             let response = client
@@ -288,14 +343,16 @@ impl OllamaAdapter {
                 buf.push_str(&String::from_utf8_lossy(&bytes));
 
                 while let Some(nl) = buf.find('\n') {
-                    let line = buf[..nl].trim().to_string();
-                    buf = buf[nl + 1..].to_string();
+                    // Drain the line in-place to avoid a full-buffer re-allocation on every iteration.
+                    let line: String = buf.drain(..nl).collect();
+                    buf.remove(0); // consume the '\n'
+                    let line = line.trim();
 
                     if line.is_empty() {
                         continue;
                     }
 
-                    let chunk: ChatChunk = serde_json::from_str(&line)
+                    let chunk: ChatChunk = serde_json::from_str(line)
                         .map_err(|e| anyhow::anyhow!("failed to parse Ollama chat response: {e}: {line}"))?;
 
                     // Skip model-load notification
@@ -324,6 +381,7 @@ impl OllamaAdapter {
                                     completion_tokens: None,
                                     cached_tokens: None,
                                     tool_calls: Some(tc.clone()),
+                                    finish_reason: None,
                                 };
                             }
 
@@ -343,6 +401,11 @@ impl OllamaAdapter {
                             completion_tokens,
                             cached_tokens: None,
                             tool_calls: None,
+                            finish_reason: if chunk.done {
+                                chunk.done_reason.clone().filter(|r| r != "load")
+                            } else {
+                                None
+                            },
                         };
                     }
 

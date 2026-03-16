@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import type { Provider, GpuServer } from '@/lib/types'
 import { Plus, Trash2, RefreshCw, Server, ListFilter, Pencil, BarChart2, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ServerMetricsCompact } from '@/components/server-metrics-cell'
@@ -27,7 +27,7 @@ import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
 import { getOllamaProviders, countByStatus } from '@/lib/utils'
-import { extractHost, StatusBadge } from './shared'
+import { extractHost, StatusBadge, StatusPill } from './shared'
 import { OllamaProviderModelsModal } from './modals'
 import { PAGE_SIZE, OllamaSyncSection, OllamaCapacitySection } from './ollama-sections'
 
@@ -60,50 +60,49 @@ export function OllamaTab({
 }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const ollama = getOllamaProviders(providers)
-  const serverMap = new Map(servers.map((s) => [s.id, s]))
-  const ollamaCounts = countByStatus(ollama)
+  const ollama = useMemo(() => getOllamaProviders(providers), [providers])
+  const serverMap = useMemo(() => new Map(servers.map((s) => [s.id, s])), [servers])
+  const ollamaCounts = useMemo(() => countByStatus(ollama), [ollama])
   const onlineCount = ollamaCounts['online'] ?? 0
   const offlineCount = ollamaCounts['offline'] ?? 0
   const degradedCount = ollamaCounts['degraded'] ?? 0
   const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null)
   const [historyServer, setHistoryServer] = useState<GpuServer | null>(null)
   const [page, setPage] = useState(1)
-  const totalPages = Math.max(1, Math.ceil(ollama.length / PAGE_SIZE))
-  const safePage = Math.min(page, totalPages)
-  const pageStart = (safePage - 1) * PAGE_SIZE
-  const pageItems = ollama.slice(pageStart, pageStart + PAGE_SIZE)
+  const { totalPages, safePage, pageStart, pageItems } = useMemo(() => {
+    const totalPages = Math.max(1, Math.ceil(ollama.length / PAGE_SIZE))
+    const safePage = Math.min(page, totalPages)
+    const pageStart = (safePage - 1) * PAGE_SIZE
+    const pageItems = ollama.slice(pageStart, pageStart + PAGE_SIZE)
+    return { totalPages, safePage, pageStart, pageItems }
+  }, [ollama, page])
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         {providers ? (
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
-              <Server className="h-3 w-3 shrink-0" />
-              <span className="tabular-nums">{ollama.length}</span>
-              <span>{t('providers.servers.registered')}</span>
-            </div>
+            <StatusPill icon={<Server className="h-3 w-3 shrink-0" />} count={ollama.length} label={t('providers.servers.registered')} />
             {onlineCount > 0 && (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-success/10 border border-status-success/30 text-xs font-medium text-status-success-fg">
-                <span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />
-                <span className="tabular-nums">{onlineCount}</span>
-                <span>{t('common.online')}</span>
-              </div>
+              <StatusPill
+                icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+                count={onlineCount} label={t('common.online')}
+                className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+              />
             )}
             {degradedCount > 0 && (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-warn/10 border border-status-warn/30 text-xs font-medium text-status-warn-fg">
-                <span className="h-1.5 w-1.5 rounded-full bg-status-warn shrink-0" />
-                <span className="tabular-nums">{degradedCount}</span>
-                <span>{t('common.degraded')}</span>
-              </div>
+              <StatusPill
+                icon={<span className="h-1.5 w-1.5 rounded-full bg-status-warning shrink-0" />}
+                count={degradedCount} label={t('common.degraded')}
+                className="bg-status-warning/10 border border-status-warning/30 text-status-warning-fg"
+              />
             )}
             {offlineCount > 0 && (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-error/10 border border-status-error/30 text-xs font-medium text-status-error-fg">
-                <span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />
-                <span className="tabular-nums">{offlineCount}</span>
-                <span>{t('common.offline')}</span>
-              </div>
+              <StatusPill
+                icon={<span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />}
+                count={offlineCount} label={t('common.offline')}
+                className="bg-status-error/10 border border-status-error/30 text-status-error-fg"
+              />
             )}
           </div>
         ) : (
@@ -117,14 +116,14 @@ export function OllamaTab({
 
       {isLoading && (
         <div className="flex h-48 items-center justify-center text-muted-foreground text-sm animate-pulse">
-          {t('providers.ollama.loadingBackends')}
+          {t('providers.ollama.loadingProviders')}
         </div>
       )}
 
       {error && (
         <Card className="border-destructive/40 bg-destructive/5">
           <CardContent className="p-5 text-destructive">
-            <p className="font-semibold">{t('providers.ollama.failedBackends')}</p>
+            <p className="font-semibold">{t('providers.ollama.failedProviders')}</p>
             <p className="text-sm mt-1 opacity-75">
               {error instanceof Error ? error.message : t('common.unknownError')}
             </p>
@@ -152,11 +151,13 @@ export function OllamaTab({
               </span>
               <div className="flex items-center gap-1">
                 <Button variant="outline" size="icon" className="h-7 w-7"
+                  aria-label={t('common.prevPage')}
                   onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1}>
                   <ChevronLeft className="h-3.5 w-3.5" />
                 </Button>
                 <span className="text-xs text-muted-foreground px-1">{safePage} / {totalPages}</span>
                 <Button variant="outline" size="icon" className="h-7 w-7"
+                  aria-label={t('common.nextPage')}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages}>
                   <ChevronRight className="h-3.5 w-3.5" />
                 </Button>
@@ -169,9 +170,9 @@ export function OllamaTab({
               <TableHead>{t('providers.ollama.name')}</TableHead>
               <TableHead>{t('providers.ollama.server')}</TableHead>
               <TableHead className="min-w-52">{t('providers.servers.liveMetrics')}</TableHead>
-              <TableHead className="w-28">{t('providers.ollama.status')}</TableHead>
-              <TableHead className="w-32">{t('providers.servers.registeredAt')}</TableHead>
-              <TableHead className="text-right w-44">{t('keys.actions')}</TableHead>
+              <TableHead>{t('providers.ollama.status')}</TableHead>
+              <TableHead>{t('providers.servers.registeredAt')}</TableHead>
+              <TableHead className="text-right">{t('keys.actions')}</TableHead>
             </TableRow>
           </TableHeader>
               <TableBody>
@@ -183,7 +184,7 @@ export function OllamaTab({
                         <div className="flex items-center gap-2 mb-1">
                           <span className="font-semibold text-text-bright">{b.name}</span>
                           {b.is_free_tier && (
-                            <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
+                            <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-2 py-0.5">
                               {t('providers.ollama.freeTier')}
                             </Badge>
                           )}
@@ -206,13 +207,13 @@ export function OllamaTab({
                           <div className="flex items-center gap-3 text-muted-foreground pl-0.5">
                             {b.gpu_index !== null && (
                               <span className="flex items-center gap-1">
-                                <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase">GPU</span>
+                                <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase">{t('providers.ollama.gpuLabel')}</span>
                                 <span className="tabular-nums font-mono">{b.gpu_index}</span>
                               </span>
                             )}
                             {b.total_vram_mb > 0 && (
                               <span className="flex items-center gap-1">
-                                <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase">VRAM</span>
+                                <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase">{t('providers.ollama.vram')}</span>
                                 <span className="tabular-nums font-mono">{fmtMb(b.total_vram_mb)}</span>
                               </span>
                             )}
@@ -246,6 +247,7 @@ export function OllamaTab({
                                 <TooltipTrigger asChild>
                                   <Button variant="ghost" size="icon"
                                     className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                                    aria-label={t('providers.servers.history')}
                                     onClick={() => setHistoryServer(linkedServer)}>
                                     <BarChart2 className="h-4 w-4" />
                                   </Button>
@@ -257,6 +259,7 @@ export function OllamaTab({
                               <TooltipTrigger asChild>
                                 <Button variant="ghost" size="icon"
                                   className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                  aria-label={t('common.sync')}
                                   onClick={() => onSync(b.id)}
                                   disabled={syncPending && syncVars === b.id}>
                                   <RefreshCw className={
@@ -271,6 +274,7 @@ export function OllamaTab({
                               <TooltipTrigger asChild>
                                 <Button variant="ghost" size="icon"
                                   className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                                  aria-label={t('providers.ollama.modelSelection')}
                                   onClick={() => setViewModelsProvider(b)}>
                                   <ListFilter className="h-4 w-4" />
                                 </Button>
@@ -281,6 +285,7 @@ export function OllamaTab({
                               <TooltipTrigger asChild>
                                 <Button variant="ghost" size="icon"
                                   className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                                  aria-label={t('providers.ollama.editTitle')}
                                   onClick={() => onEdit(b)}>
                                   <Pencil className="h-4 w-4" />
                                 </Button>
@@ -291,6 +296,7 @@ export function OllamaTab({
                               <TooltipTrigger asChild>
                                 <Button variant="ghost" size="icon"
                                   className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                                  aria-label={t('providers.removeProvider')}
                                   onClick={() => onDelete(b.id, b.name)}
                                   disabled={deleteIsPending}>
                                   <Trash2 className="h-4 w-4" />

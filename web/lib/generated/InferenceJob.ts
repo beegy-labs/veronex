@@ -123,4 +123,9 @@ messages_prefix_hash: string | null,
  * Values: queue_full, no_eligible_provider, thermal_hard_gate, drain_forced,
  *         queue_wait_exceeded, provider_error, token_budget_exceeded
  */
-failure_reason: string | null, };
+failure_reason: string | null, 
+/**
+ * S3 keys for stored WebP images (full + thumbnail pairs).
+ * Populated after async image upload completes. Persisted in DB.
+ */
+image_keys: Array<string> | null, };

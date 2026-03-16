@@ -19,6 +19,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::StreamExt as _;
 use serde::Deserialize;
+use tracing::instrument;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::entities::LlmProvider;
@@ -172,6 +173,7 @@ pub async fn list_local_models(State(state): State<AppState>) -> Response {
 ///
 /// Accepts Ollama's `/api/generate` request body and streams the response
 /// as Ollama NDJSON (`application/x-ndjson`).
+#[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn generate(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
@@ -228,6 +230,8 @@ pub async fn generate(
             conversation_id,
             key_tier: Some(api_key.tier),
             images: req.images,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {
@@ -299,6 +303,7 @@ pub async fn generate(
 ///
 /// Accepts Ollama's `/api/chat` request body and streams the response
 /// as Ollama NDJSON (`application/x-ndjson`).
+#[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn chat(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
@@ -358,6 +363,8 @@ pub async fn chat(
             conversation_id,
             key_tier: Some(api_key.tier),
             images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {

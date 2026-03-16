@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import type { Provider } from '@/lib/types'
 import { Plus, Trash2, RefreshCw, Key, ShieldCheck, ListFilter, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -25,7 +25,7 @@ import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
 import { getGeminiProviders, countByStatus } from '@/lib/utils'
-import { StatusBadge } from './shared'
+import { StatusBadge, StatusPill } from './shared'
 import { ApiKeyCell, ModelSelectionModal } from './modals'
 import { PAGE_SIZE } from './ollama-sections'
 import { GeminiStatusSyncSection, GeminiSyncSection } from './gemini-sections'
@@ -59,18 +59,21 @@ export function GeminiTab({
 }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const gemini = getGeminiProviders(providers)
-  const geminiCounts = countByStatus(gemini)
-  const activeCount = gemini.filter(b => b.is_active).length
+  const gemini = useMemo(() => getGeminiProviders(providers), [providers])
+  const geminiCounts = useMemo(() => countByStatus(gemini), [gemini])
+  const activeCount = useMemo(() => gemini.filter(b => b.is_active).length, [gemini])
   const onlineCount = geminiCounts['online'] ?? 0
   const degradedCount = geminiCounts['degraded'] ?? 0
   const offlineCount = geminiCounts['offline'] ?? 0
   const [modelSelectionProvider, setModelSelectionProvider] = useState<Provider | null>(null)
   const [geminiPage, setGeminiPage] = useState(1)
-  const geminiTotalPages = Math.max(1, Math.ceil(gemini.length / PAGE_SIZE))
-  const geminiSafePage = Math.min(geminiPage, geminiTotalPages)
-  const geminiPageStart = (geminiSafePage - 1) * PAGE_SIZE
-  const geminiPageItems = gemini.slice(geminiPageStart, geminiPageStart + PAGE_SIZE)
+  const { geminiTotalPages, geminiSafePage, geminiPageStart, geminiPageItems } = useMemo(() => {
+    const geminiTotalPages = Math.max(1, Math.ceil(gemini.length / PAGE_SIZE))
+    const geminiSafePage = Math.min(geminiPage, geminiTotalPages)
+    const geminiPageStart = (geminiSafePage - 1) * PAGE_SIZE
+    const geminiPageItems = gemini.slice(geminiPageStart, geminiPageStart + PAGE_SIZE)
+    return { geminiTotalPages, geminiSafePage, geminiPageStart, geminiPageItems }
+  }, [gemini, geminiPage])
 
   return (
     <div className="space-y-8">
@@ -80,38 +83,34 @@ export function GeminiTab({
             <h2 className="text-base font-semibold text-text-bright">{t('providers.gemini.title')}</h2>
             {providers ? (
               <div className="flex items-center gap-2 flex-wrap mt-1.5">
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
-                  <Key className="h-3 w-3 shrink-0" />
-                  <span className="tabular-nums">{gemini.length}</span>
-                  <span>{t('providers.servers.registered')}</span>
-                </div>
+                <StatusPill icon={<Key className="h-3 w-3 shrink-0" />} count={gemini.length} label={t('providers.servers.registered')} />
                 {activeCount > 0 && (
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/30 text-xs font-medium text-primary">
-                    <ShieldCheck className="h-3 w-3 shrink-0" />
-                    <span className="tabular-nums">{activeCount}</span>
-                    <span>{t('common.active')}</span>
-                  </div>
+                  <StatusPill
+                    icon={<ShieldCheck className="h-3 w-3 shrink-0" />}
+                    count={activeCount} label={t('common.active')}
+                    className="bg-primary/10 border border-primary/30 text-primary"
+                  />
                 )}
                 {onlineCount > 0 && (
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-success/10 border border-status-success/30 text-xs font-medium text-status-success-fg">
-                    <span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />
-                    <span className="tabular-nums">{onlineCount}</span>
-                    <span>{t('common.online')}</span>
-                  </div>
+                  <StatusPill
+                    icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+                    count={onlineCount} label={t('common.online')}
+                    className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+                  />
                 )}
                 {degradedCount > 0 && (
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-warn/10 border border-status-warn/30 text-xs font-medium text-status-warn-fg">
-                    <span className="h-1.5 w-1.5 rounded-full bg-status-warn shrink-0" />
-                    <span className="tabular-nums">{degradedCount}</span>
-                    <span>{t('common.degraded')}</span>
-                  </div>
+                  <StatusPill
+                    icon={<span className="h-1.5 w-1.5 rounded-full bg-status-warning shrink-0" />}
+                    count={degradedCount} label={t('common.degraded')}
+                    className="bg-status-warning/10 border border-status-warning/30 text-status-warning-fg"
+                  />
                 )}
                 {offlineCount > 0 && (
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-error/10 border border-status-error/30 text-xs font-medium text-status-error-fg">
-                    <span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />
-                    <span className="tabular-nums">{offlineCount}</span>
-                    <span>{t('common.offline')}</span>
-                  </div>
+                  <StatusPill
+                    icon={<span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />}
+                    count={offlineCount} label={t('common.offline')}
+                    className="bg-status-error/10 border border-status-error/30 text-status-error-fg"
+                  />
                 )}
               </div>
             ) : (
@@ -125,14 +124,14 @@ export function GeminiTab({
 
         {isLoading && (
           <div className="flex h-32 items-center justify-center text-muted-foreground text-sm animate-pulse">
-            {t('providers.gemini.loadingBackends')}
+            {t('providers.gemini.loadingProviders')}
           </div>
         )}
 
         {error && (
           <Card className="border-destructive/40 bg-destructive/5">
             <CardContent className="p-5 text-destructive">
-              <p className="font-semibold">{t('providers.gemini.failedBackends')}</p>
+              <p className="font-semibold">{t('providers.gemini.failedProviders')}</p>
               <p className="text-sm mt-1 opacity-75">
                 {error instanceof Error ? error.message : t('common.unknownError')}
               </p>
@@ -160,11 +159,13 @@ export function GeminiTab({
                 </span>
                 <div className="flex items-center gap-1">
                   <Button variant="outline" size="icon" className="h-7 w-7"
+                    aria-label={t('common.prevPage')}
                     onClick={() => setGeminiPage((p) => Math.max(1, p - 1))} disabled={geminiSafePage <= 1}>
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </Button>
                   <span className="text-xs text-muted-foreground px-1">{geminiSafePage} / {geminiTotalPages}</span>
                   <Button variant="outline" size="icon" className="h-7 w-7"
+                    aria-label={t('common.nextPage')}
                     onClick={() => setGeminiPage((p) => Math.min(geminiTotalPages, p + 1))} disabled={geminiSafePage >= geminiTotalPages}>
                     <ChevronRight className="h-3.5 w-3.5" />
                   </Button>
@@ -176,11 +177,11 @@ export function GeminiTab({
               <TableRow className="hover:bg-transparent">
                 <TableHead>{t('providers.gemini.name')}</TableHead>
                 <TableHead>{t('providers.gemini.apiKey')}</TableHead>
-                <TableHead className="w-24">{t('providers.gemini.freeTier')}</TableHead>
-                <TableHead className="w-24">{t('providers.gemini.activeToggle')}</TableHead>
-                <TableHead className="w-28">{t('providers.gemini.status')}</TableHead>
-                <TableHead className="w-32">{t('providers.servers.registeredAt')}</TableHead>
-                <TableHead className="text-right w-28">{t('keys.actions')}</TableHead>
+                <TableHead>{t('providers.gemini.freeTier')}</TableHead>
+                <TableHead>{t('providers.gemini.activeToggle')}</TableHead>
+                <TableHead>{t('providers.gemini.status')}</TableHead>
+                <TableHead>{t('providers.servers.registeredAt')}</TableHead>
+                <TableHead className="text-right">{t('keys.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -194,11 +195,11 @@ export function GeminiTab({
                   </TableCell>
                   <TableCell>
                     {b.is_free_tier ? (
-                      <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
+                      <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-2 py-0.5">
                         {t('providers.gemini.freeTier')}
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-1.5 py-0">
+                      <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-2 py-0.5">
                         {t('providers.gemini.paid')}
                       </Badge>
                     )}
@@ -209,6 +210,7 @@ export function GeminiTab({
                       onCheckedChange={() => onToggleActive(b)}
                       disabled={toggleActivePending}
                       title={b.is_active ? t('providers.disableProvider') : t('providers.enableProvider')}
+                      aria-label={b.is_active ? t('providers.disableProvider') : t('providers.enableProvider')}
                     />
                   </TableCell>
                   <TableCell>
@@ -224,6 +226,7 @@ export function GeminiTab({
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
                               className="h-8 w-8 text-muted-foreground hover:text-text-bright"
+                              aria-label={t('common.sync')}
                               onClick={() => onSync(b.id)}
                               disabled={syncPending}>
                               <RefreshCw className="h-4 w-4" />
@@ -236,6 +239,7 @@ export function GeminiTab({
                             <TooltipTrigger asChild>
                               <Button variant="ghost" size="icon"
                                 className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                                aria-label={t('providers.gemini.modelSelection')}
                                 onClick={() => setModelSelectionProvider(b)}>
                                 <ListFilter className="h-4 w-4" />
                               </Button>
@@ -247,6 +251,7 @@ export function GeminiTab({
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
                               className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              aria-label={t('providers.gemini.editTitle')}
                               onClick={() => onEdit(b)}>
                               <Pencil className="h-4 w-4" />
                             </Button>
@@ -257,6 +262,7 @@ export function GeminiTab({
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
                               className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                              aria-label={t('providers.removeProvider')}
                               onClick={() => onDelete(b.id, b.name)}
                               disabled={deleteIsPending}>
                               <Trash2 className="h-4 w-4" />

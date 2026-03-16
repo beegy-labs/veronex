@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { keyUsageQuery, keyModelBreakdownQuery } from '@/lib/queries'
 import type { ApiKey } from '@/lib/types'
@@ -10,7 +10,7 @@ import {
 } from 'recharts'
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
-  AXIS_TICK, LEGEND_STYLE, CURSOR_FILL, fmtCompact,
+  AXIS_TICK, LEGEND_STYLE, CURSOR_FILL, fmtCompact, fmtMs, fmtPct1,
 } from '@/lib/chart-theme'
 import { calcPercentage } from '@/lib/utils'
 import { Hash, Coins, CheckCircle, XCircle } from 'lucide-react'
@@ -25,6 +25,8 @@ import { useTranslation } from '@/i18n'
 import { TIME_OPTIONS, TimeRangeSelector } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
+import { tokens } from '@/lib/design-tokens'
+import { SectionLabel } from '@/components/section-label'
 
 export function KeyUsageModal({
   apiKey,
@@ -40,15 +42,18 @@ export function KeyUsageModal({
   const { data: hourly, isLoading } = useQuery(keyUsageQuery(apiKey.id, hours))
   const { data: models } = useQuery(keyModelBreakdownQuery(apiKey.id, hours))
 
-  const chartData = hourly?.map((h) => ({
-    hour:     fmtHourLabel(h.hour, tz),
-    tokens:   h.total_tokens,
-    prompt:   h.prompt_tokens,
-    compl:    h.completion_tokens,
-    requests: h.request_count,
-    success:  h.success_count,
-    errors:   h.error_count,
-  })) ?? []
+  const chartData = useMemo(() =>
+    (hourly ?? []).map((h) => ({
+      hour:     fmtHourLabel(h.hour, tz),
+      tokens:   h.total_tokens,
+      prompt:   h.prompt_tokens,
+      compl:    h.completion_tokens,
+      requests: h.request_count,
+      success:  h.success_count,
+      errors:   h.error_count,
+    })),
+    [hourly, tz],
+  )
 
   // Aggregate KPIs from hourly data
   const totalRequests = chartData.reduce((s, h) => s + h.requests, 0)
@@ -60,7 +65,7 @@ export function KeyUsageModal({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
@@ -122,9 +127,9 @@ export function KeyUsageModal({
             {/* Model breakdown table */}
             {models && models.length > 0 && (
               <div>
-                <p className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-3">
+                <SectionLabel>
                   {t('keys.modelBreakdown')}
-                </p>
+                </SectionLabel>
                 <DataTable minWidth="480px">
                   <TableHeader>
                     <TableRow>
@@ -145,13 +150,13 @@ export function KeyUsageModal({
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{fmtCompact(m.request_count)}</TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground">
-                          {m.call_pct.toFixed(1)}%
+                          {fmtPct1(m.call_pct)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {fmtCompact(m.prompt_tokens + m.completion_tokens)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground">
-                          {m.avg_latency_ms > 0 ? `${(m.avg_latency_ms / 1000).toFixed(1)}s` : '—'}
+                          {m.avg_latency_ms > 0 ? fmtMs(m.avg_latency_ms) : '—'}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -168,45 +173,45 @@ export function KeyUsageModal({
               <>
                 {/* Token chart */}
                 <div>
-                  <p className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-3">
+                  <SectionLabel>
                     {t('usage.tokensPerHour')}
-                  </p>
+                  </SectionLabel>
                   <ResponsiveContainer width="100%" height={180}>
                     <AreaChart data={chartData}>
                       <defs>
                         <linearGradient id="ku-gradPrompt" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%"  stopColor="var(--theme-primary)" stopOpacity={0.35} />
-                          <stop offset="95%" stopColor="var(--theme-primary)" stopOpacity={0} />
+                          <stop offset="5%"  stopColor={tokens.brand.primary} stopOpacity={0.35} />
+                          <stop offset="95%" stopColor={tokens.brand.primary} stopOpacity={0} />
                         </linearGradient>
                         <linearGradient id="ku-gradCompl" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%"  stopColor="var(--theme-status-info)" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="var(--theme-status-info)" stopOpacity={0} />
+                          <stop offset="5%"  stopColor={tokens.status.info} stopOpacity={0.3} />
+                          <stop offset="95%" stopColor={tokens.status.info} stopOpacity={0} />
                         </linearGradient>
                       </defs>
                       <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
                       <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={42} tickFormatter={fmtCompact} />
                       <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => fmtCompact(Number(v))} />
                       <Legend wrapperStyle={LEGEND_STYLE} />
-                      <Area type="monotone" dataKey="prompt" name={t('usage.prompt')}     stroke="var(--theme-primary)"       fill="url(#ku-gradPrompt)" strokeWidth={2} dot={false} />
-                      <Area type="monotone" dataKey="compl"  name={t('usage.completion')} stroke="var(--theme-status-info)"  fill="url(#ku-gradCompl)"  strokeWidth={2} dot={false} />
+                      <Area type="monotone" dataKey="prompt" name={t('usage.prompt')}     stroke={tokens.brand.primary}  fill="url(#ku-gradPrompt)" strokeWidth={2} dot={false} />
+                      <Area type="monotone" dataKey="compl"  name={t('usage.completion')} stroke={tokens.status.info}    fill="url(#ku-gradCompl)"  strokeWidth={2} dot={false} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
 
                 {/* Request chart */}
                 <div>
-                  <p className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-3">
+                  <SectionLabel>
                     {t('usage.requestsPerHour')}
-                  </p>
+                  </SectionLabel>
                   <ResponsiveContainer width="100%" height={160}>
                     <BarChart data={chartData} barGap={2}>
                       <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
                       <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={35} />
                       <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} />
                       <Legend wrapperStyle={LEGEND_STYLE} />
-                      <Bar dataKey="requests" name={t('usage.requests')} fill="var(--theme-primary)"         radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="success"  name={t('usage.success')}  fill="var(--theme-status-success)" radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="errors"   name={t('usage.errors')}   fill="var(--theme-status-error)"   radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="requests" name={t('usage.requests')} fill={tokens.brand.primary}    radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="success"  name={t('usage.success')}  fill={tokens.status.success} radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="errors"   name={t('usage.errors')}   fill={tokens.status.error}   radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

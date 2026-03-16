@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::sse::Event;
@@ -5,13 +7,15 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::StreamExt;
 use serde::Deserialize;
+use tracing::instrument;
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, JobSource, ProviderType};
+use crate::domain::enums::{ApiFormat, FinishReason, JobSource, ProviderType};
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
 use super::handlers::sanitize_sse_error;
 use super::inference_helpers::{build_sse_response, validate_model_name, validate_content_length, extract_last_user_prompt, validate_tool_call, extract_conversation_id};
 use super::openai_sse_types::{
-    ChatCompletion, CompletionChoice, CompletionChunk, CompletionMessage, UsageInfo,
+    ChatCompletion, CompletionChoice, CompletionChunk, CompletionMessage, CompletionTokensDetails,
+    PromptTokensDetails, SERVICE_TIER_DEFAULT, StreamOptions, UsageInfo, SYSTEM_FINGERPRINT,
 };
 use super::state::AppState;
 
@@ -144,9 +148,72 @@ pub struct ChatCompletionRequest {
     /// Maps to Ollama `options.num_predict`.
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// OpenAI renamed `max_tokens` to `max_completion_tokens`. Both are accepted.
+    #[serde(default)]
+    pub max_completion_tokens: Option<u32>,
     /// Whether to stream the response (SSE). Defaults to `false` per OpenAI spec.
     #[serde(default)]
     pub stream: Option<bool>,
+    /// Base64-encoded images for vision models (Ollama extension).
+    #[serde(default)]
+    pub images: Option<Vec<String>>,
+    /// Stop sequences.
+    #[serde(default)]
+    pub stop: Option<serde_json::Value>,
+    /// Seed for reproducible outputs.
+    #[serde(default)]
+    pub seed: Option<u32>,
+    /// Options for streaming (e.g. include_usage).
+    #[serde(default)]
+    pub stream_options: Option<StreamOptions>,
+    /// Response format (json_object / text / json_schema).
+    #[serde(default)]
+    pub response_format: Option<serde_json::Value>,
+    /// Frequency penalty (-2.0 to 2.0).
+    #[serde(default)]
+    pub frequency_penalty: Option<f64>,
+    /// Presence penalty (-2.0 to 2.0).
+    #[serde(default)]
+    pub presence_penalty: Option<f64>,
+    // Accepted but ignored:
+    #[serde(default)]
+    pub n: Option<u32>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub logprobs: Option<bool>,
+    #[serde(default)]
+    pub top_logprobs: Option<u32>,
+    #[serde(default)]
+    pub parallel_tool_calls: Option<bool>,
+    // ── Extra fields accepted but ignored (OpenAI SDK compatibility) ──────────
+    /// Whether to store the completion for evals (OpenAI feature, ignored here).
+    #[serde(default)]
+    pub store: Option<bool>,
+    /// Arbitrary metadata (up to 16 k/v pairs, OpenAI feature, ignored).
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+    /// Service tier preference ("auto", "default", "flex", "priority") — ignored.
+    #[serde(default)]
+    pub service_tier: Option<String>,
+    /// Reasoning effort for o-series models ("low", "medium", "high") — ignored.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    /// Token bias map (token_id → -100..100) — ignored (not supported by Ollama via this path).
+    #[serde(default)]
+    pub logit_bias: Option<serde_json::Value>,
+    /// Predicted output for latency reduction — ignored.
+    #[serde(default)]
+    pub prediction: Option<serde_json::Value>,
+    /// Output modalities (["text"], ["text","audio"]) — only "text" supported.
+    #[serde(default)]
+    pub modalities: Option<Vec<String>>,
+    /// Audio output config — ignored (audio not supported).
+    #[serde(default)]
+    pub audio: Option<serde_json::Value>,
+    /// Web search options — ignored.
+    #[serde(default)]
+    pub web_search_options: Option<serde_json::Value>,
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -158,6 +225,7 @@ pub struct ChatCompletionRequest {
 /// including `tool_calls` deltas for function-calling agents.
 ///
 /// For other providers: falls back to the legacy queue-based single-prompt path.
+#[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn chat_completions(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
@@ -167,7 +235,7 @@ pub async fn chat_completions(
     if validate_model_name(&req.model).is_err() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": {"message": ERR_MODEL_INVALID}})),
+            Json(serde_json::json!({"error": {"message": ERR_MODEL_INVALID, "type": "invalid_request_error", "code": "invalid_model"}})),
         )
             .into_response();
     }
@@ -182,9 +250,17 @@ pub async fn chat_completions(
     if validate_content_length(total_content_len).is_err() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": {"message": ERR_PROMPT_TOO_LARGE}})),
+            Json(serde_json::json!({"error": {"message": ERR_PROMPT_TOO_LARGE, "type": "invalid_request_error", "code": "context_length_exceeded"}})),
         )
             .into_response();
+    }
+
+    // Validate images against lab_settings
+    if req.images.is_some() {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        if let Some(msg) = super::inference_helpers::validate_images(&req.images, &lab) {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": {"message": msg, "type": "invalid_request_error"}}))).into_response();
+        }
     }
 
     let conversation_id = extract_conversation_id(&headers);
@@ -221,16 +297,24 @@ async fn ollama_chat_proxy(
     // Extract last user content as display prompt (required by InferenceJob).
     let prompt = extract_last_user_prompt(&ollama_messages).to_string();
 
-    let model = req.model.clone();
+    let model_str = req.model.clone();
+    let images = req.images;
     let messages = serde_json::Value::Array(ollama_messages);
     // Forward tools in Ollama format (OpenAI tools array is already compatible with Ollama).
     let tools = req.tools.map(serde_json::Value::Array);
+
+    // Prefer max_completion_tokens (new name), fall back to max_tokens.
+    let _effective_max_tokens = req.max_completion_tokens.or(req.max_tokens);
+
+    let include_usage = req.stream_options.as_ref()
+        .and_then(|o| o.include_usage)
+        .unwrap_or(false);
 
     let job_id = match state
         .use_case
         .submit(SubmitJobRequest {
             prompt,
-            model_name: model.clone(),
+            model_name: model_str.clone(),
             provider_type: ProviderType::Ollama,
             gemini_tier: None,
             api_key_id: Some(api_key.id),
@@ -242,26 +326,31 @@ async fn ollama_chat_proxy(
             request_path: Some("/v1/chat/completions".to_string()),
             conversation_id,
             key_tier: Some(api_key.tier),
-            images: None,
+            images,
+            stop: req.stop,
+            seed: req.seed,
+            response_format: req.response_format,
+            frequency_penalty: req.frequency_penalty,
+            presence_penalty: req.presence_penalty,
         })
         .await
     {
         Ok(id) => id,
         Err(e) => {
             tracing::error!("chat_completions(ollama): submit failed: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": {"message": "failed to submit inference job"}})),
-            )
-                .into_response();
+            use super::error::AppError;
+            return AppError::from(e).into_response();
         }
     };
 
-    let chunk_id = format!("chatcmpl-{}", job_id.0);
+    // Use Arc<str> so clones inside the per-token SSE closure are cheap atomic
+    // increments rather than heap allocations.
+    let chunk_id: Arc<str> = format!("chatcmpl-{}", job_id.0).into();
+    let model: Arc<str> = model_str.into();
     let created = chrono::Utc::now().timestamp();
 
     if !stream {
-        return collect_completion(&state, job_id, model, chunk_id, created).await;
+        return collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created).await;
     }
 
     let mut saw_tool_calls = false;
@@ -272,6 +361,7 @@ async fn ollama_chat_proxy(
                 let ollama_calls = token.tool_calls.as_ref()
                     .and_then(|v| v.as_array())
                     .cloned()
+                    // Safety: serde_json::Value::Array is always serialisable.
                     .unwrap_or_default();
 
                 let openai_calls: Vec<serde_json::Value> = ollama_calls
@@ -281,24 +371,47 @@ async fn ollama_chat_proxy(
                     .map(|(i, c)| convert_tool_call(i, c))
                     .collect();
 
-                let chunk = CompletionChunk::tool_calls(chunk_id.clone(), created, Some(model.clone()), openai_calls);
-                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
+                // Safety: CompletionChunk contains only String/&'static str/numbers — never fails.
+                let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model.to_string()), openai_calls);
+                vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
             }
             Ok(token) if token.is_final => {
-                let reason = if saw_tool_calls { "tool_calls" } else { "stop" };
-                let chunk = CompletionChunk::finish(chunk_id.clone(), created, Some(model.clone()), reason);
-                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
+                let reason = token.finish_reason.as_deref()
+                    .unwrap_or(if saw_tool_calls { "tool_calls" } else { FinishReason::Stop.as_str() });
+
+                // Safety: CompletionChunk contains only String/&'static str/numbers — never fails.
+                let finish_chunk = CompletionChunk::finish(chunk_id.to_string(), created, Some(model.to_string()), reason);
+                let finish_event = Event::default().data(serde_json::to_string(&finish_chunk).unwrap_or_default());
+
+                if include_usage {
+                    let prompt_tokens = token.prompt_tokens.unwrap_or(0);
+                    let completion_tokens = token.completion_tokens.unwrap_or(0);
+                    let usage = UsageInfo {
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens: prompt_tokens + completion_tokens,
+                        prompt_tokens_details: PromptTokensDetails::default(),
+                        completion_tokens_details: CompletionTokensDetails::default(),
+                    };
+                    // Safety: CompletionChunk/UsageInfo contain only numbers/strings — never fails.
+                    let usage_chunk = CompletionChunk::usage_only(chunk_id.to_string(), created, Some(model.to_string()), usage);
+                    let usage_event = Event::default().data(serde_json::to_string(&usage_chunk).unwrap_or_default());
+                    vec![finish_event, usage_event]
+                } else {
+                    vec![finish_event]
+                }
             }
             Ok(token) => {
                 if token.value.is_empty() {
-                    return Event::default().data("");
+                    return vec![];
                 }
-                let chunk = CompletionChunk::content(chunk_id.clone(), created, Some(model.clone()), token.value);
-                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
+                // Safety: CompletionChunk contains only String/&'static str/numbers — never fails.
+                let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model.to_string()), token.value);
+                vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
             }
             Err(e) => {
                 let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
-                Event::default().data(serde_json::to_string(&err).unwrap_or_default())
+                vec![Event::default().data(serde_json::to_string(&err).unwrap_or_default())]
             }
         }
     })
@@ -337,6 +450,7 @@ async fn collect_completion(
     let mut tool_calls: Vec<serde_json::Value> = Vec::new();
     let mut prompt_tokens: u32 = 0;
     let mut completion_tokens: u32 = 0;
+    let mut finish_reason_str = FinishReason::Stop.as_str().to_string();
 
     while let Some(result) = token_stream.next().await {
         match result {
@@ -352,6 +466,9 @@ async fn collect_completion(
             Ok(token) if token.is_final => {
                 prompt_tokens = token.prompt_tokens.unwrap_or(0);
                 completion_tokens = token.completion_tokens.unwrap_or(completion_tokens);
+                finish_reason_str = token.finish_reason.unwrap_or_else(|| {
+                    if tool_calls.is_empty() { FinishReason::Stop.as_str().to_string() } else { "tool_calls".to_string() }
+                });
                 break;
             }
             Ok(token) => {
@@ -360,20 +477,12 @@ async fn collect_completion(
                 }
             }
             Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": {"message": sanitize_sse_error(&e)}})),
-                )
-                    .into_response();
+                use super::error::AppError;
+                return AppError::Internal(anyhow::anyhow!("{}", sanitize_sse_error(&e))).into_response();
             }
         }
     }
 
-    let finish_reason = if tool_calls.is_empty() {
-        "stop"
-    } else {
-        "tool_calls"
-    };
     let total = prompt_tokens + completion_tokens;
 
     Json(ChatCompletion {
@@ -381,6 +490,7 @@ async fn collect_completion(
         object: "chat.completion",
         created,
         model,
+        service_tier: SERVICE_TIER_DEFAULT,
         choices: vec![CompletionChoice {
             index: 0,
             message: CompletionMessage {
@@ -391,14 +501,18 @@ async fn collect_completion(
                 } else {
                     Some(tool_calls)
                 },
+                refusal: None,
             },
-            finish_reason: finish_reason.to_string(),
+            finish_reason: finish_reason_str,
         }],
         usage: UsageInfo {
             prompt_tokens,
             completion_tokens,
             total_tokens: total,
+            prompt_tokens_details: PromptTokensDetails::default(),
+            completion_tokens_details: CompletionTokensDetails::default(),
         },
+        system_fingerprint: SYSTEM_FINGERPRINT,
     })
     .into_response()
 }
@@ -439,65 +553,77 @@ async fn legacy_queue_chat(
     if prompt.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": {"message": "no user message found in messages array"}})),
+            Json(serde_json::json!({"error": {"message": "no user message found in messages array", "type": "invalid_request_error"}})),
         )
             .into_response();
     }
 
-    let model = req.model.clone();
+    let model_str = req.model.clone();
+    let images = req.images;
 
     let job_id = match state
         .use_case
         .submit(SubmitJobRequest {
             prompt,
-            model_name: model.clone(),
+            model_name: model_str.clone(),
             provider_type,
             gemini_tier,
             api_key_id: Some(api_key.id),
             account_id: None,
             source: JobSource::Api,
             api_format: ApiFormat::OpenaiCompat,
+            // Intentionally None: legacy path uses single-prompt inference.
+            // The GeminiAdapter and non-Ollama providers use job.prompt, not messages.
+            // Tools are not supported on this path.
             messages: None,
             tools: None,
             request_path: Some("/v1/chat/completions".to_string()),
             conversation_id,
             key_tier: Some(api_key.tier),
-            images: None,
+            images,
+            stop: req.stop,
+            seed: req.seed,
+            response_format: req.response_format,
+            frequency_penalty: req.frequency_penalty,
+            presence_penalty: req.presence_penalty,
         })
         .await
     {
         Ok(id) => id,
         Err(e) => {
             tracing::error!("chat_completions: submit failed: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": {"message": "failed to submit inference job"}})),
-            )
-                .into_response();
+            use super::error::AppError;
+            return AppError::from(e).into_response();
         }
     };
 
-    let chunk_id = format!("chatcmpl-{}", job_id.0);
+    // Use Arc<str> so clones inside the per-token SSE closure are cheap atomic
+    // increments rather than heap allocations.
+    let chunk_id: Arc<str> = format!("chatcmpl-{}", job_id.0).into();
+    let model: Arc<str> = model_str.into();
     let created = chrono::Utc::now().timestamp();
 
     if !stream {
-        return collect_completion(&state, job_id, model, chunk_id, created).await;
+        return collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created).await;
     }
 
     build_sse_response(&state, job_id, true, move |result| {
         match result {
             Ok(token) if token.is_final => {
-                let chunk = CompletionChunk::stop(chunk_id.clone(), created, Some(model.clone()));
-                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
+                let reason = token.finish_reason.as_deref().unwrap_or(FinishReason::Stop.as_str());
+                // Safety: CompletionChunk contains only String/&'static str/numbers — never fails.
+                let chunk = CompletionChunk::finish(chunk_id.to_string(), created, Some(model.to_string()), reason);
+                vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
             }
-            Ok(token) if token.value.is_empty() => Event::default().data(""),
+            Ok(token) if token.value.is_empty() => vec![],
             Ok(token) => {
-                let chunk = CompletionChunk::content(chunk_id.clone(), created, Some(model.clone()), token.value);
-                Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())
+                // Safety: CompletionChunk contains only String/&'static str/numbers — never fails.
+                let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model.to_string()), token.value);
+                vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
             }
             Err(e) => {
                 let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
-                Event::default().data(serde_json::to_string(&err).unwrap_or_default())
+                vec![Event::default().data(serde_json::to_string(&err).unwrap_or_default())]
             }
         }
     })

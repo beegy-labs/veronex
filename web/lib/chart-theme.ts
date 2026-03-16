@@ -11,14 +11,16 @@
  * SSOT: docs/llm/frontend/web-charts.md
  */
 
+import { tokens } from './design-tokens'
+
 // ── Tooltip ─────────────────────────────────────────────────────────────────
 
 /** Outer container style for every <Tooltip contentStyle={...}> */
 export const TOOLTIP_STYLE = {
-  backgroundColor: 'var(--theme-bg-card)',
-  border: '1px solid var(--theme-border)',
+  backgroundColor: tokens.bg.card,
+  border: `1px solid ${tokens.border.base}`,
   borderRadius: '8px',
-  color: 'var(--theme-text-primary)',
+  color: tokens.text.primary,
   fontSize: '12px',
 }
 
@@ -27,35 +29,35 @@ export const TOOLTIP_STYLE = {
  * Controls the category label (e.g. x-axis tick value shown at the top of the tooltip).
  * Without this, Recharts falls back to the browser default (typically black).
  */
-export const TOOLTIP_LABEL_STYLE = { color: 'var(--theme-text-primary)' }
+export const TOOLTIP_LABEL_STYLE = { color: tokens.text.primary }
 
 /**
  * <Tooltip itemStyle={...}>
  * Controls each series row (name + value) inside the tooltip.
  * Without this, Recharts uses the series fill color for the text, which may be unreadable.
  */
-export const TOOLTIP_ITEM_STYLE = { color: 'var(--theme-text-primary)' }
+export const TOOLTIP_ITEM_STYLE = { color: tokens.text.primary }
 
 // ── Axes ────────────────────────────────────────────────────────────────────
 
 /** <XAxis tick={AXIS_TICK}> / <YAxis tick={AXIS_TICK}> */
-export const AXIS_TICK = { fill: 'var(--theme-text-secondary)', fontSize: 11 }
+export const AXIS_TICK = { fill: tokens.text.secondary, fontSize: 11 }
 
 /** Smaller axis tick for compact charts (history modals, sparklines). */
-export const AXIS_TICK_SM = { fontSize: 10, fill: 'var(--theme-text-faint)' }
+export const AXIS_TICK_SM = { fontSize: 10, fill: tokens.text.faint }
 
 // ── Legend ───────────────────────────────────────────────────────────────────
 
 /** <Legend wrapperStyle={LEGEND_STYLE}> */
-export const LEGEND_STYLE = { fontSize: '12px', color: 'var(--theme-text-secondary)' }
+export const LEGEND_STYLE = { fontSize: '12px', color: tokens.text.secondary }
 
 // ── Cursor overlays ─────────────────────────────────────────────────────────
 
 /** <Tooltip cursor={CURSOR_FILL}> — area fill shown on bar chart hover */
-export const CURSOR_FILL = { fill: 'var(--theme-bg-hover)' }
+export const CURSOR_FILL = { fill: tokens.bg.hover }
 
 /** <Tooltip cursor={CURSOR_STROKE}> — vertical stroke shown on line chart hover */
-export const CURSOR_STROKE = { stroke: 'var(--theme-border)' }
+export const CURSOR_STROKE = { stroke: tokens.border.base }
 
 // ── Compact number formatter ─────────────────────────────────────────────────
 
@@ -122,6 +124,17 @@ export function fmtPct(n: number): string {
   return `${Math.round(n)}%`
 }
 
+/** Format a percentage value with one decimal place. Example: 12.345 → "12.3%" */
+export function fmtPct1(n: number): string {
+  return `${n.toFixed(1)}%`
+}
+
+/** Format tokens-per-second for TPS display. Example: 23.456 → "23.46 tok/s", 0 → "—" */
+export function fmtTps(n: number): string {
+  if (n <= 0) return '—'
+  return `${n.toFixed(2)} tok/s`
+}
+
 // ── Memory size formatters ────────────────────────────────────────────────────
 
 /**
@@ -166,4 +179,17 @@ export function fmtCost(usd: number | null | undefined): string {
   if (usd == null) return '—'
   if (usd === 0) return 'free'
   return `$${usd.toFixed(4)}`
+}
+
+/** Format USD cost with 6 decimal places — for detailed per-job views. Example: 0.000042 → "$0.000042", 0 → "free", null → "—" */
+export function fmtCost6(usd: number | null | undefined): string {
+  if (usd == null) return '—'
+  if (usd === 0) return 'free'
+  return `$${usd.toFixed(6)}`
+}
+
+/** Format kilowatt-hours for power displays. Example: 1.234 → "1.23 kWh", null → "—" */
+export function fmtKwh(kwh: number | null | undefined): string {
+  if (kwh == null) return '—'
+  return `${kwh.toFixed(2)} kWh`
 }

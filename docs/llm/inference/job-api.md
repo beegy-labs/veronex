@@ -1,6 +1,6 @@
 # Jobs — Dashboard API & Response Structs
 
-> SSOT | **Last Updated**: 2026-03-03
+> SSOT | **Last Updated**: 2026-03-16
 
 ## API Endpoints
 
@@ -10,10 +10,12 @@
 GET /v1/dashboard/stats
     → { total_keys, active_keys, total_jobs, jobs_last_24h, jobs_by_status }
 
-GET /v1/dashboard/jobs?limit=&offset=&status=&q=&source=
-    q      → prompt ILIKE '%{q}%'
-    status → all | pending | running | completed | failed | cancelled
-    source → api | test  (omit for all)
+GET /v1/dashboard/jobs?limit=&offset=&status=&q=&source=&model=&provider=
+    q        → prompt ILIKE '%{q}%'
+    status   → all | pending | running | completed | failed | cancelled
+    source   → api | test | analyzer  (omit for all)
+    model    → exact match on model_name (omit for all)
+    provider → exact match on provider name via JOIN (omit for all)
     → { total: i64, jobs: Vec<JobSummary> }
 
 GET /v1/dashboard/jobs/{id}
@@ -46,6 +48,17 @@ Fires one SSE event per job status transition. Backed by a `tokio::sync::broadca
 - Slow consumers lag-skip (miss events) rather than blocking producers
 
 Client: `web/hooks/use-inference-stream.ts` — `fetch()`-based SSE reader with JWT Bearer auth; exponential backoff reconnect (2s → 30s max).
+
+#### `flow_stats` SSE Event
+
+In addition to `job_status` events, the stream emits `flow_stats` every 1 second:
+
+```
+event: flow_stats
+data: {"incoming": 2, "queued": 5, "running": 3, "completed": 120}
+```
+
+`FlowStats` struct: `{ incoming: u32, queued: u32, running: u32, completed: u32 }`. Used by the Network Flow panel to render live flow chart badges (pending/running/req-s).
 
 `JobStatusEvent` (in `domain/value_objects.rs`):
 ```rust
@@ -96,6 +109,7 @@ pub struct JobSummary {
     pub request_path: Option<String>, // e.g. "/v1/chat/completions"
     pub has_tool_calls: bool,         // true when tool_calls_json IS NOT NULL
     pub estimated_cost_usd: Option<f64>, // NULL = no pricing data; 0.0 = Ollama; >0 = Gemini
+    pub provider_name: Option<String>,   // LEFT JOIN llm_providers (server name)
 }
 ```
 
@@ -112,6 +126,8 @@ pub struct JobDetail {
     pub tool_calls_json: Option<serde_json::Value>, // model-returned tool calls (JSONB)
     pub message_count: Option<i64>,   // JSONB array length of messages_json (conversation turns)
     pub estimated_cost_usd: Option<f64>,
+    pub image_keys: Option<Vec<String>>,  // S3 object keys for attached images
+    pub image_urls: Option<Vec<String>>,  // presigned/direct URLs resolved from image_keys
 }
 ```
 
