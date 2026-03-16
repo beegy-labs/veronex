@@ -247,6 +247,9 @@ async fn planner_tick(
         }
     }
 
+    // ZSET queue depth — used by Step ④ (STANDBY recovery) and Step ⑤ (Scale-In).
+    let queue_len = valkey.zset_len().await.unwrap_or(0);
+
     // ── Step ④: STANDBY recovery ────────────────────────────────────────
     for p in &ollama_providers {
         if !vram_pool.is_standby(p.id) {
@@ -275,7 +278,9 @@ async fn planner_tick(
             })
         });
 
-        if has_demand || is_best_for_scaleout {
+        // Also wake up if ZSET has pending jobs (demand counter may not have caught up yet)
+        let has_queued_jobs = queue_len > 0;
+        if has_demand || is_best_for_scaleout || has_queued_jobs {
             vram_pool.set_standby(p.id, false);
             let guard_until = now_ms + TRANSITION_GUARD_SECS * 1000;
             vram_pool.set_transition_until(p.id, guard_until);
@@ -477,8 +482,9 @@ async fn planner_tick(
     }
 
     // ── Step ⑤: Scale-In (server_idle && !last_server && !in_transition) ──
+    // Skip entirely if ZSET queue has pending jobs — providers may be needed soon.
     // Skip if only one Ollama provider (last_server protection)
-    if ollama_providers.len() > 1 {
+    if ollama_providers.len() > 1 && queue_len == 0 {
         for p in &ollama_providers {
             // Skip if this server was used in Scale-Out/Preload this cycle
             if scale_out_servers.contains(&p.id) {

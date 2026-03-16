@@ -33,12 +33,15 @@ export function ApiTestRuns({
         {runs.map((run) => (
           <div
             key={run.id}
+            role="button"
+            tabIndex={0}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t-md border border-b-0 cursor-pointer select-none transition-colors ${
               run.id === activeRunId
                 ? 'bg-card border-border text-foreground'
                 : 'bg-muted/40 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/70'
             }`}
             onClick={() => onSelectRun(run.id)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectRun(run.id) } }}
           >
             {run.status === 'streaming' && (
               <span className="h-1.5 w-1.5 rounded-full bg-status-info-fg animate-pulse shrink-0" />
@@ -52,6 +55,7 @@ export function ApiTestRuns({
             <span>#{run.id}</span>
             <button
               type="button"
+              aria-label={t('common.close')}
               className="ml-0.5 rounded hover:bg-destructive/20 hover:text-destructive p-0.5 -mr-1"
               onClick={(e) => { e.stopPropagation(); onCloseRun(run.id) }}
               title={t('common.close')}

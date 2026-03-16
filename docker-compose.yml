@@ -81,6 +81,23 @@ services:
       timeout: 5s
       retries: 10
 
+  minio-init:
+    image: minio/minio:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}
+        mc mb --ignore-existing local/veronex-messages
+        mc mb --ignore-existing local/veronex-images
+        mc anonymous set download local/veronex-images
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-veronex}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-veronex123}
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+
   veronex:
     build:
       context: .
@@ -115,6 +132,8 @@ services:
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-veronex}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-veronex123}
       S3_BUCKET: veronex-messages
+      S3_IMAGE_BUCKET: veronex-images
+      S3_IMAGE_PUBLIC_URL: http://localhost:9010/veronex-images
       S3_REGION: us-east-1
     depends_on:
       postgres:

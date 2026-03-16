@@ -53,6 +53,12 @@ spec:
               value: {{ include "veronex.s3Endpoint" . | quote }}
             - name: S3_BUCKET
               value: {{ include "veronex.s3Bucket" . | quote }}
+            - name: S3_IMAGE_BUCKET
+              value: {{ include "veronex.s3ImageBucket" . | quote }}
+            {{- if .Values.veronex.imagePublicUrl }}
+            - name: S3_IMAGE_PUBLIC_URL
+              value: {{ .Values.veronex.imagePublicUrl | quote }}
+            {{- end }}
             - name: S3_REGION
               value: {{ include "veronex.s3Region" . | quote }}
             - name: CORS_ALLOWED_ORIGINS

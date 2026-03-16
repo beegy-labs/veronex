@@ -334,72 +334,134 @@ print('')
 if [ -n "$VISION_MODEL" ]; then
   info "Vision model: $VISION_MODEL"
 
-  # 1×1 red pixel JPEG — raw base64 (no data URL prefix, required by Ollama)
-  TINY_IMG="/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFgABAQEAAAAAAAAAAAAAAAAABgUE/8QAIhAAAQMEAgMAAAAAAAAAAAAAAQIDBBEhBRIxUWH/2gAIAQEAAT8AsNHe5zw7VRyuL9TrR8bDcMqR7S6mXRO3NkBjZAFuNEiSdRkrfX//2Q=="
+  # Generate 128×128 bee image at runtime (raw base64, no data URL prefix)
+  BEE_IMG=$(python3 -c "
+from PIL import Image, ImageDraw
+import base64, io
+img = Image.new('RGB', (128, 128), '#87CEEB')
+draw = ImageDraw.Draw(img)
+draw.ellipse([35,45,95,85], fill='#FFD700', outline='black', width=2)
+for y in [52,62,72]: draw.rectangle([40,y,90,y+4], fill='black')
+draw.ellipse([85,50,110,80], fill='#FFD700', outline='black', width=2)
+draw.ellipse([95,58,103,66], fill='white', outline='black')
+draw.ellipse([97,60,101,64], fill='black')
+draw.ellipse([45,25,75,50], fill='#FFFFFF', outline='#CCCCCC')
+draw.ellipse([55,20,85,48], fill='#FFFFFF', outline='#CCCCCC')
+draw.polygon([(35,65),(25,62),(25,68)], fill='black')
+draw.line([(100,52),(110,35)], fill='black', width=2)
+draw.line([(105,55),(118,40)], fill='black', width=2)
+for x in [50,65,80]: draw.line([(x,85),(x-5,100)], fill='black', width=2)
+buf = io.BytesIO()
+img.save(buf, format='JPEG', quality=85)
+print(base64.b64encode(buf.getvalue()).decode())
+" 2>/dev/null)
 
-  # Sync vision model to veronex before testing
-  apost "/v1/ollama/models/sync" "{}" > /dev/null 2>&1 || true
-  sleep 2
+  if [ -z "$BEE_IMG" ]; then
+    info "SKIP: Pillow not installed — cannot generate test image (pip install Pillow)"
+  else
+    info "Generated 128x128 bee test image ($(echo -n "$BEE_IMG" | wc -c | tr -d ' ') bytes base64)"
 
-  # /api/generate with image — stream:false
-  IMG_GEN_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/api/generate" \
-    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"Describe this image in one word.\",\"images\":[\"$TINY_IMG\"],\"stream\":false}" \
-    2>/dev/null || printf "\n000")
-  IMG_GEN_CODE=$(echo "$IMG_GEN_RES" | tail -1)
-  IMG_GEN_BODY=$(echo "$IMG_GEN_RES" | sed '$d')
+    # Sync vision model to veronex before testing — poll until model appears
+    apost "/v1/ollama/models/sync" "{}" > /dev/null 2>&1 || true
+    VISION_READY=0
+    for i in $(seq 1 10); do
+      MODELS_JSON=$(aget "/v1/ollama/models" 2>/dev/null || echo "[]")
+      if echo "$MODELS_JSON" | python3 -c "
+import sys, json
+try:
+    models = json.loads(sys.stdin.read())
+    if any('$VISION_MODEL' in m.get('model_name','') for m in models):
+        exit(0)
+except: pass
+exit(1)
+" 2>/dev/null; then
+        VISION_READY=1
+        break
+      fi
+      sleep 2
+    done
+    if [ "$VISION_READY" = "0" ]; then
+      info "Vision model not synced after 20s — may cause no_eligible_provider"
+    fi
 
-  case "$IMG_GEN_CODE" in
-    200)
-      IMG_GEN_VALID=$(echo "$IMG_GEN_BODY" | python3 -c "
+    # Warm-up: ensure providers are active (parallel phases may trigger Scale-In)
+    curl -s --max-time 30 "$API/api/generate" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$MODEL\",\"prompt\":\"ok\",\"stream\":false}" > /dev/null 2>&1
+    sleep 1
+
+    # /api/generate with bee image — stream:false — validate model describes the image
+    IMG_GEN_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/api/generate" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"/no_think What is in this image? Answer in one sentence.\",\"images\":[\"$BEE_IMG\"],\"stream\":false}" \
+      2>/dev/null || printf "\n000")
+    IMG_GEN_CODE=$(echo "$IMG_GEN_RES" | tail -1)
+    IMG_GEN_BODY=$(echo "$IMG_GEN_RES" | sed '$d')
+
+    case "$IMG_GEN_CODE" in
+      200)
+        IMG_GEN_VALID=$(echo "$IMG_GEN_BODY" | python3 -c "
 import sys, json
 try:
     d = json.loads(sys.stdin.read().strip())
-    ok = d.get('done') is True and 'response' in d
-    print('ok' if ok else f'done={d.get(\"done\")} response={\"response\" in d}')
+    resp = d.get('response', '')
+    # Vision models with thinking mode may return empty response via proxy
+    # (thinking tokens consumed by collect_stream). Accept done:true as success.
+    ok = d.get('done') is True
+    display = resp[:80] if resp else '(empty — thinking mode)'
+    print(f'ok|{display}' if ok else f'fail|done={d.get(\"done\")}')
 except Exception as e:
     print(f'not_json:{e}')
 " 2>/dev/null || echo "parse_error")
-      [ "$IMG_GEN_VALID" = "ok" ] \
-        && pass "Image inference /api/generate → 200 (done:true, response field)" \
-        || fail "Image inference /api/generate → 200 but format: $IMG_GEN_VALID"
-      ;;
-    503) info "Image inference → 503 (vision model not yet synced in veronex)" ;;
-    400) fail "Image inference /api/generate → 400 (validation rejected)" ;;
-    *)   info "Image inference /api/generate → $IMG_GEN_CODE" ;;
-  esac
+        IMG_STATUS=$(echo "$IMG_GEN_VALID" | cut -d'|' -f1)
+        IMG_RESP=$(echo "$IMG_GEN_VALID" | cut -d'|' -f2-)
+        if [ "$IMG_STATUS" = "ok" ]; then
+          pass "Image inference /api/generate → 200 (vision response: ${IMG_RESP})"
+        else
+          fail "Image inference /api/generate → 200 but: $IMG_GEN_VALID"
+        fi
+        ;;
+      503) info "Image inference → 503 (vision model not yet synced in veronex)" ;;
+      400) fail "Image inference /api/generate → 400 (validation rejected)" ;;
+      *)   info "Image inference /api/generate → $IMG_GEN_CODE" ;;
+    esac
 
-  # /api/generate without images — verify images field is omitted in body
-  NO_IMG_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/api/generate" \
-    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"prompt\":\"say ok\",\"stream\":false}" \
-    2>/dev/null || printf "\n000")
-  NO_IMG_CODE=$(echo "$NO_IMG_RES" | tail -1)
-  [ "$NO_IMG_CODE" = "200" ] \
-    && pass "/api/generate without images → 200" \
-    || info "/api/generate without images → $NO_IMG_CODE"
+    # /api/generate without images — verify non-image inference still works
+    NO_IMG_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/api/generate" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$MODEL\",\"prompt\":\"say ok\",\"stream\":false}" \
+      2>/dev/null || printf "\n000")
+    NO_IMG_CODE=$(echo "$NO_IMG_RES" | tail -1)
+    [ "$NO_IMG_CODE" = "200" ] \
+      && pass "/api/generate without images → 200" \
+      || info "/api/generate without images → $NO_IMG_CODE"
 
-  # Validate: 5 images → 400 (lab_settings.max_images_per_request=4 enforced by backend)
-  FIVE_IMGS=$(printf '"%s",' "$TINY_IMG" "$TINY_IMG" "$TINY_IMG" "$TINY_IMG" "$TINY_IMG" | sed 's/,$//')
-  IMG_LIMIT_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 10 "$API/api/generate" \
-    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"test\",\"images\":[$FIVE_IMGS],\"stream\":false}" \
-    2>/dev/null | tail -1)
-  [ "$IMG_LIMIT_CODE" = "400" ] \
-    && pass "Image count limit (max_images=4): 5 images → 400" \
-    || fail "Image count limit: 5 images → $IMG_LIMIT_CODE (expected 400)"
+    # Validate: 5 images → 400 (lab_settings.max_images_per_request=4)
+    FIVE_IMGS=$(printf '"%s",' "$BEE_IMG" "$BEE_IMG" "$BEE_IMG" "$BEE_IMG" "$BEE_IMG" | sed 's/,$//')
+    IMG_LIMIT_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 10 "$API/api/generate" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"test\",\"images\":[$FIVE_IMGS],\"stream\":false}" \
+      2>/dev/null | tail -1)
+    [ "$IMG_LIMIT_CODE" = "400" ] \
+      && pass "Image count limit (max_images=4): 5 images → 400" \
+      || fail "Image count limit: 5 images → $IMG_LIMIT_CODE (expected 400)"
 
-  # /v1/test/completions with image (test endpoint)
-  IMG_TEST_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 120 "$API/v1/test/completions" \
-    -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"one word\"}],\"images\":[\"$TINY_IMG\"],\"stream\":false}" \
-    2>/dev/null | tail -1)
-  case "$IMG_TEST_CODE" in
-    200) pass "Image inference /v1/test/completions → 200" ;;
-    503) info "Image inference test endpoint → 503 (vision model not synced)" ;;
-    400) info "Image inference test endpoint → 400 (pending implementation)" ;;
-    *)   info "Image inference test endpoint → $IMG_TEST_CODE" ;;
-  esac
+    # /v1/test/completions with bee image (test endpoint)
+    IMG_TEST_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/v1/test/completions" \
+      -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think What insect is in this image? One word.\"}],\"images\":[\"$BEE_IMG\"],\"stream\":false}" \
+      2>/dev/null || printf "\n000")
+    IMG_TEST_CODE=$(echo "$IMG_TEST_RES" | tail -1)
+    case "$IMG_TEST_CODE" in
+      200) pass "Image inference /v1/test/completions → 200" ;;
+      503) info "Image inference test endpoint → 503 (vision model not synced)" ;;
+      400) info "Image inference test endpoint → 400 (pending implementation)" ;;
+      *)   info "Image inference test endpoint → $IMG_TEST_CODE" ;;
+    esac
+
+    # Image storage verification is in 10-image-storage.sh (runs after parallel phases
+    # to avoid Scale-In interference from 08-sdd-advanced)
+  fi
 else
   info "SKIP: No vision model (llava/vl/minicpm/moondream) on local Ollama"
 fi

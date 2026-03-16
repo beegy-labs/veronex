@@ -192,6 +192,9 @@ pub const SYNC_LOOP_BASE_TICK: Duration = Duration::from_secs(30);
 /// Interval between pending-job sweep passes (reaper).
 pub const PENDING_JOB_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 
+/// Tick interval for the real-time FlowStats broadcast ticker.
+pub const STATS_TICK_INTERVAL: Duration = Duration::from_secs(1);
+
 // ── Valkey key constructors (used by application layer) ─────────────────
 
 /// Job ownership key — tracks which instance owns a running job.

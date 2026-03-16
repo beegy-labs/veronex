@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { serversQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
@@ -34,6 +34,7 @@ import { DataTable } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
+import { StatusPill } from '@/components/status-pill'
 
 // ── Live metrics cell ──────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
           <div className="space-y-1.5">
             <Label htmlFor="server-name">{t('providers.servers.name')} <span className="text-destructive">*</span></Label>
             <Input id="server-name" value={name} onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. gpu-node-1" />
+              placeholder={t('providers.servers.namePlaceholder')} />
           </div>
 
           <div className="space-y-1.5">
@@ -87,7 +88,7 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
           </p>
         )}
 
-        <DialogFooter className="gap-3">
+        <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate()} disabled={!name.trim() || mutation.isPending}>
             {mutation.isPending ? `${t('common.register')}…` : t('common.register')}
@@ -131,7 +132,7 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
           <div className="space-y-1.5">
             <Label htmlFor="edit-server-name">{t('providers.servers.name')} <span className="text-destructive">*</span></Label>
             <Input id="edit-server-name" value={name} onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. gpu-node-1" />
+              placeholder={t('providers.servers.namePlaceholder')} />
           </div>
 
           <div className="space-y-1.5">
@@ -151,7 +152,7 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
           </p>
         )}
 
-        <DialogFooter className="gap-3">
+        <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate()} disabled={!name.trim() || mutation.isPending}>
             {mutation.isPending ? `${t('common.save')}…` : t('common.save')}
@@ -187,11 +188,14 @@ function ServersTable({
   const { tz } = useTimezone()
   const [page, setPage] = useState(1)
   const allServers = servers ?? []
-  const configuredCount = allServers.filter((s) => !!s.node_exporter_url).length
-  const totalPages = Math.max(1, Math.ceil(allServers.length / PAGE_SIZE))
-  const safePage = Math.min(page, totalPages)
-  const pageStart = (safePage - 1) * PAGE_SIZE
-  const pageItems = allServers.slice(pageStart, pageStart + PAGE_SIZE)
+  const configuredCount = useMemo(() => allServers.filter((s) => !!s.node_exporter_url).length, [allServers])
+  const { totalPages, safePage, pageStart, pageItems } = useMemo(() => {
+    const totalPages = Math.max(1, Math.ceil(allServers.length / PAGE_SIZE))
+    const safePage = Math.min(page, totalPages)
+    const pageStart = (safePage - 1) * PAGE_SIZE
+    const pageItems = allServers.slice(pageStart, pageStart + PAGE_SIZE)
+    return { totalPages, safePage, pageStart, pageItems }
+  }, [allServers, page])
 
   return (
     <div className="space-y-4">
@@ -199,23 +203,19 @@ function ServersTable({
       <div className="flex items-center justify-between gap-3 flex-wrap">
         {servers ? (
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
-              <HardDrive className="h-3 w-3 shrink-0" />
-              <span className="tabular-nums">{servers.length}</span>
-              <span>{t('providers.servers.registered')}</span>
-            </div>
+            <StatusPill icon={<HardDrive className="h-3 w-3 shrink-0" />} count={servers.length} label={t('providers.servers.registered')} />
             {configuredCount > 0 && (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-success/10 border border-status-success/30 text-xs font-medium text-status-success-fg">
-                <span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />
-                <span className="tabular-nums">{configuredCount}</span>
-                <span>{t('providers.servers.withMetrics')}</span>
-              </div>
+              <StatusPill
+                icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+                count={configuredCount} label={t('providers.servers.withMetrics')}
+                className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+              />
             )}
             {servers.length - configuredCount > 0 && (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/40 border border-border/60 text-xs font-medium text-muted-foreground/70">
-                <span className="tabular-nums">{servers.length - configuredCount}</span>
-                <span>{t('providers.servers.noExporter')}</span>
-              </div>
+              <StatusPill
+                count={servers.length - configuredCount} label={t('providers.servers.noExporter')}
+                className="bg-muted/40 border border-border/60 text-muted-foreground/70"
+              />
             )}
           </div>
         ) : (
@@ -253,11 +253,13 @@ function ServersTable({
               </span>
               <div className="flex items-center gap-1">
                 <Button variant="outline" size="icon" className="h-7 w-7"
+                  aria-label={t('common.prevPage')}
                   onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1}>
                   <ChevronLeft className="h-3.5 w-3.5" />
                 </Button>
                 <span className="text-xs text-muted-foreground px-1">{safePage} / {totalPages}</span>
                 <Button variant="outline" size="icon" className="h-7 w-7"
+                  aria-label={t('common.nextPage')}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages}>
                   <ChevronRight className="h-3.5 w-3.5" />
                 </Button>
@@ -297,16 +299,19 @@ function ServersTable({
                   <div className="flex items-center justify-end gap-1">
                     <Button variant="ghost" size="icon"
                       className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                      aria-label={t('providers.servers.history')}
                       onClick={() => onHistory(s)} title={t('providers.servers.history')}>
                       <BarChart2 className="h-4 w-4" />
                     </Button>
                     <Button variant="ghost" size="icon"
                       className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                      aria-label={t('providers.editProvider')}
                       onClick={() => onEdit(s)} title={t('providers.editProvider')}>
                       <Pencil className="h-4 w-4" />
                     </Button>
                     <Button variant="ghost" size="icon"
                       className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                      aria-label={t('providers.removeProvider')}
                       onClick={() => onDelete(s.id, s.name)}
                       disabled={deleteIsPending} title={t('providers.removeProvider')}>
                       <Trash2 className="h-4 w-4" />

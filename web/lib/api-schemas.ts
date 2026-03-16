@@ -12,6 +12,27 @@
 
 import { z } from 'zod'
 
+// ── SSE stream payloads ──────────────────────────────────────────────────────
+
+const NonNegativeInt = z.number().int().nonnegative()
+
+export const JobStatusEventSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  model_name: z.string(),
+  provider_type: z.string(),
+  latency_ms: z.number().int().nullable(),
+  /** Server-side unix ms timestamp. Used for accurate "time ago" display. */
+  ts: z.number().optional(),
+})
+
+export const FlowStatsSchema = z.object({
+  incoming: NonNegativeInt,
+  queued: NonNegativeInt,
+  running: NonNegativeInt,
+  completed: NonNegativeInt,
+})
+
 // ── Enums ───────────────────────────────────────────────────────────────────
 
 export const JobStatusSchema = z.enum([

@@ -1,6 +1,6 @@
 # Code Patterns: Frontend — 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-15 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-03-16 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Next.js 16 · React 19 · TanStack Query v5 · Tailwind v4 · Zod
 > Rust patterns -> `policies/patterns.md`
 
@@ -205,26 +205,76 @@ const modelBarData = useMemo(() =>
 
 Not needed for simple property access or single-value derivations.
 
-## Tailwind v4 Color Rules
+## Design Token System (4-Layer Architecture)
+
+Token flow: `tokens.css palette` → `tokens.css semantic (--theme-*)` → `@theme inline (Tailwind utilities)` → components
+
+### Layer usage by context
+
+| Context | Correct pattern | Wrong |
+|---------|----------------|-------|
+| Tailwind className | `bg-status-success`, `text-status-warning-fg` | `text-emerald-400`, `bg-green-600` |
+| Inline `style={{}}` | `import { tokens } from '@/lib/design-tokens'` → `tokens.status.success` | `'var(--theme-status-success)'` raw string |
+| SVG fill/stroke | `fill={tokens.status.info}` (JSX expression) | `fill="var(--theme-status-info)"` string |
+| Chart gradient stopColor | `stopColor={tokens.brand.primary}` | `stopColor="var(--theme-primary)"` |
+| Recharts fill/stroke | `fill={tokens.status.success}` | `fill="var(--theme-status-success)"` |
+
+### `tokens` module structure (`web/lib/design-tokens.ts`)
+
+```typescript
+import { tokens } from '@/lib/design-tokens'
+
+// Backgrounds
+tokens.bg.page | .card | .elevated | .hover
+
+// Text
+tokens.text.primary | .secondary | .bright | .dim | .faint
+
+// Border
+tokens.border.base | .subtle | .default
+
+// Brand
+tokens.brand.primary | .foreground | .ring | .focusRing
+
+// Status (background / icon colour)
+tokens.status.success | .error | .warning | .info | .cancelled
+
+// Status foreground (text colour)
+tokens.statusFg.success | .error | .warning | .info
+
+// Accents
+tokens.accent.gpu | .power | .brand
+
+// Charts
+tokens.chart.c1 | .c2 | .c3 | .c4 | .c5
+```
+
+### Token name rules
+
+```
+status-warning     ✓    status-warn     ✗
+status-warning-fg  ✓    status-warn-fg  ✗
+```
+
+### Correct full example
 
 ```tsx
-// Use @theme-generated utilities (from tokens.css @theme inline block)
-<div className="bg-bg-card text-text-primary border border-border rounded-md p-4">
+import { tokens } from '@/lib/design-tokens'
 
-// Inline dynamic values via CSS vars
-<span style={{ color: 'var(--theme-text-secondary)' }}>
+// Inline style — always tokens module
+<span style={{ background: tokens.status.success }} />
 
-// Status colors (per design spec, both modes)
-const STATUS_COLOR: Record<JobStatus, string> = {
-  completed: 'text-emerald-400',
-  failed:    'text-rose-400',
-  pending:   'text-amber-400',
-  running:   'text-blue-400',
-  cancelled: 'text-slate-400',
-}
+// className — always Tailwind semantic utilities
+<span className="bg-status-success text-status-success-fg" />
 
-// Never: hardcoded hex in style prop
-// Never: non-theme Tailwind color classes (text-slate-700 etc.)
+// SVG / Recharts
+<Bar fill={tokens.status.info} />
+<stop stopColor={tokens.brand.primary} stopOpacity={0.35} />
+
+// Never
+<span style={{ color: 'var(--theme-text-secondary)' }} />   // ✗ raw string
+<span className="text-emerald-400" />                        // ✗ bypasses theme
+<span style={{ color: '#065f46' }} />                        // ✗ hardcoded hex
 ```
 
 ---

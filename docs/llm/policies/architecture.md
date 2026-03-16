@@ -179,3 +179,4 @@ Background loops:
 | `LabSettingsRepository` | `PostgresLabSettingsRepository` | Feature flags (gemini_function_calling) |
 | `ValkeyPort`             | `ValkeyAdapter`          | ZSET queue (enqueue/peek/claim/cancel), LIST legacy, KV, counters, pub/sub |
 | `MessageStore` | `S3MessageStore` | MinIO/AWS S3 message storage |
+| `ImageStore` | `S3ImageStore` | MinIO/AWS S3 image storage (WebP + thumbnails) |

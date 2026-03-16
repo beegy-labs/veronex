@@ -149,7 +149,7 @@ export default function LoginPage() {
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
           <Select value={locale} onValueChange={(v) => changeLocale(v as Locale)}>
-            <SelectTrigger className="w-32 h-8 text-xs">
+            <SelectTrigger className="w-32 h-8 text-xs" aria-label={t('common.language')}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

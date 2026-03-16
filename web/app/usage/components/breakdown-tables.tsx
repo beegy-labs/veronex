@@ -1,5 +1,6 @@
 'use client'
 
+import { useMemo } from 'react'
 import type { ApiKey, ModelBreakdown, UsageBreakdown } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -7,11 +8,13 @@ import {
   TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { DataTable } from '@/components/data-table'
-import { fmtMs, fmtCompact, fmtCost } from '@/lib/chart-theme'
+import { fmtMs, fmtCompact, fmtCost, fmtPct1 } from '@/lib/chart-theme'
 import { calcPercentage } from '@/lib/utils'
 import { useTranslation } from '@/i18n'
 import { BarChart2 } from 'lucide-react'
 import { PROVIDER_BADGE, PROVIDER_COLORS, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from '@/lib/constants'
+import { tokens } from '@/lib/design-tokens'
+import { ProgressBar } from '@/components/progress-bar'
 
 /* ─── Key breakdown table ─────────────────────────────────── */
 export function KeyBreakdownTable({
@@ -71,9 +74,7 @@ export function KeyBreakdownTable({
               <TableCell className="text-right tabular-nums font-semibold">{fmtCompact(k.request_count)}</TableCell>
               <TableCell>
                 <div className="flex items-center gap-1.5">
-                  <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-                  </div>
+                  <ProgressBar pct={pct} className="flex-1" />
                   <span className="text-xs tabular-nums text-muted-foreground w-7 text-right">{pct}%</span>
                 </div>
               </TableCell>
@@ -88,12 +89,12 @@ export function KeyBreakdownTable({
                   ? <span className="text-muted-foreground">—</span>
                   : k.estimated_cost_usd === 0
                     ? <span className="text-muted-foreground">{t('usage.free')}</span>
-                    : <span className="text-foreground">${k.estimated_cost_usd.toFixed(4)}</span>}
+                    : <span className="text-foreground">{fmtCost(k.estimated_cost_usd)}</span>}
               </TableCell>
               <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                 {apiKey && (
                   <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary"
-                    onClick={() => onKeyClick(apiKey)} title={t('keys.viewUsage')}>
+                    aria-label={t('keys.viewUsage')} onClick={() => onKeyClick(apiKey)} title={t('keys.viewUsage')}>
                     <BarChart2 className="h-3.5 w-3.5" />
                   </Button>
                 )}
@@ -115,9 +116,12 @@ export function ModelBreakdownTable({
   filter: string
 }) {
   const { t } = useTranslation()
-  const filtered = filter.trim()
-    ? data.filter((m) => m.model_name.toLowerCase().includes(filter.toLowerCase()))
-    : data
+  const filtered = useMemo(() =>
+    filter.trim()
+      ? data.filter((m) => m.model_name.toLowerCase().includes(filter.toLowerCase()))
+      : data,
+    [data, filter],
+  )
 
   if (filtered.length === 0) return (
     <div className="py-12 text-center text-muted-foreground text-sm">{t('usage.noData')}</div>
@@ -139,7 +143,7 @@ export function ModelBreakdownTable({
       <TableBody>
         {filtered.map((m, i) => {
           const totalTok = m.prompt_tokens + m.completion_tokens
-          const color = PROVIDER_COLORS[m.provider_type] ?? 'var(--theme-primary)'
+          const color = PROVIDER_COLORS[m.provider_type] ?? tokens.brand.primary
           return (
             <TableRow key={`${m.model_name}-${m.provider_type}-${i}`}>
               <TableCell className="font-mono font-medium text-sm">{m.model_name}</TableCell>
@@ -151,11 +155,9 @@ export function ModelBreakdownTable({
               <TableCell className="text-right tabular-nums font-semibold">{fmtCompact(m.request_count)}</TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(m.call_pct, 100)}%`, background: color }} />
-                  </div>
+                  <ProgressBar pct={m.call_pct} colorStyle={color} className="flex-1" />
                   <span className="text-xs tabular-nums font-semibold w-10 text-right" style={{ color }}>
-                    {m.call_pct.toFixed(1)}%
+                    {fmtPct1(m.call_pct)}
                   </span>
                 </div>
               </TableCell>
@@ -168,7 +170,7 @@ export function ModelBreakdownTable({
                   ? <span className="text-muted-foreground">—</span>
                   : m.estimated_cost_usd === 0
                     ? <span className="text-muted-foreground">{t('usage.free')}</span>
-                    : <span className="text-foreground">${m.estimated_cost_usd.toFixed(4)}</span>}
+                    : <span className="text-foreground">{fmtCost(m.estimated_cost_usd)}</span>}
               </TableCell>
             </TableRow>
           )

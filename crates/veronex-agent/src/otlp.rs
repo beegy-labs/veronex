@@ -1,5 +1,6 @@
-/// Lightweight OTLP HTTP/JSON client for pushing raw gauge metrics.
-/// No transformation — just format conversion (Gauge → OTLP JSON).
+/// Lightweight OTLP HTTP/JSON client for pushing metrics (gauges + counters).
+/// Counters (e.g. node_cpu_seconds_total) are sent as OTLP Sum with
+/// isMonotonic=true so downstream systems can compute correct deltas.
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,10 +9,19 @@ use serde_json::{json, Value};
 
 use crate::scraper::Gauge;
 
-const OTLP_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(5);
+/// Metric names that are monotonic counters (not gauges).
+/// Sent as OTLP `sum` with `isMonotonic: true`.
+const COUNTER_NAMES: &[&str] = &["node_cpu_seconds_total"];
 
-/// Push a batch of gauge metrics to the OTel Collector via OTLP HTTP.
-/// Retries once with 5s backoff on failure.
+fn is_counter(name: &str) -> bool {
+    COUNTER_NAMES.contains(&name)
+}
+
+/// Max retry attempts for OTLP push.
+const MAX_RETRIES: u32 = 3;
+
+/// Push a batch of metrics to the OTel Collector via OTLP HTTP.
+/// Retries up to 3 times with exponential backoff (2s, 4s, 8s).
 pub async fn push_metrics(
     client: &reqwest::Client,
     otel_endpoint: &str,
@@ -42,16 +52,29 @@ pub async fn push_metrics(
                 .map(|(k, v)| json!({"key": k, "value": {"stringValue": v}}))
                 .collect();
 
-            json!({
-                "name": g.name,
-                "gauge": {
-                    "dataPoints": [{
-                        "asDouble": g.value,
-                        "timeUnixNano": &now_ns,
-                        "attributes": attrs
-                    }]
-                }
-            })
+            let dp = json!({
+                "asDouble": g.value,
+                "timeUnixNano": &now_ns,
+                "attributes": attrs
+            });
+
+            if is_counter(&g.name) {
+                json!({
+                    "name": g.name,
+                    "sum": {
+                        "dataPoints": [dp],
+                        "aggregationTemporality": 2,
+                        "isMonotonic": true
+                    }
+                })
+            } else {
+                json!({
+                    "name": g.name,
+                    "gauge": {
+                        "dataPoints": [dp]
+                    }
+                })
+            }
         })
         .collect();
 
@@ -65,7 +88,7 @@ pub async fn push_metrics(
         }]
     });
 
-    for attempt in 0..2 {
+    for attempt in 0..MAX_RETRIES {
         let result = client
             .post(&url)
             .header("Content-Type", "application/json")
@@ -78,19 +101,21 @@ pub async fn push_metrics(
             Ok(resp) => {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_else(|_| "<unreadable>".into());
-                if attempt == 0 {
-                    tracing::debug!(status = %status, "OTLP push failed, retrying in 5s: {body}");
-                    tokio::time::sleep(OTLP_RETRY_BACKOFF).await;
+                if attempt + 1 < MAX_RETRIES {
+                    let backoff = std::time::Duration::from_secs(2u64 << attempt);
+                    tracing::debug!(status = %status, attempt, "OTLP push failed, retrying in {backoff:?}: {body}");
+                    tokio::time::sleep(backoff).await;
                 } else {
-                    anyhow::bail!("OTLP push failed after retry: {status} — {body}");
+                    anyhow::bail!("OTLP push failed after {MAX_RETRIES} attempts: {status} — {body}");
                 }
             }
             Err(e) => {
-                if attempt == 0 {
-                    tracing::debug!("OTLP push error, retrying in 5s: {e}");
-                    tokio::time::sleep(OTLP_RETRY_BACKOFF).await;
+                if attempt + 1 < MAX_RETRIES {
+                    let backoff = std::time::Duration::from_secs(2u64 << attempt);
+                    tracing::debug!(attempt, "OTLP push error, retrying in {backoff:?}: {e}");
+                    tokio::time::sleep(backoff).await;
                 } else {
-                    anyhow::bail!("OTLP push failed after retry: {e}");
+                    anyhow::bail!("OTLP push failed after {MAX_RETRIES} attempts: {e}");
                 }
             }
         }

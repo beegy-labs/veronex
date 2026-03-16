@@ -62,6 +62,12 @@ pub struct JobDetail {
     pub messages_json: Option<serde_json::Value>,
     /// Estimated API cost in USD. $0.00 for Ollama (self-hosted). None = no pricing data.
     pub estimated_cost_usd: Option<f64>,
+    /// Name of the Ollama server / provider that processed this job.
+    pub provider_name: Option<String>,
+    /// S3 keys for stored WebP images.
+    pub image_keys: Option<Vec<String>>,
+    /// Resolved URLs for image thumbnails/full images.
+    pub image_urls: Option<Vec<String>>,
 }
 
 // ── Query functions ────────────────────────────────────────────────
@@ -88,7 +94,7 @@ pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, A
             COUNT(*) AS total_jobs,
             COUNT(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS jobs_last_24h
          FROM inference_jobs
-         WHERE source != 'test'",
+         WHERE source NOT IN ('test', 'analyzer')",
     )
     .fetch_one(pool)
     .await?;
@@ -100,7 +106,7 @@ pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, A
     let status_rows = sqlx::query(
         "SELECT status, COUNT(*) AS cnt
          FROM inference_jobs
-         WHERE source != 'test'
+         WHERE source NOT IN ('test', 'analyzer')
          GROUP BY status",
     )
     .fetch_all(pool)
@@ -138,6 +144,8 @@ pub(super) struct JobDetailRow {
     pub db_messages: Option<serde_json::Value>,
     pub message_count: Option<i32>,
     pub account_id: Option<uuid::Uuid>,
+    pub provider_name: Option<String>,
+    pub image_keys: Option<Vec<String>>,
 }
 
 pub(super) async fn fetch_job_detail(
@@ -153,11 +161,13 @@ pub(super) async fn fetch_job_detail(
                 j.prompt, j.result_text, j.error, j.request_path,
                 j.tool_calls_json,
                 j.messages_json,
+                j.image_keys,
                 COALESCE(jsonb_array_length(j.messages_json), 0) AS message_count,
                 k.name AS api_key_name,
                 k.tenant_id AS key_tenant_id,
                 a.name AS account_name,
                 j.account_id,
+                p.name AS provider_name,
                 CASE
                     WHEN j.provider_type = 'ollama' THEN 0.0
                     WHEN pricing.input_per_1m IS NOT NULL
@@ -170,6 +180,7 @@ pub(super) async fn fetch_job_detail(
          FROM inference_jobs j
          LEFT JOIN api_keys k ON k.id = j.api_key_id
          LEFT JOIN accounts a ON a.id = j.account_id
+         LEFT JOIN llm_providers p ON p.id = j.provider_id
          LEFT JOIN LATERAL (
              SELECT input_per_1m, output_per_1m
              FROM model_pricing
@@ -199,11 +210,17 @@ pub(super) async fn fetch_job_detail(
         db_messages: row.try_get("messages_json").unwrap_or(None),
         message_count: row.try_get("message_count").unwrap_or(None),
         account_id: row.try_get("account_id").unwrap_or(None),
+        provider_name: row.try_get("provider_name").unwrap_or(None),
+        image_keys: row.try_get("image_keys").unwrap_or(None),
     }))
 }
 
 /// Build the final `JobDetail` response from a `JobDetailRow` and resolved messages.
-pub(super) fn build_job_detail(row: JobDetailRow, messages_json: Option<serde_json::Value>) -> JobDetail {
+pub(super) fn build_job_detail(
+    row: JobDetailRow,
+    messages_json: Option<serde_json::Value>,
+    image_urls: Option<Vec<String>>,
+) -> JobDetail {
     let c = row.common;
     let tps = c.tps();
     JobDetail {
@@ -231,10 +248,13 @@ pub(super) fn build_job_detail(row: JobDetailRow, messages_json: Option<serde_js
         messages_json,
         message_count: row.message_count.map(|v| v as i64),
         estimated_cost_usd: c.estimated_cost_usd,
+        provider_name: row.provider_name,
+        image_keys: row.image_keys,
+        image_urls,
     }
 }
 
-/// Fetch paginated job list with optional status/source/search filters.
+/// Fetch paginated job list with optional status/source/search/model/provider filters.
 pub(super) async fn fetch_jobs(
     pool: &sqlx::PgPool,
     limit: i64,
@@ -242,6 +262,8 @@ pub(super) async fn fetch_jobs(
     status_filter: Option<&str>,
     source_filter: Option<&str>,
     search_like: Option<&str>,
+    model_filter: Option<&str>,
+    provider_filter: Option<&str>,
 ) -> Result<JobsResponse, AppError> {
     use sqlx::Row;
 
@@ -249,13 +271,20 @@ pub(super) async fn fetch_jobs(
         "SELECT COUNT(*) AS cnt
          FROM inference_jobs j
          LEFT JOIN api_keys k ON k.id = j.api_key_id
+         LEFT JOIN llm_providers p ON p.id = j.provider_id
          WHERE ($1::TEXT IS NULL OR j.status = $1)
            AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
-           AND ($3::TEXT IS NULL OR j.source = $3)",
+           AND ($3::TEXT IS NULL OR j.source = $3)
+           AND ($6::TEXT IS NULL OR j.model_name = $6)
+           AND ($7::TEXT IS NULL OR p.name = $7)",
     )
     .bind(status_filter)
     .bind(search_like)
     .bind(source_filter)
+    .bind(limit)       // $4 not used in count but keeps bind positions aligned
+    .bind(offset)      // $5 not used in count
+    .bind(model_filter)
+    .bind(provider_filter)
     .fetch_one(pool)
     .await?
     .try_get("cnt")
@@ -269,6 +298,7 @@ pub(super) async fn fetch_jobs(
                 (j.tool_calls_json IS NOT NULL) AS has_tool_calls,
                 k.name AS api_key_name,
                 a.name AS account_name,
+                p.name AS provider_name,
                 CASE
                     WHEN j.provider_type = 'ollama' THEN 0.0
                     WHEN pricing.input_per_1m IS NOT NULL
@@ -281,6 +311,7 @@ pub(super) async fn fetch_jobs(
          FROM inference_jobs j
          LEFT JOIN api_keys k ON k.id = j.api_key_id
          LEFT JOIN accounts a ON a.id = j.account_id
+         LEFT JOIN llm_providers p ON p.id = j.provider_id
          LEFT JOIN LATERAL (
              SELECT input_per_1m, output_per_1m
              FROM model_pricing
@@ -292,6 +323,8 @@ pub(super) async fn fetch_jobs(
          WHERE ($1::TEXT IS NULL OR j.status = $1)
            AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
            AND ($3::TEXT IS NULL OR j.source = $3)
+           AND ($6::TEXT IS NULL OR j.model_name = $6)
+           AND ($7::TEXT IS NULL OR p.name = $7)
          ORDER BY j.created_at DESC LIMIT $4 OFFSET $5",
     )
     .bind(status_filter)
@@ -299,6 +332,8 @@ pub(super) async fn fetch_jobs(
     .bind(source_filter)
     .bind(limit)
     .bind(offset)
+    .bind(model_filter)
+    .bind(provider_filter)
     .fetch_all(pool)
     .await?;
 
@@ -307,7 +342,8 @@ pub(super) async fn fetch_jobs(
         .map(|row| {
             let c = JobRowCommon::from_row(row);
             let has_tool_calls: bool = row.try_get("has_tool_calls").unwrap_or(false);
-            job_summary_from_common(c, has_tool_calls)
+            let provider_name: Option<String> = row.try_get("provider_name").unwrap_or(None);
+            job_summary_from_common(c, has_tool_calls, provider_name)
         })
         .collect();
 

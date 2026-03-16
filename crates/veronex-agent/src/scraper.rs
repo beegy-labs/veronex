@@ -39,9 +39,14 @@ const NODE_EXPORTER_ALLOWLIST: &[&str] = &[
     "node_cpu_seconds_total",
     // GPU (AMD DRM)
     "node_drm_",
-    // Hardware sensors — temperature and power only (chip_names/sensor_label dropped: static labels, no analysis value)
+    // Hardware sensors — temperature, power, chip identification, sensor labels
     "node_hwmon_temp_celsius",
     "node_hwmon_power_average_watt",
+    "node_hwmon_power_watt",
+    // chip_names: maps chip→vendor (amdgpu, coretemp, k10temp, nouveau, nvme, etc.)
+    "node_hwmon_chip_names",
+    // sensor_label: maps sensor→human-readable name (edge, junction, Tctl, Package id 0, etc.)
+    "node_hwmon_sensor_label",
 ];
 
 /// CPU modes worth tracking. All others (nice, irq, softirq, steal, guest,
@@ -73,9 +78,96 @@ pub struct Gauge {
     pub labels: Vec<(String, String)>,
 }
 
+// ── Hardware classification ─────────────────────────────────────────────────
+// Maps node-exporter chip_name to normalized hw_type + hw_vendor labels.
+// Agent is the ONLY component that does this classification — downstream
+// (OTel → Redpanda → ClickHouse) is pure data pipeline.
+
+/// Classify a chip_name into (hw_type, hw_vendor).
+/// Returns None for unrecognized/irrelevant chips (NIC, board sensors, etc.)
+fn classify_chip(chip_name: &str) -> Option<(&'static str, &'static str)> {
+    match chip_name {
+        // GPU drivers
+        "amdgpu"                            => Some(("gpu", "amd")),
+        "nouveau"                           => Some(("gpu", "nvidia")),
+        // CPU temperature drivers
+        "coretemp"                          => Some(("cpu", "intel")),
+        "k10temp" | "zenpower" | "zenergy"  => Some(("cpu", "amd")),
+        // Storage
+        "nvme"                              => Some(("storage", "nvme")),
+        // ACPI thermal zone (board-level CPU temp fallback)
+        "acpitz"                            => Some(("board", "acpi")),
+        // Motherboard super I/O chips (Nuvoton, ITE, ASUS, etc.)
+        n if n.starts_with("nct") || n.starts_with("it87") || n.starts_with("asus") => Some(("board", "motherboard")),
+        _ => None,
+    }
+}
+
+/// Normalize a sensor label to a canonical role name.
+/// This maps hardware-specific labels to common keys usable in analytics.
+fn normalize_sensor_role(hw_type: &str, label: &str) -> &'static str {
+    let lower = label.to_ascii_lowercase();
+    match hw_type {
+        "gpu" => {
+            if lower.contains("junction")                    { "temp_junction" }
+            else if lower.contains("mem")                    { "temp_mem" }
+            else if lower.contains("edge") || lower == "temp1" { "temp_edge" }
+            else if lower.contains("ppt") || lower.contains("power") { "power" }
+            else { "other" }
+        }
+        "cpu" => {
+            // AMD: Tctl, Tdie, Tccd1, Tccd2...
+            // Intel: Package id 0, Core 0, Core 1...
+            if lower.contains("package") || lower == "tctl" || lower == "tdie" { "temp_package" }
+            else if lower.starts_with("core") || lower.starts_with("tccd")    { "temp_core" }
+            else { "temp_package" } // default to package for unknown CPU sensors
+        }
+        _ => "other",
+    }
+}
+
+/// Enrich hwmon gauges with `hw_type`, `hw_vendor`, `hw_role` labels
+/// based on chip_name classification and sensor_label mapping.
+pub fn enrich_hwmon_labels(
+    gauges: &mut [Gauge],
+    chip_map: &std::collections::HashMap<String, String>,  // chip → chip_name
+    label_map: &std::collections::HashMap<(String, String), String>, // (chip, sensor) → label
+) {
+    for gauge in gauges.iter_mut() {
+        // Only enrich hwmon metrics (temp, power)
+        if !gauge.name.starts_with("node_hwmon_temp") && !gauge.name.starts_with("node_hwmon_power") {
+            continue;
+        }
+
+        let chip = gauge.labels.iter().find(|(k, _)| k == "chip").map(|(_, v)| v.as_str());
+        let sensor = gauge.labels.iter().find(|(k, _)| k == "sensor").map(|(_, v)| v.as_str());
+
+        let Some(chip_val) = chip else { continue };
+        let Some(chip_name) = chip_map.get(chip_val) else { continue };
+        let Some((hw_type, hw_vendor)) = classify_chip(chip_name) else { continue };
+
+        // Resolve sensor label for role classification
+        let role = if let Some(sensor_val) = sensor {
+            if let Some(label) = label_map.get(&(chip_val.to_string(), sensor_val.to_string())) {
+                normalize_sensor_role(hw_type, label)
+            } else {
+                normalize_sensor_role(hw_type, sensor_val)
+            }
+        } else {
+            "other"
+        };
+
+        gauge.labels.push(("hw_type".to_string(), hw_type.to_string()));
+        gauge.labels.push(("hw_vendor".to_string(), hw_vendor.to_string()));
+        gauge.labels.push(("hw_role".to_string(), role.to_string()));
+    }
+}
+
 // ── Node-exporter ────────────────────────────────────────────────────────────
 
 /// Scrape node-exporter /metrics — select allowed metrics, forward raw values.
+/// Enriches hwmon metrics with `hw_type`, `hw_vendor`, `hw_role` labels
+/// based on chip_name classification (agent-side only — pipeline is raw).
 pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
     let url = format!("{}/metrics", base_url.trim_end_matches('/'));
     match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
@@ -92,7 +184,30 @@ pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> V
                 }
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
-                    parse_node_exporter(&text)
+                    let mut gauges = parse_node_exporter(&text);
+
+                    // Build chip_name and sensor_label maps from annotation metrics
+                    let mut chip_map = std::collections::HashMap::new();
+                    let mut label_map = std::collections::HashMap::new();
+                    for g in &gauges {
+                        if g.name == "node_hwmon_chip_names" {
+                            let chip = g.labels.iter().find(|(k, _)| k == "chip").map(|(_, v)| v.clone());
+                            let cn = g.labels.iter().find(|(k, _)| k == "chip_name").map(|(_, v)| v.clone());
+                            if let (Some(c), Some(n)) = (chip, cn) {
+                                chip_map.insert(c, n);
+                            }
+                        } else if g.name == "node_hwmon_sensor_label" {
+                            let chip = g.labels.iter().find(|(k, _)| k == "chip").map(|(_, v)| v.clone());
+                            let sensor = g.labels.iter().find(|(k, _)| k == "sensor").map(|(_, v)| v.clone());
+                            let label = g.labels.iter().find(|(k, _)| k == "label").map(|(_, v)| v.clone());
+                            if let (Some(c), Some(s), Some(l)) = (chip, sensor, label) {
+                                label_map.insert((c, s), l);
+                            }
+                        }
+                    }
+
+                    enrich_hwmon_labels(&mut gauges, &chip_map, &label_map);
+                    gauges
                 }
                 Err(e) => {
                     tracing::debug!("node-exporter read failed: {e}");
@@ -351,12 +466,13 @@ some_random_metric 999
         assert!(gauges.is_empty(), "missing mode label should be filtered");
     }
 
-    /// node_hwmon_chip_names is not in the allowlist (removed — static label, no analysis value).
+    /// node_hwmon_chip_names is in the allowlist (needed by analytics for GPU chip→vendor mapping).
     #[test]
-    fn chip_names_filtered() {
+    fn chip_names_allowed() {
         let text = "node_hwmon_chip_names{chip=\"0000:c4:00_0\",chip_name=\"amdgpu\"} 1";
         let gauges = parse_node_exporter(text);
-        assert!(gauges.is_empty());
+        assert_eq!(gauges.len(), 1);
+        assert_eq!(gauges[0].name, "node_hwmon_chip_names");
     }
 
     proptest! {

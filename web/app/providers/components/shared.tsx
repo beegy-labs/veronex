@@ -8,6 +8,10 @@ import { Input } from '@/components/ui/input'
 import { useTranslation } from '@/i18n'
 import type { Provider } from '@/lib/types'
 
+// ── Status Pill ─────────────────────────────────────────────────────────────────
+
+export { StatusPill } from '@/components/status-pill'
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 export function extractHost(url: string): string {
@@ -38,7 +42,7 @@ export function StatusBadge({ status }: { status: Provider['status'] }) {
 
 // ── VRAM input with MiB / GiB toggle ──────────────────────────────────────────
 
-export function VramInput({ valueMb, onChange }: { valueMb: string; onChange: (mb: string) => void }) {
+export function VramInput({ valueMb, onChange, 'aria-label': ariaLabel }: { valueMb: string; onChange: (mb: string) => void; 'aria-label'?: string }) {
   const [unit, setUnit] = useState<'mb' | 'gb'>('mb')
   const mbNum = parseInt(valueMb) || 0
   const display = mbNum > 0
@@ -57,6 +61,7 @@ export function VramInput({ valueMb, onChange }: { valueMb: string; onChange: (m
       <Input type="number" min={0} step={unit === 'gb' ? 0.5 : 256}
         value={display} onChange={(e) => handleInput(e.target.value)}
         placeholder={unit === 'gb' ? 'e.g. 24' : 'e.g. 24576'}
+        aria-label={ariaLabel}
         className="rounded-r-none" />
       <Button type="button" variant={unit === 'mb' ? 'secondary' : 'outline'}
         onClick={() => setUnit('mb')}

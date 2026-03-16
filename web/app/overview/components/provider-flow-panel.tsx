@@ -18,7 +18,7 @@
  * Scaling:   ResizeObserver → transform:scale; max-width 680 px cap
  */
 
-import { useEffect, useRef, useReducer, useMemo } from 'react'
+import { memo, useEffect, useRef, useReducer, useMemo } from 'react'
 import { useTranslation } from '@/i18n'
 import type { Provider } from '@/lib/types'
 import type { FlowEvent } from '@/hooks/use-inference-stream'
@@ -26,13 +26,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { PROVIDER_OLLAMA, PROVIDER_GEMINI, JOB_STATUS_COLORS } from '@/lib/constants'
 import { getOllamaProviders, getGeminiProviders } from '@/lib/utils'
+import { tokens } from '@/lib/design-tokens'
 
 /* ─── viewport ──────────────────────────────────────────────── */
 const VIEW_W = 540
 const VIEW_H = 264
 const MAX_BEES = 30
 const BEE_DURATION_MS = 1400
-const ENQUEUE_COLOR = 'var(--theme-status-warning)'
+const ENQUEUE_COLOR = tokens.status.warning
 
 /* ─── Column 1: Veronex API ─────────────────────────────────── */
 const API_CX = 72
@@ -54,8 +55,10 @@ const PROV_CX    = 460
 const PROV_W     = 108
 const PROV_H     = 52
 const PROV_INSET = 10     // corner clip amount for octagon
-const OLLAMA_CY  = 72
-const GEMINI_CY  = 192
+// When both providers: Ollama top, Gemini bottom. When Ollama only: centered.
+const OLLAMA_CY_DUAL   = 72
+const GEMINI_CY_DUAL   = 192
+const OLLAMA_CY_SINGLE = QUEUE_CY  // align with Queue center = straight line
 
 /* ─── connection endpoints ──────────────────────────────────── */
 const API_RIGHT   = API_CX   + API_W  / 2  // 126
@@ -67,28 +70,29 @@ const PROV_LEFT   = PROV_CX  - PROV_W / 2  // 406
 const PATH_API_QUEUE =
   `M ${API_RIGHT},${API_CY} C ${API_RIGHT + 24},${API_CY} ${QUEUE_LEFT - 24},${QUEUE_CY} ${QUEUE_LEFT},${QUEUE_CY}`
 
-/* ─── paths: dispatch (Queue → Provider) ────────────────────── */
-const PATH_QUEUE_OLLAMA =
-  `M ${QUEUE_RIGHT},${QUEUE_CY} C ${QUEUE_RIGHT + 30},${QUEUE_CY} ${PROV_LEFT - 30},${OLLAMA_CY} ${PROV_LEFT},${OLLAMA_CY}`
+/* ─── path builders (depend on runtime ollamaCy) ─────────────── */
+function pathQueueOllama(ollamaCy: number) {
+  return `M ${QUEUE_RIGHT},${QUEUE_CY} C ${QUEUE_RIGHT + 30},${QUEUE_CY} ${PROV_LEFT - 30},${ollamaCy} ${PROV_LEFT},${ollamaCy}`
+}
 const PATH_QUEUE_GEMINI =
-  `M ${QUEUE_RIGHT},${QUEUE_CY} C ${QUEUE_RIGHT + 30},${QUEUE_CY} ${PROV_LEFT - 30},${GEMINI_CY} ${PROV_LEFT},${GEMINI_CY}`
+  `M ${QUEUE_RIGHT},${QUEUE_CY} C ${QUEUE_RIGHT + 30},${QUEUE_CY} ${PROV_LEFT - 30},${GEMINI_CY_DUAL} ${PROV_LEFT},${GEMINI_CY_DUAL}`
 
-/* ─── paths: response bypass arcs (Provider → API) ──────────── */
-const PATH_OLLAMA_API =
-  `M ${PROV_LEFT},${OLLAMA_CY} C ${PROV_LEFT - 60},${OLLAMA_CY - 54} ${API_RIGHT + 60},${OLLAMA_CY - 54} ${API_RIGHT},${API_CY}`
+function pathOllamaApi(ollamaCy: number) {
+  return `M ${PROV_LEFT},${ollamaCy} C ${PROV_LEFT - 60},${ollamaCy - 54} ${API_RIGHT + 60},${ollamaCy - 54} ${API_RIGHT},${API_CY}`
+}
 const PATH_GEMINI_API =
-  `M ${PROV_LEFT},${GEMINI_CY} C ${PROV_LEFT - 60},${GEMINI_CY + 54} ${API_RIGHT + 60},${GEMINI_CY + 54} ${API_RIGHT},${API_CY}`
+  `M ${PROV_LEFT},${GEMINI_CY_DUAL} C ${PROV_LEFT - 60},${GEMINI_CY_DUAL + 54} ${API_RIGHT + 60},${GEMINI_CY_DUAL + 54} ${API_RIGHT},${API_CY}`
 
 /* ─── helpers ────────────────────────────────────────────────── */
 function statusColor(status: string): string {
-  return JOB_STATUS_COLORS[status] ?? 'var(--theme-status-warning)'
+  return JOB_STATUS_COLORS[status] ?? tokens.status.warning
 }
 
 function providerStroke(providers: Provider[]): string {
-  if (providers.length === 0)                        return 'var(--theme-border)'
-  if (providers.some(b => b.status === 'online'))    return 'var(--theme-status-success)'
-  if (providers.some(b => b.status === 'degraded'))  return 'var(--theme-status-warning)'
-  return 'var(--theme-status-error)'
+  if (providers.length === 0)                        return tokens.border.base
+  if (providers.some(b => b.status === 'online'))    return tokens.status.success
+  if (providers.some(b => b.status === 'degraded'))  return tokens.status.warning
+  return tokens.status.error
 }
 
 function octPoints(cx: number, cy: number, w: number, h: number, inset: number): string {
@@ -123,10 +127,15 @@ function beeReducer(state: Bee[], action: Action): Bee[] {
 interface Props {
   providers: Provider[]
   events: FlowEvent[]
-  queueDepth?: number
+  /** Number of pending jobs (SSE 30s window) */
+  pendingJobs?: number
+  /** Number of running jobs (SSE 30s window) */
+  runningJobs?: number
+  /** Total requests in 30s window (SSE enqueue events) */
+  recentRequests?: number
 }
 
-export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) {
+export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, events, pendingJobs = 0, runningJobs = 0, recentRequests = 0 }: Props) {
   const { t } = useTranslation()
   const { labSettings } = useLabSettings()
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
@@ -141,6 +150,13 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
     () => geminiEnabled ? getGeminiProviders(providers) : [],
     [providers, geminiEnabled],
   )
+  const localOnline = useMemo(() => localBs.filter(b => b.status === 'online').length, [localBs])
+  const apiOnline   = useMemo(() => apiBs.filter(b => b.status === 'online').length, [apiBs])
+
+  // Ollama Y position: centered when Gemini disabled, top when both active
+  const ollamaCy = geminiEnabled ? OLLAMA_CY_DUAL : OLLAMA_CY_SINGLE
+  const PATH_QUEUE_OLLAMA = useMemo(() => pathQueueOllama(ollamaCy), [ollamaCy])
+  const PATH_OLLAMA_API   = useMemo(() => pathOllamaApi(ollamaCy), [ollamaCy])
 
   // Responsive scaling
   useEffect(() => {
@@ -152,9 +168,10 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
     return () => obs.disconnect()
   }, [])
 
-  // Spawn bees for new events
+  // Spawn bees for new events (skip stale replayed events older than 2s)
   useEffect(() => {
-    const newEvs = events.filter(e => !spawnedRef.current.has(e.id))
+    const now = Date.now()
+    const newEvs = events.filter(e => !spawnedRef.current.has(e.id) && now - e.ts < 2000)
     if (newEvs.length === 0) return
     newEvs.forEach(e => spawnedRef.current.add(e.id))
 
@@ -179,7 +196,26 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-semibold">{t('overview.providerFlow')}</CardTitle>
+        <div className="flex items-center justify-between gap-4">
+          <CardTitle className="text-sm font-semibold">{t('overview.providerFlow')}</CardTitle>
+          {(pendingJobs > 0 || runningJobs > 0 || recentRequests > 0) && (
+            <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+              {pendingJobs > 0 && (
+                <span style={{ color: tokens.status.warning }}>
+                  {t('overview.pendingJobsCount', { count: pendingJobs })}
+                </span>
+              )}
+              {runningJobs > 0 && (
+                <span style={{ color: tokens.status.info }}>
+                  {t('overview.runningJobsCount', { count: runningJobs })}
+                </span>
+              )}
+              <span>
+                {t('overview.reqLast30s', { count: recentRequests })}
+              </span>
+            </div>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="p-0 pb-2">
         {/* Max-width cap — prevents the SVG from filling ultra-wide screens */}
@@ -193,14 +229,14 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
             <svg
               viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
               className="absolute inset-0 w-full h-full"
-              aria-label="Provider flow topology"
+              aria-label={t('overview.providerFlow')}
             >
               <defs>
                 {/* Arrowhead markers */}
                 <marker id="pfp-arrow" markerWidth="8" markerHeight="6"
                   refX="7" refY="3" orient="auto">
                   <polygon points="0 0, 8 3, 0 6"
-                    style={{ fill: 'var(--theme-border)' }} />
+                    style={{ fill: tokens.border.base }} />
                 </marker>
                 {/* API node left-accent clip */}
                 <clipPath id="pfp-api-clip">
@@ -215,24 +251,24 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
 
               {/* API → Queue (main dispatch path) */}
               <path d={PATH_API_QUEUE} fill="none" markerEnd="url(#pfp-arrow)"
-                style={{ stroke: 'var(--theme-border)', strokeWidth: 1.5, strokeDasharray: '6 4' }} />
+                style={{ stroke: tokens.border.base, strokeWidth: 1.5, strokeDasharray: '6 4' }} />
 
               {/* Queue → Ollama */}
               <path d={PATH_QUEUE_OLLAMA} fill="none" markerEnd="url(#pfp-arrow)"
-                style={{ stroke: 'var(--theme-border)', strokeWidth: 1.5, strokeDasharray: '6 4' }} />
+                style={{ stroke: tokens.border.base, strokeWidth: 1.5, strokeDasharray: '6 4' }} />
 
               {/* Queue → Gemini (lab-gated) */}
               {geminiEnabled && (
                 <path d={PATH_QUEUE_GEMINI} fill="none" markerEnd="url(#pfp-arrow)"
-                  style={{ stroke: 'var(--theme-border)', strokeWidth: 1.5, strokeDasharray: '6 4' }} />
+                  style={{ stroke: tokens.border.base, strokeWidth: 1.5, strokeDasharray: '6 4' }} />
               )}
 
               {/* Response arcs — dimmed (bypass Queue) */}
               <path d={PATH_OLLAMA_API} fill="none"
-                style={{ stroke: 'var(--theme-border)', strokeWidth: 1, strokeDasharray: '3 7', opacity: 0.4 }} />
+                style={{ stroke: tokens.border.base, strokeWidth: 1, strokeDasharray: '3 7', opacity: 0.4 }} />
               {geminiEnabled && (
                 <path d={PATH_GEMINI_API} fill="none"
-                  style={{ stroke: 'var(--theme-border)', strokeWidth: 1, strokeDasharray: '3 7', opacity: 0.4 }} />
+                  style={{ stroke: tokens.border.base, strokeWidth: 1, strokeDasharray: '3 7', opacity: 0.4 }} />
               )}
 
               {/* ── Node 1: Veronex API — rounded rect with left accent ── */}
@@ -246,111 +282,134 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
               <rect
                 x={API_CX - API_W / 2} y={API_CY - API_H / 2}
                 width={API_W} height={API_H} rx={8}
-                style={{ fill: 'var(--theme-bg-card)', stroke: 'var(--theme-primary)', strokeWidth: 1.5 }}
+                style={{ fill: tokens.bg.card, stroke: tokens.brand.primary, strokeWidth: 1.5 }}
               />
               {/* Left accent bar (clipped to card shape) */}
               <rect
                 x={API_CX - API_W / 2} y={API_CY - API_H / 2}
                 width={5} height={API_H}
                 clipPath="url(#pfp-api-clip)"
-                style={{ fill: 'var(--theme-primary)' }}
+                style={{ fill: tokens.brand.primary }}
               />
               {/* Labels */}
               <text x={API_CX + 2} y={API_CY - 5} textAnchor="middle"
-                style={{ fill: 'var(--theme-text-primary)', fontSize: 11, fontWeight: 700 }}>
-                Veronex API
+                style={{ fill: tokens.text.primary, fontSize: 11, fontWeight: 700 }}>
+                {t('overview.flowApiNode')}
               </text>
               <text x={API_CX + 2} y={API_CY + 10} textAnchor="middle"
-                style={{ fill: 'var(--theme-text-secondary)', fontSize: 9 }}>
+                style={{ fill: tokens.text.secondary, fontSize: 9 }}>
                 {t('overview.flowHttpGateway')}
               </text>
-
+              {/* API: req/s + req/m badge — always visible */}
+              <rect x={API_CX - API_W / 2 + 4} y={API_CY + API_H / 2 + 3} width={API_W - 8} height={22} rx={7}
+                style={{
+                  fill: recentRequests > 0
+                    ? `color-mix(in srgb, ${tokens.brand.primary} 12%, transparent)`
+                    : `color-mix(in srgb, ${tokens.text.secondary} 8%, transparent)`,
+                  stroke: recentRequests > 0 ? tokens.brand.primary : tokens.border.base,
+                  strokeWidth: 1,
+                }} />
+              <text x={API_CX} y={API_CY + API_H / 2 + 13} textAnchor="middle"
+                style={{ fill: recentRequests > 0 ? tokens.brand.primary : tokens.text.secondary, fontSize: 8, fontWeight: 700 }}>
+                {recentRequests} req/s
+              </text>
+              <text x={API_CX} y={API_CY + API_H / 2 + 22} textAnchor="middle"
+                style={{ fill: tokens.text.secondary, fontSize: 7 }}>
+                {recentRequests * 60} req/m
+              </text>
               {/* ── Node 2: Queue (Valkey) — cylinder ────────────────── */}
               {/* Bottom ellipse cap — drawn first (behind body) */}
               <ellipse cx={QUEUE_CX} cy={QUEUE_BOT_Y} rx={QUEUE_RX} ry={QUEUE_RY}
-                style={{ fill: 'var(--theme-bg-card)', stroke: 'var(--theme-border)', strokeWidth: 1.5 }} />
+                style={{ fill: tokens.bg.card, stroke: tokens.border.base, strokeWidth: 1.5 }} />
               {/* Cylinder body fill (no stroke — side lines drawn below) */}
               <rect
                 x={QUEUE_LEFT} y={QUEUE_TOP_Y}
                 width={QUEUE_RX * 2} height={QUEUE_BODY_H}
-                style={{ fill: 'var(--theme-bg-card)', stroke: 'none' }}
+                style={{ fill: tokens.bg.card, stroke: 'none' }}
               />
               {/* Left and right side lines */}
               <line x1={QUEUE_LEFT}  y1={QUEUE_TOP_Y} x2={QUEUE_LEFT}  y2={QUEUE_BOT_Y}
-                style={{ stroke: 'var(--theme-border)', strokeWidth: 1.5 }} />
+                style={{ stroke: tokens.border.base, strokeWidth: 1.5 }} />
               <line x1={QUEUE_RIGHT} y1={QUEUE_TOP_Y} x2={QUEUE_RIGHT} y2={QUEUE_BOT_Y}
-                style={{ stroke: 'var(--theme-border)', strokeWidth: 1.5 }} />
+                style={{ stroke: tokens.border.base, strokeWidth: 1.5 }} />
               {/* Top ellipse cap — drawn last (in front, slightly elevated fill) */}
               <ellipse cx={QUEUE_CX} cy={QUEUE_TOP_Y} rx={QUEUE_RX} ry={QUEUE_RY}
-                style={{ fill: 'var(--theme-bg-elevated)', stroke: 'var(--theme-border)', strokeWidth: 1.5 }} />
+                style={{ fill: tokens.bg.elevated, stroke: tokens.border.base, strokeWidth: 1.5 }} />
               {/* Labels (inside body) */}
               <text x={QUEUE_CX} y={QUEUE_CY - 4} textAnchor="middle"
-                style={{ fill: 'var(--theme-text-primary)', fontSize: 11, fontWeight: 700 }}>
-                Queue
+                style={{ fill: tokens.text.primary, fontSize: 11, fontWeight: 700 }}>
+                {t('overview.flowQueueNode')}
               </text>
               <text x={QUEUE_CX} y={QUEUE_CY + 10} textAnchor="middle"
-                style={{ fill: 'var(--theme-text-secondary)', fontSize: 9 }}>
-                Valkey
+                style={{ fill: tokens.text.secondary, fontSize: 9 }}>
+                {t('overview.flowValkeyNode')}
               </text>
-              {/* Queue depth badge — shown only when jobs are waiting */}
-              {queueDepth > 0 && (
-                <>
-                  <rect
-                    x={QUEUE_CX - 24} y={QUEUE_BOT_Y + QUEUE_RY + 3}
-                    width={48} height={15} rx={7}
-                    style={{ fill: 'color-mix(in srgb, var(--theme-status-warning) 12%, transparent)', stroke: 'var(--theme-status-warning)', strokeWidth: 1 }}
-                  />
-                  <text
-                    x={QUEUE_CX} y={QUEUE_BOT_Y + QUEUE_RY + 13}
-                    textAnchor="middle"
-                    style={{ fill: 'var(--theme-status-warning)', fontSize: 9, fontWeight: 700 }}
-                  >
-                    {t('overview.queueWaiting', { count: queueDepth })}
-                  </text>
-                </>
-              )}
-
+              {/* Queue: pending count badge — always visible */}
+              <rect x={QUEUE_CX - 24} y={QUEUE_BOT_Y + QUEUE_RY + 3} width={48} height={14} rx={7}
+                style={{
+                  fill: pendingJobs > 0
+                    ? `color-mix(in srgb, ${tokens.status.warning} 15%, transparent)`
+                    : `color-mix(in srgb, ${tokens.text.secondary} 8%, transparent)`,
+                  stroke: pendingJobs > 0 ? tokens.status.warning : tokens.border.base,
+                  strokeWidth: 1,
+                }} />
+              <text x={QUEUE_CX} y={QUEUE_BOT_Y + QUEUE_RY + 13} textAnchor="middle"
+                style={{ fill: pendingJobs > 0 ? tokens.status.warning : tokens.text.secondary, fontSize: 8, fontWeight: 700 }}>
+                {t('overview.pendingJobsCount', { count: pendingJobs })}
+              </text>
               {/* ── Node 3a: Ollama — octagon ────────────────────────── */}
               {/* Drop shadow */}
               <polygon
-                points={octPoints(PROV_CX + 2, OLLAMA_CY + 2, PROV_W, PROV_H, PROV_INSET)}
+                points={octPoints(PROV_CX + 2, ollamaCy + 2, PROV_W, PROV_H, PROV_INSET)}
                 style={{ fill: 'rgba(0,0,0,0.12)' }}
               />
               <polygon
-                points={octPoints(PROV_CX, OLLAMA_CY, PROV_W, PROV_H, PROV_INSET)}
-                style={{ fill: 'var(--theme-bg-card)', stroke: providerStroke(localBs), strokeWidth: 1.5 }}
+                points={octPoints(PROV_CX, ollamaCy, PROV_W, PROV_H, PROV_INSET)}
+                style={{ fill: tokens.bg.card, stroke: providerStroke(localBs), strokeWidth: 1.5 }}
               />
-              <text x={PROV_CX} y={OLLAMA_CY - 4} textAnchor="middle"
-                style={{ fill: 'var(--theme-text-primary)', fontSize: 11, fontWeight: 600 }}>
-                Ollama
+              <text x={PROV_CX} y={ollamaCy - 4} textAnchor="middle"
+                style={{ fill: tokens.text.primary, fontSize: 11, fontWeight: 600 }}>
+                {t('nav.ollama')}
               </text>
-              <text x={PROV_CX} y={OLLAMA_CY + 10} textAnchor="middle"
-                style={{ fill: 'var(--theme-text-secondary)', fontSize: 8 }}>
+              <text x={PROV_CX} y={ollamaCy + 10} textAnchor="middle"
+                style={{ fill: tokens.text.secondary, fontSize: 8 }}>
                 {localBs.length > 0
-                  ? t('overview.flowOnlineCount', { online: localBs.filter(b => b.status === 'online').length, total: localBs.length })
+                  ? t('overview.flowOnlineCount', { online: localOnline, total: localBs.length })
                   : t('overview.flowNoProviders')}
               </text>
-
+              {/* Ollama: running count badge — always visible */}
+              <rect x={PROV_CX - 24} y={ollamaCy + PROV_H / 2 + 3} width={48} height={14} rx={7}
+                style={{
+                  fill: runningJobs > 0
+                    ? `color-mix(in srgb, ${tokens.status.info} 15%, transparent)`
+                    : `color-mix(in srgb, ${tokens.text.secondary} 8%, transparent)`,
+                  stroke: runningJobs > 0 ? tokens.status.info : tokens.border.base,
+                  strokeWidth: 1,
+                }} />
+              <text x={PROV_CX} y={ollamaCy + PROV_H / 2 + 13} textAnchor="middle"
+                style={{ fill: runningJobs > 0 ? tokens.status.info : tokens.text.secondary, fontSize: 8, fontWeight: 700 }}>
+                {t('overview.runningJobsCount', { count: runningJobs })}
+              </text>
               {/* ── Node 3b: Gemini — octagon (lab-gated) ───────────── */}
               {geminiEnabled && (
                 <>
                   {/* Drop shadow */}
                   <polygon
-                    points={octPoints(PROV_CX + 2, GEMINI_CY + 2, PROV_W, PROV_H, PROV_INSET)}
+                    points={octPoints(PROV_CX + 2, GEMINI_CY_DUAL + 2, PROV_W, PROV_H, PROV_INSET)}
                     style={{ fill: 'rgba(0,0,0,0.12)' }}
                   />
                   <polygon
-                    points={octPoints(PROV_CX, GEMINI_CY, PROV_W, PROV_H, PROV_INSET)}
-                    style={{ fill: 'var(--theme-bg-card)', stroke: providerStroke(apiBs), strokeWidth: 1.5 }}
+                    points={octPoints(PROV_CX, GEMINI_CY_DUAL, PROV_W, PROV_H, PROV_INSET)}
+                    style={{ fill: tokens.bg.card, stroke: providerStroke(apiBs), strokeWidth: 1.5 }}
                   />
-                  <text x={PROV_CX} y={GEMINI_CY - 4} textAnchor="middle"
-                    style={{ fill: 'var(--theme-text-primary)', fontSize: 11, fontWeight: 600 }}>
-                    Gemini
+                  <text x={PROV_CX} y={GEMINI_CY_DUAL - 4} textAnchor="middle"
+                    style={{ fill: tokens.text.primary, fontSize: 11, fontWeight: 600 }}>
+                    {t('nav.gemini')}
                   </text>
-                  <text x={PROV_CX} y={GEMINI_CY + 10} textAnchor="middle"
-                    style={{ fill: 'var(--theme-text-secondary)', fontSize: 8 }}>
+                  <text x={PROV_CX} y={GEMINI_CY_DUAL + 10} textAnchor="middle"
+                    style={{ fill: tokens.text.secondary, fontSize: 8 }}>
                     {apiBs.length > 0
-                      ? t('overview.flowOnlineCount', { online: apiBs.filter(b => b.status === 'online').length, total: apiBs.length })
+                      ? t('overview.flowOnlineCount', { online: apiOnline, total: apiBs.length })
                       : t('overview.flowNoProviders')}
                   </text>
                 </>
@@ -386,4 +445,4 @@ export function ProviderFlowPanel({ providers, events, queueDepth = 0 }: Props) 
       </CardContent>
     </Card>
   )
-}
+})

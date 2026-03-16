@@ -6,7 +6,7 @@ import {
   usageAggregateQuery, analyticsQuery, performanceQuery,
   usageBreakdownQuery, keysQuery,
 } from '@/lib/queries'
-import { fmtCompact } from '@/lib/chart-theme'
+import { fmtCompact, fmtCost } from '@/lib/chart-theme'
 import { calcPercentage } from '@/lib/utils'
 import {
   Hash, Coins, CheckCircle, XCircle, AlertTriangle,
@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useTranslation } from '@/i18n'
 import { TIME_LABEL_MAP, TimeRangeSelector } from '@/components/time-range-selector'
+import { SectionLabel } from '@/components/section-label'
 
 import { OverviewTab } from './components/overview-tab'
 import { ByKeyTab } from './components/by-key-tab'
@@ -88,7 +89,7 @@ export default function UsagePage() {
           <StatsCard title={t('usage.errors')} value={fmtCompact(agg.error_count)}
             subtitle={`${fmtCompact(agg.cancelled_count)} ${t('usage.cancelled')}`}
             icon={errorRate >= 10
-              ? <AlertTriangle className="h-5 w-5 text-[var(--theme-status-error)]" />
+              ? <AlertTriangle className="h-5 w-5 text-status-error" />
               : <XCircle className="h-5 w-5" />} />
         </div>
       )}
@@ -99,7 +100,7 @@ export default function UsagePage() {
           <DollarSign className="h-4 w-4 text-muted-foreground" />
           <div>
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">{t('usage.totalCost')}</p>
-            <p className="text-lg font-bold tabular-nums font-mono">${breakdown.total_cost_usd.toFixed(4)}</p>
+            <p className="text-lg font-bold tabular-nums font-mono">{fmtCost(breakdown.total_cost_usd)}</p>
           </div>
         </div>
       )}
@@ -182,9 +183,9 @@ export default function UsagePage() {
         {/* ── By Provider ─────────────────────────────── */}
         <TabsContent value="by-provider" className="space-y-4 mt-4">
           <div>
-            <p className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-4">
+            <SectionLabel className="mb-4">
               {t('usage.byProvider')}
-            </p>
+            </SectionLabel>
             {!breakdown && (
               <div className="flex h-32 items-center justify-center text-muted-foreground text-sm">{t('common.loading')}</div>
             )}

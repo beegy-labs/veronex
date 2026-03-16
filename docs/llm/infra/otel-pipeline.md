@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline
 
-> SSOT | **Last Updated**: 2026-03-13 (rev: agent 2-target push, URL normalization, DoS protection, feat/agent-otlp-push)
+> SSOT | **Last Updated**: 2026-03-15 (rev: sum metric support, OTLP retry 3x backoff, node_hwmon_chip_names allowlist fix)
 
 ## Task Guide
 
@@ -10,6 +10,7 @@
 | Add new metric to collection | `crates/veronex-agent/src/scraper.rs` | Add prefix to `NODE_EXPORTER_ALLOWLIST` |
 | Add new OTel exporter | `docker/otel/config.yaml` | Add to `exporters:` block + add to relevant `service.pipelines` |
 | Change Kafka topic name | `docker/otel/config.yaml` kafka exporter `topic:` | Also update ClickHouse `init.sql` Kafka Engine `kafka_topic_list` |
+| Add new OTLP metric type | `crates/veronex-agent/src/scraper.rs` + ClickHouse MV | Agent classifies in scraper; MV must handle via `UNION ALL` (see migration `000002_metrics_sum_support`) |
 | Add new ClickHouse Kafka chain | `docker/clickhouse/init.sql` | Pattern: `kafka_* ENGINE=Kafka` -> `MV` -> target `MergeTree` (MergeTree table must be declared first) |
 | Add new target MergeTree table | `docker/clickhouse/init.sql` | Declare before the Kafka Engine section (top of file) |
 | Change HTTP SD endpoint auth | `infrastructure/inbound/http/metrics_handlers.rs` | Move route outside/inside auth middleware in `router.rs` |
@@ -29,7 +30,7 @@
 | `crates/veronex/src/infrastructure/outbound/observability/http_audit_adapter.rs` | `HttpAuditAdapter` (replaces RedpandaAuditAdapter) |
 | `crates/veronex/src/infrastructure/inbound/http/metrics_handlers.rs` | `GET /v1/metrics/targets` — two target types (server + ollama), URL normalization to `host[:port]` |
 | `crates/veronex-agent/src/scraper.rs` | Metric allowlist + Prometheus text → OTLP conversion (raw values), body size limits (16MB node-exporter, 1MB Ollama) |
-| `crates/veronex-agent/src/otlp.rs` | OTLP HTTP/JSON push client |
+| `crates/veronex-agent/src/otlp.rs` | OTLP HTTP/JSON push client (3 retries, exponential backoff 2s/4s/8s) |
 | `crates/veronex-agent/src/shard.rs` | Modulus sharding for multi-replica deduplication |
 
 ---
@@ -48,7 +49,7 @@ veronex --> POST /internal/ingest/audit    --> veronex-analytics
                                                                                                          +- otel_audit_events_mv   --> audit_events
 
 node-exporters (type=server) -+
-                              +-> veronex-agent (select + OTLP push) --> OTel Collector (otlp) --> kafka/metrics --> Redpanda [otel-metrics] --> otel_metrics_gauge
+                              +-> veronex-agent (select + classify + OTLP push) --> OTel Collector (otlp) --> kafka/metrics --> Redpanda [otel-metrics] --> otel_metrics_gauge (gauge + sum)
 ollama /api/ps (type=ollama) -+
 veronex traces  --> OTel Collector (otlp)      --> kafka/traces  --> Redpanda [otel-traces]  --> otel_traces_raw
 
@@ -66,6 +67,7 @@ veronex --> GET /v1/audit             --> analytics_repo (ClickHouse)
 - **Ingest validation**: Event type whitelist (`inference.completed`, `audit.action`), required field checks → 400 on invalid
 - **`otel_logs` = unified event store** -- inference + audit events keyed by `LogAttributes['event.name']`
 - **veronex crate** = no direct Redpanda or ClickHouse dependency (removed rskafka + clickhouse crates)
+- **Agent is the ONLY component that does metric processing** — allowlist filtering, type classification (gauge vs sum/counter). OTel → Redpanda → ClickHouse is pure data pipeline with no transformation
 
 ---
 
@@ -97,12 +99,14 @@ StatefulSet replicas shard targets by `hash(shard_key) % replica_count == ordina
 | `MAX_OLLAMA_BODY` | 1 MB | `scraper.rs` |
 | `MAX_CONCURRENT_SCRAPES` | 32 (semaphore) | `main.rs` |
 | `SCRAPE_TIMEOUT` | 5 s | `scraper.rs` |
+| `OTLP_RETRIES` | 3 attempts (exponential backoff: 2s, 4s, 8s) | `otlp.rs` |
 
 ### Responsibility Split
 
 | Responsibility | Owner | NOT allowed |
 |----------------|-------|-------------|
 | Metric selection (allowlist) | **Agent** (`scraper.rs`) | OTEL filter processor |
+| Metric type classification (gauge vs sum) | **Agent** (`scraper.rs`) | OTEL or ClickHouse |
 | Value transformation (unit conversion) | **ClickHouse queries** | Agent or OTEL |
 | Format conversion (Prometheus text → OTLP) | **Agent** | — |
 | Transport + batching | **OTEL Collector** | — |
@@ -115,11 +119,15 @@ StatefulSet replicas shard targets by `hash(shard_key) % replica_count == ordina
 
 **Allowlist** (`crates/veronex-agent/src/scraper.rs`):
 ```
-node_memory_MemTotal_bytes, node_memory_MemAvailable_bytes,
-node_cpu_seconds_total, node_drm_*, node_hwmon_temp_celsius,
-node_hwmon_power_average_watt*, node_hwmon_chip_names,
-ollama_* (loaded_models, model_size_vram_bytes, model_size_bytes)
+node_memory_MemTotal_bytes, node_memory_MemAvailable_bytes,       (gauge)
+node_cpu_seconds_total,                                            (sum, isMonotonic: true)
+node_drm_*,                                                        (gauge)
+node_hwmon_temp_celsius, node_hwmon_power_average_watt*,           (gauge)
+node_hwmon_chip_names,                                             (gauge — required for GPU chip→PCI address lookup)
+ollama_* (loaded_models, model_size_vram_bytes, model_size_bytes)  (gauge)
 ```
+
+Counter metrics (`node_cpu_seconds_total`) are sent as OTLP `sum` with `isMonotonic: true`. All other metrics are sent as OTLP `gauge`. The ClickHouse MV (`kafka_otel_metrics_mv`) processes both types via `UNION ALL`.
 
 ## OTel Collector Config (docker/otel/config.yaml)
 

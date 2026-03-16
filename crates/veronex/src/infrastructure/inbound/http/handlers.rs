@@ -183,6 +183,8 @@ pub async fn submit_inference(
             conversation_id: None,
             key_tier: Some(api_key.tier),
             images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await?;
 

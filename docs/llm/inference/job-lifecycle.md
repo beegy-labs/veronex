@@ -1,6 +1,6 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-03-11
+> SSOT | **Last Updated**: 2026-03-15
 
 ## Task Guide
 
@@ -123,6 +123,7 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `ttft_ms` | `Option<i32>` | Time To First Token |
 | `queue_time_ms` | `Option<i32>` | `created_at` → `started_at` (queue wait) |
 | `cancelled_at` | `Option<DateTime>` | set by cancel(); NULL for non-cancelled jobs |
+| `image_keys` | `Option<Vec<String>>` | S3 object keys for attached images (WebP); stored as `TEXT[]` in DB |
 
 > `tps` = `completion_tokens / (latency_ms - ttft_ms) * 1000` (computed in API, not stored)
 

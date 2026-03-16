@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { performanceQuery, usageBreakdownQuery, analyticsQuery } from '@/lib/queries'
 import {
@@ -11,7 +11,7 @@ import {
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
   AXIS_TICK, LEGEND_STYLE, CURSOR_FILL, CURSOR_STROKE,
-  fmtMs, fmtMsAxis, fmtCompact, fmtPct,
+  fmtMs, fmtMsAxis, fmtCompact, fmtPct, fmtTps,
 } from '@/lib/chart-theme'
 import { Timer, TrendingUp, CheckCircle, AlertTriangle, Zap } from 'lucide-react'
 import StatsCard from '@/components/stats-card'
@@ -22,6 +22,7 @@ import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
 import { ModelLatencySection } from './components/model-latency-section'
 import { KeyPerformanceSection } from './components/key-performance-section'
+import { tokens } from '@/lib/design-tokens'
 
 /* ─── page ────────────────────────────────────────────────── */
 export default function PerformancePage() {
@@ -33,27 +34,30 @@ export default function PerformancePage() {
   const { data: breakdown } = useQuery(usageBreakdownQuery(hours))
   const { data: analytics } = useQuery(analyticsQuery(hours))
 
-  const chartData = data?.hourly.map((h) => ({
-    hour:      fmtHourLabel(h.hour, tz),
-    latency:   Math.round(h.avg_latency_ms),
-    total:     h.request_count,
-    success:   h.success_count,
-    errors:    Math.max(0, h.request_count - h.success_count),
-    tokens:    h.total_tokens,
-    errorRate: h.request_count > 0
-      ? parseFloat(((h.request_count - h.success_count) / h.request_count * 100).toFixed(1))
-      : 0,
-    tps: h.request_count > 0 && h.total_tokens > 0
-      ? parseFloat((h.total_tokens / (h.avg_latency_ms / 1000 * h.request_count)).toFixed(1))
-      : 0,
-  })) ?? []
+  const chartData = useMemo(() =>
+    (data?.hourly ?? []).map((h) => ({
+      hour:      fmtHourLabel(h.hour, tz),
+      latency:   Math.round(h.avg_latency_ms),
+      total:     h.request_count,
+      success:   h.success_count,
+      errors:    Math.max(0, h.request_count - h.success_count),
+      tokens:    h.total_tokens,
+      errorRate: h.request_count > 0
+        ? parseFloat(((h.request_count - h.success_count) / h.request_count * 100).toFixed(1))
+        : 0,
+      tps: h.request_count > 0 && h.total_tokens > 0
+        ? parseFloat((h.total_tokens / (h.avg_latency_ms / 1000 * h.request_count)).toFixed(1))
+        : 0,
+    })),
+    [data?.hourly, tz],
+  )
 
   const hasData    = data && data.total_requests > 0
   const errorCount = data ? data.total_requests - Math.round(data.success_rate / 100 * data.total_requests) : 0
   const currentLabel = TIME_LABEL_MAP.get(hours) ?? `${hours}h`
 
   // Merge analytics model stats (has success_rate) with breakdown model data (has avg_latency_ms)
-  const modelPerfData = (() => {
+  const modelPerfData = useMemo(() => {
     if (!breakdown?.by_model) return []
     const analyticsMap = new Map(
       (analytics?.models ?? []).map((m) => [m.model_name, m])
@@ -68,7 +72,7 @@ export default function PerformancePage() {
         success_rate:  analyticsMap.get(m.model_name)?.success_rate ?? undefined,
       }))
       .sort((a, b) => a.avg_latency_ms - b.avg_latency_ms)
-  })()
+  }, [breakdown?.by_model, analytics?.models])
 
   return (
     <div className="space-y-6">
@@ -143,7 +147,7 @@ export default function PerformancePage() {
               title={t('performance.errors')}
               value={fmtCompact(errorCount)}
               subtitle={`${t('common.last')} ${currentLabel}`}
-              icon={<AlertTriangle className={`h-5 w-5 ${errorCount > 0 ? 'text-[var(--theme-status-error)]' : ''}`} />}
+              icon={<AlertTriangle className="h-5 w-5" style={errorCount > 0 ? { color: tokens.status.error } : undefined} />}
             />
           </div>
 
@@ -152,7 +156,7 @@ export default function PerformancePage() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <StatsCard
                 title={t('usage.avgTps')}
-                value={analytics.avg_tps > 0 ? analytics.avg_tps.toFixed(2) : '—'}
+                value={fmtTps(analytics.avg_tps)}
                 subtitle={t('usage.avgTpsDesc')}
                 icon={<Zap className="h-5 w-5" />}
               />
@@ -194,7 +198,7 @@ export default function PerformancePage() {
                 <CardHeader>
                   <CardTitle className="text-base">{t('performance.avgLatencyHour')}</CardTitle>
                   <p className="text-xs text-muted-foreground">
-                    P95 reference line: {fmtMs(data.p95_latency_ms)}
+                    {t('performance.p95ReferenceLine')}: {fmtMs(data.p95_latency_ms)}
                   </p>
                 </CardHeader>
                 <CardContent>
@@ -209,13 +213,13 @@ export default function PerformancePage() {
                       />
                       <ReferenceLine
                         y={data.p95_latency_ms}
-                        stroke="var(--theme-status-warning)"
+                        stroke={tokens.status.warning}
                         strokeDasharray="4 4"
-                        label={{ value: 'P95', position: 'right', fill: 'var(--theme-status-warning)', fontSize: 11 }}
+                        label={{ value: 'P95', position: 'right', fill: tokens.status.warning, fontSize: 11 }}
                       />
                       <Line
                         type="monotone" dataKey="latency"
-                        stroke="var(--theme-primary)" strokeWidth={2} dot={false}
+                        stroke={tokens.brand.primary} strokeWidth={2} dot={false}
                       />
                     </LineChart>
                   </ResponsiveContainer>
@@ -228,7 +232,7 @@ export default function PerformancePage() {
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-base">{t('performance.throughputHour')}</CardTitle>
                     {errorCount > 0 && (
-                      <span className="flex items-center gap-1.5 text-xs text-[var(--theme-status-error)]">
+                      <span className="flex items-center gap-1.5 text-xs text-status-error-fg">
                         <AlertTriangle className="h-3.5 w-3.5" />
                         {fmtCompact(errorCount)} {t('performance.errors')}
                       </span>
@@ -242,9 +246,9 @@ export default function PerformancePage() {
                       <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={35} />
                       <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} />
                       <Legend wrapperStyle={LEGEND_STYLE} />
-                      <Bar dataKey="total"   name={t('overview.totalReqs')}   fill="var(--theme-primary)"        radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="success" name={t('overview.successReqs')} fill="var(--theme-status-success)" radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="errors"  name={t('performance.errors')}   fill="var(--theme-status-error)"   radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="total"   name={t('overview.totalReqs')}   fill={tokens.brand.primary}    radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="success" name={t('overview.successReqs')} fill={tokens.status.success} radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="errors"  name={t('performance.errors')}   fill={tokens.status.error}   radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -257,7 +261,7 @@ export default function PerformancePage() {
                     <CardTitle className="text-base">{t('performance.tpsHour')}</CardTitle>
                     {analytics && analytics.avg_tps > 0 && (
                       <p className="text-xs text-muted-foreground">
-                        {t('usage.avgTps')}: <span className="font-semibold text-foreground">{analytics.avg_tps.toFixed(2)}</span> tok/s
+                        {t('usage.avgTps')}: <span className="font-semibold text-foreground">{fmtTps(analytics.avg_tps)}</span>
                       </p>
                     )}
                   </CardHeader>
@@ -269,12 +273,12 @@ export default function PerformancePage() {
                         <Tooltip
                           contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}
                           cursor={CURSOR_STROKE}
-                          formatter={(v) => [`${Number(v).toFixed(1)} tok/s`, t('usage.avgTps')] as [string, string]}
+                          formatter={(v) => [fmtTps(Number(v)), t('usage.avgTps')] as [string, string]}
                         />
                         <Line
                           type="monotone" dataKey="tps"
                           name={t('usage.avgTps')}
-                          stroke="var(--theme-status-info)" strokeWidth={2} dot={false}
+                          stroke={tokens.status.info} strokeWidth={2} dot={false}
                         />
                       </LineChart>
                     </ResponsiveContainer>
@@ -304,7 +308,7 @@ export default function PerformancePage() {
                       <Line
                         type="monotone" dataKey="errorRate"
                         name={t('performance.errorRate')}
-                        stroke="var(--theme-status-error)" strokeWidth={2} dot={false}
+                        stroke={tokens.status.error} strokeWidth={2} dot={false}
                       />
                     </LineChart>
                   </ResponsiveContainer>

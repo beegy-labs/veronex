@@ -1,5 +1,6 @@
 'use client'
 
+import { useMemo } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts'
@@ -16,6 +17,7 @@ import {
 import { DataTable } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
 import { PROVIDER_BADGE, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from '@/lib/constants'
+import { tokens } from '@/lib/design-tokens'
 
 interface ModelPerfRow {
   model_name: string
@@ -29,14 +31,17 @@ export function ModelLatencySection({ models }: { models: ModelPerfRow[] }) {
   const { t } = useTranslation()
   if (models.length === 0) return null
 
-  const chartData = models
-    .filter((m) => m.avg_latency_ms > 0)
-    .sort((a, b) => a.avg_latency_ms - b.avg_latency_ms)
-    .slice(0, 10)
-    .map((m) => ({
-      name: m.model_name.length > 24 ? m.model_name.slice(0, 23) + '…' : m.model_name,
-      latency: Math.round(m.avg_latency_ms),
-    }))
+  const chartData = useMemo(() =>
+    models
+      .filter((m) => m.avg_latency_ms > 0)
+      .sort((a, b) => a.avg_latency_ms - b.avg_latency_ms)
+      .slice(0, 10)
+      .map((m) => ({
+        name: m.model_name.length > 24 ? m.model_name.slice(0, 23) + '…' : m.model_name,
+        latency: Math.round(m.avg_latency_ms),
+      })),
+    [models],
+  )
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
@@ -102,7 +107,7 @@ export function ModelLatencySection({ models }: { models: ModelPerfRow[] }) {
                 <XAxis type="number" tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}ms`} />
                 <YAxis type="category" dataKey="name" width={130} tick={{ ...AXIS_TICK, fontSize: 10 }} axisLine={false} tickLine={false} />
                 <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => [`${v}ms`, t('performance.avgLatency')] as [string, string]} />
-                <Bar dataKey="latency" name={t('performance.avgLatency')} fill="var(--theme-status-info)" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="latency" name={t('performance.avgLatency')} fill={tokens.status.info} radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>

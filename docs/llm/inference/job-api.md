@@ -1,6 +1,6 @@
 # Jobs — Dashboard API & Response Structs
 
-> SSOT | **Last Updated**: 2026-03-03
+> SSOT | **Last Updated**: 2026-03-15
 
 ## API Endpoints
 
@@ -10,10 +10,12 @@
 GET /v1/dashboard/stats
     → { total_keys, active_keys, total_jobs, jobs_last_24h, jobs_by_status }
 
-GET /v1/dashboard/jobs?limit=&offset=&status=&q=&source=
-    q      → prompt ILIKE '%{q}%'
-    status → all | pending | running | completed | failed | cancelled
-    source → api | test  (omit for all)
+GET /v1/dashboard/jobs?limit=&offset=&status=&q=&source=&model=&provider=
+    q        → prompt ILIKE '%{q}%'
+    status   → all | pending | running | completed | failed | cancelled
+    source   → api | test  (omit for all)
+    model    → exact match on model_name (omit for all)
+    provider → exact match on provider name via JOIN (omit for all)
     → { total: i64, jobs: Vec<JobSummary> }
 
 GET /v1/dashboard/jobs/{id}
@@ -96,6 +98,7 @@ pub struct JobSummary {
     pub request_path: Option<String>, // e.g. "/v1/chat/completions"
     pub has_tool_calls: bool,         // true when tool_calls_json IS NOT NULL
     pub estimated_cost_usd: Option<f64>, // NULL = no pricing data; 0.0 = Ollama; >0 = Gemini
+    pub provider_name: Option<String>,   // LEFT JOIN llm_providers (server name)
 }
 ```
 
@@ -112,6 +115,8 @@ pub struct JobDetail {
     pub tool_calls_json: Option<serde_json::Value>, // model-returned tool calls (JSONB)
     pub message_count: Option<i64>,   // JSONB array length of messages_json (conversation turns)
     pub estimated_cost_usd: Option<f64>,
+    pub image_keys: Option<Vec<String>>,  // S3 object keys for attached images
+    pub image_urls: Option<Vec<String>>,  // presigned/direct URLs resolved from image_keys
 }
 ```
 

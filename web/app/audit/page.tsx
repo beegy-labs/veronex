@@ -105,8 +105,8 @@ export default function AuditPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {events.map((e: AuditEvent, i: number) => (
-                <TableRow key={i}>
+            {events.map((e: AuditEvent) => (
+                <TableRow key={`${e.event_time}-${e.account_id}-${e.action}-${e.resource_id}`}>
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                     {fmtDatetime(e.event_time, tz)}
                   </TableCell>

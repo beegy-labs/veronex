@@ -147,9 +147,9 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
           {/* Lab features section */}
           <div className="border-t pt-3 mt-1">
             <div className="flex items-center gap-2 mb-2">
-              <FlaskConical className="h-4 w-4 text-amber-500 shrink-0" />
+              <FlaskConical className="h-4 w-4 text-accent-power shrink-0" />
               <span className="text-sm font-medium flex-1">{t('common.labFeatures')}</span>
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 uppercase tracking-wide">
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning-fg border border-status-warning/30 uppercase tracking-wide">
                 Lab
               </span>
             </div>
@@ -165,6 +165,7 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                 <Switch
                   checked={labSettings?.gemini_function_calling ?? false}
                   disabled={labLoading || labSettings === null}
+                  aria-label={t('common.labGeminiFunctionCalling')}
                   onCheckedChange={async (checked) => {
                     setLabLoading(true)
                     try {
@@ -190,7 +191,7 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                     type="number"
                     min={0}
                     max={MAX_IMAGES_LIMIT}
-                    className="w-16 h-7 text-xs text-center"
+                    className="w-20 h-7 text-xs text-center"
                     value={labSettings?.max_images_per_request ?? DEFAULT_MAX_IMAGES}
                     disabled={labLoading || labSettings === null}
                     onChange={async (e) => {
