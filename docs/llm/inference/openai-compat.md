@@ -108,22 +108,32 @@ pub struct ChatMessage {
 
 Content tokens:
 ```
-data: {"id":"chatcmpl-…","object":"chat.completion.chunk","model":"llama3.2","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","model":"llama3.2","service_tier":"default","system_fingerprint":"fp_veronex","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
 ```
 
 Tool calls (Ollama function calling):
 ```
-data: {"id":"chatcmpl-…","object":"chat.completion.chunk","model":"llama3.2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Seoul\"}"}}]},"finish_reason":null}]}
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","model":"llama3.2","service_tier":"default","system_fingerprint":"fp_veronex","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Seoul\"}"}}]},"finish_reason":null}]}
 ```
 
-Stop/finish:
+Stop/finish (with `stream_options.include_usage = true`):
 ```
-data: {"id":"chatcmpl-…","object":"chat.completion.chunk","model":"llama3.2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","model":"llama3.2","service_tier":"default","system_fingerprint":"fp_veronex","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}
+
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk","model":"llama3.2","service_tier":"default","system_fingerprint":"fp_veronex","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}
 
 data: [DONE]
 ```
 
 `finish_reason` is `"tool_calls"` when the model returned tool calls, `"stop"` otherwise.
+
+**SSE chunk fields** (present on every chunk):
+
+| Field | Value | Notes |
+|-------|-------|-------|
+| `service_tier` | `"default"` | Always `"default"` (OpenAI compat) |
+| `system_fingerprint` | `"fp_veronex"` | Constant identifier for this server |
+| `usage` | `{prompt_tokens, completion_tokens, total_tokens}` | Only present when `stream_options.include_usage = true` — emitted on the finish chunk and a final usage-only chunk (empty `choices`) |
 
 ### Error Response
 

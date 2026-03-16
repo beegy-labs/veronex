@@ -67,6 +67,7 @@ If E2E breaks on internal function change → **test design flaw** (layer violat
 | Multi-model | 03-inference auto-detects available models and cycles through them for Round 2 + Goodput tests (multi-model parallel throughput) |
 | Parallel | 03~06 concurrent execution (independent counts file) |
 | Infrastructure | 09-metrics-pipeline (agent scrape → OTel → Redpanda → ClickHouse → analytics API) |
+| Image storage | 10-image-storage (vision inference, S3 WebP upload, thumbnails, provider_name) |
 
 `09-metrics-pipeline.sh` tests the full metrics pipeline end-to-end: verifies agent scrapes node-exporter, pushes via OTLP, data flows through Redpanda into ClickHouse, and the analytics API returns both gauge metrics (memory, GPU temp/power) and counter-derived metrics (CPU usage %). Tests both local (Mac) and remote (Ubuntu Ryzen AI 395+) server configurations.
 

@@ -43,7 +43,8 @@ flowchart TD
     S03 --> P02 & P04 & P05 & P06 & P07
     P02 & P04 & P05 & P06 & P07 --> S08
     S08 --> S09["09-metrics-pipeline.sh"]
-    S09 --> Result["Aggregate Results"]
+    S09 --> S10["10-image-storage.sh"]
+    S10 --> Result["Aggregate Results"]
 ```
 
 ---
@@ -523,6 +524,21 @@ Validates the full metrics data path: agent scrape → OTLP push → OTel Collec
 
 ---
 
+## 10-image-storage.sh — Image Storage & Provider Name
+
+Validates image inference through both API key and test panel paths, S3 WebP storage, thumbnail access, and provider_name field population.
+
+| Test | Validates |
+|------|-----------|
+| Vision model detection | Local Ollama has a vision model (llava, minicpm-v, etc.) |
+| API image inference | /api/generate with base64 image → 200, response contains text |
+| Test panel image inference | /v1/test/completions with images array → 200 |
+| S3 WebP storage | Job image stored as WebP in S3 bucket |
+| Thumbnail access | Thumbnail URL returns image data |
+| provider_name field | Job response includes provider_name (non-empty) |
+
+---
+
 ## Skipped Tests
 
 ### gpu_vendor Thermal Mapping
@@ -561,6 +577,7 @@ The logic is fully implemented in `thermal.rs`. To enable: deploy the agent or m
 | `07-lifecycle.sh` | Parallel | Cancel + SSE + password reset + crash recovery |
 | `08-sdd-advanced.sh` | Sequential 3 | AIMD decrease + Scale-In/Out + thermal deep validation |
 | `09-metrics-pipeline.sh` | Sequential 4 | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
+| `10-image-storage.sh` | Sequential 5 | Image inference, S3 WebP storage, thumbnails, provider_name |
 
 ---
 
@@ -578,6 +595,7 @@ Multi-Format + Endpoints      06               30
 Lifecycle + Cancel            07               23
 Advanced Validation           08               17
 Metrics Pipeline              09               10
+Image Storage                 10                6
 ──────────────────────────────────────────────────────
-Total                                          ~170
+Total                                          ~176
 ```
