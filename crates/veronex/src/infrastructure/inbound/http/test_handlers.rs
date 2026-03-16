@@ -28,14 +28,14 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, JobSource, ProviderType};
+use crate::domain::enums::{ApiFormat, FinishReason, JobSource, ProviderType};
 use super::constants::{PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
 use crate::domain::value_objects::JobId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 
 use super::cancel_guard::CancelOnDrop;
 use super::handlers::SseStream;
-use super::openai_sse_types::{ChunkChoice, CompletionChunk, DeltaContent};
+use super::openai_sse_types::{ChunkChoice, CompletionChunk, DeltaContent, SERVICE_TIER_DEFAULT, SYSTEM_FINGERPRINT};
 use super::state::AppState;
 
 // ── Shared request types ───────────────────────────────────────────────────────
@@ -118,6 +118,8 @@ pub async fn test_completions(
             conversation_id: None,
             key_tier: None,
             images: req.images,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {
@@ -148,11 +150,14 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
                     object: "chat.completion.chunk",
                     created,
                     model: Some(model.clone()),
+                    service_tier: Some(SERVICE_TIER_DEFAULT),
                     choices: vec![ChunkChoice {
                         index: 0,
                         delta: DeltaContent::default(),
-                        finish_reason: Some("stop".to_string()),
+                        finish_reason: Some(FinishReason::Stop.as_str().to_string()),
                     }],
+                    system_fingerprint: Some(SYSTEM_FINGERPRINT),
+                    usage: None,
                 };
                 Ok(Event::default().data(serde_json::to_string(&stop_chunk).unwrap_or_default()))
             }
@@ -162,11 +167,14 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
                     object: "chat.completion.chunk",
                     created,
                     model: Some(model.clone()),
+                    service_tier: Some(SERVICE_TIER_DEFAULT),
                     choices: vec![ChunkChoice {
                         index: 0,
                         delta: DeltaContent { content: Some(token.value), ..Default::default() },
                         finish_reason: None,
                     }],
+                    system_fingerprint: Some(SYSTEM_FINGERPRINT),
+                    usage: None,
                 };
                 Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
             }
@@ -313,6 +321,8 @@ pub async fn test_ollama_chat(
             conversation_id: None,
             key_tier: None,
             images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {
@@ -366,6 +376,8 @@ pub async fn test_ollama_generate(
             conversation_id: None,
             key_tier: None,
             images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {
@@ -549,6 +561,8 @@ pub async fn test_gemini_request(
             conversation_id: None,
             key_tier: None,
             images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {

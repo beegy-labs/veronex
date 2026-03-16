@@ -85,7 +85,13 @@
     "expand": "펼치기",
     "collapse": "접기",
     "signOut": "로그아웃",
-    "retry": "재시도"
+    "retry": "재시도",
+    "prevPage": "이전 페이지",
+    "nextPage": "다음 페이지",
+    "tokensUnit": "토큰",
+    "activate": "활성화",
+    "deactivate": "비활성화",
+    "deleting": "삭제 중…"
   },
   "overview": {
     "title": "개요",
@@ -136,7 +142,7 @@
     "providerFlow": "프로바이더 흐름",
     "liveFeed": "실시간 피드",
     "waitingRequests": "요청 대기 중...",
-    "reqLast5m": "{{count}} 요청 / 5분",
+    "reqLast30s": "{{count}} 요청 / 30초",
     "queueWaiting": "{{count}} 대기 중",
     "thermalAlert": "발열 경보",
     "thermalAlertDesc": "{{count}}개 서버 점검 필요",
@@ -146,7 +152,9 @@
     "waiting": "대기중",
     "running": "동작중",
     "pendingJobs": "대기 작업",
+    "pendingJobsCount": "{{count}} 대기",
     "runningJobs": "실행 중인 작업",
+    "runningJobsCount": "{{count}} 실행중",
     "daily": "일간",
     "weekly": "주간",
     "monthly": "월간",
@@ -161,8 +169,15 @@
     "noServers": "등록된 서버 없음",
     "daysData": "{{n}}일 데이터",
     "flowHttpGateway": "HTTP 게이트웨이",
-    "flowOnlineCount": "{online}/{total} 온라인",
-    "flowNoProviders": "프로바이더 없음"
+    "flowOnlineCount": "{{online}}/{{total}} 온라인",
+    "flowNoProviders": "프로바이더 없음",
+    "flowApiNode": "Veronex API",
+    "flowQueueNode": "큐",
+    "flowValkeyNode": "Valkey",
+    "liveIndicator": "라이브",
+    "timeAgoJustNow": "방금",
+    "timeAgoSeconds": "{{s}}초 전",
+    "timeAgoMinutes": "{{m}}분 전"
   },
   "jobs": {
     "title": "작업",
@@ -219,6 +234,7 @@
     "retryInTest": "테스트에서 재시도",
     "apiJobs": "API 작업",
     "testRuns": "테스트 실행",
+    "analyzerJobs": "분석기",
     "networkFlow": "네트워크 흐름",
     "groupSessions": "세션 묶기",
     "groupSessionsDesc": "선택한 날짜 이전에 완료된 작업에 대화 ID를 할당합니다.",
@@ -227,7 +243,11 @@
     "grouping": "묶는 중…",
     "groupingSuccess": "세션 묶기가 시작되었습니다",
     "groupingError": "세션 묶기 실행에 실패했습니다",
-    "groupingAlreadyRunning": "세션 묶기가 이미 실행 중입니다"
+    "groupingAlreadyRunning": "세션 묶기가 이미 실행 중입니다",
+    "providerName": "프로바이더",
+    "images": "이미지",
+    "filterModel": "모델…",
+    "filterProvider": "프로바이더…"
   },
   "keys": {
     "title": "API 키",
@@ -246,6 +266,7 @@
     "keyName": "이름",
     "keyNamePlaceholder": "예: production-key",
     "tenantId": "테넌트 ID",
+    "tenantIdPlaceholder": "default",
     "rateLimitRpm": "요청 제한 (RPM)",
     "rateLimitTpm": "토큰 제한 (TPM)",
     "rateLimitPlaceholder": "0 = 무제한",
@@ -296,6 +317,7 @@
       "registerServer": "서버 등록",
       "registerTitle": "GPU 서버 등록",
       "editTitle": "GPU 서버 편집",
+      "namePlaceholder": "예: gpu-node-1",
       "nodeExporterUrlPlaceholder": "http://192.168.1.10:9100",
       "serverMeta": "물리 서버 — 서버당 node-exporter 1개.",
       "loadingServers": "서버 로딩 중…",
@@ -336,11 +358,15 @@
       "noProviderModels": "이 프로바이더에 동기화된 모델이 없습니다.",
       "noModelsMatch": "일치하는 모델 없음",
       "noServersMatch": "일치하는 서버 없음",
+      "gpuLabel": "GPU",
       "gpuServer": "GPU 서버",
       "gpuServerHint": "메트릭 연계를 위해 GPU 서버를 연결하세요.",
       "maxVram": "최대 VRAM",
       "serverRam": "서버 RAM",
       "noneOption": "없음",
+      "namePlaceholder": "예: gpu-server-1",
+      "urlPlaceholder": "http://192.168.1.10:11434",
+      "gpuIndexPlaceholder": "0",
       "ollamaUrl": "Ollama URL",
       "modelsCount": "{{count}}개 모델",
       "serversWithModel": "이 모델을 가진 서버",
@@ -386,8 +412,8 @@
       "probePermits": "프로브 허용 수",
       "probeRate": "프로브 속도",
       "lessThanMinAgo": "< 1분 전",
-      "minsAgo": "{n}분 전",
-      "hoursAgo": "{n}시간 전",
+      "minsAgo": "{{n}}분 전",
+      "hoursAgo": "{{n}}시간 전",
       "colModel": "모델",
       "colWeight": "가중치",
       "colKvPerReq": "KV/요청",
@@ -410,7 +436,11 @@
       "rateLimitDesc": "모델별 공유 RPM/RPD 제한, 무료 티어 프로바이더에 적용.",
       "model": "모델",
       "rpm": "RPM",
+      "rpmPlaceholder": "예: 10",
+      "rpmUnit": "요청/분",
       "rpd": "RPD",
+      "rpdPlaceholder": "예: 250",
+      "rpdUnit": "요청/일",
       "onFreeTier": "무료 티어",
       "noPolicies": "설정된 요청 제한 정책이 없습니다. 마이그레이션을 실행하세요.",
       "loadingProviders": "백엔드 로딩 중…",
@@ -437,6 +467,8 @@
       "syncKeyHint": "글로벌 모델 목록을 가져오는 데만 사용됩니다. 백엔드별 키는 별도로 저장됩니다.",
       "freeTierDesc": "Google 무료 티어 프로젝트로 표시 — 요청 제한은 Gemini 정책 섹션에서 전역적으로 관리됩니다.",
       "apiKeyHint": "요청 제한은 키가 아닌 Google 프로젝트별로 적용됩니다. 롤링을 위해 다른 계정의 키를 사용하세요.",
+      "namePlaceholder": "예: gemini-prod",
+      "apiKeyPlaceholder": "AIza…",
       "keepExistingKey": "비워두면 기존 키 유지",
       "globalFallbackHint": "특정 행이 없는 모델의 전역 폴백으로 *를 사용하세요.",
       "syncSection": "글로벌 Gemini 모델 동기화",
@@ -550,8 +582,8 @@
     "free": "무료",
     "tokenComposition": "토큰 구성",
     "tokenCompositionDesc": "프롬프트 vs 완성 토큰 비율",
-    "nTokens": "{n} 토큰",
-    "totalNTokens": "전체 {n} 토큰"
+    "nTokens": "{{n}} 토큰",
+    "totalNTokens": "전체 {{n}} 토큰"
   },
   "performance": {
     "title": "성능",
@@ -582,7 +614,8 @@
     "modelLatency": "모델 평균 지연시간",
     "keyPerformance": "키별 성능",
     "keyCol": "키",
-    "tpsHour": "평균 TPS / 시간"
+    "tpsHour": "평균 TPS / 시간",
+    "p95ReferenceLine": "P95 기준선"
   },
   "test": {
     "title": "추론 테스트",
@@ -689,7 +722,10 @@
     "position": "직책",
     "createFailed": "계정 생성에 실패했습니다",
     "creating": "생성 중…",
-    "tokenWarning": "이 토큰은 한 번만 표시됩니다. 지금 복사하여 안전하게 보관하세요."
+    "tokenWarning": "이 토큰은 한 번만 표시됩니다. 지금 복사하여 안전하게 보관하세요.",
+    "roleAdmin": "관리자",
+    "roleSuper": "슈퍼",
+    "deleteConfirm": "{{name}} 계정을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다."
   },
   "audit": {
     "title": "감사 로그",
@@ -705,6 +741,11 @@
     "filterResource": "리소스로 필터",
     "allActions": "모든 작업",
     "allResources": "모든 리소스"
+  },
+  "errorPage": {
+    "title": "오류가 발생했습니다",
+    "fallbackMessage": "예기치 않은 오류가 발생했습니다.",
+    "tryAgain": "다시 시도"
   },
   "metrics": {
     "memTotal": "전체 RAM",

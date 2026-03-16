@@ -133,13 +133,14 @@ pub fn extract_last_user_prompt(messages: &[serde_json::Value]) -> &str {
 /// 6. Return via `sse_response()` (timeout + keep-alive + headers)
 ///
 /// The `map_token` closure receives each `Result<StreamToken>` and returns
-/// the SSE `Event` data string. This keeps format-specific conversion
-/// (OpenAI chunks vs Gemini responses) in the handler that knows the wire format.
+/// a `Vec<Event>`. Returning multiple events per token is needed for
+/// `stream_options.include_usage` which emits a separate usage-only chunk
+/// after the finish chunk. For all other cases return `vec![event]`.
 pub fn build_sse_response(
     state: &AppState,
     job_id: JobId,
     append_done: bool,
-    mut map_token: impl FnMut(Result<StreamToken, crate::domain::errors::DomainError>) -> Event + Send + 'static,
+    mut map_token: impl FnMut(Result<StreamToken, crate::domain::errors::DomainError>) -> Vec<Event> + Send + 'static,
 ) -> Response {
     let guard = match try_acquire_sse(&state.sse_connections) {
         Ok(g) => g,
@@ -148,9 +149,11 @@ pub fn build_sse_response(
 
     let token_stream = state.use_case.stream(&job_id);
 
-    let content_stream = token_stream.map(move |result| -> Result<Event, Infallible> {
+    let content_stream = token_stream.flat_map(move |result| {
         let _ = &guard;
-        Ok(map_token(result))
+        let events = map_token(result);
+        let results: Vec<Result<Event, Infallible>> = events.into_iter().map(Ok).collect();
+        futures::stream::iter(results)
     });
 
     let sse_stream: SseStream = if append_done {

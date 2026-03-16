@@ -32,6 +32,11 @@ veronex:
   # Session grouping interval (seconds). Default: 86400 (24h)
   sessionGroupingIntervalSecs: ""
 
+  # Public URL for image storage (MinIO/S3).
+  # Used to construct URLs for job image thumbnails served to the browser.
+  # e.g. "https://s3.example.com/veronex-images" or "http://localhost:9010/veronex-images"
+  imagePublicUrl: ""
+
   otel:
     # gRPC endpoint (e.g. http://otel-collector:4317)
     endpoint: ""
@@ -162,13 +167,15 @@ minio:
   auth:
     rootUser: veronex
     rootPassword: ""  # REQUIRED — override in production
-  defaultBuckets: "veronex-messages"
+  defaultBuckets: "veronex-messages,veronex-images"
+  imageBucket: "veronex-images"
 
 externalMinio:
   endpoint: ""
   accessKey: ""
   secretKey: ""
   bucket: "veronex-messages"
+  imageBucket: "veronex-images"
   region: "us-east-1"
 
 # Redpanda chart uses strict schema — 'enabled' must be top-level to avoid validation error.

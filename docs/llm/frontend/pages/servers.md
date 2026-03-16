@@ -1,6 +1,6 @@
 # Web — Servers Page (/servers)
 
-> SSOT | **Last Updated**: 2026-03-04
+> SSOT | **Last Updated**: 2026-03-15 (rev: CPU Usage % chart in history modal)
 
 ## Task Guide
 
@@ -96,7 +96,7 @@ Error → `unreachable` badge (`bg-status-error/10`) + retry button.
 ## ServerHistoryModal
 
 - Range tabs: 1h / 3h / 6h / 24h
-- Charts: Memory Used %, GPU Temperature (°C), GPU Power (W) — Recharts `LineChart`
+- Charts: Memory Used %, CPU Usage %, GPU Temperature (°C), GPU Power (W) — Recharts `LineChart`
 - Data: `GET /v1/servers/{id}/metrics/history?hours=N`
 - Sync button refreshes chart data
 

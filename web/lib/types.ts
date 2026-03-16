@@ -63,6 +63,8 @@ export interface JobBase {
 export interface Job extends JobBase {
   /** True when the model responded with tool calls instead of text. */
   has_tool_calls: boolean
+  /** Name of the provider (Ollama server) that processed this job. */
+  provider_name: string | null
 }
 
 export interface ChatMessage {
@@ -96,6 +98,12 @@ export interface JobDetail extends JobBase {
   message_count: number | null
   /** Full conversation context sent to the model. Null for single-turn or pre-migration jobs. */
   messages_json: ChatMessage[] | null
+  /** Name of the provider (Ollama server) that processed this job. */
+  provider_name: string | null
+  /** S3 keys for stored WebP images. */
+  image_keys: string[] | null
+  /** Resolved URLs for image thumbnails/full images. */
+  image_urls: string[] | null
 }
 
 export interface DashboardStats {
@@ -344,6 +352,10 @@ export interface ServerMetricsPoint {
   gpu_temp_junction_c: number | null
   gpu_temp_mem_c: number | null
   gpu_power_w: number | null
+  /** CPU usage percentage (0–100). Computed from delta of node_cpu_seconds_total counters. */
+  cpu_usage_pct: number | null
+  /** CPU package temperature in °C. Intel: coretemp Package id 0, AMD: k10temp Tctl/Tdie. */
+  cpu_temp_c: number | null
 }
 
 export interface ProviderSelectedModel {

@@ -85,6 +85,7 @@ function AccountSessionsModal({
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                  aria-label={t('accounts.revokeSession')}
                   title={t('accounts.revokeSession')}
                   onClick={() => revokeMutation.mutate(s.id)}
                   disabled={revokeMutation.isPending}
@@ -180,43 +181,44 @@ function CreateAccountModal({
         <div className="space-y-3 py-1">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>{t('accounts.username')}</Label>
-              <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
+              <Label htmlFor="create-account-username">{t('accounts.username')}</Label>
+              <Input id="create-account-username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
             </div>
             <div className="space-y-1.5">
-              <Label>{t('accounts.fullName')}</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} />
+              <Label htmlFor="create-account-name">{t('accounts.fullName')}</Label>
+              <Input id="create-account-name" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>{t('accounts.password')}</Label>
-            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+            <Label htmlFor="create-account-password">{t('accounts.password')}</Label>
+            <Input id="create-account-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>{t('accounts.email')}</Label>
-              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <Label htmlFor="create-account-email">{t('accounts.email')}</Label>
+              <Input id="create-account-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>{t('accounts.role')}</Label>
+              <Label htmlFor="create-account-role">{t('accounts.role')}</Label>
               <select
+                id="create-account-role"
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
               >
-                <option value="admin">admin</option>
-                <option value="super">super</option>
+                <option value="admin">{t('accounts.roleAdmin')}</option>
+                <option value="super">{t('accounts.roleSuper')}</option>
               </select>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>{t('accounts.department')}</Label>
-              <Input value={department} onChange={(e) => setDepartment(e.target.value)} />
+              <Label htmlFor="create-account-department">{t('accounts.department')}</Label>
+              <Input id="create-account-department" value={department} onChange={(e) => setDepartment(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>{t('accounts.position')}</Label>
-              <Input value={position} onChange={(e) => setPosition(e.target.value)} />
+              <Label htmlFor="create-account-position">{t('accounts.position')}</Label>
+              <Input id="create-account-position" value={position} onChange={(e) => setPosition(e.target.value)} />
             </div>
           </div>
           {mutation.isError && (
@@ -332,13 +334,16 @@ export default function AccountsPage() {
                   <TableCell className="font-mono text-xs">{a.username}</TableCell>
                   <TableCell>{a.name}</TableCell>
                   <TableCell>
-                    <Badge variant={a.role === 'super' ? 'default' : 'secondary'}>{a.role}</Badge>
+                    <Badge variant={a.role === 'super' ? 'default' : 'secondary'}>
+                      {a.role === 'super' ? t('accounts.roleSuper') : t('accounts.roleAdmin')}
+                    </Badge>
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm">{a.department ?? '—'}</TableCell>
                   <TableCell>
                     <Switch
                       checked={a.is_active}
                       onCheckedChange={(v) => activeMutation.mutate({ id: a.id, is_active: v })}
+                      aria-label={a.is_active ? t('common.deactivate') : t('common.activate')}
                     />
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
@@ -350,6 +355,7 @@ export default function AccountsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
+                        aria-label={t('accounts.sessions')}
                         title={t('accounts.sessions')}
                         onClick={() => setSessionsAccountId(a.id)}
                       >
@@ -359,6 +365,7 @@ export default function AccountsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
+                        aria-label={t('accounts.resetLink')}
                         title={t('accounts.resetLink')}
                         onClick={() => resetMutation.mutate(a.id)}
                       >
@@ -368,6 +375,7 @@ export default function AccountsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 text-destructive hover:text-destructive"
+                        aria-label={t('common.delete')}
                         title={t('common.delete')}
                         onClick={() => setDeleteTarget(a)}
                       >

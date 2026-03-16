@@ -42,10 +42,12 @@ export interface JobsQueryParams {
   status: string
   query: string
   pageSize: number
+  model?: string
+  provider?: string
 }
 
 export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
-  queryKey: ['dashboard-jobs', p.source, p.page, p.status, p.query] as const,
+  queryKey: ['dashboard-jobs', p.source, p.page, p.status, p.query, p.model ?? '', p.provider ?? ''] as const,
   queryFn: () => {
     const qs = new URLSearchParams({
       limit: String(p.pageSize),
@@ -54,6 +56,8 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
     })
     if (p.status !== 'all') qs.set('status', p.status)
     if (p.query.trim()) qs.set('q', p.query.trim())
+    if (p.model) qs.set('model', p.model)
+    if (p.provider) qs.set('provider', p.provider)
     return api.jobs(qs.toString())
   },
   staleTime: STALE_TIME_FAST,

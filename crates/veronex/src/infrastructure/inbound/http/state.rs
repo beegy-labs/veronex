@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::AtomicU32;
 
 use dashmap::DashMap;
@@ -6,10 +7,11 @@ use dashmap::DashMap;
 use tokio::sync::{broadcast, Notify};
 use uuid::Uuid;
 
-use crate::domain::value_objects::JobStatusEvent;
+use crate::domain::value_objects::{FlowStats, JobStatusEvent};
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
 use crate::application::ports::outbound::account_repository::AccountRepository;
+use crate::application::ports::outbound::image_store::ImageStore;
 use crate::application::ports::outbound::message_store::MessageStore;
 use crate::application::ports::outbound::analytics_repository::AnalyticsRepository;
 use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
@@ -75,6 +77,14 @@ pub struct AppState {
     /// Broadcast channel sender for real-time job status events.
     /// Handlers subscribe by calling `.subscribe()` on this sender.
     pub job_event_tx: Arc<broadcast::Sender<JobStatusEvent>>,
+    /// Rolling replay buffer of the last 100 job events, with server-side timestamps.
+    /// Sent to every new SSE client on connect so all users see the same view
+    /// regardless of when they connected.
+    /// Each entry is `(event, unix_ms)` — the unix_ms is used by the stats ticker.
+    pub event_ring_buffer: Arc<RwLock<VecDeque<(JobStatusEvent, u64)>>>,
+    /// Broadcast channel for real-time aggregate stats (incoming/queued/running/completed).
+    /// Pushed every second by the stats ticker; all SSE clients receive the same values.
+    pub stats_tx: Arc<broadcast::Sender<FlowStats>>,
     /// Lab (experimental) feature flags — singleton row in DB.
     pub lab_settings_repo: Arc<dyn LabSettingsRepository>,
     /// Per-provider circuit breaker — isolates failing providers automatically.
@@ -82,6 +92,9 @@ pub struct AppState {
     /// S3-compatible object store for conversation contexts (messages_json).
     /// `None` when S3_ENDPOINT is not configured (messages stay in PostgreSQL).
     pub message_store: Option<Arc<dyn MessageStore>>,
+    /// S3-compatible object store for inference job images (WebP).
+    /// `None` when S3_ENDPOINT is not configured.
+    pub image_store: Option<Arc<dyn ImageStore>>,
     /// Mutex (1-permit semaphore) that prevents concurrent session grouping runs.
     /// Held for the duration of each run — manual trigger returns 409 if locked.
     pub session_grouping_lock: Arc<tokio::sync::Semaphore>,

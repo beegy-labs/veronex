@@ -1,6 +1,6 @@
 # Web -- Jobs: Types & Extended Fields
 
-> SSOT | **Last Updated**: 2026-03-04 (companion to `jobs.md`, `jobs-impl.md`)
+> SSOT | **Last Updated**: 2026-03-16 (companion to `jobs.md`, `jobs-impl.md`)
 
 ## Types (`web/lib/types.ts`)
 
@@ -19,7 +19,7 @@ export interface Job {
   model_name: string
   provider_type: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-  source: 'api' | 'test'
+  source: 'api' | 'test' | 'analyzer'
   created_at: string
   completed_at: string | null
   latency_ms: number | null
@@ -33,6 +33,7 @@ export interface Job {
   request_path: string | null
   has_tool_calls: boolean
   estimated_cost_usd: number | null
+  provider_name: string | null
 }
 
 export interface ChatMessage {
@@ -53,6 +54,9 @@ export interface JobDetail {
   message_count: number | null
   messages_json: ChatMessage[] | null
   estimated_cost_usd: number | null
+  provider_name: string | null
+  image_keys: string[] | null
+  image_urls: string[] | null
 }
 ```
 
@@ -85,6 +89,18 @@ Present on `JobDetail`. Storage: MinIO/S3 primary (`messages/{job_id}.json`), DB
 | Config | `aws-sdk-s3 = "1"`, `force_path_style(true)` for MinIO |
 | Init | `ensure_bucket()` on startup (handles `BucketAlreadyExists`) |
 
+### Image Storage (ImageStore)
+
+| Layer | Detail |
+|-------|--------|
+| Port | `ImageStore` trait (`application/ports/outbound/image_store.rs`) |
+| Adapter | `S3ImageStore` (`infrastructure/outbound/s3/image_store.rs`) |
+| Put | `put(job_id, index, webp, thumb)` — stores full + 128px thumbnail |
+| Get | `url(key)` — presigned/direct URL for S3 object |
+| Keys | `images/{job_id}/{index}.webp` (full), `images/{job_id}/{index}_thumb.webp` (thumb) |
+| Bucket | `S3_IMAGE_BUCKET` env var (default: `veronex-images`) — separate from messages |
+| Init | `ensure_bucket()` on startup |
+
 ### ConversationHistory Component
 
 Located in `web/components/job-table.tsx`. Collapsible panel showing full message history.
@@ -103,6 +119,14 @@ Located in `web/components/job-table.tsx`. Collapsible panel showing full messag
 Present on both `Job` and `JobDetail`. Computed via LATERAL JOIN on `model_pricing` (not stored). `0.0` = Ollama (self-hosted), `> 0` = Gemini, `null` = no pricing data.
 
 See `docs/llm/inference/model-pricing.md` for pricing schema.
+
+### `provider_name: string | null`
+
+Present on both `Job` and `JobDetail`. The human-readable name of the provider (Ollama server) that processed the job. Resolved via LEFT JOIN on `llm_providers`. `null` when provider has been deleted or job is still pending.
+
+### `image_keys: string[] | null` / `image_urls: string[] | null`
+
+Present on `JobDetail` only. `image_keys` are S3 object keys (`images/{job_id}/{index}.webp`). `image_urls` are constructed from `image_keys` + `S3_IMAGE_PUBLIC_URL` env var (e.g. `http://localhost:9010/veronex-images/{key}`). UI renders a thumbnail gallery in the job detail modal when present. Stored as `TEXT[]` column on `inference_jobs`.
 
 ---
 

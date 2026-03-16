@@ -1,6 +1,6 @@
 # Hardware — GPU Server & Metrics
 
-> SSOT | **Last Updated**: 2026-03-13 (rev: thermal state table corrected — Cooldown 300s/900s, Hard→Cooldown 300s fallback, RampUp→Normal invariant)
+> SSOT | **Last Updated**: 2026-03-15 (rev: cpu_usage_pct in ServerMetricsPoint, counter delta CTE for CPU usage history)
 
 ## Task Guide
 
@@ -130,6 +130,7 @@ pub struct ServerMetricsPoint {
     pub ts: String,             // ISO 8601, 1-min bucket start
     pub mem_total_mb: u64,
     pub mem_avail_mb: u64,
+    pub cpu_usage_pct: Option<f64>,       // CPU usage % (counter delta via neighbor() CTE)
     pub gpu_temp_c: Option<f64>,          // edge
     pub gpu_temp_junction_c: Option<f64>, // junction/hotspot
     pub gpu_temp_mem_c: Option<f64>,      // VRAM
@@ -196,21 +197,37 @@ Controlled by `let bucket_interval` in `gpu_server_handlers.rs` → passed into 
 ```sql
 -- Two-step: first find amdgpu chip label, then:
 -- bucket_interval = "1 MINUTE" | "5 MINUTE" | "60 MINUTE" (selected by hours range)
-SELECT toStartOfInterval(ts, INTERVAL {bucket_interval}) AS ts,
-       maxIf(value, metric_name='node_memory_MemTotal_bytes') / 1048576      AS mem_total_mb,
-       avgIf(value, metric_name='node_memory_MemAvailable_bytes') / 1048576  AS mem_avail_mb,
-       avgIf(value, metric_name='node_hwmon_temp_celsius'
-             AND attributes['chip'] = ? AND attributes['sensor']='temp1')    AS gpu_temp_c,
-       avgIf(value, metric_name='node_hwmon_temp_celsius'
-             AND attributes['chip'] = ? AND attributes['sensor']='temp2')    AS gpu_temp_junction_c,
-       avgIf(value, metric_name='node_hwmon_temp_celsius'
-             AND attributes['chip'] = ? AND attributes['sensor']='temp3')    AS gpu_temp_mem_c,
-       avgIf(value, metric_name IN ('node_hwmon_power_average_watt',
-             'node_hwmon_power_average_watts') AND attributes['chip'] = ?)   AS gpu_power_w
-FROM otel_metrics_gauge
-WHERE server_id = ? AND ts >= now() - INTERVAL ? HOUR
-GROUP BY ts ORDER BY ts
+
+-- CTE: compute CPU usage % from node_cpu_seconds_total counter deltas
+WITH cpu_pct AS (
+    SELECT toStartOfInterval(ts, INTERVAL {bucket_interval}) AS bucket,
+           -- neighbor() window function computes delta between consecutive counter values
+           -- per-CPU idle delta / total delta across all modes → idle ratio → 100 - idle = usage%
+           ...  -- aggregated across all CPU cores per bucket
+    FROM otel_metrics_gauge
+    WHERE server_id = ? AND metric_name = 'node_cpu_seconds_total'
+      AND ts >= now() - INTERVAL ? HOUR
+    GROUP BY bucket
+)
+SELECT toStartOfInterval(g.ts, INTERVAL {bucket_interval}) AS ts,
+       maxIf(g.value, g.metric_name='node_memory_MemTotal_bytes') / 1048576      AS mem_total_mb,
+       avgIf(g.value, g.metric_name='node_memory_MemAvailable_bytes') / 1048576  AS mem_avail_mb,
+       c.cpu_usage_pct,
+       avgIf(g.value, g.metric_name='node_hwmon_temp_celsius'
+             AND g.attributes['chip'] = ? AND g.attributes['sensor']='temp1')    AS gpu_temp_c,
+       avgIf(g.value, g.metric_name='node_hwmon_temp_celsius'
+             AND g.attributes['chip'] = ? AND g.attributes['sensor']='temp2')    AS gpu_temp_junction_c,
+       avgIf(g.value, g.metric_name='node_hwmon_temp_celsius'
+             AND g.attributes['chip'] = ? AND g.attributes['sensor']='temp3')    AS gpu_temp_mem_c,
+       avgIf(g.value, g.metric_name IN ('node_hwmon_power_average_watt',
+             'node_hwmon_power_average_watts') AND g.attributes['chip'] = ?)     AS gpu_power_w
+FROM otel_metrics_gauge g
+LEFT JOIN cpu_pct c ON c.bucket = toStartOfInterval(g.ts, INTERVAL {bucket_interval})
+WHERE g.server_id = ? AND g.ts >= now() - INTERVAL ? HOUR
+GROUP BY ts, c.cpu_usage_pct ORDER BY ts
 ```
+
+**CPU usage % computation**: `node_cpu_seconds_total` is a monotonic counter (OTLP `sum` with `isMonotonic: true`). The CTE uses `neighbor()` window function to compute per-CPU deltas between consecutive scrape points, then derives `100 * (1 - idle_delta / total_delta)` aggregated across all cores.
 
 `toStartOfInterval` returns `DateTime` (not `DateTime64`) → use `clickhouse::serde::time::datetime`.
 `0.0` from `avgIf` with no data → converted to `None` in response.

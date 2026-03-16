@@ -20,7 +20,7 @@ use super::audit_helpers::emit_audit;
 use super::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
 use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
-use super::handlers::SseStream;
+use super::handlers::{SseStream, try_acquire_sse};
 use super::state::AppState;
 use super::usage_handlers::UsageQuery;
 
@@ -37,6 +37,10 @@ pub struct JobsQuery {
     pub q: Option<String>,
     /// Filter by job source: "api" or "test". Omit for all sources.
     pub source: Option<String>,
+    /// Filter by model name (exact match).
+    pub model: Option<String>,
+    /// Filter by provider name (exact match via JOIN).
+    pub provider: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -87,7 +91,14 @@ pub async fn get_job_detail(
         db_messages
     };
 
-    Ok(Json(dashboard_queries::build_job_detail(row, messages_json)))
+    // Resolve image_keys → URLs
+    let image_urls = row.image_keys.as_ref().and_then(|keys| {
+        state.image_store.as_ref().map(|store| {
+            keys.iter().map(|k| store.url(k)).collect()
+        })
+    });
+
+    Ok(Json(dashboard_queries::build_job_detail(row, messages_json, image_urls)))
 }
 
 /// GET /v1/dashboard/jobs — Paginated job list.
@@ -101,6 +112,8 @@ pub async fn list_jobs(
 
     let status_filter = params.status.as_deref().filter(|s| !s.is_empty());
     let source_filter = params.source.as_deref().filter(|s| !s.is_empty());
+    let model_filter = params.model.as_deref().filter(|s| !s.is_empty());
+    let provider_filter = params.provider.as_deref().filter(|s| !s.is_empty());
     let search_like = params
         .q
         .as_deref()
@@ -114,6 +127,8 @@ pub async fn list_jobs(
         status_filter,
         source_filter,
         search_like.as_deref(),
+        model_filter,
+        provider_filter,
     )
     .await?;
 
@@ -535,18 +550,64 @@ pub async fn get_queue_depth(State(state): State<AppState>) -> impl axum::respon
 // ── GET /v1/dashboard/jobs/stream — Real-time job status SSE ───────
 
 pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Response {
-    let mut rx = state.job_event_tx.subscribe();
+    // Enforce global SSE connection limit — prevents resource exhaustion.
+    let _guard = match try_acquire_sse(&state.sse_connections) {
+        Ok(g) => g,
+        Err(r) => return r,
+    };
+
+    // Subscribe to both channels BEFORE reading the ring buffer to avoid missing
+    // events that arrive between the snapshot read and live subscription.
+    let mut job_rx   = state.job_event_tx.subscribe();
+    let mut stats_rx = state.stats_tx.subscribe();
+
+    // Snapshot the replay buffer (oldest → newest) — include server timestamp.
+    let buffered: Vec<String> = {
+        let buf = state.event_ring_buffer.read().expect("ring buffer poisoned");
+        buf.iter()
+            .filter_map(|(e, ts)| {
+                let mut v = serde_json::to_value(e).ok()?;
+                v.as_object_mut()?.insert("ts".into(), (*ts).into());
+                serde_json::to_string(&v).ok()
+            })
+            .collect()
+    };
 
     let stream: SseStream = Box::pin(async_stream::stream! {
+        let _ = &_guard; // hold connection counter guard alive for stream lifetime
+        // 1. Replay buffered job events so the client sees a populated feed immediately.
+        for json in buffered {
+            yield Ok::<Event, Infallible>(Event::default().event("job_status").data(json));
+        }
+
+        // 2. Forward live job events AND stats ticks as they arrive.
+        // tokio::select! without `biased;` uses pseudo-random branch selection —
+        // ensures fair interleaving between high-frequency job events and 1Hz stats.
         loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    let json = serde_json::to_string(&event).unwrap_or_default();
-                    yield Ok::<Event, Infallible>(Event::default().event("job_status").data(json));
-                }
-                // Lag-skip (RecvError::Lagged): continue receiving; channel closed = break
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            tokio::select! {
+                result = job_rx.recv() => match result {
+                    Ok(event) => {
+                        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+                        let json = match serde_json::to_value(&event) {
+                            Ok(mut v) => {
+                                v.as_object_mut().map(|o| o.insert("ts".into(), now_ms.into()));
+                                serde_json::to_string(&v).unwrap_or_default()
+                            }
+                            Err(_) => continue,
+                        };
+                        yield Ok::<Event, Infallible>(Event::default().event("job_status").data(json));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                result = stats_rx.recv() => match result {
+                    Ok(stats) => {
+                        let Ok(json) = serde_json::to_string(&stats) else { continue };
+                        yield Ok::<Event, Infallible>(Event::default().event("flow_stats").data(json));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
             }
         }
     });

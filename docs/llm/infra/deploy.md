@@ -1,6 +1,6 @@
 # Infrastructure -- Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-03-10 (rev7: agent env vars, image registry, agent StatefulSet)
+> SSOT | **Last Updated**: 2026-03-16 (rev9: minio-init, S3_IMAGE_PUBLIC_URL)
 
 ## Task Guide
 
@@ -38,6 +38,7 @@
 | clickhouse | clickhouse-server:26.1 | 8123, 9000 | Analytics read layer |
 | redpanda | redpandadata/redpanda:v25.3.9 | 9092 | Single message bus (Kafka-compatible) |
 | minio | minio/minio:latest | **9010**, **9011** | S3-compatible object store |
+| minio-init | minio/mc (init container) | -- | Creates `veronex-messages` + `veronex-images` buckets and sets download policy on images bucket. Runs once on startup |
 | veronex | local build | **3001**->3000 | Rust API server |
 | veronex-analytics | local build | internal 3003 | Analytics (OTel write + ClickHouse read) |
 | veronex-web | local build | 3002 | Next.js admin dashboard |
@@ -68,6 +69,8 @@ S3_ENDPOINT=http://localhost:9010     # S3/MinIO (optional — omit to store mes
 S3_ACCESS_KEY=veronex                 # required when S3_ENDPOINT is set
 S3_SECRET_KEY=veronex123              # required when S3_ENDPOINT is set
 S3_BUCKET=veronex-messages
+S3_IMAGE_BUCKET=veronex-images       # separate bucket for inference job images (WebP); default: veronex-images
+S3_IMAGE_PUBLIC_URL=http://localhost:9010/veronex-images  # public URL base for image thumbnails served to browser; required when S3_ENDPOINT set
 S3_REGION=us-east-1
 CAPACITY_ANALYZER_OLLAMA_URL=http://localhost:11434
 SESSION_GROUPING_INTERVAL_SECS=86400 # session grouping loop interval (default: 86400 = 24h)
@@ -143,7 +146,7 @@ Single init migration: `0000000001_init.sql` -- all tables in one schema file.
 | Table | Description |
 |-------|-------------|
 | `api_keys` | Bearer tokens with RPM/TPM rate limits and per-key usage tracking |
-| `inference_jobs` | Job lifecycle: `provider_type`, `provider_id`, `messages_json` |
+| `inference_jobs` | Job lifecycle: `provider_type`, `provider_id`, `messages_json`, `image_keys` (TEXT[]) |
 | `llm_providers` | Provider config (Ollama/Gemini): `provider_type`, VRAM, server FK |
 | `gpu_servers` | GPU hardware nodes with `node_exporter_url` |
 | `gemini_rate_limit_policies` | Per-model RPM/RPD limits + `available_on_free_tier` flag |
@@ -179,7 +182,7 @@ Categories of `Arc<dyn Port>` fields wired in `main.rs` composition root:
 | Observability | `audit_port`, `analytics_repo` |
 | Capacity / thermal | `vram_pool`, `thermal`, `vram_profile_repo`, `capacity_settings_repo`, `sync_trigger`, `analyzer_url` |
 | Lab features | `lab_settings_repo` |
-| Infra | `message_store` (Option, S3), `valkey_pool` (Option), `pg_pool` |
+| Infra | `message_store` (Option, S3), `image_store` (Option, S3), `valkey_pool` (Option), `pg_pool` |
 
 > Full port catalog with adapter mappings: `docs/llm/policies/architecture.md` -- Port Catalog.
 

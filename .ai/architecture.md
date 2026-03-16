@@ -35,6 +35,7 @@ infrastructure → application → domain
 | `JobRepository` | Outbound | PostgresJobRepository |
 | `ApiKeyRepository` | Outbound | PostgresApiKeyRepository |
 | `AuditPort` | Outbound | HttpAuditAdapter (fail-open) |
+| `ImageStore` | Outbound | S3ImageStore (WebP, separate bucket) |
 | `ObservabilityPort` | Outbound | HttpObservabilityAdapter (fail-open) |
 
 ## Background Loops (12)

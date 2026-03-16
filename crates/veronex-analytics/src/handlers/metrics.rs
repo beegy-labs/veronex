@@ -12,20 +12,17 @@ pub struct MetricsHistoryQuery {
 }
 
 #[derive(Debug, Deserialize, clickhouse::Row)]
-struct ChipRow {
-    chip: String,
-}
-
-#[derive(Debug, Deserialize, clickhouse::Row)]
 struct ServerMetricsHistoryRow {
     #[serde(with = "clickhouse::serde::time::datetime")]
     ts: time::OffsetDateTime,
     mem_total_mb: f64,
     mem_avail_mb: f64,
-    gpu_temp_c: f64,
+    gpu_temp_edge_c: f64,
     gpu_temp_junction_c: f64,
     gpu_temp_mem_c: f64,
     gpu_power_w: f64,
+    cpu_usage_pct: f64,
+    cpu_temp_c: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,9 +34,14 @@ pub struct ServerMetricsPoint {
     pub gpu_temp_junction_c: Option<f64>,
     pub gpu_temp_mem_c: Option<f64>,
     pub gpu_power_w: Option<f64>,
+    pub cpu_usage_pct: Option<f64>,
+    pub cpu_temp_c: Option<f64>,
 }
 
 /// `GET /internal/metrics/history/{server_id}?hours=`
+///
+/// Uses agent-enriched `hw_type`/`hw_role` labels for hardware-agnostic queries.
+/// Works with any vendor: AMD (amdgpu/k10temp), Intel (coretemp), NVIDIA (nouveau).
 pub async fn get_server_metrics_history(
     State(state): State<AppState>,
     Path(server_id): Path<Uuid>,
@@ -56,61 +58,78 @@ pub async fn get_server_metrics_history(
         "60 MINUTE"
     };
 
-    // Step 1: find amdgpu chip label
-    let chip_rows = state
-        .ch
-        .query(
-            "SELECT DISTINCT attributes['chip'] AS chip
-             FROM otel_metrics_gauge
-             WHERE metric_name = 'node_hwmon_chip_names'
-               AND attributes['chip_name'] = 'amdgpu'
-               AND server_id = ?
-             LIMIT 1",
-        )
-        .bind(&server_id_str)
-        .fetch_all::<ChipRow>()
-        .await
-        .unwrap_or_default();
-
-    let gpu_chip = chip_rows.into_iter().next().map(|r| r.chip).unwrap_or_default();
-
-    // Step 2: pivot query — edge(temp1), junction(temp2), memory(temp3)
+    // Query uses hw_type/hw_vendor/hw_role labels enriched by veronex-agent.
+    // No chip_name hardcoding — works with any hardware vendor.
     let query_str = format!(
-        "SELECT
-            toStartOfInterval(ts, INTERVAL {bucket_interval}) AS ts,
-            toFloat64(maxIf(value, metric_name IN ('node_memory_MemTotal_bytes', 'node_memory_total_bytes')) / 1048576.0) AS mem_total_mb,
-            toFloat64(avgIf(value, metric_name IN ('node_memory_MemAvailable_bytes', 'node_memory_free_bytes')) / 1048576.0) AS mem_avail_mb,
-            avgIf(value,
-                metric_name = 'node_hwmon_temp_celsius'
-                AND attributes['chip'] = ?
-                AND attributes['sensor'] = 'temp1') AS gpu_temp_c,
-            avgIf(value,
-                metric_name = 'node_hwmon_temp_celsius'
-                AND attributes['chip'] = ?
-                AND attributes['sensor'] = 'temp2') AS gpu_temp_junction_c,
-            avgIf(value,
-                metric_name = 'node_hwmon_temp_celsius'
-                AND attributes['chip'] = ?
-                AND attributes['sensor'] = 'temp3') AS gpu_temp_mem_c,
-            avgIf(value,
-                metric_name IN ('node_hwmon_power_average_watt', 'node_hwmon_power_average_watts')
-                AND attributes['chip'] = ?) AS gpu_power_w
-        FROM otel_metrics_gauge
-        WHERE server_id = ?
-          AND ts >= now() - INTERVAL ? HOUR
-        GROUP BY ts
+        "WITH cpu_buckets AS (
+            SELECT
+                toStartOfInterval(ts, INTERVAL {bucket_interval}) AS bucket,
+                sumIf(value, attributes['mode'] = 'idle') AS idle_total,
+                sum(value) AS all_total
+            FROM otel_metrics_gauge
+            WHERE metric_name = 'node_cpu_seconds_total'
+              AND server_id = ?
+              AND ts >= now() - INTERVAL ? HOUR
+            GROUP BY bucket
+            ORDER BY bucket
+        ),
+        cpu_pct AS (
+            SELECT
+                bucket,
+                if(
+                    all_total - lagInFrame(all_total) OVER (ORDER BY bucket) > 0,
+                    (1.0 - (idle_total - lagInFrame(idle_total) OVER (ORDER BY bucket))
+                          / (all_total - lagInFrame(all_total) OVER (ORDER BY bucket))) * 100.0,
+                    0
+                ) AS usage_pct
+            FROM cpu_buckets
+        )
+        SELECT
+            toStartOfInterval(g.ts, INTERVAL {bucket_interval}) AS ts,
+            -- Memory
+            toFloat64(maxIf(g.value, g.metric_name IN ('node_memory_MemTotal_bytes', 'node_memory_total_bytes')) / 1048576.0) AS mem_total_mb,
+            toFloat64(avgIf(g.value, g.metric_name IN ('node_memory_MemAvailable_bytes', 'node_memory_free_bytes')) / 1048576.0) AS mem_avail_mb,
+            -- GPU temperature (hw_type=gpu): edge, junction, memory
+            avgIf(g.value,
+                g.metric_name = 'node_hwmon_temp_celsius'
+                AND g.attributes['hw_type'] = 'gpu'
+                AND g.attributes['hw_role'] = 'temp_edge') AS gpu_temp_edge_c,
+            avgIf(g.value,
+                g.metric_name = 'node_hwmon_temp_celsius'
+                AND g.attributes['hw_type'] = 'gpu'
+                AND g.attributes['hw_role'] = 'temp_junction') AS gpu_temp_junction_c,
+            avgIf(g.value,
+                g.metric_name = 'node_hwmon_temp_celsius'
+                AND g.attributes['hw_type'] = 'gpu'
+                AND g.attributes['hw_role'] = 'temp_mem') AS gpu_temp_mem_c,
+            -- GPU power (hw_type=gpu)
+            avgIf(g.value,
+                g.metric_name IN ('node_hwmon_power_average_watt', 'node_hwmon_power_average_watts', 'node_hwmon_power_watt')
+                AND g.attributes['hw_type'] = 'gpu') AS gpu_power_w,
+            -- CPU usage % (from counter deltas)
+            coalesce(c.usage_pct, 0) AS cpu_usage_pct,
+            -- CPU temperature (hw_type=cpu, hw_role=temp_package)
+            avgIf(g.value,
+                g.metric_name = 'node_hwmon_temp_celsius'
+                AND g.attributes['hw_type'] = 'cpu'
+                AND g.attributes['hw_role'] = 'temp_package') AS cpu_temp_c
+        FROM otel_metrics_gauge g
+        LEFT JOIN cpu_pct c ON c.bucket = toStartOfInterval(g.ts, INTERVAL {bucket_interval})
+        WHERE g.server_id = ?
+          AND g.ts >= now() - INTERVAL ? HOUR
+          AND g.metric_name != 'node_cpu_seconds_total'
+        GROUP BY ts, c.usage_pct
+        HAVING ts > toDateTime64(0, 9)
         ORDER BY ts"
     );
 
     let rows = state
         .ch
         .query(&query_str)
-        .bind(&gpu_chip)
-        .bind(&gpu_chip)
-        .bind(&gpu_chip)
-        .bind(&gpu_chip)
-        .bind(&server_id_str)
-        .bind(hours)
+        .bind(&server_id_str)  // cpu_buckets server_id
+        .bind(hours)           // cpu_buckets hours
+        .bind(&server_id_str)  // main query server_id
+        .bind(hours)           // main query hours
         .fetch_all::<ServerMetricsHistoryRow>()
         .await
         .map_err(|e| {
@@ -120,17 +139,19 @@ pub async fn get_server_metrics_history(
 
     let points: Vec<ServerMetricsPoint> = rows
         .into_iter()
-        .map(|r| ServerMetricsPoint {
-            ts: r
-                .ts
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default(),
-            mem_total_mb: r.mem_total_mb as u64,
-            mem_avail_mb: r.mem_avail_mb as u64,
-            gpu_temp_c: if r.gpu_temp_c > 0.0 { Some(r.gpu_temp_c) } else { None },
-            gpu_temp_junction_c: if r.gpu_temp_junction_c > 0.0 { Some(r.gpu_temp_junction_c) } else { None },
-            gpu_temp_mem_c: if r.gpu_temp_mem_c > 0.0 { Some(r.gpu_temp_mem_c) } else { None },
-            gpu_power_w: if r.gpu_power_w > 0.0 { Some(r.gpu_power_w) } else { None },
+        .map(|r| {
+            let opt = |v: f64| if v > 0.0 { Some((v * 10.0).round() / 10.0) } else { None };
+            ServerMetricsPoint {
+                ts: r.ts.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+                mem_total_mb: r.mem_total_mb as u64,
+                mem_avail_mb: r.mem_avail_mb as u64,
+                gpu_temp_c: opt(r.gpu_temp_edge_c),
+                gpu_temp_junction_c: opt(r.gpu_temp_junction_c),
+                gpu_temp_mem_c: opt(r.gpu_temp_mem_c),
+                gpu_power_w: opt(r.gpu_power_w),
+                cpu_usage_pct: opt(r.cpu_usage_pct),
+                cpu_temp_c: opt(r.cpu_temp_c),
+            }
         })
         .collect();
 
@@ -154,7 +175,6 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// Concrete boundary examples kept as documentation.
     #[test]
     fn bucket_interval_boundary_examples() {
         assert_eq!(bucket_interval(1), "1 MINUTE");
@@ -169,18 +189,14 @@ mod tests {
         fn bucket_interval_1min_range(hours in 1u32..=24) {
             prop_assert_eq!(bucket_interval(hours), "1 MINUTE");
         }
-
         #[test]
         fn bucket_interval_5min_range(hours in 25u32..=168) {
             prop_assert_eq!(bucket_interval(hours), "5 MINUTE");
         }
-
         #[test]
         fn bucket_interval_60min_range(hours in 169u32..=10000) {
             prop_assert_eq!(bucket_interval(hours), "60 MINUTE");
         }
-
-        /// Clamp always produces a value in [1, 1440].
         #[test]
         fn hours_clamp_always_in_range(hours in 0u32..=100000) {
             let clamped = hours.clamp(1, 1440);

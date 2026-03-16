@@ -171,6 +171,17 @@ MinIO / S3 bucket name.
 {{- end }}
 
 {{/*
+MinIO / S3 image bucket name (WebP thumbnails).
+*/}}
+{{- define "veronex.s3ImageBucket" -}}
+{{- if .Values.minio.enabled -}}
+{{ .Values.minio.imageBucket | default "veronex-images" }}
+{{- else -}}
+{{ .Values.externalMinio.imageBucket | default "veronex-images" }}
+{{- end -}}
+{{- end }}
+
+{{/*
 MinIO / S3 region.
 */}}
 {{- define "veronex.s3Region" -}}

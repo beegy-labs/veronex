@@ -1,6 +1,6 @@
 # Web -- Brand, Design System & Core
 
-> SSOT | **Last Updated**: 2026-03-08 | Split from monolithic design-system into 3 files
+> SSOT | **Last Updated**: 2026-03-16 | Split from monolithic design-system into 3 files
 
 Related files:
 - [design-system-i18n.md](design-system-i18n.md) -- i18n, timezone, date formatting
@@ -26,6 +26,9 @@ Related files:
 | File | Purpose |
 |------|---------|
 | `web/app/tokens.css` | Design token SSOT (4-layer architecture) |
+| `web/lib/design-tokens.ts` | TypeScript token module — type-safe `tokens.*` references for inline styles |
+| `web/lib/constants.ts` | Tailwind badge/color class maps (PROVIDER_BADGE, STATUS_STYLES, etc.) |
+| `web/lib/chart-theme.ts` | Recharts style constants + formatters — uses `tokens.*` internally |
 | `web/app/globals.css` | Tailwind v4 entry + focus ring + bee animation |
 | `web/app/layout.tsx` | All providers: Theme, I18n, Timezone, QueryClient, LabSettings |
 | `web/components/lab-settings-provider.tsx` | `useLabSettings()` -- experimental feature flags |
@@ -34,7 +37,6 @@ Related files:
 | `web/components/nav-settings-dialog.tsx` | Settings dialog: language, timezone, lab features |
 | `web/components/theme-provider.tsx` | `data-theme` switcher, `localStorage('hg-theme')` |
 | `web/components/data-table.tsx` | `DataTable` + `DataTableEmpty` -- SSOT for all tables |
-| `web/lib/chart-theme.ts` | Recharts constants + `fmtMs`/`fmtMsAxis`/`fmtMsNullable` |
 | `web/lib/auth.ts` | Token CRUD (see [components](design-system-components.md)) |
 | `web/lib/auth-guard.ts` | Auth flow SSOT (see [components](design-system-components.md)) |
 | `web/lib/api-client.ts` | HTTP transport, delegates 401 to auth-guard |
@@ -97,14 +99,23 @@ Dark status colors: `#34d399` / `#fb7185` / `#fbbf24` / `#60a5fa`.
 
 | Policy | Rule |
 |--------|------|
-| Color | Zero hardcoded hex in TSX. Use Tailwind utilities or `var(--theme-*)` |
+| Color — inline style | Use `tokens.*` from `web/lib/design-tokens.ts` — never raw `'var(--theme-*)'` strings |
+| Color — Tailwind class | Use semantic utilities: `bg-status-success`, `text-status-warning-fg` — never `gray-*`/`slate-*`/`zinc-*` |
+| Color — hardcoded hex | Zero tolerance in TSX. Exception: `redoc-wrapper.tsx` (3rd-party theme API, documented inline) |
+| Token names | `status-warning` / `status-warning-fg` — NOT `status-warn` / `status-warn-fg` |
+| SVG / Recharts | `fill={tokens.*}` (JSX expression) — never `fill="var(--theme-*)"` string attribute |
 | Headings | `text-2xl font-bold tracking-tight` |
-| Status order | Always: pending -> running -> completed -> failed -> cancelled |
-| i18n | All user-visible strings via `t('key')` -- no hardcoded English |
-| Terminology | See `docs/llm/policies/terminology.md` -- SSOT for all term definitions |
-| Recharts | Import from `web/lib/chart-theme.ts` (SSOT) -- never define chart constants in page files |
+| Status order | Always: pending → running → completed → failed → cancelled |
+| i18n | All user-visible strings via `t('key')` — no hardcoded English/Korean/Japanese |
+| i18n interpolation | Always use `{{var}}` double braces for interpolation — never single `{var}` |
+| i18n parity | Every key in `en.json` must exist in `ko.json` and `ja.json` |
+| CJK overflow | Use `whitespace-nowrap` on badges and table headers to prevent CJK text wrapping mid-word |
+| Terminology | See `docs/llm/policies/terminology.md` — SSOT for all term definitions |
+| Recharts style | Import from `web/lib/chart-theme.ts` (SSOT) — never define chart constants in page files |
+| Recharts formatters | Use `fmtMs`, `fmtCompact`, `fmtPct`, `fmtTemp` etc from `chart-theme.ts` — no local `toFixed()` for display |
+| Accessibility | WCAG 2.1 AA (admin scope): color+icon+text for status, `aria-label` on icon-only buttons, focus ring |
 | Focus ring | `4px solid var(--theme-focus-ring)`, offset 4px |
-| Font | System font stack only -- no Google Fonts (breaks CJK) |
+| Font | System font stack only — no Google Fonts (breaks CJK) |
 
 ---
 
