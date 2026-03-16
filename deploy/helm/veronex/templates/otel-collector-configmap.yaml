@@ -24,17 +24,17 @@ data:
     exporters:
       kafka/logs:
         brokers:
-          - {{ include "veronex.redpandaBroker" . }}
+          - {{ required "OTel collector requires a Redpanda/Kafka broker: set redpandaEnabled=true or externalRedpanda.brokers" (include "veronex.redpandaBroker" .) }}
         topic: otel-logs
         encoding: otlp_json
       kafka/metrics:
         brokers:
-          - {{ include "veronex.redpandaBroker" . }}
+          - {{ required "OTel collector requires a Redpanda/Kafka broker: set redpandaEnabled=true or externalRedpanda.brokers" (include "veronex.redpandaBroker" .) }}
         topic: otel-metrics
         encoding: otlp_json
       kafka/traces:
         brokers:
-          - {{ include "veronex.redpandaBroker" . }}
+          - {{ required "OTel collector requires a Redpanda/Kafka broker: set redpandaEnabled=true or externalRedpanda.brokers" (include "veronex.redpandaBroker" .) }}
         topic: otel-traces
         encoding: otlp_json
 
