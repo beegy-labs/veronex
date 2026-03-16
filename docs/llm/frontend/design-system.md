@@ -107,7 +107,9 @@ Dark status colors: `#34d399` / `#fb7185` / `#fbbf24` / `#60a5fa`.
 | Headings | `text-2xl font-bold tracking-tight` |
 | Status order | Always: pending → running → completed → failed → cancelled |
 | i18n | All user-visible strings via `t('key')` — no hardcoded English/Korean/Japanese |
+| i18n interpolation | Always use `{{var}}` double braces for interpolation — never single `{var}` |
 | i18n parity | Every key in `en.json` must exist in `ko.json` and `ja.json` |
+| CJK overflow | Use `whitespace-nowrap` on badges and table headers to prevent CJK text wrapping mid-word |
 | Terminology | See `docs/llm/policies/terminology.md` — SSOT for all term definitions |
 | Recharts style | Import from `web/lib/chart-theme.ts` (SSOT) — never define chart constants in page files |
 | Recharts formatters | Use `fmtMs`, `fmtCompact`, `fmtPct`, `fmtTemp` etc from `chart-theme.ts` — no local `toFixed()` for display |

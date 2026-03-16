@@ -1,6 +1,6 @@
 # Web -- Jobs: Types & Extended Fields
 
-> SSOT | **Last Updated**: 2026-03-15 (companion to `jobs.md`, `jobs-impl.md`)
+> SSOT | **Last Updated**: 2026-03-16 (companion to `jobs.md`, `jobs-impl.md`)
 
 ## Types (`web/lib/types.ts`)
 
@@ -19,7 +19,7 @@ export interface Job {
   model_name: string
   provider_type: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-  source: 'api' | 'test'
+  source: 'api' | 'test' | 'analyzer'
   created_at: string
   completed_at: string | null
   latency_ms: number | null
@@ -126,7 +126,7 @@ Present on both `Job` and `JobDetail`. The human-readable name of the provider (
 
 ### `image_keys: string[] | null` / `image_urls: string[] | null`
 
-Present on `JobDetail` only. `image_keys` are S3 object keys (`images/{job_id}/{index}.webp`). `image_urls` are presigned/direct URLs resolved at query time via `ImageStore.url()`. UI renders a thumbnail gallery in the job detail modal when present. Stored as `TEXT[]` column on `inference_jobs`.
+Present on `JobDetail` only. `image_keys` are S3 object keys (`images/{job_id}/{index}.webp`). `image_urls` are constructed from `image_keys` + `S3_IMAGE_PUBLIC_URL` env var (e.g. `http://localhost:9010/veronex-images/{key}`). UI renders a thumbnail gallery in the job detail modal when present. Stored as `TEXT[]` column on `inference_jobs`.
 
 ---
 

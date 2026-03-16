@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-15 | Classification: Constitutional
+> SSOT | **Last Updated**: 2026-03-16 | Classification: Constitutional
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision
@@ -99,6 +99,11 @@ Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → ZADD queue:z
            → OllamaAdapter | GeminiAdapter → SSE tokens
            → permit dropped (auto) → KV cache returned, weight stays
            → ObservabilityPort → veronex-analytics → ClickHouse
+
+Placement planner (dispatcher filter_candidates):
+  ④ STANDBY recovery: standby providers included in candidate list,
+    woken on demand in score_and_claim when queue_len > 0
+  ⑤ Scale-In: skipped entirely when ZSET queue has pending jobs (queue_len > 0)
 
 Direct path (dev mode, no Valkey):
   pick_and_build() → gate chain → try_reserve() → None = skip (VRAM unavailable)

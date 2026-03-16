@@ -1,6 +1,6 @@
 # Web -- Jobs Page
 
-> SSOT | **Last Updated**: 2026-03-15 (rev6: provider_name column, image gallery, model/provider filters)
+> SSOT | **Last Updated**: 2026-03-16 (rev7: flow_stats, Gemini node, stale bee filter)
 
 ## Task Guide
 
@@ -26,12 +26,13 @@
 
 ## `source` Field
 
-The `Job` and `JobDetail` types carry `source: 'api' | 'test'`. This field is set by the backend at job creation time based on the Valkey queue used:
+The `Job` and `JobDetail` types carry `source: 'api' | 'test' | 'analyzer'`. This field is set by the backend at job creation time based on the origin:
 
 | Value | Queue | Meaning |
 |-------|-------|---------|
 | `'api'` | `veronex:queue:jobs` | Submitted via the OpenAI-compatible API |
 | `'test'` | `veronex:queue:jobs:test` | Submitted via the web Test panel |
+| `'analyzer'` | `veronex:queue:zset` | Submitted by the capacity analyzer (VRAM probing/batch analysis) |
 
 The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Overview page recent-jobs mini-table shows all sources without filtering.
 
@@ -63,6 +64,8 @@ The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Ov
 |   (same component as /flow page -- real-time pipeline visualization)  |
 +-----------------------------------------------------------------------+
 ```
+
+Network Flow notes: Ollama node centers when Gemini is disabled. Stale bee filter removes inactive bees after 2 s. Flow chart badges show live pending/running/req-s counts from `flow_stats` SSE events.
 
 See `jobs-impl.md` for GroupSessionsPanel internals, handleRetry cross-tab navigation, and Network Flow details.
 

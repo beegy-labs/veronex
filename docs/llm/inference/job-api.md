@@ -1,6 +1,6 @@
 # Jobs — Dashboard API & Response Structs
 
-> SSOT | **Last Updated**: 2026-03-15
+> SSOT | **Last Updated**: 2026-03-16
 
 ## API Endpoints
 
@@ -13,7 +13,7 @@ GET /v1/dashboard/stats
 GET /v1/dashboard/jobs?limit=&offset=&status=&q=&source=&model=&provider=
     q        → prompt ILIKE '%{q}%'
     status   → all | pending | running | completed | failed | cancelled
-    source   → api | test  (omit for all)
+    source   → api | test | analyzer  (omit for all)
     model    → exact match on model_name (omit for all)
     provider → exact match on provider name via JOIN (omit for all)
     → { total: i64, jobs: Vec<JobSummary> }
@@ -48,6 +48,17 @@ Fires one SSE event per job status transition. Backed by a `tokio::sync::broadca
 - Slow consumers lag-skip (miss events) rather than blocking producers
 
 Client: `web/hooks/use-inference-stream.ts` — `fetch()`-based SSE reader with JWT Bearer auth; exponential backoff reconnect (2s → 30s max).
+
+#### `flow_stats` SSE Event
+
+In addition to `job_status` events, the stream emits `flow_stats` every 1 second:
+
+```
+event: flow_stats
+data: {"incoming": 2, "queued": 5, "running": 3, "completed": 120}
+```
+
+`FlowStats` struct: `{ incoming: u32, queued: u32, running: u32, completed: u32 }`. Used by the Network Flow panel to render live flow chart badges (pending/running/req-s).
 
 `JobStatusEvent` (in `domain/value_objects.rs`):
 ```rust

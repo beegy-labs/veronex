@@ -1,6 +1,6 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-03-15
+> SSOT | **Last Updated**: 2026-03-16
 
 ## Task Guide
 
@@ -34,6 +34,7 @@ Jobs carry a `source` field that records their origin:
 |-------|---------|
 | `api` | Submitted by any API key route (`/v1/chat/completions`, `/api/chat`, `/api/generate`, `/v1beta/models/*`, `/v1/inference`) |
 | `test` | Submitted from the dashboard Test Run panel (`/v1/test/*` routes, Bearer JWT, no rate limit) |
+| `analyzer` | Submitted by the capacity analyzer for VRAM probing and batch analysis (internal LLM inference) |
 
 - The `source` field is **immutable** — set at creation, never updated on UPSERT.
 - Default value in DB: `'api'` (backward-compatible with older rows).
