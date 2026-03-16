@@ -311,11 +311,11 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
                 }} />
               <text x={API_CX} y={API_CY + API_H / 2 + 13} textAnchor="middle"
                 style={{ fill: recentRequests > 0 ? tokens.brand.primary : tokens.text.secondary, fontSize: 8, fontWeight: 700 }}>
-                {recentRequests} req/s
+                {typeof recentRequests === 'number' ? recentRequests.toFixed(1) : recentRequests} req/s
               </text>
               <text x={API_CX} y={API_CY + API_H / 2 + 22} textAnchor="middle"
                 style={{ fill: tokens.text.secondary, fontSize: 7 }}>
-                {recentRequests * 60} req/m
+                {Math.round((recentRequests ?? 0) * 60)} req/m
               </text>
               {/* ── Node 2: Queue (Valkey) — cylinder ────────────────── */}
               {/* Bottom ellipse cap — drawn first (behind body) */}
