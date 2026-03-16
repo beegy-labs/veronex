@@ -203,17 +203,7 @@ pub async fn spawn_background_tasks(
                         // Per-second rates from ring buffer — single pass O(100)
                         let (incoming, completed) = {
                             let buf = buf.read().expect("ring buffer poisoned");
-                            let mut inc = 0u32;
-                            let mut done = 0u32;
-                            for (e, ts) in buf.iter() {
-                                if *ts < window { continue; }
-                                match e.status.as_str() {
-                                    "pending" => inc += 1,
-                                    "completed" | "failed" | "cancelled" => done += 1,
-                                    _ => {}
-                                }
-                            }
-                            (inc, done)
+                            count_ring_events(&buf, window)
                         };
 
                         // Instantaneous counts from in-memory DashMap
@@ -352,5 +342,82 @@ pub async fn spawn_background_tasks(
         event_ring_buffer,
         stats_tx,
         use_case,
+    }
+}
+
+/// Count `(incoming, completed)` events in the ring buffer that fall within `[window_ms, ∞)`.
+///
+/// - `incoming` = `"pending"` transitions (job arrivals, ~req/s)
+/// - `completed` = `"completed" | "failed" | "cancelled"` (terminal outcomes)
+///
+/// Extracted from the stats ticker closure to make the counting logic unit-testable.
+pub(super) fn count_ring_events(
+    buf: &std::collections::VecDeque<(JobStatusEvent, u64)>,
+    window_ms: u64,
+) -> (u32, u32) {
+    let mut inc = 0u32;
+    let mut done = 0u32;
+    for (e, ts) in buf.iter() {
+        if *ts < window_ms { continue; }
+        match e.status.as_str() {
+            "pending" => inc += 1,
+            "completed" | "failed" | "cancelled" => done += 1,
+            _ => {}
+        }
+    }
+    (inc, done)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use veronex::domain::value_objects::JobStatusEvent;
+
+    fn make_event(status: &str, ts: u64) -> (JobStatusEvent, u64) {
+        let ev = JobStatusEvent {
+            id: "test".to_string(),
+            status: status.to_string(),
+            model_name: "test-model".to_string(),
+            provider_type: "ollama".to_string(),
+            latency_ms: None,
+        };
+        (ev, ts)
+    }
+
+    #[test]
+    fn empty_buffer_returns_zeros() {
+        let buf = std::collections::VecDeque::new();
+        assert_eq!(count_ring_events(&buf, 1000), (0, 0));
+    }
+
+    #[test]
+    fn events_outside_window_ignored() {
+        let mut buf = std::collections::VecDeque::new();
+        buf.push_back(make_event("pending", 500));
+        buf.push_back(make_event("completed", 999));
+        // window_ms = 1000 → ts 500 and 999 are both excluded
+        assert_eq!(count_ring_events(&buf, 1000), (0, 0));
+    }
+
+    #[test]
+    fn boundary_ts_equal_to_window_is_included() {
+        let mut buf = std::collections::VecDeque::new();
+        buf.push_back(make_event("pending", 1000));
+        assert_eq!(count_ring_events(&buf, 1000), (1, 0));
+    }
+
+    #[test]
+    fn counts_mixed_statuses_within_window() {
+        let mut buf = std::collections::VecDeque::new();
+        buf.push_back(make_event("pending",   1000));
+        buf.push_back(make_event("running",   1001)); // not counted
+        buf.push_back(make_event("completed", 1002));
+        buf.push_back(make_event("failed",    1003));
+        buf.push_back(make_event("cancelled", 1004));
+        buf.push_back(make_event("pending",   1005));
+        let (inc, done) = count_ring_events(&buf, 1000);
+        assert_eq!(inc, 2);
+        assert_eq!(done, 3);
     }
 }

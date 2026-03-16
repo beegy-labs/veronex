@@ -278,6 +278,41 @@ mod tests {
     }
 
     #[test]
+    fn job_owner_key_format() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            job_owner_key(id),
+            "veronex:job:owner:00000000-0000-0000-0000-000000000000",
+        );
+    }
+
+    #[test]
+    fn ratelimit_tpm_key_format() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            ratelimit_tpm_key(id, 1_710_600_000),
+            "veronex:ratelimit:tpm:00000000-0000-0000-0000-000000000000:1710600000",
+        );
+    }
+
+    #[test]
+    fn preload_lock_key_format() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            preload_lock_key("qwen3:8b", id),
+            "veronex:preloading:qwen3:8b:00000000-0000-0000-0000-000000000000",
+        );
+    }
+
+    #[test]
+    fn scaleout_decision_key_format() {
+        assert_eq!(
+            scaleout_decision_key("llama3:70b"),
+            "veronex:scaleout:llama3:70b",
+        );
+    }
+
+    #[test]
     fn adaptive_k_bounds() {
         assert!(ZSET_PEEK_K >= 20);
         assert!(ZSET_PEEK_K_MAX <= 100);

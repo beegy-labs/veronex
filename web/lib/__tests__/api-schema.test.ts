@@ -429,4 +429,53 @@ describe('API Schema: SSE Events', () => {
       completed: 0,
     }).success).toBe(false)
   })
+
+  it('accepts ts=0 as valid unix timestamp', () => {
+    expect(JobStatusEventSchema.safeParse({
+      id: '019cf3a0-ce23-71f2-9cdc-f97fcf4e1855',
+      status: 'pending',
+      model_name: 'qwen3:8b',
+      provider_type: 'ollama',
+      latency_ms: null,
+      ts: 0,
+    }).success).toBe(true)
+  })
+
+  it('accepts ts=MAX_SAFE_INTEGER as valid timestamp', () => {
+    expect(JobStatusEventSchema.safeParse({
+      id: '019cf3a0-ce23-71f2-9cdc-f97fcf4e1855',
+      status: 'running',
+      model_name: 'qwen3:8b',
+      provider_type: 'ollama',
+      latency_ms: null,
+      ts: Number.MAX_SAFE_INTEGER,
+    }).success).toBe(true)
+  })
+
+  it('accepts flow stats with all zeros', () => {
+    expect(FlowStatsSchema.safeParse({
+      incoming: 0,
+      queued: 0,
+      running: 0,
+      completed: 0,
+    }).success).toBe(true)
+  })
+
+  it('rejects flow stats with float value', () => {
+    expect(FlowStatsSchema.safeParse({
+      incoming: 1.5,
+      queued: 0,
+      running: 0,
+      completed: 0,
+    }).success).toBe(false)
+  })
+
+  it('rejects flow stats missing required field', () => {
+    expect(FlowStatsSchema.safeParse({
+      incoming: 1,
+      queued: 0,
+      running: 0,
+      // completed missing
+    }).success).toBe(false)
+  })
 })

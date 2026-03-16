@@ -470,15 +470,57 @@ impl InferenceUseCase for InferenceUseCaseImpl {
     }
 
     fn get_live_counts(&self) -> LiveCounts {
-        let mut pending = 0u32;
-        let mut running = 0u32;
-        for entry in self.jobs.iter() {
-            match entry.status {
-                JobStatus::Pending => pending += 1,
-                JobStatus::Running => running += 1,
-                _ => {}
-            }
+        count_live_statuses(self.jobs.iter().map(|e| e.status))
+    }
+}
+
+/// Count pending/running jobs from an iterator of statuses.
+/// Extracted to a free function so it can be unit-tested without constructing the full use-case struct.
+pub(super) fn count_live_statuses(statuses: impl Iterator<Item = JobStatus>) -> LiveCounts {
+    let mut pending = 0u32;
+    let mut running = 0u32;
+    for status in statuses {
+        match status {
+            JobStatus::Pending => pending += 1,
+            JobStatus::Running => running += 1,
+            _ => {}
         }
-        LiveCounts { pending, running }
+    }
+    LiveCounts { pending, running }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_live_statuses_empty() {
+        let counts = count_live_statuses(std::iter::empty());
+        assert_eq!(counts.pending, 0);
+        assert_eq!(counts.running, 0);
+    }
+
+    #[test]
+    fn count_live_statuses_mixed() {
+        let statuses = vec![
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::Pending,
+            JobStatus::Completed,
+            JobStatus::Failed,
+            JobStatus::Running,
+            JobStatus::Cancelled,
+        ];
+        let counts = count_live_statuses(statuses.into_iter());
+        assert_eq!(counts.pending, 2);
+        assert_eq!(counts.running, 2);
+    }
+
+    #[test]
+    fn count_live_statuses_only_terminal() {
+        let statuses = vec![JobStatus::Completed, JobStatus::Failed, JobStatus::Cancelled];
+        let counts = count_live_statuses(statuses.into_iter());
+        assert_eq!(counts.pending, 0);
+        assert_eq!(counts.running, 0);
     }
 }
