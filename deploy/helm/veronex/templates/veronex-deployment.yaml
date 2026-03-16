@@ -39,6 +39,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+          {{- if and .Values.externalSecrets.csi.enabled .Values.externalSecrets.csi.syncAsSecret }}
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+          {{- end }}
           envFrom:
             - secretRef:
                 name: {{ include "veronex.secretName" . }}
@@ -93,3 +99,12 @@ spec:
             {{- end }}
           resources:
             {{- toYaml .Values.veronex.resources | nindent 12 }}
+      {{- if and .Values.externalSecrets.csi.enabled .Values.externalSecrets.csi.syncAsSecret }}
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Release.Name }}-veronex-secrets
+      {{- end }}
