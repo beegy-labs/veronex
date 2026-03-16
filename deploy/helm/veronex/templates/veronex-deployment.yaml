@@ -43,6 +43,8 @@ spec:
             - secretRef:
                 name: {{ include "veronex.secretName" . }}
           env:
+            - name: RUST_LOG
+              value: {{ .Values.veronex.logLevel | default "info" | quote }}
             - name: PORT
               value: "{{ .Values.veronex.service.port }}"
             - name: VALKEY_URL

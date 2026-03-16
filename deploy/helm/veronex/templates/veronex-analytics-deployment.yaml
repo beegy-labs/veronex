@@ -40,6 +40,8 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           env:
+            - name: RUST_LOG
+              value: {{ .Values.veronexAnalytics.logLevel | default "info" | quote }}
             - name: PORT
               value: "{{ .Values.veronexAnalytics.service.port }}"
             - name: ANALYTICS_SECRET
