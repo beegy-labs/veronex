@@ -32,6 +32,8 @@ import {
   AnalyticsStatsSchema,
   LabSettingsSchema,
   ApiErrorSchema,
+  JobStatusEventSchema,
+  FlowStatsSchema,
 } from '../api-schemas'
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
@@ -323,6 +325,33 @@ describe('API Schema: Jobs', () => {
     const { prompt: _, ...noPrompt } = fixtures.jobDetail
     expect(JobDetailSchema.safeParse(noPrompt).success).toBe(false)
   })
+
+  it('validates job with provider_name', () => {
+    expect(JobSchema.safeParse({ ...fixtures.job, provider_name: 'local-ollama' }).success).toBe(true)
+  })
+
+  it('validates job with null provider_name', () => {
+    expect(JobSchema.safeParse({ ...fixtures.job, provider_name: null }).success).toBe(true)
+  })
+
+  it('validates job with analyzer source', () => {
+    expect(JobSchema.safeParse({ ...fixtures.job, source: 'analyzer' }).success).toBe(true)
+  })
+
+  it('validates job detail with image_keys and image_urls', () => {
+    const detail = {
+      ...fixtures.jobDetail,
+      provider_name: 'local-ollama',
+      image_keys: ['images/abc/0.webp', 'images/abc/0_thumb.webp'],
+      image_urls: ['http://localhost:9010/veronex-images/images/abc/0.webp', 'http://localhost:9010/veronex-images/images/abc/0_thumb.webp'],
+    }
+    expect(JobDetailSchema.safeParse(detail).success).toBe(true)
+  })
+
+  it('validates job detail with null image fields', () => {
+    const detail = { ...fixtures.jobDetail, image_keys: null, image_urls: null }
+    expect(JobDetailSchema.safeParse(detail).success).toBe(true)
+  })
 })
 
 describe('API Schema: Performance', () => {
@@ -358,5 +387,46 @@ describe('API Schema: Lab Settings', () => {
 describe('API Schema: Error', () => {
   it('validates error response', () => {
     expect(ApiErrorSchema.safeParse({ error: 'url is required for ollama provider' }).success).toBe(true)
+  })
+})
+
+describe('API Schema: SSE Events', () => {
+  it('validates job status event', () => {
+    expect(JobStatusEventSchema.safeParse({
+      id: '019cf3a0-ce23-71f2-9cdc-f97fcf4e1855',
+      status: 'completed',
+      model_name: 'qwen3:8b',
+      provider_type: 'ollama',
+      latency_ms: 1200,
+      ts: 1710600000000,
+    }).success).toBe(true)
+  })
+
+  it('validates job status event without ts (legacy)', () => {
+    expect(JobStatusEventSchema.safeParse({
+      id: '019cf3a0-ce23-71f2-9cdc-f97fcf4e1855',
+      status: 'pending',
+      model_name: 'qwen3:8b',
+      provider_type: 'ollama',
+      latency_ms: null,
+    }).success).toBe(true)
+  })
+
+  it('validates flow stats', () => {
+    expect(FlowStatsSchema.safeParse({
+      incoming: 3,
+      queued: 1,
+      running: 2,
+      completed: 5,
+    }).success).toBe(true)
+  })
+
+  it('rejects negative flow stats', () => {
+    expect(FlowStatsSchema.safeParse({
+      incoming: -1,
+      queued: 0,
+      running: 0,
+      completed: 0,
+    }).success).toBe(false)
   })
 })

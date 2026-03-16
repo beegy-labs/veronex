@@ -562,4 +562,71 @@ some_random_metric 999
             prop_assert_eq!(labels.len(), count);
         }
     }
+
+    // ── Hardware classification tests ─────────────────────────────────
+
+    #[test]
+    fn classify_chip_gpu_vendors() {
+        assert_eq!(classify_chip("amdgpu"), Some(("gpu", "amd")));
+        assert_eq!(classify_chip("nouveau"), Some(("gpu", "nvidia")));
+    }
+
+    #[test]
+    fn classify_chip_cpu_vendors() {
+        assert_eq!(classify_chip("coretemp"), Some(("cpu", "intel")));
+        assert_eq!(classify_chip("k10temp"), Some(("cpu", "amd")));
+        assert_eq!(classify_chip("zenpower"), Some(("cpu", "amd")));
+    }
+
+    #[test]
+    fn classify_chip_storage_and_board() {
+        assert_eq!(classify_chip("nvme"), Some(("storage", "nvme")));
+        assert_eq!(classify_chip("acpitz"), Some(("board", "acpi")));
+        assert_eq!(classify_chip("nct6775"), Some(("board", "motherboard")));
+    }
+
+    #[test]
+    fn classify_chip_unknown_returns_none() {
+        assert_eq!(classify_chip("r8169_0_c100:00"), None);
+        assert_eq!(classify_chip("unknown_driver"), None);
+    }
+
+    #[test]
+    fn normalize_gpu_sensor_roles() {
+        assert_eq!(normalize_sensor_role("gpu", "edge"), "temp_edge");
+        assert_eq!(normalize_sensor_role("gpu", "junction"), "temp_junction");
+        assert_eq!(normalize_sensor_role("gpu", "mem"), "temp_mem");
+        assert_eq!(normalize_sensor_role("gpu", "PPT"), "power");
+    }
+
+    #[test]
+    fn normalize_cpu_sensor_roles() {
+        assert_eq!(normalize_sensor_role("cpu", "Package id 0"), "temp_package");
+        assert_eq!(normalize_sensor_role("cpu", "Tctl"), "temp_package");
+        assert_eq!(normalize_sensor_role("cpu", "Core 0"), "temp_core");
+        assert_eq!(normalize_sensor_role("cpu", "Tccd1"), "temp_core");
+    }
+
+    #[test]
+    fn enrich_adds_hw_labels() {
+        let mut gauges = vec![Gauge {
+            name: "node_hwmon_temp_celsius".into(),
+            value: 55.0,
+            labels: vec![
+                ("chip".into(), "0000:c4:00_0".into()),
+                ("sensor".into(), "temp1".into()),
+            ],
+        }];
+        let chip_map = std::collections::HashMap::from([
+            ("0000:c4:00_0".into(), "amdgpu".into()),
+        ]);
+        let label_map = std::collections::HashMap::from([
+            (("0000:c4:00_0".into(), "temp1".into()), "edge".into()),
+        ]);
+        enrich_hwmon_labels(&mut gauges, &chip_map, &label_map);
+        let labels = &gauges[0].labels;
+        assert!(labels.iter().any(|(k, v)| k == "hw_type" && v == "gpu"));
+        assert!(labels.iter().any(|(k, v)| k == "hw_vendor" && v == "amd"));
+        assert!(labels.iter().any(|(k, v)| k == "hw_role" && v == "temp_edge"));
+    }
 }
