@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { GpuServer } from '@/lib/types'
 import { serverMetricsHistoryQuery } from '@/lib/queries'
@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dialog'
 import { useTranslation } from '@/i18n'
 import { TOOLTIP_STYLE, AXIS_TICK_SM, fmtTimeHHMM } from '@/lib/chart-theme'
+import { tokens } from '@/lib/design-tokens'
 import { calcPercentage } from '@/lib/utils'
 
 const HIST_HOUR_OPTIONS = [1, 3, 6, 24] as const
@@ -28,19 +29,22 @@ export function ServerHistoryModal({
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery(serverMetricsHistoryQuery(server.id, hours))
 
-  const chartData = (data ?? []).map((p) => ({
-    ts: fmtTimeHHMM(p.ts),
-    memUsedPct: p.mem_total_mb > 0
-      ? calcPercentage(p.mem_total_mb - p.mem_avail_mb, p.mem_total_mb) : 0,
-    gpuTemp: p.gpu_temp_junction_c ?? p.gpu_temp_c ?? undefined,
-    gpuPower: p.gpu_power_w !== null ? Math.round((p.gpu_power_w ?? 0) * 10) / 10 : undefined,
-  }))
+  const chartData = useMemo(() =>
+    (data ?? []).map((p) => ({
+      ts: fmtTimeHHMM(p.ts),
+      memUsedPct: p.mem_total_mb > 0
+        ? calcPercentage(p.mem_total_mb - p.mem_avail_mb, p.mem_total_mb) : 0,
+      gpuTemp: p.gpu_temp_junction_c ?? p.gpu_temp_c ?? undefined,
+      gpuPower: p.gpu_power_w !== null ? Math.round((p.gpu_power_w ?? 0) * 10) / 10 : undefined,
+    })),
+    [data],
+  )
 
   const hasGpu = (data ?? []).some((p) => p.gpu_temp_junction_c !== null || p.gpu_temp_c !== null || p.gpu_power_w !== null)
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[95vw] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BarChart2 className="h-4 w-4 text-accent-gpu" />
@@ -90,8 +94,8 @@ export function ServerHistoryModal({
                 <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                   <XAxis dataKey="ts" tick={AXIS_TICK_SM} interval="preserveStartEnd" />
                   <YAxis domain={[0, 100]} tick={AXIS_TICK_SM} unit="%" />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v)}%`, 'Mem Used'] as [string, string]} />
-                  <Line type="monotone" dataKey="memUsedPct" stroke="var(--theme-status-info)" dot={false} strokeWidth={2} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v)}%`, t('providers.memUsedPct')] as [string, string]} />
+                  <Line type="monotone" dataKey="memUsedPct" stroke={tokens.status.info} dot={false} strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -103,8 +107,8 @@ export function ServerHistoryModal({
                     <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                       <XAxis dataKey="ts" tick={AXIS_TICK_SM} interval="preserveStartEnd" />
                       <YAxis tick={AXIS_TICK_SM} unit="°C" />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v)}°C`, 'GPU Temp'] as [string, string]} />
-                      <Line type="monotone" dataKey="gpuTemp" stroke="var(--theme-status-error)" dot={false} strokeWidth={2} connectNulls />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v)}°C`, t('providers.gpuTempC')] as [string, string]} />
+                      <Line type="monotone" dataKey="gpuTemp" stroke={tokens.status.error} dot={false} strokeWidth={2} connectNulls />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -114,8 +118,8 @@ export function ServerHistoryModal({
                     <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                       <XAxis dataKey="ts" tick={AXIS_TICK_SM} interval="preserveStartEnd" />
                       <YAxis tick={AXIS_TICK_SM} unit="W" />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v)}W`, 'GPU Power'] as [string, string]} />
-                      <Line type="monotone" dataKey="gpuPower" stroke="var(--theme-accent-power)" dot={false} strokeWidth={2} connectNulls />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v)}W`, t('providers.gpuPowerW')] as [string, string]} />
+                      <Line type="monotone" dataKey="gpuPower" stroke={tokens.accent.power} dot={false} strokeWidth={2} connectNulls />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>

@@ -46,6 +46,8 @@ pub enum JobSource {
     #[default]
     Api,
     Test,
+    /// Capacity analyzer LLM inference (VRAM probing, batch analysis).
+    Analyzer,
 }
 
 /// Which API format the inbound request arrived via.
@@ -97,6 +99,7 @@ impl JobSource {
         match self {
             Self::Api => "api",
             Self::Test => "test",
+            Self::Analyzer => "analyzer",
         }
     }
 }
@@ -107,6 +110,7 @@ impl std::str::FromStr for JobSource {
         match s {
             "api" => Ok(Self::Api),
             "test" => Ok(Self::Test),
+            "analyzer" => Ok(Self::Analyzer),
             other => Err(format!("invalid job source: {other}")),
         }
     }

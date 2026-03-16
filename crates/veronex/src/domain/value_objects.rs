@@ -17,6 +17,21 @@ pub struct JobStatusEvent {
     pub latency_ms: Option<i32>,
 }
 
+/// Real-time aggregate stats pushed to all SSE clients every second.
+/// All connected users receive the same values simultaneously.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
+pub struct FlowStats {
+    /// New requests received in the last 1-second window.
+    pub incoming: u32,
+    /// Jobs currently waiting in the queue.
+    pub queued: u32,
+    /// Jobs currently being processed by a provider.
+    pub running: u32,
+    /// Jobs that completed (any terminal status) in the last 1-second window.
+    pub completed: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct JobId(pub Uuid);
@@ -90,14 +105,17 @@ pub struct StreamToken {
     /// When Some, this token carries tool call data instead of text content.
     /// Handlers must convert to the appropriate wire format (OpenAI vs Ollama NDJSON).
     pub tool_calls: Option<serde_json::Value>,
+    /// Finish reason from the provider ("stop", "length", "tool_calls").
+    /// Only set on the final token. `None` for intermediate tokens.
+    pub finish_reason: Option<String>,
 }
 
 impl StreamToken {
     pub fn text(value: String) -> Self {
-        Self { value, is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None }
+        Self { value, is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None, finish_reason: None }
     }
     pub fn done() -> Self {
-        Self { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None }
+        Self { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None, finish_reason: None }
     }
 }
 

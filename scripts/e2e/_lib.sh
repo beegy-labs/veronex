@@ -29,6 +29,8 @@ PASSWORD=${E2E_PASSWORD:-$_E2E_DEFAULT}
 unset _E2E_DEFAULT
 
 MODEL="${MODEL:-qwen3:8b}"
+# Additional models for multi-model inference tests (auto-detected from synced models)
+MODELS_EXTRA="${MODELS_EXTRA:-}"
 CONCURRENT="${CONCURRENT:-6}"
 SKIP_DB_RESET="${SKIP_DB_RESET:-0}"
 

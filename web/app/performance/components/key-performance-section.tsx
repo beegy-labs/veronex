@@ -1,6 +1,6 @@
 'use client'
 
-import { fmtCompact } from '@/lib/chart-theme'
+import { fmtCompact, fmtCost } from '@/lib/chart-theme'
 import { SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from '@/lib/constants'
 import { Key } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -70,7 +70,7 @@ export function KeyPerformanceSection({ keys }: { keys: KeyPerfRow[] }) {
                       ? <span className="text-muted-foreground">—</span>
                       : k.estimated_cost_usd === 0
                         ? <span className="text-muted-foreground">{t('usage.free')}</span>
-                        : <span>${k.estimated_cost_usd.toFixed(4)}</span>}
+                        : <span>{fmtCost(k.estimated_cost_usd)}</span>}
                   </TableCell>
                 </TableRow>
               )

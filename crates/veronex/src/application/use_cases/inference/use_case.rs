@@ -8,11 +8,12 @@ use tokio::sync::{broadcast, Notify};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::application::ports::inbound::inference_use_case::{InferenceUseCase, SubmitJobRequest};
+use crate::application::ports::inbound::inference_use_case::{InferenceUseCase, LiveCounts, SubmitJobRequest};
 use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPort;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
+use crate::application::ports::outbound::image_store::ImageStore;
 use crate::application::ports::outbound::message_store::MessageStore;
 use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::ObservabilityPort;
@@ -54,6 +55,7 @@ pub struct InferenceUseCaseImpl {
     provider_dispatch: Arc<dyn ProviderDispatchPort>,
     event_tx: broadcast::Sender<JobStatusEvent>,
     message_store: Option<Arc<dyn MessageStore>>,
+    image_store: Option<Arc<dyn ImageStore>>,
     ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
     instance_id: Arc<str>,
@@ -74,6 +76,7 @@ impl InferenceUseCaseImpl {
         provider_dispatch: Arc<dyn ProviderDispatchPort>,
         event_tx: broadcast::Sender<JobStatusEvent>,
         message_store: Option<Arc<dyn MessageStore>>,
+        image_store: Option<Arc<dyn ImageStore>>,
         ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
         model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
         instance_id: Arc<str>,
@@ -82,7 +85,7 @@ impl InferenceUseCaseImpl {
             registry, job_repo, valkey, observability, model_manager,
             jobs: Arc::new(DashMap::new()),
             vram_pool, thermal, circuit_breaker, provider_dispatch,
-            event_tx, message_store, ollama_model_repo, model_selection_repo,
+            event_tx, message_store, image_store, ollama_model_repo, model_selection_repo,
             instance_id, cancel_notifiers: Arc::new(DashMap::new()),
         }
     }
@@ -224,7 +227,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         let SubmitJobRequest {
             prompt, model_name, provider_type, gemini_tier, api_key_id,
             account_id, source, api_format, messages, tools, request_path,
-            conversation_id, key_tier, images,
+            conversation_id, key_tier, images, stop, seed, response_format,
+            frequency_penalty, presence_penalty,
         } = req;
 
         let job_id = JobId::new();
@@ -242,7 +246,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             request_path, queue_time_ms: None, cancelled_at: None,
             conversation_id, tool_calls_json: None,
             messages_hash: None, messages_prefix_hash: None, failure_reason: None,
-            images,
+            images, image_keys: None,
+            stop, seed, response_format, frequency_penalty, presence_penalty,
         };
 
         // Upload messages to S3
@@ -250,8 +255,41 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             && let Err(e) = store.put(job_id.0, msgs).await {
                 tracing::warn!(job_id = %job_id.0, "S3 upload failed (non-fatal): {e}");
             }
-        let job_for_db = InferenceJob { messages: None, ..job.clone() };
+        let job_for_db = InferenceJob {
+            messages: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
+            ..job.clone()
+        };
         self.job_repo.save(&job_for_db).await?;
+
+        // Spawn async image upload (WebP conversion + S3) — non-blocking.
+        // Conversion+upload is delegated to ImageStore::put_base64() to keep infrastructure
+        // concerns (image codec) out of the application layer.
+        if let (Some(images), Some(store)) = (&job.images, &self.image_store) {
+            let images = images.clone();
+            let store = store.clone();
+            let repo = self.job_repo.clone();
+            let jid = job_id.clone();
+            tokio::spawn(async move {
+                let mut keys = Vec::new();
+                for (i, b64) in images.iter().enumerate() {
+                    match store.put_base64(jid.0, i, b64).await {
+                        Ok((fk, tk)) => { keys.push(fk); keys.push(tk); }
+                        Err(e) => tracing::warn!(job_id = %jid.0, "image upload failed: {e}"),
+                    }
+                }
+                if !keys.is_empty() {
+                    let update_job = InferenceJob {
+                        id: jid, image_keys: Some(keys),
+                        ..job_for_db
+                    };
+                    if let Err(e) = repo.save(&update_job).await {
+                        tracing::warn!("failed to save image_keys: {e}");
+                    }
+                }
+            });
+        }
 
         let cancel_notify = Arc::new(Notify::new());
         self.cancel_notifiers.insert(job_id.0, cancel_notify.clone());
@@ -429,5 +467,60 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             schedule_cleanup(&self.jobs, job_id.0, crate::domain::constants::JOB_CLEANUP_DELAY);
         }
         Ok(())
+    }
+
+    fn get_live_counts(&self) -> LiveCounts {
+        count_live_statuses(self.jobs.iter().map(|e| e.status))
+    }
+}
+
+/// Count pending/running jobs from an iterator of statuses.
+/// Extracted to a free function so it can be unit-tested without constructing the full use-case struct.
+pub(super) fn count_live_statuses(statuses: impl Iterator<Item = JobStatus>) -> LiveCounts {
+    let mut pending = 0u32;
+    let mut running = 0u32;
+    for status in statuses {
+        match status {
+            JobStatus::Pending => pending += 1,
+            JobStatus::Running => running += 1,
+            _ => {}
+        }
+    }
+    LiveCounts { pending, running }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_live_statuses_empty() {
+        let counts = count_live_statuses(std::iter::empty());
+        assert_eq!(counts.pending, 0);
+        assert_eq!(counts.running, 0);
+    }
+
+    #[test]
+    fn count_live_statuses_mixed() {
+        let statuses = vec![
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::Pending,
+            JobStatus::Completed,
+            JobStatus::Failed,
+            JobStatus::Running,
+            JobStatus::Cancelled,
+        ];
+        let counts = count_live_statuses(statuses.into_iter());
+        assert_eq!(counts.pending, 2);
+        assert_eq!(counts.running, 2);
+    }
+
+    #[test]
+    fn count_live_statuses_only_terminal() {
+        let statuses = vec![JobStatus::Completed, JobStatus::Failed, JobStatus::Cancelled];
+        let counts = count_live_statuses(statuses.into_iter());
+        assert_eq!(counts.pending, 0);
+        assert_eq!(counts.running, 0);
     }
 }

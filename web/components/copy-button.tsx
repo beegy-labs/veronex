@@ -17,7 +17,7 @@ export function CopyButton({ text, className = 'h-7 w-7' }: { text: string; clas
   }
 
   return (
-    <Button variant="ghost" size="icon" className={className} onClick={handleCopy} title={t('common.copy')}>
+    <Button variant="ghost" size="icon" className={className} aria-label={copied ? t('common.copied') : t('common.copy')} onClick={handleCopy} title={t('common.copy')}>
       {copied ? <Check className="h-3.5 w-3.5 text-status-success-fg" /> : <Copy className="h-3.5 w-3.5" />}
     </Button>
   )

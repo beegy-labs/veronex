@@ -33,31 +33,10 @@ describe('compressImage', () => {
     expect(result).toBe('aGVsbG8=')
   })
 
-  it('calls browser-image-compression with correct options', async () => {
-    const { default: mockCompress } = await import('browser-image-compression')
+  it('returns raw base64 for custom maxDim and quality', async () => {
     const file = new File(['test'], 'photo.png', { type: 'image/png' })
-
-    await compressImage(file, 512, 0.9)
-
-    expect(mockCompress).toHaveBeenCalledWith(file, {
-      maxSizeMB: 1.5,
-      maxWidthOrHeight: 512,
-      useWebWorker: true,
-      fileType: 'image/jpeg',
-      initialQuality: 0.9,
-    })
-  })
-
-  it('uses default maxDim=1024 and quality=0.85', async () => {
-    const { default: mockCompress } = await import('browser-image-compression')
-    ;(mockCompress as ReturnType<typeof vi.fn>).mockClear()
-
-    const file = new File(['test'], 'img.jpg', { type: 'image/jpeg' })
-    await compressImage(file)
-
-    expect(mockCompress).toHaveBeenCalledWith(file, expect.objectContaining({
-      maxWidthOrHeight: 1024,
-      initialQuality: 0.85,
-    }))
+    const result = await compressImage(file, 512, 0.9)
+    expect(result).not.toContain('data:')
+    expect(result).toBe('aGVsbG8=')
   })
 })

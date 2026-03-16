@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { keyUsageQuery, keyModelBreakdownQuery } from '@/lib/queries'
 import type { ApiKey, UsageBreakdown, ModelBreakdown } from '@/lib/types'
@@ -11,7 +11,7 @@ import {
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
   AXIS_TICK, LEGEND_STYLE, CURSOR_FILL,
-  fmtMs, fmtCompact,
+  fmtMs, fmtCompact, fmtPct1,
 } from '@/lib/chart-theme'
 import { Key } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -29,6 +29,9 @@ import { KeyUsageModal } from '@/components/key-usage-modal'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
 import { PROVIDER_BADGE, PROVIDER_COLORS } from '@/lib/constants'
+import { tokens } from '@/lib/design-tokens'
+import { ProgressBar } from '@/components/progress-bar'
+import { SectionLabel } from '@/components/section-label'
 import { KeyBreakdownTable } from './breakdown-tables'
 
 interface ByKeyTabProps {
@@ -47,15 +50,18 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
   const { data: hourly, isLoading: hourlyLoading } = useQuery(keyUsageQuery(activeKeyId, hours))
   const { data: keyModels } = useQuery(keyModelBreakdownQuery(activeKeyId, hours))
 
-  const chartData = hourly?.map((h) => ({
-    hour:     fmtHourLabel(h.hour, tz),
-    tokens:   h.total_tokens,
-    prompt:   h.prompt_tokens,
-    compl:    h.completion_tokens,
-    requests: h.request_count,
-    success:  h.success_count,
-    errors:   h.error_count,
-  })) ?? []
+  const chartData = useMemo(() =>
+    (hourly ?? []).map((h) => ({
+      hour:     fmtHourLabel(h.hour, tz),
+      tokens:   h.total_tokens,
+      prompt:   h.prompt_tokens,
+      compl:    h.completion_tokens,
+      requests: h.request_count,
+      success:  h.success_count,
+      errors:   h.error_count,
+    })),
+    [hourly, tz],
+  )
 
   return (
     <div className="space-y-6 mt-4">
@@ -119,19 +125,17 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
                   <>
                     {/* Tokens per hour */}
                     <div>
-                      <p className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-3">
-                        {t('usage.tokensPerHour')}
-                      </p>
+                      <SectionLabel>{t('usage.tokensPerHour')}</SectionLabel>
                       <ResponsiveContainer width="100%" height={200}>
                         <AreaChart data={chartData}>
                           <defs>
                             <linearGradient id="gradPrompt" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%"  stopColor="var(--theme-primary)" stopOpacity={0.35} />
-                              <stop offset="95%" stopColor="var(--theme-primary)" stopOpacity={0} />
+                              <stop offset="5%"  stopColor={tokens.brand.primary} stopOpacity={0.35} />
+                              <stop offset="95%" stopColor={tokens.brand.primary} stopOpacity={0} />
                             </linearGradient>
                             <linearGradient id="gradCompl" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%"  stopColor="var(--theme-status-info)" stopOpacity={0.3} />
-                              <stop offset="95%" stopColor="var(--theme-status-info)" stopOpacity={0} />
+                              <stop offset="5%"  stopColor={tokens.status.info} stopOpacity={0.3} />
+                              <stop offset="95%" stopColor={tokens.status.info} stopOpacity={0} />
                             </linearGradient>
                           </defs>
                           <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
@@ -139,25 +143,23 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
                           <YAxis yAxisId="right" orientation="right" tick={AXIS_TICK} axisLine={false} tickLine={false} width={50} tickFormatter={fmtCompact} />
                           <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} formatter={(v) => fmtCompact(Number(v))} />
                           <Legend wrapperStyle={LEGEND_STYLE} />
-                          <Area yAxisId="left" type="monotone" dataKey="prompt" name={t('usage.prompt')}     stroke="var(--theme-primary)"      fill="url(#gradPrompt)" strokeWidth={2} dot={false} />
-                          <Area yAxisId="right" type="monotone" dataKey="compl"  name={t('usage.completion')} stroke="var(--theme-status-info)"  fill="url(#gradCompl)"  strokeWidth={2} dot={false} />
+                          <Area yAxisId="left" type="monotone" dataKey="prompt" name={t('usage.prompt')}     stroke={tokens.brand.primary}   fill="url(#gradPrompt)" strokeWidth={2} dot={false} />
+                          <Area yAxisId="right" type="monotone" dataKey="compl"  name={t('usage.completion')} stroke={tokens.status.info}      fill="url(#gradCompl)"  strokeWidth={2} dot={false} />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
                     {/* Requests per hour */}
                     <div>
-                      <p className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-3">
-                        {t('usage.requestsPerHour')}
-                      </p>
+                      <SectionLabel>{t('usage.requestsPerHour')}</SectionLabel>
                       <ResponsiveContainer width="100%" height={180}>
                         <BarChart data={chartData} barGap={2}>
                           <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
                           <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={35} />
                           <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} />
                           <Legend wrapperStyle={LEGEND_STYLE} />
-                          <Bar dataKey="requests" name={t('usage.requests')} fill="var(--theme-primary)"         radius={[3, 3, 0, 0]} />
-                          <Bar dataKey="success"  name={t('usage.success')}  fill="var(--theme-status-success)" radius={[3, 3, 0, 0]} />
-                          <Bar dataKey="errors"   name={t('usage.errors')}   fill="var(--theme-status-error)"   radius={[3, 3, 0, 0]} />
+                          <Bar dataKey="requests" name={t('usage.requests')} fill={tokens.brand.primary}    radius={[3, 3, 0, 0]} />
+                          <Bar dataKey="success"  name={t('usage.success')}  fill={tokens.status.success}  radius={[3, 3, 0, 0]} />
+                          <Bar dataKey="errors"   name={t('usage.errors')}   fill={tokens.status.error}    radius={[3, 3, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
@@ -167,9 +169,7 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
                 {/* Key model breakdown */}
                 {keyModels && keyModels.length > 0 && (
                   <div>
-                    <p className="text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-3">
-                      {t('usage.modelCallRatio')}
-                    </p>
+                    <SectionLabel>{t('usage.modelCallRatio')}</SectionLabel>
                     <DataTable minWidth="600px">
                       <TableHeader>
                         <TableRow className="hover:bg-transparent">
@@ -184,7 +184,7 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
                       <TableBody>
                         {keyModels.map((m, i) => {
                           const totalTok = m.prompt_tokens + m.completion_tokens
-                          const color = PROVIDER_COLORS[m.provider_type] ?? 'var(--theme-primary)'
+                          const color = PROVIDER_COLORS[m.provider_type] ?? tokens.brand.primary
                           return (
                             <TableRow key={`${m.model_name}-${i}`}>
                               <TableCell className="font-mono font-medium text-sm">{m.model_name}</TableCell>
@@ -196,11 +196,9 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
                               <TableCell className="text-right tabular-nums font-semibold">{fmtCompact(m.request_count)}</TableCell>
                               <TableCell>
                                 <div className="flex items-center gap-2">
-                                  <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                                    <div className="h-full rounded-full" style={{ width: `${Math.min(m.call_pct, 100)}%`, background: color }} />
-                                  </div>
+                                  <ProgressBar pct={m.call_pct} colorStyle={color} className="flex-1" />
                                   <span className="text-xs tabular-nums w-10 text-right font-semibold" style={{ color }}>
-                                    {m.call_pct.toFixed(1)}%
+                                    {fmtPct1(m.call_pct)}
                                   </span>
                                 </div>
                               </TableCell>

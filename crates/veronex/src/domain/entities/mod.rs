@@ -128,6 +128,30 @@ pub struct InferenceJob {
     #[serde(default)]
     #[ts(skip)]
     pub images: Option<Vec<String>>,
+    /// S3 keys for stored WebP images (full + thumbnail pairs).
+    /// Populated after async image upload completes. Persisted in DB.
+    #[serde(default)]
+    pub image_keys: Option<Vec<String>>,
+    /// Stop sequences for inference. Not persisted to DB — in-memory only during dispatch.
+    #[serde(default)]
+    #[ts(skip)]
+    pub stop: Option<serde_json::Value>,
+    /// Seed for reproducible outputs. Not persisted to DB.
+    #[serde(default)]
+    #[ts(skip)]
+    pub seed: Option<u32>,
+    /// Response format (json_object/text/json_schema). Not persisted to DB.
+    #[serde(default)]
+    #[ts(skip)]
+    pub response_format: Option<serde_json::Value>,
+    /// Frequency penalty. Not persisted to DB.
+    #[serde(default)]
+    #[ts(skip)]
+    pub frequency_penalty: Option<f64>,
+    /// Presence penalty. Not persisted to DB.
+    #[serde(default)]
+    #[ts(skip)]
+    pub presence_penalty: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,6 +275,12 @@ mod tests {
             messages_prefix_hash: None,
             failure_reason: None,
             images: None,
+            image_keys: None,
+            stop: None,
+            seed: None,
+            response_format: None,
+            frequency_penalty: None,
+            presence_penalty: None,
         }
     }
 
@@ -332,6 +362,12 @@ mod tests {
             failure_reason: None,
             tools: None,
             images: None,
+            image_keys: None,
+            stop: None,
+            seed: None,
+            response_format: None,
+            frequency_penalty: None,
+            presence_penalty: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());

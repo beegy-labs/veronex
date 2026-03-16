@@ -6,6 +6,7 @@ import {
   TOOLTIP_LABEL_STYLE,
   TOOLTIP_ITEM_STYLE,
 } from '@/lib/chart-theme'
+import { tokens } from '@/lib/design-tokens'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -73,7 +74,7 @@ export function DonutChart({
                     <tspan
                       x={cx}
                       y={centerSub ? cy - 9 : cy}
-                      fill="var(--theme-text-primary)"
+                      fill={tokens.text.primary}
                       fontSize={13}
                       fontWeight="700"
                     >
@@ -83,7 +84,7 @@ export function DonutChart({
                       <tspan
                         x={cx}
                         y={cy + 11}
-                        fill="var(--theme-text-secondary)"
+                        fill={tokens.text.secondary}
                         fontSize={10}
                       >
                         {centerSub}

@@ -253,8 +253,10 @@ impl InferenceProviderPort for GeminiAdapter {
                 // Process complete lines from the SSE stream.
                 // Gemini SSE lines look like:  "data: {...json...}"
                 while let Some(nl) = buf.find('\n') {
-                    let line = buf[..nl].trim().to_string();
-                    buf = buf[nl + 1..].to_string();
+                    // Drain the line in-place to avoid a full-buffer re-allocation on every iteration.
+                    let line: String = buf.drain(..nl).collect();
+                    buf.remove(0); // consume the '\n'
+                    let line = line.trim();
 
                     let json_str = match line.strip_prefix("data:") {
                         Some(s) => s.trim(),
@@ -285,12 +287,20 @@ impl InferenceProviderPort for GeminiAdapter {
                         (None, None, None)
                     };
 
+                    // Populate finish_reason on the final token so HTTP handlers can
+                    // propagate it correctly (e.g. gemini_compat_handlers finish_reason mapping).
+                    let finish_reason = if done {
+                        Some(map_finish_reason(&parsed.candidates).as_str().to_string())
+                    } else {
+                        None
+                    };
+
                     // Emit a dedicated token for tool calls (empty text) so run_job
                     // can store them in tool_calls_json independently of result_text.
                     if let Some(ref tc) = tool_calls {
-                        yield StreamToken { value: String::new(), is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: Some(tc.clone()) };
+                        yield StreamToken { value: String::new(), is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: Some(tc.clone()), finish_reason: None };
                     }
-                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None };
+                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason };
 
                     if done {
                         return;
@@ -309,7 +319,8 @@ impl InferenceProviderPort for GeminiAdapter {
                     && let Ok(parsed) = serde_json::from_str::<GenerateResponse>(s) {
                         let text = extract_text(&parsed.candidates);
                         let (prompt_tokens, completion_tokens, cached_tokens) = extract_usage(&parsed);
-                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None };
+                        let finish_reason = Some(map_finish_reason(&parsed.candidates).as_str().to_string());
+                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason };
                         return;
                     }
             }
