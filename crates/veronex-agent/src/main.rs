@@ -27,6 +27,7 @@ use tokio::signal;
 use tokio::sync::Semaphore;
 
 mod health;
+mod heartbeat;
 mod otlp;
 mod scraper;
 mod shard;
@@ -35,6 +36,10 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Max concurrent scrape tasks to prevent resource exhaustion.
 const MAX_CONCURRENT_SCRAPES: usize = 32;
+
+/// Heartbeat TTL = 3× default scrape interval.  A provider survives 2 missed
+/// cycles before being considered offline.
+const HEARTBEAT_TTL_SECS: i64 = 180;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -45,6 +50,9 @@ struct Config {
     ordinal: u32,
     replicas: u32,
     health_port: u16,
+    /// Optional Valkey URL for provider liveness heartbeats.
+    /// When absent, heartbeat push is skipped (veronex falls back to HTTP probe).
+    valkey_url: Option<String>,
 }
 
 fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> T {
@@ -62,6 +70,7 @@ impl Config {
             ordinal: shard::ordinal_from_hostname(),
             replicas: parse_env("REPLICA_COUNT", 1),
             health_port: parse_env("HEALTH_PORT", 9091),
+            valkey_url: std::env::var("VALKEY_URL").ok(),
         }
     }
 }
@@ -150,6 +159,15 @@ async fn main() -> Result<()> {
         scrape_errors: AtomicU64::new(0),
     });
 
+    // Optional Valkey pool for provider liveness heartbeats.
+    let valkey_pool: Option<fred::clients::Pool> = match &config.valkey_url {
+        Some(url) => heartbeat::connect(url).await,
+        None => {
+            tracing::info!("VALKEY_URL not set — heartbeat push disabled");
+            None
+        }
+    };
+
     // Start health HTTP server
     let health_clone = health.clone();
     let health_port = config.health_port;
@@ -177,7 +195,7 @@ async fn main() -> Result<()> {
                 health.alive.store(false, Ordering::Relaxed);
                 break;
             }
-            result = scrape_cycle(&client, &config, &scrape_semaphore, &stats) => {
+            result = scrape_cycle(&client, &config, &scrape_semaphore, &stats, valkey_pool.as_ref()) => {
                 // Update health state
                 health.started.store(true, Ordering::Relaxed);
                 health.ready.store(result.success, Ordering::Relaxed);
@@ -291,6 +309,7 @@ async fn scrape_cycle(
     config: &Config,
     semaphore: &Arc<Semaphore>,
     _stats: &Arc<AgentStats>,
+    valkey: Option<&fred::clients::Pool>,
 ) -> CycleResult {
     let start = Instant::now();
 
@@ -319,6 +338,7 @@ async fn scrape_cycle(
             let url = format!("http://{host_port}");
             let labels = t.labels.clone();
             let sem = semaphore.clone();
+            let valkey = valkey.cloned();
 
             Some(async move {
                 let _permit = sem.acquire().await;
@@ -329,6 +349,13 @@ async fn scrape_cycle(
                     }
                     "ollama" => {
                         let metrics = scraper::scrape_ollama(client, &url).await;
+                        // Push heartbeat when scrape succeeded (non-empty = Ollama responded).
+                        // Missing key (TTL expired) signals offline to veronex health_checker.
+                        if let (Some(pool), Some(provider_id)) = (&valkey, labels.get("provider_id")) {
+                            if !metrics.is_empty() {
+                                heartbeat::set_online(pool, provider_id, HEARTBEAT_TTL_SECS).await;
+                            }
+                        }
                         (labels, metrics)
                     }
                     _ => (labels, vec![]),
