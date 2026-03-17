@@ -125,6 +125,20 @@ pub fn pubsub_cancel(job_id: Uuid) -> String {
 /// Pattern for subscribing to all cancel channels.
 pub const PUBSUB_CANCEL_PATTERN: &str = "veronex:pubsub:cancel:*";
 
+// ── Provider liveness (agent heartbeat) ─────────────────────────────────────
+
+/// Heartbeat key set by veronex-agent after each successful Ollama scrape.
+/// TTL = 3× scrape interval (default 90s). Missing key = provider offline.
+/// Written by: veronex-agent. Read by: health_checker (MGET batch).
+pub fn provider_heartbeat(provider_id: Uuid) -> String {
+    format!("veronex:provider:hb:{provider_id}")
+}
+
+/// Global O(1) counter of currently-online Ollama providers.
+/// Incremented/decremented atomically by health_checker on status transitions.
+/// Read by dashboard to avoid SELECT COUNT(*) from DB.
+pub const PROVIDERS_ONLINE_COUNTER: &str = "veronex:stats:providers:online";
+
 // ── VRAM pool ───────────────────────────────────────────────────────────────
 
 /// Valkey key tracking total reserved VRAM (MB) per provider.
