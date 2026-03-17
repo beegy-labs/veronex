@@ -240,3 +240,79 @@ const deleteMutation = useApiMutation(
 ```
 
 Eliminates repeated `useQueryClient()` + `onSettled` invalidation boilerplate.
+
+---
+
+## NavigationProgressProvider
+
+File: `web/components/nav-progress.tsx`
+
+Honeycomb-themed loading bar shown during page navigation and initial data fetches. Singleton — mounted once inside `AppShell` in `app/layout.tsx` (authenticated routes only).
+
+```tsx
+// app/layout.tsx — inside AppShell, after QueryClientProvider
+return (
+  <NavigationProgressProvider>
+    <div className="flex h-full min-h-screen">
+      <Nav />
+      <main>{children}</main>
+    </div>
+  </NavigationProgressProvider>
+)
+```
+
+| Trigger | Mechanism |
+|---------|-----------|
+| Page navigation (click) | `document` click listener on `<a>` tags |
+| Page navigation (programmatic) | `usePathname()` change detection |
+| Initial data fetch | `queryCache.subscribe` — only queries with `dataUpdatedAt === 0` |
+
+**Key implementation rules:**
+- `useProgressMachine()` tracks an active-source count (`countRef`) — `start()` increments, `finish()` decrements; bar only completes when count reaches 0
+- `finish()` guards with `if (countRef.current <= 0) return` to ignore spurious calls
+- `reset()` is called on programmatic navigation to clear stale `pendingQueriesRef` entries
+- `HoneycombBar` is wrapped with `React.memo` — props update at 80ms intervals during crawl
+- SVG pattern IDs use `useId()` with `:` stripped (React IDs are not valid XML NCNames)
+- Colors: track layer → `text-border`, fill layer → `text-primary`, glow → `tokens.brand.primary` via `color-mix()`
+
+---
+
+## 2-Step Verify Flow (Registration Modals)
+
+Pattern for modals that register external services (GPU servers, Ollama providers). Requires connection verification before the register button becomes active.
+
+**Shared type**: `VerifyState = 'idle' | 'checking' | 'ok' | 'error'` — exported from `web/lib/types.ts`.
+
+```tsx
+const [verifyState, setVerifyState] = useState<VerifyState>('idle')
+const [verifyError, setVerifyError] = useState('')
+const [verifiedUrl, setVerifiedUrl] = useState('')
+
+const handleUrlChange = (val: string) => {
+  setUrl(val)
+  if (verifyState !== 'idle') { setVerifyState('idle'); setVerifyError('') }
+}
+
+const verifyMutation = useMutation({
+  mutationFn: () => api.verifyServer(url.trim()),
+  onSuccess: () => { setVerifyState('ok'); setVerifiedUrl(url.trim()) },
+  onError: (e) => {
+    setVerifyState('error')
+    setVerifyError(
+      e instanceof ApiHttpError && e.status === 409
+        ? t('providers.servers.duplicateUrl')
+        : (e instanceof Error ? e.message : t('providers.servers.connectionFailed'))
+    )
+  },
+})
+
+const isVerified = verifyState === 'ok' && url.trim() === verifiedUrl
+const canRegister = !!name.trim() && isVerified && !registerMutation.isPending
+```
+
+**Rules:**
+- URL change must reset verify state (`handleUrlChange`)
+- Register button disabled unless `verifyState === 'ok'` AND URL hasn't changed since verification
+- Backend independently re-validates on actual registration (defense-in-depth)
+- 409 errors → `duplicateUrl` i18n key; 5xx errors → backend message; network errors → `connectionFailed` key
+- i18n keys: `verifyConnection`, `verifying`, `connected`, `connectionFailed`, `duplicateUrl`, `verifyFirst` (add to all 3 locales)
