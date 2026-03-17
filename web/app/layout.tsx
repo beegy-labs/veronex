@@ -11,6 +11,7 @@ import { isLoggedIn } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { TimezoneProvider } from '@/components/timezone-provider'
 import { LabSettingsProvider } from '@/components/lab-settings-provider'
+import { NavigationProgressProvider } from '@/components/nav-progress'
 import { STALE_TIME_FAST } from '@/lib/constants'
 
 function AppShell({ children }: { children: React.ReactNode }) {
@@ -45,12 +46,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-full min-h-screen">
-      <Nav />
-      <main className="flex-1 overflow-auto p-4 pt-16 md:p-8">
-        {children}
-      </main>
-    </div>
+    <NavigationProgressProvider>
+      <div className="flex h-full min-h-screen">
+        <Nav />
+        <main className="flex-1 overflow-auto p-4 pt-16 md:p-8">
+          {children}
+        </main>
+      </div>
+    </NavigationProgressProvider>
   )
 }
 
