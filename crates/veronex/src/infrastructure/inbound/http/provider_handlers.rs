@@ -101,6 +101,11 @@ async fn load_models_cache(pool: &fred::clients::Pool, key: &str) -> Option<Vec<
 // ── Request / Response DTOs ────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+pub struct VerifyProviderRequest {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct RegisterProviderRequest {
     /// Human-readable label.
     pub name: String,
@@ -209,6 +214,63 @@ pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvid
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
+/// `POST /v1/providers/verify` — validate Ollama URL format, duplicate check, and connectivity.
+pub async fn verify_provider(
+    _claims: RequireSuper,
+    State(state): State<AppState>,
+    Json(req): Json<VerifyProviderRequest>,
+) -> impl IntoResponse {
+    let url = req.url.trim().to_string();
+
+    if url.is_empty() {
+        return AppError::BadRequest("url is required".into()).into_response();
+    }
+
+    if let Err(e) = validate_provider_url(&url) {
+        return e.into_response();
+    }
+
+    // Duplicate check.
+    let count_result: Result<(i64,), _> = sqlx::query_as(
+        "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'ollama'",
+    )
+    .bind(&url)
+    .fetch_one(&state.pg_pool)
+    .await;
+
+    match count_result {
+        Ok((c,)) if c > 0 => {
+            return AppError::Conflict("a provider with this URL is already registered".into())
+                .into_response();
+        }
+        Err(e) => return db_error(e).into_response(),
+        _ => {}
+    }
+
+    // Connectivity check: GET {url}/api/version must succeed.
+    let check_url = format!("{}/api/version", url.trim_end_matches('/'));
+    match state
+        .http_client
+        .get(&check_url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            (StatusCode::OK, Json(serde_json::json!({"reachable": true}))).into_response()
+        }
+        Ok(r) => AppError::BadGateway(
+            format!("Ollama returned unexpected status {}", r.status()),
+        )
+        .into_response(),
+        Err(e) => {
+            tracing::warn!(url = %url, "Ollama verify probe failed: {e}");
+            AppError::BadGateway("Ollama is not reachable at the given URL".into())
+                .into_response()
+        }
+    }
+}
+
 /// `POST /v1/providers` — register a new Ollama or Gemini provider.
 ///
 /// Immediately runs a health check and sets the initial status.
@@ -232,6 +294,23 @@ pub async fn register_provider(
             }
             if let Err(e) = validate_provider_url(url) {
                 return e.into_response();
+            }
+            // Reject duplicate Ollama URL.
+            let count_result: Result<(i64,), _> = sqlx::query_as(
+                "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'ollama'",
+            )
+            .bind(url)
+            .fetch_one(&state.pg_pool)
+            .await;
+            match count_result {
+                Ok((count,)) if count > 0 => {
+                    return AppError::Conflict(
+                        "a provider with this URL is already registered".into(),
+                    )
+                    .into_response();
+                }
+                Err(e) => return db_error(e).into_response(),
+                _ => {}
             }
         }
         ProviderType::Gemini => {
@@ -260,6 +339,12 @@ pub async fn register_provider(
 
     // Health check before persisting.
     let initial_status = check_provider(&state.http_client, &provider).await;
+    if matches!(provider_type, ProviderType::Ollama)
+        && initial_status == LlmProviderStatus::Offline
+    {
+        return AppError::BadGateway("Ollama is not reachable at the given URL".into())
+            .into_response();
+    }
     let provider = LlmProvider {
         status: initial_status,
         ..provider
