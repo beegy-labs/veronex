@@ -309,6 +309,61 @@ try {
 
 ---
 
+## UI-State Types in `web/lib/types.ts`
+
+Modal/form state types that appear across multiple components belong in `web/lib/types.ts`, not as local `type` definitions.
+
+```typescript
+// web/lib/types.ts
+export type VerifyState = 'idle' | 'checking' | 'ok' | 'error'
+```
+
+Import in components: `import type { VerifyState } from '@/lib/types'`
+
+Rule: if the same `type Foo = 'a' | 'b' | ...` appears in 2+ component files, move it to `lib/types.ts`.
+
+---
+
+## HTTP Errors with Status Code (`ApiHttpError`)
+
+Custom fetch helpers that need to distinguish HTTP status codes throw `ApiHttpError` from `web/lib/types.ts`:
+
+```typescript
+// lib/api.ts — throwing
+import { ApiHttpError } from './types'
+if (!res.ok) throw new ApiHttpError(data.error ?? `${res.status}`, res.status)
+
+// Component onError — handling
+import { ApiHttpError } from '@/lib/types'
+onError: (e) => {
+  const msg = e instanceof ApiHttpError && e.status === 409
+    ? t('...duplicateUrl')
+    : (e instanceof Error ? e.message : t('...connectionFailed'))
+}
+```
+
+Rule: never cast `(e as Error & { status?: number })` — use `instanceof ApiHttpError` instead.
+
+---
+
+## SVG Pattern IDs — `useId()` for DOM Uniqueness
+
+SVG `<pattern id="...">` elements use global DOM IDs. If a component can render multiple instances, use `React.useId()` to generate unique IDs. Strip `:` from the result — React IDs like `:r1:` are not valid XML NCNames.
+
+```tsx
+import { useId } from 'react'
+
+const rawId = useId()
+const safeId = rawId.replace(/:/g, '') // React IDs contain ':' which is invalid in SVG NCNames
+const patternId = `my-pattern-${safeId}`
+
+// In SVG:
+<pattern id={patternId} .../>
+<rect fill={`url(#${patternId})`} />
+```
+
+---
+
 ## Adding a New Page
 
 ```
