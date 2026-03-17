@@ -38,6 +38,8 @@ spec:
               value: {{ .Values.veronexAgent.healthPort | quote }}
             - name: RUST_LOG
               value: "info"
+            - name: VALKEY_URL
+              value: {{ include "veronex.valkeyUrl" . | quote }}
             {{- range $k, $v := .Values.veronexAgent.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
