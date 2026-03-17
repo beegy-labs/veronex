@@ -12,6 +12,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 futures = "0.3"
+fred = { version = "10", features = ["enable-rustls-ring"] }
 
 # Workspace hack for faster builds (managed by cargo-hakari)
 workspace-hack = { path = "../../workspace-hack" }
