@@ -327,7 +327,13 @@
       "notConfigured": "설정되지 않음",
       "unreachable": "연결 불가",
       "nodeExporterHint": "CPU, 메모리, GPU 메트릭이 이 엔드포인트에서 수집됩니다 (라이브 + OTel 파이프라인).",
-      "nodeExporterOptional": "선택 사항"
+      "nodeExporterOptional": "선택 사항",
+      "verifyConnection": "연결 확인",
+      "verifying": "확인 중…",
+      "connected": "연결됨",
+      "connectionFailed": "연결 실패",
+      "duplicateUrl": "이미 등록된 URL입니다",
+      "verifyFirst": "등록 전 연결을 확인하세요"
     },
     "ollama": {
       "title": "Ollama 프로바이더",
@@ -377,7 +383,13 @@
       "freeTier": "무료 티어",
       "freeTierDesc": "이 백엔드를 무료 티어 API 키 요청 전용으로 설정합니다.",
       "noBackends": "등록된 Ollama 프로바이더가 없습니다",
-      "noBackendsHint": "로컬 Ollama 서버를 추가하여 인퍼런스 라우팅을 시작하세요."
+      "noBackendsHint": "로컬 Ollama 서버를 추가하여 인퍼런스 라우팅을 시작하세요.",
+      "verifyConnection": "연결 확인",
+      "verifying": "확인 중…",
+      "connected": "연결됨",
+      "connectionFailed": "연결 실패",
+      "duplicateUrl": "이미 등록된 URL입니다",
+      "verifyFirst": "등록 전 연결을 확인하세요"
     },
     "capacity": {
       "title": "동시성 제어",

@@ -327,7 +327,13 @@
       "notConfigured": "未設定",
       "unreachable": "到達不能",
       "nodeExporterHint": "CPU・メモリ・GPUメトリクスがこのエンドポイントから収集されます（ライブ + OTelパイプライン）。",
-      "nodeExporterOptional": "任意"
+      "nodeExporterOptional": "任意",
+      "verifyConnection": "接続確認",
+      "verifying": "確認中…",
+      "connected": "接続済み",
+      "connectionFailed": "接続失敗",
+      "duplicateUrl": "このURLはすでに登録されています",
+      "verifyFirst": "登録前に接続を確認してください"
     },
     "ollama": {
       "title": "Ollamaプロバイダー",
@@ -375,6 +381,12 @@
       "freeTierDesc": "このバックエンドを無料ティアのAPIキーリクエスト専用にします。",
       "noBackends": "Ollamaプロバイダーが登録されていません",
       "noBackendsHint": "ローカルOllamaサーバーを追加して推論ルーティングを開始してください。",
+      "verifyConnection": "接続確認",
+      "verifying": "確認中…",
+      "connected": "接続済み",
+      "connectionFailed": "接続失敗",
+      "duplicateUrl": "このURLはすでに登録されています",
+      "verifyFirst": "登録前に接続を確認してください",
       "modelSelection": "モデル選択",
       "modelSelectionDesc": "このバックエンドにルーティングするモデルのみ有効にしてください。",
       "enabledCount": "{{enabled}}/{{total}} 有効"

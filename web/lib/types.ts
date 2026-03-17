@@ -11,6 +11,20 @@
 
 import type { JobStatus, JobSource, ProviderType, LlmProviderStatus } from './generated'
 
+/** Connection verification state for server/provider registration modals. */
+export type VerifyState = 'idle' | 'checking' | 'ok' | 'error'
+
+/**
+ * HTTP error thrown by custom fetch helpers (verifyServer, verifyProvider).
+ * Carries the HTTP status code so callers can distinguish 409 Conflict from 5xx errors.
+ */
+export class ApiHttpError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message)
+    this.name = 'ApiHttpError'
+  }
+}
+
 /**
  * API key as returned by the dashboard API.
  * Omits internal fields (key_hash, deleted_at, key_type) not in API responses.
