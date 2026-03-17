@@ -117,4 +117,15 @@ messages_hash: string | null,
  * Blake2b-256 hex hash of messages[0..n-1] (all turns except last).
  * Empty string = first turn (no parent). Used to link child → parent in a session.
  */
-messages_prefix_hash: string | null, };
+messages_prefix_hash: string | null, 
+/**
+ * Machine-readable failure cause (G16). Set when status=Failed.
+ * Values: queue_full, no_eligible_provider, thermal_hard_gate, drain_forced,
+ *         queue_wait_exceeded, provider_error, token_budget_exceeded
+ */
+failure_reason: string | null, 
+/**
+ * S3 keys for stored WebP images (full + thumbnail pairs).
+ * Populated after async image upload completes. Persisted in DB.
+ */
+image_keys: Array<string> | null, };

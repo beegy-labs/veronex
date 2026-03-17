@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { fmtDatetime, fmtDatetimeShort, fmtDateOnly, fmtNumber, fmtHourLabel } from '../date'
+import type { TFunction } from 'i18next'
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
+import { fmtDatetime, fmtDatetimeShort, fmtDateOnly, fmtNumber, fmtHourLabel, fmtTimeAgo } from '../date'
 
 describe('fmtNumber', () => {
   it('formats integers with comma separators', () => {
@@ -51,5 +52,45 @@ describe('fmtDateOnly', () => {
     const result = fmtDateOnly('2026-03-08T14:30:45Z', 'UTC')
     expect(result).toContain('2026')
     expect(result).toContain('8')
+  })
+})
+
+describe('fmtTimeAgo', () => {
+  const NOW = 1_710_600_000_000
+
+  // Minimal t() stub: returns key for keyOnly calls, "key:param=val" for parameterized
+  const t = ((key: string, params?: Record<string, unknown>) =>
+    params ? `${key}:${Object.entries(params).map(([k, v]) => `${k}=${v}`).join(',')}` : key
+  ) as unknown as TFunction
+
+  beforeAll(() => { vi.useFakeTimers(); vi.setSystemTime(NOW) })
+  afterAll(() => { vi.useRealTimers() })
+
+  it('returns justNow key for < 5 s ago', () => {
+    expect(fmtTimeAgo(NOW - 4_000, t)).toBe('overview.timeAgoJustNow')
+  })
+
+  it('boundary: exactly 0 s ago is justNow', () => {
+    expect(fmtTimeAgo(NOW, t)).toBe('overview.timeAgoJustNow')
+  })
+
+  it('returns seconds key with count for 5–59 s ago', () => {
+    expect(fmtTimeAgo(NOW - 30_000, t)).toBe('overview.timeAgoSeconds:s=30')
+  })
+
+  it('boundary: exactly 5 s ago uses seconds key', () => {
+    expect(fmtTimeAgo(NOW - 5_000, t)).toBe('overview.timeAgoSeconds:s=5')
+  })
+
+  it('returns minutes key with count for >= 60 s ago', () => {
+    expect(fmtTimeAgo(NOW - 90_000, t)).toBe('overview.timeAgoMinutes:m=1')
+  })
+
+  it('boundary: exactly 60 s ago uses minutes key', () => {
+    expect(fmtTimeAgo(NOW - 60_000, t)).toBe('overview.timeAgoMinutes:m=1')
+  })
+
+  it('rounds down to whole minutes', () => {
+    expect(fmtTimeAgo(NOW - 125_000, t)).toBe('overview.timeAgoMinutes:m=2')
   })
 })

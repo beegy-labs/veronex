@@ -1,6 +1,6 @@
 # Git Flow & Commit Policy
 
-> SSOT for branch strategy and commit conventions | **Last Updated**: 2026-02-19
+> SSOT for branch strategy and commit conventions | **Last Updated**: 2026-03-15 | Classification: Constitutional
 
 ## Branch Strategy
 

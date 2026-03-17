@@ -17,6 +17,7 @@ import { ArrowRight } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { fmtDatetimeShort } from '@/lib/date'
 import { STATUS_STYLES, PROVIDER_GEMINI } from '@/lib/constants'
+import { tokens } from '@/lib/design-tokens'
 
 /* ─── Request Trend (24h area chart) ──────────────────────── */
 export function RequestTrendSection({ trendData }: {
@@ -36,12 +37,12 @@ export function RequestTrendSection({ trendData }: {
           <AreaChart data={trendData}>
             <defs>
               <linearGradient id="gradTotal" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%"  stopColor="var(--theme-primary)" stopOpacity={0.25} />
-                <stop offset="95%" stopColor="var(--theme-primary)" stopOpacity={0} />
+                <stop offset="5%"  stopColor={tokens.brand.primary} stopOpacity={0.25} />
+                <stop offset="95%" stopColor={tokens.brand.primary} stopOpacity={0} />
               </linearGradient>
               <linearGradient id="gradSuccess" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%"  stopColor="var(--theme-status-success)" stopOpacity={0.2} />
-                <stop offset="95%" stopColor="var(--theme-status-success)" stopOpacity={0} />
+                <stop offset="5%"  stopColor={tokens.status.success} stopOpacity={0.2} />
+                <stop offset="95%" stopColor={tokens.status.success} stopOpacity={0} />
               </linearGradient>
             </defs>
             <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
@@ -49,9 +50,9 @@ export function RequestTrendSection({ trendData }: {
             <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} cursor={CURSOR_FILL} />
             <Legend wrapperStyle={LEGEND_STYLE} />
             <Area type="monotone" dataKey="total"   name={t('overview.totalReqs')}
-              stroke="var(--theme-primary)" fill="url(#gradTotal)" strokeWidth={2} dot={false} />
+              stroke={tokens.brand.primary} fill="url(#gradTotal)" strokeWidth={2} dot={false} />
             <Area type="monotone" dataKey="success" name={t('overview.successReqs')}
-              stroke="var(--theme-status-success)" fill="url(#gradSuccess)" strokeWidth={2} dot={false} />
+              stroke={tokens.status.success} fill="url(#gradSuccess)" strokeWidth={2} dot={false} />
           </AreaChart>
         </ResponsiveContainer>
       </CardContent>
@@ -77,13 +78,13 @@ export function TopModelsSection({ modelBarData, geminiEnabled }: {
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: 'var(--theme-primary)' }} />
-              Ollama
+              <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: tokens.brand.primary }} />
+              {t('nav.ollama')}
             </span>
             {geminiEnabled && (
               <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: 'var(--theme-status-info)' }} />
-                Gemini
+                <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: tokens.status.info }} />
+                {t('nav.gemini')}
               </span>
             )}
           </div>
@@ -106,8 +107,8 @@ export function TopModelsSection({ modelBarData, geminiEnabled }: {
               ] as [string, string]}
             />
             <Bar dataKey="request_count" radius={[0, 4, 4, 0]}>
-              {modelBarData.map((m, i) => (
-                <Cell key={i} fill={m.provider_type === PROVIDER_GEMINI ? 'var(--theme-status-info)' : 'var(--theme-primary)'} />
+              {modelBarData.map((m) => (
+                <Cell key={`${m.model_name}-${m.provider_type}`} fill={m.provider_type === PROVIDER_GEMINI ? tokens.status.info : tokens.brand.primary} />
               ))}
             </Bar>
           </BarChart>
@@ -155,7 +156,7 @@ export function RecentJobsSection({ recentJobs, tz }: {
                   <td className="py-3 px-4 text-xs text-muted-foreground max-w-[120px] truncate">{job.provider_type}</td>
                   <td className="py-3 px-4">
                     <Badge variant="outline" className={`text-xs ${STATUS_STYLES[job.status] ?? 'bg-muted/20 text-muted-foreground border-muted/30'}`}>
-                      {job.status}
+                      {t(`jobs.statuses.${job.status}` as Parameters<typeof t>[0])}
                     </Badge>
                   </td>
                   <td className="py-3 px-4 text-xs tabular-nums">{fmtMsNullable(job.latency_ms)}</td>
@@ -185,7 +186,7 @@ export function TokenSummarySection({ usage }: { usage: UsageAggregate | undefin
           <>
             <p className="text-3xl font-bold tabular-nums flex items-baseline gap-1">
               {fmtCompact(usage.total_tokens)}
-              <span className="text-sm font-normal text-muted-foreground">tokens</span>
+              <span className="text-sm font-normal text-muted-foreground">{t('common.tokensUnit')}</span>
             </p>
             <p className="text-xs text-muted-foreground mt-1">
               {t('usage.promptTokens')} {fmtCompact(usage.prompt_tokens)} · {t('usage.completionTokens')} {fmtCompact(usage.completion_tokens)}

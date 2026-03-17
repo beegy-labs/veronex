@@ -282,3 +282,5 @@ CREATE TABLE lab_settings (
     gemini_function_calling BOOLEAN NOT NULL DEFAULT false,
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+INSERT INTO lab_settings (id) VALUES (1) ON CONFLICT DO NOTHING;

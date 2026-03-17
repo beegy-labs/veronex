@@ -1,7 +1,7 @@
 # Data Fetching — 2026 Research
 
 > **Last Researched**: 2026-03-01 | **Source**: TanStack Query v5 docs + verified in production
-> **Status**: ✅ Verified — used in `web/hooks/use-inference-stream.ts` + all page queries
+> **Status**: Verified — used in `web/hooks/use-inference-stream.ts` + all page queries
 
 ---
 
@@ -14,7 +14,7 @@ useQuery({
   queryKey: ['flow-jobs'],
   queryFn:  () => api.jobs('limit=50'),
   refetchInterval: 5_000,
-  refetchIntervalInBackground: false,   // ✅ pause when tab hidden — saves CPU/network
+  refetchIntervalInBackground: false,   // pause when tab hidden — saves CPU/network
 })
 ```
 
@@ -33,7 +33,7 @@ fresh in the background (e.g., a notification badge in a persistent layout).
 | Both combined | Fresh window + periodic update | History/chart data that changes slowly |
 
 ```tsx
-// ✅ History data: stale for 5 min (chart won't flicker), refetched on mount
+// History data: stale for 5 min (chart won't flicker), refetched on mount
 useQuery({
   queryKey: ['server-history', id],
   queryFn:  () => api.serverMetricsHistory(id, 1440),
@@ -41,7 +41,7 @@ useQuery({
   retry: false,
 })
 
-// ✅ Live data: always re-fetch on interval
+// Live data: always re-fetch on interval
 useQuery({
   queryKey: ['live-metrics', id],
   queryFn:  () => api.serverMetrics(id),
@@ -55,7 +55,7 @@ useQuery({
 ### retry: false for Non-Critical Queries
 
 ```tsx
-// ✅ For non-blocking data (metrics, history) — fail fast, don't retry
+// For non-blocking data (metrics, history) — fail fast, don't retry
 useQuery({
   queryKey: ['server-metrics', id],
   queryFn:  () => api.serverMetrics(id),
@@ -89,13 +89,13 @@ Use `useQueries` (not looping `useQuery`) for a variable-length list of parallel
 ### Query Key Conventions
 
 ```tsx
-// ✅ Array keys: stable, type-safe, cacheable
+// Array keys: stable, type-safe, cacheable
 queryKey: ['dashboard-stats']
 queryKey: ['server-metrics', serverId]
 queryKey: ['usage-aggregate', hours]
 queryKey: ['flow-jobs']
 
-// ❌ String keys — harder to invalidate selectively
+// AVOID: String keys — harder to invalidate selectively
 queryKey: `server-metrics-${serverId}`
 ```
 

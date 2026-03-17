@@ -160,7 +160,7 @@ LabSettingsProvider (web/components/lab-settings-provider.tsx)
 **Fail-safe default**: when the fetch fails (e.g. login page, 401), all
 features default to `false`, mirroring `LabSettings::default()` in Rust.
 
-**Settings dialog** (nav footer → ⚙️ Settings):
+**Settings dialog** (nav footer → Settings):
 
 - **Lab Features** section with a `FlaskConical` icon and "Lab" badge.
 - Toggle reads from `labSettings` in context; after PATCH calls `refetch()`.

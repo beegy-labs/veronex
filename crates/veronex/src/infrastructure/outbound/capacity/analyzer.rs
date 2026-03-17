@@ -28,8 +28,63 @@ use crate::domain::constants::{
     LLM_ANALYSIS_TIMEOUT, LLM_BATCH_ANALYSIS_TIMEOUT, OLLAMA_HEALTH_CHECK_TIMEOUT,
     OLLAMA_METADATA_TIMEOUT,
 };
-use crate::domain::enums::{LlmProviderStatus, ProviderType};
+use crate::domain::enums::{ApiFormat, JobSource, JobStatus, LlmProviderStatus, ProviderType};
+use crate::domain::value_objects::{JobId, ModelName, Prompt};
 use crate::infrastructure::outbound::hw_metrics::load_hw_metrics;
+
+/// Save an analyzer LLM call as a job record for history/tracking.
+async fn save_analyzer_job(
+    job_repo: Option<&dyn crate::application::ports::outbound::job_repository::JobRepository>,
+    model: &str,
+    prompt: &str,
+    result: &str,
+    provider_id: Uuid,
+    latency_ms: i32,
+) {
+    let Some(repo) = job_repo else { return };
+    let job = crate::domain::entities::InferenceJob {
+        id: JobId::new(),
+        prompt: Prompt::new(&prompt[..prompt.len().min(4096)]).unwrap_or_else(|_| Prompt::new("analyzer").unwrap()),
+        model_name: ModelName::new(model).unwrap_or_else(|_| ModelName::new("unknown").unwrap()),
+        status: JobStatus::Completed,
+        provider_type: ProviderType::Ollama,
+        created_at: Utc::now(),
+        started_at: Some(Utc::now()),
+        completed_at: Some(Utc::now()),
+        error: None,
+        result_text: Some(result[..result.len().min(8192)].to_string()),
+        api_key_id: None,
+        account_id: None,
+        latency_ms: Some(latency_ms),
+        ttft_ms: None,
+        prompt_tokens: None,
+        completion_tokens: None,
+        cached_tokens: None,
+        source: JobSource::Analyzer,
+        provider_id: Some(provider_id),
+        api_format: ApiFormat::OllamaNative,
+        messages: None,
+        tools: None,
+        request_path: Some("/internal/analyzer".to_string()),
+        queue_time_ms: None,
+        cancelled_at: None,
+        conversation_id: None,
+        tool_calls_json: None,
+        messages_hash: None,
+        messages_prefix_hash: None,
+        failure_reason: None,
+        images: None,
+        image_keys: None,
+        stop: None,
+        seed: None,
+        response_format: None,
+        frequency_penalty: None,
+        presence_penalty: None,
+    };
+    if let Err(e) = repo.save(&job).await {
+        tracing::debug!("failed to save analyzer job: {e}");
+    }
+}
 
 // ── Ollama API response types ─────────────────────────────────────────────────
 
@@ -264,14 +319,14 @@ mod tests {
 
 // ── LLM analysis response ─────────────────────────────────────────────────────
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default)]
 struct LlmCapacityAnalysis {
     concern: Option<String>,
     reason:  Option<String>,
 }
 
 /// LLM batch recommendation: per-model concurrency + overall reasoning.
-#[derive(Deserialize, Default, Debug)]
+#[derive(Deserialize, Serialize, Default, Debug)]
 struct LlmBatchRecommendation {
     #[serde(default)]
     models: Vec<LlmModelRecommendation>,
@@ -279,7 +334,7 @@ struct LlmBatchRecommendation {
     reasoning: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 struct LlmModelRecommendation {
     model: String,
     recommended_max_concurrent: u32,
@@ -540,6 +595,7 @@ pub async fn sync_provider(
     ollama_model_repo: &dyn OllamaModelRepository,
     model_selection_repo: &dyn ProviderModelSelectionRepository,
     vram_budget_repo: &dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository,
+    job_repo:        Option<&dyn crate::application::ports::outbound::job_repository::JobRepository>,
 ) -> Result<()> {
     // 0. Restore safety_permil from DB (first call after restart will win; no-op if already set).
     if let Ok(Some(budget)) = vram_budget_repo.get(provider_id).await {
@@ -587,7 +643,7 @@ pub async fn sync_provider(
     // Update Valkey cache
     if let Some(pool) = valkey_pool {
         use fred::prelude::*;
-        let cache_key = format!("veronex:models:{provider_id}");
+        let cache_key = crate::infrastructure::outbound::valkey_keys::provider_models(provider_id);
         let json = serde_json::to_string(&model_names).unwrap_or_default();
         let ttl = crate::infrastructure::inbound::http::constants::MODELS_CACHE_TTL;
         let _: Result<(), _> = pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await;
@@ -822,22 +878,21 @@ pub async fn sync_provider(
         // q8_0 = 1 byte per element
         let kv_per_req = compute_kv_per_request_mb(&arch, &stats, 1);
 
-        // 5. LLM analysis
-        let llm = call_llm_analysis(
-            client,
-            ollama_url,  // Use provider's Ollama URL for LLM analysis
-            analyzer_model,
-            provider_name,
-            &model.name,
-            weight_mb,
-            vram_total_mb,
-            temp_c,
-            &arch,
-            kv_per_req,
-            &stats,
-        )
-        .await
-        .unwrap_or_default();
+        // 5. LLM analysis (skip when analyzer_model not configured)
+        let llm = if analyzer_model.is_empty() {
+            LlmCapacityAnalysis::default()
+        } else {
+            let t0 = std::time::Instant::now();
+            let result = call_llm_analysis(
+                client, ollama_url, analyzer_model, provider_name,
+                &model.name, weight_mb, vram_total_mb, temp_c, &arch, kv_per_req, &stats,
+            ).await.unwrap_or_default();
+            let elapsed = t0.elapsed().as_millis() as i32;
+            let prompt_summary = format!("VRAM analysis: {} on {} ({}MB)", model.name, provider_name, weight_mb);
+            let result_text = serde_json::to_string(&result).unwrap_or_default();
+            save_analyzer_job(job_repo, analyzer_model, &prompt_summary, &result_text, provider_id, elapsed).await;
+            result
+        };
 
         // 6. Update VramPool profile
         vram_pool.set_model_profile(
@@ -982,10 +1037,11 @@ pub async fn sync_provider(
         model_count = model_snapshots.len(),
         "batch analysis check"
     );
-    if total_samples >= 10 && !model_snapshots.is_empty() {
+    if total_samples >= 10 && !model_snapshots.is_empty() && !analyzer_model.is_empty() {
+        let t0_batch = std::time::Instant::now();
         match call_llm_batch_analysis(
             client,
-            ollama_url,  // Use provider's Ollama URL for LLM analysis
+            ollama_url,
             analyzer_model,
             provider_name,
             vram_total_mb,
@@ -995,6 +1051,11 @@ pub async fn sync_provider(
         .await
         {
             Ok(rec) => {
+                let elapsed_batch = t0_batch.elapsed().as_millis() as i32;
+                let models_str: Vec<&str> = model_snapshots.iter().map(|m| m.name.as_str()).collect();
+                let prompt_summary = format!("Batch analysis: {} on {} ({} models)", models_str.join(", "), provider_name, models_str.len());
+                let result_text = serde_json::to_string(&rec).unwrap_or_default();
+                save_analyzer_job(job_repo, analyzer_model, &prompt_summary, &result_text, provider_id, elapsed_batch).await;
                 for mr in &rec.models {
                     if mr.recommended_max_concurrent == 0 {
                         continue; // LLM returned 0 = no opinion
@@ -1071,6 +1132,7 @@ pub async fn run_sync_loop(
     ollama_model_repo:     Arc<dyn OllamaModelRepository>,
     model_selection_repo:  Arc<dyn ProviderModelSelectionRepository>,
     vram_budget_repo:      Arc<dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository>,
+    job_repo:              Option<Arc<dyn crate::application::ports::outbound::job_repository::JobRepository>>,
 ) {
     let mut ticker = tokio::time::interval(base_tick);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1089,6 +1151,15 @@ pub async fn run_sync_loop(
 
         // Push probe config to VramPool
         vram_pool.set_probe_config(settings.probe_permits, settings.probe_rate);
+
+        // Guard: analyzer_model must be configured to run
+        if settings.analyzer_model.is_empty() {
+            if is_manual {
+                tracing::warn!("analyzer_model not set — cannot run analysis. Set a model in Capacity Settings.");
+                settings_repo.record_run("skipped").await.ok();
+            }
+            continue;
+        }
 
         if !is_manual {
             if !settings.sync_enabled {
@@ -1131,6 +1202,7 @@ pub async fn run_sync_loop(
                 &*ollama_model_repo,
                 &*model_selection_repo,
                 &*vram_budget_repo,
+                job_repo.as_deref(),
             )
             .await
             {

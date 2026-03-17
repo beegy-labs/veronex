@@ -192,6 +192,9 @@ pub const SYNC_LOOP_BASE_TICK: Duration = Duration::from_secs(30);
 /// Interval between pending-job sweep passes (reaper).
 pub const PENDING_JOB_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 
+/// Tick interval for the real-time FlowStats broadcast ticker.
+pub const STATS_TICK_INTERVAL: Duration = Duration::from_secs(1);
+
 // ── Valkey key constructors (used by application layer) ─────────────────
 
 /// Job ownership key — tracks which instance owns a running job.
@@ -202,6 +205,16 @@ pub fn job_owner_key(job_id: uuid::Uuid) -> String {
 /// TPM (tokens per minute) counter key for an API key at a given minute epoch.
 pub fn ratelimit_tpm_key(key_id: uuid::Uuid, minute: i64) -> String {
     format!("veronex:ratelimit:tpm:{key_id}:{minute}")
+}
+
+/// Lock key preventing duplicate preload requests for a (model, provider) pair.
+pub fn preload_lock_key(model: &str, provider_id: uuid::Uuid) -> String {
+    format!("veronex:preloading:{model}:{provider_id}")
+}
+
+/// Scale-out decision dedup key for a model.
+pub fn scaleout_decision_key(model: &str) -> String {
+    format!("veronex:scaleout:{model}")
 }
 
 // ── Circuit breaker / reaper ─────────────────────────────────────────────
@@ -262,6 +275,41 @@ mod tests {
     #[test]
     fn demand_key_format() {
         assert_eq!(demand_key("llama3:70b"), "veronex:demand:llama3:70b");
+    }
+
+    #[test]
+    fn job_owner_key_format() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            job_owner_key(id),
+            "veronex:job:owner:00000000-0000-0000-0000-000000000000",
+        );
+    }
+
+    #[test]
+    fn ratelimit_tpm_key_format() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            ratelimit_tpm_key(id, 1_710_600_000),
+            "veronex:ratelimit:tpm:00000000-0000-0000-0000-000000000000:1710600000",
+        );
+    }
+
+    #[test]
+    fn preload_lock_key_format() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            preload_lock_key("qwen3:8b", id),
+            "veronex:preloading:qwen3:8b:00000000-0000-0000-0000-000000000000",
+        );
+    }
+
+    #[test]
+    fn scaleout_decision_key_format() {
+        assert_eq!(
+            scaleout_decision_key("llama3:70b"),
+            "veronex:scaleout:llama3:70b",
+        );
     }
 
     #[test]

@@ -29,21 +29,46 @@ const MAX_OLLAMA_MODELS: usize = 256;
 /// Metric name prefixes to forward from node-exporter.
 /// Everything else is dropped at the agent level.
 const NODE_EXPORTER_ALLOWLIST: &[&str] = &[
-    // Linux
+    // Linux memory
     "node_memory_MemTotal_bytes",
     "node_memory_MemAvailable_bytes",
-    // macOS
+    // macOS memory
     "node_memory_total_bytes",
     "node_memory_free_bytes",
+    // CPU utilisation (mode-filtered separately via CPU_MODE_ALLOWLIST)
     "node_cpu_seconds_total",
+    // GPU (AMD DRM)
     "node_drm_",
+    // Hardware sensors — temperature, power, chip identification, sensor labels
     "node_hwmon_temp_celsius",
     "node_hwmon_power_average_watt",
+    "node_hwmon_power_watt",
+    // chip_names: maps chip→vendor (amdgpu, coretemp, k10temp, nouveau, nvme, etc.)
     "node_hwmon_chip_names",
+    // sensor_label: maps sensor→human-readable name (edge, junction, Tctl, Package id 0, etc.)
+    "node_hwmon_sensor_label",
 ];
+
+/// CPU modes worth tracking. All others (nice, irq, softirq, steal, guest,
+/// guest_nice) are dropped — they add ~55% of cpu row volume with no benefit
+/// for GPU-server monitoring.
+const CPU_MODE_ALLOWLIST: &[&str] = &["user", "system", "iowait", "idle"];
 
 fn is_allowed(name: &str) -> bool {
     NODE_EXPORTER_ALLOWLIST.iter().any(|prefix| name.starts_with(prefix))
+}
+
+/// Returns false when the metric is `node_cpu_seconds_total` and its `mode`
+/// label is not in CPU_MODE_ALLOWLIST. All other metrics pass through.
+fn is_cpu_mode_allowed(name: &str, labels: &[(String, String)]) -> bool {
+    if name != "node_cpu_seconds_total" {
+        return true;
+    }
+    labels
+        .iter()
+        .find(|(k, _)| k == "mode")
+        .map(|(_, v)| CPU_MODE_ALLOWLIST.contains(&v.as_str()))
+        .unwrap_or(false)
 }
 
 /// A single gauge metric — raw name, raw value, raw labels from the source.
@@ -53,9 +78,96 @@ pub struct Gauge {
     pub labels: Vec<(String, String)>,
 }
 
+// ── Hardware classification ─────────────────────────────────────────────────
+// Maps node-exporter chip_name to normalized hw_type + hw_vendor labels.
+// Agent is the ONLY component that does this classification — downstream
+// (OTel → Redpanda → ClickHouse) is pure data pipeline.
+
+/// Classify a chip_name into (hw_type, hw_vendor).
+/// Returns None for unrecognized/irrelevant chips (NIC, board sensors, etc.)
+fn classify_chip(chip_name: &str) -> Option<(&'static str, &'static str)> {
+    match chip_name {
+        // GPU drivers
+        "amdgpu"                            => Some(("gpu", "amd")),
+        "nouveau"                           => Some(("gpu", "nvidia")),
+        // CPU temperature drivers
+        "coretemp"                          => Some(("cpu", "intel")),
+        "k10temp" | "zenpower" | "zenergy"  => Some(("cpu", "amd")),
+        // Storage
+        "nvme"                              => Some(("storage", "nvme")),
+        // ACPI thermal zone (board-level CPU temp fallback)
+        "acpitz"                            => Some(("board", "acpi")),
+        // Motherboard super I/O chips (Nuvoton, ITE, ASUS, etc.)
+        n if n.starts_with("nct") || n.starts_with("it87") || n.starts_with("asus") => Some(("board", "motherboard")),
+        _ => None,
+    }
+}
+
+/// Normalize a sensor label to a canonical role name.
+/// This maps hardware-specific labels to common keys usable in analytics.
+fn normalize_sensor_role(hw_type: &str, label: &str) -> &'static str {
+    let lower = label.to_ascii_lowercase();
+    match hw_type {
+        "gpu" => {
+            if lower.contains("junction")                    { "temp_junction" }
+            else if lower.contains("mem")                    { "temp_mem" }
+            else if lower.contains("edge") || lower == "temp1" { "temp_edge" }
+            else if lower.contains("ppt") || lower.contains("power") { "power" }
+            else { "other" }
+        }
+        "cpu" => {
+            // AMD: Tctl, Tdie, Tccd1, Tccd2...
+            // Intel: Package id 0, Core 0, Core 1...
+            if lower.contains("package") || lower == "tctl" || lower == "tdie" { "temp_package" }
+            else if lower.starts_with("core") || lower.starts_with("tccd")    { "temp_core" }
+            else { "temp_package" } // default to package for unknown CPU sensors
+        }
+        _ => "other",
+    }
+}
+
+/// Enrich hwmon gauges with `hw_type`, `hw_vendor`, `hw_role` labels
+/// based on chip_name classification and sensor_label mapping.
+pub fn enrich_hwmon_labels(
+    gauges: &mut [Gauge],
+    chip_map: &std::collections::HashMap<String, String>,  // chip → chip_name
+    label_map: &std::collections::HashMap<(String, String), String>, // (chip, sensor) → label
+) {
+    for gauge in gauges.iter_mut() {
+        // Only enrich hwmon metrics (temp, power)
+        if !gauge.name.starts_with("node_hwmon_temp") && !gauge.name.starts_with("node_hwmon_power") {
+            continue;
+        }
+
+        let chip = gauge.labels.iter().find(|(k, _)| k == "chip").map(|(_, v)| v.as_str());
+        let sensor = gauge.labels.iter().find(|(k, _)| k == "sensor").map(|(_, v)| v.as_str());
+
+        let Some(chip_val) = chip else { continue };
+        let Some(chip_name) = chip_map.get(chip_val) else { continue };
+        let Some((hw_type, hw_vendor)) = classify_chip(chip_name) else { continue };
+
+        // Resolve sensor label for role classification
+        let role = if let Some(sensor_val) = sensor {
+            if let Some(label) = label_map.get(&(chip_val.to_string(), sensor_val.to_string())) {
+                normalize_sensor_role(hw_type, label)
+            } else {
+                normalize_sensor_role(hw_type, sensor_val)
+            }
+        } else {
+            "other"
+        };
+
+        gauge.labels.push(("hw_type".to_string(), hw_type.to_string()));
+        gauge.labels.push(("hw_vendor".to_string(), hw_vendor.to_string()));
+        gauge.labels.push(("hw_role".to_string(), role.to_string()));
+    }
+}
+
 // ── Node-exporter ────────────────────────────────────────────────────────────
 
 /// Scrape node-exporter /metrics — select allowed metrics, forward raw values.
+/// Enriches hwmon metrics with `hw_type`, `hw_vendor`, `hw_role` labels
+/// based on chip_name classification (agent-side only — pipeline is raw).
 pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
     let url = format!("{}/metrics", base_url.trim_end_matches('/'));
     match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
@@ -72,7 +184,30 @@ pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> V
                 }
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
-                    parse_node_exporter(&text)
+                    let mut gauges = parse_node_exporter(&text);
+
+                    // Build chip_name and sensor_label maps from annotation metrics
+                    let mut chip_map = std::collections::HashMap::new();
+                    let mut label_map = std::collections::HashMap::new();
+                    for g in &gauges {
+                        if g.name == "node_hwmon_chip_names" {
+                            let chip = g.labels.iter().find(|(k, _)| k == "chip").map(|(_, v)| v.clone());
+                            let cn = g.labels.iter().find(|(k, _)| k == "chip_name").map(|(_, v)| v.clone());
+                            if let (Some(c), Some(n)) = (chip, cn) {
+                                chip_map.insert(c, n);
+                            }
+                        } else if g.name == "node_hwmon_sensor_label" {
+                            let chip = g.labels.iter().find(|(k, _)| k == "chip").map(|(_, v)| v.clone());
+                            let sensor = g.labels.iter().find(|(k, _)| k == "sensor").map(|(_, v)| v.clone());
+                            let label = g.labels.iter().find(|(k, _)| k == "label").map(|(_, v)| v.clone());
+                            if let (Some(c), Some(s), Some(l)) = (chip, sensor, label) {
+                                label_map.insert((c, s), l);
+                            }
+                        }
+                    }
+
+                    enrich_hwmon_labels(&mut gauges, &chip_map, &label_map);
+                    gauges
                 }
                 Err(e) => {
                     tracing::debug!("node-exporter read failed: {e}");
@@ -114,10 +249,14 @@ fn parse_node_exporter(text: &str) -> Vec<Gauge> {
             continue;
         }
 
+        let labels = parse_labels(metric_part);
+        if !is_cpu_mode_allowed(name, &labels) {
+            continue;
+        }
         gauges.push(Gauge {
             name: name.to_string(),
             value,
-            labels: parse_labels(metric_part),
+            labels,
         });
     }
 
@@ -305,6 +444,37 @@ some_random_metric 999
         assert!(parse_labels("foo").is_empty());
     }
 
+    /// CPU mode filtering: allowed modes pass, blocked modes are dropped.
+    #[test]
+    fn cpu_mode_filtering() {
+        let allowed = ["user", "system", "iowait", "idle"];
+        let blocked = ["nice", "irq", "softirq", "steal", "guest", "guest_nice"];
+
+        for mode in &allowed {
+            let text = format!("node_cpu_seconds_total{{cpu=\"0\",mode=\"{mode}\"}} 1.0");
+            let gauges = parse_node_exporter(&text);
+            assert_eq!(gauges.len(), 1, "mode={mode} should pass");
+        }
+        for mode in &blocked {
+            let text = format!("node_cpu_seconds_total{{cpu=\"0\",mode=\"{mode}\"}} 1.0");
+            let gauges = parse_node_exporter(&text);
+            assert!(gauges.is_empty(), "mode={mode} should be filtered");
+        }
+        // No mode label → filtered (unknown mode)
+        let text = "node_cpu_seconds_total{cpu=\"0\"} 1.0";
+        let gauges = parse_node_exporter(text);
+        assert!(gauges.is_empty(), "missing mode label should be filtered");
+    }
+
+    /// node_hwmon_chip_names is in the allowlist (needed by analytics for GPU chip→vendor mapping).
+    #[test]
+    fn chip_names_allowed() {
+        let text = "node_hwmon_chip_names{chip=\"0000:c4:00_0\",chip_name=\"amdgpu\"} 1";
+        let gauges = parse_node_exporter(text);
+        assert_eq!(gauges.len(), 1);
+        assert_eq!(gauges[0].name, "node_hwmon_chip_names");
+    }
+
     proptest! {
         /// Allowed metrics always pass through with correct value and name.
         #[test]
@@ -312,11 +482,9 @@ some_random_metric 999
             prefix in prop::sample::select(vec![
                 "node_memory_MemTotal_bytes",
                 "node_memory_MemAvailable_bytes",
-                "node_cpu_seconds_total",
                 "node_drm_gpu_busy",
                 "node_hwmon_temp_celsius",
                 "node_hwmon_power_average_watt",
-                "node_hwmon_chip_names",
             ]),
             value in 0.0f64..1e15,
         ) {
@@ -326,6 +494,31 @@ some_random_metric 999
             prop_assert_eq!(gauges.len(), 1);
             prop_assert_eq!(&gauges[0].name, &prefix);
             prop_assert!((gauges[0].value - value).abs() < 1.0);
+        }
+
+        /// node_cpu_seconds_total with an allowed mode always passes.
+        #[test]
+        fn cpu_allowed_mode_passes(
+            mode in prop::sample::select(vec!["user", "system", "iowait", "idle"]),
+            value in 0.0f64..1e15,
+        ) {
+            prop_assume!(value.is_finite());
+            let text = format!("node_cpu_seconds_total{{cpu=\"0\",mode=\"{mode}\"}} {value}");
+            let gauges = parse_node_exporter(&text);
+            prop_assert_eq!(gauges.len(), 1);
+            prop_assert!((gauges[0].value - value).abs() < 1.0);
+        }
+
+        /// node_cpu_seconds_total with a blocked mode is always filtered.
+        #[test]
+        fn cpu_blocked_mode_filtered(
+            mode in prop::sample::select(vec!["nice", "irq", "softirq", "steal", "guest", "guest_nice"]),
+            value in 0.0f64..1e15,
+        ) {
+            prop_assume!(value.is_finite());
+            let text = format!("node_cpu_seconds_total{{cpu=\"0\",mode=\"{mode}\"}} {value}");
+            let gauges = parse_node_exporter(&text);
+            prop_assert!(gauges.is_empty());
         }
 
         /// Non-allowed metrics are always filtered out.
@@ -368,5 +561,72 @@ some_random_metric 999
             let labels = parse_labels(&metric);
             prop_assert_eq!(labels.len(), count);
         }
+    }
+
+    // ── Hardware classification tests ─────────────────────────────────
+
+    #[test]
+    fn classify_chip_gpu_vendors() {
+        assert_eq!(classify_chip("amdgpu"), Some(("gpu", "amd")));
+        assert_eq!(classify_chip("nouveau"), Some(("gpu", "nvidia")));
+    }
+
+    #[test]
+    fn classify_chip_cpu_vendors() {
+        assert_eq!(classify_chip("coretemp"), Some(("cpu", "intel")));
+        assert_eq!(classify_chip("k10temp"), Some(("cpu", "amd")));
+        assert_eq!(classify_chip("zenpower"), Some(("cpu", "amd")));
+    }
+
+    #[test]
+    fn classify_chip_storage_and_board() {
+        assert_eq!(classify_chip("nvme"), Some(("storage", "nvme")));
+        assert_eq!(classify_chip("acpitz"), Some(("board", "acpi")));
+        assert_eq!(classify_chip("nct6775"), Some(("board", "motherboard")));
+    }
+
+    #[test]
+    fn classify_chip_unknown_returns_none() {
+        assert_eq!(classify_chip("r8169_0_c100:00"), None);
+        assert_eq!(classify_chip("unknown_driver"), None);
+    }
+
+    #[test]
+    fn normalize_gpu_sensor_roles() {
+        assert_eq!(normalize_sensor_role("gpu", "edge"), "temp_edge");
+        assert_eq!(normalize_sensor_role("gpu", "junction"), "temp_junction");
+        assert_eq!(normalize_sensor_role("gpu", "mem"), "temp_mem");
+        assert_eq!(normalize_sensor_role("gpu", "PPT"), "power");
+    }
+
+    #[test]
+    fn normalize_cpu_sensor_roles() {
+        assert_eq!(normalize_sensor_role("cpu", "Package id 0"), "temp_package");
+        assert_eq!(normalize_sensor_role("cpu", "Tctl"), "temp_package");
+        assert_eq!(normalize_sensor_role("cpu", "Core 0"), "temp_core");
+        assert_eq!(normalize_sensor_role("cpu", "Tccd1"), "temp_core");
+    }
+
+    #[test]
+    fn enrich_adds_hw_labels() {
+        let mut gauges = vec![Gauge {
+            name: "node_hwmon_temp_celsius".into(),
+            value: 55.0,
+            labels: vec![
+                ("chip".into(), "0000:c4:00_0".into()),
+                ("sensor".into(), "temp1".into()),
+            ],
+        }];
+        let chip_map = std::collections::HashMap::from([
+            ("0000:c4:00_0".into(), "amdgpu".into()),
+        ]);
+        let label_map = std::collections::HashMap::from([
+            (("0000:c4:00_0".into(), "temp1".into()), "edge".into()),
+        ]);
+        enrich_hwmon_labels(&mut gauges, &chip_map, &label_map);
+        let labels = &gauges[0].labels;
+        assert!(labels.iter().any(|(k, v)| k == "hw_type" && v == "gpu"));
+        assert!(labels.iter().any(|(k, v)| k == "hw_vendor" && v == "amd"));
+        assert!(labels.iter().any(|(k, v)| k == "hw_role" && v == "temp_edge"));
     }
 }

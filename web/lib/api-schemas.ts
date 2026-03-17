@@ -12,13 +12,34 @@
 
 import { z } from 'zod'
 
+// ── SSE stream payloads ──────────────────────────────────────────────────────
+
+const NonNegativeInt = z.number().int().nonnegative()
+
+export const JobStatusEventSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  model_name: z.string(),
+  provider_type: z.string(),
+  latency_ms: z.number().int().nullable(),
+  /** Server-side unix ms timestamp. Used for accurate "time ago" display. */
+  ts: z.number().optional(),
+})
+
+export const FlowStatsSchema = z.object({
+  incoming: NonNegativeInt,
+  queued: NonNegativeInt,
+  running: NonNegativeInt,
+  completed: NonNegativeInt,
+})
+
 // ── Enums ───────────────────────────────────────────────────────────────────
 
 export const JobStatusSchema = z.enum([
   'pending', 'running', 'completed', 'failed', 'cancelled',
 ])
 
-export const JobSourceSchema = z.enum(['api', 'api_paid', 'test'])
+export const JobSourceSchema = z.enum(['api', 'api_paid', 'test', 'analyzer'])
 
 export const ProviderTypeSchema = z.enum(['ollama', 'gemini'])
 
@@ -152,6 +173,7 @@ export const JobSchema = z.object({
   request_path: z.string().nullable(),
   estimated_cost_usd: z.number().nullable(),
   has_tool_calls: z.boolean(),
+  provider_name: z.string().nullable().optional(),
 })
 
 export const PaginatedJobsSchema = z.object({
@@ -184,6 +206,9 @@ export const JobDetailSchema = z.object({
   tool_calls_json: z.array(z.any()).nullable(),
   message_count: z.number().int().nullable(),
   messages_json: z.array(z.any()).nullable(),
+  provider_name: z.string().nullable().optional(),
+  image_keys: z.array(z.string()).nullable().optional(),
+  image_urls: z.array(z.string()).nullable().optional(),
 })
 
 // ── Performance ─────────────────────────────────────────────────────────────

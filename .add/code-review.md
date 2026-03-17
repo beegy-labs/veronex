@@ -1,6 +1,6 @@
 # Code Review
 
-> ADD Execution | Last Updated: 2026-03-14
+> ADD Execution | **Last Updated**: 2026-03-16
 
 ## Trigger
 
@@ -13,13 +13,17 @@ Read only docs relevant to the changed domain.
 | Domain | Path |
 | ------ | ---- |
 | Architecture | `docs/llm/policies/architecture.md` |
-| Code patterns | `docs/llm/policies/patterns.md` |
+| Code patterns (Rust) | `docs/llm/policies/patterns.md` |
+| Code patterns (Frontend) | `docs/llm/policies/patterns-frontend.md` |
+| Frontend review criteria | `.add/frontend-review.md` |
 | Testing | `docs/llm/policies/testing-strategy.md` |
 | Security | `docs/llm/auth/security.md` |
 | Capacity | `docs/llm/inference/capacity.md` |
 | Thermal | `docs/llm/providers/hardware.md` |
 | Job lifecycle | `docs/llm/inference/job-lifecycle.md` |
 | Scheduler spec | `.specs/veronex/scheduler.md` |
+
+> **Frontend changes**: use `.add/frontend-review.md` checklist instead of this file.
 
 ## Execution
 
@@ -30,7 +34,7 @@ Read only docs relevant to the changed domain.
 | 3 | Scan target files (git diff or user-specified) |
 | 4 | Fix violations directly in code |
 | 5 | Verify via `cargo check`, `cargo test` |
-| 6 | Update `docs/llm/` if patterns changed |
+| 6 | CDD sync — if a new pattern is established, update the specific doc: architecture change → `docs/llm/policies/architecture.md`; code pattern → `docs/llm/policies/patterns.md`; test pattern → `docs/llm/policies/testing-strategy.md` |
 
 ## Rules
 

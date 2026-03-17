@@ -1,6 +1,6 @@
 # Web -- Jobs Page
 
-> SSOT | **Last Updated**: 2026-03-04 (rev5: split to jobs.md + jobs-impl.md)
+> SSOT | **Last Updated**: 2026-03-16 (rev7: flow_stats, Gemini node, stale bee filter)
 
 ## Task Guide
 
@@ -26,12 +26,13 @@
 
 ## `source` Field
 
-The `Job` and `JobDetail` types carry `source: 'api' | 'test'`. This field is set by the backend at job creation time based on the Valkey queue used:
+The `Job` and `JobDetail` types carry `source: 'api' | 'test' | 'analyzer'`. This field is set by the backend at job creation time based on the origin:
 
 | Value | Queue | Meaning |
 |-------|-------|---------|
 | `'api'` | `veronex:queue:jobs` | Submitted via the OpenAI-compatible API |
 | `'test'` | `veronex:queue:jobs:test` | Submitted via the web Test panel |
+| `'analyzer'` | `veronex:queue:zset` | Submitted by the capacity analyzer (VRAM probing/batch analysis) |
 
 The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Overview page recent-jobs mini-table shows all sources without filtering.
 
@@ -64,6 +65,8 @@ The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Ov
 +-----------------------------------------------------------------------+
 ```
 
+Network Flow notes: Ollama node centers when Gemini is disabled. Stale bee filter removes inactive bees after 2 s. Flow chart badges show live pending/running/req-s counts from `flow_stats` SSE events.
+
 See `jobs-impl.md` for GroupSessionsPanel internals, handleRetry cross-tab navigation, and Network Flow details.
 
 ## `JobsSection` Component
@@ -78,7 +81,7 @@ Reusable component in `jobs/page.tsx`, rendered once per tab:
 Each section maintains independent state:
 - `page`, `status`, `search`, `query` -- no shared state between tabs
 - Query key: `['dashboard-jobs', source, page, status, query]`
-- API call: `GET /v1/dashboard/jobs?source={source}&limit=50&offset=...&status=...&q=...`
+- API call: `GET /v1/dashboard/jobs?source={source}&limit=50&offset=...&status=...&q=...&model=...&provider=...`
 - `refetchInterval: 30_000`
 - Pagination: `buildPageSlots()` -- up to 7 slots with ellipsis, `PAGE_SIZE = 50`
 
@@ -87,13 +90,15 @@ Each section maintains independent state:
 ## JobTable Columns
 
 ```
-+--------------------------------------------------------------------------+
-| ID      Model    Provider API Key   Status           Created   TTFT  Latency|
-| 3a9f..  llama3   gpu-1    dev-key   complete         Feb 25   142ms  1.2s  |
-+--------------------------------------------------------------------------+
++---------------------------------------------------------------------------------+
+| ID      Model    Provider  Provider Name  API Key  Status    Created  TTFT  Latency|
+| 3a9f..  llama3   ollama    gpu-1          dev-key  complete  Feb 25  142ms  1.2s   |
++---------------------------------------------------------------------------------+
 ```
 
 - Status filter: all | pending | running | completed | failed | cancelled
+- Model filter (`model=`): exact match on model_name
+- Provider filter (`provider=`): exact match on provider name (via JOIN)
 - Search (`q=`): case-insensitive substring match on prompt text OR api key name
 - Retry button: pre-fills test panel with job's model + prompt + provider (via `onRetry`)
 - Wrench icon next to status badge when `has_tool_calls = true`
@@ -107,9 +112,9 @@ See `jobs-impl.md` for duration format, job detail modal, and extended field spe
 | Interface | Key fields | Notes |
 |-----------|-----------|-------|
 | `ToolCall` | `id`, `function.name`, `function.arguments` | Used in both `Job` and `JobDetail` |
-| `Job` | `id`, `model_name`, `provider_type`, `status`, `source`, timing fields, `has_tool_calls`, `estimated_cost_usd` | List view -- `has_tool_calls` computed by backend SQL |
+| `Job` | `id`, `model_name`, `provider_type`, `status`, `source`, timing fields, `has_tool_calls`, `estimated_cost_usd`, `provider_name` | List view -- `has_tool_calls` computed by backend SQL |
 | `ChatMessage` | `role`, `content`, `tool_calls` | Roles: system/user/assistant/tool |
-| `JobDetail` | All `Job` fields + `prompt`, `result_text`, `error`, `tool_calls_json`, `message_count`, `messages_json` | Modal view -- `tool_calls_json` rendered when `result_text` is null |
+| `JobDetail` | All `Job` fields + `prompt`, `result_text`, `error`, `tool_calls_json`, `message_count`, `messages_json`, `image_keys`, `image_urls` | Modal view -- `tool_calls_json` rendered when `result_text` is null; image thumbnail gallery when `image_urls` present |
 
 See `jobs-impl.md` for full type definitions and extended field specs.
 

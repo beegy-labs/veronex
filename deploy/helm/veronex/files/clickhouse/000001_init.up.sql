@@ -1,3 +1,9 @@
+-- ============================================================
+-- Veronex ClickHouse schema (consolidated init)
+-- Generated from migrations 000001–000002
+-- Last updated: 2026-03-16
+-- ============================================================
+
 -- ── MergeTree target tables ────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS inference_logs (
@@ -13,7 +19,8 @@ CREATE TABLE IF NOT EXISTS inference_logs (
     status            LowCardinality(String)
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(event_time)
-ORDER BY (api_key_id, event_time);
+ORDER BY (api_key_id, event_time)
+TTL toDate(event_time) + INTERVAL __RETENTION_INFERENCE_DAYS__ DAY;
 
 CREATE TABLE IF NOT EXISTS api_key_usage_hourly (
     hour              DateTime,
@@ -66,7 +73,7 @@ CREATE TABLE IF NOT EXISTS otel_logs (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(Timestamp)
 ORDER BY (ServiceName, Timestamp)
-TTL toDate(Timestamp) + INTERVAL __RETENTION_ANALYTICS_DAYS__ DAY;
+TTL toDate(Timestamp) + INTERVAL __RETENTION_LOGS_DAYS__ DAY;
 
 -- Audit events (DEPRECATED — superseded by otel_logs)
 CREATE TABLE IF NOT EXISTS audit_events (
@@ -136,7 +143,7 @@ CREATE TABLE IF NOT EXISTS otel_traces_raw (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(received_at)
 ORDER BY received_at
-TTL toDate(received_at) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
+TTL toDate(received_at) + INTERVAL __RETENTION_TRACES_DAYS__ DAY;
 
 -- ── Kafka Engine tables + Materialized Views ───────────────────────────────────
 
@@ -209,6 +216,7 @@ FROM (
 );
 
 -- otel-metrics → otel_metrics_gauge
+-- Supports both Gauge and Sum (counter) metric types.
 CREATE TABLE IF NOT EXISTS kafka_otel_metrics (
     raw String
 ) ENGINE = Kafka
@@ -261,11 +269,15 @@ FROM (
             arrayJoin(JSONExtractArrayRaw(raw, 'resourceMetrics'))              AS rm,
             arrayJoin(JSONExtractArrayRaw(rm, 'scopeMetrics'))                  AS sm,
             arrayJoin(JSONExtractArrayRaw(sm, 'metrics'))                       AS metric,
+            -- Extract dataPoints from gauge OR sum (counters like node_cpu_seconds_total)
             arrayJoin(
-                JSONExtractArrayRaw(JSONExtractRaw(metric, 'gauge'), 'dataPoints')
+                if(JSONHas(metric, 'gauge'),
+                    JSONExtractArrayRaw(JSONExtractRaw(metric, 'gauge'), 'dataPoints'),
+                    JSONExtractArrayRaw(JSONExtractRaw(metric, 'sum'), 'dataPoints')
+                )
             ) AS dp
         FROM kafka_otel_metrics
-        WHERE JSONHas(metric, 'gauge')
+        WHERE JSONHas(metric, 'gauge') OR JSONHas(metric, 'sum')
     )
 );
 

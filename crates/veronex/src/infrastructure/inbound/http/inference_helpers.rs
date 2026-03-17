@@ -47,6 +47,33 @@ pub fn validate_content_length(total_bytes: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
+// ── Image validation ────────────────────────────────────────────────────────
+
+use crate::application::ports::outbound::lab_settings_repository::LabSettings;
+
+/// Validate images against lab_settings limits.
+/// Returns error message on failure, None on success.
+pub fn validate_images(images: &Option<Vec<String>>, lab: &LabSettings) -> Option<String> {
+    let imgs = match images {
+        Some(v) if !v.is_empty() => v,
+        _ => return None,
+    };
+    let max_count = lab.max_images_per_request as usize;
+    if max_count == 0 {
+        return Some("image input is disabled".into());
+    }
+    if imgs.len() > max_count {
+        return Some(format!("too many images (max {max_count})"));
+    }
+    let max_bytes = lab.max_image_b64_bytes as usize;
+    for img in imgs {
+        if img.len() > max_bytes {
+            return Some(format!("image too large (max {} bytes)", max_bytes));
+        }
+    }
+    None
+}
+
 // ── Tool call validation (security) ─────────────────────────────────────────
 
 /// Validate a single tool call from a provider response.
@@ -106,13 +133,14 @@ pub fn extract_last_user_prompt(messages: &[serde_json::Value]) -> &str {
 /// 6. Return via `sse_response()` (timeout + keep-alive + headers)
 ///
 /// The `map_token` closure receives each `Result<StreamToken>` and returns
-/// the SSE `Event` data string. This keeps format-specific conversion
-/// (OpenAI chunks vs Gemini responses) in the handler that knows the wire format.
+/// a `Vec<Event>`. Returning multiple events per token is needed for
+/// `stream_options.include_usage` which emits a separate usage-only chunk
+/// after the finish chunk. For all other cases return `vec![event]`.
 pub fn build_sse_response(
     state: &AppState,
     job_id: JobId,
     append_done: bool,
-    mut map_token: impl FnMut(Result<StreamToken, crate::domain::errors::DomainError>) -> Event + Send + 'static,
+    mut map_token: impl FnMut(Result<StreamToken, crate::domain::errors::DomainError>) -> Vec<Event> + Send + 'static,
 ) -> Response {
     let guard = match try_acquire_sse(&state.sse_connections) {
         Ok(g) => g,
@@ -121,9 +149,11 @@ pub fn build_sse_response(
 
     let token_stream = state.use_case.stream(&job_id);
 
-    let content_stream = token_stream.map(move |result| -> Result<Event, Infallible> {
+    let content_stream = token_stream.flat_map(move |result| {
         let _ = &guard;
-        Ok(map_token(result))
+        let events = map_token(result);
+        let results: Vec<Result<Event, Infallible>> = events.into_iter().map(Ok).collect();
+        futures::stream::iter(results)
     });
 
     let sse_stream: SseStream = if append_done {
@@ -226,5 +256,44 @@ mod tests {
             let call = serde_json::json!({"function": {"name": name, "arguments": {}}});
             prop_assert!(!validate_tool_call(&call));
         }
+
+        #[test]
+        fn images_within_limits_pass(count in 1_usize..=4, size in 1_usize..=100) {
+            let imgs: Vec<String> = (0..count).map(|_| "x".repeat(size)).collect();
+            let lab = LabSettings { max_images_per_request: 4, max_image_b64_bytes: 100, ..LabSettings::default() };
+            prop_assert!(validate_images(&Some(imgs), &lab).is_none());
+        }
+
+        #[test]
+        fn images_over_count_rejected(count in 5_usize..=10) {
+            let imgs: Vec<String> = (0..count).map(|_| "x".into()).collect();
+            let lab = LabSettings { max_images_per_request: 4, ..LabSettings::default() };
+            prop_assert!(validate_images(&Some(imgs), &lab).is_some());
+        }
+
+        #[test]
+        fn image_over_size_rejected(excess in 1_usize..=100) {
+            let lab = LabSettings { max_image_b64_bytes: 10, ..LabSettings::default() };
+            let imgs = Some(vec!["x".repeat(10 + excess)]);
+            prop_assert!(validate_images(&imgs, &lab).is_some());
+        }
+
+        #[test]
+        fn image_exact_size_passes(size in 1_usize..=1000) {
+            let lab = LabSettings { max_image_b64_bytes: size as i32, ..LabSettings::default() };
+            let imgs = Some(vec!["x".repeat(size)]);
+            prop_assert!(validate_images(&imgs, &lab).is_none());
+        }
+    }
+
+    #[test]
+    fn validate_images_none_passes() {
+        assert!(validate_images(&None, &LabSettings::default()).is_none());
+    }
+
+    #[test]
+    fn validate_images_disabled_rejected() {
+        let lab = LabSettings { max_images_per_request: 0, ..LabSettings::default() };
+        assert!(validate_images(&Some(vec!["abc".into()]), &lab).is_some());
     }
 }

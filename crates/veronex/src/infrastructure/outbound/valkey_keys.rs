@@ -124,3 +124,20 @@ pub fn pubsub_cancel(job_id: Uuid) -> String {
 
 /// Pattern for subscribing to all cancel channels.
 pub const PUBSUB_CANCEL_PATTERN: &str = "veronex:pubsub:cancel:*";
+
+// ── VRAM pool ───────────────────────────────────────────────────────────────
+
+/// Valkey key tracking total reserved VRAM (MB) per provider.
+pub fn vram_reserved(provider_id: Uuid) -> String {
+    format!("veronex:vram_reserved:{provider_id}")
+}
+
+/// ZSET of VRAM lease entries for crash recovery.
+pub fn vram_leases(provider_id: Uuid) -> String {
+    format!("veronex:vram_leases:{provider_id}")
+}
+
+// ── Placement planner (SSOT in domain::constants) ───────────────────────────
+
+pub use crate::domain::constants::{preload_lock_key as preload_lock};
+pub use crate::domain::constants::{scaleout_decision_key as scaleout_decision};

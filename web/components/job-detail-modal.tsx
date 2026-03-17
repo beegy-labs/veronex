@@ -12,18 +12,20 @@ import {
 } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useTranslation } from '@/i18n'
-import { fmtMsNullable } from '@/lib/chart-theme'
+import { fmtMsNullable, fmtTps, fmtCost6 } from '@/lib/chart-theme'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDatetime, fmtNumber } from '@/lib/date'
 import { STATUS_STYLES, ROLE_STYLES, STALE_TIME_FAST } from '@/lib/constants'
 
 function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation()
+  const key = `jobs.statuses.${status}` as Parameters<typeof t>[0]
   return (
     <Badge
       variant="outline"
-      className={STATUS_STYLES[status] ?? 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30'}
+      className={`whitespace-nowrap ${STATUS_STYLES[status] ?? 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30'}`}
     >
-      {status}
+      {t(key)}
     </Badge>
   )
 }
@@ -37,6 +39,8 @@ function ConversationHistory({ messages }: { messages: ChatMessage[] }) {
   return (
     <div className="border-t border-border">
       <button
+        type="button"
+        aria-expanded={open}
         className="w-full flex items-center gap-2 px-6 py-3 text-xs font-semibold tracking-wider uppercase text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors text-left"
         onClick={() => setOpen(v => !v)}
       >
@@ -71,7 +75,7 @@ function ConversationHistory({ messages }: { messages: ChatMessage[] }) {
                   ))}
                 </div>
               ) : (
-                <span className="text-xs text-muted-foreground italic">(empty)</span>
+                <span className="text-xs text-muted-foreground italic">({t('common.empty')})</span>
               )}
             </div>
           ))}
@@ -154,7 +158,7 @@ export function JobDetailModal({
                 <span className="font-mono text-xs text-muted-foreground">{data.id}</span>
                 <StatusBadge status={data.status} />
                 <span className="text-sm font-normal text-muted-foreground">
-                  {data.model_name} · {data.provider_type}
+                  {data.model_name} · {data.provider_name ?? data.provider_type}
                 </span>
               </>
             ) : (
@@ -176,7 +180,7 @@ export function JobDetailModal({
                 <MetaItem label={t('jobs.completedAt')} value={data.completed_at ? fmtDatetime(data.completed_at, tz) : '—'} />
                 <MetaItem label={t('jobs.latency')}     value={formatDuration(data.latency_ms)} />
                 <MetaItem label={t('jobs.ttft')}        value={formatDuration(data.ttft_ms)} />
-                <MetaItem label={t('jobs.tps')} value={data.tps != null ? `${data.tps.toFixed(1)} tok/s` : '—'} />
+                <MetaItem label={t('jobs.tps')} value={data.tps != null ? fmtTps(data.tps) : '—'} />
                 <MetaItem label={t('jobs.promptTokens')} value={data.prompt_tokens != null ? fmtNumber(data.prompt_tokens) : '—'} tooltip={t('jobs.promptTokensTooltip')} />
                 <MetaItem label={t('jobs.completionTokens')} value={data.completion_tokens != null ? fmtNumber(data.completion_tokens) : '—'} />
                 {data.cached_tokens != null && data.cached_tokens > 0 && (
@@ -185,6 +189,7 @@ export function JobDetailModal({
                 {(data.prompt_tokens != null && data.completion_tokens != null) && (
                   <MetaItem label={t('jobs.totalTokens')} value={fmtNumber(data.prompt_tokens + data.completion_tokens)} />
                 )}
+                {data.provider_name && <MetaItem label={t('jobs.providerName')} value={data.provider_name} />}
                 {data.api_key_name && <MetaItem label={t('jobs.apiKey')} value={data.api_key_name} accent />}
                 {data.account_name && <MetaItem label={t('test.runner')} value={data.account_name} accent />}
                 {data.request_path && <MetaItem label={t('jobs.endpoint')} value={data.request_path} />}
@@ -194,13 +199,38 @@ export function JobDetailModal({
                 {data.estimated_cost_usd != null && (
                   <MetaItem
                     label={t('jobs.estimatedCost')}
-                    value={data.estimated_cost_usd === 0 ? '$0.00 (self-hosted)' : `$${data.estimated_cost_usd.toFixed(6)}`}
+                    value={fmtCost6(data.estimated_cost_usd)}
                     accent={data.estimated_cost_usd > 0}
                   />
                 )}
               </div>
 
-              <TextSection label={t('jobs.prompt')} text={data.prompt || '(empty)'} labelClass="text-accent-brand" />
+              <TextSection label={t('jobs.prompt')} text={data.prompt || `(${t('common.empty')})`} labelClass="text-accent-brand" />
+
+              {data.image_urls && data.image_urls.length > 0 && (
+                <div className="px-6 py-4 border-t border-border">
+                  <p className="text-xs font-semibold tracking-wider uppercase mb-2 text-muted-foreground">{t('jobs.images')}</p>
+                  <div className="flex gap-2 flex-wrap">
+                    {data.image_urls
+                      .filter(url => url.includes('_thumb'))
+                      .map((url, i) => (
+                        <a
+                          key={url}
+                          href={url.replace('_thumb', '')}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt={`image ${i}`}
+                            className="h-16 w-16 object-cover rounded border border-border hover:ring-2 hover:ring-primary/50 transition-shadow"
+                          />
+                        </a>
+                      ))}
+                  </div>
+                </div>
+              )}
 
               {data.status === 'failed' ? (
                 <TextSection label={t('jobs.error')} text={data.error || t('jobs.noError')} labelClass="text-status-error-fg" textClass="text-status-error-fg/80" />

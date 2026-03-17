@@ -91,8 +91,32 @@ else
   PARALLEL_EXIT=1
 fi
 
+# ── Sequential post-parallel phase: Metrics Pipeline ────────────────────────
+echo ""
+echo -e "${CYAN}${BOLD}[09] Metrics Pipeline: Agent → OTel → ClickHouse${NC}"
+METRICS_COUNTS="$COUNTS_FILE.09-metrics-pipeline"
+: > "$METRICS_COUNTS"
+if E2E_COUNTS_FILE="$METRICS_COUNTS" bash "$E2E_DIR/09-metrics-pipeline.sh"; then
+  true
+else
+  echo -e "${RED}[ERROR]${NC} 09-metrics-pipeline.sh exited non-zero" >&2
+  PARALLEL_EXIT=1
+fi
+
+# ── Sequential post-parallel phase: Image Storage ───────────────────────────
+echo ""
+echo -e "${CYAN}${BOLD}[10] Image Storage: S3 WebP + provider_name (API + Test)${NC}"
+IMG_COUNTS="$COUNTS_FILE.10-image-storage"
+: > "$IMG_COUNTS"
+if E2E_COUNTS_FILE="$IMG_COUNTS" bash "$E2E_DIR/10-image-storage.sh"; then
+  true
+else
+  echo -e "${RED}[ERROR]${NC} 10-image-storage.sh exited non-zero" >&2
+  PARALLEL_EXIT=1
+fi
+
 # ── Aggregate results ─────────────────────────────────────────────────────────
-ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}" "$SDD_COUNTS")
+ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}" "$SDD_COUNTS" "$METRICS_COUNTS" "$IMG_COUNTS")
 TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
 for cf in "${ALL_COUNTS_FILES[@]}"; do
   [ -f "$cf" ] || continue

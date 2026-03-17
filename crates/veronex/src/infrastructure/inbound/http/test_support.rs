@@ -54,6 +54,7 @@ impl InferenceUseCase for MockUseCase {
                 completion_tokens: None,
                 cached_tokens: None,
                 tool_calls: None,
+                finish_reason: None,
             }),
             Ok(StreamToken {
                 value: "".to_string(),
@@ -62,6 +63,7 @@ impl InferenceUseCase for MockUseCase {
                 completion_tokens: None,
                 cached_tokens: None,
                 tool_calls: None,
+                finish_reason: None,
             }),
         ];
         Box::pin(futures::stream::iter(tokens))
@@ -73,6 +75,10 @@ impl InferenceUseCase for MockUseCase {
 
     async fn cancel(&self, _job_id: &JobId) -> std::result::Result<(), DomainError> {
         Ok(())
+    }
+
+    fn get_live_counts(&self) -> crate::application::ports::inbound::inference_use_case::LiveCounts {
+        crate::application::ports::inbound::inference_use_case::LiveCounts { pending: 0, running: 0 }
     }
 }
 
@@ -244,10 +250,10 @@ pub(crate) struct MockLabSettingsRepo;
 #[async_trait]
 impl LabSettingsRepository for MockLabSettingsRepo {
     async fn get(&self) -> Result<LabSettings> {
-        Ok(LabSettings { gemini_function_calling: false, updated_at: chrono::Utc::now() })
+        Ok(LabSettings::default())
     }
-    async fn update(&self, _gemini_function_calling: Option<bool>) -> Result<LabSettings> {
-        Ok(LabSettings { gemini_function_calling: false, updated_at: chrono::Utc::now() })
+    async fn update(&self, _gemini_function_calling: Option<bool>, _max_images: Option<i32>, _max_image_bytes: Option<i32>) -> Result<LabSettings> {
+        Ok(LabSettings::default())
     }
 }
 
@@ -319,8 +325,11 @@ pub(crate) fn make_app() -> axum::Router {
         sync_trigger: Arc::new(tokio::sync::Notify::new()),
         analyzer_url: String::new(),
         job_event_tx: Arc::new(tokio::sync::broadcast::channel(1).0),
+        event_ring_buffer: Arc::new(std::sync::RwLock::new(std::collections::VecDeque::new())),
+        stats_tx: Arc::new(tokio::sync::broadcast::channel(1).0),
         circuit_breaker: Arc::new(crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap::new()),
         message_store: None,
+        image_store: None,
         session_grouping_lock: Arc::new(tokio::sync::Semaphore::new(1)),
         sync_lock: Arc::new(tokio::sync::Semaphore::new(1)),
         lab_settings_repo: Arc::new(MockLabSettingsRepo),

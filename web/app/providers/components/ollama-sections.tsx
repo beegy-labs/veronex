@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { OllamaSyncJob } from '@/lib/types'
@@ -47,8 +47,11 @@ export function OllamaSyncSection() {
 
   const isRunning = syncJob?.status === 'running' || syncMutation.isPending
   const allModels = ollamaModelsData?.models ?? []
-  const filteredModels = allModels.filter((m) =>
-    m.model_name.toLowerCase().includes(search.toLowerCase())
+  const filteredModels = useMemo(() =>
+    allModels.filter((m) =>
+      m.model_name.toLowerCase().includes(search.toLowerCase())
+    ),
+    [allModels, search],
   )
 
   return (

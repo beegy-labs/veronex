@@ -17,6 +17,7 @@ import { redirectToLogin } from '@/lib/auth-guard'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone } from '@/components/timezone-provider'
 import { NavSettingsDialog } from '@/components/nav-settings-dialog'
+import { HexLogo, OllamaIcon } from '@/components/nav-icons'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -81,8 +82,6 @@ const navItems: NavItem[] = [
     ],
   },
 ]
-
-import { HexLogo, OllamaIcon } from '@/components/nav-icons'
 
 // ── Inner nav (needs useSearchParams — wrapped in Suspense by parent) ───────────
 
@@ -188,6 +187,7 @@ function NavContent() {
         <button
           type="button"
           onClick={() => setMobileOpen((v) => !v)}
+          aria-label={t('common.menu')}
           className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           title={t('common.menu')}
         >
@@ -200,7 +200,7 @@ function NavContent() {
       {/* ── Backdrop ───────────────────────────────────────────────── */}
       {mobileOpen && (
         <div
-          className="md:hidden fixed inset-0 z-40 bg-black/50"
+          className="md:hidden fixed inset-0 z-40 bg-foreground/30"
           onClick={() => setMobileOpen(false)}
           aria-hidden="true"
         />
@@ -212,7 +212,7 @@ function NavContent() {
           // Base: always flex column, themed
           'flex flex-col bg-card border-r border-border',
           // Mobile: fixed overlay, slides in/out from left
-          'fixed inset-y-0 left-0 z-50 w-72',
+          'fixed inset-y-0 left-0 z-50 w-[80vw] max-w-72',
           'transition-transform duration-200 ease-in-out',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
           // Desktop: back to normal flex child, collapsible width

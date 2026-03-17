@@ -6,13 +6,12 @@ import { Thermometer, Zap, MemoryStick, WifiOff, RefreshCw, Cpu } from 'lucide-r
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
-import { fmtMb } from '@/lib/chart-theme'
+import { fmtMb, fmtTemp, fmtPower, fmtPct } from '@/lib/chart-theme'
+import { calcPercentage } from '@/lib/utils'
 import {
   GPU_TEMP_CRITICAL, GPU_TEMP_WARNING,
   RESOURCE_CRITICAL, RESOURCE_WARNING,
 } from '@/lib/constants'
-
-export { fmtMb } from '@/lib/chart-theme'
 
 // ── Full-width metrics cell (Servers page) ────────────────────────────────────
 
@@ -31,7 +30,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
           <WifiOff className="h-3 w-3 mr-1.5" />{t('providers.servers.unreachable')}
         </Badge>
         <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground"
-          onClick={() => refetch()} disabled={isFetching} title={t('common.retry')}>
+          aria-label={t('common.retry')} onClick={() => refetch()} disabled={isFetching} title={t('common.retry')}>
           <RefreshCw className={isFetching ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
         </Button>
       </div>
@@ -39,7 +38,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
   }
 
   const memUsed = data.mem_total_mb - data.mem_available_mb
-  const memPct = data.mem_total_mb > 0 ? Math.round((memUsed / data.mem_total_mb) * 100) : 0
+  const memPct = calcPercentage(memUsed, data.mem_total_mb)
   const cpuPct = data.cpu_usage_pct != null ? Math.round(data.cpu_usage_pct) : null
 
   return (
@@ -73,21 +72,20 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
       )}
 
       {/* GPU rows */}
-      {data.gpus.map((gpu) => (
+      {data.gpus.map((gpu) => {
+        const gpuT = gpu.temp_junction_c ?? gpu.temp_c
+        return (
         <div key={gpu.card} className="flex items-center gap-2 flex-wrap">
           <span className="w-6 text-[10px] font-semibold text-accent-gpu uppercase tracking-wide shrink-0">GPU</span>
           <span className="text-text-dim font-mono">{gpu.card}</span>
-          {(gpu.temp_junction_c ?? gpu.temp_c) != null && (() => {
-            const t = gpu.temp_junction_c ?? gpu.temp_c!
-            return (
-              <span className={`flex items-center gap-0.5 tabular-nums ${t >= GPU_TEMP_CRITICAL ? 'text-status-error-fg font-bold' : 'text-text-dim'}`}>
-                <Thermometer className="h-3 w-3" />{t.toFixed(0)}°C
+          {gpuT != null && (
+              <span className={`flex items-center gap-0.5 tabular-nums ${gpuT >= GPU_TEMP_CRITICAL ? 'text-status-error-fg font-bold' : 'text-text-dim'}`}>
+                <Thermometer className="h-3 w-3" />{fmtTemp(gpuT)}
               </span>
-            )
-          })()}
+          )}
           {gpu.power_w != null && (
             <span className="flex items-center gap-0.5 text-text-dim tabular-nums">
-              <Zap className="h-3 w-3 text-accent-power" />{gpu.power_w.toFixed(0)}W
+              <Zap className="h-3 w-3 text-accent-power" />{fmtPower(gpu.power_w)}
             </span>
           )}
           {gpu.vram_total_mb != null && (
@@ -96,10 +94,11 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
             </span>
           )}
           {gpu.busy_pct != null && (
-            <span className="text-muted-foreground tabular-nums">{gpu.busy_pct.toFixed(0)}%</span>
+            <span className="text-muted-foreground tabular-nums">{fmtPct(gpu.busy_pct)}</span>
           )}
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -122,14 +121,14 @@ export function ServerMetricsCompact({
   if (!data) return null
 
   const memUsed = data.mem_total_mb - data.mem_available_mb
-  const memPct = data.mem_total_mb > 0 ? Math.round((memUsed / data.mem_total_mb) * 100) : 0
+  const memPct = calcPercentage(memUsed, data.mem_total_mb)
   const cpuPct = data.cpu_usage_pct != null ? Math.round(data.cpu_usage_pct) : null
   const gpu = data.gpus[gpuIndex ?? 0] ?? null
   const gpuTemp = gpu?.temp_junction_c ?? gpu?.temp_c ?? null
   const tempCls = gpuTemp != null && gpuTemp >= GPU_TEMP_CRITICAL
     ? 'text-status-error-fg'
     : gpuTemp != null && gpuTemp >= GPU_TEMP_WARNING
-    ? 'text-status-warn-fg'
+    ? 'text-status-warning-fg'
     : 'text-muted-foreground'
 
   return (
@@ -153,12 +152,12 @@ export function ServerMetricsCompact({
       )}
       {gpuTemp != null && (
         <span className={`flex items-center gap-0.5 text-[11px] tabular-nums ${tempCls}`}>
-          <Thermometer className="h-3 w-3 shrink-0" />{gpuTemp.toFixed(0)}°C
+          <Thermometer className="h-3 w-3 shrink-0" />{fmtTemp(gpuTemp)}
         </span>
       )}
       {gpu?.power_w != null && (
         <span className="flex items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground">
-          <Zap className="h-3 w-3 shrink-0 text-accent-power" />{gpu.power_w.toFixed(0)}W
+          <Zap className="h-3 w-3 shrink-0 text-accent-power" />{fmtPower(gpu.power_w)}
         </span>
       )}
     </div>

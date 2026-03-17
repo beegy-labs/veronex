@@ -5,15 +5,20 @@ import Link from 'next/link'
 import { ChevronLeft } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 
+function SwaggerLoadingFallback() {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center justify-center h-64 text-muted-foreground text-sm animate-pulse">
+      {t('apiDocs.loading')}
+    </div>
+  )
+}
+
 const SwaggerUiWrapper = dynamic(
   () => import('@/components/swagger-ui-wrapper'),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-64 text-muted-foreground text-sm animate-pulse">
-        Loading…
-      </div>
-    ),
+    loading: () => <SwaggerLoadingFallback />,
   },
 )
 
@@ -36,7 +41,7 @@ export default function SwaggerPage() {
           {t('apiDocs.backToDocs')}
         </Link>
         <span className="text-border mx-1">/</span>
-        <span className="font-medium">Swagger UI</span>
+        <span className="font-medium">{t('apiDocs.swaggerTitle')}</span>
       </div>
 
       {/* Viewer — fills remaining space */}
