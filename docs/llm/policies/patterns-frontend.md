@@ -41,6 +41,7 @@ All `staleTime` and `refetchInterval` values come from `web/lib/constants.ts`:
 |----------|-------|---------|
 | `STALE_TIME_SLOW` | 59s | keys, usage, accounts, audit, servers |
 | `STALE_TIME_FAST` | 29s | dashboard stats, capacity, providers |
+| `STALE_TIME_HISTORY` | 30min | long-window historical queries (metrics history) |
 | `REFETCH_INTERVAL_FAST` | 30s | dashboard stats, capacity, providers |
 
 Never hardcode timing values in query definitions — import from constants.
@@ -361,6 +362,44 @@ const patternId = `my-pattern-${safeId}`
 <pattern id={patternId} .../>
 <rect fill={`url(#${patternId})`} />
 ```
+
+---
+
+## Query Prefetch in AppShell
+
+Queries depended on by multiple pages (e.g. `serversQuery` drives the dashboard waterfall) should be prefetched in `AppShell` on mount so they are cache-warm before the user navigates.
+
+```tsx
+// web/app/layout.tsx — AppShell
+const queryClient = useQueryClient()
+useEffect(() => {
+  if (!isLoginPage && !isSetupPage && isLoggedIn()) {
+    queryClient.prefetchQuery(serversQuery)
+  }
+  // isLoggedIn() is a pure synchronous cookie read — not React state, omit from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [queryClient, isLoginPage, isSetupPage])
+```
+
+**Rule**: only prefetch queries that are universally needed across authenticated pages. Page-specific queries stay in the page component.
+
+## Historical Data — `STALE_TIME_HISTORY`
+
+Long-window historical queries (e.g. 60-day power/metrics history) use `STALE_TIME_HISTORY` (30 minutes).
+Background refetch still runs on `REFETCH_INTERVAL_HISTORY` (5 minutes) to keep data fresh,
+but re-navigation within 30 minutes skips the on-mount fetch and returns cached data immediately.
+
+```typescript
+// web/lib/queries/servers.ts
+export const serverMetricsHistoryQuery = (serverId: string) => queryOptions({
+  queryKey: ['server-metrics-history', serverId],
+  queryFn: () => api.serverMetricsHistory(serverId),
+  staleTime: STALE_TIME_HISTORY,           // 30 min — re-nav returns cache instantly
+  refetchInterval: REFETCH_INTERVAL_HISTORY, // 5 min — background refresh continues
+})
+```
+
+**Rule**: `staleTime` and `refetchInterval` should reflect how quickly data actually changes, not be set to "slightly less than refetch". Use `STALE_TIME_HISTORY` for any query whose data window spans days or weeks.
 
 ---
 
