@@ -128,7 +128,7 @@ pub const PUBSUB_CANCEL_PATTERN: &str = "veronex:pubsub:cancel:*";
 // ── Provider liveness (agent heartbeat) ─────────────────────────────────────
 
 /// Heartbeat key set by veronex-agent after each successful Ollama scrape.
-/// TTL = 3× scrape interval (default 90s). Missing key = provider offline.
+/// TTL = 3× scrape interval (default 180s). Missing key = provider offline.
 /// Written by: veronex-agent. Read by: health_checker (MGET batch).
 pub fn provider_heartbeat(provider_id: Uuid) -> String {
     format!("veronex:provider:hb:{provider_id}")
@@ -155,3 +155,20 @@ pub fn vram_leases(provider_id: Uuid) -> String {
 
 pub use crate::domain::constants::{preload_lock_key as preload_lock};
 pub use crate::domain::constants::{scaleout_decision_key as scaleout_decision};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// provider_heartbeat() must produce the canonical format consumed by the
+    /// agent's heartbeat::key() and by MGET in health_checker.
+    /// Guards against crate-boundary drift between veronex and veronex-agent.
+    #[test]
+    fn provider_heartbeat_format_matches_agent_convention() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        assert_eq!(
+            provider_heartbeat(id),
+            "veronex:provider:hb:550e8400-e29b-41d4-a716-446655440000"
+        );
+    }
+}
