@@ -1,5 +1,6 @@
 {{- if .Values.migrations.enabled }}
 {{- $chHost := ternary (printf "%s-clickhouse" .Release.Name) .Values.externalClickhouse.host .Values.clickhouse.enabled }}
+{{- if not .Values.migrations.clickhouse.kafkaBroker }}{{ fail "migrations.clickhouse.kafkaBroker is required (e.g. redpanda:9092)" }}{{- end }}
 ---
 # ── PostgreSQL migration ──────────────────────────────────────────────────────
 apiVersion: batch/v1
@@ -30,6 +31,13 @@ spec:
           volumeMounts:
             - name: migrations
               mountPath: /migrations
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
       volumes:
         - name: migrations
           configMap:
@@ -76,6 +84,13 @@ spec:
                   -e "s|__RETENTION_TRACES_DAYS__|{{ .Values.migrations.clickhouse.retentionTracesDays }}|g" \
                   "$f" > "/out/$(basename "$f")"
               done
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           env:
             - name: KAFKA_BROKER
               value: {{ .Values.migrations.clickhouse.kafkaBroker | quote }}
@@ -102,6 +117,13 @@ spec:
           volumeMounts:
             - name: rendered
               mountPath: /migrations
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
       volumes:
         - name: tpl
           configMap:

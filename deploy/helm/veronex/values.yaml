@@ -55,6 +55,8 @@ veronex:
       cpu: "2"
       memory: 1Gi
 
+  logLevel: "info"  # RUST_LOG level: error, warn, info, debug, trace
+
   # Extra environment variables (key: value)
   env: {}
 
@@ -68,6 +70,8 @@ veronexAnalytics:
   service:
     type: ClusterIP
     port: 3003
+
+  logLevel: "info"  # RUST_LOG level: error, warn, info, debug, trace
 
   resources:
     requests:
@@ -192,6 +196,13 @@ otelCollector:
     repository: otel/opentelemetry-collector-contrib
     tag: "0.123.0"
     pullPolicy: IfNotPresent
+
+  # Kafka/Redpanda auth — set securityProtocol to SASL_PLAINTEXT or SASL_SSL for external Kafka
+  kafka:
+    securityProtocol: PLAINTEXT   # PLAINTEXT | SASL_PLAINTEXT | SASL_SSL
+    saslMechanism: ""             # SCRAM-SHA-512 | SCRAM-SHA-256 | PLAIN
+    saslUsername: ""
+    saslPassword: ""
 
   resources:
     requests:
