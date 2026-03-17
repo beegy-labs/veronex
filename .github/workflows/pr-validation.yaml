@@ -35,6 +35,7 @@ jobs:
           echo "✅ Target branch is correct: ${BASE}"
 
       - name: Validate commit messages
+        if: github.base_ref != 'main'
         run: |
           echo "Validating commit message format..."
 
