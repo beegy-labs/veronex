@@ -14,6 +14,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { DEFAULT_MAX_IMAGES, MAX_IMAGES_LIMIT } from '@/lib/constants'
 import {
   Dialog,
   DialogContent,
@@ -146,16 +147,16 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
           {/* Lab features section */}
           <div className="border-t pt-3 mt-1">
             <div className="flex items-center gap-2 mb-2">
-              <FlaskConical className="h-4 w-4 text-amber-500 shrink-0" />
+              <FlaskConical className="h-4 w-4 text-accent-power shrink-0" />
               <span className="text-sm font-medium flex-1">{t('common.labFeatures')}</span>
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 uppercase tracking-wide">
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning-fg border border-status-warning/30 uppercase tracking-wide">
                 Lab
               </span>
             </div>
             <p className="text-xs text-muted-foreground mb-3 pl-6">{t('common.labFeaturesDesc')}</p>
 
             {/* Gemini function calling */}
-            <div className="pl-6 space-y-1">
+            <div className="pl-6 space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium">{t('common.labGeminiFunctionCalling')}</p>
@@ -164,6 +165,7 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                 <Switch
                   checked={labSettings?.gemini_function_calling ?? false}
                   disabled={labLoading || labSettings === null}
+                  aria-label={t('common.labGeminiFunctionCalling')}
                   onCheckedChange={async (checked) => {
                     setLabLoading(true)
                     try {
@@ -176,6 +178,37 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                     }
                   }}
                 />
+              </div>
+
+              {/* Image limits */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium">{t('common.maxImagesPerRequest')}</p>
+                    <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{t('common.maxImagesPerRequestDesc')}</p>
+                  </div>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={MAX_IMAGES_LIMIT}
+                    className="w-20 h-7 text-xs text-center"
+                    value={labSettings?.max_images_per_request ?? DEFAULT_MAX_IMAGES}
+                    disabled={labLoading || labSettings === null}
+                    onChange={async (e) => {
+                      const val = parseInt(e.target.value, 10)
+                      if (isNaN(val) || val < 0 || val > MAX_IMAGES_LIMIT) return
+                      setLabLoading(true)
+                      try {
+                        await api.patchLabSettings({ max_images_per_request: val })
+                        await refetchLabSettings()
+                      } catch {
+                        // keep previous state on error
+                      } finally {
+                        setLabLoading(false)
+                      }
+                    }}
+                  />
+                </div>
               </div>
             </div>
           </div>

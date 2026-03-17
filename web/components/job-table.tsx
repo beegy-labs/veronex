@@ -16,12 +16,14 @@ import { JobDetailModal } from '@/components/job-detail-modal'
 import { STATUS_STYLES } from '@/lib/constants'
 
 function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation()
+  const key = `jobs.statuses.${status}` as Parameters<typeof t>[0]
   return (
     <Badge
       variant="outline"
-      className={STATUS_STYLES[status] ?? 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30'}
+      className={`whitespace-nowrap ${STATUS_STYLES[status] ?? 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30'}`}
     >
-      {status}
+      {t(key)}
     </Badge>
   )
 }
@@ -51,18 +53,18 @@ export default function JobTable({
 
   return (
     <>
-      <DataTable minWidth="760px">
+      <DataTable minWidth="900px">
         <TableHeader>
           <TableRow>
-            <TableHead>{t('jobs.id')}</TableHead>
-            <TableHead>{t('jobs.model')}</TableHead>
-            <TableHead>{t('jobs.provider')}</TableHead>
-            <TableHead>{t('jobs.apiKey')}</TableHead>
-            <TableHead>{t('jobs.endpoint')}</TableHead>
-            <TableHead>{t('jobs.status')}</TableHead>
-            <TableHead>{t('jobs.createdAt')}</TableHead>
-            <TableHead className="text-right">{t('jobs.ttft')}</TableHead>
-            <TableHead className="text-right">{t('jobs.latency')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.id')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.model')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.provider')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.apiKey')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.endpoint')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.status')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.createdAt')}</TableHead>
+            <TableHead className="text-right whitespace-nowrap">{t('jobs.ttft')}</TableHead>
+            <TableHead className="text-right whitespace-nowrap">{t('jobs.latency')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -76,7 +78,9 @@ export default function JobTable({
                 <span title={job.id}>{truncateId(job.id)}</span>
               </TableCell>
               <TableCell>{job.model_name}</TableCell>
-              <TableCell className="text-muted-foreground">{job.provider_type}</TableCell>
+              <TableCell className="text-muted-foreground">
+                {job.provider_name ?? job.provider_type}
+              </TableCell>
               <TableCell className="text-xs text-primary/80">
                 {job.source === 'test'
                   ? (job.account_name ?? <span className="text-muted-foreground">—</span>)

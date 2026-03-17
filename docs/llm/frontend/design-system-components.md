@@ -1,6 +1,6 @@
 # Web -- Component Patterns & Auth Architecture
 
-> SSOT | **Last Updated**: 2026-03-08 | Split from design-system.md
+> SSOT | **Last Updated**: 2026-03-16 | Split from design-system.md
 
 Related files:
 - [design-system.md](design-system.md) -- brand, tokens, theme, nav, DataTable, state management
@@ -110,8 +110,8 @@ Module-level state (not class-level) survives re-renders and is shared across al
 
 Follow Carbon Design System 3-element rule: **color + icon + text** (never color alone -- WCAG 1.4.1).
 
-| Status | Color class | Icon | Text key |
-|--------|-------------|------|----------|
+| Status | Tailwind class | Icon | Text key |
+|--------|----------------|------|----------|
 | Connected | `text-status-success-fg` | filled dot | `overview.connected` |
 | Unreachable | `text-status-error-fg` | filled dot | `overview.unreachable` |
 | Normal (<80C) | `text-status-success-fg` | `CheckCircle2` | `overview.tempNormal` |
@@ -120,29 +120,35 @@ Follow Carbon Design System 3-element rule: **color + icon + text** (never color
 
 ### Job Status Colors
 
-| Status | Color token |
-|--------|-------------|
-| `pending` | `var(--theme-status-warning)` -- amber |
-| `running` | `var(--theme-status-info)` -- blue |
-| `completed` | `var(--theme-status-success)` -- green |
-| `failed` | `var(--theme-status-error)` -- red |
-| `cancelled` | `var(--theme-status-cancelled)` -- slate/gray |
+All job status colors live in `JOB_STATUS_COLORS` in `web/lib/constants.ts` (uses `tokens.*` internally).
+
+| Status | `tokens.*` key | Tailwind class |
+|--------|---------------|----------------|
+| `pending` | `tokens.status.warning` | `text-status-warning-fg` |
+| `running` | `tokens.status.info` | `text-status-info-fg` |
+| `completed` | `tokens.status.success` | `text-status-success-fg` |
+| `failed` | `tokens.status.error` | `text-status-error-fg` |
+| `cancelled` | `tokens.status.cancelled` | `text-muted-foreground` |
 
 ### Provider Status Colors
 
-Provider `StatusBadge`: `online` = success green, `degraded` = warning amber, `offline` = muted.
+Provider `StatusBadge`: `online` = `tokens.status.success`, `degraded` = `tokens.status.warning`, `offline` = `tokens.text.faint`.
+All mappings in `PROVIDER_STATUS_DOT` / `PROVIDER_STATUS_BADGE` / `PROVIDER_STATUS_TEXT` in `web/lib/constants.ts`.
 
 ### Provider/Finish Colors (Usage page SSOT)
 
 ```ts
-const BACKEND_COLORS = { ollama: 'var(--theme-primary)', gemini: 'var(--theme-status-info)' }
-const FINISH_COLORS  = {
-  stop: 'var(--theme-status-success)', length: 'var(--theme-status-warning)',
-  error: 'var(--theme-status-error)', cancelled: 'var(--theme-text-secondary)',
+import { tokens } from '@/lib/design-tokens'
+
+// From web/lib/constants.ts — already use tokens internally
+const PROVIDER_COLORS = { ollama: tokens.brand.primary, gemini: tokens.status.info }
+const FINISH_COLORS   = {
+  stop: tokens.status.success, length: tokens.status.warning,
+  error: tokens.status.error,  cancelled: tokens.text.secondary,
 }
 ```
 
-Extend these maps when adding new provider types -- never hardcode provider names in JSX. Note: `BACKEND_COLORS` uses `provider_type` field values as keys.
+Extend these maps when adding new provider types — never hardcode provider names in JSX. Note: keys match `provider_type` field values.
 
 ---
 
@@ -189,7 +195,7 @@ Real-time inference traffic visualization. Accessible as the 3rd tab on `/jobs` 
 
 ### Bee Particle Animation
 
-Engine: CSS Motion Path (`offset-path`) + `@keyframes bee-fly` in `globals.css`. CSS is GPU-composited (2026 best practice over SVG SMIL). Fixed 360x240 logical space scaled via `ResizeObserver`. State managed by `useReducer` (SPAWN/EXPIRE actions); cleanup via `onAnimationEnd` (no setTimeout leaks). Max 30 concurrent bees, `BEE_STAGGER_MS = 700` (half of 1400ms duration). Enqueue color: `#facc15` (yellow-400). Response bees dimmed: `color + 'cc'` bg, `color + '28'` glow.
+Engine: CSS Motion Path (`offset-path`) + `@keyframes bee-fly` in `globals.css`. CSS is GPU-composited (2026 best practice over SVG SMIL). Fixed 540x264 logical space scaled via `ResizeObserver`. State managed by `useReducer` (SPAWN/EXPIRE actions); cleanup via `onAnimationEnd` (no setTimeout leaks). Max 30 concurrent bees, `BEE_DURATION_MS = 1400ms`. Enqueue color: `tokens.status.warning` (amber). Response bees: `JOB_STATUS_COLORS[status]` with `color-mix()` alpha overlay.
 
 ### SVG Topology (540x264)
 

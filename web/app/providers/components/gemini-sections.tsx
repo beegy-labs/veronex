@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { GeminiRateLimitPolicy, GeminiStatusResult } from '@/lib/types'
@@ -135,9 +135,9 @@ export function GeminiSyncSection() {
     ? fmtDatetimeShort(models[0].synced_at, tz)
     : null
 
-  const policyMap = new Map<string, GeminiRateLimitPolicy>((policies ?? []).map(p => [p.model_name, p]))
+  const policyMap = useMemo(() => new Map<string, GeminiRateLimitPolicy>((policies ?? []).map(p => [p.model_name, p])), [policies])
   const globalDefault = policyMap.get('*')
-  const syncedRows = [...models].sort((a, b) => a.model_name.localeCompare(b.model_name))
+  const syncedRows = useMemo(() => [...models].sort((a, b) => a.model_name.localeCompare(b.model_name)), [models])
 
   function makeEditablePolicy(modelName: string): GeminiRateLimitPolicy {
     const existing = policyMap.get(modelName)
@@ -281,6 +281,7 @@ export function GeminiSyncSection() {
                     <TableCell className="text-right">
                       <Button variant="ghost" size="icon"
                         className="h-8 w-8 text-muted-foreground hover:text-status-info-fg hover:bg-status-info/10"
+                        aria-label={t('providers.gemini.editPolicyTitle')}
                         onClick={() => setEditingPolicy(makeEditablePolicy(m.model_name))}
                         title={t('providers.gemini.editPolicyTitle')}>
                         <Pencil className="h-4 w-4" />

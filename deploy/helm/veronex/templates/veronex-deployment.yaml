@@ -39,10 +39,18 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+          {{- if and .Values.externalSecrets.csi.enabled .Values.externalSecrets.csi.syncAsSecret }}
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+          {{- end }}
           envFrom:
             - secretRef:
                 name: {{ include "veronex.secretName" . }}
           env:
+            - name: RUST_LOG
+              value: {{ .Values.veronex.logLevel | default "info" | quote }}
             - name: PORT
               value: "{{ .Values.veronex.service.port }}"
             - name: VALKEY_URL
@@ -53,6 +61,12 @@ spec:
               value: {{ include "veronex.s3Endpoint" . | quote }}
             - name: S3_BUCKET
               value: {{ include "veronex.s3Bucket" . | quote }}
+            - name: S3_IMAGE_BUCKET
+              value: {{ include "veronex.s3ImageBucket" . | quote }}
+            {{- if .Values.veronex.imagePublicUrl }}
+            - name: S3_IMAGE_PUBLIC_URL
+              value: {{ .Values.veronex.imagePublicUrl | quote }}
+            {{- end }}
             - name: S3_REGION
               value: {{ include "veronex.s3Region" . | quote }}
             - name: CORS_ALLOWED_ORIGINS
@@ -85,3 +99,12 @@ spec:
             {{- end }}
           resources:
             {{- toYaml .Values.veronex.resources | nindent 12 }}
+      {{- if and .Values.externalSecrets.csi.enabled .Values.externalSecrets.csi.syncAsSecret }}
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Release.Name }}-veronex-secrets
+      {{- end }}

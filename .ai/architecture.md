@@ -1,5 +1,5 @@
 # Architecture
-> CDD Tier 1 — Hexagonal Architecture pointer (≤50 lines) | **Last Updated**: 2026-03-07
+> CDD Layer 1 — Hexagonal Architecture pointer (≤50 lines) | **Last Updated**: 2026-03-15
 
 ## Structure
 
@@ -35,6 +35,7 @@ infrastructure → application → domain
 | `JobRepository` | Outbound | PostgresJobRepository |
 | `ApiKeyRepository` | Outbound | PostgresApiKeyRepository |
 | `AuditPort` | Outbound | HttpAuditAdapter (fail-open) |
+| `ImageStore` | Outbound | S3ImageStore (WebP, separate bucket) |
 | `ObservabilityPort` | Outbound | HttpObservabilityAdapter (fail-open) |
 
 ## Background Loops (12)

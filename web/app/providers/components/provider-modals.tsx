@@ -6,7 +6,7 @@ import { api } from '@/lib/api'
 import type { Provider, GpuServer, RegisterProviderRequest, UpdateProviderRequest } from '@/lib/types'
 import { serverMetricsQuery } from '@/lib/queries'
 import { Server, Key } from 'lucide-react'
-import { fmtMb } from '@/lib/chart-theme'
+import { fmtMb, fmtTemp, fmtPower } from '@/lib/chart-theme'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -107,26 +107,26 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
               </div>
 
               <div className="space-y-1.5">
-                <Label>{t('providers.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
+                <Label htmlFor="edit-gpu-index">{t('providers.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                 {gpuCards.length > 0 ? (
                   <Select value={gpuIndex} onValueChange={setGpuIndex}>
-                    <SelectTrigger><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
+                    <SelectTrigger aria-label={t('providers.ollama.gpuIndex')}><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">{t('providers.ollama.noneOption')}</SelectItem>
                       {gpuCards.map((gpu, i) => (
                         <SelectItem key={gpu.card} value={String(i)}>
-                          GPU {i} ({gpu.card})
-                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${(gpu.temp_junction_c ?? gpu.temp_c)!.toFixed(0)}°C` : ''}
-                          {gpu.power_w != null ? ` · ${gpu.power_w.toFixed(0)}W` : ''}
+                          {t('providers.ollama.gpuLabel')} {i} ({gpu.card})
+                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${fmtTemp(gpu.temp_junction_c ?? gpu.temp_c)}` : ''}
+                          {gpu.power_w != null ? ` · ${fmtPower(gpu.power_w)}` : ''}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 ) : (
-                  <Input type="number" min={0}
+                  <Input id="edit-gpu-index" type="number" min={0}
                     value={gpuIndex === 'none' ? '' : gpuIndex}
                     onChange={(e) => setGpuIndex(e.target.value)}
-                    placeholder="0" />
+                    placeholder={t('providers.ollama.gpuIndexPlaceholder')} />
                 )}
               </div>
 
@@ -139,7 +139,7 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
                     </span>
                   )}
                 </div>
-                <VramInput valueMb={vram} onChange={setVram} />
+                <VramInput valueMb={vram} onChange={setVram} aria-label={t('providers.ollama.maxVram')} />
               </div>
 
               <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
@@ -147,7 +147,7 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
                   <p className="text-sm font-medium">{t('providers.ollama.freeTier')}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">{t('providers.ollama.freeTierDesc')}</p>
                 </div>
-                <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} />
+                <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} aria-label={t('providers.ollama.freeTier')} />
               </div>
             </>
           )}
@@ -159,7 +159,7 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
                   {t('providers.gemini.apiKey')} <span className="text-muted-foreground font-normal">— {t('providers.gemini.keepExistingKey')}</span>
                 </Label>
                 <Input id="edit-apikey" type="password" value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)} placeholder="AIza…" />
+                  onChange={(e) => setApiKey(e.target.value)} placeholder={t('providers.gemini.apiKeyPlaceholder')} />
                 <p className="text-xs text-muted-foreground">{t('providers.gemini.apiKeyHint')}</p>
               </div>
 
@@ -168,7 +168,7 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
                   <p className="text-sm font-medium">{t('providers.gemini.freeTier')}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">{t('providers.gemini.freeTierDesc')}</p>
                 </div>
-                <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} />
+                <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} aria-label={t('providers.gemini.freeTier')} />
               </div>
             </div>
           )}
@@ -180,7 +180,7 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
           </p>
         )}
 
-        <DialogFooter className="gap-3">
+        <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate()} disabled={!name.trim() || mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}
@@ -257,7 +257,7 @@ export function RegisterModal({
           <div className="space-y-1.5">
             <Label htmlFor="provider-name">{t('providers.ollama.name')} <span className="text-destructive">*</span></Label>
             <Input id="provider-name" value={name} onChange={(e) => setName(e.target.value)}
-              placeholder={initialType === 'ollama' ? 'e.g. gpu-server-1' : 'e.g. gemini-prod'} />
+              placeholder={initialType === 'ollama' ? t('providers.ollama.namePlaceholder') : t('providers.gemini.namePlaceholder')} />
           </div>
 
           {initialType === 'ollama' && (
@@ -265,7 +265,7 @@ export function RegisterModal({
               <div className="space-y-1.5">
                 <Label htmlFor="provider-url">{t('providers.ollama.ollamaUrl')} <span className="text-destructive">*</span></Label>
                 <Input id="provider-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)}
-                  placeholder="http://192.168.1.10:11434" />
+                  placeholder={t('providers.ollama.urlPlaceholder')} />
               </div>
 
               <div className="space-y-1.5">
@@ -287,26 +287,26 @@ export function RegisterModal({
               </div>
 
               <div className="space-y-1.5">
-                <Label>{t('providers.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
+                <Label htmlFor="provider-gpu-index">{t('providers.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                 {gpuCards.length > 0 ? (
                   <Select value={gpuIndex} onValueChange={setGpuIndex}>
-                    <SelectTrigger><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
+                    <SelectTrigger aria-label={t('providers.ollama.gpuIndex')}><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">{t('providers.ollama.noneOption')}</SelectItem>
                       {gpuCards.map((gpu, i) => (
                         <SelectItem key={gpu.card} value={String(i)}>
-                          GPU {i} ({gpu.card})
-                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${(gpu.temp_junction_c ?? gpu.temp_c)!.toFixed(0)}°C` : ''}
-                          {gpu.power_w != null ? ` · ${gpu.power_w.toFixed(0)}W` : ''}
+                          {t('providers.ollama.gpuLabel')} {i} ({gpu.card})
+                          {(gpu.temp_junction_c ?? gpu.temp_c) != null ? ` — ${fmtTemp(gpu.temp_junction_c ?? gpu.temp_c)}` : ''}
+                          {gpu.power_w != null ? ` · ${fmtPower(gpu.power_w)}` : ''}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 ) : (
-                  <Input type="number" min={0}
+                  <Input id="provider-gpu-index" type="number" min={0}
                     value={gpuIndex === 'none' ? '' : gpuIndex}
                     onChange={(e) => setGpuIndex(e.target.value)}
-                    placeholder="0" />
+                    placeholder={t('providers.ollama.gpuIndexPlaceholder')} />
                 )}
               </div>
 
@@ -319,7 +319,7 @@ export function RegisterModal({
                     </span>
                   )}
                 </div>
-                <VramInput valueMb={vram} onChange={setVram} />
+                <VramInput valueMb={vram} onChange={setVram} aria-label={t('providers.ollama.maxVram')} />
               </div>
             </>
           )}
@@ -329,7 +329,7 @@ export function RegisterModal({
               <div className="space-y-1.5">
                 <Label htmlFor="provider-apikey">{t('providers.gemini.apiKey')} <span className="text-destructive">*</span></Label>
                 <Input id="provider-apikey" type="password" value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)} placeholder="AIza…" />
+                  onChange={(e) => setApiKey(e.target.value)} placeholder={t('providers.gemini.apiKeyPlaceholder')} />
                 <p className="text-xs text-muted-foreground">{t('providers.gemini.apiKeyHint')}</p>
               </div>
 
@@ -338,7 +338,7 @@ export function RegisterModal({
                   <p className="text-sm font-medium">{t('providers.gemini.freeTier')}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">{t('providers.gemini.freeTierDesc')}</p>
                 </div>
-                <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} />
+                <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} aria-label={t('providers.gemini.freeTier')} />
               </div>
             </div>
           )}
@@ -350,7 +350,7 @@ export function RegisterModal({
           </p>
         )}
 
-        <DialogFooter className="gap-3">
+        <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate()} disabled={!isValid || mutation.isPending}>
             {mutation.isPending ? `${t('common.register')}…` : t('common.register')}

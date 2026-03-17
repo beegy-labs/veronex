@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import React, { useState, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { PatchSyncSettings } from '@/lib/types'
@@ -21,9 +21,11 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
-import { fmtMbShort } from '@/lib/chart-theme'
-import { RESOURCE_CRITICAL, RESOURCE_WARNING } from '@/lib/constants'
+import { fmtMbShort, fmtTemp } from '@/lib/chart-theme'
+import { calcPercentage } from '@/lib/utils'
+import { RESOURCE_CRITICAL, RESOURCE_WARNING, SYNC_INVALIDATE_DELAY_MS } from '@/lib/constants'
 import { useLabSettings } from '@/components/lab-settings-provider'
+import { ProgressBar } from '@/components/progress-bar'
 
 export function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
   const { t } = useTranslation()
@@ -33,7 +35,7 @@ export function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
     </span>
   )
   if (state === 'soft') return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-warn/15 text-status-warn-fg border border-status-warn/30">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-warning/15 text-status-warning-fg border border-status-warning/30">
       <AlertTriangle className="h-2.5 w-2.5" />{t('providers.capacity.thermal.soft')}
     </span>
   )
@@ -45,14 +47,13 @@ export function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
 }
 
 export function VramBar({ used, total }: { used: number; total: number }) {
-  if (total === 0) return <span className="text-xs text-muted-foreground italic">unknown</span>
-  const pct = Math.min(100, Math.round((used / total) * 100))
-  const color = pct > RESOURCE_CRITICAL ? 'bg-status-error' : pct > RESOURCE_WARNING ? 'bg-status-warn' : 'bg-status-success'
+  const { t } = useTranslation()
+  if (total === 0) return <span className="text-xs text-muted-foreground italic">{t('common.na')}</span>
+  const pct = Math.min(100, calcPercentage(used, total))
+  const color = pct > RESOURCE_CRITICAL ? 'bg-status-error' : pct > RESOURCE_WARNING ? 'bg-status-warning' : 'bg-status-success'
   return (
     <div className="flex items-center gap-2 min-w-32">
-      <div className="flex-1 h-2 rounded-full bg-muted/60 overflow-hidden">
-        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
-      </div>
+      <ProgressBar pct={pct} height="h-2" colorClass={color} trackClass="bg-muted/60" className="flex-1" />
       <span className="text-xs text-muted-foreground tabular-nums shrink-0">{pct}%</span>
     </div>
   )
@@ -100,7 +101,7 @@ export function OllamaCapacitySection() {
         queryClient.invalidateQueries({ queryKey: ['sync-settings'] })
         queryClient.invalidateQueries({ queryKey: ['providers'] })
         queryClient.invalidateQueries({ queryKey: ['ollama-models'] })
-      }, 3000)
+      }, SYNC_INVALIDATE_DELAY_MS)
     },
   })
 
@@ -120,21 +121,32 @@ export function OllamaCapacitySection() {
   const lastRunStatus = settings?.last_run_status
   const allModels = settings?.available_models ?? {}
 
-  // Filter: hide gemini when lab feature is off, apply provider filter
-  const availableModels = Object.fromEntries(
-    Object.entries(allModels)
-      .filter(([p]) => p !== 'gemini' || geminiEnabled)
-      .filter(([p]) => providerFilter === 'all' || p === providerFilter)
+  const filteredProviders = useMemo(() =>
+    providers.filter((p) => providerFilter === 'all' || p.provider_name.toLowerCase().includes(providerFilter)),
+    [providers, providerFilter],
   )
-  const providerOptions = Object.keys(allModels).filter(p => p !== 'gemini' || geminiEnabled)
+
+  // Filter: hide gemini when lab feature is off, apply provider filter
+  const availableModels = useMemo(() =>
+    Object.fromEntries(
+      Object.entries(allModels)
+        .filter(([p]) => p !== 'gemini' || geminiEnabled)
+        .filter(([p]) => providerFilter === 'all' || p === providerFilter)
+    ),
+    [allModels, geminiEnabled, providerFilter],
+  )
+  const providerOptions = useMemo(() =>
+    Object.keys(allModels).filter(p => p !== 'gemini' || geminiEnabled),
+    [allModels, geminiEnabled],
+  )
 
   function fmtRelativeTime(iso: string | null) {
     if (!iso) return t('providers.capacity.never')
     const diff = Date.now() - new Date(iso).getTime()
     const mins = Math.floor(diff / 60_000)
-    if (mins < 1) return '< 1 min ago'
-    if (mins < 60) return `${mins} min ago`
-    return `${Math.floor(mins / 60)}h ago`
+    if (mins < 1) return t('providers.capacity.lessThanMinAgo')
+    if (mins < 60) return t('providers.capacity.minsAgo', { n: mins })
+    return t('providers.capacity.hoursAgo', { n: Math.floor(mins / 60) })
   }
 
   return (
@@ -180,7 +192,7 @@ export function OllamaCapacitySection() {
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">{t('usage.providerCol')}</Label>
               <Select value={providerFilter} onValueChange={setProviderFilter}>
-                <SelectTrigger className="h-8 text-sm w-28">
+                <SelectTrigger className="h-8 text-sm w-32">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -225,7 +237,7 @@ export function OllamaCapacitySection() {
             </div>
 
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Probe Permits</Label>
+              <Label className="text-xs text-muted-foreground">{t('providers.capacity.probePermits')}</Label>
               <Input
                 type="number"
                 className="h-8 text-sm w-20"
@@ -235,7 +247,7 @@ export function OllamaCapacitySection() {
             </div>
 
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Probe Rate</Label>
+              <Label className="text-xs text-muted-foreground">{t('providers.capacity.probeRate')}</Label>
               <Input
                 type="number"
                 min={0}
@@ -282,7 +294,7 @@ export function OllamaCapacitySection() {
         </Card>
       )}
 
-      {providers.filter((p) => providerFilter === 'all' || p.provider_name.toLowerCase().includes(providerFilter)).map((provider) => (
+      {filteredProviders.map((provider) => (
         <Card key={provider.provider_id}>
           <CardContent className="p-0">
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
@@ -290,7 +302,7 @@ export function OllamaCapacitySection() {
               <span className="text-sm font-semibold text-text-bright">{provider.provider_name}</span>
               <ThermalBadge state={provider.thermal_state} />
               {provider.temp_c !== null && (
-                <span className="text-xs text-muted-foreground ml-1">{provider.temp_c.toFixed(1)}°C</span>
+                <span className="text-xs text-muted-foreground ml-1">{fmtTemp(provider.temp_c)}</span>
               )}
               <div className="ml-auto flex items-center gap-2">
                 <span className="text-xs text-muted-foreground tabular-nums">
@@ -307,16 +319,16 @@ export function OllamaCapacitySection() {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
-                      <th className="px-4 py-2 text-left font-medium text-muted-foreground">Model</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">Weight</th>
-                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">KV/req</th>
-                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">Active / Limit</th>
+                      <th className="px-4 py-2 text-left font-medium text-muted-foreground">{t('providers.capacity.colModel')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.colWeight')}</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.colKvPerReq')}</th>
+                      <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('providers.capacity.colActiveLimit')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {provider.loaded_models.map((m) => (
-                      <>
-                        <tr key={m.model_name} className="hover:bg-muted/20 transition-colors">
+                      <React.Fragment key={m.model_name}>
+                        <tr className="hover:bg-muted/20 transition-colors">
                           <td className="px-4 py-2.5">
                             <span className="font-mono font-medium text-text-bright">{m.model_name}</span>
                           </td>
@@ -331,9 +343,9 @@ export function OllamaCapacitySection() {
                           </td>
                         </tr>
                         {m.llm_concern && (
-                          <tr key={`${m.model_name}-concern`} className="bg-status-warn/5">
+                          <tr className="bg-status-warning/5">
                             <td colSpan={4} className="px-4 py-1.5">
-                              <span className="text-[10px] font-semibold text-status-warn-fg uppercase tracking-wide mr-2">
+                              <span className="text-[10px] font-semibold text-status-warning-fg uppercase tracking-wide mr-2">
                                 {t('providers.capacity.concern')}
                               </span>
                               <span className="text-xs text-muted-foreground">{m.llm_concern}</span>
@@ -343,7 +355,7 @@ export function OllamaCapacitySection() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>

@@ -1,6 +1,6 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-03-11
+> SSOT | **Last Updated**: 2026-03-16
 
 ## Task Guide
 
@@ -34,6 +34,7 @@ Jobs carry a `source` field that records their origin:
 |-------|---------|
 | `api` | Submitted by any API key route (`/v1/chat/completions`, `/api/chat`, `/api/generate`, `/v1beta/models/*`, `/v1/inference`) |
 | `test` | Submitted from the dashboard Test Run panel (`/v1/test/*` routes, Bearer JWT, no rate limit) |
+| `analyzer` | Submitted by the capacity analyzer for VRAM probing and batch analysis (internal LLM inference) |
 
 - The `source` field is **immutable** — set at creation, never updated on UPSERT.
 - Default value in DB: `'api'` (backward-compatible with older rows).
@@ -123,6 +124,7 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `ttft_ms` | `Option<i32>` | Time To First Token |
 | `queue_time_ms` | `Option<i32>` | `created_at` → `started_at` (queue wait) |
 | `cancelled_at` | `Option<DateTime>` | set by cancel(); NULL for non-cancelled jobs |
+| `image_keys` | `Option<Vec<String>>` | S3 object keys for attached images (WebP); stored as `TEXT[]` in DB |
 
 > `tps` = `completion_tokens / (latency_ms - ttft_ms) * 1000` (computed in API, not stored)
 
@@ -155,7 +157,7 @@ pub(crate) struct JobEntry {
     pub gemini_tier: Option<String>,
     pub key_tier: Option<KeyTier>,
     pub tpm_reservation_minute: Option<i64>, // minute bucket for TPM adjustment
-    pub assigned_provider_id: Option<Uuid>,  // dispatch 시점에 set (Hard drain cancel용)
+    pub assigned_provider_id: Option<Uuid>,  // set at dispatch time (for Hard drain cancel)
 }
 ```
 

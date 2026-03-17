@@ -1,19 +1,31 @@
 'use client'
 
+import { useMemo } from 'react'
 import type { AnalyticsStats } from '@/lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DonutChart } from '@/components/donut-chart'
 import { useTranslation } from '@/i18n'
 import { FINISH_COLORS, FINISH_BG } from '@/lib/constants'
+import { tokens } from '@/lib/design-tokens'
+import { calcPercentage } from '@/lib/utils'
+
+const FINISH_REASON_LABEL_KEY: Record<string, string> = {
+  stop:      'usage.finishStop',
+  length:    'usage.finishLength',
+  error:     'usage.finishError',
+  cancelled: 'usage.finishCancelled',
+}
 
 export function FinishReasonsCard({ data }: { data: AnalyticsStats }) {
   const { t } = useTranslation()
-  const total = data.finish_reasons.reduce((s, r) => s + r.count, 0)
-  const donutData = data.finish_reasons.map((r) => ({
-    name: r.reason,
-    value: r.count,
-    pct: total > 0 ? Math.round((r.count / total) * 100) : 0,
-  }))
+  const donutData = useMemo(() => {
+    const total = data.finish_reasons.reduce((s, r) => s + r.count, 0)
+    return data.finish_reasons.map((r) => ({
+      name: r.reason,
+      value: r.count,
+      pct: calcPercentage(r.count, total),
+    }))
+  }, [data.finish_reasons])
   if (donutData.length === 0) return null
 
   return (
@@ -25,9 +37,9 @@ export function FinishReasonsCard({ data }: { data: AnalyticsStats }) {
         <div className="flex items-center gap-6">
           <DonutChart
             data={donutData.map((d) => ({
-              name: d.name,
+              name: t(FINISH_REASON_LABEL_KEY[d.name] ?? 'usage.finishStop'),
               value: d.value,
-              fill: FINISH_COLORS[d.name] ?? 'var(--theme-muted)',
+              fill: FINISH_COLORS[d.name] ?? tokens.text.faint,
             }))}
             size={120}
             innerRadius={30}
@@ -39,9 +51,9 @@ export function FinishReasonsCard({ data }: { data: AnalyticsStats }) {
               <div key={d.name} className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="h-2 w-2 rounded-full shrink-0"
-                    style={{ background: FINISH_COLORS[d.name] ?? 'var(--theme-muted)' }} />
+                    style={{ background: FINISH_COLORS[d.name] ?? tokens.text.faint }} />
                   <span className={`text-xs font-medium px-1.5 py-0.5 rounded border ${FINISH_BG[d.name] ?? 'bg-muted text-muted-foreground border-border'}`}>
-                    {d.name}
+                    {t(FINISH_REASON_LABEL_KEY[d.name] ?? 'usage.finishStop')}
                   </span>
                 </div>
                 <div className="text-right">

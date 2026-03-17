@@ -26,6 +26,10 @@ use super::middleware::rate_limiter::rate_limiter;
 use super::ollama_compat_handlers;
 use super::ollama_model_handlers;
 use super::openai_handlers;
+use super::openai_models_handlers;
+use super::openai_embeddings_handlers;
+use super::openai_completions_handlers;
+use super::openai_media_handlers;
 use super::test_handlers;
 use super::state::AppState;
 use super::usage_handlers;
@@ -50,13 +54,23 @@ pub fn build_api_router() -> Router<AppState> {
         )
         // ── OpenAI-compatible (qwen-code, OpenAI SDK) ──────────────────
         .route("/v1/chat/completions", post(openai_handlers::chat_completions))
+        .route("/v1/models", get(openai_models_handlers::list_models))
+        .route("/v1/models/{model_id}", get(openai_models_handlers::get_model))
+        .route("/v1/embeddings", post(openai_embeddings_handlers::create_embeddings))
+        .route("/v1/completions", post(openai_completions_handlers::text_completions))
+        // ── OpenAI-compatible media stubs (501 Not Implemented) ────────────────
+        .route("/v1/audio/transcriptions",  post(openai_media_handlers::audio_transcriptions))
+        .route("/v1/audio/speech",          post(openai_media_handlers::audio_speech))
+        .route("/v1/images/generations",    post(openai_media_handlers::image_generations))
+        .route("/v1/moderations",           post(openai_media_handlers::moderations))
 
         // ── Ollama native API (OLLAMA_HOST=http://veronex:3001) ─────────
         // /api/tags uses Veronex-synchronized models; everything else proxies to provider.
         .route("/api/tags",        get(ollama_compat_handlers::list_local_models))
         .route("/api/version",     get(ollama_compat_handlers::version))
         .route("/api/ps",          get(ollama_compat_handlers::ps))
-        .route("/api/generate",    post(ollama_compat_handlers::generate))
+        .route("/api/generate",    post(ollama_compat_handlers::generate)
+            .layer(DefaultBodyLimit::max(super::constants::IMAGE_BODY_LIMIT)))
         .route("/api/chat",        post(ollama_compat_handlers::chat))
         .route("/api/show",        post(ollama_compat_handlers::show))
         .route("/api/embed",       post(ollama_compat_handlers::embed))
@@ -89,7 +103,8 @@ pub fn build_api_router() -> Router<AppState> {
 fn build_test_router() -> Router<AppState> {
     Router::new()
         // OpenAI-compat (web test panel)
-        .route("/v1/test/completions", post(test_handlers::test_completions))
+        .route("/v1/test/completions", post(test_handlers::test_completions)
+            .layer(DefaultBodyLimit::max(super::constants::IMAGE_BODY_LIMIT)))
         .route("/v1/test/jobs/{job_id}/stream", get(test_handlers::stream_test_job))
         // Ollama native test endpoints
         .route("/v1/test/api/chat", post(test_handlers::test_ollama_chat))
@@ -207,6 +222,42 @@ async fn security_headers(mut response: axum::response::Response) -> axum::respo
     response
 }
 
+/// Add OpenAI-compatible response headers to every API response.
+///
+/// - `x-request-id`: unique per-request ID for tracing (read by openai-python SDK)
+/// - `x-ratelimit-*`: placeholder rate-limit headers (read by LiteLLM, Cursor, Continue.dev)
+#[allow(clippy::expect_used)]
+async fn openai_compat_headers(mut response: axum::response::Response) -> axum::response::Response {
+    use uuid::Uuid;
+    let headers = response.headers_mut();
+    // Unique request ID — openai-python SDK surfaces this on response objects
+    let req_id = format!("req_{}", Uuid::new_v4().simple());
+    if let Ok(v) = req_id.parse() {
+        headers.insert(
+            axum::http::header::HeaderName::from_static("x-request-id"),
+            v,
+        );
+    }
+    // Static rate-limit placeholders — clients use these for backoff
+    let static_headers: &[(&str, &str)] = &[
+        ("x-ratelimit-limit-requests",     "10000"),
+        ("x-ratelimit-limit-tokens",       "10000000"),
+        ("x-ratelimit-remaining-requests", "9999"),
+        ("x-ratelimit-remaining-tokens",   "9999999"),
+        ("x-ratelimit-reset-requests",     "1s"),
+        ("x-ratelimit-reset-tokens",       "1s"),
+    ];
+    for (name, value) in static_headers {
+        if let (Ok(n), Ok(v)) = (
+            axum::http::header::HeaderName::from_bytes(name.as_bytes()),
+            value.parse::<axum::http::HeaderValue>(),
+        ) {
+            headers.insert(n, v);
+        }
+    }
+    response
+}
+
 /// Build the full application router with health endpoints and middleware.
 ///
 /// Applies API key auth and rate limiting to all API routes.
@@ -223,6 +274,15 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                 axum::http::header::AUTHORIZATION,
                 axum::http::header::ACCEPT,
                 axum::http::header::HeaderName::from_static("x-conversation-id"),
+                axum::http::header::HeaderName::from_static("x-api-key"),
+                axum::http::header::HeaderName::from_static("openai-organization"),
+                axum::http::header::HeaderName::from_static("openai-project"),
+                axum::http::header::HeaderName::from_static("x-stainless-lang"),
+                axum::http::header::HeaderName::from_static("x-stainless-package-version"),
+                axum::http::header::HeaderName::from_static("x-stainless-os"),
+                axum::http::header::HeaderName::from_static("x-stainless-arch"),
+                axum::http::header::HeaderName::from_static("x-stainless-runtime"),
+                axum::http::header::HeaderName::from_static("x-stainless-runtime-version"),
             ])
             .allow_credentials(true);
         if cors_origins.is_empty() {
@@ -285,7 +345,8 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
                     api_key_auth,
-                )),
+                ))
+                .layer(middleware::map_response(openai_compat_headers)),
         )
         .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB — reject oversized bodies before deserialization
         .layer(cors)

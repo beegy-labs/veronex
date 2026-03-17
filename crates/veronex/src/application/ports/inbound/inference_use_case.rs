@@ -30,6 +30,19 @@ pub struct SubmitJobRequest {
     /// Billing tier of the API key: `Some(KeyTier::Paid)` routes to the high-priority queue.
     /// `None` or `Some(KeyTier::Free)` uses the standard queue.
     pub key_tier: Option<KeyTier>,
+    /// Base64 images for vision inference (/api/generate).
+    pub images: Option<Vec<String>>,
+    pub stop: Option<serde_json::Value>,
+    pub seed: Option<u32>,
+    pub response_format: Option<serde_json::Value>,
+    pub frequency_penalty: Option<f64>,
+    pub presence_penalty: Option<f64>,
+}
+
+/// Snapshot of in-flight job counts — derived from the in-memory DashMap.
+pub struct LiveCounts {
+    pub pending: u32,
+    pub running: u32,
 }
 
 /// Inbound port for inference operations.
@@ -51,4 +64,8 @@ pub trait InferenceUseCase: Send + Sync {
 
     /// Cancel a pending or running job.
     async fn cancel(&self, job_id: &JobId) -> Result<()>;
+
+    /// Return current in-memory pending and running counts.
+    /// Used by the stats ticker to compute real-time queue metrics.
+    fn get_live_counts(&self) -> LiveCounts;
 }

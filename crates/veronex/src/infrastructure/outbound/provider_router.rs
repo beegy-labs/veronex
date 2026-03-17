@@ -20,6 +20,12 @@ use crate::infrastructure::outbound::hw_metrics::load_hw_metrics;
 use crate::infrastructure::outbound::ollama::OllamaAdapter;
 use crate::infrastructure::outbound::valkey_keys;
 
+/// TTL (seconds) for the per-minute Gemini RPM counter key.
+const GEMINI_RPM_TTL_SECS: i64 = 120;
+
+/// TTL (seconds) for the per-day Gemini RPD counter key (~25 hours).
+const GEMINI_RPD_TTL_SECS: i64 = 90_000;
+
 // ── Static provider router (kept for tests) ────────────────────────────────────
 
 /// Routes inference calls to the appropriate provider adapter based on
@@ -254,10 +260,10 @@ pub async fn increment_gemini_counters(
     let rpd_key = gemini_rpd_key(provider_id, model);
 
     let _: i64 = pool.incr_by(&rpm_key, 1).await?;
-    let _: bool = pool.expire(&rpm_key, 120, None).await?;
+    let _: bool = pool.expire(&rpm_key, GEMINI_RPM_TTL_SECS, None).await?;
 
     let _: i64 = pool.incr_by(&rpd_key, 1).await?;
-    let _: bool = pool.expire(&rpd_key, 90_000, None).await?;
+    let _: bool = pool.expire(&rpd_key, GEMINI_RPD_TTL_SECS, None).await?;
 
     Ok(())
 }
@@ -609,5 +615,61 @@ impl InferenceProviderPort for BlockedAdapter {
         Box::pin(async_stream::stream! {
             yield Err(anyhow::anyhow!("provider blocked: {}", msg));
         })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::domain::entities::LlmProvider;
+    use crate::domain::enums::LlmProviderStatus;
+    use uuid::Uuid;
+
+    fn make_provider(total_vram_mb: i64) -> LlmProvider {
+        LlmProvider {
+            id: Uuid::now_v7(),
+            name: "test".into(),
+            provider_type: crate::domain::enums::ProviderType::Ollama,
+            url: "http://localhost:11434".into(),
+            api_key_encrypted: None,
+            is_active: true,
+            total_vram_mb,
+            gpu_index: None,
+            server_id: None,
+            is_free_tier: false,
+            num_parallel: 4,
+            status: LlmProviderStatus::Online,
+            registered_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Graceful degradation: Valkey cache miss → static VRAM fallback.
+    #[tokio::test]
+    async fn vram_fallback_on_cache_miss() {
+        let provider = make_provider(24576);
+        // No Valkey connection → should return total_vram_mb as fallback
+        let vram = get_ollama_available_vram_mb(&provider, None).await;
+        assert_eq!(vram, 24576);
+    }
+
+    /// Graceful degradation: unknown VRAM (0) → unlimited (i64::MAX).
+    #[tokio::test]
+    async fn vram_unknown_returns_unlimited() {
+        let provider = make_provider(0);
+        let vram = get_ollama_available_vram_mb(&provider, None).await;
+        assert_eq!(vram, i64::MAX);
+    }
+
+    #[test]
+    fn validate_url_blocks_cloud_metadata() {
+        assert!(validate_provider_url("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(validate_provider_url("http://metadata.google.internal").is_err());
+    }
+
+    #[test]
+    fn validate_url_allows_localhost() {
+        assert!(validate_provider_url("http://localhost:11434").is_ok());
+        assert!(validate_provider_url("http://192.168.1.10:11434").is_ok());
     }
 }

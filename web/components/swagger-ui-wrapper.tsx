@@ -24,7 +24,7 @@ export default function SwaggerUiWrapper({ specUrl }: SwaggerUiWrapperProps) {
         .swagger-ui .info h1, .swagger-ui .info h2, .swagger-ui .info h3 { color: var(--theme-text-primary); }
         .swagger-ui .opblock-tag { color: var(--theme-text-primary); border-bottom-color: var(--theme-border); }
         .swagger-ui section.models { border-color: var(--theme-border); }
-        .swagger-ui .opblock.opblock-get .opblock-summary { border-color: #2563eb; }
+        .swagger-ui .opblock.opblock-get .opblock-summary { border-color: var(--theme-status-info); }
         .swagger-ui .opblock.opblock-post .opblock-summary { border-color: var(--theme-status-success); }
         .swagger-ui .opblock.opblock-delete .opblock-summary { border-color: var(--theme-status-error); }
         .swagger-ui .opblock.opblock-patch .opblock-summary { border-color: var(--theme-status-warning); }

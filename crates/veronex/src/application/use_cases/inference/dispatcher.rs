@@ -45,12 +45,11 @@ async fn filter_candidates(
 ) -> Vec<LlmProvider> {
     let all = registry.list_all().await.unwrap_or_default();
 
-    // Stage 1: active + type + tier + standby exclusion
+    // Stage 1: active + type + tier (standby providers included — woken on demand)
     let mut candidates: Vec<_> = all.into_iter()
         .filter(|b| {
             b.is_active && b.provider_type == provider_type
                 && !matches!(gemini_tier, Some(GEMINI_TIER_FREE) if !b.is_free_tier)
-                && !vram_pool.is_standby(b.id)
         })
         .collect();
 
@@ -160,6 +159,11 @@ async fn score_and_claim(
                     }
                 }
                 _ => {}
+            }
+            // Wake standby provider on demand (instant Scale-Out recovery)
+            if vram.is_standby(provider.id) {
+                vram.set_standby(provider.id, false);
+                tracing::info!(provider_id = %provider.id, %model, "dispatch: woke standby provider on demand");
             }
             vram.try_reserve(provider.id, model).map(|permit| (provider, permit))
         })

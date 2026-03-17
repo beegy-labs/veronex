@@ -1,6 +1,6 @@
 # Web — Setup / Bootstrap Page (/setup)
 
-> **SSOT** | **Tier 2** | Last Updated: 2026-03-02
+> CDD Layer 2 | **Last Updated**: 2026-03-02
 
 ## Task Guide
 

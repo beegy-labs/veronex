@@ -1,6 +1,6 @@
 # Veronex E2E Test Suite
 
-> **Last Updated**: 2026-03-14
+> **Last Updated**: 2026-03-15
 
 ---
 
@@ -42,7 +42,9 @@ flowchart TD
 
     S03 --> P02 & P04 & P05 & P06 & P07
     P02 & P04 & P05 & P06 & P07 --> S08
-    S08 --> Result["Aggregate Results"]
+    S08 --> S09["09-metrics-pipeline.sh"]
+    S09 --> S10["10-image-storage.sh"]
+    S10 --> Result["Aggregate Results"]
 ```
 
 ---
@@ -503,6 +505,40 @@ sequenceDiagram
 
 ---
 
+## 09-metrics-pipeline.sh — Metrics Pipeline End-to-End
+
+Validates the full metrics data path: agent scrape → OTLP push → OTel Collector → Redpanda → ClickHouse → analytics API. Tests both gauge metrics (memory, GPU temp/power) and counter-derived metrics (CPU usage %).
+
+| Test | Validates |
+|------|-----------|
+| Agent scrape | Agent scrapes node-exporter metrics (server type targets) |
+| OTLP push | Metrics pushed to OTel Collector via OTLP HTTP |
+| Redpanda topic | otel-metrics topic contains gauge and sum data points |
+| ClickHouse MV | kafka_otel_metrics_mv processes both gauge and sum types |
+| otel_metrics_gauge populated | Rows present for memory, CPU, GPU metrics |
+| Analytics history API | GET /v1/servers/{id}/metrics/history returns ServerMetricsPoint |
+| CPU usage % | cpu_usage_pct field present (counter delta computation) |
+| GPU temp/power | gpu_temp_c, gpu_power_w fields present (requires node_hwmon_chip_names in allowlist) |
+| Local server (Mac) | Metrics collected from local dev machine |
+| Remote server (Ubuntu) | Metrics collected from remote Ryzen AI 395+ server |
+
+---
+
+## 10-image-storage.sh — Image Storage & Provider Name
+
+Validates image inference through both API key and test panel paths, S3 WebP storage, thumbnail access, and provider_name field population.
+
+| Test | Validates |
+|------|-----------|
+| Vision model detection | Local Ollama has a vision model (llava, minicpm-v, etc.) |
+| API image inference | /api/generate with base64 image → 200, response contains text |
+| Test panel image inference | /v1/test/completions with images array → 200 |
+| S3 WebP storage | Job image stored as WebP in S3 bucket |
+| Thumbnail access | Thumbnail URL returns image data |
+| provider_name field | Job response includes provider_name (non-empty) |
+
+---
+
 ## Skipped Tests
 
 ### gpu_vendor Thermal Mapping
@@ -540,6 +576,8 @@ The logic is fully implemented in `thermal.rs`. To enable: deploy the agent or m
 | `06-api-surface.sh` | Parallel | Multi-format inference + endpoints + Pull Drain |
 | `07-lifecycle.sh` | Parallel | Cancel + SSE + password reset + crash recovery |
 | `08-sdd-advanced.sh` | Sequential 3 | AIMD decrease + Scale-In/Out + thermal deep validation |
+| `09-metrics-pipeline.sh` | Sequential 4 | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
+| `10-image-storage.sh` | Sequential 5 | Image inference, S3 WebP storage, thumbnails, provider_name |
 
 ---
 
@@ -556,6 +594,8 @@ Security + RBAC               05               17
 Multi-Format + Endpoints      06               30
 Lifecycle + Cancel            07               23
 Advanced Validation           08               17
+Metrics Pipeline              09               10
+Image Storage                 10                6
 ──────────────────────────────────────────────────────
-Total                                          ~160
+Total                                          ~176
 ```

@@ -1,6 +1,6 @@
 # SDD (Spec-Driven Development)
 
-> WHAT to build | Policy: `vendor/agentic-dev-protocol/docs/llm/policies/sdd.md`
+> CDD-derived change plan | Policy: `docs/llm/policies/sdd.md` | **Last Updated**: 2026-03-15
 
 ## Structure
 

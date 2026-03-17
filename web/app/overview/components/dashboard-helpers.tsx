@@ -1,18 +1,14 @@
 'use client'
 
+import { memo, useMemo } from 'react'
+import { fmtTemp } from '@/lib/chart-theme'
+import { useTranslation } from '@/i18n'
 import { Card, CardContent } from '@/components/ui/card'
 import { CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 import type { Provider } from '@/lib/types'
 
 /* ─── pure color helpers ──────────────────────────────────── */
 export type ThermalLevel = 'normal' | 'warning' | 'critical' | 'unknown'
-
-export function successRateCls(rate: number | undefined): string {
-  if (rate == null) return ''
-  if (rate >= 99) return 'bg-status-success/15 text-status-success-fg'
-  if (rate >= 95) return 'bg-status-warning/15 text-status-warning-fg'
-  return 'bg-status-error/15 text-status-error-fg'
-}
 
 export function providerValueCls(online: number, total: number): string {
   if (total === 0) return ''
@@ -34,10 +30,6 @@ export function latencyColor(val: number | null | undefined, warnMs: number, err
   return ''
 }
 
-export function countByStatus(providers: Provider[], status: string) {
-  return providers.filter(b => b.status === status).length
-}
-
 export const THERMAL_ROW_CLS: Record<ThermalLevel, string> = {
   normal:   '',
   warning:  'bg-status-warning/5 border-l-2 border-status-warning/60',
@@ -55,7 +47,7 @@ export const THERMAL_NAME_CLS: Record<ThermalLevel, string> = {
 /* ─── sub-components ──────────────────────────────────────── */
 export function StatSkeleton() {
   return (
-    <Card>
+    <Card aria-busy="true">
       <CardContent className="p-5">
         <div className="h-3 w-24 rounded bg-muted animate-pulse mb-4" />
         <div className="h-8 w-16 rounded bg-muted animate-pulse mb-2" />
@@ -65,21 +57,23 @@ export function StatSkeleton() {
   )
 }
 
-export function ProviderRow({
-  icon, label, providers,
+export const ProviderRow = memo(function ProviderRow({
+  Icon, label, providers,
 }: {
-  icon: React.ReactNode
+  Icon: React.ComponentType<{ className?: string }>
   label: string
   providers: Provider[]
 }) {
-  const online   = countByStatus(providers, 'online')
-  const degraded = countByStatus(providers, 'degraded')
-  const offline  = countByStatus(providers, 'offline')
+  const { online, degraded, offline } = useMemo(() => ({
+    online:   providers.filter(b => b.status === 'online').length,
+    degraded: providers.filter(b => b.status === 'degraded').length,
+    offline:  providers.filter(b => b.status === 'offline').length,
+  }), [providers])
 
   return (
     <div className="flex items-center justify-between py-2">
       <div className="flex items-center gap-2 text-sm font-medium">
-        {icon}
+        <Icon className="h-4 w-4" />
         <span>{label}</span>
         <span className="text-muted-foreground text-xs">({providers.length})</span>
       </div>
@@ -106,13 +100,13 @@ export function ProviderRow({
       </div>
     </div>
   )
-}
+})
 
-export function ThermalBadge({ level, temp, t }: {
+export const ThermalLevelBadge = memo(function ThermalLevelBadge({ level, temp }: {
   level: ThermalLevel
   temp: number | null
-  t: (k: string) => string
 }) {
+  const { t } = useTranslation()
   if (level === 'unknown') return <span className="text-[11px] text-muted-foreground">—</span>
 
   const cfg = {
@@ -125,12 +119,13 @@ export function ThermalBadge({ level, temp, t }: {
     <span className={`flex items-center gap-1 text-[11px] font-medium ${cfg.cls}`}>
       <cfg.Icon className="h-3 w-3" />
       <span>{t(cfg.key)}</span>
-      {temp != null && <span className="tabular-nums opacity-70">({temp.toFixed(0)}°C)</span>}
+      {temp != null && <span className="tabular-nums opacity-70">({fmtTemp(temp)})</span>}
     </span>
   )
-}
+})
 
-export function ConnectionDot({ connected, t }: { connected: boolean; t: (k: string) => string }) {
+export const ConnectionDot = memo(function ConnectionDot({ connected }: { connected: boolean }) {
+  const { t } = useTranslation()
   return connected ? (
     <span className="flex items-center gap-1 text-[11px] font-medium text-status-success-fg">
       <span className="h-1.5 w-1.5 rounded-full bg-status-success inline-block" />
@@ -142,4 +137,4 @@ export function ConnectionDot({ connected, t }: { connected: boolean; t: (k: str
       {t('overview.unreachable')}
     </span>
   )
-}
+})

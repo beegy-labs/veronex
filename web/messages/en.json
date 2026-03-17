@@ -79,11 +79,19 @@
     "labFeaturesDesc": "Experimental features — may be unstable.",
     "labGeminiFunctionCalling": "Gemini function calling",
     "labGeminiFunctionCallingDesc": "Enable tool use (function calling) through the Gemini-compatible endpoint. Still in development.",
+    "maxImagesPerRequest": "Max images per request",
+    "maxImagesPerRequestDesc": "Maximum images per inference request. 0 disables image input.",
     "menu": "Menu",
     "expand": "Expand",
     "collapse": "Collapse",
     "signOut": "Sign out",
-    "retry": "Retry"
+    "retry": "Retry",
+    "prevPage": "Previous page",
+    "nextPage": "Next page",
+    "tokensUnit": "tokens",
+    "activate": "Activate",
+    "deactivate": "Deactivate",
+    "deleting": "Deleting…"
   },
   "overview": {
     "title": "Overview",
@@ -134,7 +142,7 @@
     "providerFlow": "Provider Flow",
     "liveFeed": "Live Feed",
     "waitingRequests": "Waiting for requests...",
-    "reqLast5m": "{{count}} req / 5m",
+    "reqLast30s": "{{count}} req / 30s",
     "queueWaiting": "{{count}} waiting",
     "thermalAlert": "Thermal Alert",
     "thermalAlertDesc": "{{count}} server(s) need attention",
@@ -144,7 +152,9 @@
     "waiting": "Waiting",
     "running": "Running",
     "pendingJobs": "pending jobs",
+    "pendingJobsCount": "{{count}} pending",
     "runningJobs": "running jobs",
+    "runningJobsCount": "{{count}} running",
     "daily": "Daily",
     "weekly": "Weekly",
     "monthly": "Monthly",
@@ -157,7 +167,17 @@
     "unreachable": "Unreachable",
     "tempNormal": "Normal",
     "noServers": "No servers registered",
-    "daysData": "{{n}} days of data"
+    "daysData": "{{n}} days of data",
+    "flowHttpGateway": "HTTP gateway",
+    "flowOnlineCount": "{{online}}/{{total}} online",
+    "flowNoProviders": "no providers",
+    "flowApiNode": "Veronex API",
+    "flowQueueNode": "Queue",
+    "flowValkeyNode": "Valkey",
+    "liveIndicator": "Live",
+    "timeAgoJustNow": "just now",
+    "timeAgoSeconds": "{{s}}s ago",
+    "timeAgoMinutes": "{{m}}m ago"
   },
   "jobs": {
     "title": "Jobs",
@@ -214,6 +234,7 @@
     "retryInTest": "Retry in Test",
     "apiJobs": "API Jobs",
     "testRuns": "Test Runs",
+    "analyzerJobs": "Analyzer",
     "networkFlow": "Network Flow",
     "groupSessions": "Group Sessions",
     "groupSessionsDesc": "Assign conversation IDs to completed jobs before the selected date.",
@@ -222,7 +243,11 @@
     "grouping": "Grouping…",
     "groupingSuccess": "Session grouping triggered",
     "groupingError": "Failed to trigger session grouping",
-    "groupingAlreadyRunning": "Session grouping already in progress"
+    "groupingAlreadyRunning": "Session grouping already in progress",
+    "providerName": "Provider",
+    "images": "Images",
+    "filterModel": "Model…",
+    "filterProvider": "Provider…"
   },
   "keys": {
     "title": "API Keys",
@@ -241,6 +266,7 @@
     "keyName": "Name",
     "keyNamePlaceholder": "e.g. production-key",
     "tenantId": "Tenant ID",
+    "tenantIdPlaceholder": "default",
     "rateLimitRpm": "Rate limit (RPM)",
     "rateLimitTpm": "Rate limit (TPM)",
     "rateLimitPlaceholder": "0 = unlimited",
@@ -291,6 +317,7 @@
       "registerServer": "Register Server",
       "registerTitle": "Register GPU Server",
       "editTitle": "Edit GPU Server",
+      "namePlaceholder": "e.g. gpu-node-1",
       "nodeExporterUrlPlaceholder": "http://192.168.1.10:9100",
       "serverMeta": "Physical machines — one node-exporter per server.",
       "loadingServers": "Loading servers…",
@@ -331,11 +358,15 @@
       "noProviderModels": "No models synced for this provider.",
       "noModelsMatch": "No models match",
       "noServersMatch": "No servers match",
+      "gpuLabel": "GPU",
       "gpuServer": "GPU Server",
       "gpuServerHint": "Link to a GPU server for metric correlation.",
       "maxVram": "Max VRAM",
       "serverRam": "Server RAM",
       "noneOption": "None",
+      "namePlaceholder": "e.g. gpu-server-1",
+      "urlPlaceholder": "http://192.168.1.10:11434",
+      "gpuIndexPlaceholder": "0",
       "ollamaUrl": "Ollama URL",
       "modelsCount": "{{count}} models",
       "serversWithModel": "servers with this model",
@@ -377,7 +408,16 @@
         "hard": "Hard Throttle"
       },
       "concern": "LLM Concern",
-      "reason": "Reason"
+      "reason": "Reason",
+      "probePermits": "Probe Permits",
+      "probeRate": "Probe Rate",
+      "lessThanMinAgo": "< 1 min ago",
+      "minsAgo": "{{n}} min ago",
+      "hoursAgo": "{{n}}h ago",
+      "colModel": "Model",
+      "colWeight": "Weight",
+      "colKvPerReq": "KV/req",
+      "colActiveLimit": "Active / Limit"
     },
     "gemini": {
       "title": "Gemini API Keys",
@@ -396,7 +436,11 @@
       "rateLimitDesc": "Shared RPM/RPD limits per model, applied to all free-tier providers.",
       "model": "Model",
       "rpm": "RPM",
+      "rpmPlaceholder": "e.g. 10",
+      "rpmUnit": "req/min",
       "rpd": "RPD",
+      "rpdPlaceholder": "e.g. 250",
+      "rpdUnit": "req/day",
       "onFreeTier": "Free Tier",
       "noPolicies": "No policies configured. Run the migration to seed defaults.",
       "loadingProviders": "Loading providers…",
@@ -423,6 +467,8 @@
       "syncKeyHint": "Used only to fetch the global model list. Per-provider keys are stored separately.",
       "freeTierDesc": "Mark as Google free-tier project — rate limits are managed globally in the Gemini Policies section.",
       "apiKeyHint": "Rate limits are per Google project, not per key. Use keys from different accounts for rolling.",
+      "namePlaceholder": "e.g. gemini-prod",
+      "apiKeyPlaceholder": "AIza…",
       "keepExistingKey": "leave blank to keep existing",
       "globalFallbackHint": "Use * as a global fallback for models without a specific row.",
       "syncSection": "Global Gemini Model Sync",
@@ -504,10 +550,10 @@
     "avgLatency": "Avg Latency",
     "totalTok": "Total Tokens",
     "finishReasonTitle": "Finish Reasons",
-    "finishStop": "stop",
-    "finishLength": "length",
-    "finishError": "error",
-    "finishCancelled": "cancelled",
+    "finishStop": "Stop",
+    "finishLength": "Length",
+    "finishError": "Error",
+    "finishCancelled": "Cancelled",
     "breakdownTitle": "Usage Breakdown",
     "breakdownDesc": "Split by provider, API key, and model",
     "byProvider": "By Provider",
@@ -533,7 +579,11 @@
     "tokensCol": "Tokens",
     "callPct": "Call %",
     "avgLatencyCol": "Avg Latency",
-    "free": "Free"
+    "free": "Free",
+    "tokenComposition": "Token Composition",
+    "tokenCompositionDesc": "Prompt vs Completion token split",
+    "nTokens": "{{n}} tokens",
+    "totalNTokens": "Total {{n}} tokens"
   },
   "performance": {
     "title": "Performance",
@@ -564,7 +614,8 @@
     "modelLatency": "Model Avg Latency",
     "keyPerformance": "Key Performance",
     "keyCol": "Key",
-    "tpsHour": "Avg TPS / Hour"
+    "tpsHour": "Avg TPS / Hour",
+    "p95ReferenceLine": "P95 reference line"
   },
   "test": {
     "title": "Inference Test",
@@ -595,7 +646,12 @@
     "sourceFilter": "Source",
     "sourceAll": "All",
     "sourceApi": "API",
-    "sourceTest": "Test"
+    "sourceTest": "Test",
+    "imageAttach": "Attach images",
+    "imageRemove": "Remove",
+    "imageCompressing": "Compressing…",
+    "imageTooLarge": "Image exceeds 10 MB limit",
+    "imageTooMany": "Maximum 4 images (Ollama limit)"
   },
   "apiDocs": {
     "title": "API Documentation",
@@ -666,7 +722,10 @@
     "position": "Position",
     "createFailed": "Failed to create account",
     "creating": "Creating…",
-    "tokenWarning": "This token will only be shown once. Copy it now and share it securely."
+    "tokenWarning": "This token will only be shown once. Copy it now and share it securely.",
+    "roleAdmin": "Admin",
+    "roleSuper": "Super",
+    "deleteConfirm": "Delete account {{name}}? This action cannot be undone."
   },
   "audit": {
     "title": "Audit Log",
@@ -682,6 +741,11 @@
     "filterResource": "Filter by resource",
     "allActions": "All actions",
     "allResources": "All resources"
+  },
+  "errorPage": {
+    "title": "Something went wrong",
+    "fallbackMessage": "An unexpected error occurred.",
+    "tryAgain": "Try Again"
   },
   "metrics": {
     "memTotal": "Total RAM",

@@ -1,6 +1,6 @@
 # Web — API Test Panel
 
-> SSOT | Last Updated: 2026-03-04 (rev: JWT-only; sequential run tabs; no localStorage reconnect)
+> SSOT | **Last Updated**: 2026-03-04 (rev: JWT-only; sequential run tabs; no localStorage reconnect)
 
 ## Task Guide
 

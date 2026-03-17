@@ -1,3 +1,5 @@
+import { tokens } from './design-tokens'
+
 /** Single source of truth for the Veronex backend URL. */
 export const BASE_API_URL =
   process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
@@ -14,16 +16,25 @@ export const PROVIDER_BADGE: Record<string, string> = {
 
 /** Provider type → CSS custom-property chart colour. */
 export const PROVIDER_COLORS: Record<string, string> = {
-  ollama: 'var(--theme-primary)',
-  gemini: 'var(--theme-status-info)',
+  ollama: tokens.brand.primary,
+  gemini: tokens.status.info,
+}
+
+/** Job status → chart/SVG colour (CSS variable). */
+export const JOB_STATUS_COLORS: Record<string, string> = {
+  completed: tokens.status.success,
+  failed:    tokens.status.error,
+  running:   tokens.status.info,
+  cancelled: tokens.status.cancelled,
+  pending:   tokens.status.warning,
 }
 
 /** Finish reason → chart colour. */
 export const FINISH_COLORS: Record<string, string> = {
-  stop:      'var(--theme-status-success)',
-  length:    'var(--theme-status-warning)',
-  error:     'var(--theme-status-error)',
-  cancelled: 'var(--theme-text-secondary)',
+  stop:      tokens.status.success,
+  length:    tokens.status.warning,
+  error:     tokens.status.error,
+  cancelled: tokens.text.secondary,
 }
 
 /** Finish reason → Tailwind badge class. */
@@ -34,6 +45,26 @@ export const FINISH_BG: Record<string, string> = {
   cancelled: 'bg-muted text-muted-foreground border-border',
 }
 
+// ── Image defaults ──────────────────────────────────────────────────────────
+
+/** Default max images per request (matches Rust LabSettings::default()). */
+export const DEFAULT_MAX_IMAGES = 4
+
+/** Upper bound for max_images_per_request setting. */
+export const MAX_IMAGES_LIMIT = 20
+
+/** Default max image base64 bytes (matches Rust LabSettings::default()). */
+export const DEFAULT_MAX_IMAGE_B64_BYTES = 2 * 1024 * 1024
+
+/** Max file size before compression (UX guard, not a security boundary). */
+export const MAX_FILE_BYTES = 10 * 1024 * 1024
+
+/** Delay (ms) before invalidating queries after a sync operation. */
+export const SYNC_INVALIDATE_DELAY_MS = 3000
+
+/** Duration (ms) to show copy-success feedback before resetting. */
+export const COPY_FEEDBACK_MS = 2000
+
 /** Stale time for data that changes infrequently (keys, usage, models). */
 export const STALE_TIME_SLOW = 59_000
 
@@ -42,6 +73,12 @@ export const STALE_TIME_FAST = 29_000
 
 /** Refetch interval for near-realtime data. */
 export const REFETCH_INTERVAL_FAST = 30_000
+
+/** Refetch interval for data that changes infrequently (keys, usage, models). */
+export const REFETCH_INTERVAL_SLOW = 60_000
+
+/** Refetch interval for historical data (power history, metric history). */
+export const REFETCH_INTERVAL_HISTORY = 5 * 60_000
 
 // ── Metric thresholds — SSOT for colour-coded health indicators ─────────────
 
@@ -73,28 +110,28 @@ export const ROLE_STYLES: Record<string, string> = {
 /** Provider status → dot indicator class (solid bg). */
 export const PROVIDER_STATUS_DOT: Record<string, string> = {
   online:   'h-2 w-2 rounded-full bg-status-success shrink-0',
-  degraded: 'h-2 w-2 rounded-full bg-status-warn shrink-0',
+  degraded: 'h-2 w-2 rounded-full bg-status-warning shrink-0',
   offline:  'h-2 w-2 rounded-full bg-status-error shrink-0',
 }
 
 /** Provider status → dot indicator class (muted offline variant). */
 export const PROVIDER_STATUS_DOT_ALT: Record<string, string> = {
   online:   'h-2 w-2 rounded-full bg-status-success shrink-0',
-  degraded: 'h-2 w-2 rounded-full bg-status-warn shrink-0',
+  degraded: 'h-2 w-2 rounded-full bg-status-warning shrink-0',
   offline:  'h-2 w-2 rounded-full bg-muted-foreground/40 shrink-0',
 }
 
 /** Provider status → badge class. */
 export const PROVIDER_STATUS_BADGE: Record<string, string> = {
   online:   'text-status-success-fg border-status-success/40 text-[10px]',
-  degraded: 'text-status-warn-fg border-status-warn/40 text-[10px]',
+  degraded: 'text-status-warning-fg border-status-warning/40 text-[10px]',
   offline:  'text-status-error-fg border-status-error/40 text-[10px]',
 }
 
 /** Provider status → text colour class. */
 export const PROVIDER_STATUS_TEXT: Record<string, string> = {
   online:   'text-status-success-fg',
-  degraded: 'text-status-warn-fg',
+  degraded: 'text-status-warning-fg',
   offline:  'text-muted-foreground',
 }
 
