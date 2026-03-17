@@ -221,6 +221,7 @@ services:
       REPLICA_COUNT: "1"
       HEALTH_PORT: "9091"
       RUST_LOG: info
+      VALKEY_URL: redis://valkey:6379/0
     ports:
       - "9091:9091"
     depends_on:
