@@ -327,7 +327,13 @@
       "notConfigured": "not configured",
       "unreachable": "unreachable",
       "nodeExporterHint": "CPU, memory, and GPU metrics are scraped from this endpoint (live + OTel pipeline).",
-      "nodeExporterOptional": "optional"
+      "nodeExporterOptional": "optional",
+      "verifyConnection": "Verify",
+      "verifying": "Verifying…",
+      "connected": "Connected",
+      "connectionFailed": "Connection failed",
+      "duplicateUrl": "This URL is already registered",
+      "verifyFirst": "Verify connection before registering"
     },
     "ollama": {
       "title": "Ollama Providers",
@@ -377,7 +383,13 @@
       "freeTier": "Free Tier",
       "freeTierDesc": "Reserve this provider for free-tier API key requests.",
       "noBackends": "No Ollama providers registered",
-      "noBackendsHint": "Add a local Ollama server to start routing inference."
+      "noBackendsHint": "Add a local Ollama server to start routing inference.",
+      "verifyConnection": "Verify",
+      "verifying": "Verifying…",
+      "connected": "Connected",
+      "connectionFailed": "Connection failed",
+      "duplicateUrl": "This URL is already registered",
+      "verifyFirst": "Verify connection before registering"
     },
     "capacity": {
       "title": "Concurrency Control",
