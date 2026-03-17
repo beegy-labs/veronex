@@ -150,15 +150,17 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/dashboard/performance", get(dashboard_handlers::get_performance))
         // Provider management
         .route("/v1/providers", get(provider_handlers::list_providers).post(provider_handlers::register_provider))
+        .route("/v1/providers/verify", post(provider_handlers::verify_provider))
+        .route("/v1/providers/sync", post(provider_handlers::sync_all_providers_handler))
         .route("/v1/providers/{id}", delete(provider_handlers::delete_provider).patch(provider_handlers::update_provider))
         .route("/v1/providers/{id}/sync", post(provider_handlers::sync_single_provider))
         .route("/v1/providers/{id}/models", get(provider_handlers::list_provider_models))
-        .route("/v1/providers/sync", post(provider_handlers::sync_all_providers_handler))
         .route("/v1/providers/{id}/key", get(provider_handlers::reveal_provider_key))
         .route("/v1/providers/{id}/selected-models", get(model_selection_handlers::list_selected_models))
         .route("/v1/providers/{id}/selected-models/{model_name}", patch(model_selection_handlers::set_model_enabled))
         // GPU server management
         .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers).post(gpu_server_handlers::register_gpu_server))
+        .route("/v1/servers/verify", post(gpu_server_handlers::verify_gpu_server))
         .route(
             "/v1/servers/{id}",
             patch(gpu_server_handlers::update_gpu_server).delete(gpu_server_handlers::delete_gpu_server),
