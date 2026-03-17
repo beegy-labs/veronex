@@ -152,6 +152,12 @@ async fn poll_node_exporter_metrics(
 /// respect soft/hard thermal limits without any additional network calls.
 ///
 /// Exits cleanly when `shutdown` is cancelled.
+/// Outcome of a single provider liveness check.
+struct ProviderCheck {
+    provider:   LlmProvider,
+    new_status: LlmProviderStatus,
+}
+
 pub async fn run_health_checker_loop(
     registry:           Arc<dyn LlmProviderRegistry>,
     gpu_server_registry: Arc<dyn GpuServerRegistry>,
@@ -195,12 +201,6 @@ pub async fn run_health_checker_loop(
         //
         // Fallback (when Valkey is absent or heartbeat key is missing):
         //   Direct HTTP probe via check_provider() — same behaviour as before.
-
-        /// Result of a single provider check (status + optional HW poll needed).
-        struct ProviderCheck {
-            provider: LlmProvider,
-            new_status: LlmProviderStatus,
-        }
 
         let checks: Vec<ProviderCheck> = if let Some(ref pool) = valkey_pool {
             use fred::prelude::*;
@@ -279,8 +279,6 @@ pub async fn run_health_checker_loop(
             let vram_pool         = vram_pool.clone();
 
             set.spawn(async move {
-                // 1. Connectivity health check result (already resolved above)
-                let new_status = new_status;
                 if new_status != provider.status {
                     tracing::info!(
                         provider_id = %provider.id,
@@ -301,9 +299,16 @@ pub async fn run_health_checker_loop(
                             _ => 0,
                         };
                         if delta != 0 {
-                            let _: Result<i64, _> = pool
-                                .incr_by(valkey_keys::PROVIDERS_ONLINE_COUNTER, delta)
-                                .await;
+                            if let Err(e) = pool
+                                .incr_by::<i64, _>(valkey_keys::PROVIDERS_ONLINE_COUNTER, delta)
+                                .await
+                            {
+                                tracing::warn!(
+                                    provider_id = %provider.id,
+                                    delta,
+                                    "failed to update providers online counter: {e}"
+                                );
+                            }
                         }
                     }
                 }
@@ -336,8 +341,8 @@ pub async fn run_health_checker_loop(
                                         "HARD THROTTLE: dispatch suspended, cooldown active"
                                     );
                                     use fred::prelude::*;
-                                    let _: () = pool
-                                        .set(
+                                    if let Err(e) = pool
+                                        .set::<(), _, _>(
                                             &valkey_keys::thermal_throttle(provider.id),
                                             "hard",
                                             Some(Expiration::EX(360)),
@@ -345,7 +350,9 @@ pub async fn run_health_checker_loop(
                                             false,
                                         )
                                         .await
-                                        .unwrap_or(());
+                                    {
+                                        tracing::warn!(provider = %provider.name, "failed to set thermal throttle key: {e}");
+                                    }
                                 }
                                 ThrottleLevel::Cooldown => {
                                     tracing::warn!(
@@ -376,10 +383,12 @@ pub async fn run_health_checker_loop(
                                         "throttle lifted — normal ops"
                                     );
                                     use fred::prelude::*;
-                                    let _: () = pool
+                                    if let Err(e) = pool
                                         .del::<(), _>(&valkey_keys::thermal_throttle(provider.id))
                                         .await
-                                        .unwrap_or(());
+                                    {
+                                        tracing::warn!(provider = %provider.name, "failed to del thermal throttle key: {e}");
+                                    }
                                 }
                             }
                         }

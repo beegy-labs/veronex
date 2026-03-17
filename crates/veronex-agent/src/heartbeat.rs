@@ -33,12 +33,15 @@ pub async fn set_online(pool: &Pool, provider_id: &str, ttl_secs: i64) {
         )
         .await;
     if let Err(e) = result {
-        tracing::warn!(provider_id, "heartbeat set failed: {e}");
+        tracing::warn!(provider_id = %provider_id, "heartbeat set failed: {e}");
     }
 }
 
 /// Connect to Valkey and return a connection pool.
 /// Returns `None` (and logs a warning) when connection fails.
+///
+/// `set_online` and `connect` are not unit-tested: they require a live Valkey
+/// connection (external dependency → integration layer per testing-strategy.md).
 pub async fn connect(url: &str) -> Option<Pool> {
     let config = match fred::types::config::Config::from_url(url) {
         Ok(c) => c,
@@ -67,4 +70,24 @@ pub async fn connect(url: &str) -> Option<Pool> {
     }
     tracing::info!(url, "heartbeat: connected to Valkey");
     Some(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// key() must produce the canonical format consumed by veronex MGET.
+    /// veronex::valkey_keys::provider_heartbeat() generates the same prefix —
+    /// this test guards against drift between the two crates.
+    #[test]
+    fn key_format_matches_veronex_convention() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        assert_eq!(key(id), "veronex:provider:hb:550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[test]
+    fn key_prefix_is_stable() {
+        let id = "abc";
+        assert!(key(id).starts_with("veronex:provider:hb:"));
+    }
 }

@@ -24,10 +24,13 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   // Prefetch the server list as soon as the authenticated shell mounts so that
   // dashboard's dependent per-server queries don't have to wait for it.
+  // isLoggedIn() reads a cookie synchronously — it is not React state, so it is
+  // intentionally omitted from the dependency array (pure read, no subscription).
   useEffect(() => {
     if (!isLoginPage && !isSetupPage && isLoggedIn()) {
       queryClient.prefetchQuery(serversQuery)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryClient, isLoginPage, isSetupPage])
 
   useEffect(() => {

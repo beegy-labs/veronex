@@ -358,6 +358,31 @@ Used by `set_auth_cookies()` in `auth_handlers.rs`. Never hardcode cookie TTLs.
 
 Called on provider register and update. See `auth/security.md` for full SSRF details.
 
+## Provider Liveness — Push Model (Heartbeat)
+
+At scale (100+ providers) do NOT poll providers directly from veronex.
+Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
+
+| Component | Responsibility |
+|-----------|---------------|
+| `veronex-agent/src/heartbeat.rs` | `set_online(pool, provider_id, ttl_secs)` after each successful Ollama scrape |
+| `valkey_keys::provider_heartbeat(id)` | Key SSOT: `veronex:provider:hb:{uuid}` |
+| `health_checker.rs` | MGET all known heartbeat keys → one round-trip; missing key = offline |
+| `valkey_keys::PROVIDERS_ONLINE_COUNTER` | `INCR`/`DECR` atomically on status transitions → O(1) dashboard reads |
+
+**TTL rule**: `heartbeat_ttl ≥ 3 × scrape_interval` — survives 2 missed cycles.
+
+**Fallback**: when Valkey is absent, health_checker falls back to semaphore-limited (64) concurrent HTTP probes.
+
+```rust
+// Reading liveness — O(1) Valkey instead of N × HTTP
+let keys: Vec<String> = active.iter().map(|p| valkey_keys::provider_heartbeat(p.id)).collect();
+let values: Result<Vec<Option<String>>, _> = pool.mget(keys).await;
+// Some(str) = online, None = TTL expired = offline
+```
+
+**Key format test**: `heartbeat::key()` is pure — test it to guard crate-boundary drift.
+
 ## SSE Error Sanitization
 
 Use `sanitize_sse_error()` from `handlers.rs` for all SSE/NDJSON error output:
