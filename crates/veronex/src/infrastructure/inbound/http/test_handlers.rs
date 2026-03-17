@@ -28,14 +28,14 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, JobSource, ProviderType};
+use crate::domain::enums::{ApiFormat, FinishReason, JobSource, ProviderType};
 use super::constants::{PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
 use crate::domain::value_objects::JobId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 
 use super::cancel_guard::CancelOnDrop;
 use super::handlers::SseStream;
-use super::openai_sse_types::{ChunkChoice, CompletionChunk, DeltaContent};
+use super::openai_sse_types::{ChunkChoice, CompletionChunk, DeltaContent, SERVICE_TIER_DEFAULT, SYSTEM_FINGERPRINT};
 use super::state::AppState;
 
 // ── Shared request types ───────────────────────────────────────────────────────
@@ -45,6 +45,8 @@ pub struct TestCompletionRequest {
     pub model: String,
     pub messages: Vec<TestChatMessage>,
     pub provider_type: Option<String>,
+    #[serde(default)]
+    pub images: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -82,6 +84,15 @@ pub async fn test_completions(
             .into_response();
     }
 
+    // Validate images against lab_settings
+    if req.images.is_some() {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        if let Some(msg) = super::inference_helpers::validate_images(&req.images, &lab) {
+            return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": {"message": msg}}))).into_response();
+        }
+    }
+
     let (provider_type, gemini_tier) = match req.provider_type.as_deref().unwrap_or(PROVIDER_OLLAMA) {
         "gemini-free" => (ProviderType::Gemini, Some(GEMINI_TIER_FREE.to_string())),
         PROVIDER_GEMINI => (ProviderType::Gemini, None),
@@ -106,6 +117,9 @@ pub async fn test_completions(
             request_path: Some("/v1/test/completions".to_string()),
             conversation_id: None,
             key_tier: None,
+            images: req.images,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {
@@ -136,11 +150,14 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
                     object: "chat.completion.chunk",
                     created,
                     model: Some(model.clone()),
+                    service_tier: Some(SERVICE_TIER_DEFAULT),
                     choices: vec![ChunkChoice {
                         index: 0,
                         delta: DeltaContent::default(),
-                        finish_reason: Some("stop".to_string()),
+                        finish_reason: Some(FinishReason::Stop.as_str().to_string()),
                     }],
+                    system_fingerprint: Some(SYSTEM_FINGERPRINT),
+                    usage: None,
                 };
                 Ok(Event::default().data(serde_json::to_string(&stop_chunk).unwrap_or_default()))
             }
@@ -150,11 +167,14 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
                     object: "chat.completion.chunk",
                     created,
                     model: Some(model.clone()),
+                    service_tier: Some(SERVICE_TIER_DEFAULT),
                     choices: vec![ChunkChoice {
                         index: 0,
                         delta: DeltaContent { content: Some(token.value), ..Default::default() },
                         finish_reason: None,
                     }],
+                    system_fingerprint: Some(SYSTEM_FINGERPRINT),
+                    usage: None,
                 };
                 Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
             }
@@ -300,6 +320,9 @@ pub async fn test_ollama_chat(
             request_path: Some("/v1/test/api/chat".to_string()),
             conversation_id: None,
             key_tier: None,
+            images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {
@@ -352,6 +375,9 @@ pub async fn test_ollama_generate(
             request_path: Some("/v1/test/api/generate".to_string()),
             conversation_id: None,
             key_tier: None,
+            images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {
@@ -534,6 +560,9 @@ pub async fn test_gemini_request(
             request_path: Some("/v1/test/v1beta/models".to_string()),
             conversation_id: None,
             key_tier: None,
+            images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {

@@ -124,10 +124,12 @@ pub struct JobSummary {
     pub has_tool_calls: bool,
     /// Estimated API cost in USD. $0.00 for Ollama (self-hosted). None = no pricing data.
     pub estimated_cost_usd: Option<f64>,
+    /// Name of the provider (Ollama server) that processed this job.
+    pub provider_name: Option<String>,
 }
 
 /// Build a `JobSummary` from a `JobRowCommon` and a `has_tool_calls` flag.
-pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool) -> JobSummary {
+pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, provider_name: Option<String>) -> JobSummary {
     let tps = c.tps();
     JobSummary {
         id: c.id.to_string(),
@@ -148,5 +150,6 @@ pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool) -> 
         request_path: c.request_path,
         has_tool_calls,
         estimated_cost_usd: c.estimated_cost_usd,
+        provider_name,
     }
 }

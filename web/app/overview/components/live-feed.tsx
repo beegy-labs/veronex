@@ -1,27 +1,21 @@
 'use client'
 
-import { useMemo } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from '@/i18n'
 import type { FlowEvent } from '@/hooks/use-inference-stream'
 import { CheckCircle2, XCircle, Loader2, Ban, Clock } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { fmtMsNullable } from '@/lib/chart-theme'
-
-/* ─── helpers ─────────────────────────────────────────────── */
-function timeAgo(ts: number): string {
-  const s = Math.floor((Date.now() - ts) / 1000)
-  if (s < 5)  return 'just now'
-  if (s < 60) return `${s}s ago`
-  return `${Math.floor(s / 60)}m ago`
-}
+import { fmtTimeAgo } from '@/lib/date'
+import { tokens } from '@/lib/design-tokens'
 
 function statusDotColor(status: string): string {
   switch (status) {
-    case 'completed': return 'var(--theme-status-success)'
-    case 'failed':    return 'var(--theme-status-error)'
-    case 'running':   return 'var(--theme-status-info)'
-    case 'cancelled': return 'var(--theme-status-cancelled)'
-    default:          return 'var(--theme-status-warning)'
+    case 'completed': return tokens.status.success
+    case 'failed':    return tokens.status.error
+    case 'running':   return tokens.status.info
+    case 'cancelled': return tokens.status.cancelled
+    default:          return tokens.status.warning
   }
 }
 
@@ -41,8 +35,15 @@ interface Props {
   events: FlowEvent[]
 }
 
-export function LiveFeed({ events }: Props) {
+export const LiveFeed = memo(function LiveFeed({ events }: Props) {
   const { t } = useTranslation()
+
+  // Tick every 10s so displayed "X ago" labels age without waiting for new events.
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => tick(n => n + 1), 10_000)
+    return () => clearInterval(id)
+  }, [])
 
   // Show only enqueue-phase events (job arrivals) — but display CURRENT status.
   // events are newest-first, so the first occurrence of a jobId is its latest state.
@@ -72,9 +73,9 @@ export function LiveFeed({ events }: Props) {
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span
                 className="h-1.5 w-1.5 rounded-full animate-pulse"
-                style={{ background: 'var(--theme-status-success)' }}
+                style={{ background: tokens.status.success }}
               />
-              live
+              {t('overview.liveIndicator')}
             </span>
           )}
         </div>
@@ -108,14 +109,14 @@ export function LiveFeed({ events }: Props) {
                         {ev.model}
                       </td>
                       {/* Provider */}
-                      <td className="py-2 px-2 text-muted-foreground capitalize">
+                      <td className="py-2 px-2 text-muted-foreground">
                         {ev.provider}
                       </td>
                       {/* Current status — color + icon + text (WCAG 1.4.1) */}
                       <td className="py-2 px-2" style={{ color: statusDotColor(cur.status) }}>
                         <span className="flex items-center gap-1">
                           <StatusIcon status={cur.status} />
-                          {cur.status}
+                          {t(`jobs.statuses.${cur.status}` as Parameters<typeof t>[0])}
                         </span>
                       </td>
                       {/* Latency — populated once job completes */}
@@ -124,7 +125,7 @@ export function LiveFeed({ events }: Props) {
                       </td>
                       {/* Time ago (arrival time) */}
                       <td className="py-2 pl-2 pr-4 text-muted-foreground text-right whitespace-nowrap">
-                        {timeAgo(ev.ts)}
+                        {fmtTimeAgo(ev.ts, t)}
                       </td>
                     </tr>
                   )
@@ -136,4 +137,4 @@ export function LiveFeed({ events }: Props) {
       </CardContent>
     </Card>
   )
-}
+})

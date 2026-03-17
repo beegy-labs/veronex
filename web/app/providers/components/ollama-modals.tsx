@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { Provider, ProviderSelectedModel, OllamaProviderForModel } from '@/lib/types'
-import { selectedModelsQuery } from '@/lib/queries'
+import { selectedModelsQuery, ollamaModelProvidersQuery } from '@/lib/queries'
 import { Search, Cpu, ChevronLeft, ChevronRight, ListFilter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,7 +20,6 @@ import {
 import { useTranslation } from '@/i18n'
 import {
   PROVIDER_STATUS_DOT, PROVIDER_STATUS_BADGE, PROVIDER_STATUS_I18N,
-  STALE_TIME_FAST,
 } from '@/lib/constants'
 import { extractHost } from './shared'
 
@@ -33,22 +32,20 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
 
-  const { data, isLoading } = useQuery<{ providers: OllamaProviderForModel[] }>({
-    queryKey: ['ollama-model-providers', modelName],
-    queryFn: () => api.ollamaModelProviders(modelName),
-    staleTime: STALE_TIME_FAST,
-  })
+  const { data, isLoading } = useQuery(ollamaModelProvidersQuery(modelName))
 
   const allProviders = data?.providers ?? []
-  const filtered = allProviders.filter((b) =>
-    b.name.toLowerCase().includes(search.toLowerCase()) ||
-    b.url.toLowerCase().includes(search.toLowerCase())
-  )
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PROVIDERS_PAGE_SIZE))
-  const safePage = Math.min(page, totalPages)
-  const pageStart = (safePage - 1) * PROVIDERS_PAGE_SIZE
-  const pageItems = filtered.slice(pageStart, pageStart + PROVIDERS_PAGE_SIZE)
+  const { filtered, totalPages, safePage, pageStart, pageItems } = useMemo(() => {
+    const filtered = allProviders.filter((b) =>
+      b.name.toLowerCase().includes(search.toLowerCase()) ||
+      b.url.toLowerCase().includes(search.toLowerCase())
+    )
+    const totalPages = Math.max(1, Math.ceil(filtered.length / PROVIDERS_PAGE_SIZE))
+    const safePage = Math.min(page, totalPages)
+    const pageStart = (safePage - 1) * PROVIDERS_PAGE_SIZE
+    const pageItems = filtered.slice(pageStart, pageStart + PROVIDERS_PAGE_SIZE)
+    return { filtered, totalPages, safePage, pageStart, pageItems }
+  }, [allProviders, search, page])
 
   const handleSearch = (v: string) => { setSearch(v); setPage(1) }
 
@@ -126,6 +123,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
             </span>
             <div className="flex items-center gap-1">
               <Button variant="outline" size="icon" className="h-7 w-7"
+                aria-label={t('common.prevPage')}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}>
                 <ChevronLeft className="h-3.5 w-3.5" />
@@ -134,6 +132,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
                 {safePage} / {totalPages}
               </span>
               <Button variant="outline" size="icon" className="h-7 w-7"
+                aria-label={t('common.nextPage')}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}>
                 <ChevronRight className="h-3.5 w-3.5" />
@@ -226,6 +225,7 @@ export function OllamaProviderModelsModal({ provider, onClose }: { provider: Pro
                     toggleMutation.mutate({ modelName: m.model_name, isEnabled: checked })
                   }
                   disabled={toggleMutation.isPending}
+                  aria-label={m.model_name}
                 />
               </div>
             ))}

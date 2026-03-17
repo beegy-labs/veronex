@@ -40,6 +40,8 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           env:
+            - name: RUST_LOG
+              value: {{ .Values.veronexAnalytics.logLevel | default "info" | quote }}
             - name: PORT
               value: "{{ .Values.veronexAnalytics.service.port }}"
             - name: ANALYTICS_SECRET
@@ -61,5 +63,20 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          {{- if and .Values.externalSecrets.csi.enabled .Values.externalSecrets.csi.syncAsSecret }}
+          volumeMounts:
+            - name: secrets-store
+              mountPath: /mnt/secrets-store
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.veronexAnalytics.resources | nindent 12 }}
+      {{- if and .Values.externalSecrets.csi.enabled .Values.externalSecrets.csi.syncAsSecret }}
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Release.Name }}-veronex-secrets
+      {{- end }}

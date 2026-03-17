@@ -128,7 +128,7 @@ on_inference_failure(provider_id, model_name, error):
         entry.estimated_weight_mb *= 1.20
         entry.estimated_kv_per_slot_mb *= 1.20
         # safety_permil +50 (OOM_SAFETY_BUMP_PERMIL), max 500 (= 50%)
-        # AIMD 동시에 max_concurrent ×3/4 적용 (독립 경로)
+        # AIMD simultaneously applies max_concurrent ×3/4 (independent path)
         provider.safety_permil = min(provider.safety_permil + 50, 500)
 ```
 

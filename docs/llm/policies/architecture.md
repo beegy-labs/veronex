@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-13
+> SSOT | **Last Updated**: 2026-03-16 | Classification: Constitutional
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision
@@ -100,6 +100,11 @@ Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → ZADD queue:z
            → permit dropped (auto) → KV cache returned, weight stays
            → ObservabilityPort → veronex-analytics → ClickHouse
 
+Placement planner (dispatcher filter_candidates):
+  ④ STANDBY recovery: standby providers included in candidate list,
+    woken on demand in score_and_claim when queue_len > 0
+  ⑤ Scale-In: skipped entirely when ZSET queue has pending jobs (queue_len > 0)
+
 Direct path (dev mode, no Valkey):
   pick_and_build() → gate chain → try_reserve() → None = skip (VRAM unavailable)
 
@@ -179,3 +184,4 @@ Background loops:
 | `LabSettingsRepository` | `PostgresLabSettingsRepository` | Feature flags (gemini_function_calling) |
 | `ValkeyPort`             | `ValkeyAdapter`          | ZSET queue (enqueue/peek/claim/cancel), LIST legacy, KV, counters, pub/sub |
 | `MessageStore` | `S3MessageStore` | MinIO/AWS S3 message storage |
+| `ImageStore` | `S3ImageStore` | MinIO/AWS S3 image storage (WebP + thumbnails) |

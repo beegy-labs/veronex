@@ -51,6 +51,9 @@ config = "0.14"
 aws-sdk-s3 = "1"
 bytes = "1"
 
+# Image processing (WebP conversion for inference job thumbnails)
+image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png"] }
+
 # Allocator
 mimalloc = { version = "0.1", default-features = false }
 

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { fmtCompact, fmtMs, fmtMsAxis, fmtMsNullable, fmtPct, fmtMb, fmtMbShort } from '../chart-theme'
+import {
+  fmtCompact, fmtMs, fmtMsAxis, fmtMsNullable, fmtPct, fmtMb, fmtMbShort,
+  fmtPct1, fmtTps, fmtTemp, fmtPower, fmtTimeHHMM, fmtCost, fmtCost6, fmtKwh,
+} from '../chart-theme'
 
 describe('fmtCompact', () => {
   it('returns raw number below 1K', () => {
@@ -108,5 +111,109 @@ describe('fmtMbShort', () => {
     expect(fmtMbShort(1024)).toBe('1.0 GB')
     expect(fmtMbShort(2048)).toBe('2.0 GB')
     expect(fmtMbShort(8192)).toBe('8.0 GB')
+  })
+})
+
+describe('fmtPct1', () => {
+  it('formats with one decimal place and % suffix', () => {
+    expect(fmtPct1(0)).toBe('0.0%')
+    expect(fmtPct1(100)).toBe('100.0%')
+    expect(fmtPct1(12.345)).toBe('12.3%')
+    expect(fmtPct1(99.95)).toBe('100.0%')
+  })
+})
+
+describe('fmtTps', () => {
+  it('returns dash for zero', () => {
+    expect(fmtTps(0)).toBe('—')
+  })
+
+  it('returns dash for negative', () => {
+    expect(fmtTps(-1)).toBe('—')
+  })
+
+  it('formats tok/s with 2 decimal places', () => {
+    expect(fmtTps(23.456)).toBe('23.46 tok/s')
+    expect(fmtTps(1)).toBe('1.00 tok/s')
+  })
+})
+
+describe('fmtTemp', () => {
+  it('returns dash for null', () => {
+    expect(fmtTemp(null)).toBe('—')
+  })
+
+  it('returns dash for undefined', () => {
+    expect(fmtTemp(undefined)).toBe('—')
+  })
+
+  it('formats to whole degrees Celsius', () => {
+    expect(fmtTemp(72.3)).toBe('72°C')
+    expect(fmtTemp(0)).toBe('0°C')
+    expect(fmtTemp(85)).toBe('85°C')
+  })
+})
+
+describe('fmtPower', () => {
+  it('returns dash for null/undefined', () => {
+    expect(fmtPower(null)).toBe('—')
+    expect(fmtPower(undefined)).toBe('—')
+  })
+
+  it('formats to whole watts', () => {
+    expect(fmtPower(45.7)).toBe('46W')
+    expect(fmtPower(0)).toBe('0W')
+  })
+})
+
+describe('fmtTimeHHMM', () => {
+  it('formats ISO timestamp as HH:MM (zero-padded)', () => {
+    // Use a fixed UTC ISO string and check format structure
+    const result = fmtTimeHHMM('2026-01-15T09:05:00Z')
+    // Result is two-digit:two-digit
+    expect(result).toMatch(/^\d{2}:\d{2}$/)
+  })
+})
+
+describe('fmtCost', () => {
+  it('returns dash for null/undefined', () => {
+    expect(fmtCost(null)).toBe('—')
+    expect(fmtCost(undefined)).toBe('—')
+  })
+
+  it('returns "free" for zero', () => {
+    expect(fmtCost(0)).toBe('free')
+  })
+
+  it('formats with $ and 4 decimal places', () => {
+    expect(fmtCost(0.0012)).toBe('$0.0012')
+    expect(fmtCost(1.5)).toBe('$1.5000')
+  })
+})
+
+describe('fmtCost6', () => {
+  it('returns dash for null/undefined', () => {
+    expect(fmtCost6(null)).toBe('—')
+    expect(fmtCost6(undefined)).toBe('—')
+  })
+
+  it('returns "free" for zero', () => {
+    expect(fmtCost6(0)).toBe('free')
+  })
+
+  it('formats with $ and 6 decimal places', () => {
+    expect(fmtCost6(0.000042)).toBe('$0.000042')
+  })
+})
+
+describe('fmtKwh', () => {
+  it('returns dash for null/undefined', () => {
+    expect(fmtKwh(null)).toBe('—')
+    expect(fmtKwh(undefined)).toBe('—')
+  })
+
+  it('formats with 2 decimal places and kWh suffix', () => {
+    expect(fmtKwh(1.234)).toBe('1.23 kWh')
+    expect(fmtKwh(0)).toBe('0.00 kWh')
   })
 })

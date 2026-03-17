@@ -32,6 +32,11 @@ veronex:
   # Session grouping interval (seconds). Default: 86400 (24h)
   sessionGroupingIntervalSecs: ""
 
+  # Public URL for image storage (MinIO/S3).
+  # Used to construct URLs for job image thumbnails served to the browser.
+  # e.g. "https://s3.example.com/veronex-images" or "http://localhost:9010/veronex-images"
+  imagePublicUrl: ""
+
   otel:
     # gRPC endpoint (e.g. http://otel-collector:4317)
     endpoint: ""
@@ -50,6 +55,8 @@ veronex:
       cpu: "2"
       memory: 1Gi
 
+  logLevel: "info"  # RUST_LOG level: error, warn, info, debug, trace
+
   # Extra environment variables (key: value)
   env: {}
 
@@ -63,6 +70,8 @@ veronexAnalytics:
   service:
     type: ClusterIP
     port: 3003
+
+  logLevel: "info"  # RUST_LOG level: error, warn, info, debug, trace
 
   resources:
     requests:
@@ -81,9 +90,10 @@ veronexAgent:
     tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 1
-  # Scrape interval in milliseconds. Recommended: 15000 (15s) for production,
-  # 5000 (5s) for real-time dashboards, 500 for sub-second debugging.
-  scrapeIntervalMs: "15000"
+  # Scrape interval in milliseconds. Thermal protection runs inside the agent,
+  # so 60s is sufficient for metric collection.
+  scrapeIntervalMs: "60000"
+  healthPort: 9091
   resources:
     requests:
       cpu: 50m
@@ -161,13 +171,15 @@ minio:
   auth:
     rootUser: veronex
     rootPassword: ""  # REQUIRED — override in production
-  defaultBuckets: "veronex-messages"
+  defaultBuckets: "veronex-messages,veronex-images"
+  imageBucket: "veronex-images"
 
 externalMinio:
   endpoint: ""
   accessKey: ""
   secretKey: ""
   bucket: "veronex-messages"
+  imageBucket: "veronex-images"
   region: "us-east-1"
 
 # Redpanda chart uses strict schema — 'enabled' must be top-level to avoid validation error.
@@ -184,6 +196,13 @@ otelCollector:
     repository: otel/opentelemetry-collector-contrib
     tag: "0.123.0"
     pullPolicy: IfNotPresent
+
+  # Kafka/Redpanda auth — set securityProtocol to SASL_PLAINTEXT or SASL_SSL for external Kafka
+  kafka:
+    securityProtocol: PLAINTEXT   # PLAINTEXT | SASL_PLAINTEXT | SASL_SSL
+    saslMechanism: ""             # SCRAM-SHA-512 | SCRAM-SHA-256 | PLAIN
+    saslUsername: ""
+    saslPassword: ""
 
   resources:
     requests:
@@ -211,9 +230,11 @@ migrations:
     kafkaPassword: ""
     kafkaSecurityProtocol: SASL_PLAINTEXT
     kafkaSaslMechanism: SCRAM-SHA-512
-    retentionAnalyticsDays: 90
-    retentionMetricsDays: 30
-    retentionAuditDays: 365
+    retentionMetricsDays: 14
+    retentionLogsDays: 7
+    retentionInferenceDays: 90
+    retentionAuditDays: 90
+    retentionTracesDays: 7
 
 # ── ServiceAccount ───────────────────────────────────────────────────────────
 

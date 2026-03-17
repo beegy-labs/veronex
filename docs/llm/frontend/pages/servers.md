@@ -1,6 +1,6 @@
 # Web — Servers Page (/servers)
 
-> SSOT | **Last Updated**: 2026-03-04
+> SSOT | **Last Updated**: 2026-03-15 (rev: CPU Usage % chart in history modal)
 
 ## Task Guide
 
@@ -44,10 +44,10 @@ Physical GPU servers — one node-exporter per server.
 
 Name         node-exporter endpoint       Live Metrics (30s auto-refresh)    Registered  Actions
 ──────────────────────────────────────────────────────────────────────────────────────────────
-gpu-node-1   http://192.168.1.10:9100     MEM 28.5/64.0 GB  32%              Feb 26      [📊][✏️][🗑]
+gpu-node-1   http://192.168.1.10:9100     MEM 28.5/64.0 GB  32%              Feb 26      [History][Edit][Delete]
                                           CPU 32 cores
                                           GPU card0 · 32°C · 10W
-gpu-node-2   not configured               —                                   Feb 26      [📊][✏️][🗑]
+gpu-node-2   not configured               —                                   Feb 26      [History][Edit][Delete]
 
                  [← 1 / 2 →]   ← pagination controls (hidden when ≤ PAGE_SIZE rows)
 ```
@@ -96,7 +96,7 @@ Error → `unreachable` badge (`bg-status-error/10`) + retry button.
 ## ServerHistoryModal
 
 - Range tabs: 1h / 3h / 6h / 24h
-- Charts: Memory Used %, GPU Temperature (°C), GPU Power (W) — Recharts `LineChart`
+- Charts: Memory Used %, CPU Usage %, GPU Temperature (°C), GPU Power (W) — Recharts `LineChart`
 - Data: `GET /v1/servers/{id}/metrics/history?hours=N`
 - Sync button refreshes chart data
 

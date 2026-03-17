@@ -23,12 +23,14 @@ NODE_EXPORTER_LOCAL="${NODE_EXPORTER_LOCAL:-http://host.docker.internal:9100}"
 OLLAMA_REMOTE="${OLLAMA_REMOTE:-https://ollama.girok.dev}"
 NODE_EXPORTER_REMOTE="${NODE_EXPORTER_REMOTE:-http://192.168.1.21:9100}"
 
-USERNAME="${USERNAME:-admin}"
-_E2E_DEFAULT=admin2026!
+USERNAME="${USERNAME:-test}"
+_E2E_DEFAULT='test1234!'
 PASSWORD=${E2E_PASSWORD:-$_E2E_DEFAULT}
 unset _E2E_DEFAULT
 
 MODEL="${MODEL:-qwen3:8b}"
+# Additional models for multi-model inference tests (auto-detected from synced models)
+MODELS_EXTRA="${MODELS_EXTRA:-}"
 CONCURRENT="${CONCURRENT:-6}"
 SKIP_DB_RESET="${SKIP_DB_RESET:-0}"
 

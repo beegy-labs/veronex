@@ -16,25 +16,34 @@ import {
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
   AXIS_TICK, CURSOR_FILL,
-  fmtMs, fmtMsNullable, fmtCompact,
+  fmtMs, fmtMsNullable, fmtCompact, fmtTemp, fmtKwh,
 } from '@/lib/chart-theme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtHourLabel } from '@/lib/date'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
+import { PROVIDER_GEMINI, GPU_TEMP_CRITICAL, GPU_TEMP_WARNING } from '@/lib/constants'
+import { tokens } from '@/lib/design-tokens'
+import { getOllamaProviders, getGeminiProviders, successRateCls } from '@/lib/utils'
 import {
   RequestTrendSection, TopModelsSection, RecentJobsSection, TokenSummarySection,
 } from './dashboard-lower-sections'
 
 import {
   type ThermalLevel,
-  successRateCls, providerValueCls, pendingValueCls, latencyColor,
-  countByStatus,
+  providerValueCls, pendingValueCls, latencyColor,
   THERMAL_ROW_CLS, THERMAL_NAME_CLS,
-  StatSkeleton, ProviderRow, ThermalBadge, ConnectionDot,
+  StatSkeleton, ProviderRow, ThermalLevelBadge, ConnectionDot,
 } from './dashboard-helpers'
+import { SectionLabel } from '@/components/section-label'
+
+/* ─── constants ────────────────────────────────────────────── */
+const LATENCY_THRESHOLDS = [
+  { name: 'P50', key: 'p50_latency_ms' as const, warnMs: 1_000,  errMs:  3_000 },
+  { name: 'P95', key: 'p95_latency_ms' as const, warnMs: 2_000,  errMs:  5_000 },
+  { name: 'P99', key: 'p99_latency_ms' as const, warnMs: 5_000,  errMs: 10_000 },
+]
 
 /* ─── props ───────────────────────────────────────────────── */
 interface Props {
@@ -66,40 +75,47 @@ export function DashboardTab({
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   /* ── derived: providers ─────────────────────────────────── */
-  const LOCAL_TYPES = [PROVIDER_OLLAMA] as const
-  const localBs = providers?.filter(b => (LOCAL_TYPES as readonly string[]).includes(b.provider_type)) ?? []
-  const apiBs   = geminiEnabled
-    ? (providers?.filter(b => b.provider_type === PROVIDER_GEMINI) ?? [])
-    : []
-  // visibleBs = only providers that are currently shown (respects lab flags)
-  const visibleBs = [...localBs, ...apiBs]
-  const onlineAll = visibleBs.filter(b => b.status === 'online').length
-  const totalProv = visibleBs.length
+  const { localBs, apiBs, visibleBs, onlineAll, totalProv } = useMemo(() => {
+    const localBs = getOllamaProviders(providers)
+    const apiBs   = geminiEnabled ? getGeminiProviders(providers) : []
+    const visibleBs = [...localBs, ...apiBs]
+    return {
+      localBs,
+      apiBs,
+      visibleBs,
+      onlineAll: visibleBs.filter(b => b.status === 'online').length,
+      totalProv: visibleBs.length,
+    }
+  }, [providers, geminiEnabled])
 
   /* ── derived: server health (all servers) ───────────────── */
-  const serverStatus = (servers ?? []).map((s, i) => {
-    const m = serverMetricQueries[i]?.data
-    const connected = m?.scrape_ok === true
-    const maxTemp = connected && (m!.gpus?.length ?? 0) > 0
-      ? m!.gpus.reduce((max, g) => Math.max(max, g.temp_junction_c ?? g.temp_c ?? 0, g.temp_mem_c ?? 0), 0)
-      : null
-    const thermal: ThermalLevel = maxTemp == null ? 'unknown'
-      : maxTemp >= 90 ? 'critical'
-      : maxTemp >= 80 ? 'warning'
-      : 'normal'
-    return { id: s.id, name: s.name, connected, maxTemp, thermal }
-  })
+  const serverStatus = useMemo(() =>
+    (servers ?? []).map((s, i) => {
+      const m = serverMetricQueries[i]?.data
+      const connected = m?.scrape_ok === true
+      const maxTemp = connected && (m?.gpus?.length ?? 0) > 0
+        ? m?.gpus?.reduce((max, g) => Math.max(max, g.temp_junction_c ?? g.temp_c ?? 0, g.temp_mem_c ?? 0), 0) ?? null
+        : null
+      const thermal: ThermalLevel = maxTemp == null ? 'unknown'
+        : maxTemp >= GPU_TEMP_CRITICAL ? 'critical'
+        : maxTemp >= GPU_TEMP_WARNING ? 'warning'
+        : 'normal'
+      return { id: s.id, name: s.name, connected, maxTemp, thermal }
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [servers, serverMetricQueries],
+  )
 
-  // Server status counts
-  const connectedCount   = serverStatus.filter(s => s.connected).length
-  const unreachableCount = serverStatus.filter(s => !s.connected).length
-  const normalCount   = serverStatus.filter(s => s.thermal === 'normal').length
-  const warningCount  = serverStatus.filter(s => s.thermal === 'warning').length
-  const criticalCount = serverStatus.filter(s => s.thermal === 'critical').length
-
-  // Thermal alert — servers needing attention (≥80°C)
-  const hotServers = serverStatus.filter(s => s.thermal === 'warning' || s.thermal === 'critical')
-  const hasCritical = hotServers.some(s => s.thermal === 'critical')
+  // Server status counts + thermal alert — derived from memoized serverStatus
+  const { connectedCount, unreachableCount, normalCount, warningCount, criticalCount, hotServers, hasCritical } = useMemo(() => {
+    const connectedCount   = serverStatus.filter(s => s.connected).length
+    const unreachableCount = serverStatus.filter(s => !s.connected).length
+    const normalCount   = serverStatus.filter(s => s.thermal === 'normal').length
+    const warningCount  = serverStatus.filter(s => s.thermal === 'warning').length
+    const criticalCount = serverStatus.filter(s => s.thermal === 'critical').length
+    const hotServers = serverStatus.filter(s => s.thermal === 'warning' || s.thermal === 'critical')
+    return { connectedCount, unreachableCount, normalCount, warningCount, criticalCount, hotServers, hasCritical: hotServers.some(s => s.thermal === 'critical') }
+  }, [serverStatus])
 
   /* ── derived: power ─────────────────────────────────────── */
   const hasPowerData = serverMetricQueries.some(q =>
@@ -153,11 +169,14 @@ export function DashboardTab({
   const monthDelta    = kwhLastMonth != null && kwhLastMonth > 0 ? (kwhThisMonth ?? 0) - kwhLastMonth : null
 
   /* ── derived: charts ────────────────────────────────────── */
-  const trendData = perf?.hourly.map((h) => ({
-    hour:    fmtHourLabel(h.hour, tz),
-    total:   h.request_count,
-    success: h.success_count,
-  })) ?? []
+  const trendData = useMemo(() =>
+    (perf?.hourly ?? []).map((h) => ({
+      hour:    fmtHourLabel(h.hour, tz),
+      total:   h.request_count,
+      success: h.success_count,
+    })),
+    [perf?.hourly, tz],
+  )
 
   const modelBarData = useMemo<(ModelBreakdown & { label: string })[]>(() =>
     (breakdown?.by_model ?? [])
@@ -173,6 +192,7 @@ export function DashboardTab({
   )
 
   const recentJobs: Job[] = recentJobsData?.jobs ?? []
+  const perfMap = { daily: perf, weekly: perf7d, monthly: perf30d }
 
   /* ── render ─────────────────────────────────────────────── */
   return (
@@ -240,8 +260,8 @@ export function DashboardTab({
                 }`}
               >
                 <Thermometer className="h-3 w-3 flex-shrink-0" />
-                <span className="truncate max-w-[120px]">{s.name}</span>
-                {s.maxTemp != null && <span className="tabular-nums font-bold">{s.maxTemp.toFixed(0)}°C</span>}
+                <span className="truncate max-w-[40%]">{s.name}</span>
+                {s.maxTemp != null && <span className="tabular-nums font-bold">{fmtTemp(s.maxTemp)}</span>}
                 <span className="opacity-70">
                   {s.thermal === 'critical' ? t('overview.tempCritical') : t('overview.tempWarning')}
                 </span>
@@ -253,9 +273,9 @@ export function DashboardTab({
 
       {/* Section 2: Infrastructure */}
       <div>
-        <h2 className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground mb-3">
+        <SectionLabel as="h2" className="text-xs">
           {t('overview.infrastructure')}
-        </h2>
+        </SectionLabel>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 
           {/* Server Health — per-server status list */}
@@ -310,8 +330,8 @@ export function DashboardTab({
                     <div key={s.id} className={`flex items-center justify-between py-2 px-2 gap-2 rounded-sm ${THERMAL_ROW_CLS[s.thermal]}`}>
                       <span className={`text-sm font-medium truncate min-w-0 ${THERMAL_NAME_CLS[s.thermal]}`}>{s.name}</span>
                       <div className="flex items-center gap-3 flex-shrink-0">
-                        <ConnectionDot connected={s.connected} t={t} />
-                        <ThermalBadge level={s.thermal} temp={s.maxTemp} t={t} />
+                        <ConnectionDot connected={s.connected} />
+                        <ThermalLevelBadge level={s.thermal} temp={s.maxTemp} />
                       </div>
                     </div>
                   ))}
@@ -329,11 +349,11 @@ export function DashboardTab({
           <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
             <StatsCard
               title={t('overview.dailyPower')}
-              value={(hasPowerData || hasHistory) ? `${kwhToday.toFixed(2)} kWh` : '—'}
+              value={(hasPowerData || hasHistory) ? fmtKwh(kwhToday) : '—'}
               icon={<Zap className="h-5 w-5" />}
               subtitleNode={dailyDelta != null ? (
                 <span className={dailyDelta > 0 ? 'text-status-warning-fg' : 'text-status-success-fg'}>
-                  {dailyDelta > 0 ? '+' : ''}{dailyDelta.toFixed(2)} kWh {t('overview.sameDayLastWeek')}
+                  {dailyDelta > 0 ? '+' : ''}{fmtKwh(dailyDelta)} {t('overview.sameDayLastWeek')}
                 </span>
               ) : (
                 <span className="text-muted-foreground">
@@ -343,11 +363,11 @@ export function DashboardTab({
             />
             <StatsCard
               title={t('overview.weeklyPower')}
-              value={kwhThisWeek != null ? `${kwhThisWeek.toFixed(2)} kWh` : '—'}
+              value={fmtKwh(kwhThisWeek)}
               icon={<Zap className="h-5 w-5" />}
               subtitleNode={weekDelta != null ? (
                 <span className={weekDelta > 0 ? 'text-status-warning-fg' : weekDelta < 0 ? 'text-status-success-fg' : 'text-muted-foreground'}>
-                  {weekDelta > 0 ? '+' : ''}{weekDelta.toFixed(2)} kWh {t('overview.prevWeek')}
+                  {weekDelta > 0 ? '+' : ''}{fmtKwh(weekDelta)} {t('overview.prevWeek')}
                 </span>
               ) : (
                 <span className="text-muted-foreground">
@@ -359,11 +379,11 @@ export function DashboardTab({
             />
             <StatsCard
               title={t('overview.monthlyPower')}
-              value={kwhThisMonth != null ? `${kwhThisMonth.toFixed(2)} kWh` : '—'}
+              value={fmtKwh(kwhThisMonth)}
               icon={<Zap className="h-5 w-5" />}
               subtitleNode={monthDelta != null ? (
                 <span className={monthDelta > 0 ? 'text-status-warning-fg' : monthDelta < 0 ? 'text-status-success-fg' : 'text-muted-foreground'}>
-                  {monthDelta > 0 ? '+' : ''}{monthDelta.toFixed(2)} kWh {t('overview.prevMonth')}
+                  {monthDelta > 0 ? '+' : ''}{fmtKwh(monthDelta)} {t('overview.prevMonth')}
                 </span>
               ) : (
                 <span className="text-muted-foreground">
@@ -404,15 +424,18 @@ export function DashboardTab({
                 </tr>
                 <tr>
                   <td className="py-3 text-xs text-muted-foreground">{t('performance.successRate')}</td>
-                  {([perf, perf7d, perf30d] as const).map((d, i) => (
-                    <td key={i} className="py-3 text-right">
-                      {d != null ? (
-                        <span className={`inline-flex items-center justify-center rounded px-1.5 py-0.5 text-xs font-bold tabular-nums ${successRateCls(d.success_rate)}`}>
-                          {Math.round(d.success_rate)}%
-                        </span>
-                      ) : '—'}
-                    </td>
-                  ))}
+                  {(['daily', 'weekly', 'monthly'] as const).map((period) => {
+                    const d = perfMap[period]
+                    return (
+                      <td key={period} className="py-3 text-right">
+                        {d != null ? (
+                          <span className={`inline-flex items-center justify-center rounded px-1.5 py-0.5 text-xs font-bold tabular-nums ${successRateCls(d.success_rate)}`}>
+                            {Math.round(d.success_rate)}%
+                          </span>
+                        ) : '—'}
+                      </td>
+                    )
+                  })}
                 </tr>
               </tbody>
             </table>
@@ -435,18 +458,17 @@ export function DashboardTab({
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {([
-                  { name: 'P50', key: 'p50_latency_ms' as const, warnMs: 1000,  errMs: 3000 },
-                  { name: 'P95', key: 'p95_latency_ms' as const, warnMs: 2000,  errMs: 5000 },
-                  { name: 'P99', key: 'p99_latency_ms' as const, warnMs: 5000,  errMs: 10000 },
-                ]).map(({ name, key, warnMs, errMs }) => (
+                {LATENCY_THRESHOLDS.map(({ name, key, warnMs, errMs }) => (
                   <tr key={name}>
                     <td className="py-3 text-xs font-medium text-muted-foreground">{name}</td>
-                    {([perf, perf7d, perf30d] as const).map((d, i) => (
-                      <td key={i} className={`py-3 text-right font-bold tabular-nums ${latencyColor(d?.[key], warnMs, errMs)}`}>
-                        {d?.[key] != null ? fmtMs(d[key]!) : '—'}
-                      </td>
-                    ))}
+                    {(['daily', 'weekly', 'monthly'] as const).map((period) => {
+                      const d = perfMap[period]
+                      return (
+                        <td key={period} className={`py-3 text-right font-bold tabular-nums ${latencyColor(d?.[key], warnMs, errMs)}`}>
+                          {d?.[key] != null ? fmtMs(d[key]!) : '—'}
+                        </td>
+                      )
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -461,10 +483,10 @@ export function DashboardTab({
                     <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={38} tickFormatter={v => `${v}ms`} />
                     <Tooltip
                       contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE}
-                      formatter={(v) => [fmtMs(Number(v)), 'Avg'] as [string, string]}
+                      formatter={(v) => [fmtMs(Number(v)), t('performance.avgLatency')] as [string, string]}
                     />
-                    <Area type="monotone" dataKey="ms" stroke="var(--theme-status-warning)"
-                      fill="var(--theme-status-warning)" fillOpacity={0.1} strokeWidth={1.5} dot={false} />
+                    <Area type="monotone" dataKey="ms" stroke={tokens.status.warning}
+                      fill={tokens.status.warning} fillOpacity={0.1} strokeWidth={1.5} dot={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -481,9 +503,9 @@ export function DashboardTab({
           </CardHeader>
           <CardContent className="pt-0">
             <div className="divide-y divide-border">
-              <ProviderRow icon={<Server className="h-4 w-4" />} label={t('overview.localProviders')} providers={localBs} />
+              <ProviderRow Icon={Server} label={t('overview.localProviders')} providers={localBs} />
               {geminiEnabled && (
-                <ProviderRow icon={<Globe className="h-4 w-4" />} label={t('overview.apiProviders')} providers={apiBs} />
+                <ProviderRow Icon={Globe} label={t('overview.apiProviders')} providers={apiBs} />
               )}
             </div>
             <div className="mt-3 pt-2 border-t border-border">

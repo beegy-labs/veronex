@@ -15,6 +15,9 @@ use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 /// Timeout for preload requests (model loading can take minutes for large models).
 const PRELOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Timeout for `api/pull` requests (downloading large models can take hours).
+const PULL_TIMEOUT: Duration = Duration::from_secs(14400);
+
 /// Trigger model preload on an Ollama provider.
 ///
 /// Sets `is_preloading=true` before the request, restores to `false` on completion.
@@ -115,7 +118,7 @@ pub async fn pull_and_reset(
     match client
         .post(&url)
         .json(&serde_json::json!({"model": model, "stream": false}))
-        .timeout(Duration::from_secs(14400)) // 4h max for large models
+        .timeout(PULL_TIMEOUT)
         .send()
         .await
     {
@@ -138,7 +141,6 @@ pub async fn pull_and_reset(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use uuid::Uuid;
     use crate::infrastructure::outbound::capacity::vram_pool::VramPool;
     use crate::application::ports::outbound::concurrency_port::VramPoolPort;

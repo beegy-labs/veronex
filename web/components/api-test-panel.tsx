@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useReducer, useMemo } from 'react'
+import { useState, useRef, useEffect, useReducer, useMemo, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { isLoggedIn, getAuthUser } from '@/lib/auth'
 import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
@@ -8,7 +8,9 @@ import type { RetryParams } from '@/lib/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { BASE } from '@/lib/api'
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
+import { compressImage } from '@/lib/compress-image'
+import { PROVIDER_OLLAMA, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
+import { useLabSettings } from '@/components/lab-settings-provider'
 import type { OpenAIChunk, Run, ProviderOption } from '@/components/api-test-types'
 import { runsReducer, MAX_RUNS } from '@/components/api-test-types'
 import { ApiTestForm } from '@/components/api-test-form'
@@ -23,6 +25,7 @@ interface Props {
 
 export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const { t } = useTranslation()
+  const { labSettings } = useLabSettings()
 
   const authUser = getAuthUser()
 
@@ -30,6 +33,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const [providerType, setProviderType] = useState<string>(PROVIDER_OLLAMA)
   const [model, setModel] = useState('')
   const [prompt, setPrompt] = useState('')
+  const [images, setImages] = useState<string[]>([])       // raw base64 (no data URL prefix)
+  const [isCompressing, setIsCompressing] = useState(false)
 
   // ── Run state ─────────────────────────────────────────────────────────────────
   const [runs, dispatch] = useReducer(runsReducer, [])
@@ -173,6 +178,35 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     }
   }
 
+  // ── Image handlers ────────────────────────────────────────────────────────────
+  const maxImages = labSettings?.max_images_per_request ?? DEFAULT_MAX_IMAGES
+
+  const handleImageAdd = useCallback(async (files: FileList) => {
+    const remaining = maxImages - images.length
+    if (remaining <= 0) return
+
+    const toProcess = Array.from(files).slice(0, remaining)
+    const oversized = toProcess.filter((f) => f.size > MAX_FILE_BYTES)
+    if (oversized.length > 0) {
+      // Silently skip oversized files — UX toast would require a toast system
+      return
+    }
+
+    setIsCompressing(true)
+    try {
+      const compressed = await Promise.all(toProcess.map((f) => compressImage(f)))
+      setImages((prev) => [...prev, ...compressed].slice(0, maxImages))
+    } catch {
+      // Compression failure — skip silently, file not added
+    } finally {
+      setIsCompressing(false)
+    }
+  }, [images.length, maxImages])
+
+  const handleImageRemove = useCallback((index: number) => {
+    setImages((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
   // ── Run handler ───────────────────────────────────────────────────────────────
   async function handleRun() {
     if (!prompt.trim() || !model) return
@@ -186,6 +220,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     }
 
     const runId = nextIdRef.current++
+    const currentImages = images.length > 0 ? [...images] : undefined
+
     const newRun: Run = {
       id: runId,
       prompt: prompt.trim(),
@@ -194,6 +230,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
       status: 'streaming',
       text: '',
       errorMsg: '',
+      images: currentImages,
     }
     dispatch({ type: 'ADD', run: newRun })
     setActiveRunId(runId)
@@ -210,6 +247,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           messages: [{ role: 'user', content: prompt.trim() }],
           provider_type: providerType,
           stream: true,
+          ...(currentImages && currentImages.length > 0 && { images: currentImages }),
         }),
       })
 
@@ -263,6 +301,9 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           providerType={providerType}
           model={model}
           prompt={prompt}
+          images={images}
+          maxImages={maxImages}
+          isCompressing={isCompressing}
           availableOptions={availableOptions}
           availableModels={availableModels}
           isGeminiProvider={isGeminiProvider}
@@ -272,6 +313,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           onProviderChange={setProviderType}
           onModelChange={setModel}
           onPromptChange={setPrompt}
+          onImageAdd={handleImageAdd}
+          onImageRemove={handleImageRemove}
           onRun={handleRun}
         />
 

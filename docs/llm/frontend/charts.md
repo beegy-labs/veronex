@@ -89,13 +89,13 @@ Recharts `formatter` signature: `(value, name, props) => displayValue | [display
 **Rule**: When you only want to format the value (not override the name), return a **string**:
 
 ```tsx
-// ✅ Correct — original series name is preserved
+// Correct — original series name is preserved
 <Tooltip formatter={(v: number) => fmt(v)} />
 
-// ❌ Wrong — name becomes empty, shows ": 6" instead of "error: 6"
+// WRONG: Wrong — name becomes empty, shows ": 6" instead of "error: 6"
 <Tooltip formatter={(v: number) => [fmt(v), '']} />
 
-// ✅ OK — explicit name override (e.g. for i18n)
+// OK — explicit name override (e.g. for i18n)
 <Tooltip formatter={(v: number) => [ms(v), t('performance.avgLatency')]} />
 ```
 
@@ -154,15 +154,15 @@ import { DonutChart } from '@/components/donut-chart'
 ### What NOT to do
 
 ```tsx
-// ❌ Never inline PieChart in page files
+// WRONG: Never inline PieChart in page files
 <PieChart>
   <Pie ...>
-    <Cell fill="#333" />   // ❌ hardcoded color
+    <Cell fill="#333" />   // WRONG: hardcoded color
   </Pie>
-  <Tooltip contentStyle={TOOLTIP_STYLE} />  // ❌ missing labelStyle / itemStyle
+  <Tooltip contentStyle={TOOLTIP_STYLE} />  // WRONG: missing labelStyle / itemStyle
 </PieChart>
 
-// ✅ Always use DonutChart
+// Always use DonutChart
 <DonutChart data={slices} size={160} formatter={fmt} />
 ```
 

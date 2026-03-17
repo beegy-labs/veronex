@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next'
 import type { Timezone } from '@/components/timezone-provider'
 
 /**
@@ -35,6 +36,14 @@ export function fmtDateOnly(iso: string, tz: Timezone): string {
 /** "1,234,567" — integer count with comma separators (SSOT for all numeric counts) */
 export function fmtNumber(n: number): string {
   return new Intl.NumberFormat('en-US').format(n)
+}
+
+/** "just now" / "5s ago" / "3m ago" — live-feed row elapsed time (seconds resolution) */
+export function fmtTimeAgo(ts: number, t: TFunction): string {
+  const s = Math.floor((Date.now() - ts) / 1000)
+  if (s < 5)  return t('overview.timeAgoJustNow')
+  if (s < 60) return t('overview.timeAgoSeconds', { s })
+  return t('overview.timeAgoMinutes', { m: Math.floor(s / 60) })
 }
 
 /** "3/1 14h" — hourly chart x-axis labels */

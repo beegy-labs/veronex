@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { keysQuery } from '@/lib/queries'
+import { keysQuery, resourceAuditQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, AuditEvent, CreateKeyResponse } from '@/lib/types'
 import { Plus, Trash2, BarChart2, RefreshCw, History } from 'lucide-react'
@@ -89,7 +89,7 @@ function CreateKeyModal({
               id="key-tenant"
               value={tenantId}
               onChange={(e) => setTenantId(e.target.value)}
-              placeholder="default"
+              placeholder={t('keys.tenantIdPlaceholder')}
             />
           </div>
 
@@ -136,7 +136,7 @@ function CreateKeyModal({
           </p>
         )}
 
-        <DialogFooter className="gap-3">
+        <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate()} disabled={!name.trim() || mutation.isPending}>
             {mutation.isPending ? t('keys.creating') : t('keys.createKey')}
@@ -183,10 +183,7 @@ function KeyCreatedModal({ resp, onClose }: { resp: CreateKeyResponse; onClose: 
 function KeyHistoryModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => void }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const { data: events, isLoading } = useQuery({
-    queryKey: ['audit', 'api_key', apiKey.id],
-    queryFn: () => api.auditEvents({ resource_type: 'api_key', resource_id: apiKey.id, limit: 50 }),
-  })
+  const { data: events, isLoading } = useQuery(resourceAuditQuery('api_key', apiKey.id))
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -199,8 +196,8 @@ function KeyHistoryModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => v
           {events && events.length === 0 && (
             <p className="text-sm text-muted-foreground">{t('common.empty')}</p>
           )}
-          {events?.map((ev, i) => (
-            <div key={i} className="rounded-lg border px-3 py-2 text-sm space-y-0.5">
+          {events?.map((ev) => (
+            <div key={`${ev.event_time}-${ev.account_id}-${ev.action}-${ev.resource_id}`} className="rounded-lg border px-3 py-2 text-sm space-y-0.5">
               <div className="flex items-center justify-between gap-2">
                 <Badge variant="outline" className="text-[10px]">{ev.action}</Badge>
                 <span className="text-xs text-muted-foreground">{fmtDateOnly(ev.event_time, tz)}</span>
@@ -248,14 +245,13 @@ export default function KeysPage() {
     { invalidateKey: ['keys'] },
   )
 
-  const regenerateMutation = useMutation({
-    mutationFn: (id: string) => api.regenerateKey(id),
-    onSuccess: (data) => {
-      setRegenerateTarget(null)
-      setCreatedKey(data)
-      queryClient.invalidateQueries({ queryKey: ['keys'] })
+  const regenerateMutation = useApiMutation(
+    (id: string) => api.regenerateKey(id),
+    {
+      invalidateKey: ['keys'],
+      onSuccess: (data) => { setRegenerateTarget(null); setCreatedKey(data) },
     },
-  })
+  )
 
   function handleCreated(resp: CreateKeyResponse) {
     setShowCreate(false)
@@ -358,6 +354,7 @@ export default function KeysPage() {
                           toggleMutation.mutate({ id: key.id, is_active: checked })
                         }
                         disabled={toggleMutation.isPending}
+                        aria-label={key.is_active ? t('common.deactivate') : t('common.activate')}
                       />
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs tabular-nums">
@@ -377,6 +374,7 @@ export default function KeysPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label={t('keys.viewUsage')}
                           onClick={() => setUsageKey(key)}
                           title={t('keys.viewUsage')}
                           className="text-muted-foreground hover:text-primary"
@@ -386,6 +384,7 @@ export default function KeysPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label={t('keys.viewHistory')}
                           onClick={() => setHistoryKey(key)}
                           title={t('keys.viewHistory')}
                           className="text-muted-foreground hover:text-primary"
@@ -395,6 +394,7 @@ export default function KeysPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label={t('keys.regenerateKey')}
                           onClick={() => setRegenerateTarget(key)}
                           title={t('keys.regenerateKey')}
                           className="text-muted-foreground hover:text-status-warning-fg"
@@ -404,6 +404,7 @@ export default function KeysPage() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label={t('keys.deleteKey')}
                           onClick={() => setDeleteTarget(key)}
                           disabled={deleteMutation.isPending}
                           title={t('keys.deleteKey')}

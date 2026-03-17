@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { STALE_TIME_SLOW, STALE_TIME_FAST, REFETCH_INTERVAL_FAST } from '@/lib/constants'
+import { STALE_TIME_SLOW, STALE_TIME_FAST, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_SLOW, REFETCH_INTERVAL_HISTORY } from '@/lib/constants'
 
 // ── GPU servers list ──────────────────────────────────────────────────────────
 
@@ -8,7 +8,7 @@ export const serversQuery = queryOptions({
   queryKey: ['servers'] as const,
   queryFn: () => api.servers(),
   staleTime: STALE_TIME_SLOW,
-  refetchInterval: 60_000,
+  refetchInterval: REFETCH_INTERVAL_SLOW,
   refetchIntervalInBackground: false,
   retry: false,
 })
@@ -27,11 +27,11 @@ export const serverMetricsQuery = (serverId: string) => queryOptions({
 // ── ClickHouse power history for a single server ──────────────────────────────
 // Long history windows change slowly — 5 min refetch is sufficient.
 
-export const serverMetricsHistoryQuery = (serverId: string, minutes = 1440) => queryOptions({
-  queryKey: ['server-metrics-history', serverId, minutes] as const,
-  queryFn: () => api.serverMetricsHistory(serverId, minutes),
-  staleTime: 5 * 60_000 - 1_000,
-  refetchInterval: 5 * 60_000,
+export const serverMetricsHistoryQuery = (serverId: string, hours = 1440) => queryOptions({
+  queryKey: ['server-metrics-history', serverId, hours] as const,
+  queryFn: () => api.serverMetricsHistory(serverId, hours),
+  staleTime: REFETCH_INTERVAL_HISTORY - 1_000,
+  refetchInterval: REFETCH_INTERVAL_HISTORY,
   refetchIntervalInBackground: false,
   retry: false,
 })

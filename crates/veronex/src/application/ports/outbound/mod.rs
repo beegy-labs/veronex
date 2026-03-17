@@ -26,3 +26,4 @@ pub mod ollama_sync_job_repository;
 pub mod session_repository;
 pub mod valkey_port;
 pub mod provider_vram_budget_repository;
+pub mod image_store;

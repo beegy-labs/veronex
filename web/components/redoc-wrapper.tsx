@@ -19,8 +19,35 @@ interface RedocWrapperProps {
 /**
  * Thin wrapper around RedocStandalone.
  * Loaded via dynamic() with ssr:false from the /api-docs/redoc page.
- * Theme tokens use Veronex light-mode palette (Redoc doesn't support CSS vars).
+ *
+ * NOTE: Redoc does not support CSS custom properties — all theme values must be
+ * static hex strings. These are intentional light-mode palette constants;
+ * the `no-hardcoded-hex` linting exception applies to this file only.
  */
+
+// ── Veronex light-mode palette (Redoc-only) ──────────────────────────────────
+const REDOC_COLOR_PRIMARY        = '#0f3325'
+const REDOC_COLOR_SUCCESS        = '#16a34a'
+const REDOC_COLOR_WARNING        = '#d97706'
+const REDOC_COLOR_ERROR          = '#dc2626'
+const REDOC_COLOR_INFO           = '#2563eb'
+const REDOC_TEXT_PRIMARY         = '#141a14'
+const REDOC_TEXT_SECONDARY       = '#334155'
+const REDOC_BORDER_DARK          = '#cbd5e1'
+const REDOC_BORDER_LIGHT         = '#e2e8e0'
+const REDOC_SIDEBAR_BG           = '#f2f4f2'
+const REDOC_SIDEBAR_ACTIVE_BG    = '#e2e8e0'
+const REDOC_RIGHT_PANEL_BG       = '#1a2118'
+const REDOC_CODE_BLOCK_BG        = '#111412'
+const REDOC_RESP_SUCCESS_BG      = '#f0fdf4'
+const REDOC_RESP_SUCCESS_TAB     = '#14532d'
+const REDOC_RESP_ERROR_BG        = '#fef2f2'
+const REDOC_RESP_ERROR_TAB       = '#7f1d1d'
+const REDOC_RESP_REDIRECT_BG     = '#fffbeb'
+const REDOC_RESP_REDIRECT_TAB    = '#78350f'
+const REDOC_RESP_INFO_BG         = '#eff6ff'
+const REDOC_RESP_INFO_TAB        = '#1e3a5f'
+
 export default function RedocWrapper({ specUrl, labels }: RedocWrapperProps) {
   return (
     <RedocStandalone
@@ -34,20 +61,20 @@ export default function RedocWrapper({ specUrl, labels }: RedocWrapperProps) {
         theme: {
           spacing: { unit: 5 },
           colors: {
-            primary: { main: '#0f3325' },
-            success: { main: '#16a34a' },
-            warning: { main: '#d97706' },
-            error:   { main: '#dc2626' },
+            primary: { main: REDOC_COLOR_PRIMARY },
+            success: { main: REDOC_COLOR_SUCCESS },
+            warning: { main: REDOC_COLOR_WARNING },
+            error:   { main: REDOC_COLOR_ERROR },
             text: {
-              primary:   '#141a14',
-              secondary: '#334155',
+              primary:   REDOC_TEXT_PRIMARY,
+              secondary: REDOC_TEXT_SECONDARY,
             },
-            border: { dark: '#cbd5e1', light: '#e2e8e0' },
+            border: { dark: REDOC_BORDER_DARK, light: REDOC_BORDER_LIGHT },
             responses: {
-              success:  { color: '#16a34a', backgroundColor: '#f0fdf4', tabTextColor: '#14532d' },
-              error:    { color: '#dc2626', backgroundColor: '#fef2f2', tabTextColor: '#7f1d1d' },
-              redirect: { color: '#d97706', backgroundColor: '#fffbeb', tabTextColor: '#78350f' },
-              info:     { color: '#2563eb', backgroundColor: '#eff6ff', tabTextColor: '#1e3a5f' },
+              success:  { color: REDOC_COLOR_SUCCESS,  backgroundColor: REDOC_RESP_SUCCESS_BG,  tabTextColor: REDOC_RESP_SUCCESS_TAB  },
+              error:    { color: REDOC_COLOR_ERROR,    backgroundColor: REDOC_RESP_ERROR_BG,    tabTextColor: REDOC_RESP_ERROR_TAB    },
+              redirect: { color: REDOC_COLOR_WARNING,  backgroundColor: REDOC_RESP_REDIRECT_BG, tabTextColor: REDOC_RESP_REDIRECT_TAB },
+              info:     { color: REDOC_COLOR_INFO,     backgroundColor: REDOC_RESP_INFO_BG,     tabTextColor: REDOC_RESP_INFO_TAB     },
             },
           },
           typography: {
@@ -58,17 +85,17 @@ export default function RedocWrapper({ specUrl, labels }: RedocWrapperProps) {
           },
           sidebar: {
             width: '240px',
-            backgroundColor: '#f2f4f2',
-            textColor: '#141a14',
-            activeTextColor: '#0f3325',
-            groupItems: { activeBackgroundColor: '#e2e8e0', activeTextColor: '#0f3325' },
-            level1Items:  { activeBackgroundColor: '#e2e8e0', activeTextColor: '#0f3325' },
+            backgroundColor: REDOC_SIDEBAR_BG,
+            textColor:       REDOC_TEXT_PRIMARY,
+            activeTextColor: REDOC_COLOR_PRIMARY,
+            groupItems: { activeBackgroundColor: REDOC_SIDEBAR_ACTIVE_BG, activeTextColor: REDOC_COLOR_PRIMARY },
+            level1Items:  { activeBackgroundColor: REDOC_SIDEBAR_ACTIVE_BG, activeTextColor: REDOC_COLOR_PRIMARY },
           },
           rightPanel: {
-            backgroundColor: '#1a2118',
+            backgroundColor: REDOC_RIGHT_PANEL_BG,
           },
           codeBlock: {
-            backgroundColor: '#111412',
+            backgroundColor: REDOC_CODE_BLOCK_BG,
           },
         },
       }}

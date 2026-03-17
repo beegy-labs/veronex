@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { Provider, ProviderSelectedModel, GeminiRateLimitPolicy } from '@/lib/types'
-import { selectedModelsQuery } from '@/lib/queries'
+import { selectedModelsQuery, providerKeyQuery } from '@/lib/queries'
 import { Key, ShieldCheck, Eye, EyeOff, ListFilter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -65,20 +65,20 @@ export function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPo
                   : t('providers.gemini.paidOnlyRouting')}
               </p>
             </div>
-            <Switch checked={availableOnFreeTier} onCheckedChange={setAvailableOnFreeTier} />
+            <Switch checked={availableOnFreeTier} onCheckedChange={setAvailableOnFreeTier} aria-label={t('providers.gemini.availableOnFreeTier')} />
           </div>
 
           {availableOnFreeTier && (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="pol-rpm" className="text-xs">RPM <span className="text-muted-foreground font-normal">(req/min)</span></Label>
+                <Label htmlFor="pol-rpm" className="text-xs">{t('providers.gemini.rpm')} <span className="text-muted-foreground font-normal">({t('providers.gemini.rpmUnit')})</span></Label>
                 <Input id="pol-rpm" type="number" min={0} value={rpm}
-                  onChange={(e) => setRpm(e.target.value)} placeholder="e.g. 10" className="h-8 text-sm" />
+                  onChange={(e) => setRpm(e.target.value)} placeholder={t('providers.gemini.rpmPlaceholder')} className="h-8 text-sm" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="pol-rpd" className="text-xs">RPD <span className="text-muted-foreground font-normal">(req/day)</span></Label>
+                <Label htmlFor="pol-rpd" className="text-xs">{t('providers.gemini.rpd')} <span className="text-muted-foreground font-normal">({t('providers.gemini.rpdUnit')})</span></Label>
                 <Input id="pol-rpd" type="number" min={0} value={rpd}
-                  onChange={(e) => setRpd(e.target.value)} placeholder="e.g. 250" className="h-8 text-sm" />
+                  onChange={(e) => setRpd(e.target.value)} placeholder={t('providers.gemini.rpdPlaceholder')} className="h-8 text-sm" />
               </div>
               <p className="col-span-2 text-[11px] text-muted-foreground -mt-1">
                 {t('providers.gemini.freeLimitsHint')}
@@ -92,7 +92,7 @@ export function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPo
             {mutation.error instanceof Error ? mutation.error.message : t('providers.gemini.failedToSave')}
           </p>
         )}
-        <DialogFooter className="gap-3">
+        <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}
@@ -109,11 +109,7 @@ export function ApiKeyCell({ providerId, masked }: { providerId: string; masked:
   const { t } = useTranslation()
   const [revealed, setRevealed] = useState(false)
 
-  const { data, isFetching, refetch } = useQuery({
-    queryKey: ['provider-key', providerId],
-    queryFn: () => api.providerKey(providerId),
-    enabled: false,
-  })
+  const { data, isFetching, refetch } = useQuery(providerKeyQuery(providerId))
 
   async function handleReveal() {
     if (revealed) { setRevealed(false); return }
@@ -130,6 +126,7 @@ export function ApiKeyCell({ providerId, masked }: { providerId: string; masked:
       {masked && (
         <Button variant="ghost" size="icon"
           className="h-6 w-6 text-muted-foreground/70 hover:text-text-dim shrink-0"
+          aria-label={revealed ? t('common.hide') : t('common.show')}
           onClick={handleReveal} disabled={isFetching}
           title={revealed ? t('common.hide') : t('common.show')}>
           {revealed
@@ -217,6 +214,7 @@ export function ModelSelectionModal({ provider, onClose }: { provider: Provider;
                     toggleMutation.mutate({ modelName: m.model_name, isEnabled: checked })
                   }
                   disabled={toggleMutation.isPending}
+                  aria-label={m.model_name}
                 />
               </div>
             ))}
@@ -270,7 +268,7 @@ export function SetSyncKeyModal({ current, onClose }: { current: string | null; 
           <div className="space-y-1.5">
             <Label htmlFor="sync-key">{t('providers.gemini.syncKey')} <span className="text-destructive">*</span></Label>
             <Input id="sync-key" type="password" value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)} placeholder="AIza…" />
+              onChange={(e) => setApiKey(e.target.value)} placeholder={t('providers.gemini.apiKeyPlaceholder')} />
             <p className="text-xs text-muted-foreground">{t('providers.gemini.syncKeyHint')}</p>
           </div>
         </div>
@@ -279,7 +277,7 @@ export function SetSyncKeyModal({ current, onClose }: { current: string | null; 
             {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
           </p>
         )}
-        <DialogFooter className="gap-3">
+        <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate()} disabled={!apiKey.trim() || mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}

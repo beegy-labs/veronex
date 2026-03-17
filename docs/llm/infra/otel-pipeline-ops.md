@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline Operations
 
-> SSOT | **Last Updated**: 2026-03-10 (rev: 2-target discovery, URL normalization)
+> SSOT | **Last Updated**: 2026-03-15 (rev: MV sum+gauge support, migration 000002_metrics_sum_support)
 
 See `infra/otel-pipeline.md` for pipeline overview, OTel Collector config, and Chain 1 (otel-logs).
 
@@ -9,6 +9,14 @@ See `infra/otel-pipeline.md` for pipeline overview, OTel Collector config, and C
 ## Chain 2 -- otel-metrics -> otel_metrics_gauge
 
 Lean schema — only 5 columns (was 17). `server_id` extracted from OTLP resource attributes for direct column filtering.
+
+Handles **both** OTLP metric types:
+- **gauge** — instantaneous values (memory, temperature, power)
+- **sum** (`isMonotonic: true`) — monotonic counters (e.g., `node_cpu_seconds_total`)
+
+Agent classifies metric type in `scraper.rs`; the MV processes both via `UNION ALL`.
+
+> **Migration**: `000002_metrics_sum_support` recreates this MV to add sum support (was gauge-only, dropping CPU counters).
 
 ```sql
 CREATE TABLE otel_metrics_gauge (
@@ -22,30 +30,24 @@ ORDER BY (metric_name, server_id, ts)
 TTL toDate(ts) + INTERVAL 30 DAY;
 
 CREATE MATERIALIZED VIEW kafka_otel_metrics_mv TO otel_metrics_gauge AS
-SELECT
-    fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'timeUnixNano'))) AS ts,
-    ResAttrs['server_id'] AS server_id,
-    JSONExtractString(metric, 'name') AS metric_name,
-    JSONExtractFloat(dp, 'asDouble') AS value,
-    CAST(arrayMap(x -> (JSONExtractString(x,'key'),
-        JSONExtractString(JSONExtractRaw(x,'value'),'stringValue')),
-        JSONExtractArrayRaw(dp, 'attributes')),
-        'Map(LowCardinality(String), String)') AS attributes
-FROM (
-    SELECT rm, metric, dp,
-        CAST(arrayMap(x -> (JSONExtractString(x,'key'),
-            JSONExtractString(JSONExtractRaw(x,'value'),'stringValue')),
-            JSONExtractArrayRaw(JSONExtractRaw(rm, 'resource'), 'attributes')),
-            'Map(LowCardinality(String), String)') AS ResAttrs
-    FROM (
-        SELECT
-            arrayJoin(JSONExtractArrayRaw(raw, 'resourceMetrics')) AS rm,
-            arrayJoin(JSONExtractArrayRaw(rm, 'scopeMetrics')) AS sm,
-            arrayJoin(JSONExtractArrayRaw(sm, 'metrics')) AS metric,
-            arrayJoin(JSONExtractArrayRaw(JSONExtractRaw(metric,'gauge'),'dataPoints')) AS dp
-        FROM kafka_otel_metrics
-        WHERE JSONHas(metric, 'gauge')
-    )
+SELECT ts, server_id, metric_name, value, attributes FROM (
+    -- gauge data points
+    SELECT
+        fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'timeUnixNano'))) AS ts,
+        ResAttrs['server_id'] AS server_id,
+        JSONExtractString(metric, 'name') AS metric_name,
+        JSONExtractFloat(dp, 'asDouble') AS value,
+        CAST(arrayMap(...), 'Map(LowCardinality(String), String)') AS attributes
+    FROM ( ... WHERE JSONHas(metric, 'gauge') )
+    UNION ALL
+    -- sum data points (monotonic counters like node_cpu_seconds_total)
+    SELECT
+        fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'timeUnixNano'))) AS ts,
+        ResAttrs['server_id'] AS server_id,
+        JSONExtractString(metric, 'name') AS metric_name,
+        JSONExtractFloat(dp, 'asDouble') AS value,
+        CAST(arrayMap(...), 'Map(LowCardinality(String), String)') AS attributes
+    FROM ( ... WHERE JSONHas(metric, 'sum') )
 );
 ```
 

@@ -98,7 +98,7 @@ function GroupSessionsPanel() {
 // ── Reusable jobs section ──────────────────────────────────────────────────────
 
 interface JobsSectionProps {
-  source: 'api' | 'test'
+  source: 'api' | 'test' | 'analyzer'
   onRetry?: (params: RetryParams) => void
 }
 
@@ -108,6 +108,8 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const [status, setStatus] = useState('all')
   const [search, setSearch] = useState('')
   const [query, setQuery] = useState('')
+  const [modelFilter, setModelFilter] = useState('')
+  const [providerFilter, setProviderFilter] = useState('')
 
   const STATUS_OPTIONS = useMemo(() => [
     { value: 'all',       label: t('jobs.allStatuses') },
@@ -121,7 +123,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const offset = page * PAGE_SIZE
 
   const { data, isLoading, error } = useQuery(
-    dashboardJobsQuery({ source, page, status, query, pageSize: PAGE_SIZE }),
+    dashboardJobsQuery({ source, page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: providerFilter || undefined }),
   )
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
@@ -155,6 +157,8 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
             />
             {search && (
               <button
+                type="button"
+                aria-label={t('jobs.clearSearch')}
                 className="absolute right-2.5 text-muted-foreground hover:text-foreground"
                 onClick={clearSearch}
               >
@@ -162,6 +166,20 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
               </button>
             )}
           </div>
+          {/* Model filter */}
+          <Input
+            className="w-32 h-9 text-sm"
+            placeholder={t('jobs.filterModel')}
+            value={modelFilter}
+            onChange={(e) => { setModelFilter(e.target.value); setPage(0) }}
+          />
+          {/* Provider filter */}
+          <Input
+            className="w-32 h-9 text-sm"
+            placeholder={t('jobs.filterProvider')}
+            value={providerFilter}
+            onChange={(e) => { setProviderFilter(e.target.value); setPage(0) }}
+          />
           {/* Status filter */}
           <Select value={status} onValueChange={(val) => { setStatus(val); setPage(0) }}>
             <SelectTrigger className="w-36 h-9">
@@ -181,7 +199,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>{t('jobs.searchingFor')}</span>
           <span className="px-2 py-0.5 rounded bg-primary/15 text-primary font-mono text-xs">{query}</span>
-          <button className="underline text-xs hover:text-foreground" onClick={clearSearch}>
+          <button type="button" className="underline text-xs hover:text-foreground" onClick={clearSearch}>
             {t('jobs.clearSearch')}
           </button>
         </div>
@@ -212,11 +230,12 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
           <p className="text-sm text-muted-foreground tabular-nums">
             {data.total === 0
               ? t('jobs.noJobs')
-              : `${fmtNumber(firstItem)}–${fmtNumber(lastItem)} of ${fmtNumber(data.total)}`}
+              : `${fmtNumber(firstItem)}–${fmtNumber(lastItem)} / ${fmtNumber(data.total)}`}
           </p>
           {totalPages > 1 && (
             <div className="flex items-center gap-1">
               <Button variant="outline" size="icon" className="h-8 w-8"
+                aria-label={t('common.prevPage')}
                 onClick={() => goTo(page - 1)} disabled={page === 0}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
@@ -231,6 +250,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
                 )
               )}
               <Button variant="outline" size="icon" className="h-8 w-8"
+                aria-label={t('common.nextPage')}
                 onClick={() => goTo(page + 1)} disabled={page >= totalPages - 1}>
                 <ChevronRight className="h-4 w-4" />
               </Button>
@@ -248,7 +268,19 @@ export default function JobsPage() {
   const { t } = useTranslation()
   const testPanelRef = useRef<HTMLDivElement>(null)
 
-  const [activeTab, setActiveTab] = useState<'api' | 'test' | 'flow'>('api')
+  // Persist active tab across page refreshes via URL hash
+  const [activeTab, setActiveTab] = useState<'api' | 'test' | 'analyzer' | 'flow'>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.slice(1)
+      if (hash === 'test' || hash === 'analyzer' || hash === 'flow') return hash as 'test' | 'analyzer' | 'flow'
+    }
+    return 'api'
+  })
+  const handleTabChange = useCallback((v: string) => {
+    const tab = v as 'api' | 'test' | 'flow'
+    setActiveTab(tab)
+    window.history.replaceState(null, '', `#${tab}`)
+  }, [])
   const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
 
   const { data: providers } = useQuery(providersQuery)
@@ -273,10 +305,11 @@ export default function JobsPage() {
       <GroupSessionsPanel />
 
       {/* ── Tabs ──────────────────────────────────────────────────────────────── */}
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'api' | 'test' | 'flow')}>
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList>
           <TabsTrigger value="api">{t('jobs.apiJobs')}</TabsTrigger>
           <TabsTrigger value="test">{t('jobs.testRuns')}</TabsTrigger>
+          <TabsTrigger value="analyzer">{t('jobs.analyzerJobs')}</TabsTrigger>
           <TabsTrigger value="flow">{t('jobs.networkFlow')}</TabsTrigger>
         </TabsList>
 
@@ -296,6 +329,11 @@ export default function JobsPage() {
           <div className="border-t border-border pt-6">
             <JobsSection source="test" onRetry={handleRetry} />
           </div>
+        </TabsContent>
+
+        {/* ── Analyzer tab ──────────────────────────────────────────────────── */}
+        <TabsContent value="analyzer" className="mt-6">
+          <JobsSection source="analyzer" />
         </TabsContent>
 
         {/* ── Network Flow tab ──────────────────────────────────────────────── */}

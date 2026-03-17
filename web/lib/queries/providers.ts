@@ -21,6 +21,18 @@ export const providerModelsQuery = (providerId: string) => queryOptions({
   retry: false,
 })
 
+export const providerKeyQuery = (providerId: string) => queryOptions({
+  queryKey: ['provider-key', providerId] as const,
+  queryFn: () => api.providerKey(providerId),
+  enabled: false,
+})
+
+export const ollamaModelProvidersQuery = (modelName: string) => queryOptions({
+  queryKey: ['ollama-model-providers', modelName] as const,
+  queryFn: () => api.ollamaModelProviders(modelName),
+  staleTime: STALE_TIME_FAST,
+})
+
 export const selectedModelsQuery = (providerId: string) => queryOptions({
   queryKey: ['selected-models', providerId] as const,
   queryFn: () => api.getSelectedModels(providerId),

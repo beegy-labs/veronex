@@ -1,7 +1,7 @@
 # React — 2026 Research
 
 > **Last Researched**: 2026-03-01 | **Source**: Web search + verified in production
-> **Status**: ✅ Verified — patterns used throughout `web/` codebase
+> **Status**: Verified — patterns used throughout `web/` codebase
 
 ---
 
@@ -9,15 +9,15 @@
 
 | | `useReducer` | `useState` |
 |--|-------------|-----------|
-| **Multiple sub-values** | ✅ Single dispatch, atomic | ⚠️ Multiple setters, race risk |
-| **Stable dispatch ref** | ✅ Never changes | ❌ Setter is stable but closure risk |
-| **Complex transitions** | ✅ Action-based, testable | ⚠️ Logic scattered in event handlers |
-| **Simple scalar** | ⚠️ Verbose | ✅ Simpler |
+| **Multiple sub-values** | Yes — Single dispatch, atomic | Caution — Multiple setters, race risk |
+| **Stable dispatch ref** | Yes — Never changes | No — Setter is stable but closure risk |
+| **Complex transitions** | Yes — Action-based, testable | Caution — Logic scattered in event handlers |
+| **Simple scalar** | Caution — Verbose | Yes — Simpler |
 
 **Rule**: Use `useReducer` when state has multiple fields, or when multiple actions mutate it.
 
 ```tsx
-// ✅ useReducer for particle/list state
+// useReducer for particle/list state
 type Action = { type: 'SPAWN'; items: Item[] } | { type: 'EXPIRE'; id: string }
 
 function reducer(state: Item[], action: Action): Item[] {
@@ -59,13 +59,13 @@ useEffect(() => {
 ## onAnimationEnd — Cleanup without Leaks
 
 ```tsx
-// ✅ onAnimationEnd: fires once, exactly when CSS animation ends
+// onAnimationEnd: fires once, exactly when CSS animation ends
 <div
   className="animated-particle"
   onAnimationEnd={() => dispatch({ type: 'EXPIRE', id })}
 />
 
-// ❌ setTimeout: timing guesswork, leaks on unmount
+// AVOID: setTimeout: timing guesswork, leaks on unmount
 useEffect(() => {
   const t = setTimeout(() => remove(id), DURATION_MS)
   return () => clearTimeout(t)   // must manually manage
@@ -80,11 +80,11 @@ React's synthetic event system handles this safely.
 ## useMemo — Dependency Array Rules
 
 ```tsx
-// ❌ WRONG — Date.now() in dep array → new value every render → no memoization
+// AVOID: WRONG — Date.now() in dep array → new value every render → no memoization
 const cutoff = Date.now() - WINDOW_MS  // declared outside useMemo
 const filtered = useMemo(() => items.filter(i => i.ts > cutoff), [items, cutoff])
 
-// ✅ CORRECT — Date.now() computed inside useMemo body
+// CORRECT — Date.now() computed inside useMemo body
 const filtered = useMemo(() => {
   const cutoff = Date.now() - WINDOW_MS   // local variable, not a dependency
   return items.filter(i => i.ts > cutoff)

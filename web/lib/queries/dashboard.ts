@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { STALE_TIME_FAST, REFETCH_INTERVAL_FAST } from '@/lib/constants'
+import { STALE_TIME_FAST, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_SLOW } from '@/lib/constants'
 
 // ── Dashboard overview (aggregated snapshot) ──────────────────────────────────
 
@@ -42,10 +42,12 @@ export interface JobsQueryParams {
   status: string
   query: string
   pageSize: number
+  model?: string
+  provider?: string
 }
 
 export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
-  queryKey: ['dashboard-jobs', p.source, p.page, p.status, p.query] as const,
+  queryKey: ['dashboard-jobs', p.source, p.page, p.status, p.query, p.model ?? '', p.provider ?? ''] as const,
   queryFn: () => {
     const qs = new URLSearchParams({
       limit: String(p.pageSize),
@@ -54,6 +56,8 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
     })
     if (p.status !== 'all') qs.set('status', p.status)
     if (p.query.trim()) qs.set('q', p.query.trim())
+    if (p.model) qs.set('model', p.model)
+    if (p.provider) qs.set('provider', p.provider)
     return api.jobs(qs.toString())
   },
   staleTime: STALE_TIME_FAST,
@@ -75,16 +79,16 @@ export const queueDepthQuery = queryOptions({
 // refetchInterval scales with the window: longer windows change less frequently.
 
 const PERF_REFETCH: Record<number, number> = {
-  24:  60_000,       // 1 min  — daily view changes frequently
-  168: 5 * 60_000,  // 5 min  — weekly view
-  720: 10 * 60_000, // 10 min — monthly view
+  24:  REFETCH_INTERVAL_SLOW,       // 1 min  — daily view changes frequently
+  168: 5 * REFETCH_INTERVAL_SLOW,   // 5 min  — weekly view
+  720: 10 * REFETCH_INTERVAL_SLOW,  // 10 min — monthly view
 }
 
 export const performanceQuery = (hours: number) => queryOptions({
   queryKey: ['performance', hours] as const,
   queryFn: () => api.performance(hours),
-  staleTime: (PERF_REFETCH[hours] ?? 60_000) - 1_000,
-  refetchInterval: PERF_REFETCH[hours] ?? 60_000,
+  staleTime: (PERF_REFETCH[hours] ?? REFETCH_INTERVAL_SLOW) - 1_000,
+  refetchInterval: PERF_REFETCH[hours] ?? REFETCH_INTERVAL_SLOW,
   refetchIntervalInBackground: false,
   retry: false,
 })

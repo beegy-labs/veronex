@@ -21,9 +21,10 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, JobSource, ProviderType};
+use crate::domain::enums::{ApiFormat, FinishReason, JobSource, ProviderType};
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
 use super::handlers::sanitize_sse_error;
 use super::inference_helpers::{build_sse_response, validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
@@ -156,6 +157,7 @@ struct GeminiUsageMetadata {
 ///
 /// **Function calling (tool use)** is a lab feature: disabled by default.
 /// Enable it in Settings → Lab Features before sending requests with `tools`.
+#[instrument(skip(state, req, headers), fields(path = %path))]
 pub async fn handle_request(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
@@ -255,6 +257,9 @@ async fn stream_generate(
             request_path: Some(request_path),
             conversation_id,
             key_tier: Some(api_key.tier),
+            images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {
@@ -277,14 +282,14 @@ async fn stream_generate(
                     candidates: vec![GeminiCandidate {
                         content: GeminiResponseContent { parts: vec![], role: "model" },
                         index: 0,
-                        finish_reason: Some("STOP".to_string()),
+                        finish_reason: Some(to_gemini_finish_reason(token.finish_reason.as_deref())),
                     }],
                     usage_metadata: Some(GeminiUsageMetadata {
                         prompt_token_count: token.prompt_tokens.unwrap_or(0),
                         candidates_token_count: token.completion_tokens.unwrap_or(0),
                     }),
                 };
-                Event::default().data(serde_json::to_string(&resp).unwrap_or_default())
+                vec![Event::default().data(serde_json::to_string(&resp).unwrap_or_default())]
             }
             Ok(token) => {
                 let resp = GeminiResponse {
@@ -298,11 +303,11 @@ async fn stream_generate(
                     }],
                     usage_metadata: None,
                 };
-                Event::default().data(serde_json::to_string(&resp).unwrap_or_default())
+                vec![Event::default().data(serde_json::to_string(&resp).unwrap_or_default())]
             }
             Err(e) => {
                 let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
-                Event::default().data(serde_json::to_string(&err).unwrap_or_default())
+                vec![Event::default().data(serde_json::to_string(&err).unwrap_or_default())]
             }
         }
     })
@@ -345,6 +350,9 @@ async fn generate_content(
             request_path: Some(request_path),
             conversation_id,
             key_tier: Some(api_key.tier),
+            images: None,
+            stop: None, seed: None, response_format: None,
+            frequency_penalty: None, presence_penalty: None,
         })
         .await
     {
@@ -364,12 +372,14 @@ async fn generate_content(
     let mut full_text = String::new();
     let mut prompt_tokens = 0u32;
     let mut completion_tokens = 0u32;
+    let mut gemini_finish_reason = "STOP".to_string();
 
     while let Some(result) = token_stream.next().await {
         match result {
             Ok(token) if token.is_final => {
                 prompt_tokens = token.prompt_tokens.unwrap_or(0);
                 completion_tokens = token.completion_tokens.unwrap_or(0);
+                gemini_finish_reason = to_gemini_finish_reason(token.finish_reason.as_deref());
                 break;
             }
             Ok(token) => full_text.push_str(&token.value),
@@ -391,7 +401,7 @@ async fn generate_content(
                 role: "model",
             },
             index: 0,
-            finish_reason: Some("STOP".to_string()),
+            finish_reason: Some(gemini_finish_reason),
         }],
         usage_metadata: Some(GeminiUsageMetadata {
             prompt_token_count: prompt_tokens,
@@ -515,6 +525,20 @@ fn gemini_tools_to_ollama(tools: Vec<GeminiTool>) -> Option<serde_json::Value> {
     if ollama_tools.is_empty() { None } else { Some(serde_json::Value::Array(ollama_tools)) }
 }
 
+/// Map a Veronex/Ollama finish reason string to the Gemini wire format (uppercase).
+///
+/// Gemini uses: `"STOP"`, `"MAX_TOKENS"`, `"CANCELLED"`, `"OTHER"`.
+/// Ollama/Veronex uses: `"stop"`, `"length"`, `"cancelled"`, `"error"`.
+fn to_gemini_finish_reason(reason: Option<&str>) -> String {
+    match reason.unwrap_or(FinishReason::Stop.as_str()) {
+        "length" => "MAX_TOKENS",
+        "cancelled" => "CANCELLED",
+        "error" => "OTHER",
+        _ => "STOP",
+    }
+    .to_string()
+}
+
 fn extract_text_parts(parts: &[GeminiPart]) -> String {
     parts
         .iter()
@@ -545,6 +569,7 @@ fn gemini_error(http: StatusCode, code: u32, status: &str, message: &str) -> Res
 /// Returns only Ollama models that are explicitly **enabled** on at least one
 /// active provider (via the model selection feature in the Providers page).
 /// This is the "selected models" subset of the full synchronized model list.
+#[instrument(skip(state))]
 pub async fn list_models(State(state): State<AppState>) -> Response {
     // Gather all active Ollama providers
     let providers = match state.provider_registry.list_active().await {
@@ -595,6 +620,7 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
 }
 
 /// `GET /v1beta/models/{model}` — get info for a single model.
+#[instrument(skip(state), fields(model = %model))]
 pub async fn get_model(State(state): State<AppState>, axum::extract::Path(model): axum::extract::Path<String>) -> Response {
     // Strip "models/" prefix if present (Gemini SDK adds it)
     let model_name = model.strip_prefix("models/").unwrap_or(&model);
