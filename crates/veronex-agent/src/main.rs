@@ -122,17 +122,17 @@ async fn discover_targets(client: &reqwest::Client, api_url: &str) -> Vec<SdTarg
             match resp.json::<Vec<SdTarget>>().await {
                 Ok(targets) => targets,
                 Err(e) => {
-                    tracing::warn!(url = %url, "target discovery JSON parse failed: {e}");
+                    tracing::warn!(url = %url, error = %e, "target discovery JSON parse failed");
                     vec![]
                 }
             }
         }
         Ok(resp) => {
-            tracing::warn!(status = %resp.status(), "target discovery returned non-success");
+            tracing::warn!(url = %url, status = %resp.status(), "target discovery returned non-success");
             vec![]
         }
         Err(e) => {
-            tracing::debug!("target discovery failed: {e}");
+            tracing::debug!(error = %e, "target discovery failed");
             vec![]
         }
     }
@@ -173,7 +173,7 @@ async fn main() -> Result<()> {
     let health_port = config.health_port;
     tokio::spawn(async move {
         if let Err(e) = health::serve(health_port, health_clone).await {
-            tracing::error!("health server failed: {e}");
+            tracing::error!(error = %e, "health server failed");
         }
     });
 
@@ -195,7 +195,7 @@ async fn main() -> Result<()> {
                 health.alive.store(false, Ordering::Relaxed);
                 break;
             }
-            result = scrape_cycle(&client, &config, &scrape_semaphore, &stats, valkey_pool.as_ref()) => {
+            result = scrape_cycle(&client, &config, &scrape_semaphore, valkey_pool.as_ref()) => {
                 // Update health state
                 health.started.store(true, Ordering::Relaxed);
                 health.ready.store(result.success, Ordering::Relaxed);
@@ -209,7 +209,7 @@ async fn main() -> Result<()> {
                     let self_labels: HashMap<String, String> =
                         [("service.name".into(), "veronex-agent".into())].into();
                     if let Err(e) = otlp::push_metrics(&client, &config.otel_endpoint, &self_labels, &self_gauges).await {
-                        tracing::debug!("self-metrics push failed: {e}");
+                        tracing::debug!(error = %e, "self-metrics push failed");
                     }
                 }
             }
@@ -308,7 +308,6 @@ async fn scrape_cycle(
     client: &reqwest::Client,
     config: &Config,
     semaphore: &Arc<Semaphore>,
-    _stats: &Arc<AgentStats>,
     valkey: Option<&fred::clients::Pool>,
 ) -> CycleResult {
     let start = Instant::now();
@@ -375,7 +374,7 @@ async fn scrape_cycle(
             continue;
         }
         if let Err(e) = otlp::push_metrics(client, &config.otel_endpoint, labels, metrics).await {
-            tracing::warn!(target = ?labels.get("type"), "OTLP push failed: {e}");
+            tracing::warn!(target_type = %labels.get("type").map(|s| s.as_str()).unwrap_or("unknown"), error = %e, "OTLP push failed");
             any_error = true;
         }
     }
