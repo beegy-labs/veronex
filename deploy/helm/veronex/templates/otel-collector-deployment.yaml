@@ -48,6 +48,15 @@ spec:
               port: health
             initialDelaySeconds: 5
             periodSeconds: 10
+          env:
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: {{ .Values.otelCollector.kafka.securityProtocol | default "PLAINTEXT" | quote }}
+            - name: KAFKA_SASL_MECHANISM
+              value: {{ .Values.otelCollector.kafka.saslMechanism | default "" | quote }}
+            - name: KAFKA_USERNAME
+              value: {{ .Values.otelCollector.kafka.saslUsername | default "" | quote }}
+            - name: KAFKA_PASSWORD
+              value: {{ .Values.otelCollector.kafka.saslPassword | default "" | quote }}
           volumeMounts:
             - name: config
               mountPath: /etc/otel

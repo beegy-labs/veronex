@@ -1,4 +1,6 @@
 {{- if .Values.autoscaling.enabled }}
+{{- /* HPA targets the main API only. Analytics and Agent are single-instance by design:
+     analytics is a lightweight aggregator; agent is a StatefulSet with node affinity. */}}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
