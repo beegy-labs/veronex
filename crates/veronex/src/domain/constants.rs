@@ -217,6 +217,17 @@ pub fn scaleout_decision_key(model: &str) -> String {
     format!("veronex:scaleout:{model}")
 }
 
+// ── Thermal throttle ─────────────────────────────────────────────────────
+
+/// Cooldown period (seconds) after hard thermal throttle is triggered.
+/// During this window dispatch is suspended until temperature drops.
+pub const THERMAL_HARD_COOLDOWN_SECS: i64 = 300;
+
+/// TTL for the `veronex:thermal:{provider_id}` Valkey key.
+/// Slightly longer than `THERMAL_HARD_COOLDOWN_SECS` to prevent stale key
+/// from expiring before the cooldown window is checked.
+pub const THERMAL_THROTTLE_KEY_TTL_SECS: i64 = 360;
+
 // ── Circuit breaker / reaper ─────────────────────────────────────────────
 
 /// Cooldown before half-open probe after circuit opens.

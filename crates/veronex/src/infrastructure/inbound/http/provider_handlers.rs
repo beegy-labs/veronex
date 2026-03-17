@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
@@ -85,7 +86,7 @@ async fn store_models_cache(pool: &fred::clients::Pool, key: &str, models: &[Str
         )
         .await
     {
-        tracing::warn!("failed to cache model list: {e}");
+        tracing::warn!(error = %e, "failed to cache model list");
     }
 }
 
@@ -206,7 +207,7 @@ pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvid
         .get(id)
         .await
         .map_err(|e| {
-            tracing::error!(%id, "failed to fetch provider: {e}");
+            tracing::error!(%id, error = %e, "failed to fetch provider");
             db_error(e)
         })?
         .ok_or_else(|| AppError::NotFound("provider not found".into()))
@@ -252,19 +253,22 @@ pub async fn verify_provider(
     match state
         .http_client
         .get(&check_url)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
         .send()
         .await
     {
         Ok(r) if r.status().is_success() => {
             (StatusCode::OK, Json(serde_json::json!({"reachable": true}))).into_response()
         }
-        Ok(r) => AppError::BadGateway(
-            format!("Ollama returned unexpected status {}", r.status()),
-        )
-        .into_response(),
+        Ok(r) => {
+            tracing::warn!(url = %url, status = %r.status(), "Ollama verify probe returned unexpected status");
+            AppError::BadGateway(
+                format!("Ollama returned unexpected status {}", r.status()),
+            )
+            .into_response()
+        }
         Err(e) => {
-            tracing::warn!(url = %url, "Ollama verify probe failed: {e}");
+            tracing::warn!(url = %url, error = %e, "Ollama verify probe failed");
             AppError::BadGateway("Ollama is not reachable at the given URL".into())
                 .into_response()
         }
@@ -352,7 +356,7 @@ pub async fn register_provider(
 
     let registry = &state.provider_registry;
     if let Err(e) = registry.register(&provider).await {
-        tracing::error!("failed to register provider: {e}");
+        tracing::error!(error = %e, "failed to register provider");
         return db_error(e).into_response();
     }
 
@@ -360,7 +364,7 @@ pub async fn register_provider(
 
     tracing::info!(
         id = %provider.id,
-        name = %provider.name,
+        provider_name = %provider.name,
         provider_type = %req.provider_type,
         status = %status_str,
         "provider registered"
@@ -390,7 +394,7 @@ pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse 
             (StatusCode::OK, Json(summaries)).into_response()
         }
         Err(e) => {
-            tracing::error!("failed to list providers: {e}");
+            tracing::error!(error = %e, "failed to list providers");
             db_error(e).into_response()
         }
     }
@@ -416,7 +420,7 @@ pub async fn delete_provider(
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
-            tracing::error!(%id, "failed to deactivate provider: {e}");
+            tracing::error!(%id, error = %e, "failed to deactivate provider");
             db_error(e).into_response()
         }
     }
@@ -436,7 +440,7 @@ pub async fn healthcheck_provider(
 
     let registry = &state.provider_registry;
     if let Err(e) = registry.update_status(id, new_status).await {
-        tracing::warn!(%id, "failed to persist healthcheck result: {e}");
+        tracing::warn!(%id, error = %e, "failed to persist healthcheck result");
     }
 
     let status_str = new_status.as_str();
@@ -488,7 +492,7 @@ pub async fn update_provider(
     if let Some(v) = req.is_active { provider.is_active = v; }
 
     if let Err(e) = registry.update(&provider).await {
-        tracing::error!(%id, "update_provider: failed: {e}");
+        tracing::error!(%id, error = %e, "update_provider: failed");
         return db_error(e).into_response();
     }
 
@@ -575,11 +579,11 @@ pub async fn sync_provider_models(
             }
             // Also persist to the global ollama_models table.
             if let Err(e) = state.ollama_model_repo.sync_provider_models(id, &models).await {
-                tracing::warn!(%id, "failed to persist ollama models to DB (non-fatal): {e}");
+                tracing::warn!(%id, error = %e, "failed to persist ollama models to DB (non-fatal)");
             }
             // Upsert model selections (is_enabled defaults to true for new rows).
             if let Err(e) = state.model_selection_repo.upsert_models(id, &models).await {
-                tracing::warn!(%id, "failed to upsert model selections (non-fatal): {e}");
+                tracing::warn!(%id, error = %e, "failed to upsert model selections (non-fatal)");
             }
             tracing::info!(%id, count = models.len(), "model list synced");
             (
@@ -589,7 +593,7 @@ pub async fn sync_provider_models(
                 .into_response()
         }
         Err(e) => {
-            tracing::error!(%id, "model sync failed: {e}");
+            tracing::error!(%id, error = %e, "model sync failed");
             AppError::ServiceUnavailable(e.to_string()).into_response()
         }
     }
@@ -645,7 +649,7 @@ pub async fn sync_single_provider(
             (StatusCode::OK, Json(serde_json::json!({"synced": true}))).into_response()
         }
         Err(e) => {
-            tracing::warn!(%id, "sync_provider failed: {e}");
+            tracing::warn!(%id, error = %e, "sync_provider failed");
             AppError::ServiceUnavailable(e.to_string()).into_response()
         }
     }

@@ -6,6 +6,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::constants::NODE_EXPORTER_TIMEOUT;
 use crate::domain::entities::GpuServer;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
 use crate::infrastructure::outbound::hw_metrics;
@@ -21,7 +22,7 @@ type HandlerResult<T> = Result<T, AppError>;
 async fn probe_node_exporter(client: &reqwest::Client, url: &str) -> Result<(), String> {
     client
         .get(url)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(NODE_EXPORTER_TIMEOUT)
         .send()
         .await
         .map(|_| ())
@@ -108,7 +109,7 @@ pub async fn verify_gpu_server(
 
     // Connectivity check.
     if let Err(e) = probe_node_exporter(&state.http_client, &url).await {
-        tracing::warn!(url = %url, "node-exporter probe failed: {e}");
+        tracing::warn!(url = %url, error = %e, "node-exporter probe failed");
         return AppError::BadGateway(
             "node-exporter is not reachable at the given URL".into(),
         )
@@ -152,7 +153,7 @@ pub async fn register_gpu_server(
 
     // Verify node_exporter is reachable.
     if let Err(e) = probe_node_exporter(&state.http_client, &node_exporter_url).await {
-        tracing::warn!(url = %node_exporter_url, "node-exporter probe failed on register: {e}");
+        tracing::warn!(url = %node_exporter_url, error = %e, "node-exporter probe failed on register");
         return Err(AppError::BadGateway(
             "node-exporter is not reachable at the given URL".into(),
         ));
@@ -258,7 +259,7 @@ pub async fn get_server_metrics(
             Ok(Json(metrics))
         }
         Err(e) => {
-            tracing::warn!(%id, "failed to fetch node metrics from {ne_url}: {e}");
+            tracing::warn!(%id, url = %ne_url, error = %e, "failed to fetch node metrics");
             Ok(Json(hw_metrics::NodeMetrics::default()))
         }
     }
@@ -287,7 +288,7 @@ pub async fn get_server_metrics_history(
     let hours = params.hours.unwrap_or(1).clamp(1, 1440);
 
     let points = repo.server_metrics_history(&id, hours).await.map_err(|e| {
-        tracing::error!(%id, "metrics history failed: {e}");
+        tracing::error!(%id, error = %e, "metrics history failed");
         AppError::Internal(anyhow::anyhow!("query failed"))
     })?;
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback, memo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { serversQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
@@ -237,23 +237,24 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
 
 const PAGE_SIZE = 10
 
-function ServersTable({
-  servers,
-  isLoading,
-  onRegister,
-  onEdit,
-  onHistory,
-  onDelete,
-  deleteIsPending,
-}: {
-  servers: GpuServer[] | undefined
-  isLoading: boolean
+interface ServersTableHandlers {
   onRegister: () => void
   onEdit: (s: GpuServer) => void
   onHistory: (s: GpuServer) => void
   onDelete: (id: string, name: string) => void
   deleteIsPending: boolean
+}
+
+const ServersTable = memo(function ServersTable({
+  servers,
+  isLoading,
+  handlers,
+}: {
+  servers: GpuServer[] | undefined
+  isLoading: boolean
+  handlers: ServersTableHandlers
 }) {
+  const { onRegister, onEdit, onHistory, onDelete, deleteIsPending } = handlers
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const [page, setPage] = useState(1)
@@ -298,7 +299,11 @@ function ServersTable({
       </div>
 
       {isLoading && (
-        <div className="flex h-24 items-center justify-center text-muted-foreground text-sm animate-pulse">
+        <div
+          aria-busy="true"
+          aria-label={t('providers.servers.loadingServers')}
+          className="flex h-24 items-center justify-center text-muted-foreground text-sm animate-pulse"
+        >
           {t('providers.servers.loadingServers')}
         </div>
       )}
@@ -395,7 +400,7 @@ function ServersTable({
       )}
     </div>
   )
-}
+})
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -414,6 +419,13 @@ export default function ServersPage() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['servers'] }),
   })
 
+  const handleRegister = useCallback(() => setShowRegister(true), [])
+  const handleEdit = useCallback((s: GpuServer) => setEditingServer(s), [])
+  const handleHistory = useCallback((s: GpuServer) => setHistoryServer(s), [])
+  const handleDelete = useCallback((id: string, name: string) => {
+    if (confirm(t('providers.deleteServerConfirm', { name }))) deleteMutation.mutate(id)
+  }, [t, deleteMutation.mutate])
+
   return (
     <div className="space-y-6">
       <div>
@@ -424,13 +436,13 @@ export default function ServersPage() {
       <ServersTable
         servers={servers}
         isLoading={isLoading}
-        onRegister={() => setShowRegister(true)}
-        onEdit={(s) => setEditingServer(s)}
-        onHistory={(s) => setHistoryServer(s)}
-        onDelete={(id, name) => {
-          if (confirm(t('providers.deleteServerConfirm', { name }))) deleteMutation.mutate(id)
+        handlers={{
+          onRegister: handleRegister,
+          onEdit: handleEdit,
+          onHistory: handleHistory,
+          onDelete: handleDelete,
+          deleteIsPending: deleteMutation.isPending,
         }}
-        deleteIsPending={deleteMutation.isPending}
       />
 
       {showRegister && <RegisterServerModal onClose={() => setShowRegister(false)} />}

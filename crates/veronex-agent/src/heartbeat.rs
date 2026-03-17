@@ -7,12 +7,13 @@
 /// Key layout mirrors veronex `valkey_keys::provider_heartbeat`:
 ///   `veronex:provider:hb:{provider_id}`  EX {ttl_secs}
 ///
-/// TTL should be ≥ 2× scrape interval so a single missed cycle doesn't flip
+/// TTL should be ≥ 3× scrape interval so two missed cycles don't flip
 /// the provider offline.  Default: 3× (180s for 60s scrape interval).
 use fred::clients::Pool;
 use fred::prelude::*;
 
 const HB_KEY_PREFIX: &str = "veronex:provider:hb:";
+const VALKEY_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Build the heartbeat key for a provider UUID string.
 fn key(provider_id: &str) -> String {
@@ -33,7 +34,7 @@ pub async fn set_online(pool: &Pool, provider_id: &str, ttl_secs: i64) {
         )
         .await;
     if let Err(e) = result {
-        tracing::warn!(provider_id = %provider_id, "heartbeat set failed: {e}");
+        tracing::warn!(provider_id = %provider_id, error = %e, "heartbeat set failed");
     }
 }
 
@@ -46,29 +47,29 @@ pub async fn connect(url: &str) -> Option<Pool> {
     let config = match fred::types::config::Config::from_url(url) {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!("heartbeat: invalid VALKEY_URL: {e}");
+            tracing::warn!(error = %e, "heartbeat: invalid VALKEY_URL");
             return None;
         }
     };
     let pool = match Builder::from_config(config)
         .with_connection_config(|c| {
-            c.connection_timeout = std::time::Duration::from_secs(5);
+            c.connection_timeout = VALKEY_CONNECT_TIMEOUT;
         })
         .build_pool(4)
     {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!("heartbeat: failed to build Valkey pool: {e}");
+            tracing::warn!(error = %e, "heartbeat: failed to build Valkey pool");
             return None;
         }
     };
     // connect() spawns background tasks and returns a JoinHandle — drop it.
     let _ = pool.connect();
     if let Err(e) = pool.wait_for_connect().await {
-        tracing::warn!("heartbeat: Valkey wait_for_connect failed: {e}");
+        tracing::warn!(error = %e, "heartbeat: Valkey wait_for_connect failed");
         return None;
     }
-    tracing::info!(url, "heartbeat: connected to Valkey");
+    tracing::info!(url = %url, "heartbeat: connected to Valkey");
     Some(pool)
 }
 
@@ -83,11 +84,5 @@ mod tests {
     fn key_format_matches_veronex_convention() {
         let id = "550e8400-e29b-41d4-a716-446655440000";
         assert_eq!(key(id), "veronex:provider:hb:550e8400-e29b-41d4-a716-446655440000");
-    }
-
-    #[test]
-    fn key_prefix_is_stable() {
-        let id = "abc";
-        assert!(key(id).starts_with("veronex:provider:hb:"));
     }
 }
