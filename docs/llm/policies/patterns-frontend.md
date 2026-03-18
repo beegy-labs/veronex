@@ -1,6 +1,6 @@
 # Code Patterns: Frontend — 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-16 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Next.js 16 · React 19 · TanStack Query v5 · Tailwind v4 · Zod
 > Rust patterns -> `policies/patterns.md`
 
@@ -143,6 +143,14 @@ type ProviderId = z.infer<typeof ProviderIdSchema>
 ```
 
 Apply Zod at entry points: API responses, form inputs, env vars.
+
+### FlowStats — Server-Computed Rates
+
+`FlowStatsSchema` fields: `incoming` (10s window count), `incoming_60s` (60s window count = req/m), `queued`, `running`, `completed`. All `NonNegativeInt`.
+
+- `req/s` = `incoming / 10` (client divides)
+- `req/m` = `incoming_60s` (server-computed 60-bucket sliding window, NOT `req/s * 60`)
+- Server broadcasts every second unconditionally — clients rely on this cadence
 
 ---
 

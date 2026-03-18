@@ -1,6 +1,6 @@
 # Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-15 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Rust Edition 2024 · Axum 0.8 · sqlx 0.8
 > Frontend patterns -> `policies/patterns-frontend.md`
 
@@ -188,6 +188,8 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 | `CANCEL_TIMEOUT` | 5s | Job cancellation in CancelGuard |
 | `OLLAMA_MODEL_CACHE_TTL` | 10s | Provider-for-model lookup cache |
 | `MODEL_SELECTION_CACHE_TTL` | 30s | Provider model-selection enabled list cache |
+| `HEALTH_CHECK_INTERVAL_SECS` | 30s | Health checker loop interval |
+| `STATS_TICK_INTERVAL` | 1s | FlowStats broadcast cadence |
 
 **Health checker** (`health_checker.rs` — health check specific):
 
@@ -212,6 +214,20 @@ while let Some(res) = tasks.join_next().await {
 ```
 
 Loop convention: accept `CancellationToken`, use `select!` to exit cleanly.
+
+### Stats Ticker — Sliding Window Counters
+
+`FlowStats` uses 60 x 1-second sliding-window buckets (not ring-buffer event scanning):
+
+| Field | Computation | Buckets |
+|-------|-------------|---------|
+| `incoming` | sum of last 10 buckets | req/s = incoming/10 |
+| `incoming_60s` | sum of all 60 buckets | = req/m |
+| `completed` | sum of all 60 buckets | terminal events |
+
+A separate task counts broadcast events (`pending` -> incoming, terminal -> completed) into the current bucket. The ticker rotates buckets every second, clears the new slot, and always broadcasts -- no PartialEq skip. Clients rely on receiving stats every second.
+
+`queued`/`running` sourced from DashMap (`get_live_counts()`) with DB fallback (single indexed query) when DashMap is empty (e.g. after restart). Not Valkey LLEN -- pops too fast for accurate reads.
 
 ## Pool Configuration
 

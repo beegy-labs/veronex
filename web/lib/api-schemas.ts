@@ -28,6 +28,7 @@ export const JobStatusEventSchema = z.object({
 
 export const FlowStatsSchema = z.object({
   incoming: NonNegativeInt,
+  incoming_60s: NonNegativeInt,
   queued: NonNegativeInt,
   running: NonNegativeInt,
   completed: NonNegativeInt,
@@ -203,9 +204,9 @@ export const JobDetailSchema = z.object({
   prompt: z.string(),
   result_text: z.string().nullable(),
   error: z.string().nullable(),
-  tool_calls_json: z.array(z.any()).nullable(),
+  tool_calls_json: z.array(z.unknown()).nullable(),
   message_count: z.number().int().nullable(),
-  messages_json: z.array(z.any()).nullable(),
+  messages_json: z.array(z.unknown()).nullable(),
   provider_name: z.string().nullable().optional(),
   image_keys: z.array(z.string()).nullable().optional(),
   image_urls: z.array(z.string()).nullable().optional(),
