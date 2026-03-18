@@ -8,6 +8,9 @@
 servers. Integrates request routing + capacity learning + thermal protection to
 maximize cluster-wide throughput. OpenAI-compatible API + Next.js admin dashboard.
 
+Scale target: 10,000+ providers, tens of thousands req/s.
+All architecture decisions must consider this scale (O(1) counters, no DB polling hot paths).
+
 Three Rust crates:
 - `veronex` — main API server + scheduler (`crates/veronex/`)
 - `veronex-analytics` — internal analytics service (`crates/veronex-analytics/`, port 3003)

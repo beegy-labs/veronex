@@ -330,6 +330,7 @@ pub async fn wire_repositories(
 pub async fn maybe_bootstrap_super_account(
     account_repo: &Arc<dyn AccountRepository>,
     config: &AppConfig,
+    pg_pool: &sqlx::PgPool,
 ) {
     let (user, pass) = match (&config.bootstrap_super_user, &config.bootstrap_super_pass) {
         (Some(u), Some(p)) => (u.clone(), p.clone()),
@@ -352,13 +353,21 @@ pub async fn maybe_bootstrap_super_account(
                 .map(|h| h.to_string())
             {
                 Ok(hash) => {
+                    // Look up the super role_id from seeded roles table.
+                    let super_role_id = match sqlx::query_as::<_, (uuid::Uuid,)>("SELECT id FROM roles WHERE name = 'super'")
+                        .fetch_optional(pg_pool)
+                        .await
+                    {
+                        Ok(Some(row)) => row.0,
+                        Ok(None) => { tracing::warn!("super role not found in DB — skip bootstrap"); return; }
+                        Err(e) => { tracing::warn!("failed to query super role: {e}"); return; }
+                    };
                     let super_account = veronex::domain::entities::Account {
                         id: uuid::Uuid::now_v7(),
                         username: user.clone(),
                         password_hash: hash,
                         name: "Super Admin".to_string(),
                         email: None,
-                        role: veronex::domain::enums::AccountRole::Super,
                         department: None,
                         position: None,
                         is_active: true,
@@ -367,7 +376,7 @@ pub async fn maybe_bootstrap_super_account(
                         created_at: chrono::Utc::now(),
                         deleted_at: None,
                     };
-                    match account_repo.create(&super_account).await {
+                    match account_repo.create_with_roles(&super_account, &[super_role_id]).await {
                         Ok(()) => tracing::info!("bootstrap super account '{user}' created"),
                         Err(e) => {
                             tracing::warn!("failed to create bootstrap super account: {e}")

@@ -114,7 +114,7 @@ pub async fn test_completions(
             api_format: ApiFormat::OpenaiCompat,
             messages: None,
             tools: None,
-            request_path: Some("/v1/test/completions".to_string()),
+            request_path: Some("/v1/chat/completions".to_string()),
             conversation_id: None,
             key_tier: None,
             images: req.images,
@@ -125,7 +125,7 @@ pub async fn test_completions(
     {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("test_completions: submit failed: {e}");
+            tracing::error!(account_id = %claims.sub, model = %model, "test_completions: submit failed: {e:?}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": {"message": "failed to submit test job"}})),
@@ -317,7 +317,7 @@ pub async fn test_ollama_chat(
             api_format: ApiFormat::OllamaNative,
             messages: None,
             tools: None,
-            request_path: Some("/v1/test/api/chat".to_string()),
+            request_path: Some("/api/chat".to_string()),
             conversation_id: None,
             key_tier: None,
             images: None,
@@ -328,7 +328,7 @@ pub async fn test_ollama_chat(
     {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("test_ollama_chat: submit failed: {e}");
+            tracing::error!(account_id = %claims.sub, "test_ollama_chat: submit failed: {e:?}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "failed to submit test job"})),
@@ -372,7 +372,7 @@ pub async fn test_ollama_generate(
             api_format: ApiFormat::OllamaNative,
             messages: None,
             tools: None,
-            request_path: Some("/v1/test/api/generate".to_string()),
+            request_path: Some("/api/generate".to_string()),
             conversation_id: None,
             key_tier: None,
             images: None,
@@ -383,7 +383,7 @@ pub async fn test_ollama_generate(
     {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("test_ollama_generate: submit failed: {e}");
+            tracing::error!(account_id = %claims.sub, "test_ollama_generate: submit failed: {e:?}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "failed to submit test job"})),
@@ -557,7 +557,7 @@ pub async fn test_gemini_request(
             api_format: ApiFormat::GeminiNative,
             messages: None,
             tools: None,
-            request_path: Some("/v1/test/v1beta/models".to_string()),
+            request_path: Some("/v1beta/models".to_string()),
             conversation_id: None,
             key_tier: None,
             images: None,
@@ -568,7 +568,7 @@ pub async fn test_gemini_request(
     {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("test_gemini_request: submit failed: {e}");
+            tracing::error!(account_id = %claims.sub, "test_gemini_request: submit failed: {e:?}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": {"message": "failed to submit test job"}})),

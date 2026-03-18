@@ -40,12 +40,25 @@ flowchart TD
         S08["08-sdd-advanced.sh"]
     end
 
-    S03 --> P02 & P04 & P05 & P06 & P07
-    P02 & P04 & P05 & P06 & P07 --> S08
-    S08 --> S09["09-metrics-pipeline.sh"]
-    S09 --> S10["10-image-storage.sh"]
-    S10 --> S11["11-verify-liveness.sh"]
-    S11 --> Result["Aggregate Results"]
+    S03 --> P02 & P04 & P05 & P06 & P07 & P11
+    P02 & P04 & P05 & P06 & P07 & P11 --> S08
+
+    subgraph "Parallel 1"
+        P02["02-scheduler.sh"]
+        P04["04-crud.sh"]
+        P05["05-security.sh"]
+        P06["06-api-surface.sh"]
+        P07["07-lifecycle.sh"]
+        P11["11-verify-liveness.sh"]
+    end
+
+    subgraph "Parallel 2"
+        P09["09-metrics-pipeline.sh"]
+        P10["10-image-storage.sh"]
+    end
+
+    S08 --> P09 & P10
+    P09 & P10 --> Result["Aggregate Results"]
 ```
 
 ---
@@ -296,6 +309,14 @@ flowchart TD
         R3[admin → /accounts 403]
         R4[admin → /audit 403]
     end
+
+    subgraph "Role CRUD"
+        RC1[List roles → 200]
+        RC2[Create role → 201]
+        RC3[Update role → 200]
+        RC4[System role blocked → 403]
+        RC5[Delete role → 204]
+    end
 ```
 
 | Test | Validates |
@@ -314,8 +335,21 @@ flowchart TD
 | RPM rate limit | rate_limit_rpm=2 key with 3 requests → 429 |
 | Expired key rejection | expires_at in past → 401 |
 | Session revocation | DELETE /v1/sessions/{id} → subsequent request 401 |
-| RBAC admin → accounts | Admin role accessing /v1/accounts → 403 |
-| RBAC admin → audit | Admin role accessing /v1/audit → 403 |
+| RBAC viewer → accounts | Viewer accessing /v1/accounts → 403 |
+| RBAC viewer → audit | Viewer accessing /v1/audit → 403 |
+| RBAC viewer → provider create | Viewer POST /v1/providers → 403 |
+| RBAC viewer → key create | Viewer POST /v1/keys → 403 |
+| RBAC viewer → role create | Viewer POST /v1/roles → 403 |
+| List roles | GET /v1/roles → 200 |
+| Create role | POST /v1/roles → 201 with permissions and menus |
+| Update role | PATCH /v1/roles/{id} → 200 |
+| System role blocked | PATCH system role → 403 |
+| Create account with N roles | POST /v1/accounts with role_ids array → 201 |
+| Multi-role dashboard access | Merged permissions: dashboard_view → 200 |
+| Multi-role key access | Merged permissions: key_manage → 200 |
+| Multi-role account blocked | Missing account_manage → 403 |
+| Delete role with users | DELETE role with assigned users → 409 |
+| Delete role | DELETE /v1/roles/{id} → 204 (after users removed) |
 | MAX_QUEUE constants | MAX_QUEUE_PER_MODEL=2000, MAX_QUEUE_SIZE=10000 (info) |
 
 ---
@@ -638,9 +672,9 @@ The logic is fully implemented in `thermal.rs`. To enable: deploy the agent or m
 | `06-api-surface.sh` | Parallel | Multi-format inference + endpoints + Pull Drain |
 | `07-lifecycle.sh` | Parallel | Cancel + SSE + password reset + crash recovery |
 | `08-sdd-advanced.sh` | Sequential 3 | AIMD decrease + Scale-In/Out + thermal deep validation |
-| `09-metrics-pipeline.sh` | Sequential 4 | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
-| `10-image-storage.sh` | Sequential 5 | Image inference, S3 WebP storage, thumbnails, provider_name |
-| `11-verify-liveness.sh` | Sequential 6 | Server/provider verify endpoints, registration validation, liveness |
+| `09-metrics-pipeline.sh` | Parallel 2 | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
+| `10-image-storage.sh` | Parallel 2 | Image inference, S3 WebP storage, thumbnails, provider_name |
+| `11-verify-liveness.sh` | Parallel 1 | Server/provider verify endpoints, registration validation, liveness |
 
 ---
 
@@ -653,7 +687,7 @@ Infrastructure + Auth         01               15
 Core Scheduler                02               20
 Inference + AIMD Learning     03               16
 CRUD                          04               19
-Security + RBAC               05               17
+Security + RBAC + Roles        05               30
 Multi-Format + Endpoints      06               30
 Lifecycle + Cancel            07               23
 Advanced Validation           08               17
@@ -661,5 +695,5 @@ Metrics Pipeline              09               10
 Image Storage                 10                6
 Verify + Liveness             11               18
 ──────────────────────────────────────────────────────
-Total                                          ~191
+Total                                          ~204
 ```

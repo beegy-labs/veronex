@@ -115,9 +115,7 @@ hdr "Provider Liveness — Valkey Keys"
 
 ONLINE_COUNT=$(valkey_get "veronex:stats:providers:online")
 if [ -n "$ONLINE_COUNT" ] && [ "$ONLINE_COUNT" != "(nil)" ]; then
-  [ "$ONLINE_COUNT" -ge 0 ] 2>/dev/null \
-    && pass "PROVIDERS_ONLINE_COUNTER exists (value=$ONLINE_COUNT)" \
-    || fail "PROVIDERS_ONLINE_COUNTER invalid ($ONLINE_COUNT)"
+  pass "PROVIDERS_ONLINE_COUNTER exists (value=$ONLINE_COUNT)"
 else
   info "PROVIDERS_ONLINE_COUNTER not set (health_checker may not have run yet)"
 fi

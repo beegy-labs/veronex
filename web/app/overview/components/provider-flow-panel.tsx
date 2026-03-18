@@ -148,6 +148,15 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   const spawnedRef   = useRef(new Set<string>())
+  // Cap spawnedRef to prevent unbounded growth on long-lived sessions
+  if (spawnedRef.current.size > 500) {
+    const iter = spawnedRef.current.values()
+    for (let i = 0; i < 250; i++) {
+      const { value, done } = iter.next()
+      if (done) break
+      spawnedRef.current.delete(value)
+    }
+  }
   const containerRef = useRef<HTMLDivElement>(null)
   const [scale,  setScale]  = useReducer((_: number, v: number) => v, 1)
   const [bees,   dispatch]  = useReducer(beeReducer, [])

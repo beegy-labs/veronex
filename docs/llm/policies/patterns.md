@@ -254,6 +254,32 @@ PgPoolOptions::new()
 | 8 | `infrastructure/inbound/http/router.rs` | Register routes inside auth middleware |
 | 9 | `docs/llm/{domain}/new_feature.md` | CDD doc |
 
+## RequirePermission Macro
+
+`define_require_permission!` generates Axum `FromRequestParts` extractors that check JWT claims for a specific permission. Super-admin bypasses all checks.
+
+```rust
+// Definition (jwt_auth.rs)
+macro_rules! define_require_permission {
+    ($name:ident, $perm:expr) => { /* reads Claims, checks role==Super || permissions.contains($perm) */ };
+}
+define_require_permission!(RequireRoleManage, "role_manage");
+
+// Usage in handlers
+pub async fn list_roles(RequireRoleManage(_claims): RequireRoleManage, ...) { ... }
+```
+
+| Extractor | Permission | Used by |
+|-----------|-----------|---------|
+| `RequireRoleManage` | `role_manage` | Role CRUD |
+| `RequireAccountManage` | `account_manage` | Account CRUD |
+| `RequireProviderManage` | `provider_manage` | Provider CRUD |
+| `RequireKeyManage` | `key_manage` | API key CRUD |
+| `RequireAuditView` | `audit_view` | Audit log |
+| `RequireSettingsManage` | `settings_manage` | System settings |
+| `RequireApiTest` | `api_test` | Test inference |
+| `RequireDashboardView` | `dashboard_view` | Dashboard data |
+
 ## Domain Enum Patterns
 
 Domain enums (`ProviderType`, `JobStatus`, `JobSource`, `ApiFormat`, `KeyTier`) implement conversion methods directly — no wrapper functions in the infrastructure layer.
@@ -311,6 +337,19 @@ const PRICING_LATERAL: &str = "LEFT JOIN LATERAL (...) pricing ON true";
 format!("SELECT ... FROM inference_jobs j {PRICING_LATERAL} WHERE ...")
 ```
 
+## SQL Multi-Value Filters
+
+Use `string_to_array` + `ANY` for comma-separated status filters instead of `= $1`:
+
+```rust
+// CORRECT — supports "pending,running" as single parameter
+"j.status = ANY(string_to_array($1, ','))"
+// WRONG — only matches a single value
+"j.status = $1"
+```
+
+Used in `dashboard_queries.rs` for job status filtering (live feed, dashboard jobs).
+
 ## SQL Interval Parameterization
 
 Never interpolate user-controlled intervals as strings. Use `make_interval()`:
@@ -321,6 +360,18 @@ Never interpolate user-controlled intervals as strings. Use `make_interval()`:
 // WRONG — SQL injection risk
 format!("j.created_at >= NOW() - INTERVAL '{interval}'")
 ```
+
+## Image Inference — 3-Endpoint Support
+
+All three inference formats support image forwarding to Ollama vision models:
+
+| Endpoint | Image source | Extraction |
+|----------|-------------|------------|
+| `/v1/chat/completions` | `messages[].content[]` array with `type: "image_url"` | `openai_handlers.rs`: `ContentPart.extract_base64_images()` parses `data:...;base64,{data}` from `image_url.url` |
+| `/api/chat` | `images` field on request body (Ollama native) | `ollama_compat_handlers.rs`: forwarded from parsed messages |
+| `/api/generate` | `images` field on request body | `ollama_compat_handlers.rs`: forwarded directly |
+
+`stream_chat()` in `ollama/adapter.rs` injects images into the last user message (Ollama expects per-message images, not top-level). OpenAI `images` field and content-array images are merged before injection.
 
 ## Input Validation
 
@@ -376,7 +427,8 @@ Called on provider register and update. See `auth/security.md` for full SSRF det
 
 ## Provider Liveness — Push Model (Heartbeat)
 
-At scale (100+ providers) do NOT poll providers directly from veronex.
+Scale target: 10,000+ providers, tens of thousands req/s.
+Do NOT poll providers directly from veronex.
 Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
 
 | Component | Responsibility |
@@ -385,6 +437,22 @@ Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
 | `valkey_keys::provider_heartbeat(id)` | Key SSOT: `veronex:provider:hb:{uuid}` |
 | `health_checker.rs` | MGET all known heartbeat keys → one round-trip; missing key = offline |
 | `valkey_keys::PROVIDERS_ONLINE_COUNTER` | `INCR`/`DECR` atomically on status transitions → O(1) dashboard reads |
+
+## Job Counters — Valkey INCR/DECR
+
+O(1) pending/running counts for dashboard. No DB polling in hot path.
+
+| Key | Update | Read |
+|-----|--------|------|
+| `JOBS_PENDING_COUNTER` | INCR on submit, DECR on dispatch/cancel/fail | stats ticker GET |
+| `JOBS_RUNNING_COUNTER` | INCR on dispatch, DECR on complete/fail/cancel | stats ticker GET |
+
+| Safety | Detail |
+|--------|--------|
+| Double-DECR prevention | Check previous status before DECR |
+| Startup reconciliation | DB COUNT → Valkey SET at boot |
+| Periodic reconciliation | Every 60s: DB COUNT vs Valkey GET → SET if drift |
+| Valkey unavailable | Fallback to DB query |
 
 **TTL rule**: `heartbeat_ttl ≥ 3 × scrape_interval` — survives 2 missed cycles.
 
@@ -398,6 +466,18 @@ let values: Result<Vec<Option<String>>, _> = pool.mget(keys).await;
 ```
 
 **Key format test**: `heartbeat::key()` is pure — test it to guard crate-boundary drift.
+
+## Scale Guards — 10K+ Provider Patterns
+
+| Pattern | Location | Detail |
+|---------|----------|--------|
+| `MAX_SCORING_CANDIDATES = 50` | `dispatcher.rs` | Bounds scoring loop: O(10K) → O(50) |
+| `MAX_CONCURRENT_METRICS = 64` | `health_checker.rs` | Semaphore limits concurrent node-exporter polls |
+| `MAX_CONCURRENT_PROBES = 64` | `health_checker.rs` | Semaphore limits HTTP health probes (no-Valkey fallback) |
+| `pg_class.reltuples` | `dashboard_queries.rs` | O(1) total_jobs estimate instead of COUNT(*) |
+| `join_all` parallelism | `dispatcher.rs`, `placement_planner.rs` | Parallel Valkey/DB calls instead of sequential loops |
+| `concurrent_http_probes()` | `health_checker.rs` | Bounded parallel HTTP for MGET fallback |
+| No-Valkey DB cache | `background.rs` | DB query every 10s (not 1s) when Valkey absent |
 
 ## SSE Error Sanitization
 

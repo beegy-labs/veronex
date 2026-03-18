@@ -12,12 +12,11 @@ use serde::{Deserialize, Serialize};
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
 use crate::domain::enums::AccountRole;
 use crate::infrastructure::outbound::valkey_keys::{QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID, QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_TEST as QUEUE_KEY_TEST};
-use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSuper};
+use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSettingsManage};
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
 use super::audit_helpers::emit_audit;
-use super::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
 use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
 use super::handlers::{SseStream, try_acquire_sse};
@@ -408,7 +407,7 @@ pub async fn get_capacity_settings(
 // ── PATCH /v1/dashboard/capacity/settings ──────────────────────────
 
 pub async fn patch_capacity_settings(
-    RequireSuper(claims): RequireSuper,
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
     Json(body): Json<PatchSyncSettings>,
 ) -> impl axum::response::IntoResponse {
@@ -441,7 +440,7 @@ pub async fn patch_capacity_settings(
 // ── POST /v1/dashboard/capacity/sync ───────────────────────────────
 
 pub async fn trigger_capacity_sync(
-    RequireSuper(claims): RequireSuper,
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     if state.sync_lock.available_permits() == 0 {
@@ -464,40 +463,13 @@ pub async fn trigger_capacity_sync(
 // ── Helper: fetch models from all registered providers ────────────
 
 async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<String>> {
-    use crate::domain::enums::ProviderType;
-
     let mut result: HashMap<String, Vec<String>> = HashMap::new();
 
-    let providers = state.provider_registry.list_all().await.unwrap_or_default();
-
-    // ── Ollama: fetch /api/tags from each active Ollama provider ───
-    let ollama_providers: Vec<_> = providers.iter()
-        .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
-        .collect();
-
-    let mut ollama_models = std::collections::BTreeSet::new();
-    for provider in &ollama_providers {
-        let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
-        if let Ok(resp) = state.http_client
-            .get(&url)
-            .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
-            .send()
-            .await
-        {
-            #[derive(serde::Deserialize)]
-            struct TagsResponse { models: Vec<TagModel> }
-            #[derive(serde::Deserialize)]
-            struct TagModel { name: String }
-
-            if let Ok(tags) = resp.json::<TagsResponse>().await {
-                for m in tags.models {
-                    ollama_models.insert(m.name);
-                }
-            }
+    // ── Ollama: read from already-synced ollama_model_repo (no HTTP) ───
+    if let Ok(models) = state.ollama_model_repo.list_all().await {
+        if !models.is_empty() {
+            result.insert("ollama".to_string(), models);
         }
-    }
-    if !ollama_models.is_empty() {
-        result.insert("ollama".to_string(), ollama_models.into_iter().collect());
     }
 
     // ── Gemini: show models only when lab feature is enabled ──
@@ -643,7 +615,7 @@ pub struct PatchLabSettingsBody {
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
 pub async fn patch_lab_settings(
-    RequireSuper(claims): RequireSuper,
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
     Json(body): Json<PatchLabSettingsBody>,
 ) -> impl axum::response::IntoResponse {

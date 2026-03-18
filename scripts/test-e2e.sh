@@ -13,7 +13,9 @@
 #
 # Phase execution:
 #   Sequential : 01-setup → 03-inference
-#   Parallel   : 02-scheduler, 04-crud, 05-security, 06-api-surface, 07-lifecycle
+#   Parallel 1 : 02-scheduler, 04-crud, 05-security, 06-api-surface, 07-lifecycle, 11-verify-liveness
+#   Sequential : 08-sdd-advanced
+#   Parallel 2 : 09-metrics-pipeline, 10-image-storage
 #
 # Prerequisites:
 #   - docker compose up (Veronex stack running)
@@ -49,20 +51,23 @@ bash "$E2E_DIR/01-setup.sh"
 echo -e "${CYAN}${BOLD}[03] Inference: concurrent bursts + AIMD learning${NC}"
 bash "$E2E_DIR/03-inference.sh"
 
-# ── Parallel phases ───────────────────────────────────────────────────────────
+# ── Parallel group 1 ─────────────────────────────────────────────────────────
+# 11-verify-liveness is stateless (HTTP verify calls + Valkey key checks)
+# so it runs safely alongside the other parallel phases.
 PARALLEL_PHASES=(
-  "02-scheduler.sh"    # ZSET queue, thermal, num_parallel, AIMD constraint
-  "04-crud.sh"         # Account / Key / Provider(num_parallel) / Server CRUD
-  "05-security.sh"     # Auth edge cases, SSRF, rate limiting, RBAC
-  "06-api-surface.sh"  # Multi-format inference, endpoint smoke tests
-  "07-lifecycle.sh"    # Job cancel, SSE, native API, password reset, edge cases
+  "02-scheduler.sh"          # ZSET queue, thermal, num_parallel, AIMD constraint
+  "04-crud.sh"               # Account / Key / Provider(num_parallel) / Server CRUD
+  "05-security.sh"           # Auth edge cases, SSRF, rate limiting, RBAC, Roles
+  "06-api-surface.sh"        # Multi-format inference, endpoint smoke tests
+  "07-lifecycle.sh"          # Job cancel, SSE, native API, password reset, edge cases
+  "11-verify-liveness.sh"    # Server/provider verify, duplicate 409, heartbeat
 )
 PARALLEL_PIDS=()
 PARALLEL_COUNTS=()
 PARALLEL_EXIT=0
 
 echo ""
-echo -e "${CYAN}${BOLD}Running parallel phases: ${PARALLEL_PHASES[*]}${NC}"
+echo -e "${CYAN}${BOLD}Running parallel group 1: ${PARALLEL_PHASES[*]}${NC}"
 
 for phase in "${PARALLEL_PHASES[@]}"; do
   phase_counts="$COUNTS_FILE.${phase%.sh}"
@@ -79,7 +84,7 @@ for i in "${!PARALLEL_PIDS[@]}"; do
   fi
 done
 
-# ── Sequential post-parallel phase: SDD advanced tests ──────────────────────
+# ── Sequential: SDD advanced tests (needs clean state after parallel) ────────
 echo ""
 echo -e "${CYAN}${BOLD}[08] SDD Advanced: AIMD decrease, multi-model, scale-in/out, thermal${NC}"
 SDD_COUNTS="$COUNTS_FILE.08-sdd-advanced"
@@ -91,44 +96,34 @@ else
   PARALLEL_EXIT=1
 fi
 
-# ── Sequential post-parallel phase: Metrics Pipeline ────────────────────────
-echo ""
-echo -e "${CYAN}${BOLD}[09] Metrics Pipeline: Agent → OTel → ClickHouse${NC}"
-METRICS_COUNTS="$COUNTS_FILE.09-metrics-pipeline"
-: > "$METRICS_COUNTS"
-if E2E_COUNTS_FILE="$METRICS_COUNTS" bash "$E2E_DIR/09-metrics-pipeline.sh"; then
-  true
-else
-  echo -e "${RED}[ERROR]${NC} 09-metrics-pipeline.sh exited non-zero" >&2
-  PARALLEL_EXIT=1
-fi
+# ── Parallel group 2: independent infra tests ────────────────────────────────
+# 09 (metrics pipeline) and 10 (image storage) are independent:
+#   09 only touches agent + ClickHouse, no inference
+#   10 does image inference but doesn't touch metrics pipeline
+PARALLEL2_PHASES=("09-metrics-pipeline.sh" "10-image-storage.sh")
+PARALLEL2_PIDS=()
+PARALLEL2_COUNTS=()
 
-# ── Sequential post-parallel phase: Image Storage ───────────────────────────
 echo ""
-echo -e "${CYAN}${BOLD}[10] Image Storage: S3 WebP + provider_name (API + Test)${NC}"
-IMG_COUNTS="$COUNTS_FILE.10-image-storage"
-: > "$IMG_COUNTS"
-if E2E_COUNTS_FILE="$IMG_COUNTS" bash "$E2E_DIR/10-image-storage.sh"; then
-  true
-else
-  echo -e "${RED}[ERROR]${NC} 10-image-storage.sh exited non-zero" >&2
-  PARALLEL_EXIT=1
-fi
+echo -e "${CYAN}${BOLD}Running parallel group 2: ${PARALLEL2_PHASES[*]}${NC}"
 
-# ── Sequential post-parallel phase: Verify & Liveness ───────────────────────
-echo ""
-echo -e "${CYAN}${BOLD}[11] Verify & Liveness: server/provider verify, duplicate 409, heartbeat${NC}"
-VERIFY_COUNTS="$COUNTS_FILE.11-verify-liveness"
-: > "$VERIFY_COUNTS"
-if E2E_COUNTS_FILE="$VERIFY_COUNTS" bash "$E2E_DIR/11-verify-liveness.sh"; then
-  true
-else
-  echo -e "${RED}[ERROR]${NC} 11-verify-liveness.sh exited non-zero" >&2
-  PARALLEL_EXIT=1
-fi
+for phase in "${PARALLEL2_PHASES[@]}"; do
+  phase_counts="$COUNTS_FILE.${phase%.sh}"
+  : > "$phase_counts"
+  PARALLEL2_COUNTS+=("$phase_counts")
+  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase" &
+  PARALLEL2_PIDS+=($!)
+done
+
+for i in "${!PARALLEL2_PIDS[@]}"; do
+  if ! wait "${PARALLEL2_PIDS[$i]}"; then
+    echo -e "${RED}[ERROR]${NC} ${PARALLEL2_PHASES[$i]} exited non-zero" >&2
+    PARALLEL_EXIT=1
+  fi
+done
 
 # ── Aggregate results ─────────────────────────────────────────────────────────
-ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}" "$SDD_COUNTS" "$METRICS_COUNTS" "$IMG_COUNTS" "$VERIFY_COUNTS")
+ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}" "$SDD_COUNTS" "${PARALLEL2_COUNTS[@]}")
 TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
 for cf in "${ALL_COUNTS_FILES[@]}"; do
   [ -f "$cf" ] || continue

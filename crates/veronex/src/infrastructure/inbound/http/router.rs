@@ -9,6 +9,7 @@ use tower_http::trace::TraceLayer;
 use super::account_handlers;
 use super::audit_handlers;
 use super::auth_handlers;
+use super::role_handlers;
 use super::model_selection_handlers;
 use super::provider_handlers;
 use super::dashboard_handlers;
@@ -116,6 +117,9 @@ fn build_test_router() -> Router<AppState> {
 /// Build the JWT-protected admin router.
 fn build_jwt_router() -> Router<AppState> {
     Router::new()
+        // Role management (super-only)
+        .route("/v1/roles", get(role_handlers::list_roles).post(role_handlers::create_role))
+        .route("/v1/roles/{id}", patch(role_handlers::update_role).delete(role_handlers::delete_role))
         // Account management
         .route("/v1/accounts", get(account_handlers::list_accounts).post(account_handlers::create_account))
         .route("/v1/accounts/{id}", patch(account_handlers::update_account).delete(account_handlers::delete_account))

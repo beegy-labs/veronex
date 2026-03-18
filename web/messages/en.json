@@ -666,7 +666,11 @@
     "imageRemove": "Remove",
     "imageCompressing": "Compressing…",
     "imageTooLarge": "Image exceeds 10 MB limit",
-    "imageTooMany": "Maximum 4 images (Ollama limit)"
+    "imageTooMany": "Maximum 4 images (Ollama limit)",
+    "endpoint": "Endpoint",
+    "apiKeyToggle": "Use API Key",
+    "apiKeyPlaceholder": "Paste your API key…",
+    "noApiKey": "Session Auth (Test)"
   },
   "apiDocs": {
     "title": "API Documentation",
@@ -741,6 +745,53 @@
     "roleAdmin": "Admin",
     "roleSuper": "Super",
     "deleteConfirm": "Delete account {{name}}? This action cannot be undone."
+  },
+  "roles": {
+    "title": "Roles",
+    "description": "Manage roles and permissions.",
+    "createRole": "Create Role",
+    "editRole": "Edit Role",
+    "roleName": "Role Name",
+    "permissions": "Permissions",
+    "menus": "Menus",
+    "accountCount": "Accounts",
+    "system": "System",
+    "noRoles": "No roles yet.",
+    "deleteConfirm": "Delete role {{name}}? This action cannot be undone.",
+    "perm_dashboard_view": "Dashboard View",
+    "perm_api_test": "API Test",
+    "perm_provider_manage": "Provider Manage",
+    "perm_key_manage": "Key Manage",
+    "perm_account_manage": "Account Manage",
+    "perm_audit_view": "Audit View",
+    "perm_settings_manage": "Settings Manage",
+    "perm": {
+      "dashboard_view": "Dashboard View",
+      "api_test": "API Test",
+      "provider_manage": "Provider Management",
+      "key_manage": "API Key Management",
+      "account_manage": "Account Management",
+      "audit_view": "Audit Log",
+      "settings_manage": "Settings",
+      "role_manage": "Role Management"
+    },
+    "menu": {
+      "dashboard": "Dashboard",
+      "flow": "Network Flow",
+      "jobs": "Jobs",
+      "performance": "Performance",
+      "usage": "Usage",
+      "test": "Test",
+      "providers": "Providers",
+      "servers": "Servers",
+      "keys": "API Keys",
+      "accounts": "Accounts",
+      "audit": "Audit Log",
+      "api_docs": "API Docs"
+    },
+    "permissionCount": "{{count}} permissions",
+    "menuCount": "{{count}} menus",
+    "assignedUsers": "{{count}} users"
   },
   "audit": {
     "title": "Audit Log",
