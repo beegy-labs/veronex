@@ -34,6 +34,9 @@ import {
   ApiErrorSchema,
   JobStatusEventSchema,
   FlowStatsSchema,
+  RoleSummarySchema,
+  RoleSummaryListSchema,
+  LoginResponseSchema,
 } from '../api-schemas'
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
@@ -85,7 +88,10 @@ const fixtures = {
     username: 'admin',
     name: 'Admin',
     email: null,
-    role: 'admin' as const,
+    roles: [{ id: '880e8400-e29b-41d4-a716-446655440001', name: 'viewer' }],
+    role_name: 'viewer',
+    permissions: ['dashboard_view'],
+    menus: ['dashboard'],
     department: null,
     position: null,
     is_active: true,
@@ -96,7 +102,6 @@ const fixtures = {
   createAccountResponse: {
     id: '770e8400-e29b-41d4-a716-446655440002',
     username: 'new-user',
-    role: 'admin',
     test_api_key: 'sk-test-xyz',
     created_at: '2026-01-15T10:00:00Z',
   },
@@ -267,8 +272,25 @@ describe('API Schema: Accounts', () => {
     expect(CreateAccountResponseSchema.safeParse(fixtures.createAccountResponse).success).toBe(true)
   })
 
-  it('rejects account with invalid role', () => {
-    expect(AccountSchema.safeParse({ ...fixtures.account, role: 'viewer' }).success).toBe(false)
+  it('rejects account with missing roles array', () => {
+    const { roles: _roles, ...rest } = fixtures.account
+    expect(AccountSchema.safeParse(rest).success).toBe(false)
+  })
+
+  it('validates account with roles array', () => {
+    const account = {
+      ...fixtures.account,
+      roles: [
+        { id: '880e8400-e29b-41d4-a716-446655440001', name: 'viewer' },
+        { id: '880e8400-e29b-41d4-a716-446655440002', name: 'editor' },
+      ],
+    }
+    expect(AccountSchema.safeParse(account).success).toBe(true)
+  })
+
+  it('validates account with empty roles array', () => {
+    const account = { ...fixtures.account, roles: [] }
+    expect(AccountSchema.safeParse(account).success).toBe(true)
   })
 })
 
@@ -481,5 +503,62 @@ describe('API Schema: SSE Events', () => {
       running: 0,
       // completed missing
     }).success).toBe(false)
+  })
+})
+
+describe('API Schema: Roles', () => {
+  const roleSummary = {
+    id: '880e8400-e29b-41d4-a716-446655440001',
+    name: 'viewer',
+    permissions: ['dashboard_view'],
+    menus: ['dashboard', 'jobs'],
+    is_system: true,
+    account_count: 3,
+    created_at: '2026-01-01T00:00:00Z',
+  }
+
+  it('validates a single role summary', () => {
+    expect(RoleSummarySchema.safeParse(roleSummary).success).toBe(true)
+  })
+
+  it('validates role summary list', () => {
+    expect(RoleSummaryListSchema.safeParse([roleSummary]).success).toBe(true)
+  })
+
+  it('validates empty role summary list', () => {
+    expect(RoleSummaryListSchema.safeParse([]).success).toBe(true)
+  })
+
+  it('rejects role missing permissions array', () => {
+    const { permissions: _, ...rest } = roleSummary
+    expect(RoleSummarySchema.safeParse(rest).success).toBe(false)
+  })
+
+  it('rejects role with non-integer account_count', () => {
+    expect(RoleSummarySchema.safeParse({ ...roleSummary, account_count: 1.5 }).success).toBe(false)
+  })
+})
+
+describe('API Schema: Login Response', () => {
+  const loginResponse = {
+    ok: true,
+    account_id: '770e8400-e29b-41d4-a716-446655440002',
+    username: 'admin',
+    role: 'super',
+    permissions: ['dashboard_view', 'api_test', 'provider_manage'],
+    menus: ['dashboard', 'flow', 'jobs'],
+  }
+
+  it('validates login response', () => {
+    expect(LoginResponseSchema.safeParse(loginResponse).success).toBe(true)
+  })
+
+  it('validates login response with empty permissions', () => {
+    expect(LoginResponseSchema.safeParse({ ...loginResponse, permissions: [], menus: [] }).success).toBe(true)
+  })
+
+  it('rejects login response missing ok field', () => {
+    const { ok: _, ...rest } = loginResponse
+    expect(LoginResponseSchema.safeParse(rest).success).toBe(false)
   })
 })

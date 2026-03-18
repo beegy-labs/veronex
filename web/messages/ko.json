@@ -666,7 +666,11 @@
     "imageRemove": "제거",
     "imageCompressing": "압축 중…",
     "imageTooLarge": "이미지가 10MB를 초과합니다",
-    "imageTooMany": "최대 4장까지 가능합니다 (Ollama 제한)"
+    "imageTooMany": "최대 4장까지 가능합니다 (Ollama 제한)",
+    "endpoint": "엔드포인트",
+    "apiKeyToggle": "API 키 사용",
+    "apiKeyPlaceholder": "API 키를 붙여넣으세요…",
+    "noApiKey": "세션 인증 (테스트)"
   },
   "apiDocs": {
     "title": "API 문서",
@@ -741,6 +745,53 @@
     "roleAdmin": "관리자",
     "roleSuper": "슈퍼",
     "deleteConfirm": "{{name}} 계정을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다."
+  },
+  "roles": {
+    "title": "역할",
+    "description": "역할 및 권한을 관리합니다.",
+    "createRole": "역할 생성",
+    "editRole": "역할 편집",
+    "roleName": "역할 이름",
+    "permissions": "권한",
+    "menus": "메뉴",
+    "accountCount": "계정 수",
+    "system": "시스템",
+    "noRoles": "역할이 없습니다.",
+    "deleteConfirm": "{{name}} 역할을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
+    "perm_dashboard_view": "대시보드 보기",
+    "perm_api_test": "API 테스트",
+    "perm_provider_manage": "프로바이더 관리",
+    "perm_key_manage": "키 관리",
+    "perm_account_manage": "계정 관리",
+    "perm_audit_view": "감사 로그 보기",
+    "perm_settings_manage": "설정 관리",
+    "perm": {
+      "dashboard_view": "대시보드 보기",
+      "api_test": "API 테스트",
+      "provider_manage": "프로바이더 관리",
+      "key_manage": "API 키 관리",
+      "account_manage": "계정 관리",
+      "audit_view": "감사 로그",
+      "settings_manage": "설정",
+      "role_manage": "역할 관리"
+    },
+    "menu": {
+      "dashboard": "대시보드",
+      "flow": "네트워크 플로우",
+      "jobs": "작업",
+      "performance": "성능",
+      "usage": "사용량",
+      "test": "테스트",
+      "providers": "프로바이더",
+      "servers": "서버",
+      "keys": "API 키",
+      "accounts": "계정",
+      "audit": "감사 로그",
+      "api_docs": "API 문서"
+    },
+    "permissionCount": "{{count}}개 권한",
+    "menuCount": "{{count}}개 메뉴",
+    "assignedUsers": "{{count}}명 사용자"
   },
   "audit": {
     "title": "감사 로그",

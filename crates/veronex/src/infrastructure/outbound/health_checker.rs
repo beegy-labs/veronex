@@ -147,6 +147,36 @@ async fn poll_node_exporter_metrics(
 
 // ── Background task ────────────────────────────────────────────────────────────
 
+/// Concurrently probe providers via HTTP with bounded parallelism.
+async fn concurrent_http_probes(
+    providers: Vec<LlmProvider>,
+    client: &reqwest::Client,
+) -> Vec<ProviderCheck> {
+    use tokio::task::JoinSet;
+
+    const MAX_CONCURRENT: usize = 64;
+    let sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
+    let mut set: JoinSet<ProviderCheck> = JoinSet::new();
+
+    for provider in providers {
+        let client = client.clone();
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire_owned().await.expect("semaphore closed");
+            let new_status = check_provider(&client, &provider).await;
+            ProviderCheck { provider, new_status }
+        });
+    }
+    let mut checks = Vec::new();
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok(c) => checks.push(c),
+            Err(e) => tracing::warn!(error = %e, "health checker probe task panicked"),
+        }
+    }
+    checks
+}
+
 /// Outcome of a single provider liveness check.
 struct ProviderCheck {
     provider:   LlmProvider,
@@ -234,60 +264,29 @@ pub async fn run_health_checker_loop(
                         .collect()
                 }
                 Ok(values) => {
-                    // Length mismatch — fall back to HTTP.
+                    // Length mismatch — fall back to concurrent HTTP probes.
                     tracing::warn!(
                         expected = active.len(),
                         got = values.len(),
                         "health_checker: Valkey MGET length mismatch, falling back to HTTP probes"
                     );
-                    let mut checks = Vec::with_capacity(active.len());
-                    for provider in active {
-                        let new_status = check_provider(&client, &provider).await;
-                        checks.push(ProviderCheck { provider, new_status });
-                    }
-                    checks
+                    concurrent_http_probes(active, &client).await
                 }
                 Err(e) => {
-                    // Valkey unavailable — fall back to HTTP.
+                    // Valkey unavailable — fall back to concurrent HTTP probes.
                     tracing::warn!(error = %e, "health_checker: Valkey MGET failed, falling back to HTTP probes");
-                    let mut checks = Vec::with_capacity(active.len());
-                    for provider in active {
-                        let new_status = check_provider(&client, &provider).await;
-                        checks.push(ProviderCheck { provider, new_status });
-                    }
-                    checks
+                    concurrent_http_probes(active, &client).await
                 }
             }
         } else {
             // No Valkey — probe each provider directly (concurrent, semaphore-limited).
-            use tokio::task::JoinSet;
-            use std::sync::Arc as StdArc;
-
-            const MAX_CONCURRENT_PROBES: usize = 64;
-            let sem = StdArc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROBES));
-            let mut set: JoinSet<ProviderCheck> = JoinSet::new();
-
-            for provider in active {
-                let client = client.clone();
-                let sem = sem.clone();
-                set.spawn(async move {
-                    let _permit = sem.acquire_owned().await.expect("semaphore closed");
-                    let new_status = check_provider(&client, &provider).await;
-                    ProviderCheck { provider, new_status }
-                });
-            }
-            let mut checks = Vec::new();
-            while let Some(res) = set.join_next().await {
-                match res {
-                    Ok(c) => checks.push(c),
-                    Err(e) => tracing::warn!(error = %e, "health checker probe task panicked"),
-                }
-            }
-            checks
+            concurrent_http_probes(active, &client).await
         };
 
-        // ── Apply status changes + HW metrics (sequential — avoids cache storm) ──
+        // ── Apply status changes + HW metrics (semaphore-limited concurrency) ──
 
+        const MAX_CONCURRENT_METRICS: usize = 64;
+        let metrics_sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_METRICS));
         let mut set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
         for ProviderCheck { provider, new_status } in checks {
@@ -296,8 +295,10 @@ pub async fn run_health_checker_loop(
             let valkey_pool       = valkey_pool.clone();
             let thermal           = thermal.clone();
             let vram_pool         = vram_pool.clone();
+            let metrics_sem       = metrics_sem.clone();
 
             set.spawn(async move {
+                let _permit = metrics_sem.acquire().await.expect("semaphore closed");
                 if new_status != provider.status {
                     tracing::info!(
                         provider_id = %provider.id,

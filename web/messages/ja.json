@@ -666,7 +666,11 @@
     "imageRemove": "削除",
     "imageCompressing": "圧縮中…",
     "imageTooLarge": "画像が10MBを超えています",
-    "imageTooMany": "最大4枚まで (Ollama制限)"
+    "imageTooMany": "最大4枚まで (Ollama制限)",
+    "endpoint": "エンドポイント",
+    "apiKeyToggle": "APIキーを使用",
+    "apiKeyPlaceholder": "APIキーを貼り付けてください…",
+    "noApiKey": "セッション認証 (テスト)"
   },
   "apiDocs": {
     "title": "APIドキュメント",
@@ -741,6 +745,53 @@
     "roleAdmin": "管理者",
     "roleSuper": "スーパー",
     "deleteConfirm": "アカウント {{name}} を削除しますか？この操作は取り消せません。"
+  },
+  "roles": {
+    "title": "ロール",
+    "description": "ロールと権限を管理します。",
+    "createRole": "ロール作成",
+    "editRole": "ロール編集",
+    "roleName": "ロール名",
+    "permissions": "権限",
+    "menus": "メニュー",
+    "accountCount": "アカウント数",
+    "system": "システム",
+    "noRoles": "ロールがありません。",
+    "deleteConfirm": "ロール {{name}} を削除しますか？この操作は取り消せません。",
+    "perm_dashboard_view": "ダッシュボード閲覧",
+    "perm_api_test": "APIテスト",
+    "perm_provider_manage": "プロバイダー管理",
+    "perm_key_manage": "キー管理",
+    "perm_account_manage": "アカウント管理",
+    "perm_audit_view": "監査ログ閲覧",
+    "perm_settings_manage": "設定管理",
+    "perm": {
+      "dashboard_view": "ダッシュボード閲覧",
+      "api_test": "APIテスト",
+      "provider_manage": "プロバイダー管理",
+      "key_manage": "キー管理",
+      "account_manage": "アカウント管理",
+      "audit_view": "監査ログ",
+      "settings_manage": "設定",
+      "role_manage": "ロール管理"
+    },
+    "menu": {
+      "dashboard": "ダッシュボード",
+      "flow": "ネットワークフロー",
+      "jobs": "ジョブ",
+      "performance": "パフォーマンス",
+      "usage": "使用量",
+      "test": "テスト",
+      "providers": "プロバイダー",
+      "servers": "サーバー",
+      "keys": "APIキー",
+      "accounts": "アカウント",
+      "audit": "監査ログ",
+      "api_docs": "APIドキュメント"
+    },
+    "permissionCount": "{{count}}個の権限",
+    "menuCount": "{{count}}個のメニュー",
+    "assignedUsers": "{{count}}人のユーザー"
   },
   "audit": {
     "title": "監査ログ",

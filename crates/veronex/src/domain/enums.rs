@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-// ── Account role ────────────────────────────────────────────────────────────
+// ── Account role (legacy — kept for backward compat during migration) ───────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
@@ -10,6 +10,72 @@ pub enum AccountRole {
     Super,
     Admin,
 }
+
+// ── Permission ──────────────────────────────────────────────────────────────
+
+/// Permission identifiers stored in `roles.permissions TEXT[]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
+#[serde(rename_all = "snake_case")]
+pub enum Permission {
+    DashboardView,
+    ApiTest,
+    ProviderManage,
+    KeyManage,
+    AccountManage,
+    AuditView,
+    SettingsManage,
+    RoleManage,
+}
+
+impl Permission {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DashboardView => "dashboard_view",
+            Self::ApiTest => "api_test",
+            Self::ProviderManage => "provider_manage",
+            Self::KeyManage => "key_manage",
+            Self::AccountManage => "account_manage",
+            Self::AuditView => "audit_view",
+            Self::SettingsManage => "settings_manage",
+            Self::RoleManage => "role_manage",
+        }
+    }
+}
+
+/// All valid permission strings — used for input validation.
+pub const ALL_PERMISSIONS: &[&str] = &[
+    "dashboard_view", "api_test", "provider_manage",
+    "key_manage", "account_manage", "audit_view", "settings_manage",
+    "role_manage",
+];
+
+// ── Menu ────────────────────────────────────────────────────────────────────
+
+/// Menu identifiers stored in `roles.menus TEXT[]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../web/lib/generated/")]
+#[serde(rename_all = "snake_case")]
+pub enum MenuId {
+    Dashboard,
+    Flow,
+    Jobs,
+    Performance,
+    Usage,
+    Test,
+    Providers,
+    Servers,
+    Keys,
+    Accounts,
+    Audit,
+    ApiDocs,
+}
+
+/// All valid menu ID strings — used for input validation.
+pub const ALL_MENUS: &[&str] = &[
+    "dashboard", "flow", "jobs", "performance", "usage", "test",
+    "providers", "servers", "keys", "accounts", "audit", "api_docs",
+];
 
 impl AccountRole {
     pub fn as_str(&self) -> &'static str {
@@ -325,5 +391,121 @@ impl std::str::FromStr for KeyType {
             "test" => Ok(Self::Test),
             other => Err(format!("invalid key_type: {other}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_permissions_count() {
+        assert_eq!(ALL_PERMISSIONS.len(), 8);
+    }
+
+    #[test]
+    fn all_menus_count() {
+        assert_eq!(ALL_MENUS.len(), 12);
+    }
+
+    #[test]
+    fn permission_as_str_roundtrip() {
+        for &p in ALL_PERMISSIONS {
+            assert!(!p.is_empty());
+        }
+    }
+
+    #[test]
+    fn menu_as_str_roundtrip() {
+        for &m in ALL_MENUS {
+            assert!(!m.is_empty());
+        }
+    }
+
+    #[test]
+    fn role_manage_in_all_permissions() {
+        assert!(ALL_PERMISSIONS.contains(&"role_manage"));
+    }
+
+    // ── FromStr roundtrip tests ─────────────────────────────────────────
+
+    #[test]
+    fn account_role_roundtrip() {
+        for role in &[AccountRole::Super, AccountRole::Admin] {
+            let s = role.as_str();
+            let parsed: AccountRole = s.parse().unwrap();
+            assert_eq!(*role, parsed);
+        }
+    }
+
+    #[test]
+    fn account_role_invalid() {
+        assert!("viewer".parse::<AccountRole>().is_err());
+    }
+
+    #[test]
+    fn provider_type_roundtrip() {
+        for pt in &[ProviderType::Ollama, ProviderType::Gemini] {
+            let s = pt.as_str();
+            let parsed: ProviderType = s.parse().unwrap();
+            assert_eq!(*pt, parsed);
+        }
+    }
+
+    #[test]
+    fn job_status_roundtrip() {
+        for status in &[JobStatus::Pending, JobStatus::Running, JobStatus::Completed, JobStatus::Failed, JobStatus::Cancelled] {
+            let s = status.as_str();
+            let parsed: JobStatus = s.parse().unwrap();
+            assert_eq!(*status, parsed);
+        }
+    }
+
+    #[test]
+    fn job_source_roundtrip() {
+        for src in &[JobSource::Api, JobSource::Test, JobSource::Analyzer] {
+            let s = src.as_str();
+            let parsed: JobSource = s.parse().unwrap();
+            assert_eq!(*src, parsed);
+        }
+    }
+
+    #[test]
+    fn api_format_roundtrip() {
+        for fmt in &[ApiFormat::OpenaiCompat, ApiFormat::OllamaNative, ApiFormat::GeminiNative, ApiFormat::VeronexNative] {
+            let s = fmt.as_str();
+            let parsed: ApiFormat = s.parse().unwrap();
+            assert_eq!(*fmt, parsed);
+        }
+    }
+
+    #[test]
+    fn key_tier_roundtrip() {
+        for tier in &[KeyTier::Free, KeyTier::Paid] {
+            let s = tier.as_str();
+            let parsed: KeyTier = s.parse().unwrap();
+            assert_eq!(*tier, parsed);
+        }
+    }
+
+    #[test]
+    fn key_type_roundtrip() {
+        for kt in &[KeyType::Standard, KeyType::Test] {
+            let s = kt.as_str();
+            let parsed: KeyType = s.parse().unwrap();
+            assert_eq!(*kt, parsed);
+        }
+    }
+
+    #[test]
+    fn key_type_is_test() {
+        assert!(!KeyType::Standard.is_test());
+        assert!(KeyType::Test.is_test());
+    }
+
+    #[test]
+    fn provider_type_resource_type() {
+        assert_eq!(ProviderType::Ollama.resource_type(), "ollama_provider");
+        assert_eq!(ProviderType::Gemini.resource_type(), "gemini_provider");
     }
 }

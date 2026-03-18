@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::domain::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::outbound::health_checker::check_provider;
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -217,7 +217,7 @@ pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvid
 
 /// `POST /v1/providers/verify` — validate Ollama URL format, duplicate check, and connectivity.
 pub async fn verify_provider(
-    _claims: RequireSuper,
+    _claims: RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<VerifyProviderRequest>,
 ) -> impl IntoResponse {
@@ -279,7 +279,7 @@ pub async fn verify_provider(
 ///
 /// Immediately runs a health check and sets the initial status.
 pub async fn register_provider(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<RegisterProviderRequest>,
 ) -> impl IntoResponse {
@@ -402,7 +402,7 @@ pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse 
 
 /// `DELETE /v1/providers/{id}` — soft-delete (deactivate) a provider.
 pub async fn delete_provider(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -457,7 +457,7 @@ pub async fn healthcheck_provider(
 /// All fields are optional; only provided (non-null) fields are applied.
 /// Passing `api_key: ""` leaves the existing key unchanged.
 pub async fn update_provider(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateProviderRequest>,
@@ -533,7 +533,7 @@ pub async fn list_provider_models(
 ///
 /// Requires admin auth. Returns `{"key": "AIza..."}`.
 pub async fn reveal_provider_key(
-    _claims: RequireSuper,
+    _claims: RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -605,7 +605,7 @@ pub async fn sync_provider_models(
 ///
 /// Combines health check + model sync + VRAM probing + LLM analysis.
 pub async fn sync_single_provider(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -657,7 +657,7 @@ pub async fn sync_single_provider(
 
 /// `POST /v1/providers/sync` — unified sync for all active Ollama providers.
 pub async fn sync_all_providers_handler(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     if state.sync_lock.available_permits() == 0 {

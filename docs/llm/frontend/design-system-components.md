@@ -190,7 +190,7 @@ Real-time inference traffic visualization. Accessible as the 3rd tab on `/jobs` 
 | `web/app/overview/components/provider-flow-panel.tsx` | SVG topology: API -> Queue -> Providers |
 | `web/app/overview/components/dashboard-helpers.tsx` | Shared: ThermalBadge, ConnectionDot, ProviderRow |
 | `web/app/overview/components/dashboard-lower-sections.tsx` | RequestTrend, TopModels, RecentJobs, TokenSummary |
-| `web/app/overview/components/live-feed.tsx` | Active jobs panel — React Query polls `GET /v1/dashboard/jobs?status=pending` + `running` every 2s from DB |
+| `web/app/overview/components/live-feed.tsx` | Active jobs panel — React Query polls `GET /v1/dashboard/jobs?status=pending,running&limit=50` every 2s from DB |
 | `web/hooks/use-inference-stream.ts` | SSE stream (`/v1/dashboard/jobs/stream`) — FlowEvents + FlowStats |
 
 ### Bee Particle Animation
@@ -202,6 +202,31 @@ Engine: CSS Motion Path (`offset-path`) + `@keyframes bee-fly` in `globals.css`.
 ### SVG Topology (540x264)
 
 3-column ArgoCD-style layout, max-width 680px: Veronex API (Rect, cx=72) -> Queue/Valkey (Cylinder, cx=244) -> Ollama (Octagon, cx=460 cy=72) / Gemini (Octagon, cx=460 cy=192). Response arcs bypass Queue. See [pages/jobs.md](pages/jobs.md) for full path coordinates and phase details.
+
+---
+
+## Accounts Page (`web/app/accounts/page.tsx`)
+
+Two-tab layout gated by `hasPermission('role_manage')`:
+
+| Tab | Visible when | Content |
+|-----|-------------|---------|
+| Accounts | Always (page guard: `accounts` menu) | Account table with CRUD, role assignment, sessions, reset links |
+| Roles | `hasPermission('role_manage')` | Role cards with permission checkboxes, menu checkboxes |
+
+### Role Cards
+
+Each role renders as a Card with permission badges. System roles (`is_system=true`) show a "System" badge and disable edit/delete buttons.
+
+### Multi-Role Assignment
+
+- Create account modal: checkbox list of all roles (default: viewer)
+- Edit roles modal: checkbox list, N:N assignment via `api.updateAccount(id, { role_ids })`
+- `account.roles` array displayed as Badge list in the accounts table
+
+### Permission Checkboxes
+
+`RoleEditorModal` renders all `ALL_PERMISSIONS` (including `role_manage`) as a 2-column checkbox grid. System roles have all checkboxes disabled.
 
 ---
 

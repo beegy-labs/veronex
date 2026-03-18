@@ -100,12 +100,20 @@ export const RegisterProviderResponseSchema = z.object({
 
 // ── Accounts ────────────────────────────────────────────────────────────────
 
+export const RoleInfoSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+})
+
 export const AccountSchema = z.object({
   id: z.string().uuid(),
   username: z.string(),
   name: z.string(),
   email: z.string().nullable(),
-  role: AccountRoleSchema,
+  roles: z.array(RoleInfoSchema),
+  role_name: z.string(),
+  permissions: z.array(z.string()),
+  menus: z.array(z.string()),
   department: z.string().nullable(),
   position: z.string().nullable(),
   is_active: z.boolean(),
@@ -118,7 +126,6 @@ export const AccountListSchema = z.array(AccountSchema)
 export const CreateAccountResponseSchema = z.object({
   id: z.string().uuid(),
   username: z.string(),
-  role: z.string(),
   test_api_key: z.string(),
   created_at: z.string(),
 })
@@ -263,6 +270,31 @@ export const AnalyticsStatsSchema = z.object({
 export const LabSettingsSchema = z.object({
   gemini_function_calling: z.boolean(),
   updated_at: z.string(),
+})
+
+// ── Roles ────────────────────────────────────────────────────────────────────
+
+export const RoleSummarySchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  permissions: z.array(z.string()),
+  menus: z.array(z.string()),
+  is_system: z.boolean(),
+  account_count: z.number().int(),
+  created_at: z.string(),
+})
+
+export const RoleSummaryListSchema = z.array(RoleSummarySchema)
+
+// ── Login ────────────────────────────────────────────────────────────────────
+
+export const LoginResponseSchema = z.object({
+  ok: z.boolean(),
+  account_id: z.string(),
+  username: z.string(),
+  role: z.string(),
+  permissions: z.array(z.string()),
+  menus: z.array(z.string()),
 })
 
 // ── Error ───────────────────────────────────────────────────────────────────

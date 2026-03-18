@@ -139,6 +139,14 @@ pub fn provider_heartbeat(provider_id: Uuid) -> String {
 /// Read by dashboard to avoid SELECT COUNT(*) from DB.
 pub const PROVIDERS_ONLINE_COUNTER: &str = "veronex:stats:providers:online";
 
+/// Atomic counter of pending jobs (INCR on create, DECR on dispatch/cancel/fail).
+/// Reconciled from DB every 60 ticks. Read by stats ticker instead of DB query.
+pub const JOBS_PENDING_COUNTER: &str = "veronex:stats:jobs:pending";
+
+/// Atomic counter of running jobs (INCR on dispatch start, DECR on complete/fail/cancel).
+/// Reconciled from DB every 60 ticks. Read by stats ticker instead of DB query.
+pub const JOBS_RUNNING_COUNTER: &str = "veronex:stats:jobs:running";
+
 // ── VRAM pool ───────────────────────────────────────────────────────────────
 
 /// Valkey key tracking total reserved VRAM (MB) per provider.

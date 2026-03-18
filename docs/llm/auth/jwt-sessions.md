@@ -1,6 +1,6 @@
 # Auth -- RBAC, JWT & Sessions
 
-> SSOT | **Last Updated**: 2026-03-03 (rev 5 -- split: impl details in [jwt-sessions-impl.md](jwt-sessions-impl.md))
+> SSOT | **Last Updated**: 2026-03-18 (rev 6 -- N:N roles, permissions in JWT, RequirePermission extractors)
 
 ## Overview
 
@@ -12,14 +12,52 @@ Two independent auth layers:
 | JWT Bearer | `Authorization: Bearer <token>` (HS256) | All admin routes: `/v1/accounts/*`, `/v1/audit`, `/v1/keys/*`, `/v1/usage/*`, `/v1/dashboard/*`, `/v1/providers/*`, `/v1/servers/*`, `/v1/gemini/*`, `/v1/ollama/*`, `/v1/test/*` |
 | Public | None | `/v1/auth/*`, `/v1/setup/*`, `/health`, `/readyz`, `/docs/*`, `/v1/metrics/targets` |
 
-## Roles
+## Roles & Permissions (N:N)
 
-| Role | Capabilities |
-|------|-------------|
-| `super` | Manage accounts, view audit, all admin actions |
-| `admin` | Normal admin -- no account management or audit |
+Accounts have N:N role assignment via `account_roles` join table. Each role grants a set of permissions and menu visibility.
 
-Stored in `accounts.role` (`CHECK (role IN ('super', 'admin'))`).
+| Table | Purpose |
+|-------|---------|
+| `roles` | `id, name, permissions TEXT[], menus TEXT[], is_system BOOL` |
+| `account_roles` | `account_id, role_id` (composite PK) |
+
+### Built-in Roles
+
+| Role | `is_system` | Permissions |
+|------|-------------|-------------|
+| `super` | true | All: `dashboard_view`, `api_test`, `provider_manage`, `key_manage`, `account_manage`, `audit_view`, `settings_manage`, `role_manage` |
+| `viewer` | true | `dashboard_view` only |
+
+System roles (`is_system=true`) cannot be edited or deleted.
+
+### Permission Identifiers
+
+| Permission | Purpose |
+|------------|---------|
+| `dashboard_view` | View dashboard and overview |
+| `api_test` | Run test inferences |
+| `provider_manage` | CRUD providers and servers |
+| `key_manage` | CRUD API keys |
+| `account_manage` | CRUD accounts |
+| `audit_view` | View audit log |
+| `settings_manage` | Modify system settings |
+| `role_manage` | CRUD roles (except system roles) |
+
+### JWT Claims
+
+Permissions and menus are embedded in JWT claims for frontend gating:
+
+```json
+{
+  "sub": "account-uuid",
+  "role": "super",
+  "jti": "session-uuid",
+  "exp": 1234567890,
+  "permissions": ["dashboard_view", "provider_manage", "role_manage"],
+  "menus": ["dashboard", "providers", "accounts"],
+  "role_name": "super"
+}
+```
 
 ## Router Layers (4-layer)
 
@@ -39,10 +77,18 @@ JWT Auth       /v1/test/*                                                       
 - `tokio::spawn` calls `session_repo.update_last_used(&jti)` (non-blocking)
 - Inserts `Claims { sub, role, jti, exp }` into request extensions
 
-### RequireSuper Extractor
+### Permission Extractors
 
-`FromRequestParts` -- reads `Claims` from extensions, returns 403 if `role != "super"`.
-Usage: `RequireSuper(claims): RequireSuper` as handler arg.
+| Extractor | Check |
+|-----------|-------|
+| `RequireSuper` | `role == Super` (403 otherwise) |
+| `RequireRoleManage` | `role_manage` permission or super |
+| `RequireAccountManage` | `account_manage` permission or super |
+| `RequireProviderManage` | `provider_manage` permission or super |
+| ... | One per permission via `define_require_permission!` macro |
+
+All generated extractors bypass the permission check for super-admin accounts.
+Usage: `RequireRoleManage(claims): RequireRoleManage` as handler arg.
 
 ## Accounts Table
 
@@ -53,8 +99,6 @@ CREATE TABLE accounts (
   password_hash VARCHAR(255) NOT NULL,          -- Argon2id
   name          VARCHAR(128) NOT NULL,
   email         VARCHAR(255),
-  role          VARCHAR(16) NOT NULL DEFAULT 'admin'
-                CHECK (role IN ('super', 'admin')),
   department    VARCHAR(128),
   position      VARCHAR(128),
   is_active     BOOLEAN NOT NULL DEFAULT true,
@@ -63,10 +107,15 @@ CREATE TABLE accounts (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   deleted_at    TIMESTAMPTZ                     -- soft-delete
 );
-CREATE INDEX idx_accounts_username ON accounts(username) WHERE deleted_at IS NULL;
+-- N:N role assignment (replaces old accounts.role column)
+CREATE TABLE account_roles (
+  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  role_id    UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  PRIMARY KEY (account_id, role_id)
+);
 ```
 
-Migration: `000034_accounts.sql`
+Migrations: `000007_roles`, `000008_account_roles`, `000009_role_manage_perm`
 
 ## First-Run Setup Flow
 
@@ -96,9 +145,12 @@ BOOTSTRAP_SUPER_PASS=secret
 |----------|-------|
 | Algorithm | HS256 |
 | `sub` | `account.id` (UUID) |
-| `role` | `"super"` / `"admin"` |
+| `role` | `"super"` / `"admin"` (legacy, kept for backward compat) |
 | `jti` | `Uuid::now_v7()` -- unique per session, used for revocation |
 | `exp` | now + 1 hour |
+| `permissions` | Merged permission strings from all assigned roles |
+| `menus` | Merged menu IDs from all assigned roles |
+| `role_name` | Primary role name |
 | Secret | `JWT_SECRET` env var |
 
 ## Sessions (`account_sessions` table)

@@ -171,6 +171,33 @@ pub async fn spawn_background_tasks(
     if let Err(e) = use_case_impl.recover_pending_jobs().await {
         tracing::warn!("job recovery failed (non-fatal): {e}");
     }
+
+    // ── Startup reconciliation: seed Valkey job counters from DB ──
+    if let Some(ref vk) = infra.valkey_pool {
+        use fred::interfaces::KeysInterface;
+        use veronex::infrastructure::outbound::valkey_keys::{
+            JOBS_PENDING_COUNTER, JOBS_RUNNING_COUNTER,
+        };
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT status::text, COUNT(*) FROM inference_jobs \
+             WHERE status IN ('pending','running') GROUP BY status"
+        )
+        .fetch_all(&infra.pg_pool)
+        .await
+        .unwrap_or_default();
+        let mut pending = 0i64;
+        let mut running = 0i64;
+        for (status, cnt) in &rows {
+            match status.as_str() {
+                "pending" => pending = *cnt,
+                "running" => running = *cnt,
+                _ => {}
+            }
+        }
+        let _: Result<(), _> = vk.set(JOBS_PENDING_COUNTER, pending, None, None, false).await;
+        let _: Result<(), _> = vk.set(JOBS_RUNNING_COUNTER, running, None, None, false).await;
+        tracing::info!(pending, running, "job counters seeded from DB");
+    }
     tasks.spawn(use_case_impl.start_queue_worker(shutdown.child_token()));
     tasks.spawn(use_case_impl.start_job_sweeper(shutdown.child_token()));
 
@@ -182,8 +209,8 @@ pub async fn spawn_background_tasks(
     let (stats_tx, _) = tokio::sync::broadcast::channel::<FlowStats>(16);
     let stats_tx = Arc::new(stats_tx);
     {
-        let uc        = use_case_impl.clone() as Arc<dyn InferenceUseCase>;
         let pg        = infra.pg_pool.clone();
+        let vk_pool   = infra.valkey_pool.clone();
         let tx        = (*stats_tx).clone();
         let shutdown_token = shutdown.clone();
 
@@ -232,6 +259,8 @@ pub async fn spawn_background_tasks(
             let mut interval = tokio::time::interval(STATS_TICK_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut tick_count = 0u64;
+            // Cached pending/running counts for no-Valkey fallback (re-queried every 10s)
+            let mut cached_no_valkey: (u32, u32) = (0, 0);
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => break,
@@ -268,16 +297,50 @@ pub async fn spawn_background_tasks(
                             b.iter().sum::<u32>()
                         };
 
-                        // Pending/running counts: DB is the source of truth.
-                        // DashMap loses state on restart; Valkey LLEN pops too fast.
-                        // Single indexed query — negligible cost at 1 Hz.
-                        let (queued, running) = {
-                            let live = uc.get_live_counts();
-                            if live.pending > 0 || live.running > 0 {
-                                // DashMap has data — use it (faster, no I/O)
-                                (live.pending, live.running)
+                        // Pending/running counts: read from Valkey atomic counters (O(1)).
+                        // Reconciled from DB every 60 ticks to correct any drift.
+                        let (queued, running) = if let Some(ref vk) = vk_pool {
+                            use fred::interfaces::KeysInterface;
+                            use veronex::infrastructure::outbound::valkey_keys::{
+                                JOBS_PENDING_COUNTER, JOBS_RUNNING_COUNTER,
+                            };
+
+                            let p: i64 = vk.get(JOBS_PENDING_COUNTER).await.unwrap_or(0);
+                            let r: i64 = vk.get(JOBS_RUNNING_COUNTER).await.unwrap_or(0);
+
+                            // Periodic reconciliation: every 60 ticks, verify against DB
+                            if tick_count % 60 == 0 {
+                                let rows: Vec<(String, i64)> = sqlx::query_as(
+                                    "SELECT status::text, COUNT(*) FROM inference_jobs \
+                                     WHERE status IN ('pending','running') GROUP BY status"
+                                )
+                                .fetch_all(&pg)
+                                .await
+                                .unwrap_or_default();
+                                let mut db_p = 0i64;
+                                let mut db_r = 0i64;
+                                for (status, cnt) in &rows {
+                                    match status.as_str() {
+                                        "pending" => db_p = *cnt,
+                                        "running" => db_r = *cnt,
+                                        _ => {}
+                                    }
+                                }
+                                if db_p != p {
+                                    tracing::debug!(valkey = p, db = db_p, "reconciling pending counter");
+                                    let _: Result<(), _> = vk.set(JOBS_PENDING_COUNTER, db_p, None, None, false).await;
+                                }
+                                if db_r != r {
+                                    tracing::debug!(valkey = r, db = db_r, "reconciling running counter");
+                                    let _: Result<(), _> = vk.set(JOBS_RUNNING_COUNTER, db_r, None, None, false).await;
+                                }
+                                (db_p.max(0) as u32, db_r.max(0) as u32)
                             } else {
-                                // DashMap empty (e.g. after restart) — fall back to DB
+                                (p.max(0) as u32, r.max(0) as u32)
+                            }
+                        } else {
+                            // No Valkey — fall back to DB query, cached for 10 ticks (10s)
+                            if tick_count % 10 == 1 {
                                 let rows: Vec<(String, i64)> = sqlx::query_as(
                                     "SELECT status::text, COUNT(*) FROM inference_jobs \
                                      WHERE status IN ('pending','running') GROUP BY status"
@@ -294,8 +357,9 @@ pub async fn spawn_background_tasks(
                                         _ => {}
                                     }
                                 }
-                                (p, r)
+                                cached_no_valkey = (p, r);
                             }
+                            cached_no_valkey
                         };
 
                         let stats = FlowStats { incoming, incoming_60s, queued, running, completed };

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::domain::constants::NODE_EXPORTER_TIMEOUT;
 use crate::domain::entities::GpuServer;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::outbound::hw_metrics;
 
 use super::audit_helpers::emit_audit;
@@ -75,7 +75,7 @@ async fn get_gpu_server(state: &AppState, id: Uuid) -> Result<GpuServer, AppErro
 
 /// `POST /v1/servers/verify` — validate URL format, duplicate check, and reachability.
 pub async fn verify_gpu_server(
-    _claims: RequireSuper,
+    _claims: RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<VerifyServerRequest>,
 ) -> impl IntoResponse {
@@ -121,7 +121,7 @@ pub async fn verify_gpu_server(
 
 /// `POST /v1/servers`
 pub async fn register_gpu_server(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<RegisterGpuServerRequest>,
 ) -> HandlerResult<impl IntoResponse> {
@@ -192,7 +192,7 @@ pub struct UpdateGpuServerRequest {
 
 /// `PATCH /v1/servers/{id}`
 pub async fn update_gpu_server(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateGpuServerRequest>,
@@ -224,7 +224,7 @@ pub async fn update_gpu_server(
 
 /// `DELETE /v1/servers/{id}`
 pub async fn delete_gpu_server(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> HandlerResult<StatusCode> {
