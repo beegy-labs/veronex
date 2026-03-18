@@ -238,6 +238,7 @@ function NavContent() {
             type="button"
             onClick={toggleCollapsed}
             className="flex items-center justify-center"
+            aria-label={t('common.expand')}
             title={t('common.expand')}
           >
             <HexLogo className="h-7 w-7" />
@@ -250,6 +251,7 @@ function NavContent() {
               type="button"
               onClick={toggleCollapsed}
               className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0"
+              aria-label={t('common.collapse')}
               title={t('common.collapse')}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -408,6 +410,7 @@ function NavContent() {
               <span className="text-xs text-muted-foreground truncate">{authUser.username}</span>
               <button
                 type="button"
+                aria-label={t('common.signOut')}
                 title={t('common.signOut')}
                 onClick={() => redirectToLogin()}
                 className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -449,6 +452,7 @@ function NavContent() {
             type="button"
             onClick={() => setShowSettings(true)}
             className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+            aria-label={t('common.settings')}
             title={t('common.settings')}
           >
             <Settings2 className="h-4 w-4" />
@@ -458,6 +462,7 @@ function NavContent() {
             type="button"
             onClick={toggleTheme}
             className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+            aria-label={theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')}
             title={theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')}
           >
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}

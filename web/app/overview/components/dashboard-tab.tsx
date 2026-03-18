@@ -521,7 +521,7 @@ export function DashboardTab({
           </CardHeader>
           <CardContent className="pt-0">
             {statsLoading ? (
-              <div className="h-12 rounded bg-muted animate-pulse" />
+              <div className="h-12 rounded bg-muted animate-pulse" aria-busy="true" />
             ) : stats ? (
               <>
                 <p className="text-3xl font-bold tabular-nums">{stats.active_keys}</p>

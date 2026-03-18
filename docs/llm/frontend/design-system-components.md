@@ -173,7 +173,7 @@ Never hard-code "Ollama" or "Gemini" labels in Overview. Use `localProviders`/`a
 4. Extend `ProviderType` enum in Rust + add adapter in `infrastructure/outbound/`
 5. Update `docs/llm/providers/` + `docs/llm/inference/openai-compat.md`
 6. Create `docs/llm/frontend/pages/providers.md` section for the new tab
-7. Extend `BACKEND_COLORS` map in Usage page
+7. Extend `PROVIDER_COLORS` map in Usage page
 8. Add to provider taxonomy array in Dashboard tab
 
 ---

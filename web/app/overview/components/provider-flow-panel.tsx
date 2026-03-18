@@ -212,7 +212,7 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
     }
 
     if (newBees.length > 0) dispatch({ type: 'SPAWN', bees: newBees })
-  }, [events, enqueueSize, dispatchSize, responseSize])
+  }, [events, enqueueSize, dispatchSize, responseSize, PATH_QUEUE_OLLAMA, PATH_OLLAMA_API])
 
   return (
     <Card>

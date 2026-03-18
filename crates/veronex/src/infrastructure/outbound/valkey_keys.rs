@@ -84,6 +84,10 @@ pub fn gemini_rpd(provider_id: Uuid, model: &str, date: &str) -> String {
 
 // ── Multi-instance coordination ─────────────────────────────────────────────
 
+/// SET of all API instance IDs (SADD on heartbeat refresh).
+/// Used by orphan sweeper to enumerate all known instances.
+pub const INSTANCES_SET: &str = "veronex:instances";
+
 /// Instance heartbeat key (EX 30s, refreshed every 10s).
 pub fn heartbeat(instance_id: &str) -> String {
     format!("veronex:heartbeat:{instance_id}")
@@ -178,5 +182,12 @@ mod tests {
             provider_heartbeat(id),
             "veronex:provider:hb:550e8400-e29b-41d4-a716-446655440000"
         );
+    }
+
+    /// INSTANCES_SET must match the hardcoded key in veronex-agent's orphan_sweeper.
+    /// Guards against crate-boundary drift since agent cannot import this module.
+    #[test]
+    fn instances_set_value_matches_agent_convention() {
+        assert_eq!(INSTANCES_SET, "veronex:instances");
     }
 }

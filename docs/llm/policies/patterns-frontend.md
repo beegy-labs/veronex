@@ -411,6 +411,20 @@ export const serverMetricsHistoryQuery = (serverId: string) => queryOptions({
 
 ---
 
+## Page Guard (`usePageGuard`)
+
+Menu-based access control at page level. Redirects to `/overview` if user lacks the required menu permission. Super-admin bypasses all checks.
+
+```typescript
+// web/hooks/use-page-guard.ts
+export function usePageGuard(menuId: string): void
+// Usage: usePageGuard('audit') at top of page component
+```
+
+`hasMenu()` reads from JWT claims `menus` array (set during login from merged role menus).
+
+---
+
 ## Adding a New Page
 
 ```

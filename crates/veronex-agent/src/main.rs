@@ -25,9 +25,11 @@ use anyhow::Result;
 use serde::Deserialize;
 use tokio::signal;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 mod health;
 mod heartbeat;
+mod orphan_sweeper;
 mod otlp;
 mod scraper;
 mod shard;
@@ -53,6 +55,9 @@ struct Config {
     /// Optional Valkey URL for provider liveness heartbeats.
     /// When absent, heartbeat push is skipped (veronex falls back to HTTP probe).
     valkey_url: Option<String>,
+    /// Optional DATABASE_URL for orphan job sweeper.
+    /// When absent, orphan sweeper is disabled.
+    database_url: Option<String>,
 }
 
 fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> T {
@@ -71,6 +76,7 @@ impl Config {
             replicas: parse_env("REPLICA_COUNT", 1),
             health_port: parse_env("HEALTH_PORT", 9091),
             valkey_url: std::env::var("VALKEY_URL").ok(),
+            database_url: std::env::var("DATABASE_URL").ok(),
         }
     }
 }
@@ -168,6 +174,38 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Optional PgPool for orphan job sweeper.
+    let pg_pool: Option<sqlx::PgPool> = match &config.database_url {
+        Some(url) => match sqlx::PgPool::connect(url).await {
+            Ok(pool) => {
+                tracing::info!("orphan sweeper: connected to PostgreSQL");
+                Some(pool)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "DATABASE_URL set but connection failed — orphan sweeper disabled");
+                None
+            }
+        },
+        None => {
+            tracing::info!("DATABASE_URL not set — orphan sweeper disabled");
+            None
+        }
+    };
+
+    // Spawn orphan sweeper when both Valkey and PgPool are available.
+    let shutdown = CancellationToken::new();
+    if let (Some(vk), Some(pg)) = (&valkey_pool, &pg_pool) {
+        let vk = vk.clone();
+        let pg = pg.clone();
+        let ordinal = config.ordinal;
+        let replicas = config.replicas;
+        let token = shutdown.child_token();
+        tokio::spawn(async move {
+            orphan_sweeper::run_orphan_sweeper(vk, pg, ordinal, replicas, token).await;
+        });
+        tracing::info!("orphan sweeper spawned");
+    }
+
     // Start health HTTP server
     let health_clone = health.clone();
     let health_port = config.health_port;
@@ -193,6 +231,7 @@ async fn main() -> Result<()> {
             _ = signal::ctrl_c() => {
                 tracing::info!("shutdown signal received");
                 health.alive.store(false, Ordering::Relaxed);
+                shutdown.cancel();
                 break;
             }
             result = scrape_cycle(&client, &config, &scrape_semaphore, valkey_pool.as_ref()) => {
