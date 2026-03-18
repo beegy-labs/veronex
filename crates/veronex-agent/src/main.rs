@@ -25,8 +25,11 @@ use anyhow::Result;
 use serde::Deserialize;
 use tokio::signal;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 mod health;
+mod heartbeat;
+mod orphan_sweeper;
 mod otlp;
 mod scraper;
 mod shard;
@@ -35,6 +38,10 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Max concurrent scrape tasks to prevent resource exhaustion.
 const MAX_CONCURRENT_SCRAPES: usize = 32;
+
+/// Heartbeat TTL = 3× default scrape interval.  A provider survives 2 missed
+/// cycles before being considered offline.
+const HEARTBEAT_TTL_SECS: i64 = 180;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -45,6 +52,12 @@ struct Config {
     ordinal: u32,
     replicas: u32,
     health_port: u16,
+    /// Optional Valkey URL for provider liveness heartbeats.
+    /// When absent, heartbeat push is skipped (veronex falls back to HTTP probe).
+    valkey_url: Option<String>,
+    /// Optional DATABASE_URL for orphan job sweeper.
+    /// When absent, orphan sweeper is disabled.
+    database_url: Option<String>,
 }
 
 fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> T {
@@ -62,6 +75,8 @@ impl Config {
             ordinal: shard::ordinal_from_hostname(),
             replicas: parse_env("REPLICA_COUNT", 1),
             health_port: parse_env("HEALTH_PORT", 9091),
+            valkey_url: std::env::var("VALKEY_URL").ok(),
+            database_url: std::env::var("DATABASE_URL").ok(),
         }
     }
 }
@@ -113,17 +128,17 @@ async fn discover_targets(client: &reqwest::Client, api_url: &str) -> Vec<SdTarg
             match resp.json::<Vec<SdTarget>>().await {
                 Ok(targets) => targets,
                 Err(e) => {
-                    tracing::warn!(url = %url, "target discovery JSON parse failed: {e}");
+                    tracing::warn!(url = %url, error = %e, "target discovery JSON parse failed");
                     vec![]
                 }
             }
         }
         Ok(resp) => {
-            tracing::warn!(status = %resp.status(), "target discovery returned non-success");
+            tracing::warn!(url = %url, status = %resp.status(), "target discovery returned non-success");
             vec![]
         }
         Err(e) => {
-            tracing::debug!("target discovery failed: {e}");
+            tracing::debug!(error = %e, "target discovery failed");
             vec![]
         }
     }
@@ -150,12 +165,53 @@ async fn main() -> Result<()> {
         scrape_errors: AtomicU64::new(0),
     });
 
+    // Optional Valkey pool for provider liveness heartbeats.
+    let valkey_pool: Option<fred::clients::Pool> = match &config.valkey_url {
+        Some(url) => heartbeat::connect(url).await,
+        None => {
+            tracing::info!("VALKEY_URL not set — heartbeat push disabled");
+            None
+        }
+    };
+
+    // Optional PgPool for orphan job sweeper.
+    let pg_pool: Option<sqlx::PgPool> = match &config.database_url {
+        Some(url) => match sqlx::PgPool::connect(url).await {
+            Ok(pool) => {
+                tracing::info!("orphan sweeper: connected to PostgreSQL");
+                Some(pool)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "DATABASE_URL set but connection failed — orphan sweeper disabled");
+                None
+            }
+        },
+        None => {
+            tracing::info!("DATABASE_URL not set — orphan sweeper disabled");
+            None
+        }
+    };
+
+    // Spawn orphan sweeper when both Valkey and PgPool are available.
+    let shutdown = CancellationToken::new();
+    if let (Some(vk), Some(pg)) = (&valkey_pool, &pg_pool) {
+        let vk = vk.clone();
+        let pg = pg.clone();
+        let ordinal = config.ordinal;
+        let replicas = config.replicas;
+        let token = shutdown.child_token();
+        tokio::spawn(async move {
+            orphan_sweeper::run_orphan_sweeper(vk, pg, ordinal, replicas, token).await;
+        });
+        tracing::info!("orphan sweeper spawned");
+    }
+
     // Start health HTTP server
     let health_clone = health.clone();
     let health_port = config.health_port;
     tokio::spawn(async move {
         if let Err(e) = health::serve(health_port, health_clone).await {
-            tracing::error!("health server failed: {e}");
+            tracing::error!(error = %e, "health server failed");
         }
     });
 
@@ -175,9 +231,10 @@ async fn main() -> Result<()> {
             _ = signal::ctrl_c() => {
                 tracing::info!("shutdown signal received");
                 health.alive.store(false, Ordering::Relaxed);
+                shutdown.cancel();
                 break;
             }
-            result = scrape_cycle(&client, &config, &scrape_semaphore, &stats) => {
+            result = scrape_cycle(&client, &config, &scrape_semaphore, valkey_pool.as_ref()) => {
                 // Update health state
                 health.started.store(true, Ordering::Relaxed);
                 health.ready.store(result.success, Ordering::Relaxed);
@@ -191,7 +248,7 @@ async fn main() -> Result<()> {
                     let self_labels: HashMap<String, String> =
                         [("service.name".into(), "veronex-agent".into())].into();
                     if let Err(e) = otlp::push_metrics(&client, &config.otel_endpoint, &self_labels, &self_gauges).await {
-                        tracing::debug!("self-metrics push failed: {e}");
+                        tracing::debug!(error = %e, "self-metrics push failed");
                     }
                 }
             }
@@ -290,7 +347,7 @@ async fn scrape_cycle(
     client: &reqwest::Client,
     config: &Config,
     semaphore: &Arc<Semaphore>,
-    _stats: &Arc<AgentStats>,
+    valkey: Option<&fred::clients::Pool>,
 ) -> CycleResult {
     let start = Instant::now();
 
@@ -319,6 +376,7 @@ async fn scrape_cycle(
             let url = format!("http://{host_port}");
             let labels = t.labels.clone();
             let sem = semaphore.clone();
+            let valkey = valkey.cloned();
 
             Some(async move {
                 let _permit = sem.acquire().await;
@@ -329,6 +387,13 @@ async fn scrape_cycle(
                     }
                     "ollama" => {
                         let metrics = scraper::scrape_ollama(client, &url).await;
+                        // Push heartbeat when scrape succeeded (non-empty = Ollama responded).
+                        // Missing key (TTL expired) signals offline to veronex health_checker.
+                        if let (Some(pool), Some(provider_id)) = (&valkey, labels.get("provider_id")) {
+                            if !metrics.is_empty() {
+                                heartbeat::set_online(pool, provider_id, HEARTBEAT_TTL_SECS).await;
+                            }
+                        }
                         (labels, metrics)
                     }
                     _ => (labels, vec![]),
@@ -348,7 +413,7 @@ async fn scrape_cycle(
             continue;
         }
         if let Err(e) = otlp::push_metrics(client, &config.otel_endpoint, labels, metrics).await {
-            tracing::warn!(target = ?labels.get("type"), "OTLP push failed: {e}");
+            tracing::warn!(target_type = %labels.get("type").map(|s| s.as_str()).unwrap_or("unknown"), error = %e, "OTLP push failed");
             any_error = true;
         }
     }

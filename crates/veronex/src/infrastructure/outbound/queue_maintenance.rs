@@ -20,6 +20,7 @@ use crate::domain::constants::{
     EMERGENCY_BONUS_MS, MAX_QUEUE_WAIT_SECS, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP,
     QUEUE_ZSET, TIER_EXPIRE_SECS,
 };
+use crate::infrastructure::outbound::valkey_keys::JOBS_PENDING_COUNTER;
 
 // ── Promote Overdue ─────────────────────────────────────────────────────────
 
@@ -269,6 +270,10 @@ async fn queue_wait_cancel_pass(
                             Some("queue wait exceeded 300s"),
                         ).await {
                             tracing::warn!(%uuid, "failed to persist queue_wait_exceeded: {e}");
+                        }
+                        // pending → failed (queue_wait_exceeded): DECR pending
+                        if let Err(e) = valkey.incr_by(JOBS_PENDING_COUNTER, -1).await {
+                            tracing::warn!("DECR pending counter failed: {e}");
                         }
                         cancelled += 1;
                         tracing::info!(

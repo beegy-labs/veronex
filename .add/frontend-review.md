@@ -77,6 +77,7 @@ Violations: placing shared logic in feature dirs, or page-specific logic in `com
 | Polling no-ops | Intervals that call `setState` unconditionally → add change-detection guard |
 | React key | All list renders must have stable `key` — never `index` as sole key for reorderable lists |
 | SSE-driven props | Components receiving props updated ≥1/sec from SSE must be wrapped with `React.memo` — without it every stats tick re-renders the full SVG/DOM tree |
+| High-frequency timer props | Components receiving props updated by `setInterval` ≤100ms (e.g. loading bar, live metrics) must be wrapped with `React.memo` — same re-render risk as SSE |
 | Time-display staleness | Any component that shows relative time strings (e.g. "5s ago") must have a `setInterval` tick (10–30s) so labels age without waiting for new events |
 | Zero-value stat containers | Stat rows/badges that show counts from live data must be hidden when all values are 0 — never show "0 pending, 0 running" noise at idle |
 

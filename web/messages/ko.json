@@ -162,6 +162,7 @@
     "sameDayLastWeek": "전주 동요일 대비",
     "workload": "요청 & 성공률",
     "latencyMonitor": "지연",
+    "latencyAvgPerHour": "시간당 평균",
     "serverHealth": "서버 상태",
     "connected": "연결됨",
     "unreachable": "연결실패",
@@ -172,6 +173,8 @@
     "flowOnlineCount": "{{online}}/{{total}} 온라인",
     "flowNoProviders": "프로바이더 없음",
     "flowApiNode": "Veronex API",
+    "flowReqPerSec": "{{value}} req/s",
+    "flowReqPerMin": "{{value}} req/m",
     "flowQueueNode": "큐",
     "flowValkeyNode": "Valkey",
     "liveIndicator": "라이브",
@@ -327,7 +330,13 @@
       "notConfigured": "설정되지 않음",
       "unreachable": "연결 불가",
       "nodeExporterHint": "CPU, 메모리, GPU 메트릭이 이 엔드포인트에서 수집됩니다 (라이브 + OTel 파이프라인).",
-      "nodeExporterOptional": "선택 사항"
+      "nodeExporterOptional": "선택 사항",
+      "verifyConnection": "연결 확인",
+      "verifying": "확인 중…",
+      "connected": "연결됨",
+      "connectionFailed": "연결 실패",
+      "duplicateUrl": "이미 등록된 URL입니다",
+      "verifyFirst": "등록 전 연결을 확인하세요"
     },
     "ollama": {
       "title": "Ollama 프로바이더",
@@ -377,7 +386,13 @@
       "freeTier": "무료 티어",
       "freeTierDesc": "이 백엔드를 무료 티어 API 키 요청 전용으로 설정합니다.",
       "noBackends": "등록된 Ollama 프로바이더가 없습니다",
-      "noBackendsHint": "로컬 Ollama 서버를 추가하여 인퍼런스 라우팅을 시작하세요."
+      "noBackendsHint": "로컬 Ollama 서버를 추가하여 인퍼런스 라우팅을 시작하세요.",
+      "verifyConnection": "연결 확인",
+      "verifying": "확인 중…",
+      "connected": "연결됨",
+      "connectionFailed": "연결 실패",
+      "duplicateUrl": "이미 등록된 URL입니다",
+      "verifyFirst": "등록 전 연결을 확인하세요"
     },
     "capacity": {
       "title": "동시성 제어",
@@ -651,7 +666,11 @@
     "imageRemove": "제거",
     "imageCompressing": "압축 중…",
     "imageTooLarge": "이미지가 10MB를 초과합니다",
-    "imageTooMany": "최대 4장까지 가능합니다 (Ollama 제한)"
+    "imageTooMany": "최대 4장까지 가능합니다 (Ollama 제한)",
+    "endpoint": "엔드포인트",
+    "apiKeyToggle": "API 키 사용",
+    "apiKeyPlaceholder": "API 키를 붙여넣으세요…",
+    "noApiKey": "세션 인증 (테스트)"
   },
   "apiDocs": {
     "title": "API 문서",
@@ -726,6 +745,53 @@
     "roleAdmin": "관리자",
     "roleSuper": "슈퍼",
     "deleteConfirm": "{{name}} 계정을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다."
+  },
+  "roles": {
+    "title": "역할",
+    "description": "역할 및 권한을 관리합니다.",
+    "createRole": "역할 생성",
+    "editRole": "역할 편집",
+    "roleName": "역할 이름",
+    "permissions": "권한",
+    "menus": "메뉴",
+    "accountCount": "계정 수",
+    "system": "시스템",
+    "noRoles": "역할이 없습니다.",
+    "deleteConfirm": "{{name}} 역할을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
+    "perm_dashboard_view": "대시보드 보기",
+    "perm_api_test": "API 테스트",
+    "perm_provider_manage": "프로바이더 관리",
+    "perm_key_manage": "키 관리",
+    "perm_account_manage": "계정 관리",
+    "perm_audit_view": "감사 로그 보기",
+    "perm_settings_manage": "설정 관리",
+    "perm": {
+      "dashboard_view": "대시보드 보기",
+      "api_test": "API 테스트",
+      "provider_manage": "프로바이더 관리",
+      "key_manage": "API 키 관리",
+      "account_manage": "계정 관리",
+      "audit_view": "감사 로그",
+      "settings_manage": "설정",
+      "role_manage": "역할 관리"
+    },
+    "menu": {
+      "dashboard": "대시보드",
+      "flow": "네트워크 플로우",
+      "jobs": "작업",
+      "performance": "성능",
+      "usage": "사용량",
+      "test": "테스트",
+      "providers": "프로바이더",
+      "servers": "서버",
+      "keys": "API 키",
+      "accounts": "계정",
+      "audit": "감사 로그",
+      "api_docs": "API 문서"
+    },
+    "permissionCount": "{{count}}개 권한",
+    "menuCount": "{{count}}개 메뉴",
+    "assignedUsers": "{{count}}명 사용자"
   },
   "audit": {
     "title": "감사 로그",

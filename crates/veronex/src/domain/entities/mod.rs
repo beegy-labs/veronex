@@ -7,6 +7,9 @@ pub use session::Session;
 pub mod api_key;
 pub use api_key::*;
 
+pub mod role;
+pub use role::Role;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

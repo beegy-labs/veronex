@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::join_all;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -159,17 +160,28 @@ async fn planner_tick(
         }
     }
 
-    // Get demand for each model
+    // Get demand for each model — parallel Valkey lookups
     let mut model_demand: HashMap<String, u64> = HashMap::new();
-    for model in &all_models {
-        let key = demand_key(model);
-        let demand: u64 = valkey.kv_get(&key).await
-            .ok()
-            .flatten()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
-        if demand > 0 {
-            model_demand.insert(model.clone(), demand);
+    {
+        let futs: Vec<_> = all_models.iter()
+            .map(|model| {
+                let key = demand_key(model);
+                let model = model.clone();
+                let valkey = valkey.clone();
+                async move {
+                    let demand: u64 = valkey.kv_get(&key).await
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                    (model, demand)
+                }
+            })
+            .collect();
+        for (model, demand) in join_all(futs).await {
+            if demand > 0 {
+                model_demand.insert(model, demand);
+            }
         }
     }
 

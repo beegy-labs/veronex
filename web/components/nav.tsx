@@ -12,7 +12,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
 import { useTranslation } from '@/i18n'
-import { getAuthUser } from '@/lib/auth'
+import { getAuthUser, hasMenu } from '@/lib/auth'
 import { redirectToLogin } from '@/lib/auth-guard'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone } from '@/components/timezone-provider'
@@ -31,6 +31,8 @@ type NavLink = {
   href: string
   labelKey: string
   icon: React.ComponentType<{ className?: string }>
+  /** Menu ID for role-based visibility filtering. */
+  menuId?: string
 }
 
 type NavGroupChild = {
@@ -38,6 +40,8 @@ type NavGroupChild = {
   labelKey: string
   icon: React.ComponentType<{ className?: string }>
   section?: string  // if set: matched via ?s= query param; otherwise: pathname === href
+  /** Menu ID for role-based visibility filtering. */
+  menuId?: string
 }
 
 type NavGroup = {
@@ -47,6 +51,8 @@ type NavGroup = {
   icon: React.ComponentType<{ className?: string }>
   basePath: string
   children: NavGroupChild[]
+  /** Menu ID for role-based visibility filtering (applies to entire group). */
+  menuId?: string
 }
 
 type NavItem = NavLink | NavGroup
@@ -61,24 +67,26 @@ const navItems: NavItem[] = [
     labelKey: 'nav.monitor',
     icon: LayoutDashboard,
     basePath: '/overview',
+    menuId: 'dashboard',
     children: [
-      { href: '/overview',     labelKey: 'nav.dashboard',   icon: LayoutDashboard },
-      { href: '/usage',        labelKey: 'nav.usage',       icon: BarChart2 },
-      { href: '/performance',  labelKey: 'nav.performance', icon: Gauge },
+      { href: '/overview',     labelKey: 'nav.dashboard',   icon: LayoutDashboard, menuId: 'dashboard' },
+      { href: '/usage',        labelKey: 'nav.usage',       icon: BarChart2,       menuId: 'usage' },
+      { href: '/performance',  labelKey: 'nav.performance', icon: Gauge,           menuId: 'performance' },
     ],
   },
-  { type: 'link', href: '/jobs', labelKey: 'nav.jobs', icon: List },
-  { type: 'link', href: '/keys',    labelKey: 'nav.keys',    icon: Key },
-  { type: 'link', href: '/servers', labelKey: 'nav.servers', icon: HardDrive },
+  { type: 'link', href: '/jobs',    labelKey: 'nav.jobs',    icon: List,      menuId: 'jobs' },
+  { type: 'link', href: '/keys',    labelKey: 'nav.keys',    icon: Key,       menuId: 'keys' },
+  { type: 'link', href: '/servers', labelKey: 'nav.servers', icon: HardDrive, menuId: 'servers' },
   {
     type: 'group',
     id: 'providers',
     labelKey: 'nav.providers',
     icon: Server,
     basePath: '/providers',
+    menuId: 'providers',
     children: [
-      { href: '/providers?s=ollama', labelKey: 'nav.ollama', icon: OllamaIcon, section: 'ollama' },
-      { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini' },
+      { href: '/providers?s=ollama', labelKey: 'nav.ollama', icon: OllamaIcon, section: 'ollama', menuId: 'providers' },
+      { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini', menuId: 'providers' },
     ],
   },
 ]
@@ -230,6 +238,7 @@ function NavContent() {
             type="button"
             onClick={toggleCollapsed}
             className="flex items-center justify-center"
+            aria-label={t('common.expand')}
             title={t('common.expand')}
           >
             <HexLogo className="h-7 w-7" />
@@ -242,6 +251,7 @@ function NavContent() {
               type="button"
               onClick={toggleCollapsed}
               className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0"
+              aria-label={t('common.collapse')}
               title={t('common.collapse')}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -253,16 +263,22 @@ function NavContent() {
       {/* ── Nav links ──────────────────────────────────────────────── */}
       <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
         {navItems
-          .map(item =>
-            item.type === 'group' && item.id === 'providers'
-              ? {
-                  ...item,
-                  children: item.children.filter(c =>
-                    c.section !== 'gemini' || (labSettings?.gemini_function_calling ?? false)
+          // Filter by role-based menu access
+          .filter(item => !item.menuId || hasMenu(item.menuId))
+          .map(item => {
+            if (item.type === 'group') {
+              return {
+                ...item,
+                children: item.children
+                  .filter(c => !c.menuId || hasMenu(c.menuId))
+                  .filter(c =>
+                    item.id !== 'providers' || c.section !== 'gemini' || (labSettings?.gemini_function_calling ?? false)
                   ),
-                }
-              : item
-          )
+              }
+            }
+            return item
+          })
+          .filter(item => item.type !== 'group' || item.children.length > 0)
           .map((item) => {
           if (item.type === 'link') {
             const active = pathname.startsWith(item.href)
@@ -362,19 +378,21 @@ function NavContent() {
         {/* Auth user + JWT-protected links */}
         {authUser && !collapsed && (
           <div className="px-1 space-y-0.5">
-            <Link
-              href="/accounts"
-              className={cn(
-                'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
-                pathname.startsWith('/accounts')
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-              )}
-            >
-              <Users className="h-4 w-4 flex-shrink-0" />
-              {t('accounts.title')}
-            </Link>
-            {authUser.role === 'super' && (
+            {hasMenu('accounts') && (
+              <Link
+                href="/accounts"
+                className={cn(
+                  'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                  pathname.startsWith('/accounts')
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                )}
+              >
+                <Users className="h-4 w-4 flex-shrink-0" />
+                {t('accounts.title')}
+              </Link>
+            )}
+            {hasMenu('audit') && (
               <Link
                 href="/audit"
                 className={cn(
@@ -392,6 +410,7 @@ function NavContent() {
               <span className="text-xs text-muted-foreground truncate">{authUser.username}</span>
               <button
                 type="button"
+                aria-label={t('common.signOut')}
                 title={t('common.signOut')}
                 onClick={() => redirectToLogin()}
                 className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -433,6 +452,7 @@ function NavContent() {
             type="button"
             onClick={() => setShowSettings(true)}
             className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+            aria-label={t('common.settings')}
             title={t('common.settings')}
           >
             <Settings2 className="h-4 w-4" />
@@ -442,6 +462,7 @@ function NavContent() {
             type="button"
             onClick={toggleTheme}
             className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+            aria-label={theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')}
             title={theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')}
           >
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}

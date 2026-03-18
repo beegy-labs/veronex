@@ -1,14 +1,16 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback, memo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { serversQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
-import type { GpuServer, RegisterGpuServerRequest, UpdateGpuServerRequest } from '@/lib/types'
+import type { GpuServer, RegisterGpuServerRequest, UpdateGpuServerRequest, VerifyState } from '@/lib/types'
+import { ApiHttpError } from '@/lib/types'
 import {
   Plus, Trash2, BarChart2, Pencil,
   Server, HardDrive,
   ChevronLeft, ChevronRight,
+  CheckCircle2, XCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -44,18 +46,49 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
   const [nodeExporterUrl, setNodeExporterUrl] = useState('')
+  const [verifyState, setVerifyState] = useState<VerifyState>('idle')
+  const [verifyError, setVerifyError] = useState('')
+  const [verifiedUrl, setVerifiedUrl] = useState('')
   const queryClient = useQueryClient()
 
-  const mutation = useMutation({
+  const handleUrlChange = (val: string) => {
+    setNodeExporterUrl(val)
+    if (verifyState !== 'idle') {
+      setVerifyState('idle')
+      setVerifyError('')
+    }
+  }
+
+  const verifyMutation = useMutation({
+    mutationFn: () => api.verifyServer(nodeExporterUrl.trim()),
+    onSuccess: () => {
+      setVerifyState('ok')
+      setVerifiedUrl(nodeExporterUrl.trim())
+    },
+    onError: (e) => {
+      setVerifyState('error')
+      setVerifyError(
+        e instanceof ApiHttpError && e.status === 409
+          ? t('providers.servers.duplicateUrl')
+          : (e instanceof Error ? e.message : t('providers.servers.connectionFailed'))
+      )
+    },
+  })
+
+  const registerMutation = useMutation({
     mutationFn: () => {
       const body: RegisterGpuServerRequest = {
         name: name.trim(),
-        node_exporter_url: nodeExporterUrl.trim() || undefined,
+        node_exporter_url: nodeExporterUrl.trim(),
       }
       return api.registerServer(body)
     },
     onSettled: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }); onClose() },
   })
+
+  const canVerify = !!nodeExporterUrl.trim() && verifyState !== 'checking'
+  const isVerified = verifyState === 'ok' && nodeExporterUrl.trim() === verifiedUrl
+  const canRegister = !!name.trim() && isVerified && !registerMutation.isPending
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -73,25 +106,62 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
 
           <div className="space-y-1.5">
             <Label htmlFor="server-ne-url">
-              {t('providers.servers.nodeExporterUrl')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span>
+              {t('providers.servers.nodeExporterUrl')} <span className="text-destructive">*</span>
             </Label>
-            <Input id="server-ne-url" type="url" value={nodeExporterUrl}
-              onChange={(e) => setNodeExporterUrl(e.target.value)}
-              placeholder={t('providers.servers.nodeExporterUrlPlaceholder')} />
-            <p className="text-xs text-muted-foreground">{t('providers.servers.nodeExporterHint')}</p>
+            <div className="flex gap-2">
+              <Input
+                id="server-ne-url"
+                type="url"
+                value={nodeExporterUrl}
+                onChange={(e) => handleUrlChange(e.target.value)}
+                placeholder={t('providers.servers.nodeExporterUrlPlaceholder')}
+                className={verifyState === 'ok' ? 'border-status-success' : verifyState === 'error' ? 'border-destructive' : ''}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                disabled={!canVerify}
+                onClick={() => { setVerifyState('checking'); verifyMutation.mutate() }}
+              >
+                {verifyState === 'checking'
+                  ? t('providers.servers.verifying')
+                  : t('providers.servers.verifyConnection')}
+              </Button>
+            </div>
+            {verifyState === 'ok' && (
+              <p className="flex items-center gap-1.5 text-xs text-status-success-fg">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {t('providers.servers.connected')}
+              </p>
+            )}
+            {verifyState === 'error' && (
+              <p className="flex items-center gap-1.5 text-xs text-destructive">
+                <XCircle className="h-3.5 w-3.5" />
+                {verifyError}
+              </p>
+            )}
+            {verifyState === 'idle' && (
+              <p className="text-xs text-muted-foreground">{t('providers.servers.nodeExporterHint')}</p>
+            )}
           </div>
         </div>
 
-        {mutation.error && (
+        {registerMutation.error && (
           <p className="text-sm text-destructive">
-            {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
+            {registerMutation.error instanceof Error ? registerMutation.error.message : t('common.error')}
           </p>
         )}
 
         <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={() => mutation.mutate()} disabled={!name.trim() || mutation.isPending}>
-            {mutation.isPending ? `${t('common.register')}…` : t('common.register')}
+          <Button
+            onClick={() => registerMutation.mutate()}
+            disabled={!canRegister}
+            title={!isVerified ? t('providers.servers.verifyFirst') : undefined}
+          >
+            {registerMutation.isPending ? `${t('common.register')}…` : t('common.register')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -167,23 +237,24 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
 
 const PAGE_SIZE = 10
 
-function ServersTable({
-  servers,
-  isLoading,
-  onRegister,
-  onEdit,
-  onHistory,
-  onDelete,
-  deleteIsPending,
-}: {
-  servers: GpuServer[] | undefined
-  isLoading: boolean
+interface ServersTableHandlers {
   onRegister: () => void
   onEdit: (s: GpuServer) => void
   onHistory: (s: GpuServer) => void
   onDelete: (id: string, name: string) => void
   deleteIsPending: boolean
+}
+
+const ServersTable = memo(function ServersTable({
+  servers,
+  isLoading,
+  handlers,
+}: {
+  servers: GpuServer[] | undefined
+  isLoading: boolean
+  handlers: ServersTableHandlers
 }) {
+  const { onRegister, onEdit, onHistory, onDelete, deleteIsPending } = handlers
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const [page, setPage] = useState(1)
@@ -228,7 +299,11 @@ function ServersTable({
       </div>
 
       {isLoading && (
-        <div className="flex h-24 items-center justify-center text-muted-foreground text-sm animate-pulse">
+        <div
+          aria-busy="true"
+          aria-label={t('providers.servers.loadingServers')}
+          className="flex h-24 items-center justify-center text-muted-foreground text-sm animate-pulse"
+        >
           {t('providers.servers.loadingServers')}
         </div>
       )}
@@ -325,7 +400,7 @@ function ServersTable({
       )}
     </div>
   )
-}
+})
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -344,6 +419,13 @@ export default function ServersPage() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['servers'] }),
   })
 
+  const handleRegister = useCallback(() => setShowRegister(true), [])
+  const handleEdit = useCallback((s: GpuServer) => setEditingServer(s), [])
+  const handleHistory = useCallback((s: GpuServer) => setHistoryServer(s), [])
+  const handleDelete = useCallback((id: string, name: string) => {
+    if (confirm(t('providers.deleteServerConfirm', { name }))) deleteMutation.mutate(id)
+  }, [t, deleteMutation.mutate])
+
   return (
     <div className="space-y-6">
       <div>
@@ -354,13 +436,13 @@ export default function ServersPage() {
       <ServersTable
         servers={servers}
         isLoading={isLoading}
-        onRegister={() => setShowRegister(true)}
-        onEdit={(s) => setEditingServer(s)}
-        onHistory={(s) => setHistoryServer(s)}
-        onDelete={(id, name) => {
-          if (confirm(t('providers.deleteServerConfirm', { name }))) deleteMutation.mutate(id)
+        handlers={{
+          onRegister: handleRegister,
+          onEdit: handleEdit,
+          onHistory: handleHistory,
+          onDelete: handleDelete,
+          deleteIsPending: deleteMutation.isPending,
         }}
-        deleteIsPending={deleteMutation.isPending}
       />
 
       {showRegister && <RegisterServerModal onClose={() => setShowRegister(false)} />}

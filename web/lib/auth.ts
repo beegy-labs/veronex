@@ -1,9 +1,11 @@
 import type { LoginResponse } from './types'
 
-const SESSION_KEY    = 'veronex_session'
-const USERNAME_KEY   = 'veronex_username'
-const ROLE_KEY       = 'veronex_role'
-const ACCOUNT_ID_KEY = 'veronex_account_id'
+const SESSION_KEY      = 'veronex_session'
+const USERNAME_KEY     = 'veronex_username'
+const ROLE_KEY         = 'veronex_role'
+const ACCOUNT_ID_KEY   = 'veronex_account_id'
+const PERMISSIONS_KEY  = 'veronex_permissions'
+const MENUS_KEY        = 'veronex_menus'
 
 // ── Cookie helpers (same pattern as timezone-provider.tsx) ─────────────────
 
@@ -31,10 +33,12 @@ function deleteCookie(name: string): void {
  * by the backend — they are never accessible to JavaScript.
  */
 export function setSession(resp: LoginResponse): void {
-  writeCookie(SESSION_KEY,    '1')
-  writeCookie(USERNAME_KEY,   resp.username)
-  writeCookie(ROLE_KEY,       resp.role)
-  writeCookie(ACCOUNT_ID_KEY, resp.account_id)
+  writeCookie(SESSION_KEY,     '1')
+  writeCookie(USERNAME_KEY,    resp.username)
+  writeCookie(ROLE_KEY,        resp.role)
+  writeCookie(ACCOUNT_ID_KEY,  resp.account_id)
+  writeCookie(PERMISSIONS_KEY, JSON.stringify(resp.permissions ?? []))
+  writeCookie(MENUS_KEY,       JSON.stringify(resp.menus ?? []))
 }
 
 /**
@@ -48,15 +52,33 @@ export function clearSession(): void {
   deleteCookie(USERNAME_KEY)
   deleteCookie(ROLE_KEY)
   deleteCookie(ACCOUNT_ID_KEY)
+  deleteCookie(PERMISSIONS_KEY)
+  deleteCookie(MENUS_KEY)
 }
 
-export function getAuthUser(): { username: string; role: string; accountId: string } | null {
+export function getAuthUser(): {
+  username: string
+  role: string
+  accountId: string
+  permissions: string[]
+  menus: string[]
+} | null {
   if (!isLoggedIn()) return null
   const username  = readCookie(USERNAME_KEY)
   const role      = readCookie(ROLE_KEY)
   const accountId = readCookie(ACCOUNT_ID_KEY)
   if (!username || !role || !accountId) return null
-  return { username, role, accountId }
+
+  let permissions: string[] = []
+  let menus: string[] = []
+  try {
+    permissions = JSON.parse(readCookie(PERMISSIONS_KEY) ?? '[]')
+  } catch { /* empty */ }
+  try {
+    menus = JSON.parse(readCookie(MENUS_KEY) ?? '[]')
+  } catch { /* empty */ }
+
+  return { username, role, accountId, permissions, menus }
 }
 
 /**
@@ -68,4 +90,20 @@ export function getAuthUser(): { username: string; role: string; accountId: stri
  */
 export function isLoggedIn(): boolean {
   return readCookie(SESSION_KEY) === '1'
+}
+
+/** Check if the current user has a specific permission. Super role has all permissions. */
+export function hasPermission(perm: string): boolean {
+  const user = getAuthUser()
+  if (!user) return false
+  if (user.role === 'super') return true
+  return user.permissions.includes(perm)
+}
+
+/** Check if the current user has access to a specific menu. Super role has all menus. */
+export function hasMenu(menuId: string): boolean {
+  const user = getAuthUser()
+  if (!user) return false
+  if (user.role === 'super') return true
+  return user.menus.includes(menuId)
 }

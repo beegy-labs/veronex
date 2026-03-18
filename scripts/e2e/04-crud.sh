@@ -88,9 +88,10 @@ import json; print(json.dumps(p[0]) if p else '{}')
     && pass "Local provider num_parallel=$NP_VAL" || fail "num_parallel missing from provider response"
 fi
 
-# Create a temp provider with explicit num_parallel
+# Create a temp provider with explicit num_parallel (use reachable Ollama URL)
+TMP_PROV_URL="${OLLAMA_LOCAL:-http://host.docker.internal:11434}"
 TMP_RES=$(apostc "/v1/providers" \
-  "{\"name\":\"tmp-np-test\",\"provider_type\":\"ollama\",\"url\":\"http://127.0.0.1:59998\",\"num_parallel\":8}")
+  "{\"name\":\"tmp-np-test\",\"provider_type\":\"ollama\",\"url\":\"$TMP_PROV_URL\",\"num_parallel\":8}")
 TMP_CODE=$(echo "$TMP_RES" | code)
 TMP_ID=$(echo "$TMP_RES" | body | jv '["id"]' 2>/dev/null || echo "")
 if [ "$TMP_CODE" = "201" ] && [ -n "$TMP_ID" ] && [ "$TMP_ID" != "None" ]; then
@@ -113,6 +114,10 @@ print(p[0].get('num_parallel','?') if p else '?')
   # Cleanup
   c=$(adelc "/v1/providers/$TMP_ID" | code)
   [ "$c" = "204" ] && pass "Delete temp provider → 204" || fail "Delete temp provider → $c"
+elif [ "$TMP_CODE" = "409" ]; then
+  pass "Temp provider duplicate URL rejected → 409 (expected when Ollama URL already registered)"
+elif [ "$TMP_CODE" = "502" ]; then
+  info "Temp provider Ollama unreachable → 502 (skip num_parallel CRUD)"
 else
   fail "Create temp provider failed ($TMP_CODE)"
 fi
@@ -141,7 +146,16 @@ hdr "Server CRUD"
 
 assert_get "/v1/servers" 200 "List servers"
 
-TMP_SRV=$(apostc "/v1/servers" '{"name":"tmp-srv-crud"}')
+# node_exporter_url is now required — missing URL should → 400
+TMP_SRV_NO_URL=$(apostc "/v1/servers" '{"name":"tmp-srv-no-url"}' | code)
+[ "$TMP_SRV_NO_URL" = "400" ] \
+  && pass "Server without node_exporter_url → 400" \
+  || fail "Server without node_exporter_url → $TMP_SRV_NO_URL (expected 400)"
+
+# Create with valid URL (use existing node-exporter that is already registered → 409 expected)
+TMP_SRV_URL="${NODE_EXPORTER_LOCAL:-http://host.docker.internal:9100}"
+TMP_SRV=$(apostc "/v1/servers" \
+  "{\"name\":\"tmp-srv-crud\",\"node_exporter_url\":\"$TMP_SRV_URL\"}")
 TMP_SRV_CODE=$(echo "$TMP_SRV" | code)
 TMP_SRV_ID=$(echo "$TMP_SRV" | body | jv '["id"]' 2>/dev/null || echo "")
 if [ "$TMP_SRV_CODE" = "201" ] && [ -n "$TMP_SRV_ID" ] && [ "$TMP_SRV_ID" != "None" ]; then
@@ -149,6 +163,10 @@ if [ "$TMP_SRV_CODE" = "201" ] && [ -n "$TMP_SRV_ID" ] && [ "$TMP_SRV_ID" != "No
   [ "$c" = "200" ] && pass "Update server → 200" || fail "Update server → $c"
   c=$(adelc "/v1/servers/$TMP_SRV_ID" | code)
   [ "$c" = "204" ] && pass "Delete server → 204" || fail "Delete server → $c"
+elif [ "$TMP_SRV_CODE" = "409" ]; then
+  pass "Duplicate server URL rejected → 409"
+elif [ "$TMP_SRV_CODE" = "502" ]; then
+  info "Server node-exporter unreachable → 502 (skip server CRUD)"
 else
   fail "Create temp server failed ($TMP_SRV_CODE)"
 fi

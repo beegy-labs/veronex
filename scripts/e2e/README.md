@@ -1,6 +1,6 @@
 # Veronex E2E Test Suite
 
-> **Last Updated**: 2026-03-15
+> **Last Updated**: 2026-03-17
 
 ---
 
@@ -40,11 +40,25 @@ flowchart TD
         S08["08-sdd-advanced.sh"]
     end
 
-    S03 --> P02 & P04 & P05 & P06 & P07
-    P02 & P04 & P05 & P06 & P07 --> S08
-    S08 --> S09["09-metrics-pipeline.sh"]
-    S09 --> S10["10-image-storage.sh"]
-    S10 --> Result["Aggregate Results"]
+    S03 --> P02 & P04 & P05 & P06 & P07 & P11
+    P02 & P04 & P05 & P06 & P07 & P11 --> S08
+
+    subgraph "Parallel 1"
+        P02["02-scheduler.sh"]
+        P04["04-crud.sh"]
+        P05["05-security.sh"]
+        P06["06-api-surface.sh"]
+        P07["07-lifecycle.sh"]
+        P11["11-verify-liveness.sh"]
+    end
+
+    subgraph "Parallel 2"
+        P09["09-metrics-pipeline.sh"]
+        P10["10-image-storage.sh"]
+    end
+
+    S08 --> P09 & P10
+    P09 & P10 --> Result["Aggregate Results"]
 ```
 
 ---
@@ -247,7 +261,7 @@ flowchart LR
 | Change tier | PATCH /v1/keys/{id} tier=paid → 204 |
 | Delete key | DELETE /v1/keys/{id} → 204 |
 | Provider num_parallel | Verify num_parallel field on existing provider |
-| Create provider np=8 | POST /v1/providers num_parallel=8 → 201 |
+| Create provider np=8 | POST /v1/providers num_parallel=8 → 201 (or 409 if duplicate URL) |
 | Verify np=8 stored | GET /v1/providers → num_parallel=8 |
 | Update num_parallel | PATCH /v1/providers/{id} num_parallel=2 → 200 |
 | Delete provider | DELETE /v1/providers/{id} → 204 |
@@ -257,7 +271,8 @@ flowchart LR
 | Model disable/enable | PATCH selected-models/{model} is_enabled=false/true |
 | Model-to-provider mapping | GET /v1/ollama/models/{model}/providers → 200 |
 | List servers | GET /v1/servers → 200 |
-| Create server | POST /v1/servers → 201 |
+| Server without URL rejected | POST /v1/servers without node_exporter_url → 400 |
+| Create server | POST /v1/servers with node_exporter_url → 201 (or 409 if duplicate) |
 | Update server name | PATCH /v1/servers/{id} → 200 |
 | Delete server | DELETE /v1/servers/{id} → 204 |
 
@@ -294,6 +309,14 @@ flowchart TD
         R3[admin → /accounts 403]
         R4[admin → /audit 403]
     end
+
+    subgraph "Role CRUD"
+        RC1[List roles → 200]
+        RC2[Create role → 201]
+        RC3[Update role → 200]
+        RC4[System role blocked → 403]
+        RC5[Delete role → 204]
+    end
 ```
 
 | Test | Validates |
@@ -312,8 +335,21 @@ flowchart TD
 | RPM rate limit | rate_limit_rpm=2 key with 3 requests → 429 |
 | Expired key rejection | expires_at in past → 401 |
 | Session revocation | DELETE /v1/sessions/{id} → subsequent request 401 |
-| RBAC admin → accounts | Admin role accessing /v1/accounts → 403 |
-| RBAC admin → audit | Admin role accessing /v1/audit → 403 |
+| RBAC viewer → accounts | Viewer accessing /v1/accounts → 403 |
+| RBAC viewer → audit | Viewer accessing /v1/audit → 403 |
+| RBAC viewer → provider create | Viewer POST /v1/providers → 403 |
+| RBAC viewer → key create | Viewer POST /v1/keys → 403 |
+| RBAC viewer → role create | Viewer POST /v1/roles → 403 |
+| List roles | GET /v1/roles → 200 |
+| Create role | POST /v1/roles → 201 with permissions and menus |
+| Update role | PATCH /v1/roles/{id} → 200 |
+| System role blocked | PATCH system role → 403 |
+| Create account with N roles | POST /v1/accounts with role_ids array → 201 |
+| Multi-role dashboard access | Merged permissions: dashboard_view → 200 |
+| Multi-role key access | Merged permissions: key_manage → 200 |
+| Multi-role account blocked | Missing account_manage → 403 |
+| Delete role with users | DELETE role with assigned users → 409 |
+| Delete role | DELETE /v1/roles/{id} → 204 (after users removed) |
 | MAX_QUEUE constants | MAX_QUEUE_PER_MODEL=2000, MAX_QUEUE_SIZE=10000 (info) |
 
 ---
@@ -515,8 +551,8 @@ Validates the full metrics data path: agent scrape → OTLP push → OTel Collec
 | OTLP push | Metrics pushed to OTel Collector via OTLP HTTP |
 | Redpanda topic | otel-metrics topic contains gauge and sum data points |
 | ClickHouse MV | kafka_otel_metrics_mv processes both gauge and sum types |
-| otel_metrics_gauge populated | Rows present for memory, CPU, GPU metrics |
-| Analytics history API | GET /v1/servers/{id}/metrics/history returns ServerMetricsPoint |
+| otel_metrics_gauge populated | Rows present for memory, CPU, GPU metrics (info if pipeline not ready) |
+| Analytics history API | GET /v1/servers/{id}/metrics/history returns ServerMetricsPoint (info if no data) |
 | CPU usage % | cpu_usage_pct field present (counter delta computation) |
 | GPU temp/power | gpu_temp_c, gpu_power_w fields present (requires node_hwmon_chip_names in allowlist) |
 | Local server (Mac) | Metrics collected from local dev machine |
@@ -536,6 +572,66 @@ Validates image inference through both API key and test panel paths, S3 WebP sto
 | S3 WebP storage | Job image stored as WebP in S3 bucket |
 | Thumbnail access | Thumbnail URL returns image data |
 | provider_name field | Job response includes provider_name (non-empty) |
+
+---
+
+## 11-verify-liveness.sh — Server/Provider Verify + Liveness
+
+Validates the pre-registration verify endpoints (PR #25), registration validation (required fields, duplicate URL, reachability), and provider liveness infrastructure (heartbeat keys, online counter).
+
+```mermaid
+flowchart TD
+    subgraph "Server Verify"
+        SV1["POST /v1/servers/verify"]
+        SV2["empty → 400"]
+        SV3["bad scheme → 400"]
+        SV4["duplicate → 409"]
+        SV5["unreachable → 502"]
+        SV1 --> SV2 & SV3 & SV4 & SV5
+    end
+
+    subgraph "Provider Verify"
+        PV1["POST /v1/providers/verify"]
+        PV2["empty → 400"]
+        PV3["bad scheme → 400"]
+        PV4["duplicate → 409"]
+        PV5["unreachable → 502"]
+        PV1 --> PV2 & PV3 & PV4 & PV5
+    end
+
+    subgraph "Registration Validation"
+        RV1["Server: no URL → 400"]
+        RV2["Server: dup → 409"]
+        RV3["Provider: dup → 409"]
+        RV4["Provider: unreachable → 502"]
+    end
+
+    subgraph "Liveness"
+        L1["PROVIDERS_ONLINE_COUNTER"]
+        L2["provider heartbeat keys"]
+    end
+```
+
+| Test | Validates |
+|------|-----------|
+| Verify server: empty URL | POST /v1/servers/verify with empty url → 400 |
+| Verify server: bad scheme | ftp:// URL → 400 |
+| Verify server: duplicate | Already-registered node_exporter_url → 409 |
+| Verify server: unreachable | Non-routable IP → 502 |
+| Verify provider: empty URL | POST /v1/providers/verify with empty url → 400 |
+| Verify provider: bad scheme | ftp:// URL → 400 |
+| Verify provider: duplicate | Already-registered Ollama URL → 409 |
+| Verify provider: unreachable | Non-routable IP → 502 |
+| Register server: no URL | POST /v1/servers without node_exporter_url → 400 |
+| Register server: bad scheme | ftp:// node_exporter_url → 400 |
+| Register server: duplicate | Duplicate node_exporter_url → 409 |
+| Register server: unreachable | Unreachable node_exporter_url → 502 |
+| Register provider: duplicate | Duplicate Ollama URL → 409 |
+| Register provider: unreachable | Unreachable Ollama URL → 502 |
+| Register provider: no URL | Missing Ollama URL → 400 |
+| Register provider: bad scheme | ftp:// Ollama URL → 400 |
+| PROVIDERS_ONLINE_COUNTER | Valkey key exists with valid integer value |
+| Provider heartbeat key | veronex:provider:hb:{id} present (if agent running) |
 
 ---
 
@@ -576,8 +672,9 @@ The logic is fully implemented in `thermal.rs`. To enable: deploy the agent or m
 | `06-api-surface.sh` | Parallel | Multi-format inference + endpoints + Pull Drain |
 | `07-lifecycle.sh` | Parallel | Cancel + SSE + password reset + crash recovery |
 | `08-sdd-advanced.sh` | Sequential 3 | AIMD decrease + Scale-In/Out + thermal deep validation |
-| `09-metrics-pipeline.sh` | Sequential 4 | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
-| `10-image-storage.sh` | Sequential 5 | Image inference, S3 WebP storage, thumbnails, provider_name |
+| `09-metrics-pipeline.sh` | Parallel 2 | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
+| `10-image-storage.sh` | Parallel 2 | Image inference, S3 WebP storage, thumbnails, provider_name |
+| `11-verify-liveness.sh` | Parallel 1 | Server/provider verify endpoints, registration validation, liveness |
 
 ---
 
@@ -589,13 +686,14 @@ Area                          Phase(s)         Tests
 Infrastructure + Auth         01               15
 Core Scheduler                02               20
 Inference + AIMD Learning     03               16
-CRUD                          04               18
-Security + RBAC               05               17
+CRUD                          04               19
+Security + RBAC + Roles        05               30
 Multi-Format + Endpoints      06               30
 Lifecycle + Cancel            07               23
 Advanced Validation           08               17
 Metrics Pipeline              09               10
 Image Storage                 10                6
+Verify + Liveness             11               18
 ──────────────────────────────────────────────────────
-Total                                          ~176
+Total                                          ~204
 ```
