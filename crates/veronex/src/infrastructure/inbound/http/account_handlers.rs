@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::entities::{Account, ApiKey};
-use crate::domain::enums::{AccountRole, KeyTier, KeyType};
+use crate::domain::enums::{KeyTier, KeyType};
 use crate::domain::services::api_key_generator::generate_api_key;
 use crate::domain::services::password_hashing;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireAccountManage;
 use crate::infrastructure::inbound::http::state::AppState;
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -24,14 +24,13 @@ pub struct CreateAccountRequest {
     pub password: String,
     pub name: String,
     pub email: Option<String>,
-    #[serde(default = "default_role")]
-    pub role: AccountRole,
+    /// Role UUIDs to assign. If empty/missing, defaults to "viewer".
+    #[serde(default)]
+    pub role_ids: Vec<Uuid>,
+    /// Legacy single role_id — used as fallback when role_ids is empty.
+    pub role_id: Option<Uuid>,
     pub department: Option<String>,
     pub position: Option<String>,
-}
-
-fn default_role() -> AccountRole {
-    AccountRole::Admin
 }
 
 #[derive(Deserialize)]
@@ -40,6 +39,8 @@ pub struct UpdateAccountRequest {
     pub email: Option<String>,
     pub department: Option<String>,
     pub position: Option<String>,
+    /// When provided, replaces all role assignments.
+    pub role_ids: Option<Vec<Uuid>>,
 }
 
 #[derive(Deserialize)]
@@ -48,12 +49,21 @@ pub struct SetActiveRequest {
 }
 
 #[derive(Serialize)]
+pub struct RoleInfo {
+    pub id: Uuid,
+    pub name: String,
+}
+
+#[derive(Serialize)]
 pub struct AccountSummary {
     pub id: Uuid,
     pub username: String,
     pub name: String,
     pub email: Option<String>,
-    pub role: AccountRole,
+    pub roles: Vec<RoleInfo>,
+    pub role_name: String,
+    pub permissions: Vec<String>,
+    pub menus: Vec<String>,
     pub department: Option<String>,
     pub position: Option<String>,
     pub is_active: bool,
@@ -65,7 +75,6 @@ pub struct AccountSummary {
 pub struct CreateAccountResponse {
     pub id: Uuid,
     pub username: String,
-    pub role: AccountRole,
     /// Plaintext test API key (shown once).
     pub test_api_key: String,
     pub created_at: chrono::DateTime<Utc>,
@@ -78,25 +87,62 @@ pub struct ResetLinkResponse {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-fn to_summary(a: Account) -> AccountSummary {
-    AccountSummary {
+async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, AppError> {
+    let role_rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, Vec<String>, bool)>(
+        "SELECT r.id, r.name, r.permissions, r.menus, r.is_system
+         FROM roles r
+         JOIN account_roles ar ON ar.role_id = r.id
+         WHERE ar.account_id = $1"
+    )
+    .bind(a.id)
+    .fetch_all(pg)
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("role lookup: {e}")))?;
+
+    let mut all_perms = std::collections::BTreeSet::new();
+    let mut all_menus = std::collections::BTreeSet::new();
+    let mut is_super = false;
+    let mut roles = Vec::new();
+
+    for (id, name, perms, menus, is_system) in &role_rows {
+        if *is_system && name == "super" { is_super = true; }
+        roles.push(RoleInfo { id: *id, name: name.clone() });
+        for p in perms { all_perms.insert(p.clone()); }
+        for m in menus { all_menus.insert(m.clone()); }
+    }
+
+    if is_super {
+        all_perms = crate::domain::enums::ALL_PERMISSIONS.iter().map(|s| s.to_string()).collect();
+        all_menus = crate::domain::enums::ALL_MENUS.iter().map(|s| s.to_string()).collect();
+    }
+
+    let role_name = if is_super {
+        "super".to_string()
+    } else {
+        roles.first().map(|r| r.name.clone()).unwrap_or_default()
+    };
+
+    Ok(AccountSummary {
         id: a.id,
         username: a.username,
         name: a.name,
         email: a.email,
-        role: a.role,
+        roles,
+        role_name,
+        permissions: all_perms.into_iter().collect(),
+        menus: all_menus.into_iter().collect(),
         department: a.department,
         position: a.position,
         is_active: a.is_active,
         last_login_at: a.last_login_at,
         created_at: a.created_at,
-    }
+    })
 }
 
 // ── GET /v1/accounts ──────────────────────────────────────────────────────────
 
 pub async fn list_accounts(
-    RequireSuper(_claims): RequireSuper,
+    RequireAccountManage(_claims): RequireAccountManage,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<AccountSummary>>, AppError> {
     let accounts = state
@@ -104,17 +150,54 @@ pub async fn list_accounts(
         .list_all()
         .await?;
 
-    Ok(Json(accounts.into_iter().map(to_summary).collect()))
+    let mut result = Vec::with_capacity(accounts.len());
+    for a in accounts {
+        result.push(to_summary(a, &state.pg_pool).await?);
+    }
+    Ok(Json(result))
 }
 
 // ── POST /v1/accounts ─────────────────────────────────────────────────────────
 
 pub async fn create_account(
-    RequireSuper(claims): RequireSuper,
+    RequireAccountManage(claims): RequireAccountManage,
     State(state): State<AppState>,
     Json(req): Json<CreateAccountRequest>,
 ) -> Result<Json<CreateAccountResponse>, AppError> {
     super::handlers::validate_username(&req.username)?;
+
+    // Resolve role_ids: explicit role_ids > legacy role_id > default "viewer"
+    let role_ids = if !req.role_ids.is_empty() {
+        // Validate all role_ids exist
+        for rid in &req.role_ids {
+            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
+                .bind(rid)
+                .fetch_one(&state.pg_pool)
+                .await
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
+            if !exists {
+                return Err(AppError::BadRequest(format!("invalid role_id: {rid}")));
+            }
+        }
+        req.role_ids.clone()
+    } else if let Some(rid) = req.role_id {
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
+            .bind(rid)
+            .fetch_one(&state.pg_pool)
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
+        if !exists {
+            return Err(AppError::BadRequest("invalid role_id".into()));
+        }
+        vec![rid]
+    } else {
+        // Default to "viewer" role
+        let row: (Uuid,) = sqlx::query_as("SELECT id FROM roles WHERE name = 'viewer'")
+            .fetch_one(&state.pg_pool)
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("viewer role not found: {e}")))?;
+        vec![row.0]
+    };
 
     let password_hash = password_hashing::hash_password(&req.password)?;
     let now = Utc::now();
@@ -124,7 +207,6 @@ pub async fn create_account(
         password_hash,
         name: req.name.clone(),
         email: req.email.clone(),
-        role: req.role,
         department: req.department.clone(),
         position: req.position.clone(),
         is_active: true,
@@ -153,10 +235,10 @@ pub async fn create_account(
         account_id: Some(claims.sub),
     };
 
-    // Create account in DB
+    // Create account with roles in a single transaction
     state
         .account_repo
-        .create(&account)
+        .create_with_roles(&account, &role_ids)
         .await
         .map_err(|e| {
             let msg = e.to_string();
@@ -168,17 +250,15 @@ pub async fn create_account(
         })?;
 
     // Create test API key (best-effort; account already exists)
-    // In production this would be in a transaction, but sqlx PgPool supports it.
     let _ = state.api_key_repo.create(&test_key).await;
 
     emit_audit(&state, &claims, "create", "account", &account.id.to_string(), &req.username,
-        &format!("Account '{}' (role: {}) created with auto-generated test API key",
-            req.username, req.role)).await;
+        &format!("Account '{}' created with {} role(s) and auto-generated test API key",
+            req.username, role_ids.len())).await;
 
     Ok(Json(CreateAccountResponse {
         id: account.id,
         username: req.username,
-        role: req.role,
         test_api_key: plaintext,
         created_at: now,
     }))
@@ -187,7 +267,7 @@ pub async fn create_account(
 // ── PATCH /v1/accounts/{id} ───────────────────────────────────────────────────
 
 pub async fn update_account(
-    RequireSuper(claims): RequireSuper,
+    RequireAccountManage(claims): RequireAccountManage,
     Path(id): Path<String>,
     State(state): State<AppState>,
     Json(req): Json<UpdateAccountRequest>,
@@ -212,9 +292,27 @@ pub async fn update_account(
         .update(&account)
         .await?;
 
+    // Update role assignments if provided
+    if let Some(role_ids) = &req.role_ids {
+        if role_ids.is_empty() {
+            return Err(AppError::BadRequest("at least one role is required".into()));
+        }
+        // Validate all role_ids exist
+        for rid in role_ids {
+            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
+                .bind(rid)
+                .fetch_one(&state.pg_pool)
+                .await
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
+            if !exists {
+                return Err(AppError::BadRequest(format!("invalid role_id: {rid}")));
+            }
+        }
+        state.account_repo.set_roles(&uuid, role_ids).await?;
+    }
+
     emit_audit(&state, &claims, "update", "account", &id, &account.username,
-        &format!("Account '{}' ({}) profile updated (name/email/department/position)",
-            account.username, id)).await;
+        &format!("Account '{}' ({}) updated", account.username, id)).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -222,7 +320,7 @@ pub async fn update_account(
 // ── DELETE /v1/accounts/{id} ──────────────────────────────────────────────────
 
 pub async fn delete_account(
-    RequireSuper(claims): RequireSuper,
+    RequireAccountManage(claims): RequireAccountManage,
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
@@ -250,7 +348,7 @@ pub async fn delete_account(
 // ── PATCH /v1/accounts/{id}/active ────────────────────────────────────────────
 
 pub async fn set_account_active(
-    RequireSuper(claims): RequireSuper,
+    RequireAccountManage(claims): RequireAccountManage,
     Path(id): Path<String>,
     State(state): State<AppState>,
     Json(req): Json<SetActiveRequest>,
@@ -281,7 +379,7 @@ pub struct SessionSummary {
 }
 
 pub async fn list_account_sessions(
-    RequireSuper(_claims): RequireSuper,
+    RequireAccountManage(_claims): RequireAccountManage,
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SessionSummary>>, AppError> {
@@ -309,7 +407,7 @@ pub async fn list_account_sessions(
 // ── DELETE /v1/sessions/{session_id} ──────────────────────────────────────────
 
 pub async fn revoke_session(
-    RequireSuper(claims): RequireSuper,
+    RequireAccountManage(claims): RequireAccountManage,
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
@@ -334,7 +432,7 @@ pub async fn revoke_session(
 // ── DELETE /v1/accounts/{id}/sessions ─────────────────────────────────────────
 
 pub async fn revoke_all_account_sessions(
-    RequireSuper(claims): RequireSuper,
+    RequireAccountManage(claims): RequireAccountManage,
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
@@ -360,7 +458,7 @@ pub async fn revoke_all_account_sessions(
 // ── POST /v1/accounts/{id}/reset-link ─────────────────────────────────────────
 
 pub async fn create_reset_link(
-    RequireSuper(claims): RequireSuper,
+    RequireAccountManage(claims): RequireAccountManage,
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<ResetLinkResponse>, AppError> {

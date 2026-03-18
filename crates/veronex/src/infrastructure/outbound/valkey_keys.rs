@@ -84,6 +84,10 @@ pub fn gemini_rpd(provider_id: Uuid, model: &str, date: &str) -> String {
 
 // ── Multi-instance coordination ─────────────────────────────────────────────
 
+/// SET of all API instance IDs (SADD on heartbeat refresh).
+/// Used by orphan sweeper to enumerate all known instances.
+pub const INSTANCES_SET: &str = "veronex:instances";
+
 /// Instance heartbeat key (EX 30s, refreshed every 10s).
 pub fn heartbeat(instance_id: &str) -> String {
     format!("veronex:heartbeat:{instance_id}")
@@ -125,6 +129,28 @@ pub fn pubsub_cancel(job_id: Uuid) -> String {
 /// Pattern for subscribing to all cancel channels.
 pub const PUBSUB_CANCEL_PATTERN: &str = "veronex:pubsub:cancel:*";
 
+// ── Provider liveness (agent heartbeat) ─────────────────────────────────────
+
+/// Heartbeat key set by veronex-agent after each successful Ollama scrape.
+/// TTL = 3× scrape interval (default 180s). Missing key = provider offline.
+/// Written by: veronex-agent. Read by: health_checker (MGET batch).
+pub fn provider_heartbeat(provider_id: Uuid) -> String {
+    format!("veronex:provider:hb:{provider_id}")
+}
+
+/// Global O(1) counter of currently-online Ollama providers.
+/// Incremented/decremented atomically by health_checker on status transitions.
+/// Read by dashboard to avoid SELECT COUNT(*) from DB.
+pub const PROVIDERS_ONLINE_COUNTER: &str = "veronex:stats:providers:online";
+
+/// Atomic counter of pending jobs (INCR on create, DECR on dispatch/cancel/fail).
+/// Reconciled from DB every 60 ticks. Read by stats ticker instead of DB query.
+pub const JOBS_PENDING_COUNTER: &str = "veronex:stats:jobs:pending";
+
+/// Atomic counter of running jobs (INCR on dispatch start, DECR on complete/fail/cancel).
+/// Reconciled from DB every 60 ticks. Read by stats ticker instead of DB query.
+pub const JOBS_RUNNING_COUNTER: &str = "veronex:stats:jobs:running";
+
 // ── VRAM pool ───────────────────────────────────────────────────────────────
 
 /// Valkey key tracking total reserved VRAM (MB) per provider.
@@ -141,3 +167,27 @@ pub fn vram_leases(provider_id: Uuid) -> String {
 
 pub use crate::domain::constants::{preload_lock_key as preload_lock};
 pub use crate::domain::constants::{scaleout_decision_key as scaleout_decision};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// provider_heartbeat() must produce the canonical format consumed by the
+    /// agent's heartbeat::key() and by MGET in health_checker.
+    /// Guards against crate-boundary drift between veronex and veronex-agent.
+    #[test]
+    fn provider_heartbeat_format_matches_agent_convention() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        assert_eq!(
+            provider_heartbeat(id),
+            "veronex:provider:hb:550e8400-e29b-41d4-a716-446655440000"
+        );
+    }
+
+    /// INSTANCES_SET must match the hardcoded key in veronex-agent's orphan_sweeper.
+    /// Guards against crate-boundary drift since agent cannot import this module.
+    #[test]
+    fn instances_set_value_matches_agent_convention() {
+        assert_eq!(INSTANCES_SET, "veronex:instances");
+    }
+}

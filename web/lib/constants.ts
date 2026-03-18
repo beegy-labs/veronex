@@ -80,6 +80,12 @@ export const REFETCH_INTERVAL_SLOW = 60_000
 /** Refetch interval for historical data (power history, metric history). */
 export const REFETCH_INTERVAL_HISTORY = 5 * 60_000
 
+/** Stale time for long-window historical data (60-day power / metrics history).
+ *  Data is refetched in the background every REFETCH_INTERVAL_HISTORY, so it
+ *  stays fresh — but navigating away and back within 30 min skips the on-mount
+ *  fetch and uses the cached data immediately. */
+export const STALE_TIME_HISTORY = 30 * 60_000
+
 // ── Metric thresholds — SSOT for colour-coded health indicators ─────────────
 
 /** GPU temperature (°C): critical ≥ this value. */

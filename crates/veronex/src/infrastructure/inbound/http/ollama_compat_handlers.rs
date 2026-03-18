@@ -342,6 +342,25 @@ pub async fn chat(
     }
     let prompt = extract_last_user_prompt(&req.messages).to_string();
 
+    // Extract images from user messages (Ollama chat format: message-level `images` field).
+    let images: Option<Vec<String>> = {
+        let imgs: Vec<String> = req.messages.iter()
+            .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            .filter_map(|m| m.get("images"))
+            .filter_map(|v| v.as_array())
+            .flat_map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)))
+            .collect();
+        if imgs.is_empty() { None } else { Some(imgs) }
+    };
+
+    // Validate images against lab_settings
+    if images.is_some() {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        if let Some(msg) = validate_images(&images, &lab) {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response();
+        }
+    }
+
     let model = req.model.clone();
     let messages = serde_json::Value::Array(req.messages);
     let tools = req.tools.map(serde_json::Value::Array);
@@ -362,7 +381,7 @@ pub async fn chat(
             request_path: Some("/api/chat".to_string()),
             conversation_id,
             key_tier: Some(api_key.tier),
-            images: None,
+            images,
             stop: None, seed: None, response_format: None,
             frequency_penalty: None, presence_penalty: None,
         })

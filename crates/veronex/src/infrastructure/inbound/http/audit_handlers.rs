@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::ports::outbound::analytics_repository::AuditFilters;
 use crate::infrastructure::inbound::http::error::AppError;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireAuditView;
 use crate::infrastructure::inbound::http::state::AppState;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ pub struct AuditEventResponse {
 // ── GET /v1/audit ─────────────────────────────────────────────────────────────
 
 pub async fn list_audit_events(
-    RequireSuper(_claims): RequireSuper,
+    RequireAuditView(_claims): RequireAuditView,
     State(state): State<AppState>,
     Query(q): Query<AuditQuery>,
 ) -> Result<Json<Vec<AuditEventResponse>>, AppError> {

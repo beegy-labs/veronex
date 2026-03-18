@@ -1,6 +1,6 @@
 # Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-15 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Rust Edition 2024 · Axum 0.8 · sqlx 0.8
 > Frontend patterns -> `policies/patterns-frontend.md`
 
@@ -188,6 +188,8 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 | `CANCEL_TIMEOUT` | 5s | Job cancellation in CancelGuard |
 | `OLLAMA_MODEL_CACHE_TTL` | 10s | Provider-for-model lookup cache |
 | `MODEL_SELECTION_CACHE_TTL` | 30s | Provider model-selection enabled list cache |
+| `HEALTH_CHECK_INTERVAL_SECS` | 30s | Health checker loop interval |
+| `STATS_TICK_INTERVAL` | 1s | FlowStats broadcast cadence |
 
 **Health checker** (`health_checker.rs` — health check specific):
 
@@ -213,6 +215,20 @@ while let Some(res) = tasks.join_next().await {
 
 Loop convention: accept `CancellationToken`, use `select!` to exit cleanly.
 
+### Stats Ticker — Sliding Window Counters
+
+`FlowStats` uses 60 x 1-second sliding-window buckets (not ring-buffer event scanning):
+
+| Field | Computation | Buckets |
+|-------|-------------|---------|
+| `incoming` | sum of last 10 buckets | req/s = incoming/10 |
+| `incoming_60s` | sum of all 60 buckets | = req/m |
+| `completed` | sum of all 60 buckets | terminal events |
+
+A separate task counts broadcast events (`pending` -> incoming, terminal -> completed) into the current bucket. The ticker rotates buckets every second, clears the new slot, and always broadcasts -- no PartialEq skip. Clients rely on receiving stats every second.
+
+`queued`/`running` sourced from DashMap (`get_live_counts()`) with DB fallback (single indexed query) when DashMap is empty (e.g. after restart). Not Valkey LLEN -- pops too fast for accurate reads.
+
 ## Pool Configuration
 
 ```rust
@@ -237,6 +253,32 @@ PgPoolOptions::new()
 | 7 | `infrastructure/inbound/http/new_handlers.rs` | `Result<T, AppError>` |
 | 8 | `infrastructure/inbound/http/router.rs` | Register routes inside auth middleware |
 | 9 | `docs/llm/{domain}/new_feature.md` | CDD doc |
+
+## RequirePermission Macro
+
+`define_require_permission!` generates Axum `FromRequestParts` extractors that check JWT claims for a specific permission. Super-admin bypasses all checks.
+
+```rust
+// Definition (jwt_auth.rs)
+macro_rules! define_require_permission {
+    ($name:ident, $perm:expr) => { /* reads Claims, checks role==Super || permissions.contains($perm) */ };
+}
+define_require_permission!(RequireRoleManage, "role_manage");
+
+// Usage in handlers
+pub async fn list_roles(RequireRoleManage(_claims): RequireRoleManage, ...) { ... }
+```
+
+| Extractor | Permission | Used by |
+|-----------|-----------|---------|
+| `RequireRoleManage` | `role_manage` | Role CRUD |
+| `RequireAccountManage` | `account_manage` | Account CRUD |
+| `RequireProviderManage` | `provider_manage` | Provider CRUD |
+| `RequireKeyManage` | `key_manage` | API key CRUD |
+| `RequireAuditView` | `audit_view` | Audit log |
+| `RequireSettingsManage` | `settings_manage` | System settings |
+| `RequireApiTest` | `api_test` | Test inference |
+| `RequireDashboardView` | `dashboard_view` | Dashboard data |
 
 ## Domain Enum Patterns
 
@@ -295,6 +337,19 @@ const PRICING_LATERAL: &str = "LEFT JOIN LATERAL (...) pricing ON true";
 format!("SELECT ... FROM inference_jobs j {PRICING_LATERAL} WHERE ...")
 ```
 
+## SQL Multi-Value Filters
+
+Use `string_to_array` + `ANY` for comma-separated status filters instead of `= $1`:
+
+```rust
+// CORRECT — supports "pending,running" as single parameter
+"j.status = ANY(string_to_array($1, ','))"
+// WRONG — only matches a single value
+"j.status = $1"
+```
+
+Used in `dashboard_queries.rs` for job status filtering (live feed, dashboard jobs).
+
 ## SQL Interval Parameterization
 
 Never interpolate user-controlled intervals as strings. Use `make_interval()`:
@@ -305,6 +360,18 @@ Never interpolate user-controlled intervals as strings. Use `make_interval()`:
 // WRONG — SQL injection risk
 format!("j.created_at >= NOW() - INTERVAL '{interval}'")
 ```
+
+## Image Inference — 3-Endpoint Support
+
+All three inference formats support image forwarding to Ollama vision models:
+
+| Endpoint | Image source | Extraction |
+|----------|-------------|------------|
+| `/v1/chat/completions` | `messages[].content[]` array with `type: "image_url"` | `openai_handlers.rs`: `ContentPart.extract_base64_images()` parses `data:...;base64,{data}` from `image_url.url` |
+| `/api/chat` | `images` field on request body (Ollama native) | `ollama_compat_handlers.rs`: forwarded from parsed messages |
+| `/api/generate` | `images` field on request body | `ollama_compat_handlers.rs`: forwarded directly |
+
+`stream_chat()` in `ollama/adapter.rs` injects images into the last user message (Ollama expects per-message images, not top-level). OpenAI `images` field and content-array images are merged before injection.
 
 ## Input Validation
 
@@ -358,6 +425,60 @@ Used by `set_auth_cookies()` in `auth_handlers.rs`. Never hardcode cookie TTLs.
 
 Called on provider register and update. See `auth/security.md` for full SSRF details.
 
+## Provider Liveness — Push Model (Heartbeat)
+
+Scale target: 10,000+ providers, tens of thousands req/s.
+Do NOT poll providers directly from veronex.
+Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
+
+| Component | Responsibility |
+|-----------|---------------|
+| `veronex-agent/src/heartbeat.rs` | `set_online(pool, provider_id, ttl_secs)` after each successful Ollama scrape |
+| `valkey_keys::provider_heartbeat(id)` | Key SSOT: `veronex:provider:hb:{uuid}` |
+| `health_checker.rs` | MGET all known heartbeat keys → one round-trip; missing key = offline |
+| `valkey_keys::PROVIDERS_ONLINE_COUNTER` | `INCR`/`DECR` atomically on status transitions → O(1) dashboard reads |
+
+## Job Counters — Valkey INCR/DECR
+
+O(1) pending/running counts for dashboard. No DB polling in hot path.
+
+| Key | Update | Read |
+|-----|--------|------|
+| `JOBS_PENDING_COUNTER` | INCR on submit, DECR on dispatch/cancel/fail | stats ticker GET |
+| `JOBS_RUNNING_COUNTER` | INCR on dispatch, DECR on complete/fail/cancel | stats ticker GET |
+
+| Safety | Detail |
+|--------|--------|
+| Double-DECR prevention | Check previous status before DECR |
+| Startup reconciliation | DB COUNT → Valkey SET at boot |
+| Periodic reconciliation | Every 60s: DB COUNT vs Valkey GET → SET if drift |
+| Valkey unavailable | Fallback to DB query |
+
+**TTL rule**: `heartbeat_ttl ≥ 3 × scrape_interval` — survives 2 missed cycles.
+
+**Fallback**: when Valkey is absent, health_checker falls back to semaphore-limited (64) concurrent HTTP probes.
+
+```rust
+// Reading liveness — O(1) Valkey instead of N × HTTP
+let keys: Vec<String> = active.iter().map(|p| valkey_keys::provider_heartbeat(p.id)).collect();
+let values: Result<Vec<Option<String>>, _> = pool.mget(keys).await;
+// Some(str) = online, None = TTL expired = offline
+```
+
+**Key format test**: `heartbeat::key()` is pure — test it to guard crate-boundary drift.
+
+## Scale Guards — 10K+ Provider Patterns
+
+| Pattern | Location | Detail |
+|---------|----------|--------|
+| `MAX_SCORING_CANDIDATES = 50` | `dispatcher.rs` | Bounds scoring loop: O(10K) → O(50) |
+| `MAX_CONCURRENT_METRICS = 64` | `health_checker.rs` | Semaphore limits concurrent node-exporter polls |
+| `MAX_CONCURRENT_PROBES = 64` | `health_checker.rs` | Semaphore limits HTTP health probes (no-Valkey fallback) |
+| `pg_class.reltuples` | `dashboard_queries.rs` | O(1) total_jobs estimate instead of COUNT(*) |
+| `join_all` parallelism | `dispatcher.rs`, `placement_planner.rs` | Parallel Valkey/DB calls instead of sequential loops |
+| `concurrent_http_probes()` | `health_checker.rs` | Bounded parallel HTTP for MGET fallback |
+| No-Valkey DB cache | `background.rs` | DB query every 10s (not 1s) when Valkey absent |
+
 ## SSE Error Sanitization
 
 Use `sanitize_sse_error()` from `handlers.rs` for all SSE/NDJSON error output:
@@ -368,6 +489,57 @@ Use `sanitize_sse_error()` from `handlers.rs` for all SSE/NDJSON error output:
 ```rust
 let err = json!({"error": {"message": sanitize_sse_error(&e)}});
 ```
+
+## Orphan Sweeper — Agent-Side Crash Recovery
+
+Detects crashed API instances and fails their orphaned jobs. Runs in `veronex-agent`, not in the API server. API servers manage their own INCR/DECR during normal operation; the agent only intervenes when an API server is confirmed dead.
+
+### Separation of Concerns
+
+| Component | Responsibility |
+|-----------|---------------|
+| API server (`reaper.rs`) | Heartbeat refresh (SET EX 30s, every 10s) + SADD to `INSTANCES_SET` + re-enqueue orphaned jobs (second chance) |
+| Agent (`orphan_sweeper.rs`) | Monitor heartbeats, detect death, fail orphaned jobs in DB, DECR counters, SREM from instance set |
+
+### Instance Registry
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `veronex:instances` | SET | All API instance IDs (SADD on heartbeat + startup) |
+| `veronex:heartbeat:{id}` | STRING EX 30s | Instance liveness (refreshed every 10s) |
+| `veronex:suspect:{id}` | STRING EX 180s | Grace period marker (2-min confirmation) |
+| `veronex:reaped:{id}` | STRING NX EX 86400s | Prevents duplicate cleanup (24h) |
+| `veronex:job:owner:{uuid}` | STRING EX 300s | Maps running job to owning instance |
+
+### 2-Minute Suspect Grace Period
+
+```
+Heartbeat missing → SET suspect EX 180 → wait
+TTL drops to ≤ 60  → 2+ minutes elapsed → confirmed dead
+SET reaped NX      → claim cleanup (single execution)
+```
+
+Network blips (< 2 min) do not trigger cleanup. The suspect marker auto-expires after 3 min if the instance recovers.
+
+### Shard Distribution (10K Scale)
+
+| Sweep | Interval | Scope |
+|-------|----------|-------|
+| Shard sweep | 30s | `hash(instance_id) % replicas == ordinal` — each agent handles its shard |
+| Leader sweep | 60s | NX lock — one agent fails jobs from deleted/inactive providers |
+
+### Cleanup Actions
+
+1. Find jobs owned by dead instance (Valkey `processing` list + `job:owner` keys)
+2. UPDATE DB: `status = 'failed'`, `failure_reason = 'server_crash'`
+3. LREM from processing list, DEL owner key
+4. DECR `JOBS_RUNNING_COUNTER` / `JOBS_PENDING_COUNTER`
+5. Belt-and-suspenders: DB query for `instance_id` match (catches jobs not in Valkey list)
+6. SREM from `INSTANCES_SET`, DEL suspect marker
+
+### Restart Behavior
+
+All agents down then restart: `tokio::time::interval` fires immediately on first tick, triggering an immediate scan and cleanup of any dead instances found.
 
 ## Test Code Conventions
 

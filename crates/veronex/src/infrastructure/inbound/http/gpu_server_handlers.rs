@@ -6,8 +6,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::constants::NODE_EXPORTER_TIMEOUT;
 use crate::domain::entities::GpuServer;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::outbound::hw_metrics;
 
 use super::audit_helpers::emit_audit;
@@ -16,12 +17,29 @@ use super::state::AppState;
 
 type HandlerResult<T> = Result<T, AppError>;
 
+/// Probe a node-exporter URL: returns `Ok(())` if reachable (any HTTP response),
+/// `Err` if the connection times out or is refused.
+async fn probe_node_exporter(client: &reqwest::Client, url: &str) -> Result<(), String> {
+    client
+        .get(url)
+        .timeout(NODE_EXPORTER_TIMEOUT)
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 // ── DTOs ───────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterGpuServerRequest {
     pub name: String,
     pub node_exporter_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VerifyServerRequest {
+    pub url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,9 +73,55 @@ async fn get_gpu_server(state: &AppState, id: Uuid) -> Result<GpuServer, AppErro
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
 
+/// `POST /v1/servers/verify` — validate URL format, duplicate check, and reachability.
+pub async fn verify_gpu_server(
+    _claims: RequireProviderManage,
+    State(state): State<AppState>,
+    Json(req): Json<VerifyServerRequest>,
+) -> impl IntoResponse {
+    let url = req.url.trim().to_string();
+
+    if url.is_empty() {
+        return AppError::BadRequest("url is required".into()).into_response();
+    }
+
+    // Must be a valid http/https URL.
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return AppError::BadRequest("url must start with http:// or https://".into()).into_response();
+    }
+
+    // Duplicate check.
+    let count_res: Result<(i64,), _> = sqlx::query_as(
+        "SELECT COUNT(*) FROM gpu_servers WHERE node_exporter_url = $1",
+    )
+    .bind(&url)
+    .fetch_one(&state.pg_pool)
+    .await;
+
+    match count_res {
+        Ok((c,)) if c > 0 => {
+            return AppError::Conflict("a server with this URL is already registered".into())
+                .into_response();
+        }
+        Err(e) => return db_error(e).into_response(),
+        _ => {}
+    }
+
+    // Connectivity check.
+    if let Err(e) = probe_node_exporter(&state.http_client, &url).await {
+        tracing::warn!(url = %url, error = %e, "node-exporter probe failed");
+        return AppError::BadGateway(
+            "node-exporter is not reachable at the given URL".into(),
+        )
+        .into_response();
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({"reachable": true}))).into_response()
+}
+
 /// `POST /v1/servers`
 pub async fn register_gpu_server(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<RegisterGpuServerRequest>,
 ) -> HandlerResult<impl IntoResponse> {
@@ -65,10 +129,40 @@ pub async fn register_gpu_server(
         return Err(AppError::BadRequest("name is required".into()));
     }
 
+    let node_exporter_url = req.node_exporter_url.as_deref().unwrap_or("").trim().to_string();
+    if node_exporter_url.is_empty() {
+        return Err(AppError::BadRequest("node_exporter_url is required".into()));
+    }
+
+    // Must be a valid http/https URL.
+    if !node_exporter_url.starts_with("http://") && !node_exporter_url.starts_with("https://") {
+        return Err(AppError::BadRequest("url must start with http:// or https://".into()));
+    }
+
+    // Reject duplicate node_exporter_url.
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM gpu_servers WHERE node_exporter_url = $1",
+    )
+    .bind(&node_exporter_url)
+    .fetch_one(&state.pg_pool)
+    .await
+    .map_err(|e| db_error(e))?;
+    if count > 0 {
+        return Err(AppError::Conflict("a server with this URL is already registered".into()));
+    }
+
+    // Verify node_exporter is reachable.
+    if let Err(e) = probe_node_exporter(&state.http_client, &node_exporter_url).await {
+        tracing::warn!(url = %node_exporter_url, error = %e, "node-exporter probe failed on register");
+        return Err(AppError::BadGateway(
+            "node-exporter is not reachable at the given URL".into(),
+        ));
+    }
+
     let server = GpuServer {
         id: Uuid::now_v7(),
         name: req.name.trim().to_string(),
-        node_exporter_url: req.node_exporter_url.filter(|s| !s.is_empty()),
+        node_exporter_url: Some(node_exporter_url),
         registered_at: Utc::now(),
     };
 
@@ -98,7 +192,7 @@ pub struct UpdateGpuServerRequest {
 
 /// `PATCH /v1/servers/{id}`
 pub async fn update_gpu_server(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateGpuServerRequest>,
@@ -130,7 +224,7 @@ pub async fn update_gpu_server(
 
 /// `DELETE /v1/servers/{id}`
 pub async fn delete_gpu_server(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> HandlerResult<StatusCode> {
@@ -165,7 +259,7 @@ pub async fn get_server_metrics(
             Ok(Json(metrics))
         }
         Err(e) => {
-            tracing::warn!(%id, "failed to fetch node metrics from {ne_url}: {e}");
+            tracing::warn!(%id, url = %ne_url, error = %e, "failed to fetch node metrics");
             Ok(Json(hw_metrics::NodeMetrics::default()))
         }
     }
@@ -194,7 +288,7 @@ pub async fn get_server_metrics_history(
     let hours = params.hours.unwrap_or(1).clamp(1, 1440);
 
     let points = repo.server_metrics_history(&id, hours).await.map_err(|e| {
-        tracing::error!(%id, "metrics history failed: {e}");
+        tracing::error!(%id, error = %e, "metrics history failed");
         AppError::Internal(anyhow::anyhow!("query failed"))
     })?;
 
