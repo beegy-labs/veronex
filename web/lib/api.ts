@@ -1,4 +1,5 @@
-import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, RoleSummary, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
 
@@ -107,6 +108,18 @@ export const api = {
   registerServer: (body: RegisterGpuServerRequest) =>
     apiClient.post<{ id: string }>('/v1/servers', body),
 
+  verifyServer: async (url: string): Promise<{ reachable: boolean }> => {
+    const res = await fetch(`${BASE}/v1/servers/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ url }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new ApiHttpError((data as { error?: string }).error ?? `${res.status}`, res.status)
+    return data as { reachable: boolean }
+  },
+
   updateServer: (id: string, body: UpdateGpuServerRequest) =>
     apiClient.patch<GpuServer>(`/v1/servers/${id}`, body),
 
@@ -125,6 +138,18 @@ export const api = {
 
   registerProvider: (body: RegisterProviderRequest) =>
     apiClient.post<RegisterProviderResponse>('/v1/providers', body),
+
+  verifyProvider: async (url: string): Promise<{ reachable: boolean }> => {
+    const res = await fetch(`${BASE}/v1/providers/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ url }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new ApiHttpError((data as { error?: string }).error ?? `${res.status}`, res.status)
+    return data as { reachable: boolean }
+  },
 
   deleteProvider: (id: string) =>
     apiClient.delete<void>(`/v1/providers/${id}`),
@@ -217,7 +242,7 @@ export const api = {
   createAccount: (body: CreateAccountRequest) =>
     apiClient.post<CreateAccountResponse>('/v1/accounts', body),
 
-  updateAccount: (id: string, body: Partial<Pick<Account, 'name' | 'email' | 'department' | 'position'>>) =>
+  updateAccount: (id: string, body: Partial<Pick<Account, 'name' | 'email' | 'department' | 'position'>> & { role_ids?: string[] }) =>
     apiClient.patch<void>(`/v1/accounts/${id}`, body),
 
   deleteAccount: (id: string) =>
@@ -237,6 +262,19 @@ export const api = {
 
   revokeAllSessions: (accountId: string) =>
     apiClient.delete<void>(`/v1/accounts/${accountId}/sessions`),
+
+  // ── Roles (JWT-protected, super only) ────────────────────────────────────
+  roles: () =>
+    apiClient.get<RoleSummary[]>('/v1/roles'),
+
+  createRole: (body: { name: string; permissions: string[]; menus: string[] }) =>
+    apiClient.post<RoleSummary>('/v1/roles', body),
+
+  updateRole: (id: string, body: { name?: string; permissions?: string[]; menus?: string[] }) =>
+    apiClient.patch<void>(`/v1/roles/${id}`, body),
+
+  deleteRole: (id: string) =>
+    apiClient.delete<void>(`/v1/roles/${id}`),
 
   // ── Audit (JWT-protected) ─────────────────────────────────────────────────
   auditEvents: (params?: { limit?: number; offset?: number; action?: string; resource_type?: string; resource_id?: string }) => {

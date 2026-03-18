@@ -28,7 +28,7 @@ use crate::domain::constants::{
 use crate::application::ports::outbound::concurrency_port::VramPermit;
 
 use super::JobEntry;
-use super::helpers::schedule_cleanup;
+use super::helpers::{decr_pending, schedule_cleanup};
 use super::runner::run_job;
 
 // ── Provider filtering ──────────────────────────────────────────────────────
@@ -67,22 +67,29 @@ async fn filter_candidates(
                 if !filtered.is_empty() { candidates = filtered; }
             }
 
-    // Stage 3: model selection (disabled models)
+    // Stage 3: model selection (disabled models) — parallel lookups
     if let Some(repo) = model_selection_repo {
-        let mut result = Vec::new();
-        for b in candidates {
-            match repo.list_enabled(b.id).await {
+        let futs: Vec<_> = candidates.iter()
+            .map(|b| {
+                let id = b.id;
+                async move { (id, repo.list_enabled(id).await) }
+            })
+            .collect();
+        let results = futures::future::join_all(futs).await;
+        let mut filtered = Vec::with_capacity(candidates.len());
+        for (b, (_, res)) in candidates.into_iter().zip(results) {
+            match res {
                 Ok(enabled) if !enabled.is_empty() => {
                     if enabled.iter().any(|s| s == model) {
-                        result.push(b);
+                        filtered.push(b);
                     } else {
                         tracing::debug!(provider_id = %b.id, %model, "model disabled, skipping");
                     }
                 }
-                _ => result.push(b),
+                _ => filtered.push(b),
             }
         }
-        candidates = result;
+        candidates = filtered;
     }
 
     // Stage 4: preload exclusion (Phase 6) — skip model+provider pairs
@@ -99,11 +106,13 @@ async fn filter_candidates(
     candidates
 }
 
+/// Maximum candidates to score — bounds the scoring loop at scale.
+const MAX_SCORING_CANDIDATES: usize = 50;
+
 /// Score by VRAM + locality bonus, sort by tier preference, claim first available slot.
-#[allow(clippy::too_many_arguments)]
-async fn score_and_claim(
-    candidates: Vec<LlmProvider>,
-    dispatch: &dyn ProviderDispatchPort,
+/// All operations are O(1) atomic reads — no async I/O needed.
+fn score_and_claim(
+    mut candidates: Vec<LlmProvider>,
     vram: &dyn VramPoolPort,
     thermal: &dyn ThermalPort,
     cb: &dyn CircuitBreakerPort,
@@ -111,11 +120,17 @@ async fn score_and_claim(
     key_tier: Option<&KeyTier>,
     provider_type: ProviderType,
 ) -> Option<(LlmProvider, VramPermit)> {
+    // Cap candidates to avoid O(N) scoring at 10K+ providers
+    if candidates.len() > MAX_SCORING_CANDIDATES {
+        candidates.truncate(MAX_SCORING_CANDIDATES);
+    }
     let mut scored: Vec<(LlmProvider, i64)> = Vec::with_capacity(candidates.len());
     for b in candidates {
         let avail = match b.provider_type {
             ProviderType::Ollama => {
-                let base = dispatch.available_vram_mb(&b).await;
+                // Use VramPool's O(1) atomic read instead of per-provider Valkey call.
+                // Thermal/overheating checks are handled below in the find_map closure.
+                let base = vram.available_vram_mb(b.id) as i64;
                 if vram.loaded_model_names(b.id).iter().any(|m| m == model) {
                     base.saturating_add(MODEL_LOCALITY_BONUS_MB)
                 } else { base }
@@ -174,9 +189,12 @@ async fn score_and_claim(
 async fn fail_job_no_provider(
     jobs: &Arc<DashMap<Uuid, JobEntry>>,
     job_repo: &Arc<dyn JobRepository>,
+    valkey: &Option<Arc<dyn ValkeyPort>>,
     uuid: Uuid,
     reason: &str,
 ) {
+    // pending → failed: DECR pending
+    decr_pending(valkey).await;
     if let Some(mut entry) = jobs.get_mut(&uuid) {
         entry.status = JobStatus::Failed;
         entry.job.status = JobStatus::Failed;
@@ -224,7 +242,7 @@ pub(super) fn spawn_job_direct(
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(job_id = %uuid, "no provider: {e}");
-                fail_job_no_provider(&jobs, &job_repo, uuid, &e.to_string()).await;
+                fail_job_no_provider(&jobs, &job_repo, &valkey, uuid, &e.to_string()).await;
                 return;
             }
         };
@@ -386,17 +404,18 @@ pub(super) async fn queue_dispatcher_loop(
                 let claimed = valkey.zset_claim(&job_id_str, QUEUE_PROCESSING, model).await.unwrap_or(false);
                 if claimed {
                     let _ = valkey.list_remove(QUEUE_PROCESSING, &job_id_str).await;
-                    fail_job_no_provider(&jobs, &job_repo, uuid, "no eligible provider for this model").await;
+                    let vk_opt: Option<Arc<dyn ValkeyPort>> = Some(valkey.clone());
+                    fail_job_no_provider(&jobs, &job_repo, &vk_opt, uuid, "no eligible provider for this model").await;
                     dispatched = true;
                 }
                 continue;
             }
 
             let claimed_provider = score_and_claim(
-                candidates, provider_dispatch.as_ref(), vram_pool.as_ref(),
+                candidates, vram_pool.as_ref(),
                 thermal.as_ref(), circuit_breaker.as_ref(), model,
                 key_tier.as_ref(), job.provider_type,
-            ).await;
+            );
 
             let Some((cfg, permit)) = claimed_provider else {
                 // Provider busy — skip this job, try next in window

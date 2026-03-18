@@ -101,10 +101,11 @@ export function useInferenceStream(): { events: FlowEvent[]; stats: FlowStats | 
                 const next = result.data
                 setStats(prev =>
                   prev &&
-                  prev.incoming  === next.incoming &&
-                  prev.queued    === next.queued &&
-                  prev.running   === next.running &&
-                  prev.completed === next.completed
+                  prev.incoming     === next.incoming &&
+                  prev.incoming_60s === next.incoming_60s &&
+                  prev.queued       === next.queued &&
+                  prev.running      === next.running &&
+                  prev.completed    === next.completed
                     ? prev
                     : next
                 )
@@ -161,9 +162,7 @@ export function useInferenceStream(): { events: FlowEvent[]; stats: FlowStats | 
         })
         .catch(err => {
           if (!active) return
-          if ((err as Error).name === 'AbortError') return
-          // Clear stale stats so the UI shows 0 rather than stale values during reconnect
-          setStats(null)
+          if (err instanceof DOMException && err.name === 'AbortError') return
           // Reconnect with exponential backoff (max 30 s)
           retryTimer = setTimeout(() => {
             if (active) {

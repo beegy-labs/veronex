@@ -77,6 +77,7 @@ pub async fn run_reaper_loop(
     pool: Pool,
     instance_id: Arc<str>,
     distributed_vram_pool: Option<Arc<DistributedVramPool>>,
+    _pg_pool: sqlx::PgPool,
     shutdown: CancellationToken,
 ) {
     let mut heartbeat_interval = tokio::time::interval(crate::domain::constants::REAPER_HEARTBEAT_INTERVAL);
@@ -110,7 +111,7 @@ pub async fn run_reaper_loop(
     tracing::info!("reaper loop stopped");
 }
 
-/// Refresh instance heartbeat (SET with 30s TTL).
+/// Refresh instance heartbeat (SET with 30s TTL) and register in instance set.
 async fn refresh_heartbeat(pool: &Pool, instance_id: &str) {
     let key = valkey_keys::heartbeat(instance_id);
     let result: Result<(), _> = pool
@@ -119,6 +120,8 @@ async fn refresh_heartbeat(pool: &Pool, instance_id: &str) {
     if let Err(e) = result {
         tracing::warn!("heartbeat refresh failed: {e}");
     }
+    // Register in global instance set so orphan sweeper can enumerate all instances.
+    let _: Result<i64, _> = pool.sadd(valkey_keys::INSTANCES_SET, instance_id).await;
 }
 
 /// Scan the processing list for jobs whose owner instance is dead, re-enqueue them.
@@ -172,6 +175,7 @@ async fn reap_orphaned_jobs(pool: &Pool) {
                     Ok(1) => {
                         tracing::info!(%uuid, %instance_id, "reaped orphaned job (CAS)");
                         reaped += 1;
+                        // DB cleanup (mark_job_failed) delegated to veronex-agent orphan sweeper.
                     }
                     Ok(_) => {} // owner changed or instance recovered — skip
                     Err(e) => tracing::warn!(%uuid, "reap CAS failed: {e}"),
@@ -194,6 +198,7 @@ async fn reap_orphaned_jobs(pool: &Pool) {
                     Ok(1) => {
                         tracing::info!(%uuid, "reaped ownerless job (CAS)");
                         reaped += 1;
+                        // DB cleanup delegated to veronex-agent orphan sweeper.
                     }
                     Ok(_) => {} // another reaper claimed it — skip
                     Err(e) => tracing::warn!(%uuid, "reap ownerless CAS failed: {e}"),
@@ -206,3 +211,4 @@ async fn reap_orphaned_jobs(pool: &Pool) {
         tracing::info!(reaped, "reaper re-enqueued orphaned jobs");
     }
 }
+

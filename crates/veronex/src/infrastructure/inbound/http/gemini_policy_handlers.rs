@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::entities::GeminiRateLimitPolicy;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 
 use super::audit_helpers::emit_audit;
 use super::error::{AppError, db_error};
@@ -59,7 +59,7 @@ fn default_true() -> bool {
 /// `GET /v1/gemini/policies` — list all Gemini rate-limit policies.
 ///
 /// Returns one row per model name. The `"*"` row is the global fallback.
-pub async fn list_gemini_policies(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<Json<Vec<GeminiPolicySummary>>> {
+pub async fn list_gemini_policies(RequireProviderManage(_claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<Vec<GeminiPolicySummary>>> {
     let policies = state.gemini_policy_repo.list_all().await.map_err(|e| db_error(e))?;
     let summaries: Vec<GeminiPolicySummary> = policies.into_iter().map(Into::into).collect();
     Ok(Json(summaries))
@@ -76,7 +76,7 @@ pub async fn list_gemini_policies(RequireSuper(_claims): RequireSuper, State(sta
 /// { "rpm_limit": 10, "rpd_limit": 250 }
 /// ```
 pub async fn upsert_gemini_policy(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(model_name): Path<String>,
     Json(req): Json<UpsertGeminiPolicyRequest>,

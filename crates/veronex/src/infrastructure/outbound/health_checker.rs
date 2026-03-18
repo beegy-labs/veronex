@@ -16,6 +16,8 @@ use crate::infrastructure::outbound::valkey_keys;
 use crate::domain::constants::{
     OLLAMA_HEALTH_CHECK_TIMEOUT as OLLAMA_HEALTH_TIMEOUT,
     GEMINI_HEALTH_CHECK_TIMEOUT as GEMINI_HEALTH_TIMEOUT,
+    THERMAL_HARD_COOLDOWN_SECS,
+    THERMAL_THROTTLE_KEY_TTL_SECS,
 };
 
 // ── Health check ───────────────────────────────────────────────────────────────
@@ -39,7 +41,7 @@ pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) ->
                     LlmProviderStatus::Offline
                 }
                 Err(e) => {
-                    tracing::warn!(provider_id = %provider.id, "Ollama health check failed: {e}");
+                    tracing::warn!(provider_id = %provider.id, error = %e, "Ollama health check failed");
                     LlmProviderStatus::Offline
                 }
             }
@@ -64,7 +66,7 @@ pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) ->
                     LlmProviderStatus::Offline
                 }
                 Err(e) => {
-                    tracing::warn!(provider_id = %provider.id, "Gemini health check failed: {e}");
+                    tracing::warn!(provider_id = %provider.id, error = %e, "Gemini health check failed");
                     LlmProviderStatus::Offline
                 }
             }
@@ -102,8 +104,9 @@ async fn poll_node_exporter_metrics(
         Err(e) => {
             tracing::warn!(
                 provider_id = %provider.id,
-                name = %provider.name,
-                "node-exporter metrics poll failed: {e}"
+                provider_name = %provider.name,
+                error = %e,
+                "node-exporter metrics poll failed"
             );
             return;
         }
@@ -132,9 +135,9 @@ async fn poll_node_exporter_metrics(
 
     tracing::debug!(
         provider_id = %provider.id,
-        name = %provider.name,
-        vram = "{}/{} MiB",
-        hw.vram_used_mb, hw.vram_total_mb,
+        provider_name = %provider.name,
+        vram_used_mb = hw.vram_used_mb,
+        vram_total_mb = hw.vram_total_mb,
         temp = hw.max_temp_c(),
         "node-exporter metrics collected"
     );
@@ -143,6 +146,42 @@ async fn poll_node_exporter_metrics(
 }
 
 // ── Background task ────────────────────────────────────────────────────────────
+
+/// Concurrently probe providers via HTTP with bounded parallelism.
+async fn concurrent_http_probes(
+    providers: Vec<LlmProvider>,
+    client: &reqwest::Client,
+) -> Vec<ProviderCheck> {
+    use tokio::task::JoinSet;
+
+    const MAX_CONCURRENT: usize = 64;
+    let sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
+    let mut set: JoinSet<ProviderCheck> = JoinSet::new();
+
+    for provider in providers {
+        let client = client.clone();
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire_owned().await.expect("semaphore closed");
+            let new_status = check_provider(&client, &provider).await;
+            ProviderCheck { provider, new_status }
+        });
+    }
+    let mut checks = Vec::new();
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok(c) => checks.push(c),
+            Err(e) => tracing::warn!(error = %e, "health checker probe task panicked"),
+        }
+    }
+    checks
+}
+
+/// Outcome of a single provider liveness check.
+struct ProviderCheck {
+    provider:   LlmProvider,
+    new_status: LlmProviderStatus,
+}
 
 /// Background loop that checks all registered providers every `interval_secs`
 /// seconds: updates online/offline status and (when linked to a GpuServer with
@@ -164,7 +203,7 @@ pub async fn run_health_checker_loop(
 ) {
     let interval = Duration::from_secs(interval_secs);
 
-    tracing::info!("provider health checker started (interval={}s)", interval_secs);
+    tracing::info!(interval_secs, "provider health checker started");
 
     loop {
         tokio::select! {
@@ -176,7 +215,7 @@ pub async fn run_health_checker_loop(
         let providers = match registry.list_all().await {
             Ok(b) => b,
             Err(e) => {
-                tracing::error!("health checker: failed to list providers: {e}");
+                tracing::error!(error = %e, "health checker: failed to list providers");
                 continue;
             }
         };
@@ -188,98 +227,201 @@ pub async fn run_health_checker_loop(
             .filter(|b| b.is_active && matches!(b.provider_type, ProviderType::Ollama))
             .collect();
 
-        for provider in active {
-            // 1. Connectivity health check
-            let new_status = check_provider(&client, &provider).await;
-            if new_status != provider.status {
-                tracing::info!(
-                    provider_id = %provider.id,
-                    name = %provider.name,
-                    old = ?provider.status,
-                    new = ?new_status,
-                    "provider status changed"
-                );
-                if let Err(e) = registry.update_status(provider.id, new_status).await {
-                    tracing::warn!(provider_id = %provider.id, "failed to update status: {e}");
+        // ── Determine liveness ────────────────────────────────────────────────
+        //
+        // When veronex-agent pushes heartbeats to Valkey (preferred at scale):
+        //   MGET all heartbeat keys in one round-trip → no HTTP probing required.
+        //
+        // Fallback (when Valkey is absent or heartbeat key is missing):
+        //   Direct HTTP probe via check_provider() — same behaviour as before.
+
+        let checks: Vec<ProviderCheck> = if let Some(ref pool) = valkey_pool {
+            use fred::prelude::*;
+
+            // MGET all heartbeat keys in a single round-trip.
+            // fred::mget returns Value::Array where each element is Null or a string.
+            let keys: Vec<String> = active
+                .iter()
+                .map(|p| valkey_keys::provider_heartbeat(p.id))
+                .collect();
+
+            let mget_result: Result<Vec<Option<String>>, _> = pool.mget(keys).await;
+
+            match mget_result {
+                Ok(values) if values.len() == active.len() => {
+                    // Derive status from presence of heartbeat key.
+                    active
+                        .into_iter()
+                        .zip(values)
+                        .map(|(provider, val): (LlmProvider, Option<String>)| {
+                            let new_status = if val.is_some() {
+                                LlmProviderStatus::Online
+                            } else {
+                                LlmProviderStatus::Offline
+                            };
+                            ProviderCheck { provider, new_status }
+                        })
+                        .collect()
+                }
+                Ok(values) => {
+                    // Length mismatch — fall back to concurrent HTTP probes.
+                    tracing::warn!(
+                        expected = active.len(),
+                        got = values.len(),
+                        "health_checker: Valkey MGET length mismatch, falling back to HTTP probes"
+                    );
+                    concurrent_http_probes(active, &client).await
+                }
+                Err(e) => {
+                    // Valkey unavailable — fall back to concurrent HTTP probes.
+                    tracing::warn!(error = %e, "health_checker: Valkey MGET failed, falling back to HTTP probes");
+                    concurrent_http_probes(active, &client).await
                 }
             }
+        } else {
+            // No Valkey — probe each provider directly (concurrent, semaphore-limited).
+            concurrent_http_probes(active, &client).await
+        };
 
-            // 2. Hardware metrics (only when linked to a GpuServer)
-            if let Some(ref pool) = valkey_pool {
-                poll_node_exporter_metrics(&provider, pool, gpu_server_registry.as_ref()).await;
+        // ── Apply status changes + HW metrics (semaphore-limited concurrency) ──
 
-                // 3. Thermal throttle update from cached hw_metrics
-                if let Some(hw) = load_hw_metrics(pool, provider.id).await {
-                    use crate::infrastructure::outbound::capacity::thermal::ThermalThresholds;
-                    let profile = match hw.gpu_vendor.as_str() {
-                        "nvidia" => ThermalThresholds::GPU,
-                        _ => ThermalThresholds::CPU,
-                    };
-                    thermal.set_thresholds(provider.id, profile);
+        const MAX_CONCURRENT_METRICS: usize = 64;
+        let metrics_sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_METRICS));
+        let mut set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
-                    let active_count = vram_pool.provider_active_requests(provider.id);
-                    let sum_mc       = vram_pool.sum_loaded_max_concurrent(provider.id);
-                    let prev  = thermal.get(provider.id);
-                    let level = thermal.update(provider.id, hw.max_temp_c(), active_count, sum_mc);
+        for ProviderCheck { provider, new_status } in checks {
+            let registry          = registry.clone();
+            let gpu_server_registry = gpu_server_registry.clone();
+            let valkey_pool       = valkey_pool.clone();
+            let thermal           = thermal.clone();
+            let vram_pool         = vram_pool.clone();
+            let metrics_sem       = metrics_sem.clone();
 
-                    if level != prev {
-                        match &level {
-                            ThrottleLevel::Hard => {
+            set.spawn(async move {
+                let _permit = metrics_sem.acquire().await.expect("semaphore closed");
+                if new_status != provider.status {
+                    tracing::info!(
+                        provider_id = %provider.id,
+                        provider_name = %provider.name,
+                        old = ?provider.status,
+                        new = ?new_status,
+                        "provider status changed"
+                    );
+                    if let Err(e) = registry.update_status(provider.id, new_status).await {
+                        tracing::warn!(provider_id = %provider.id, error = %e, "failed to update status");
+                    }
+                    // Update O(1) online counter: avoid SELECT COUNT(*) in dashboard.
+                    if let Some(ref pool) = valkey_pool {
+                        use fred::prelude::*;
+                        let delta: i64 = match (&provider.status, &new_status) {
+                            (LlmProviderStatus::Online, _) => -1, // was online, now not
+                            (_, LlmProviderStatus::Online) =>  1, // now online
+                            _ => 0,
+                        };
+                        if delta != 0 {
+                            if let Err(e) = pool
+                                .incr_by::<i64, _>(valkey_keys::PROVIDERS_ONLINE_COUNTER, delta)
+                                .await
+                            {
                                 tracing::warn!(
-                                    provider = %provider.name,
-                                    temp    = hw.max_temp_c(),
-                                    cooldown_secs = 300,
-                                    "HARD THROTTLE: dispatch suspended, cooldown active"
+                                    provider_id = %provider.id,
+                                    delta,
+                                    error = %e,
+                                    "failed to update providers online counter"
                                 );
-                                use fred::prelude::*;
-                                let _: () = pool
-                                    .set(
-                                        &valkey_keys::thermal_throttle(provider.id),
-                                        "hard",
-                                        Some(Expiration::EX(360)),
-                                        None,
-                                        false,
-                                    )
-                                    .await
-                                    .unwrap_or(());
-                            }
-                            ThrottleLevel::Cooldown => {
-                                tracing::warn!(
-                                    provider = %provider.name,
-                                    temp    = hw.max_temp_c(),
-                                    cooldown_secs = 300,
-                                    "COOLDOWN: waiting for hardware to cool"
-                                );
-                            }
-                            ThrottleLevel::RampUp => {
-                                tracing::info!(
-                                    provider = %provider.name,
-                                    temp    = hw.max_temp_c(),
-                                    "RAMP-UP: gradually restoring concurrency"
-                                );
-                            }
-                            ThrottleLevel::Soft => {
-                                tracing::warn!(
-                                    provider = %provider.name,
-                                    temp    = hw.max_temp_c(),
-                                    "SOFT THROTTLE: new requests blocked"
-                                );
-                            }
-                            ThrottleLevel::Normal => {
-                                tracing::info!(
-                                    provider = %provider.name,
-                                    temp    = hw.max_temp_c(),
-                                    "throttle lifted — normal ops"
-                                );
-                                use fred::prelude::*;
-                                let _: () = pool
-                                    .del::<(), _>(&valkey_keys::thermal_throttle(provider.id))
-                                    .await
-                                    .unwrap_or(());
                             }
                         }
                     }
                 }
+
+                // 2. Hardware metrics (only when linked to a GpuServer)
+                if let Some(ref pool) = valkey_pool {
+                    poll_node_exporter_metrics(&provider, pool, gpu_server_registry.as_ref()).await;
+
+                    // 3. Thermal throttle update from cached hw_metrics
+                    if let Some(hw) = load_hw_metrics(pool, provider.id).await {
+                        use crate::infrastructure::outbound::capacity::thermal::ThermalThresholds;
+                        let profile = match hw.gpu_vendor.as_str() {
+                            "nvidia" => ThermalThresholds::GPU,
+                            _ => ThermalThresholds::CPU,
+                        };
+                        thermal.set_thresholds(provider.id, profile);
+
+                        let active_count = vram_pool.provider_active_requests(provider.id);
+                        let sum_mc       = vram_pool.sum_loaded_max_concurrent(provider.id);
+                        let prev  = thermal.get(provider.id);
+                        let level = thermal.update(provider.id, hw.max_temp_c(), active_count, sum_mc);
+
+                        if level != prev {
+                            match &level {
+                                ThrottleLevel::Hard => {
+                                    tracing::warn!(
+                                        provider_name = %provider.name,
+                                        temp    = hw.max_temp_c(),
+                                        cooldown_secs = THERMAL_HARD_COOLDOWN_SECS,
+                                        "HARD THROTTLE: dispatch suspended, cooldown active"
+                                    );
+                                    use fred::prelude::*;
+                                    if let Err(e) = pool
+                                        .set::<(), _, _>(
+                                            &valkey_keys::thermal_throttle(provider.id),
+                                            "hard",
+                                            Some(Expiration::EX(THERMAL_THROTTLE_KEY_TTL_SECS)),
+                                            None,
+                                            false,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(provider_name = %provider.name, error = %e, "failed to set thermal throttle key");
+                                    }
+                                }
+                                ThrottleLevel::Cooldown => {
+                                    tracing::warn!(
+                                        provider_name = %provider.name,
+                                        temp    = hw.max_temp_c(),
+                                        cooldown_secs = THERMAL_HARD_COOLDOWN_SECS,
+                                        "COOLDOWN: waiting for hardware to cool"
+                                    );
+                                }
+                                ThrottleLevel::RampUp => {
+                                    tracing::info!(
+                                        provider_name = %provider.name,
+                                        temp    = hw.max_temp_c(),
+                                        "RAMP-UP: gradually restoring concurrency"
+                                    );
+                                }
+                                ThrottleLevel::Soft => {
+                                    tracing::warn!(
+                                        provider_name = %provider.name,
+                                        temp    = hw.max_temp_c(),
+                                        "SOFT THROTTLE: new requests blocked"
+                                    );
+                                }
+                                ThrottleLevel::Normal => {
+                                    tracing::info!(
+                                        provider_name = %provider.name,
+                                        temp    = hw.max_temp_c(),
+                                        "throttle lifted — normal ops"
+                                    );
+                                    use fred::prelude::*;
+                                    if let Err(e) = pool
+                                        .del::<(), _>(&valkey_keys::thermal_throttle(provider.id))
+                                        .await
+                                    {
+                                        tracing::warn!(provider_name = %provider.name, error = %e, "failed to del thermal throttle key");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Drain all provider tasks before sleeping until the next cycle.
+        while let Some(res) = set.join_next().await {
+            if let Err(e) = res {
+                tracing::warn!(error = %e, "health checker apply task panicked");
             }
         }
     }

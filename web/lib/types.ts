@@ -11,6 +11,20 @@
 
 import type { JobStatus, JobSource, ProviderType, LlmProviderStatus } from './generated'
 
+/** Connection verification state for server/provider registration modals. */
+export type VerifyState = 'idle' | 'checking' | 'ok' | 'error'
+
+/**
+ * HTTP error thrown by custom fetch helpers (verifyServer, verifyProvider).
+ * Carries the HTTP status code so callers can distinguish 409 Conflict from 5xx errors.
+ */
+export class ApiHttpError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message)
+    this.name = 'ApiHttpError'
+  }
+}
+
 /**
  * API key as returned by the dashboard API.
  * Omits internal fields (key_hash, deleted_at, key_type) not in API responses.
@@ -428,12 +442,30 @@ export interface OllamaProviderForModel {
  * Omits internal fields (password_hash, deleted_at, created_by)
  * and narrows `role` to the concrete string union.
  */
+export interface RoleSummary {
+  id: string
+  name: string
+  permissions: string[]
+  menus: string[]
+  is_system: boolean
+  account_count: number
+  created_at: string
+}
+
+export interface RoleInfo {
+  id: string
+  name: string
+}
+
 export interface Account {
   id: string
   username: string
   name: string
   email: string | null
-  role: 'super' | 'admin'
+  roles: RoleInfo[]
+  role_name: string
+  permissions: string[]
+  menus: string[]
   department: string | null
   position: string | null
   is_active: boolean
@@ -446,7 +478,9 @@ export interface CreateAccountRequest {
   password: string
   name: string
   email?: string
-  role?: string
+  role_ids?: string[]
+  /** Legacy single role_id — fallback when role_ids is empty. */
+  role_id?: string
   department?: string
   position?: string
 }
@@ -454,7 +488,6 @@ export interface CreateAccountRequest {
 export interface CreateAccountResponse {
   id: string
   username: string
-  role: string
   test_api_key: string
   created_at: string
 }
@@ -469,6 +502,8 @@ export interface LoginResponse {
   account_id: string
   username: string
   role: string
+  permissions: string[]
+  menus: string[]
 }
 
 export interface SessionRecord {

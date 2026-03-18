@@ -22,7 +22,7 @@ import {
 import { DataTable } from '@/components/data-table'
 import StatsCard from '@/components/stats-card'
 import { useTranslation } from '@/i18n'
-import { TIME_OPTIONS, TimeRangeSelector } from '@/components/time-range-selector'
+import { TimeRangeSelector } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
 import { tokens } from '@/lib/design-tokens'
