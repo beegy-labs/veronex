@@ -40,6 +40,8 @@ spec:
               value: "info"
             - name: VALKEY_URL
               value: {{ include "veronex.valkeyUrl" . | quote }}
+            - name: DATABASE_URL
+              value: {{ include "veronex.postgresUrl" . | quote }}
             {{- range $k, $v := .Values.veronexAgent.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

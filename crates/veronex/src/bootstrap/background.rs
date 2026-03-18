@@ -172,6 +172,17 @@ pub async fn spawn_background_tasks(
         tracing::warn!("job recovery failed (non-fatal): {e}");
     }
 
+    // ── Startup: register instance in global set for orphan sweeper ──
+    if let Some(ref vk) = infra.valkey_pool {
+        use fred::interfaces::SetsInterface;
+        let _: Result<i64, _> = vk
+            .sadd(
+                veronex::infrastructure::outbound::valkey_keys::INSTANCES_SET,
+                infra.instance_id.as_ref(),
+            )
+            .await;
+    }
+
     // ── Startup reconciliation: seed Valkey job counters from DB ──
     if let Some(ref vk) = infra.valkey_pool {
         use fred::interfaces::KeysInterface;
@@ -198,6 +209,11 @@ pub async fn spawn_background_tasks(
         let _: Result<(), _> = vk.set(JOBS_RUNNING_COUNTER, running, None, None, false).await;
         tracing::info!(pending, running, "job counters seeded from DB");
     }
+
+    // NOTE: Startup stuck-job cleanup moved to veronex-agent orphan sweeper.
+    // The agent monitors heartbeats and cleans up orphaned jobs with a 2-minute
+    // grace period, preventing false positives from network blips.
+
     tasks.spawn(use_case_impl.start_queue_worker(shutdown.child_token()));
     tasks.spawn(use_case_impl.start_job_sweeper(shutdown.child_token()));
 
@@ -420,6 +436,7 @@ pub async fn spawn_background_tasks(
             pool.clone(),
             infra.instance_id.clone(),
             distributed_vram_pool,
+            infra.pg_pool.clone(),
             shutdown.child_token(),
         ));
 

@@ -162,7 +162,7 @@ export function useInferenceStream(): { events: FlowEvent[]; stats: FlowStats | 
         })
         .catch(err => {
           if (!active) return
-          if ((err as Error).name === 'AbortError') return
+          if (err instanceof DOMException && err.name === 'AbortError') return
           // Reconnect with exponential backoff (max 30 s)
           retryTimer = setTimeout(() => {
             if (active) {

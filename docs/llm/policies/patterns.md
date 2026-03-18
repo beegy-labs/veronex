@@ -490,6 +490,57 @@ Use `sanitize_sse_error()` from `handlers.rs` for all SSE/NDJSON error output:
 let err = json!({"error": {"message": sanitize_sse_error(&e)}});
 ```
 
+## Orphan Sweeper — Agent-Side Crash Recovery
+
+Detects crashed API instances and fails their orphaned jobs. Runs in `veronex-agent`, not in the API server. API servers manage their own INCR/DECR during normal operation; the agent only intervenes when an API server is confirmed dead.
+
+### Separation of Concerns
+
+| Component | Responsibility |
+|-----------|---------------|
+| API server (`reaper.rs`) | Heartbeat refresh (SET EX 30s, every 10s) + SADD to `INSTANCES_SET` + re-enqueue orphaned jobs (second chance) |
+| Agent (`orphan_sweeper.rs`) | Monitor heartbeats, detect death, fail orphaned jobs in DB, DECR counters, SREM from instance set |
+
+### Instance Registry
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `veronex:instances` | SET | All API instance IDs (SADD on heartbeat + startup) |
+| `veronex:heartbeat:{id}` | STRING EX 30s | Instance liveness (refreshed every 10s) |
+| `veronex:suspect:{id}` | STRING EX 180s | Grace period marker (2-min confirmation) |
+| `veronex:reaped:{id}` | STRING NX EX 86400s | Prevents duplicate cleanup (24h) |
+| `veronex:job:owner:{uuid}` | STRING EX 300s | Maps running job to owning instance |
+
+### 2-Minute Suspect Grace Period
+
+```
+Heartbeat missing → SET suspect EX 180 → wait
+TTL drops to ≤ 60  → 2+ minutes elapsed → confirmed dead
+SET reaped NX      → claim cleanup (single execution)
+```
+
+Network blips (< 2 min) do not trigger cleanup. The suspect marker auto-expires after 3 min if the instance recovers.
+
+### Shard Distribution (10K Scale)
+
+| Sweep | Interval | Scope |
+|-------|----------|-------|
+| Shard sweep | 30s | `hash(instance_id) % replicas == ordinal` — each agent handles its shard |
+| Leader sweep | 60s | NX lock — one agent fails jobs from deleted/inactive providers |
+
+### Cleanup Actions
+
+1. Find jobs owned by dead instance (Valkey `processing` list + `job:owner` keys)
+2. UPDATE DB: `status = 'failed'`, `failure_reason = 'server_crash'`
+3. LREM from processing list, DEL owner key
+4. DECR `JOBS_RUNNING_COUNTER` / `JOBS_PENDING_COUNTER`
+5. Belt-and-suspenders: DB query for `instance_id` match (catches jobs not in Valkey list)
+6. SREM from `INSTANCES_SET`, DEL suspect marker
+
+### Restart Behavior
+
+All agents down then restart: `tokio::time::interval` fires immediately on first tick, triggering an immediate scan and cleanup of any dead instances found.
+
 ## Test Code Conventions
 
 | Rule | Rationale |
