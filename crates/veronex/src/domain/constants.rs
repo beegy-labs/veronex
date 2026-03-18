@@ -189,6 +189,9 @@ pub const PROVIDER_REGISTRY_CACHE_TTL: Duration = Duration::from_secs(5);
 /// Base tick interval for the capacity analyzer sync loop.
 pub const SYNC_LOOP_BASE_TICK: Duration = Duration::from_secs(30);
 
+/// Interval between health checker passes (provider liveness probes).
+pub const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
+
 /// Interval between pending-job sweep passes (reaper).
 pub const PENDING_JOB_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 

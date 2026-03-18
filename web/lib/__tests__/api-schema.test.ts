@@ -415,6 +415,7 @@ describe('API Schema: SSE Events', () => {
   it('validates flow stats', () => {
     expect(FlowStatsSchema.safeParse({
       incoming: 3,
+      incoming_60s: 20,
       queued: 1,
       running: 2,
       completed: 5,
@@ -424,6 +425,7 @@ describe('API Schema: SSE Events', () => {
   it('rejects negative flow stats', () => {
     expect(FlowStatsSchema.safeParse({
       incoming: -1,
+      incoming_60s: 0,
       queued: 0,
       running: 0,
       completed: 0,
@@ -455,6 +457,7 @@ describe('API Schema: SSE Events', () => {
   it('accepts flow stats with all zeros', () => {
     expect(FlowStatsSchema.safeParse({
       incoming: 0,
+      incoming_60s: 0,
       queued: 0,
       running: 0,
       completed: 0,
@@ -464,6 +467,7 @@ describe('API Schema: SSE Events', () => {
   it('rejects flow stats with float value', () => {
     expect(FlowStatsSchema.safeParse({
       incoming: 1.5,
+      incoming_60s: 0,
       queued: 0,
       running: 0,
       completed: 0,

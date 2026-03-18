@@ -24,7 +24,7 @@ import type { Provider } from '@/lib/types'
 import type { FlowEvent } from '@/hooks/use-inference-stream'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI, JOB_STATUS_COLORS } from '@/lib/constants'
+import { PROVIDER_GEMINI, JOB_STATUS_COLORS } from '@/lib/constants'
 import { getOllamaProviders, getGeminiProviders } from '@/lib/utils'
 import { tokens } from '@/lib/design-tokens'
 
@@ -32,7 +32,6 @@ import { tokens } from '@/lib/design-tokens'
 const VIEW_W = 540
 const VIEW_H = 264
 const MAX_BEES = 30
-const BEE_DURATION_MS = 1400
 const ENQUEUE_COLOR = tokens.status.warning
 
 /* ─── Column 1: Veronex API ─────────────────────────────────── */
@@ -89,7 +88,8 @@ function statusColor(status: string): string {
 }
 
 function providerStroke(providers: Provider[]): string {
-  if (providers.length === 0)                        return tokens.border.base
+  // Empty = still loading (query cache warming) — show neutral, not error
+  if (providers.length === 0)                        return tokens.border.subtle
   if (providers.some(b => b.status === 'online'))    return tokens.status.success
   if (providers.some(b => b.status === 'degraded'))  return tokens.status.warning
   return tokens.status.error
@@ -106,12 +106,19 @@ function octPoints(cx: number, cy: number, w: number, h: number, inset: number):
   ].join(' ')
 }
 
+/* ─── bee sizing — scales particle with volume ───────────────── */
+// Maps a count (0–20+) to a pixel diameter (6–18px).
+function beeSize(count: number): number {
+  return Math.min(6 + Math.floor(count * 0.6), 18)
+}
+
 /* ─── bee reducer ────────────────────────────────────────────── */
 type Bee = {
   id: string
   pathD: string
   color: string
   phase: 'enqueue' | 'dispatch' | 'response'
+  size: number
   delay: number
 }
 type Action = { type: 'SPAWN'; bees: Bee[] } | { type: 'EXPIRE'; id: string }
@@ -127,15 +134,15 @@ function beeReducer(state: Bee[], action: Action): Bee[] {
 interface Props {
   providers: Provider[]
   events: FlowEvent[]
-  /** Number of pending jobs (SSE 30s window) */
   pendingJobs?: number
-  /** Number of running jobs (SSE 30s window) */
   runningJobs?: number
-  /** Total requests in 30s window (SSE enqueue events) */
+  /** req/s (10-second smoothed) */
   recentRequests?: number
+  /** req/m (60-second window) */
+  reqPerMin?: number
 }
 
-export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, events, pendingJobs = 0, runningJobs = 0, recentRequests = 0 }: Props) {
+export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, events, pendingJobs = 0, runningJobs = 0, recentRequests = 0, reqPerMin = 0 }: Props) {
   const { t } = useTranslation()
   const { labSettings } = useLabSettings()
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
@@ -168,6 +175,11 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
     return () => obs.disconnect()
   }, [])
 
+  // Bee sizes based on current volume
+  const enqueueSize  = beeSize(recentRequests * 10)  // incoming rate
+  const dispatchSize = beeSize(runningJobs)
+  const responseSize = beeSize(runningJobs)
+
   // Spawn bees for new events (skip stale replayed events older than 2s)
   useEffect(() => {
     const now = Date.now()
@@ -180,18 +192,18 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
       const color = statusColor(e.status)
 
       if (e.phase === 'enqueue') {
-        newBees.push({ id: `${e.id}-eq`, pathD: PATH_API_QUEUE, color: ENQUEUE_COLOR, phase: 'enqueue', delay: 0 })
+        newBees.push({ id: `${e.id}-eq`, pathD: PATH_API_QUEUE, color: ENQUEUE_COLOR, phase: 'enqueue', size: enqueueSize, delay: 0 })
       } else if (e.phase === 'dispatch') {
         const pathD = e.provider === PROVIDER_GEMINI ? PATH_QUEUE_GEMINI : PATH_QUEUE_OLLAMA
-        newBees.push({ id: `${e.id}-qp`, pathD, color, phase: 'dispatch', delay: 0 })
+        newBees.push({ id: `${e.id}-qp`, pathD, color, phase: 'dispatch', size: dispatchSize, delay: 0 })
       } else {
         const pathD = e.provider === PROVIDER_GEMINI ? PATH_GEMINI_API : PATH_OLLAMA_API
-        newBees.push({ id: `${e.id}-pa`, pathD, color, phase: 'response', delay: 0 })
+        newBees.push({ id: `${e.id}-pa`, pathD, color, phase: 'response', size: responseSize, delay: 0 })
       }
     }
 
     if (newBees.length > 0) dispatch({ type: 'SPAWN', bees: newBees })
-  }, [events])
+  }, [events, enqueueSize, dispatchSize, responseSize])
 
   return (
     <Card>
@@ -311,11 +323,11 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
                 }} />
               <text x={API_CX} y={API_CY + API_H / 2 + 13} textAnchor="middle"
                 style={{ fill: recentRequests > 0 ? tokens.brand.primary : tokens.text.secondary, fontSize: 8, fontWeight: 700 }}>
-                {typeof recentRequests === 'number' ? recentRequests.toFixed(1) : recentRequests} req/s
+                {t('overview.flowReqPerSec', { value: typeof recentRequests === 'number' ? recentRequests.toFixed(1) : recentRequests })}
               </text>
               <text x={API_CX} y={API_CY + API_H / 2 + 22} textAnchor="middle"
                 style={{ fill: tokens.text.secondary, fontSize: 7 }}>
-                {Math.round((recentRequests ?? 0) * 60)} req/m
+                {t('overview.flowReqPerMin', { value: reqPerMin })}
               </text>
               {/* ── Node 2: Queue (Valkey) — cylinder ────────────────── */}
               {/* Bottom ellipse cap — drawn first (behind body) */}
@@ -431,11 +443,12 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
                   key={bee.id}
                   className="bee-particle"
                   style={{
+                    '--bee-size': `${bee.size}px`,
                     offsetPath:      `path("${bee.pathD}")`,
                     backgroundColor: bee.phase === 'response' ? `${bee.color}cc` : bee.color,
-                    boxShadow:       `0 0 6px 2px ${bee.color}${bee.phase === 'response' ? '28' : '44'}`,
+                    boxShadow:       `0 0 ${Math.round(bee.size * 0.6)}px ${Math.round(bee.size * 0.2)}px ${bee.color}${bee.phase === 'response' ? '28' : '44'}`,
                     animationDelay:  bee.delay > 0 ? `${bee.delay}ms` : undefined,
-                  }}
+                  } as React.CSSProperties}
                   onAnimationEnd={() => dispatch({ type: 'EXPIRE', id: bee.id })}
                 />
               ))}

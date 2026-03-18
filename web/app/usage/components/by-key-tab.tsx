@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { keyUsageQuery, keyModelBreakdownQuery } from '@/lib/queries'
-import type { ApiKey, UsageBreakdown, ModelBreakdown } from '@/lib/types'
+import type { ApiKey, UsageBreakdown } from '@/lib/types'
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,

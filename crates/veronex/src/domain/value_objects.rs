@@ -22,13 +22,16 @@ pub struct JobStatusEvent {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct FlowStats {
-    /// New requests received in the last 1-second window.
+    /// Enqueue events in the last 10 seconds (raw count).
+    /// Client divides by 10 for req/s display.
     pub incoming: u32,
+    /// Enqueue events in the last 60 seconds (raw count) = req/m.
+    pub incoming_60s: u32,
     /// Jobs currently waiting in the queue.
     pub queued: u32,
     /// Jobs currently being processed by a provider.
     pub running: u32,
-    /// Jobs that completed (any terminal status) in the last 1-second window.
+    /// Jobs that completed (any terminal status) in the last 60 seconds.
     pub completed: u32,
 }
 

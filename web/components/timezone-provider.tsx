@@ -70,10 +70,6 @@ function writeCookie(tz: Timezone) {
   document.cookie = `${COOKIE_KEY}=${encodeURIComponent(tz)}; path=/; expires=${expires}; SameSite=Lax`
 }
 
-function deleteCookie() {
-  document.cookie = `${COOKIE_KEY}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax`
-}
-
 function initialTimezone(): Timezone {
   const cookie = readCookie()
   if (cookie) return cookie

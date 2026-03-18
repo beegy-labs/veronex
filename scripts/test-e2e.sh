@@ -115,8 +115,20 @@ else
   PARALLEL_EXIT=1
 fi
 
+# ── Sequential post-parallel phase: Verify & Liveness ───────────────────────
+echo ""
+echo -e "${CYAN}${BOLD}[11] Verify & Liveness: server/provider verify, duplicate 409, heartbeat${NC}"
+VERIFY_COUNTS="$COUNTS_FILE.11-verify-liveness"
+: > "$VERIFY_COUNTS"
+if E2E_COUNTS_FILE="$VERIFY_COUNTS" bash "$E2E_DIR/11-verify-liveness.sh"; then
+  true
+else
+  echo -e "${RED}[ERROR]${NC} 11-verify-liveness.sh exited non-zero" >&2
+  PARALLEL_EXIT=1
+fi
+
 # ── Aggregate results ─────────────────────────────────────────────────────────
-ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}" "$SDD_COUNTS" "$METRICS_COUNTS" "$IMG_COUNTS")
+ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}" "$SDD_COUNTS" "$METRICS_COUNTS" "$IMG_COUNTS" "$VERIFY_COUNTS")
 TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
 for cf in "${ALL_COUNTS_FILES[@]}"; do
   [ -f "$cf" ] || continue
