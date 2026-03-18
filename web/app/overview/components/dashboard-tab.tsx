@@ -15,8 +15,8 @@ import {
 } from 'recharts'
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
-  AXIS_TICK, CURSOR_FILL,
-  fmtMs, fmtMsNullable, fmtCompact, fmtTemp, fmtKwh,
+  AXIS_TICK,
+  fmtMs, fmtCompact, fmtTemp, fmtKwh,
 } from '@/lib/chart-theme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
@@ -75,14 +75,13 @@ export function DashboardTab({
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   /* ── derived: providers ─────────────────────────────────── */
-  const { localBs, apiBs, visibleBs, onlineAll, totalProv } = useMemo(() => {
+  const { localBs, apiBs, onlineAll, totalProv } = useMemo(() => {
     const localBs = getOllamaProviders(providers)
     const apiBs   = geminiEnabled ? getGeminiProviders(providers) : []
     const visibleBs = [...localBs, ...apiBs]
     return {
       localBs,
       apiBs,
-      visibleBs,
       onlineAll: visibleBs.filter(b => b.status === 'online').length,
       totalProv: visibleBs.length,
     }
@@ -465,7 +464,7 @@ export function DashboardTab({
                       const d = perfMap[period]
                       return (
                         <td key={period} className={`py-3 text-right font-bold tabular-nums ${latencyColor(d?.[key], warnMs, errMs)}`}>
-                          {d?.[key] != null ? fmtMs(d[key]!) : '—'}
+                          {d?.[key] != null ? fmtMs(d[key]) : '—'}
                         </td>
                       )
                     })}
@@ -476,7 +475,7 @@ export function DashboardTab({
             {/* Mini 24h avg latency sparkline */}
             {perf && perf.hourly.length > 0 && (
               <div className="mt-4 pt-3 border-t border-border">
-                <p className="text-[11px] text-muted-foreground mb-2">{t('overview.daily')} — avg / hour</p>
+                <p className="text-[11px] text-muted-foreground mb-2">{t('overview.daily')} — {t('overview.latencyAvgPerHour')}</p>
                 <ResponsiveContainer width="100%" height={64}>
                   <AreaChart data={perf.hourly.map(h => ({ hour: fmtHourLabel(h.hour, tz), ms: h.avg_latency_ms }))}>
                     <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />

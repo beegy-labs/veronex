@@ -6,9 +6,14 @@
  */
 export type FlowStats = { 
 /**
- * New requests received in the last 1-second window.
+ * Enqueue events in the last 10 seconds (raw count).
+ * Client divides by 10 for req/s display.
  */
 incoming: number, 
+/**
+ * Enqueue events in the last 60 seconds (raw count) = req/m.
+ */
+incoming_60s: number, 
 /**
  * Jobs currently waiting in the queue.
  */
@@ -18,6 +23,6 @@ queued: number,
  */
 running: number, 
 /**
- * Jobs that completed (any terminal status) in the last 1-second window.
+ * Jobs that completed (any terminal status) in the last 60 seconds.
  */
 completed: number, };
