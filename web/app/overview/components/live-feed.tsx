@@ -43,14 +43,7 @@ export const LiveFeed = memo(function LiveFeed() {
   // Refetch every 2s for near-real-time, and also on new SSE events.
   const { data } = useQuery({
     queryKey: ['active-jobs'] as const,
-    queryFn: async () => {
-      // Fetch pending and running separately (API supports single status filter)
-      const [p, r] = await Promise.all([
-        api.jobs('status=pending&limit=50'),
-        api.jobs('status=running&limit=50'),
-      ])
-      return { jobs: [...p.jobs, ...r.jobs], total: p.total + r.total }
-    },
+    queryFn: () => api.jobs('status=pending,running&limit=50'),
     staleTime: 1_000,
     refetchInterval: 2_000,
     refetchIntervalInBackground: false,

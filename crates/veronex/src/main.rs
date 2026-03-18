@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
     let repos = bootstrap::wire_repositories(&infra, &config).await?;
 
     // ── Bootstrap super account ────────────────────────────────────
-    bootstrap::repositories::maybe_bootstrap_super_account(&repos.account_repo, &config).await;
+    bootstrap::repositories::maybe_bootstrap_super_account(&repos.account_repo, &config, &infra.pg_pool).await;
 
     // ── Background tasks ───────────────────────────────────────────
     let shutdown = CancellationToken::new();

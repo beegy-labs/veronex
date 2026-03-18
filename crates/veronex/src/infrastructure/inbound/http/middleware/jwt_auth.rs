@@ -19,6 +19,15 @@ pub struct Claims {
     /// JWT ID — unique per session, used for Valkey revocation blocklist.
     pub jti: Uuid,
     pub exp: usize,
+    /// Role-based permissions (e.g. ["dashboard_view", "provider_manage"]).
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    /// Visible menu IDs (e.g. ["dashboard", "providers", "servers"]).
+    #[serde(default)]
+    pub menus: Vec<String>,
+    /// Role name (e.g. "super", "viewer").
+    #[serde(default)]
+    pub role_name: String,
 }
 
 /// Axum middleware that validates `Authorization: Bearer <token>` and inserts
@@ -104,6 +113,7 @@ fn extract_access_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
 /// Axum extractor that pulls [`Claims`] from extensions and asserts `role == Super`.
 ///
 /// Returns `403 Forbidden` if the authenticated user is not a super-admin.
+/// Used for role CRUD and other super-only operations.
 pub struct RequireSuper(pub Claims);
 
 impl<S> axum::extract::FromRequestParts<S> for RequireSuper
@@ -129,3 +139,52 @@ where
         Ok(RequireSuper(claims))
     }
 }
+
+/// Macro to generate permission-checking extractors.
+///
+/// Each generated struct works like `RequireSuper` but checks for a
+/// specific permission string. Super-admin accounts bypass the check.
+macro_rules! define_require_permission {
+    ($name:ident, $perm:expr) => {
+        pub struct $name(pub Claims);
+
+        impl<S> axum::extract::FromRequestParts<S> for $name
+        where
+            S: Send + Sync,
+        {
+            type Rejection = AppError;
+
+            async fn from_request_parts(
+                parts: &mut axum::http::request::Parts,
+                _state: &S,
+            ) -> Result<Self, Self::Rejection> {
+                let claims = parts
+                    .extensions
+                    .get::<Claims>()
+                    .cloned()
+                    .ok_or_else(|| AppError::Unauthorized("authentication required".into()))?;
+
+                if claims.role == AccountRole::Super {
+                    return Ok($name(claims));
+                }
+
+                if !claims.permissions.iter().any(|p| p == $perm) {
+                    return Err(AppError::Forbidden(
+                        format!("permission '{}' required", $perm),
+                    ));
+                }
+
+                Ok($name(claims))
+            }
+        }
+    };
+}
+
+define_require_permission!(RequireDashboardView,  "dashboard_view");
+define_require_permission!(RequireApiTest,        "api_test");
+define_require_permission!(RequireProviderManage, "provider_manage");
+define_require_permission!(RequireKeyManage,      "key_manage");
+define_require_permission!(RequireAccountManage,  "account_manage");
+define_require_permission!(RequireAuditView,      "audit_view");
+define_require_permission!(RequireSettingsManage, "settings_manage");
+define_require_permission!(RequireRoleManage,     "role_manage");

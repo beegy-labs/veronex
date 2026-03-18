@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::domain::enums::ProviderType;
 
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 
 use super::constants::ERR_DATABASE;
 use super::error::error_json;
@@ -121,7 +121,7 @@ pub async fn list_provider_models(
 /// Returns 202 immediately with the job ID. The sync runs in the background,
 /// processing each provider sequentially without retrying on failure.
 pub async fn sync_all_providers(
-    RequireSuper(_claims): RequireSuper,
+    RequireProviderManage(_claims): RequireProviderManage,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     // List all active Ollama providers.
@@ -256,7 +256,7 @@ pub async fn sync_all_providers(
 
 /// `GET /v1/ollama/sync/status` — return the latest sync job status.
 pub async fn get_sync_status(
-    RequireSuper(_claims): RequireSuper,
+    RequireProviderManage(_claims): RequireProviderManage,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     match state.ollama_sync_job_repo.get_latest().await {
@@ -298,7 +298,7 @@ pub struct PullModelRequest {
 /// executes Ollama pull, then resets AIMD epoch. Requires admin auth.
 /// Returns 202 Accepted immediately; pull runs in background.
 pub async fn pull_model(
-    _: RequireSuper,
+    _: RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<PullModelRequest>,
 ) -> impl IntoResponse {

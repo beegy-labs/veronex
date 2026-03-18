@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::domain::enums::AccountRole;
-
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct Account {
@@ -15,7 +13,6 @@ pub struct Account {
     pub password_hash: String,
     pub name: String,
     pub email: Option<String>,
-    pub role: AccountRole,
     pub department: Option<String>,
     pub position: Option<String>,
     pub is_active: bool,

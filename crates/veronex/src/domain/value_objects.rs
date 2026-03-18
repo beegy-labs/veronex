@@ -298,4 +298,30 @@ mod tests {
             prop_assert!(ProviderUrl::new(&url).is_err());
         }
     }
+
+    // ── ModelName ────────────────────────────────────────────────────────
+
+    #[test]
+    fn model_name_valid() {
+        let m = ModelName::new("llama3.2:latest").unwrap();
+        assert_eq!(m.as_str(), "llama3.2:latest");
+    }
+
+    #[test]
+    fn model_name_empty_rejected() {
+        assert!(ModelName::new("").is_err());
+    }
+
+    // ── Prompt ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn prompt_valid() {
+        let p = Prompt::new("hello").unwrap();
+        assert_eq!(p.as_str(), "hello");
+    }
+
+    #[test]
+    fn prompt_empty_rejected() {
+        assert!(Prompt::new("").is_err());
+    }
 }

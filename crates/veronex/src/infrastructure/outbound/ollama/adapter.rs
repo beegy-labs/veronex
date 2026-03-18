@@ -147,6 +147,7 @@ impl InferenceProviderPort for OllamaAdapter {
         if let Some(messages) = &job.messages {
             return self.stream_chat(
                 job.model_name.as_str(), messages.clone(), job.tools.clone(),
+                job.images.clone(),
                 job.stop.clone(), job.seed, job.response_format.clone(),
                 job.frequency_penalty, job.presence_penalty,
             );
@@ -280,6 +281,7 @@ impl OllamaAdapter {
         model: &str,
         messages: serde_json::Value,
         tools: Option<serde_json::Value>,
+        images: Option<Vec<String>>,
         stop: Option<serde_json::Value>,
         seed: Option<u32>,
         response_format: Option<serde_json::Value>,
@@ -297,6 +299,21 @@ impl OllamaAdapter {
             if let Some(fp) = frequency_penalty { options["frequency_penalty"] = serde_json::json!(fp); }
             if let Some(pp) = presence_penalty { options["presence_penalty"] = serde_json::json!(pp); }
             if let Some(ref st) = stop { options["stop"] = st.clone(); }
+
+            // Inject images into the last user message (Ollama expects per-message images).
+            let messages = if let Some(imgs) = images {
+                let mut msgs = messages;
+                if let Some(arr) = msgs.as_array_mut() {
+                    if let Some(last_user) = arr.iter_mut().rev()
+                        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    {
+                        last_user["images"] = serde_json::json!(imgs);
+                    }
+                }
+                msgs
+            } else {
+                messages
+            };
 
             let mut body = serde_json::json!({
                 "model":    model,
