@@ -1,7 +1,7 @@
 'use client'
 
 import './globals.css'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query'
 import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Nav from '@/components/nav'
@@ -11,13 +11,27 @@ import { isLoggedIn } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { TimezoneProvider } from '@/components/timezone-provider'
 import { LabSettingsProvider } from '@/components/lab-settings-provider'
+import { NavigationProgressProvider } from '@/components/nav-progress'
+import { serversQuery } from '@/lib/queries'
 import { STALE_TIME_FAST } from '@/lib/constants'
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
+  const queryClient = useQueryClient()
   const isLoginPage = pathname === '/login'
   const isSetupPage = pathname === '/setup'
+
+  // Prefetch the server list as soon as the authenticated shell mounts so that
+  // dashboard's dependent per-server queries don't have to wait for it.
+  // isLoggedIn() reads a cookie synchronously — it is not React state, so it is
+  // intentionally omitted from the dependency array (pure read, no subscription).
+  useEffect(() => {
+    if (!isLoginPage && !isSetupPage && isLoggedIn()) {
+      queryClient.prefetchQuery(serversQuery)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryClient, isLoginPage, isSetupPage])
 
   useEffect(() => {
     api.setupStatus().then(({ needs_setup }) => {
@@ -45,12 +59,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-full min-h-screen">
-      <Nav />
-      <main className="flex-1 overflow-auto p-4 pt-16 md:p-8">
-        {children}
-      </main>
-    </div>
+    <NavigationProgressProvider>
+      <div className="flex h-full min-h-screen">
+        <Nav />
+        <main className="flex-1 overflow-auto p-4 pt-16 md:p-8">
+          {children}
+        </main>
+      </div>
+    </NavigationProgressProvider>
   )
 }
 

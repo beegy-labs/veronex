@@ -7,9 +7,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::outbound::health_checker::check_provider;
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -85,7 +86,7 @@ async fn store_models_cache(pool: &fred::clients::Pool, key: &str, models: &[Str
         )
         .await
     {
-        tracing::warn!("failed to cache model list: {e}");
+        tracing::warn!(error = %e, "failed to cache model list");
     }
 }
 
@@ -99,6 +100,11 @@ async fn load_models_cache(pool: &fred::clients::Pool, key: &str) -> Option<Vec<
 }
 
 // ── Request / Response DTOs ────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct VerifyProviderRequest {
+    pub url: String,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterProviderRequest {
@@ -201,7 +207,7 @@ pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvid
         .get(id)
         .await
         .map_err(|e| {
-            tracing::error!(%id, "failed to fetch provider: {e}");
+            tracing::error!(%id, error = %e, "failed to fetch provider");
             db_error(e)
         })?
         .ok_or_else(|| AppError::NotFound("provider not found".into()))
@@ -209,11 +215,71 @@ pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvid
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
+/// `POST /v1/providers/verify` — validate Ollama URL format, duplicate check, and connectivity.
+pub async fn verify_provider(
+    _claims: RequireProviderManage,
+    State(state): State<AppState>,
+    Json(req): Json<VerifyProviderRequest>,
+) -> impl IntoResponse {
+    let url = req.url.trim().to_string();
+
+    if url.is_empty() {
+        return AppError::BadRequest("url is required".into()).into_response();
+    }
+
+    if let Err(e) = validate_provider_url(&url) {
+        return e.into_response();
+    }
+
+    // Duplicate check.
+    let count_result: Result<(i64,), _> = sqlx::query_as(
+        "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'ollama'",
+    )
+    .bind(&url)
+    .fetch_one(&state.pg_pool)
+    .await;
+
+    match count_result {
+        Ok((c,)) if c > 0 => {
+            return AppError::Conflict("a provider with this URL is already registered".into())
+                .into_response();
+        }
+        Err(e) => return db_error(e).into_response(),
+        _ => {}
+    }
+
+    // Connectivity check: GET {url}/api/version must succeed.
+    let check_url = format!("{}/api/version", url.trim_end_matches('/'));
+    match state
+        .http_client
+        .get(&check_url)
+        .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            (StatusCode::OK, Json(serde_json::json!({"reachable": true}))).into_response()
+        }
+        Ok(r) => {
+            tracing::warn!(url = %url, status = %r.status(), "Ollama verify probe returned unexpected status");
+            AppError::BadGateway(
+                format!("Ollama returned unexpected status {}", r.status()),
+            )
+            .into_response()
+        }
+        Err(e) => {
+            tracing::warn!(url = %url, error = %e, "Ollama verify probe failed");
+            AppError::BadGateway("Ollama is not reachable at the given URL".into())
+                .into_response()
+        }
+    }
+}
+
 /// `POST /v1/providers` — register a new Ollama or Gemini provider.
 ///
 /// Immediately runs a health check and sets the initial status.
 pub async fn register_provider(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<RegisterProviderRequest>,
 ) -> impl IntoResponse {
@@ -232,6 +298,23 @@ pub async fn register_provider(
             }
             if let Err(e) = validate_provider_url(url) {
                 return e.into_response();
+            }
+            // Reject duplicate Ollama URL.
+            let count_result: Result<(i64,), _> = sqlx::query_as(
+                "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'ollama'",
+            )
+            .bind(url)
+            .fetch_one(&state.pg_pool)
+            .await;
+            match count_result {
+                Ok((count,)) if count > 0 => {
+                    return AppError::Conflict(
+                        "a provider with this URL is already registered".into(),
+                    )
+                    .into_response();
+                }
+                Err(e) => return db_error(e).into_response(),
+                _ => {}
             }
         }
         ProviderType::Gemini => {
@@ -260,6 +343,12 @@ pub async fn register_provider(
 
     // Health check before persisting.
     let initial_status = check_provider(&state.http_client, &provider).await;
+    if matches!(provider_type, ProviderType::Ollama)
+        && initial_status == LlmProviderStatus::Offline
+    {
+        return AppError::BadGateway("Ollama is not reachable at the given URL".into())
+            .into_response();
+    }
     let provider = LlmProvider {
         status: initial_status,
         ..provider
@@ -267,7 +356,7 @@ pub async fn register_provider(
 
     let registry = &state.provider_registry;
     if let Err(e) = registry.register(&provider).await {
-        tracing::error!("failed to register provider: {e}");
+        tracing::error!(error = %e, "failed to register provider");
         return db_error(e).into_response();
     }
 
@@ -275,7 +364,7 @@ pub async fn register_provider(
 
     tracing::info!(
         id = %provider.id,
-        name = %provider.name,
+        provider_name = %provider.name,
         provider_type = %req.provider_type,
         status = %status_str,
         "provider registered"
@@ -305,7 +394,7 @@ pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse 
             (StatusCode::OK, Json(summaries)).into_response()
         }
         Err(e) => {
-            tracing::error!("failed to list providers: {e}");
+            tracing::error!(error = %e, "failed to list providers");
             db_error(e).into_response()
         }
     }
@@ -313,7 +402,7 @@ pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse 
 
 /// `DELETE /v1/providers/{id}` — soft-delete (deactivate) a provider.
 pub async fn delete_provider(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -331,7 +420,7 @@ pub async fn delete_provider(
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
-            tracing::error!(%id, "failed to deactivate provider: {e}");
+            tracing::error!(%id, error = %e, "failed to deactivate provider");
             db_error(e).into_response()
         }
     }
@@ -351,7 +440,7 @@ pub async fn healthcheck_provider(
 
     let registry = &state.provider_registry;
     if let Err(e) = registry.update_status(id, new_status).await {
-        tracing::warn!(%id, "failed to persist healthcheck result: {e}");
+        tracing::warn!(%id, error = %e, "failed to persist healthcheck result");
     }
 
     let status_str = new_status.as_str();
@@ -368,7 +457,7 @@ pub async fn healthcheck_provider(
 /// All fields are optional; only provided (non-null) fields are applied.
 /// Passing `api_key: ""` leaves the existing key unchanged.
 pub async fn update_provider(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateProviderRequest>,
@@ -403,7 +492,7 @@ pub async fn update_provider(
     if let Some(v) = req.is_active { provider.is_active = v; }
 
     if let Err(e) = registry.update(&provider).await {
-        tracing::error!(%id, "update_provider: failed: {e}");
+        tracing::error!(%id, error = %e, "update_provider: failed");
         return db_error(e).into_response();
     }
 
@@ -444,7 +533,7 @@ pub async fn list_provider_models(
 ///
 /// Requires admin auth. Returns `{"key": "AIza..."}`.
 pub async fn reveal_provider_key(
-    _claims: RequireSuper,
+    _claims: RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -490,11 +579,11 @@ pub async fn sync_provider_models(
             }
             // Also persist to the global ollama_models table.
             if let Err(e) = state.ollama_model_repo.sync_provider_models(id, &models).await {
-                tracing::warn!(%id, "failed to persist ollama models to DB (non-fatal): {e}");
+                tracing::warn!(%id, error = %e, "failed to persist ollama models to DB (non-fatal)");
             }
             // Upsert model selections (is_enabled defaults to true for new rows).
             if let Err(e) = state.model_selection_repo.upsert_models(id, &models).await {
-                tracing::warn!(%id, "failed to upsert model selections (non-fatal): {e}");
+                tracing::warn!(%id, error = %e, "failed to upsert model selections (non-fatal)");
             }
             tracing::info!(%id, count = models.len(), "model list synced");
             (
@@ -504,7 +593,7 @@ pub async fn sync_provider_models(
                 .into_response()
         }
         Err(e) => {
-            tracing::error!(%id, "model sync failed: {e}");
+            tracing::error!(%id, error = %e, "model sync failed");
             AppError::ServiceUnavailable(e.to_string()).into_response()
         }
     }
@@ -516,7 +605,7 @@ pub async fn sync_provider_models(
 ///
 /// Combines health check + model sync + VRAM probing + LLM analysis.
 pub async fn sync_single_provider(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -560,7 +649,7 @@ pub async fn sync_single_provider(
             (StatusCode::OK, Json(serde_json::json!({"synced": true}))).into_response()
         }
         Err(e) => {
-            tracing::warn!(%id, "sync_provider failed: {e}");
+            tracing::warn!(%id, error = %e, "sync_provider failed");
             AppError::ServiceUnavailable(e.to_string()).into_response()
         }
     }
@@ -568,7 +657,7 @@ pub async fn sync_single_provider(
 
 /// `POST /v1/providers/sync` — unified sync for all active Ollama providers.
 pub async fn sync_all_providers_handler(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     if state.sync_lock.available_permits() == 0 {

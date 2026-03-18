@@ -35,7 +35,7 @@ use crate::domain::constants::{
 
 use super::JobEntry;
 use super::dispatcher::{queue_dispatcher_loop, spawn_job_direct};
-use super::helpers::{broadcast_event, schedule_cleanup};
+use super::helpers::{broadcast_event, decr_pending, incr_pending, schedule_cleanup};
 use super::runner::run_job;
 
 type Result<T> = std::result::Result<T, DomainError>;
@@ -105,10 +105,20 @@ struct ThermalDrainAdapter {
 
 impl ThermalDrainPort for ThermalDrainAdapter {
     fn cancel_jobs_for_provider(&self, provider_id: Uuid) -> usize {
-        self.jobs.iter()
+        // Collect matching job IDs first to avoid holding DashMap shard locks
+        // across notify calls. O(N) scan is acceptable here because thermal
+        // drain is a rare event (hardware overheat).
+        // TODO(scale:100K+): add reverse index `provider_jobs: DashMap<Uuid, DashSet<Uuid>>`
+        //   updated on dispatch/completion for O(1) lookup.
+        let to_cancel: Vec<Arc<Notify>> = self.jobs.iter()
             .filter(|e| e.assigned_provider_id == Some(provider_id))
-            .map(|e| { e.cancel_notify.notify_one(); 1 })
-            .sum()
+            .map(|e| e.cancel_notify.clone())
+            .collect();
+        let count = to_cancel.len();
+        for notify in to_cancel {
+            notify.notify_one();
+        }
+        count
     }
 }
 
@@ -129,6 +139,8 @@ impl InferenceUseCaseImpl {
                     _ = tokio::time::sleep(INTERVAL) => {}
                 }
                 let now = chrono::Utc::now();
+                // Collect IDs first (no await during iter) then remove — safe for DashMap.
+                // O(N) scan every 30s is acceptable; DashMap iter is lock-per-shard, not global.
                 let stale: Vec<Uuid> = jobs.iter()
                     .filter(|e| e.status == JobStatus::Pending && now.signed_duration_since(e.job.created_at) > MAX_AGE)
                     .map(|e| *e.key())
@@ -310,6 +322,9 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             provider_type: job.provider_type.as_str().into(), latency_ms: None,
         }).await;
 
+        // job created → pending: INCR pending
+        incr_pending(&self.valkey).await;
+
         // Compute ZSET score: now_ms - tier_bonus (lower = higher priority)
         let now_ms = chrono::Utc::now().timestamp_millis() as u64;
         let tier_bonus = match (source, key_tier) {
@@ -325,6 +340,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 Ok(false) => {
                     // Queue full — mark DB job failed (orphan prevention) then reject.
                     tracing::warn!(%uuid, "queue full, rejecting job");
+                    // pending → failed (queue full): DECR pending
+                    decr_pending(&self.valkey).await;
                     self.jobs.remove(&uuid);
                     self.cancel_notifiers.remove(&uuid);
                     if let Err(e) = self.job_repo.fail_with_reason(
@@ -438,12 +455,18 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             if matches!(entry.status, JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled) {
                 true
             } else {
+                let prev = entry.status;
                 entry.status = JobStatus::Cancelled;
                 entry.done = true;
                 let (n, cn) = (entry.notify.clone(), entry.cancel_notify.clone());
                 drop(entry);
                 n.notify_one();
                 cn.notify_one();
+                // Pending → cancelled: DECR pending here.
+                // Running → cancelled: runner's cancel_notify handler DECRs running.
+                if prev == JobStatus::Pending {
+                    decr_pending(&self.valkey).await;
+                }
                 false
             }
         } else { false };
@@ -470,6 +493,9 @@ impl InferenceUseCase for InferenceUseCaseImpl {
     }
 
     fn get_live_counts(&self) -> LiveCounts {
+        // NOTE(scale): O(N) DashMap scan. Not called in any production hot path —
+        // the stats ticker uses Valkey atomic counters instead. This exists only
+        // as a trait method for test/diagnostic use. Safe to leave as-is.
         count_live_statuses(self.jobs.iter().map(|e| e.status))
     }
 }

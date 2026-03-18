@@ -189,6 +189,9 @@ pub const PROVIDER_REGISTRY_CACHE_TTL: Duration = Duration::from_secs(5);
 /// Base tick interval for the capacity analyzer sync loop.
 pub const SYNC_LOOP_BASE_TICK: Duration = Duration::from_secs(30);
 
+/// Interval between health checker passes (provider liveness probes).
+pub const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
+
 /// Interval between pending-job sweep passes (reaper).
 pub const PENDING_JOB_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 
@@ -216,6 +219,17 @@ pub fn preload_lock_key(model: &str, provider_id: uuid::Uuid) -> String {
 pub fn scaleout_decision_key(model: &str) -> String {
     format!("veronex:scaleout:{model}")
 }
+
+// ── Thermal throttle ─────────────────────────────────────────────────────
+
+/// Cooldown period (seconds) after hard thermal throttle is triggered.
+/// During this window dispatch is suspended until temperature drops.
+pub const THERMAL_HARD_COOLDOWN_SECS: i64 = 300;
+
+/// TTL for the `veronex:thermal:{provider_id}` Valkey key.
+/// Slightly longer than `THERMAL_HARD_COOLDOWN_SECS` to prevent stale key
+/// from expiring before the cooldown window is checked.
+pub const THERMAL_THROTTLE_KEY_TTL_SECS: i64 = 360;
 
 // ── Circuit breaker / reaper ─────────────────────────────────────────────
 

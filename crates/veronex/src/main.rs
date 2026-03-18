@@ -55,7 +55,10 @@ async fn main() -> Result<()> {
     };
 
     // ── Infrastructure context ─────────────────────────────────────
-    let instance_id: Arc<str> = Arc::from(uuid::Uuid::new_v4().to_string());
+    let instance_id: Arc<str> = Arc::from(
+        std::env::var("VERONEX_INSTANCE_ID")
+            .unwrap_or_else(|_| uuid::Uuid::now_v7().to_string()),
+    );
     tracing::info!(instance_id = %instance_id, "instance identity generated");
     let infra = bootstrap::InfraContext {
         valkey_pool,
@@ -68,7 +71,7 @@ async fn main() -> Result<()> {
     let repos = bootstrap::wire_repositories(&infra, &config).await?;
 
     // ── Bootstrap super account ────────────────────────────────────
-    bootstrap::repositories::maybe_bootstrap_super_account(&repos.account_repo, &config).await;
+    bootstrap::repositories::maybe_bootstrap_super_account(&repos.account_repo, &config, &infra.pg_pool).await;
 
     // ── Background tasks ───────────────────────────────────────────
     let shutdown = CancellationToken::new();
