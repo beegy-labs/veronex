@@ -11,7 +11,7 @@ import { BASE } from '@/lib/api'
 import { compressImage } from '@/lib/compress-image'
 import { PROVIDER_OLLAMA, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import type { OpenAIChunk, Run, ProviderOption } from '@/components/api-test-types'
+import type { OpenAIChunk, Run, ProviderOption, Endpoint } from '@/components/api-test-types'
 import { runsReducer, MAX_RUNS } from '@/components/api-test-types'
 import { ApiTestForm } from '@/components/api-test-form'
 import { ApiTestRuns } from '@/components/api-test-runs'
@@ -35,6 +35,9 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const [prompt, setPrompt] = useState('')
   const [images, setImages] = useState<string[]>([])       // raw base64 (no data URL prefix)
   const [isCompressing, setIsCompressing] = useState(false)
+  const [endpoint, setEndpoint] = useState<Endpoint>('/v1/chat/completions')
+  const [useApiKey, setUseApiKey] = useState(false)
+  const [apiKeyValue, setApiKeyValue] = useState('')
 
   // ── Run state ─────────────────────────────────────────────────────────────────
   const [runs, dispatch] = useReducer(runsReducer, [])
@@ -227,6 +230,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
       prompt: prompt.trim(),
       model,
       provider_type: providerType,
+      endpoint,
+      useApiKey,
       status: 'streaming',
       text: '',
       errorMsg: '',
@@ -238,26 +243,74 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     const jobIdRef = { current: null as string | null }
 
     try {
-      const resp = await fetch(`${BASE}/v1/test/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
+      // Determine URL and headers based on endpoint + auth mode
+      const isStreaming = endpoint === '/v1/chat/completions'
+      let url: string
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+
+      if (useApiKey && apiKeyValue.trim()) {
+        // Real endpoints with API key auth
+        url = `${BASE}${endpoint}`
+        if (endpoint === '/v1/chat/completions') {
+          headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
+        } else {
+          headers['X-API-Key'] = apiKeyValue.trim()
+        }
+      } else {
+        // Test endpoints with JWT session auth
+        const testEndpointMap: Record<Endpoint, string> = {
+          '/v1/chat/completions': '/v1/test/completions',
+          '/api/chat': '/v1/test/api/chat',
+          '/api/generate': '/v1/test/api/generate',
+        }
+        url = `${BASE}${testEndpointMap[endpoint]}`
+      }
+
+      // Build request body based on endpoint format
+      let body: Record<string, unknown>
+      if (endpoint === '/api/generate') {
+        body = { model, prompt: prompt.trim(), stream: isStreaming }
+      } else if (endpoint === '/api/chat') {
+        body = {
+          model,
+          messages: [{ role: 'user', content: prompt.trim() }],
+          stream: isStreaming,
+        }
+      } else {
+        body = {
           model,
           messages: [{ role: 'user', content: prompt.trim() }],
           provider_type: providerType,
-          stream: true,
+          stream: isStreaming,
           ...(currentImages && currentImages.length > 0 && { images: currentImages }),
-        }),
+        }
+      }
+
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers,
+        ...(!useApiKey && { credentials: 'include' as RequestCredentials }),
+        body: JSON.stringify(body),
       })
 
-      if (!resp.ok || !resp.body) {
+      if (!resp.ok) {
         throw new Error(`${resp.status} ${resp.statusText}`)
       }
 
-      const reader = resp.body.getReader()
-      readersRef.current.set(runId, reader)
-      await consumeStream(runId, reader, jobIdRef)
+      if (isStreaming && resp.body) {
+        // SSE streaming for /v1/chat/completions
+        const reader = resp.body.getReader()
+        readersRef.current.set(runId, reader)
+        await consumeStream(runId, reader, jobIdRef)
+      } else {
+        // JSON response for /api/chat and /api/generate
+        const json = await resp.json()
+        const text = endpoint === '/api/generate'
+          ? (json.response ?? '')
+          : (json.message?.content ?? '')
+        dispatch({ type: 'APPEND', id: runId, token: text })
+        dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
+      }
     } catch (err) {
       dispatch({
         type: 'SET_STATUS',
@@ -288,6 +341,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     setPrompt(run.prompt)
     setProviderType(run.provider_type)
     setModel(run.model)
+    setEndpoint(run.endpoint)
+    setUseApiKey(run.useApiKey)
     handleRun()
   }
 
@@ -310,11 +365,17 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           isAnyStreaming={isAnyStreaming}
           canRun={canRun}
           authUsername={authUser?.username ?? null}
+          endpoint={endpoint}
+          useApiKey={useApiKey}
+          apiKeyValue={apiKeyValue}
           onProviderChange={setProviderType}
           onModelChange={setModel}
           onPromptChange={setPrompt}
           onImageAdd={handleImageAdd}
           onImageRemove={handleImageRemove}
+          onEndpointChange={setEndpoint}
+          onUseApiKeyChange={setUseApiKey}
+          onApiKeyValueChange={setApiKeyValue}
           onRun={handleRun}
         />
 

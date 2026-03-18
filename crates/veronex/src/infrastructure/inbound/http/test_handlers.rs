@@ -34,7 +34,7 @@ use crate::domain::value_objects::JobId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 
 use super::cancel_guard::CancelOnDrop;
-use super::handlers::SseStream;
+use super::handlers::{SseStream, sanitize_sse_error};
 use super::openai_sse_types::{ChunkChoice, CompletionChunk, DeltaContent, SERVICE_TIER_DEFAULT, SYSTEM_FINGERPRINT};
 use super::state::AppState;
 
@@ -114,7 +114,7 @@ pub async fn test_completions(
             api_format: ApiFormat::OpenaiCompat,
             messages: None,
             tools: None,
-            request_path: Some("/v1/test/completions".to_string()),
+            request_path: Some("/v1/chat/completions".to_string()),
             conversation_id: None,
             key_tier: None,
             images: req.images,
@@ -125,7 +125,7 @@ pub async fn test_completions(
     {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("test_completions: submit failed: {e}");
+            tracing::error!(account_id = %claims.sub, model = %model, "test_completions: submit failed: {e:?}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": {"message": "failed to submit test job"}})),
@@ -179,7 +179,7 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
                 Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
             }
             Err(e) => {
-                let err = serde_json::json!({"error": {"message": e.to_string()}});
+                let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
                 Ok(Event::default().data(serde_json::to_string(&err).unwrap_or_default()))
             }
         }
@@ -229,7 +229,7 @@ pub async fn stream_test_job(
                 Ok(Event::default().data(chunk.to_string()))
             }
             Err(e) => {
-                let err = serde_json::json!({"error": {"message": e.to_string()}});
+                let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
                 Ok(Event::default().data(err.to_string()))
             }
         }
@@ -317,7 +317,7 @@ pub async fn test_ollama_chat(
             api_format: ApiFormat::OllamaNative,
             messages: None,
             tools: None,
-            request_path: Some("/v1/test/api/chat".to_string()),
+            request_path: Some("/api/chat".to_string()),
             conversation_id: None,
             key_tier: None,
             images: None,
@@ -328,7 +328,7 @@ pub async fn test_ollama_chat(
     {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("test_ollama_chat: submit failed: {e}");
+            tracing::error!(account_id = %claims.sub, "test_ollama_chat: submit failed: {e:?}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "failed to submit test job"})),
@@ -372,7 +372,7 @@ pub async fn test_ollama_generate(
             api_format: ApiFormat::OllamaNative,
             messages: None,
             tools: None,
-            request_path: Some("/v1/test/api/generate".to_string()),
+            request_path: Some("/api/generate".to_string()),
             conversation_id: None,
             key_tier: None,
             images: None,
@@ -383,7 +383,7 @@ pub async fn test_ollama_generate(
     {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("test_ollama_generate: submit failed: {e}");
+            tracing::error!(account_id = %claims.sub, "test_ollama_generate: submit failed: {e:?}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "failed to submit test job"})),
@@ -418,7 +418,7 @@ fn stream_as_ollama_chat_ndjson(state: AppState, job_id: JobId, model: String) -
                 "done": false,
             }),
             Err(e) => serde_json::json!({
-                "error": e.to_string(),
+                "error": sanitize_sse_error(&e),
                 "done": true,
             }),
         };
@@ -457,7 +457,7 @@ fn stream_as_ollama_generate_ndjson(state: AppState, job_id: JobId, model: Strin
                 "done": false,
             }),
             Err(e) => serde_json::json!({
-                "error": e.to_string(),
+                "error": sanitize_sse_error(&e),
                 "done": true,
             }),
         };
@@ -557,7 +557,7 @@ pub async fn test_gemini_request(
             api_format: ApiFormat::GeminiNative,
             messages: None,
             tools: None,
-            request_path: Some("/v1/test/v1beta/models".to_string()),
+            request_path: Some("/v1beta/models".to_string()),
             conversation_id: None,
             key_tier: None,
             images: None,
@@ -568,7 +568,7 @@ pub async fn test_gemini_request(
     {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("test_gemini_request: submit failed: {e}");
+            tracing::error!(account_id = %claims.sub, "test_gemini_request: submit failed: {e:?}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": {"message": "failed to submit test job"}})),
@@ -603,7 +603,7 @@ fn stream_as_gemini_sse(state: AppState, job_id: JobId, model: String) -> Respon
                 "modelVersion": model.as_str(),
             }),
             Err(e) => serde_json::json!({
-                "error": {"message": e.to_string(), "code": 500},
+                "error": {"message": sanitize_sse_error(&e), "code": 500},
             }),
         };
         Ok::<_, std::convert::Infallible>(Bytes::from(

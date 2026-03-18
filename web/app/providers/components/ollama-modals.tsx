@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Provider, ProviderSelectedModel, OllamaProviderForModel } from '@/lib/types'
+import type { Provider, ProviderSelectedModel } from '@/lib/types'
 import { selectedModelsQuery, ollamaModelProvidersQuery } from '@/lib/queries'
 import { Search, Cpu, ChevronLeft, ChevronRight, ListFilter } from 'lucide-react'
 import { Button } from '@/components/ui/button'

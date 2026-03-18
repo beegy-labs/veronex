@@ -219,6 +219,9 @@ impl AccountRepository for MockAccountRepo {
     async fn set_active(&self, _id: &Uuid, _is_active: bool) -> Result<()> { Ok(()) }
     async fn update_last_login(&self, _id: &Uuid) -> Result<()> { Ok(()) }
     async fn set_password_hash(&self, _id: &Uuid, _hash: &str) -> Result<()> { Ok(()) }
+    async fn create_with_roles(&self, _account: &Account, _role_ids: &[Uuid]) -> Result<()> { Ok(()) }
+    async fn set_roles(&self, _account_id: &Uuid, _role_ids: &[Uuid]) -> Result<()> { Ok(()) }
+    async fn get_role_ids(&self, _account_id: &Uuid) -> Result<Vec<Uuid>> { Ok(vec![]) }
 }
 
 pub(crate) struct MockCapacityRepo;

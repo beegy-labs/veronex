@@ -1,6 +1,6 @@
 # Code Patterns: Frontend — 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-16 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Next.js 16 · React 19 · TanStack Query v5 · Tailwind v4 · Zod
 > Rust patterns -> `policies/patterns.md`
 
@@ -41,6 +41,7 @@ All `staleTime` and `refetchInterval` values come from `web/lib/constants.ts`:
 |----------|-------|---------|
 | `STALE_TIME_SLOW` | 59s | keys, usage, accounts, audit, servers |
 | `STALE_TIME_FAST` | 29s | dashboard stats, capacity, providers |
+| `STALE_TIME_HISTORY` | 30min | long-window historical queries (metrics history) |
 | `REFETCH_INTERVAL_FAST` | 30s | dashboard stats, capacity, providers |
 
 Never hardcode timing values in query definitions — import from constants.
@@ -142,6 +143,14 @@ type ProviderId = z.infer<typeof ProviderIdSchema>
 ```
 
 Apply Zod at entry points: API responses, form inputs, env vars.
+
+### FlowStats — Server-Computed Rates
+
+`FlowStatsSchema` fields: `incoming` (10s window count), `incoming_60s` (60s window count = req/m), `queued`, `running`, `completed`. All `NonNegativeInt`.
+
+- `req/s` = `incoming / 10` (client divides)
+- `req/m` = `incoming_60s` (server-computed 60-bucket sliding window, NOT `req/s * 60`)
+- Server broadcasts every second unconditionally — clients rely on this cadence
 
 ---
 
@@ -306,6 +315,113 @@ try {
   if (createdId) await api.delete(`/v1/keys/${createdId}`)
 }
 ```
+
+---
+
+## UI-State Types in `web/lib/types.ts`
+
+Modal/form state types that appear across multiple components belong in `web/lib/types.ts`, not as local `type` definitions.
+
+```typescript
+// web/lib/types.ts
+export type VerifyState = 'idle' | 'checking' | 'ok' | 'error'
+```
+
+Import in components: `import type { VerifyState } from '@/lib/types'`
+
+Rule: if the same `type Foo = 'a' | 'b' | ...` appears in 2+ component files, move it to `lib/types.ts`.
+
+---
+
+## HTTP Errors with Status Code (`ApiHttpError`)
+
+Custom fetch helpers that need to distinguish HTTP status codes throw `ApiHttpError` from `web/lib/types.ts`:
+
+```typescript
+// lib/api.ts — throwing
+import { ApiHttpError } from './types'
+if (!res.ok) throw new ApiHttpError(data.error ?? `${res.status}`, res.status)
+
+// Component onError — handling
+import { ApiHttpError } from '@/lib/types'
+onError: (e) => {
+  const msg = e instanceof ApiHttpError && e.status === 409
+    ? t('...duplicateUrl')
+    : (e instanceof Error ? e.message : t('...connectionFailed'))
+}
+```
+
+Rule: never cast `(e as Error & { status?: number })` — use `instanceof ApiHttpError` instead.
+
+---
+
+## SVG Pattern IDs — `useId()` for DOM Uniqueness
+
+SVG `<pattern id="...">` elements use global DOM IDs. If a component can render multiple instances, use `React.useId()` to generate unique IDs. Strip `:` from the result — React IDs like `:r1:` are not valid XML NCNames.
+
+```tsx
+import { useId } from 'react'
+
+const rawId = useId()
+const safeId = rawId.replace(/:/g, '') // React IDs contain ':' which is invalid in SVG NCNames
+const patternId = `my-pattern-${safeId}`
+
+// In SVG:
+<pattern id={patternId} .../>
+<rect fill={`url(#${patternId})`} />
+```
+
+---
+
+## Query Prefetch in AppShell
+
+Queries depended on by multiple pages (e.g. `serversQuery` drives the dashboard waterfall) should be prefetched in `AppShell` on mount so they are cache-warm before the user navigates.
+
+```tsx
+// web/app/layout.tsx — AppShell
+const queryClient = useQueryClient()
+useEffect(() => {
+  if (!isLoginPage && !isSetupPage && isLoggedIn()) {
+    queryClient.prefetchQuery(serversQuery)
+  }
+  // isLoggedIn() is a pure synchronous cookie read — not React state, omit from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [queryClient, isLoginPage, isSetupPage])
+```
+
+**Rule**: only prefetch queries that are universally needed across authenticated pages. Page-specific queries stay in the page component.
+
+## Historical Data — `STALE_TIME_HISTORY`
+
+Long-window historical queries (e.g. 60-day power/metrics history) use `STALE_TIME_HISTORY` (30 minutes).
+Background refetch still runs on `REFETCH_INTERVAL_HISTORY` (5 minutes) to keep data fresh,
+but re-navigation within 30 minutes skips the on-mount fetch and returns cached data immediately.
+
+```typescript
+// web/lib/queries/servers.ts
+export const serverMetricsHistoryQuery = (serverId: string) => queryOptions({
+  queryKey: ['server-metrics-history', serverId],
+  queryFn: () => api.serverMetricsHistory(serverId),
+  staleTime: STALE_TIME_HISTORY,           // 30 min — re-nav returns cache instantly
+  refetchInterval: REFETCH_INTERVAL_HISTORY, // 5 min — background refresh continues
+})
+```
+
+**Rule**: `staleTime` and `refetchInterval` should reflect how quickly data actually changes, not be set to "slightly less than refetch". Use `STALE_TIME_HISTORY` for any query whose data window spans days or weeks.
+
+---
+
+## Page Guard (`usePageGuard`)
+
+Menu-based access control at page level. Redirects to `/overview` if user lacks the required menu permission. Super-admin bypasses all checks.
+
+```typescript
+// web/hooks/use-page-guard.ts
+export function usePageGuard(menuId: string): void
+// Usage: usePageGuard('audit') at top of page component
+```
+
+`hasMenu()` reads from JWT claims `menus` array (set during login from merged role menus).
 
 ---
 

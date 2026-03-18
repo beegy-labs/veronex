@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::application::ports::outbound::analytics_repository::{
     AnalyticsSummary, HourlyUsage, UsageAggregate, UsageJob,
 };
-use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSuper};
+use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireDashboardView};
 
 use super::error::AppError;
 use super::query_helpers::validate_hours;
@@ -56,7 +56,7 @@ async fn verify_key_ownership(
 /// GET /v1/usage — Aggregate usage across all keys (super admin only).
 /// ClickHouse primary, PostgreSQL fallback.
 pub async fn aggregate_usage(
-    RequireSuper(_): RequireSuper,
+    RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<UsageAggregate>, AppError> {
@@ -91,7 +91,7 @@ pub async fn key_usage(
 /// GET /v1/dashboard/analytics — Model distribution, finish reasons, TPS and avg tokens (super admin only).
 /// ClickHouse primary, PostgreSQL fallback.
 pub async fn get_analytics(
-    RequireSuper(_): RequireSuper,
+    RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<AnalyticsSummary>, AppError> {
@@ -140,7 +140,7 @@ pub async fn key_model_breakdown(
 
 /// GET /v1/usage/breakdown — Provider, API key, and model breakdown from PostgreSQL (super admin only).
 pub async fn usage_breakdown(
-    RequireSuper(_): RequireSuper,
+    RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<UsageBreakdownResponse>, AppError> {

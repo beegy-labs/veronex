@@ -72,6 +72,10 @@ pub struct JobDetail {
 
 // ── Query functions ────────────────────────────────────────────────
 
+/// NOTE(scale): Called per dashboard page load, not per-second. Acceptable at current scale.
+/// At 10K+ providers / high request volume, pending/running counts should read from Valkey
+/// atomic counters (JOBS_PENDING_COUNTER / JOBS_RUNNING_COUNTER) and jobs_by_status should
+/// be cached or moved to a materialized view.
 pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, AppError> {
     use sqlx::Row;
 
@@ -88,13 +92,15 @@ pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, A
     let total_keys: i64 = key_row.try_get("total_keys").unwrap_or(0);
     let active_keys: i64 = key_row.try_get("active_keys").unwrap_or(0);
 
-    // Job counts (exclude test-source jobs from dashboard aggregates)
+    // Job counts: use pg_class estimate for total_jobs (O(1) instead of full table scan).
+    // Exact count on millions of rows is too expensive for a dashboard page load.
     let job_row = sqlx::query(
         "SELECT
-            COUNT(*) AS total_jobs,
-            COUNT(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS jobs_last_24h
+            COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname = 'inference_jobs'), 0) AS total_jobs,
+            COUNT(*) AS jobs_last_24h
          FROM inference_jobs
-         WHERE source NOT IN ('test', 'analyzer')",
+         WHERE source NOT IN ('test', 'analyzer')
+           AND created_at >= now() - interval '24 hours'",
     )
     .fetch_one(pool)
     .await?;
@@ -102,11 +108,13 @@ pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, A
     let total_jobs: i64 = job_row.try_get("total_jobs").unwrap_or(0);
     let jobs_last_24h: i64 = job_row.try_get("jobs_last_24h").unwrap_or(0);
 
-    // Jobs by status (API jobs only)
+    // Jobs by status: only count recent jobs (last 7 days) to avoid full table scan.
+    // For exact pending/running counts, the stats ticker uses Valkey atomic counters.
     let status_rows = sqlx::query(
         "SELECT status, COUNT(*) AS cnt
          FROM inference_jobs
          WHERE source NOT IN ('test', 'analyzer')
+           AND created_at >= now() - interval '7 days'
          GROUP BY status",
     )
     .fetch_all(pool)
@@ -255,6 +263,9 @@ pub(super) fn build_job_detail(
 }
 
 /// Fetch paginated job list with optional status/source/search/model/provider filters.
+/// NOTE(scale): Uses COUNT(*) for total + OFFSET pagination. At 10K+ scale, replace with
+/// cursor-based pagination (WHERE created_at < $cursor ORDER BY created_at DESC LIMIT N)
+/// and drop the total count query to avoid sequential scans.
 pub(super) async fn fetch_jobs(
     pool: &sqlx::PgPool,
     limit: i64,
@@ -272,7 +283,7 @@ pub(super) async fn fetch_jobs(
          FROM inference_jobs j
          LEFT JOIN api_keys k ON k.id = j.api_key_id
          LEFT JOIN llm_providers p ON p.id = j.provider_id
-         WHERE ($1::TEXT IS NULL OR j.status = $1)
+         WHERE ($1::TEXT IS NULL OR j.status = ANY(string_to_array($1, ',')))
            AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
            AND ($3::TEXT IS NULL OR j.source = $3)
            AND ($6::TEXT IS NULL OR j.model_name = $6)
@@ -320,7 +331,7 @@ pub(super) async fn fetch_jobs(
              ORDER BY CASE WHEN model_name = j.model_name THEN 0 ELSE 1 END
              LIMIT 1
          ) pricing ON true
-         WHERE ($1::TEXT IS NULL OR j.status = $1)
+         WHERE ($1::TEXT IS NULL OR j.status = ANY(string_to_array($1, ',')))
            AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
            AND ($3::TEXT IS NULL OR j.source = $3)
            AND ($6::TEXT IS NULL OR j.model_name = $6)
@@ -352,6 +363,10 @@ pub(super) async fn fetch_jobs(
 
 // ── PostgreSQL fallback for performance ─────────────────────────────
 
+/// NOTE(scale): PERCENTILE_CONT is O(N log N) — expensive on large tables.
+/// This is the PostgreSQL fallback; ClickHouse is the primary path (checked first
+/// in get_performance / get_dashboard_overview). At 10K+ scale, ensure ClickHouse
+/// is always available so this fallback is never hit in production.
 #[allow(clippy::unwrap_used)]
 pub(super) async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<PerformanceMetrics, AppError> {
     use sqlx::Row;

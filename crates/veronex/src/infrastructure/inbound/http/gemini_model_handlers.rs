@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::enums::ProviderType;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSuper;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::outbound::health_checker::check_provider;
 
 use super::audit_helpers::emit_audit;
@@ -45,7 +45,7 @@ pub struct SyncModelsResponse {
 // ── Handlers ───────────────────────────────────────────────────────────────────
 
 /// `GET /v1/gemini/sync-config` — return the masked admin API key (or null).
-pub async fn get_sync_config(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<Json<SyncConfigResponse>> {
+pub async fn get_sync_config(RequireProviderManage(_claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<SyncConfigResponse>> {
     let key = state.gemini_sync_config_repo.get_api_key().await.map_err(db_error)?;
     let masked = key.as_deref().map(gemini_helpers::mask_api_key);
     Ok(Json(SyncConfigResponse { api_key_masked: masked }))
@@ -53,7 +53,7 @@ pub async fn get_sync_config(RequireSuper(_claims): RequireSuper, State(state): 
 
 /// `PUT /v1/gemini/sync-config` — store (or replace) the admin API key.
 pub async fn set_sync_config(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<SetSyncConfigRequest>,
 ) -> HandlerResult<StatusCode> {
@@ -72,7 +72,7 @@ pub async fn set_sync_config(
 ///
 /// Uses the stored admin API key. Returns `400` if no key is configured.
 pub async fn sync_models(
-    RequireSuper(claims): RequireSuper,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
 ) -> HandlerResult<Json<SyncModelsResponse>> {
     let api_key = match state.gemini_sync_config_repo.get_api_key().await {
@@ -121,7 +121,7 @@ pub struct GeminiSyncStatusResponse {
 ///
 /// Runs synchronously (fast — just one lightweight API call per provider).
 /// Returns the updated status for each provider.
-pub async fn sync_status(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<Json<GeminiSyncStatusResponse>> {
+pub async fn sync_status(RequireProviderManage(_claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<GeminiSyncStatusResponse>> {
     let providers = state.provider_registry.list_all().await.map_err(db_error)?;
 
     let gemini_active: Vec<_> = providers
@@ -155,7 +155,7 @@ pub async fn sync_status(RequireSuper(_claims): RequireSuper, State(state): Stat
 }
 
 /// `GET /v1/gemini/models` — list the global Gemini model pool.
-pub async fn list_models(RequireSuper(_claims): RequireSuper, State(state): State<AppState>) -> HandlerResult<impl IntoResponse> {
+pub async fn list_models(RequireProviderManage(_claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<impl IntoResponse> {
     let rows = state.gemini_model_repo.list().await.map_err(db_error)?;
     let dtos: Vec<GeminiModelDto> = rows
         .into_iter()

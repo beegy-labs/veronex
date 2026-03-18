@@ -10,6 +10,14 @@ export const accountsQuery = queryOptions({
   staleTime: Infinity,
 })
 
+// ── Roles ────────────────────────────────────────────────────────────────────
+
+export const rolesQuery = queryOptions({
+  queryKey: ['roles'] as const,
+  queryFn: () => api.roles(),
+  staleTime: Infinity,
+})
+
 // ── Sessions for a specific account ──────────────────────────────────────────
 
 export const accountSessionsQuery = (accountId: string | null, open: boolean) => queryOptions({

@@ -4,11 +4,13 @@ import { useRef } from 'react'
 import { Send, ImagePlus, X, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
-import type { ProviderOption } from '@/components/api-test-types'
+import type { ProviderOption, Endpoint } from '@/components/api-test-types'
 
 interface ApiTestFormProps {
   providerType: string
@@ -23,11 +25,17 @@ interface ApiTestFormProps {
   isAnyStreaming: boolean
   canRun: boolean
   authUsername: string | null
+  endpoint: Endpoint
+  useApiKey: boolean
+  apiKeyValue: string
   onProviderChange: (v: string) => void
   onModelChange: (v: string) => void
   onPromptChange: (v: string) => void
   onImageAdd: (files: FileList) => void
   onImageRemove: (index: number) => void
+  onEndpointChange: (v: Endpoint) => void
+  onUseApiKeyChange: (v: boolean) => void
+  onApiKeyValueChange: (v: string) => void
   onRun: () => void
 }
 
@@ -36,8 +44,11 @@ export function ApiTestForm({
   images, maxImages, isCompressing,
   availableOptions, availableModels, isGeminiProvider,
   isAnyStreaming, canRun, authUsername,
+  endpoint, useApiKey, apiKeyValue,
   onProviderChange, onModelChange, onPromptChange,
-  onImageAdd, onImageRemove, onRun,
+  onImageAdd, onImageRemove,
+  onEndpointChange, onUseApiKeyChange, onApiKeyValueChange,
+  onRun,
 }: ApiTestFormProps) {
   const { t } = useTranslation()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -92,6 +103,48 @@ export function ApiTestForm({
             </SelectContent>
           </Select>
         </div>
+      </div>
+
+      {/* Endpoint selector */}
+      <div className="space-y-1.5">
+        <Label htmlFor="test-endpoint">{t('test.endpoint')}</Label>
+        <Select
+          value={endpoint}
+          onValueChange={(v) => onEndpointChange(v as Endpoint)}
+          disabled={isAnyStreaming}
+        >
+          <SelectTrigger id="test-endpoint" aria-label={t('test.endpoint')}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="/v1/chat/completions">/v1/chat/completions</SelectItem>
+            <SelectItem value="/api/chat">/api/chat</SelectItem>
+            <SelectItem value="/api/generate">/api/generate</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* API Key toggle + input */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <Switch
+            id="test-use-api-key"
+            checked={useApiKey}
+            onCheckedChange={onUseApiKeyChange}
+            disabled={isAnyStreaming}
+          />
+          <Label htmlFor="test-use-api-key" className="cursor-pointer">{t('test.apiKeyToggle')}</Label>
+          {!useApiKey && (
+            <span className="text-xs text-muted-foreground">{t('test.noApiKey')}</span>
+          )}
+        </div>
+        {useApiKey && (
+          <Input
+            type="password"
+            placeholder={t('test.apiKeyPlaceholder')}
+            value={apiKeyValue}
+            onChange={(e) => onApiKeyValueChange(e.target.value)}
+            disabled={isAnyStreaming}
+          />
+        )}
       </div>
 
       {/* Prompt + Image button + Run button */}
