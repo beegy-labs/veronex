@@ -7,10 +7,9 @@ use uuid::Uuid;
 use super::SOFT_DELETE;
 use crate::application::ports::outbound::account_repository::AccountRepository;
 use crate::domain::entities::Account;
-use crate::domain::enums::AccountRole;
 
 /// Column list shared by all SELECT queries on accounts.
-const ACCOUNT_COLS: &str = "id, username, password_hash, name, email, role, department, position, is_active, created_by, last_login_at, created_at, deleted_at";
+const ACCOUNT_COLS: &str = "id, username, password_hash, name, email, department, position, is_active, created_by, last_login_at, created_at, deleted_at";
 
 pub struct PostgresAccountRepository {
     pool: PgPool,
@@ -31,8 +30,6 @@ fn row_to_account(row: &sqlx::postgres::PgRow) -> Result<Account> {
         password_hash: row.try_get("password_hash").context("password_hash")?,
         name: row.try_get("name").context("name")?,
         email: row.try_get("email").context("email")?,
-        role: row.try_get::<String, _>("role").context("role")?
-            .parse::<AccountRole>().map_err(|e| anyhow::anyhow!(e))?,
         department: row.try_get("department").context("department")?,
         position: row.try_get("position").context("position")?,
         is_active: row.try_get("is_active").context("is_active")?,
@@ -48,16 +45,15 @@ impl AccountRepository for PostgresAccountRepository {
     async fn create(&self, account: &Account) -> Result<()> {
         sqlx::query(
             "INSERT INTO accounts
-             (id, username, password_hash, name, email, role, department, position,
+             (id, username, password_hash, name, email, department, position,
               is_active, created_by, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(account.id)
         .bind(&account.username)
         .bind(&account.password_hash)
         .bind(&account.name)
         .bind(&account.email)
-        .bind(account.role.as_str())
         .bind(&account.department)
         .bind(&account.position)
         .bind(account.is_active)
@@ -68,6 +64,76 @@ impl AccountRepository for PostgresAccountRepository {
         .context("failed to create account")?;
 
         Ok(())
+    }
+
+    async fn create_with_roles(&self, account: &Account, role_ids: &[Uuid]) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+
+        sqlx::query(
+            "INSERT INTO accounts
+             (id, username, password_hash, name, email, department, position,
+              is_active, created_by, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(account.id)
+        .bind(&account.username)
+        .bind(&account.password_hash)
+        .bind(&account.name)
+        .bind(&account.email)
+        .bind(&account.department)
+        .bind(&account.position)
+        .bind(account.is_active)
+        .bind(account.created_by)
+        .bind(account.created_at)
+        .execute(&mut *tx)
+        .await
+        .context("failed to create account")?;
+
+        for rid in role_ids {
+            sqlx::query("INSERT INTO account_roles (account_id, role_id) VALUES ($1, $2)")
+                .bind(account.id)
+                .bind(rid)
+                .execute(&mut *tx)
+                .await
+                .context("failed to assign role")?;
+        }
+
+        tx.commit().await.context("commit tx")?;
+        Ok(())
+    }
+
+    async fn set_roles(&self, account_id: &Uuid, role_ids: &[Uuid]) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+
+        sqlx::query("DELETE FROM account_roles WHERE account_id = $1")
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await
+            .context("failed to clear roles")?;
+
+        for rid in role_ids {
+            sqlx::query("INSERT INTO account_roles (account_id, role_id) VALUES ($1, $2)")
+                .bind(account_id)
+                .bind(rid)
+                .execute(&mut *tx)
+                .await
+                .context("failed to assign role")?;
+        }
+
+        tx.commit().await.context("commit tx")?;
+        Ok(())
+    }
+
+    async fn get_role_ids(&self, account_id: &Uuid) -> Result<Vec<Uuid>> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT role_id FROM account_roles WHERE account_id = $1",
+        )
+        .bind(account_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to get role_ids")?;
+
+        Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
     async fn get_by_id(&self, id: &Uuid) -> Result<Option<Account>> {

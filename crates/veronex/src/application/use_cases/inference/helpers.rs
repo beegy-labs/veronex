@@ -11,7 +11,47 @@ use crate::domain::enums::FinishReason;
 use crate::domain::value_objects::JobStatusEvent;
 use crate::domain::constants::TPM_ESTIMATED_TOKENS;
 
+use crate::infrastructure::outbound::valkey_keys::{JOBS_PENDING_COUNTER, JOBS_RUNNING_COUNTER};
+
 use super::JobEntry;
+
+// ── Job counter helpers (fire-and-forget) ────────────────────────────────────
+
+/// Atomically increment the pending job counter in Valkey.
+pub(super) async fn incr_pending(valkey: &Option<Arc<dyn ValkeyPort>>) {
+    if let Some(vk) = valkey {
+        if let Err(e) = vk.incr_by(JOBS_PENDING_COUNTER, 1).await {
+            tracing::warn!("INCR pending counter failed: {e}");
+        }
+    }
+}
+
+/// Atomically decrement the pending job counter in Valkey.
+pub(super) async fn decr_pending(valkey: &Option<Arc<dyn ValkeyPort>>) {
+    if let Some(vk) = valkey {
+        if let Err(e) = vk.incr_by(JOBS_PENDING_COUNTER, -1).await {
+            tracing::warn!("DECR pending counter failed: {e}");
+        }
+    }
+}
+
+/// Atomically increment the running job counter in Valkey.
+pub(super) async fn incr_running(valkey: &Option<Arc<dyn ValkeyPort>>) {
+    if let Some(vk) = valkey {
+        if let Err(e) = vk.incr_by(JOBS_RUNNING_COUNTER, 1).await {
+            tracing::warn!("INCR running counter failed: {e}");
+        }
+    }
+}
+
+/// Atomically decrement the running job counter in Valkey.
+pub(super) async fn decr_running(valkey: &Option<Arc<dyn ValkeyPort>>) {
+    if let Some(vk) = valkey {
+        if let Err(e) = vk.incr_by(JOBS_RUNNING_COUNTER, -1).await {
+            tracing::warn!("DECR running counter failed: {e}");
+        }
+    }
+}
 
 // ── Event broadcasting ──────────────────────────────────────────────────────
 

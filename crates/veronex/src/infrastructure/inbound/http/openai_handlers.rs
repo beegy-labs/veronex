@@ -35,6 +35,13 @@ struct ContentPart {
     #[serde(rename = "type")]
     part_type: String,
     text: Option<String>,
+    /// OpenAI vision format: `{"url": "data:image/png;base64,XXXX"}`.
+    image_url: Option<ImageUrl>,
+}
+
+#[derive(Deserialize)]
+struct ImageUrl {
+    url: String,
 }
 
 impl MessageContent {
@@ -47,6 +54,31 @@ impl MessageContent {
                 .filter_map(|p| p.text)
                 .collect::<Vec<_>>()
                 .join("\n"),
+        }
+    }
+
+    /// Extract base64 image data from `image_url` content parts.
+    ///
+    /// Strips the `data:image/...;base64,` prefix so the result is raw base64
+    /// compatible with Ollama's `images` field.
+    fn extract_images(&self) -> Vec<String> {
+        match self {
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .filter(|p| p.part_type == "image_url")
+                .filter_map(|p| p.image_url.as_ref())
+                .filter_map(|iu| {
+                    // Accept both "data:image/...;base64,XXXX" and raw base64
+                    if let Some(pos) = iu.url.find(";base64,") {
+                        Some(iu.url[pos + 8..].to_string())
+                    } else if iu.url.starts_with("data:") {
+                        None // malformed data URI
+                    } else {
+                        Some(iu.url.clone()) // assume raw base64
+                    }
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 }
@@ -290,6 +322,14 @@ async fn ollama_chat_proxy(
     conversation_id: Option<String>,
     stream: bool,
 ) -> Response {
+    // Extract base64 images from content arrays (OpenAI vision format) before
+    // consuming messages. Only look at user messages — assistant/system won't have images.
+    let mut content_images: Vec<String> = req.messages.iter()
+        .filter(|m| m.role == "user")
+        .filter_map(|m| m.content.as_ref())
+        .flat_map(|c| c.extract_images())
+        .collect();
+
     // Convert messages to Ollama format (normalise content, convert tool_calls).
     let ollama_messages: Vec<serde_json::Value> =
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
@@ -298,7 +338,12 @@ async fn ollama_chat_proxy(
     let prompt = extract_last_user_prompt(&ollama_messages).to_string();
 
     let model_str = req.model.clone();
-    let images = req.images;
+    // Merge top-level images with images extracted from content array parts.
+    let images = {
+        let mut imgs = req.images.unwrap_or_default();
+        imgs.append(&mut content_images);
+        if imgs.is_empty() { None } else { Some(imgs) }
+    };
     let messages = serde_json::Value::Array(ollama_messages);
     // Forward tools in Ollama format (OpenAI tools array is already compatible with Ollama).
     let tools = req.tools.map(serde_json::Value::Array);
@@ -627,4 +672,129 @@ async fn legacy_queue_chat(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_image_part(url: &str) -> ContentPart {
+        ContentPart {
+            part_type: "image_url".to_string(),
+            text: None,
+            image_url: Some(ImageUrl { url: url.to_string() }),
+        }
+    }
+
+    fn make_text_part(text: &str) -> ContentPart {
+        ContentPart {
+            part_type: "text".to_string(),
+            text: Some(text.to_string()),
+            image_url: None,
+        }
+    }
+
+    #[test]
+    fn extract_images_from_data_url() {
+        let content = MessageContent::Parts(vec![
+            make_image_part("data:image/jpeg;base64,ABC123"),
+        ]);
+        assert_eq!(content.extract_images(), vec!["ABC123"]);
+    }
+
+    #[test]
+    fn extract_images_strips_prefix() {
+        let content = MessageContent::Parts(vec![
+            make_image_part("data:image/png;base64,PNGDATA=="),
+        ]);
+        assert_eq!(content.extract_images(), vec!["PNGDATA=="]);
+    }
+
+    #[test]
+    fn extract_images_empty_for_text_only() {
+        let content = MessageContent::Parts(vec![
+            make_text_part("describe this image"),
+        ]);
+        assert!(content.extract_images().is_empty());
+    }
+
+    #[test]
+    fn extract_images_from_string_content() {
+        let content = MessageContent::Text("hello".to_string());
+        assert!(content.extract_images().is_empty());
+    }
+
+    // ── into_string ─────────────────────────────────────────────────────
+
+    #[test]
+    fn into_string_from_text() {
+        let content = MessageContent::Text("hello world".to_string());
+        assert_eq!(content.into_string(), "hello world");
+    }
+
+    #[test]
+    fn into_string_from_parts_joins_text() {
+        let content = MessageContent::Parts(vec![
+            make_text_part("line 1"),
+            make_text_part("line 2"),
+        ]);
+        assert_eq!(content.into_string(), "line 1\nline 2");
+    }
+
+    #[test]
+    fn into_string_from_parts_skips_non_text() {
+        let content = MessageContent::Parts(vec![
+            make_text_part("hello"),
+            make_image_part("data:image/png;base64,ABC"),
+        ]);
+        assert_eq!(content.into_string(), "hello");
+    }
+
+    // ── parse_provider_str ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_provider_str_gemini_free() {
+        let (pt, tier) = parse_provider_str("gemini-free");
+        assert_eq!(pt, ProviderType::Gemini);
+        assert_eq!(tier.as_deref(), Some("free"));
+    }
+
+    #[test]
+    fn parse_provider_str_gemini() {
+        let (pt, tier) = parse_provider_str("gemini");
+        assert_eq!(pt, ProviderType::Gemini);
+        assert!(tier.is_none());
+    }
+
+    #[test]
+    fn parse_provider_str_unknown_defaults_ollama() {
+        let (pt, tier) = parse_provider_str("something-else");
+        assert_eq!(pt, ProviderType::Ollama);
+        assert!(tier.is_none());
+    }
+
+    // ── convert_tool_call ───────────────────────────────────────────────
+
+    #[test]
+    fn convert_tool_call_format() {
+        let ollama = serde_json::json!({
+            "function": {"name": "get_weather", "arguments": {"city": "Seoul"}}
+        });
+        let openai = convert_tool_call(0, &ollama);
+        assert_eq!(openai["index"], 0);
+        assert_eq!(openai["id"], "call_0");
+        assert_eq!(openai["type"], "function");
+        assert_eq!(openai["function"]["name"], "get_weather");
+        // Arguments must be stringified JSON (OpenAI convention)
+        let args: serde_json::Value = serde_json::from_str(openai["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["city"], "Seoul");
+    }
+
+    #[test]
+    fn convert_tool_call_missing_fields() {
+        let empty = serde_json::json!({});
+        let result = convert_tool_call(0, &empty);
+        assert_eq!(result["function"]["name"], "");
+        assert_eq!(result["function"]["arguments"], "");
+    }
 }

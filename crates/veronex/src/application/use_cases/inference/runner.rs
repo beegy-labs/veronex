@@ -21,7 +21,7 @@ use crate::domain::constants::{
 };
 
 use super::JobEntry;
-use super::helpers::{broadcast_event, emit_inference_event, record_tpm, schedule_cleanup};
+use super::helpers::{broadcast_event, decr_pending, decr_running, emit_inference_event, incr_running, record_tpm, schedule_cleanup};
 
 // ── Token stream state ──────────────────────────────────────────────────────
 
@@ -88,6 +88,9 @@ async fn handle_stream_error(
         tracing::warn!(job_id = %uuid, "failed to persist failed state: {db_err}");
     }
 
+    // running → failed: DECR running
+    decr_running(valkey).await;
+
     let latency_ms = chrono::Utc::now()
         .signed_duration_since(started_at).num_milliseconds().max(0) as u32;
     emit_inference_event(
@@ -152,6 +155,9 @@ async fn finalize_job(
     } else {
         JobStatus::Completed
     };
+
+    // running → completed/cancelled: DECR running
+    decr_running(valkey).await;
 
     let result_text = (!ts.text.is_empty()).then_some(ts.text);
     let tool_calls_json = (!ts.tool_calls.is_empty())
@@ -277,7 +283,12 @@ pub(super) async fn run_job(
 
     let started_at = chrono::Utc::now();
     let (api_key_id, tpm_minute) = if let Some(mut entry) = jobs.get_mut(&uuid) {
-        if entry.status == JobStatus::Cancelled { return Ok(None); }
+        if entry.status == JobStatus::Cancelled {
+            drop(entry);
+            // pending → cancelled (before dispatch): DECR pending
+            decr_pending(&valkey).await;
+            return Ok(None);
+        }
         entry.status = JobStatus::Running;
         entry.job.status = JobStatus::Running;
         entry.job.started_at = Some(started_at);
@@ -295,6 +306,10 @@ pub(super) async fn run_job(
     if let Err(e) = job_repo.save(&job).await {
         tracing::warn!(job_id = %uuid, "failed to persist running state: {e}");
     }
+
+    // pending → running: DECR pending, INCR running
+    decr_pending(&valkey).await;
+    incr_running(&valkey).await;
 
     broadcast_event(&event_tx, &valkey, &instance_id, &JobStatusEvent {
         id: uuid.to_string(),
@@ -318,6 +333,8 @@ pub(super) async fn run_job(
             biased;
             _ = cancel_notify.notified() => {
                 tracing::info!(%uuid, "job cancelled — dropping stream");
+                // running → cancelled: DECR running
+                decr_running(&valkey).await;
                 schedule_cleanup(&jobs, uuid, JOB_CLEANUP_DELAY);
                 return Ok(None);
             }
@@ -331,7 +348,12 @@ pub(super) async fn run_job(
             None => break,
         };
 
-        if entry.status == JobStatus::Cancelled { return Ok(None); }
+        if entry.status == JobStatus::Cancelled {
+            drop(entry);
+            // running → cancelled: DECR running
+            decr_running(&valkey).await;
+            return Ok(None);
+        }
 
         match result {
             Ok(token) => {

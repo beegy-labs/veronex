@@ -102,8 +102,8 @@ if [ "$METRICS_FOUND" = "0" ]; then
   fail "No metrics in ClickHouse after ${WAIT_SECS}s — pipeline broken"
   # Dump diagnostic info
   info "Checking Redpanda topic..."
-  TOPIC_COUNT=$(docker compose exec -T redpanda rpk topic consume otel-metrics --num 1 --timeout 3s 2>/dev/null | wc -l || echo "0")
-  [ "$TOPIC_COUNT" -gt 0 ] \
+  TOPIC_COUNT=$(docker compose exec -T redpanda rpk topic consume otel-metrics --num 1 --timeout 3s 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+  [ "${TOPIC_COUNT:-0}" -gt 0 ] 2>/dev/null \
     && info "Redpanda otel-metrics topic has data (OTel → Redpanda OK, Redpanda → ClickHouse broken)" \
     || info "Redpanda otel-metrics topic empty (OTel → Redpanda broken)"
 fi
@@ -125,10 +125,16 @@ check_metric() {
   if [ "$count" -gt 0 ]; then
     pass "$label: $count rows"
   else
-    # Some metrics only available on remote (GPU), OK to skip on local
+    # When the entire pipeline has no data, individual metric misses are info, not fail
     case "$metric_name" in
       node_hwmon_*) info "$label: 0 rows (may not be available on this host)" ;;
-      *)            fail "$label: 0 rows" ;;
+      *)
+        if [ "$METRICS_FOUND" = "0" ]; then
+          info "$label: 0 rows (pipeline not delivering yet)"
+        else
+          fail "$label: 0 rows"
+        fi
+        ;;
     esac
   fi
 }
@@ -186,7 +192,11 @@ except Exception as e:
       *)     fail "Remote server history: $HIST_CHECK" ;;
     esac
   else
-    fail "Remote server history API → $HIST_CODE"
+    if [ "$METRICS_FOUND" = "0" ]; then
+      info "Remote server history API → $HIST_CODE (no metrics in pipeline yet)"
+    else
+      fail "Remote server history API → $HIST_CODE"
+    fi
   fi
 fi
 

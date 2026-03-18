@@ -1,6 +1,6 @@
 # docs/llm — SSOT Index
 
-> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-03-15
+> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-03-18
 
 ## Policies (Cross-Cutting)
 

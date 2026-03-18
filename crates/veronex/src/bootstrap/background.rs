@@ -14,7 +14,6 @@ use veronex::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use veronex::infrastructure::outbound::health_checker::run_health_checker_loop;
 use veronex::infrastructure::outbound::provider_dispatch::ConcreteProviderDispatch;
 use veronex::infrastructure::outbound::session_grouping::run_session_grouping_loop;
-use veronex::infrastructure::outbound::valkey_keys::{QUEUE_JOBS, QUEUE_JOBS_PAID, QUEUE_JOBS_TEST};
 use veronex::domain::constants::STATS_TICK_INTERVAL;
 
 use super::config::AppConfig;
@@ -42,7 +41,7 @@ pub struct BackgroundHandles {
     pub session_grouping_lock: Arc<tokio::sync::Semaphore>,
     pub job_event_tx: Arc<tokio::sync::broadcast::Sender<JobStatusEvent>>,
     /// Rolling replay buffer — `(event, unix_ms)` tuples, last `EVENT_BUFFER_CAPACITY` entries.
-    /// Replayed to new SSE clients on connect; unix_ms used by the stats ticker.
+    /// Replayed to new SSE clients on connect so late joiners see recent activity.
     pub event_ring_buffer: Arc<RwLock<VecDeque<(JobStatusEvent, u64)>>>,
     /// Broadcast channel for real-time aggregate stats pushed every second.
     /// All SSE clients receive the same FlowStats simultaneously.
@@ -58,7 +57,9 @@ pub async fn spawn_background_tasks(
     shutdown: &CancellationToken,
     tasks: &mut JoinSet<()>,
 ) -> BackgroundHandles {
-    let thermal = Arc::new(ThermalThrottleMap::new(300)); // 300s cooldown (SDD §3)
+    let thermal = Arc::new(ThermalThrottleMap::new(
+        veronex::domain::constants::THERMAL_HARD_COOLDOWN_SECS as u64,
+    ));
     let circuit_breaker = Arc::new(CircuitBreakerMap::new());
     let sync_trigger = Arc::new(tokio::sync::Notify::new());
     let sync_lock = Arc::new(tokio::sync::Semaphore::new(1));
@@ -67,7 +68,7 @@ pub async fn spawn_background_tasks(
     tasks.spawn(run_health_checker_loop(
         repos.provider_registry.clone(),
         repos.gpu_server_registry.clone(),
-        30,
+        veronex::domain::constants::HEALTH_CHECK_INTERVAL_SECS,
         infra.valkey_pool.clone(),
         thermal.clone(),
         shutdown.child_token(),
@@ -170,63 +171,217 @@ pub async fn spawn_background_tasks(
     if let Err(e) = use_case_impl.recover_pending_jobs().await {
         tracing::warn!("job recovery failed (non-fatal): {e}");
     }
+
+    // ── Startup: register instance in global set for orphan sweeper ──
+    if let Some(ref vk) = infra.valkey_pool {
+        use fred::interfaces::SetsInterface;
+        let _: Result<i64, _> = vk
+            .sadd(
+                veronex::infrastructure::outbound::valkey_keys::INSTANCES_SET,
+                infra.instance_id.as_ref(),
+            )
+            .await;
+    }
+
+    // ── Startup reconciliation: seed Valkey job counters from DB ──
+    if let Some(ref vk) = infra.valkey_pool {
+        use fred::interfaces::KeysInterface;
+        use veronex::infrastructure::outbound::valkey_keys::{
+            JOBS_PENDING_COUNTER, JOBS_RUNNING_COUNTER,
+        };
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT status::text, COUNT(*) FROM inference_jobs \
+             WHERE status IN ('pending','running') GROUP BY status"
+        )
+        .fetch_all(&infra.pg_pool)
+        .await
+        .unwrap_or_default();
+        let mut pending = 0i64;
+        let mut running = 0i64;
+        for (status, cnt) in &rows {
+            match status.as_str() {
+                "pending" => pending = *cnt,
+                "running" => running = *cnt,
+                _ => {}
+            }
+        }
+        let _: Result<(), _> = vk.set(JOBS_PENDING_COUNTER, pending, None, None, false).await;
+        let _: Result<(), _> = vk.set(JOBS_RUNNING_COUNTER, running, None, None, false).await;
+        tracing::info!(pending, running, "job counters seeded from DB");
+    }
+
+    // NOTE: Startup stuck-job cleanup moved to veronex-agent orphan sweeper.
+    // The agent monitors heartbeats and cleans up orphaned jobs with a 2-minute
+    // grace period, preventing false positives from network blips.
+
     tasks.spawn(use_case_impl.start_queue_worker(shutdown.child_token()));
     tasks.spawn(use_case_impl.start_job_sweeper(shutdown.child_token()));
 
     // ── Real-time stats ticker ──────────────────────────────────────
-    // Computes FlowStats every second from the ring buffer + live DashMap counts
+    // Computes FlowStats every second from sliding-window counters + live DashMap counts
     // and broadcasts to all SSE clients so every user sees the same numbers.
     // Capacity 16: ticker fires at most once per second; 16 slots = 16s of lag tolerance.
-    // No-op guard (PartialEq) ensures capacity is only consumed when stats actually change.
+    // Always broadcast — no PartialEq skip — clients rely on receiving stats every second.
     let (stats_tx, _) = tokio::sync::broadcast::channel::<FlowStats>(16);
     let stats_tx = Arc::new(stats_tx);
     {
-        use fred::prelude::*;
-
-        let buf       = event_ring_buffer.clone();
-        let uc        = use_case_impl.clone() as Arc<dyn InferenceUseCase>;
-        let valkey    = infra.valkey_pool.clone();
+        let pg        = infra.pg_pool.clone();
+        let vk_pool   = infra.valkey_pool.clone();
         let tx        = (*stats_tx).clone();
         let shutdown_token = shutdown.clone();
 
+        // Sliding-window counters — 60 × 1-second buckets.
+        // req/s = sum of last 10 buckets / 10.  req/m = sum of all 60 buckets.
+        // Unlike the ring buffer (which evicts oldest events), these counters only
+        // accumulate and rotate, so they accurately reflect the rate.
+        let incoming_buckets = Arc::new(std::sync::Mutex::new([0u32; 60]));
+        let completed_buckets = Arc::new(std::sync::Mutex::new([0u32; 60]));
+        let bucket_idx = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        // Separate task: count incoming/completed from broadcast events into buckets
+        {
+            let mut rx = job_event_tx.subscribe();
+            let inc_b = incoming_buckets.clone();
+            let done_b = completed_buckets.clone();
+            let bi = bucket_idx.clone();
+            let shutdown_token = shutdown.clone();
+            tasks.spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => break,
+                        result = rx.recv() => match result {
+                            Ok(event) => {
+                                let idx = bi.load(std::sync::atomic::Ordering::Relaxed) % 60;
+                                match event.status.as_str() {
+                                    "pending" => {
+                                        let mut b = inc_b.lock().unwrap();
+                                        b[idx] += 1;
+                                    }
+                                    "completed" | "failed" | "cancelled" => {
+                                        let mut b = done_b.lock().unwrap();
+                                        b[idx] += 1;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                }
+            });
+        }
         tasks.spawn(async move {
             let mut interval = tokio::time::interval(STATS_TICK_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut last_stats: Option<FlowStats> = None;
+            let mut tick_count = 0u64;
+            // Cached pending/running counts for no-Valkey fallback (re-queried every 10s)
+            let mut cached_no_valkey: (u32, u32) = (0, 0);
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => break,
                     _ = interval.tick() => {
-                        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
-                        let window = now_ms.saturating_sub(1_000);
-
-                        // Per-second rates from ring buffer — single pass O(100)
-                        let (incoming, completed) = {
-                            let buf = buf.read().expect("ring buffer poisoned");
-                            count_ring_events(&buf, window)
-                        };
-
-                        // Instantaneous counts from in-memory DashMap
-                        let live = uc.get_live_counts();
-
-                        // Queue depth from Valkey (0 if unavailable)
-                        let queued = if let Some(ref pool) = valkey {
-                            let (paid, api, test): (i64, i64, i64) = tokio::join!(
-                                async { pool.llen::<i64, _>(QUEUE_JOBS_PAID).await.unwrap_or(0) },
-                                async { pool.llen::<i64, _>(QUEUE_JOBS).await.unwrap_or(0) },
-                                async { pool.llen::<i64, _>(QUEUE_JOBS_TEST).await.unwrap_or(0) },
-                            );
-                            (paid + api + test).max(0) as u32
-                        } else {
-                            live.pending
-                        };
-
-                        let stats = FlowStats { incoming, queued, running: live.running, completed };
-                        // Always send the first tick; skip subsequent broadcasts when nothing changed.
-                        if last_stats.as_ref() != Some(&stats) {
-                            last_stats = Some(stats.clone());
-                            let _ = tx.send(stats);
+                        // Rotate bucket every tick: advance index, clear the new bucket
+                        tick_count += 1;
+                        let new_idx = (tick_count as usize) % 60;
+                        bucket_idx.store(new_idx, std::sync::atomic::Ordering::Relaxed);
+                        {
+                            let mut b = incoming_buckets.lock().unwrap();
+                            b[new_idx] = 0;
                         }
+                        {
+                            let mut b = completed_buckets.lock().unwrap();
+                            b[new_idx] = 0;
+                        }
+
+                        // req/s: sum last 10 buckets.  req/m: sum all 60 buckets.
+                        let (incoming, incoming_60s) = {
+                            let b = incoming_buckets.lock().unwrap();
+                            let mut sum_10 = 0u32;
+                            let mut sum_60 = 0u32;
+                            for i in 0..60 {
+                                let val = b[i];
+                                sum_60 += val;
+                                // Last 10 buckets = indices (new_idx-9)..=new_idx (wrapping)
+                                let age = (new_idx + 60 - i) % 60;
+                                if age > 0 && age <= 10 { sum_10 += val; }
+                            }
+                            (sum_10, sum_60)
+                        };
+                        let completed = {
+                            let b = completed_buckets.lock().unwrap();
+                            b.iter().sum::<u32>()
+                        };
+
+                        // Pending/running counts: read from Valkey atomic counters (O(1)).
+                        // Reconciled from DB every 60 ticks to correct any drift.
+                        let (queued, running) = if let Some(ref vk) = vk_pool {
+                            use fred::interfaces::KeysInterface;
+                            use veronex::infrastructure::outbound::valkey_keys::{
+                                JOBS_PENDING_COUNTER, JOBS_RUNNING_COUNTER,
+                            };
+
+                            let p: i64 = vk.get(JOBS_PENDING_COUNTER).await.unwrap_or(0);
+                            let r: i64 = vk.get(JOBS_RUNNING_COUNTER).await.unwrap_or(0);
+
+                            // Periodic reconciliation: every 60 ticks, verify against DB
+                            if tick_count % 60 == 0 {
+                                let rows: Vec<(String, i64)> = sqlx::query_as(
+                                    "SELECT status::text, COUNT(*) FROM inference_jobs \
+                                     WHERE status IN ('pending','running') GROUP BY status"
+                                )
+                                .fetch_all(&pg)
+                                .await
+                                .unwrap_or_default();
+                                let mut db_p = 0i64;
+                                let mut db_r = 0i64;
+                                for (status, cnt) in &rows {
+                                    match status.as_str() {
+                                        "pending" => db_p = *cnt,
+                                        "running" => db_r = *cnt,
+                                        _ => {}
+                                    }
+                                }
+                                if db_p != p {
+                                    tracing::debug!(valkey = p, db = db_p, "reconciling pending counter");
+                                    let _: Result<(), _> = vk.set(JOBS_PENDING_COUNTER, db_p, None, None, false).await;
+                                }
+                                if db_r != r {
+                                    tracing::debug!(valkey = r, db = db_r, "reconciling running counter");
+                                    let _: Result<(), _> = vk.set(JOBS_RUNNING_COUNTER, db_r, None, None, false).await;
+                                }
+                                (db_p.max(0) as u32, db_r.max(0) as u32)
+                            } else {
+                                (p.max(0) as u32, r.max(0) as u32)
+                            }
+                        } else {
+                            // No Valkey — fall back to DB query, cached for 10 ticks (10s)
+                            if tick_count % 10 == 1 {
+                                let rows: Vec<(String, i64)> = sqlx::query_as(
+                                    "SELECT status::text, COUNT(*) FROM inference_jobs \
+                                     WHERE status IN ('pending','running') GROUP BY status"
+                                )
+                                .fetch_all(&pg)
+                                .await
+                                .unwrap_or_default();
+                                let mut p = 0u32;
+                                let mut r = 0u32;
+                                for (status, cnt) in &rows {
+                                    match status.as_str() {
+                                        "pending" => p = *cnt as u32,
+                                        "running" => r = *cnt as u32,
+                                        _ => {}
+                                    }
+                                }
+                                cached_no_valkey = (p, r);
+                            }
+                            cached_no_valkey
+                        };
+
+                        let stats = FlowStats { incoming, incoming_60s, queued, running, completed };
+                        // Always broadcast — clients rely on receiving stats every second.
+                        // The 16-slot channel absorbs bursts without backpressure.
+                        let _ = tx.send(stats);
                     }
                 }
             }
@@ -281,6 +436,7 @@ pub async fn spawn_background_tasks(
             pool.clone(),
             infra.instance_id.clone(),
             distributed_vram_pool,
+            infra.pg_pool.clone(),
             shutdown.child_token(),
         ));
 
@@ -351,6 +507,7 @@ pub async fn spawn_background_tasks(
 /// - `completed` = `"completed" | "failed" | "cancelled"` (terminal outcomes)
 ///
 /// Extracted from the stats ticker closure to make the counting logic unit-testable.
+#[cfg(test)]
 pub(super) fn count_ring_events(
     buf: &std::collections::VecDeque<(JobStatusEvent, u64)>,
     window_ms: u64,

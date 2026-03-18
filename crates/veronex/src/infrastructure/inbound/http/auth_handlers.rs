@@ -38,6 +38,8 @@ pub struct LoginResponse {
     pub account_id: Uuid,
     pub username: String,
     pub role: String,
+    pub permissions: Vec<String>,
+    pub menus: Vec<String>,
 }
 
 /// JSON body returned on successful token refresh.
@@ -55,12 +57,70 @@ pub struct ResetPasswordRequest {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+/// Role info resolved from DB — passed to `issue_access_token` for JWT embedding.
+pub(crate) struct ResolvedRole {
+    pub permissions: Vec<String>,
+    pub menus: Vec<String>,
+    pub name: String,
+    pub is_super: bool,
+}
+
+/// Resolve merged role info from the N:N account_roles join table.
+/// Returns union of all permissions/menus across assigned roles.
+pub(crate) async fn resolve_roles_for_account(pg: &sqlx::PgPool, account_id: Uuid) -> Result<ResolvedRole, AppError> {
+    let rows = sqlx::query_as::<_, (String, Vec<String>, Vec<String>, bool)>(
+        "SELECT r.name, r.permissions, r.menus, r.is_system
+         FROM roles r
+         JOIN account_roles ar ON ar.role_id = r.id
+         WHERE ar.account_id = $1"
+    )
+    .bind(account_id)
+    .fetch_all(pg)
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("role lookup: {e}")))?;
+
+    if rows.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!("no roles assigned to account")));
+    }
+
+    let mut all_perms = std::collections::BTreeSet::new();
+    let mut all_menus = std::collections::BTreeSet::new();
+    let mut is_super = false;
+    let mut role_names = Vec::new();
+
+    for (name, perms, menus, is_system) in &rows {
+        if *is_system && name == "super" {
+            is_super = true;
+        }
+        role_names.push(name.clone());
+        for p in perms { all_perms.insert(p.clone()); }
+        for m in menus { all_menus.insert(m.clone()); }
+    }
+
+    // If super, grant all permissions/menus
+    if is_super {
+        all_perms = crate::domain::enums::ALL_PERMISSIONS.iter().map(|s| s.to_string()).collect();
+        all_menus = crate::domain::enums::ALL_MENUS.iter().map(|s| s.to_string()).collect();
+    }
+
+    // Primary role name: "super" if any, otherwise first
+    let primary_name = if is_super { "super".to_string() } else { role_names.first().cloned().unwrap_or_default() };
+
+    Ok(ResolvedRole {
+        permissions: all_perms.into_iter().collect(),
+        menus: all_menus.into_iter().collect(),
+        name: primary_name,
+        is_super,
+    })
+}
+
 fn issue_access_token(
     account_id: Uuid,
-    role: AccountRole,
     jti: Uuid,
     secret: &str,
+    resolved: &ResolvedRole,
 ) -> Result<(String, chrono::DateTime<Utc>), AppError> {
+    let role = if resolved.is_super { AccountRole::Super } else { AccountRole::Admin };
     let expires_at = Utc::now() + chrono::Duration::hours(1);
     let exp = expires_at.timestamp() as usize;
     let claims = Claims {
@@ -68,6 +128,9 @@ fn issue_access_token(
         role,
         jti,
         exp,
+        permissions: resolved.permissions.clone(),
+        menus: resolved.menus.clone(),
+        role_name: resolved.name.clone(),
     };
     let token = encode(
         &Header::default(),
@@ -270,9 +333,11 @@ pub async fn login(
 
     let _ = state.account_repo.update_last_login(&account.id).await;
 
+    let resolved = resolve_roles_for_account(&state.pg_pool, account.id).await?;
+
     let jti = Uuid::now_v7();
     let (access_token, expires_at) =
-        issue_access_token(account.id, account.role, jti, &state.jwt_secret)?;
+        issue_access_token(account.id, jti, &state.jwt_secret, &resolved)?;
 
     // Generate refresh token and hash it for storage.
     let refresh_raw = Uuid::new_v4().to_string();
@@ -294,7 +359,9 @@ pub async fn login(
         ok: true,
         account_id: account.id,
         username: account.username,
-        role: account.role.to_string(),
+        role: resolved.name.clone(),
+        permissions: resolved.permissions.clone(),
+        menus: resolved.menus.clone(),
     })))
 }
 
@@ -365,9 +432,11 @@ pub async fn refresh(
     let _ = state.session_repo.revoke(&old_session.id).await;
     revoke_jti(&state, old_session.jti, old_session.expires_at).await;
 
+    let resolved = resolve_roles_for_account(&state.pg_pool, account.id).await?;
+
     let new_jti = Uuid::now_v7();
     let (access_token, new_expires_at) =
-        issue_access_token(account.id, account.role, new_jti, &state.jwt_secret)?;
+        issue_access_token(account.id, new_jti, &state.jwt_secret, &resolved)?;
 
     let new_refresh_raw = Uuid::new_v4().to_string();
     let new_refresh_hash = hash_token(&new_refresh_raw);
@@ -485,13 +554,18 @@ pub async fn setup(
         return Err(AppError::Conflict("setup already completed".into()));
     }
 
+    // Look up the super role (seeded by migration 000007).
+    let super_role_id: (Uuid,) = sqlx::query_as("SELECT id FROM roles WHERE name = 'super'")
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("super role not found: {e}")))?;
+
     let account = Account {
         id: Uuid::now_v7(),
         username: req.username.trim().to_string(),
         password_hash: hash,
         name: "Super Admin".to_string(),
         email: None,
-        role: AccountRole::Super,
         department: None,
         position: None,
         is_active: true,
@@ -503,16 +577,15 @@ pub async fn setup(
 
     sqlx::query(
         "INSERT INTO accounts
-         (id, username, password_hash, name, email, role, department, position,
+         (id, username, password_hash, name, email, department, position,
           is_active, created_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(account.id)
     .bind(&account.username)
     .bind(&account.password_hash)
     .bind(&account.name)
     .bind(&account.email)
-    .bind(account.role.as_str())
     .bind(&account.department)
     .bind(&account.position)
     .bind(account.is_active)
@@ -522,6 +595,14 @@ pub async fn setup(
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("insert account: {e}")))?;
 
+    // Assign super role via account_roles join table
+    sqlx::query("INSERT INTO account_roles (account_id, role_id) VALUES ($1, $2)")
+        .bind(account.id)
+        .bind(super_role_id.0)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("assign super role: {e}")))?;
+
     tx.commit().await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("commit tx: {e}")))?;
 
@@ -530,9 +611,11 @@ pub async fn setup(
         &format!("First-run setup: super admin account '{}' created", account.username)).await;
 
     // Issue access token + session so the user lands directly on the dashboard.
+    let resolved = resolve_roles_for_account(&state.pg_pool, account.id).await?;
+
     let jti = Uuid::now_v7();
     let (access_token, expires_at) =
-        issue_access_token(account.id, account.role, jti, &state.jwt_secret)?;
+        issue_access_token(account.id, jti, &state.jwt_secret, &resolved)?;
 
     let refresh_raw = Uuid::new_v4().to_string();
     let refresh_hash = hash_token(&refresh_raw);
@@ -547,7 +630,9 @@ pub async fn setup(
         ok: true,
         account_id: account.id,
         username: account.username,
-        role: account.role.to_string(),
+        role: resolved.name.clone(),
+        permissions: resolved.permissions.clone(),
+        menus: resolved.menus.clone(),
     })))
 }
 

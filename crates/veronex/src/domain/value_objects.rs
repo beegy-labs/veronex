@@ -22,13 +22,16 @@ pub struct JobStatusEvent {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct FlowStats {
-    /// New requests received in the last 1-second window.
+    /// Enqueue events in the last 10 seconds (raw count).
+    /// Client divides by 10 for req/s display.
     pub incoming: u32,
+    /// Enqueue events in the last 60 seconds (raw count) = req/m.
+    pub incoming_60s: u32,
     /// Jobs currently waiting in the queue.
     pub queued: u32,
     /// Jobs currently being processed by a provider.
     pub running: u32,
-    /// Jobs that completed (any terminal status) in the last 1-second window.
+    /// Jobs that completed (any terminal status) in the last 60 seconds.
     pub completed: u32,
 }
 
@@ -294,5 +297,31 @@ mod tests {
             let url = format!("{scheme}://{host}");
             prop_assert!(ProviderUrl::new(&url).is_err());
         }
+    }
+
+    // ── ModelName ────────────────────────────────────────────────────────
+
+    #[test]
+    fn model_name_valid() {
+        let m = ModelName::new("llama3.2:latest").unwrap();
+        assert_eq!(m.as_str(), "llama3.2:latest");
+    }
+
+    #[test]
+    fn model_name_empty_rejected() {
+        assert!(ModelName::new("").is_err());
+    }
+
+    // ── Prompt ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn prompt_valid() {
+        let p = Prompt::new("hello").unwrap();
+        assert_eq!(p.as_str(), "hello");
+    }
+
+    #[test]
+    fn prompt_empty_rejected() {
+        assert!(Prompt::new("").is_err());
     }
 }

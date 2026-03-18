@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
-import type { UsageAggregate, AnalyticsStats, PerformanceStats, UsageBreakdown } from '@/lib/types'
+import type { UsageAggregate, AnalyticsStats, PerformanceStats } from '@/lib/types'
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -9,7 +9,7 @@ import {
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
   AXIS_TICK, LEGEND_STYLE, CURSOR_FILL,
-  fmtMs, fmtCompact, fmtTps,
+  fmtCompact, fmtTps,
 } from '@/lib/chart-theme'
 import { Zap, MessageSquare, Bot } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'

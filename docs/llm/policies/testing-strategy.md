@@ -1,6 +1,6 @@
 # Testing Strategy
 
-> SSOT | **Last Updated**: 2026-03-16 | Classification: Operational
+> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational
 
 ## Methodology: Testing Trophy + Contract Testing
 
@@ -63,11 +63,12 @@ If E2E breaks on internal function change → **test design flaw** (layer violat
 
 | Pattern | Implementation |
 |---------|---------------|
-| Sequential | 01-setup → 02-inference (state creation) |
+| Sequential | 01-setup → 03-inference (state creation) |
 | Multi-model | 03-inference auto-detects available models and cycles through them for Round 2 + Goodput tests (multi-model parallel throughput) |
-| Parallel | 03~06 concurrent execution (independent counts file) |
-| Infrastructure | 09-metrics-pipeline (agent scrape → OTel → Redpanda → ClickHouse → analytics API) |
-| Image storage | 10-image-storage (vision inference, S3 WebP upload, thumbnails, provider_name) |
+| Parallel 1 | 02, 04, 05, 06, 07, 11 concurrent execution (independent counts file) |
+| Sequential | 08-sdd-advanced (clean state after parallel phases) |
+| Parallel 2 | 09-metrics-pipeline, 10-image-storage |
+| Verify + Liveness | 11-verify-liveness (pre-registration verify endpoints, heartbeat keys, online counter) |
 
 `09-metrics-pipeline.sh` tests the full metrics pipeline end-to-end: verifies agent scrapes node-exporter, pushes via OTLP, data flows through Redpanda into ClickHouse, and the analytics API returns both gauge metrics (memory, GPU temp/power) and counter-derived metrics (CPU usage %). Tests both local (Mac) and remote (Ubuntu Ryzen AI 395+) server configurations.
 
