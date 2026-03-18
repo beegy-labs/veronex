@@ -324,6 +324,12 @@ if [ -n "$RECOVERY_JOB" ] && [ "$RECOVERY_JOB" != "None" ]; then
   [ "${PROCESSING_COUNT:-0}" = "0" ] \
     && pass "No zombie jobs in processing list after restart" \
     || info "Processing list has $PROCESSING_COUNT entries (crash recovery may still be running)"
+
+  # Verify instance registered in veronex:instances after restart
+  INST_COUNT=$(docker compose exec -T valkey valkey-cli SCARD "veronex:instances" 2>/dev/null | tr -d ' \r\n' || echo "0")
+  [ "${INST_COUNT:-0}" -ge 1 ] \
+    && pass "Instance re-registered in veronex:instances after restart ($INST_COUNT member(s))" \
+    || info "veronex:instances empty after restart (Valkey may not be configured)"
 else
   info "Crash recovery test skipped — job submission failed"
 fi

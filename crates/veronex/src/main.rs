@@ -55,7 +55,10 @@ async fn main() -> Result<()> {
     };
 
     // ── Infrastructure context ─────────────────────────────────────
-    let instance_id: Arc<str> = Arc::from(uuid::Uuid::new_v4().to_string());
+    let instance_id: Arc<str> = Arc::from(
+        std::env::var("VERONEX_INSTANCE_ID")
+            .unwrap_or_else(|_| uuid::Uuid::now_v7().to_string()),
+    );
     tracing::info!(instance_id = %instance_id, "instance identity generated");
     let infra = bootstrap::InfraContext {
         valkey_pool,

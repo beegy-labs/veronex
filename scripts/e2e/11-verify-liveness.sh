@@ -141,4 +141,26 @@ if [ -n "${PROVIDER_ID_REMOTE:-}" ] && [ "$PROVIDER_ID_REMOTE" != "None" ]; then
   fi
 fi
 
+# ── API Instance Registry (Orphan Sweeper Support) ─────────────────────────
+
+hdr "API Instance Registry — veronex:instances"
+
+INSTANCE_COUNT=$(docker compose exec -T valkey valkey-cli SCARD "veronex:instances" 2>/dev/null | tr -d ' \r\n' || echo "0")
+if [ "${INSTANCE_COUNT:-0}" -ge 1 ]; then
+  pass "veronex:instances SET has $INSTANCE_COUNT member(s)"
+else
+  info "veronex:instances SET empty — multi-instance coordination may not be active"
+fi
+
+# Verify heartbeat key exists for a registered instance
+INSTANCE_ID=$(docker compose exec -T valkey valkey-cli SRANDMEMBER "veronex:instances" 2>/dev/null | tr -d ' \r\n' || echo "")
+if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "(nil)" ]; then
+  HB_VAL=$(valkey_get "veronex:heartbeat:$INSTANCE_ID")
+  if [ -n "$HB_VAL" ] && [ "$HB_VAL" != "(nil)" ]; then
+    pass "API instance heartbeat present (veronex:heartbeat:$INSTANCE_ID)"
+  else
+    info "API instance heartbeat expired or absent for $INSTANCE_ID"
+  fi
+fi
+
 save_counts

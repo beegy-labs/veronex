@@ -34,7 +34,7 @@ use crate::domain::value_objects::JobId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 
 use super::cancel_guard::CancelOnDrop;
-use super::handlers::SseStream;
+use super::handlers::{SseStream, sanitize_sse_error};
 use super::openai_sse_types::{ChunkChoice, CompletionChunk, DeltaContent, SERVICE_TIER_DEFAULT, SYSTEM_FINGERPRINT};
 use super::state::AppState;
 
@@ -179,7 +179,7 @@ fn stream_as_openai_sse(state: AppState, job_id: JobId, model: String) -> Respon
                 Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
             }
             Err(e) => {
-                let err = serde_json::json!({"error": {"message": e.to_string()}});
+                let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
                 Ok(Event::default().data(serde_json::to_string(&err).unwrap_or_default()))
             }
         }
@@ -229,7 +229,7 @@ pub async fn stream_test_job(
                 Ok(Event::default().data(chunk.to_string()))
             }
             Err(e) => {
-                let err = serde_json::json!({"error": {"message": e.to_string()}});
+                let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
                 Ok(Event::default().data(err.to_string()))
             }
         }
@@ -418,7 +418,7 @@ fn stream_as_ollama_chat_ndjson(state: AppState, job_id: JobId, model: String) -
                 "done": false,
             }),
             Err(e) => serde_json::json!({
-                "error": e.to_string(),
+                "error": sanitize_sse_error(&e),
                 "done": true,
             }),
         };
@@ -457,7 +457,7 @@ fn stream_as_ollama_generate_ndjson(state: AppState, job_id: JobId, model: Strin
                 "done": false,
             }),
             Err(e) => serde_json::json!({
-                "error": e.to_string(),
+                "error": sanitize_sse_error(&e),
                 "done": true,
             }),
         };
@@ -603,7 +603,7 @@ fn stream_as_gemini_sse(state: AppState, job_id: JobId, model: String) -> Respon
                 "modelVersion": model.as_str(),
             }),
             Err(e) => serde_json::json!({
-                "error": {"message": e.to_string(), "code": 500},
+                "error": {"message": sanitize_sse_error(&e), "code": 500},
             }),
         };
         Ok::<_, std::convert::Infallible>(Bytes::from(

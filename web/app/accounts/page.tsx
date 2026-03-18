@@ -299,8 +299,8 @@ function RoleEditorModal({
     async (_: void) => {
       if (isNew) {
         await api.createRole({ name, permissions: perms, menus })
-      } else {
-        await api.updateRole(role!.id, { name: name !== role!.name ? name : undefined, permissions: perms, menus })
+      } else if (role) {
+        await api.updateRole(role.id, { name: name !== role.name ? name : undefined, permissions: perms, menus })
       }
     },
     { invalidateKey: ['roles'], onSuccess: () => onClose() },
@@ -339,7 +339,7 @@ function RoleEditorModal({
                     onCheckedChange={() => togglePerm(p)}
                     disabled={isSystem}
                   />
-                  <span>{t(`roles.perm.${p}` as any)}</span>
+                  <span>{t(`roles.perm.${p}` as Parameters<typeof t>[0])}</span>
                 </label>
               ))}
             </div>
@@ -356,7 +356,7 @@ function RoleEditorModal({
                     onCheckedChange={() => toggleMenu(m)}
                     disabled={isSystem}
                   />
-                  <span>{t(`roles.menu.${m}` as any)}</span>
+                  <span>{t(`roles.menu.${m}` as Parameters<typeof t>[0])}</span>
                 </label>
               ))}
             </div>
@@ -509,7 +509,7 @@ function RolesTab() {
                 <div className="flex flex-wrap gap-1">
                   {r.permissions.map(p => (
                     <Badge key={p} variant="outline" className="text-[10px] font-normal">
-                      {t(`roles.perm.${p}` as any)}
+                      {t(`roles.perm.${p}` as Parameters<typeof t>[0])}
                     </Badge>
                   ))}
                 </div>
