@@ -169,7 +169,7 @@ mod tests {
         ApiKey {
             id: Uuid::now_v7(),
             key_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
-            key_prefix: "iq_01ARZ3NDEK".to_string(),
+            key_prefix: "vnx_01ARZ3NDE".to_string(),
             tenant_id: tenant_id.to_string(),
             name: "test-key".to_string(),
             is_active: true,

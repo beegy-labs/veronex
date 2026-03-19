@@ -60,7 +60,7 @@ mod tests {
         ApiKey {
             id: Uuid::now_v7(),
             key_hash: "a".repeat(64),
-            key_prefix: "iq_01ARZ3N".to_string(),
+            key_prefix: "vnx_01ARZ3N".to_string(),
             tenant_id: "tenant-1".to_string(),
             name: "test-key".to_string(),
             is_active: true,
@@ -112,7 +112,7 @@ mod tests {
         assert!(!json.contains("key_hash"));
         // public fields must be present
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["key_prefix"], "iq_01ARZ3N");
+        assert_eq!(v["key_prefix"], "vnx_01ARZ3N");
         assert_eq!(v["tenant_id"], "tenant-1");
         assert_eq!(v["name"], "test-key");
         assert_eq!(v["is_active"], true);
@@ -131,8 +131,8 @@ mod tests {
     fn api_key_created_serde_roundtrip() {
         let created = ApiKeyCreated {
             id: Uuid::now_v7(),
-            key: "iq_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
-            key_prefix: "iq_01ARZ3NDEK".to_string(),
+            key: "vnx_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            key_prefix: "vnx_01ARZ3NDE".to_string(),
             tenant_id: "tenant-1".to_string(),
             created_at: Utc::now(),
         };

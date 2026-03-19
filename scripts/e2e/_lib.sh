@@ -66,6 +66,7 @@ fire_concurrent() {
   local tmpdir; tmpdir=$(mktemp -d)
   for i in $(seq 1 "$count"); do
     (
+      set +u  # API_KEY may come from sourced state file
       T0=$(python3 -c "import time; print(int(time.time()*1000))")
       RES=$(curl -s -w "\n%{http_code}" "$API/v1/chat/completions" \
         -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
@@ -78,6 +79,7 @@ fire_concurrent() {
   done
   wait; echo ""
   R_OK=0; R_Q=0; R_F=0
+  shopt -s nullglob
   for f in "$tmpdir"/r_*; do
     read -r IDX CODE DUR < "$f"
     case "$CODE" in
@@ -86,6 +88,7 @@ fire_concurrent() {
       *)       echo -e "    #$IDX: ${RED}${CODE}${NC} ($DUR)"; R_F=$((R_F+1)) ;;
     esac
   done
+  shopt -u nullglob
   rm -rf "$tmpdir"
 }
 
