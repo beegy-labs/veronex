@@ -181,7 +181,12 @@ PP2=$(echo "$S2" | jv '["probe_permits"]' || echo "")
 PR2=$(echo "$S2" | jv '["probe_rate"]' || echo "")
 [ "$PP2" = "2" ] && [ "$PR2" = "5" ] && pass "Capacity settings updated (permits=2 rate=5)" \
   || fail "Capacity settings update failed (pp=$PP2 pr=$PR2)"
-apatch "/v1/dashboard/capacity/settings" '{"probe_permits":1,"probe_rate":3}' > /dev/null 2>&1
+apatch "/v1/dashboard/capacity/settings" '{"probe_permits":1,"probe_rate":3,"analyzer_model":"'"$MODEL"'"}' > /dev/null 2>&1
+
+S3=$(aget "/v1/dashboard/capacity/settings" || echo "{}")
+AM=$(echo "$S3" | jv '["analyzer_model"]' || echo "")
+[ "$AM" = "$MODEL" ] && pass "Analyzer model set to $MODEL" \
+  || fail "Analyzer model not set (got=$AM)"
 
 # ── Phase 7: API Key ──────────────────────────────────────────────────────────
 
@@ -208,5 +213,19 @@ if [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ]; then
 else
   fail "Could not find account for API key creation"
 fi
+
+# ── Phase 8: Wait for providers to come online ────────────────────────────────
+
+hdr "Phase 8: Provider Online Wait"
+
+for attempt in $(seq 1 12); do
+  STATUS=$(aget "/v1/providers" 2>/dev/null | jv '[0]["status"]' 2>/dev/null || echo "")
+  if [ "$STATUS" = "online" ]; then
+    pass "Provider online (attempt $attempt)"
+    break
+  fi
+  [ "$attempt" -eq 12 ] && info "Provider still offline after 60s — inference tests may fail"
+  sleep 5
+done
 
 save_counts
