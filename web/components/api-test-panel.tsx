@@ -211,8 +211,13 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   }, [])
 
   // ── Run handler ───────────────────────────────────────────────────────────────
-  async function handleRun() {
-    if (!prompt.trim() || !model) return
+  interface RunParams {
+    prompt: string; model: string; providerType: string
+    endpoint: Endpoint; useApiKey: boolean; images?: string[]
+  }
+
+  async function executeRun(p: RunParams) {
+    if (!p.prompt.trim() || !p.model) return
     if (!isLoggedIn()) return
 
     if (runs.length >= MAX_RUNS) {
@@ -223,19 +228,18 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     }
 
     const runId = nextIdRef.current++
-    const currentImages = images.length > 0 ? [...images] : undefined
 
     const newRun: Run = {
       id: runId,
-      prompt: prompt.trim(),
-      model,
-      provider_type: providerType,
-      endpoint,
-      useApiKey,
+      prompt: p.prompt.trim(),
+      model: p.model,
+      provider_type: p.providerType,
+      endpoint: p.endpoint,
+      useApiKey: p.useApiKey,
       status: 'streaming',
       text: '',
       errorMsg: '',
-      images: currentImages,
+      images: p.images,
     }
     dispatch({ type: 'ADD', run: newRun })
     setActiveRunId(runId)
@@ -243,53 +247,49 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     const jobIdRef = { current: null as string | null }
 
     try {
-      // Determine URL and headers based on endpoint + auth mode
-      const isStreaming = endpoint === '/v1/chat/completions'
+      const isStreaming = p.endpoint === '/v1/chat/completions'
       let url: string
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
-      if (useApiKey && apiKeyValue.trim()) {
-        // Real endpoints with API key auth
-        url = `${BASE}${endpoint}`
-        if (endpoint === '/v1/chat/completions') {
+      if (p.useApiKey && apiKeyValue.trim()) {
+        url = `${BASE}${p.endpoint}`
+        if (p.endpoint === '/v1/chat/completions') {
           headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
         } else {
           headers['X-API-Key'] = apiKeyValue.trim()
         }
       } else {
-        // Test endpoints with JWT session auth
         const testEndpointMap: Record<Endpoint, string> = {
           '/v1/chat/completions': '/v1/test/completions',
           '/api/chat': '/v1/test/api/chat',
           '/api/generate': '/v1/test/api/generate',
         }
-        url = `${BASE}${testEndpointMap[endpoint]}`
+        url = `${BASE}${testEndpointMap[p.endpoint]}`
       }
 
-      // Build request body based on endpoint format
       let body: Record<string, unknown>
-      if (endpoint === '/api/generate') {
-        body = { model, prompt: prompt.trim(), stream: isStreaming }
-      } else if (endpoint === '/api/chat') {
+      if (p.endpoint === '/api/generate') {
+        body = { model: p.model, prompt: p.prompt.trim(), stream: isStreaming }
+      } else if (p.endpoint === '/api/chat') {
         body = {
-          model,
-          messages: [{ role: 'user', content: prompt.trim() }],
+          model: p.model,
+          messages: [{ role: 'user', content: p.prompt.trim() }],
           stream: isStreaming,
         }
       } else {
         body = {
-          model,
-          messages: [{ role: 'user', content: prompt.trim() }],
-          provider_type: providerType,
+          model: p.model,
+          messages: [{ role: 'user', content: p.prompt.trim() }],
+          provider_type: p.providerType,
           stream: isStreaming,
-          ...(currentImages && currentImages.length > 0 && { images: currentImages }),
+          ...(p.images && p.images.length > 0 && { images: p.images }),
         }
       }
 
       const resp = await fetch(url, {
         method: 'POST',
         headers,
-        ...(!useApiKey && { credentials: 'include' as RequestCredentials }),
+        ...(!p.useApiKey && { credentials: 'include' as RequestCredentials }),
         body: JSON.stringify(body),
       })
 
@@ -298,14 +298,12 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
       }
 
       if (isStreaming && resp.body) {
-        // SSE streaming for /v1/chat/completions
         const reader = resp.body.getReader()
         readersRef.current.set(runId, reader)
         await consumeStream(runId, reader, jobIdRef)
       } else {
-        // JSON response for /api/chat and /api/generate
         const json = await resp.json()
-        const text = endpoint === '/api/generate'
+        const text = p.endpoint === '/api/generate'
           ? (json.response ?? '')
           : (json.message?.content ?? '')
         dispatch({ type: 'APPEND', id: runId, token: text })
@@ -319,6 +317,13 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
         errorMsg: err instanceof Error ? err.message : t('common.unknownError'),
       })
     }
+  }
+
+  function handleRun() {
+    executeRun({
+      prompt, model, providerType, endpoint, useApiKey,
+      images: images.length > 0 ? [...images] : undefined,
+    })
   }
 
   function handleStop(runId: number) {
@@ -343,7 +348,14 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     setModel(run.model)
     setEndpoint(run.endpoint)
     setUseApiKey(run.useApiKey)
-    handleRun()
+    executeRun({
+      prompt: run.prompt,
+      model: run.model,
+      providerType: run.provider_type,
+      endpoint: run.endpoint,
+      useApiKey: run.useApiKey,
+      images: run.images,
+    })
   }
 
   const canRun = isLoggedIn() && !!prompt.trim() && !!model
@@ -362,7 +374,6 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           availableOptions={availableOptions}
           availableModels={availableModels}
           isGeminiProvider={isGeminiProvider}
-          isAnyStreaming={isAnyStreaming}
           canRun={canRun}
           authUsername={authUser?.username ?? null}
           endpoint={endpoint}

@@ -335,6 +335,8 @@
       "verifying": "Verifying…",
       "connected": "Connected",
       "connectionFailed": "Connection failed",
+      "networkError": "Cannot reach the API server — check your network",
+      "unreachableError": "Server is unreachable — verify the URL and port",
       "duplicateUrl": "This URL is already registered",
       "verifyFirst": "Verify connection before registering"
     },
@@ -373,7 +375,7 @@
       "maxVram": "Max VRAM",
       "serverRam": "Server RAM",
       "noneOption": "None",
-      "namePlaceholder": "e.g. gpu-server-1",
+      "namePlaceholder": "e.g. ollama-server-1",
       "urlPlaceholder": "http://192.168.1.10:11434",
       "gpuIndexPlaceholder": "0",
       "ollamaUrl": "Ollama URL",
@@ -391,6 +393,8 @@
       "verifying": "Verifying…",
       "connected": "Connected",
       "connectionFailed": "Connection failed",
+      "networkError": "Cannot reach the API server — check your network",
+      "unreachableError": "Ollama server is unreachable — verify the URL and port",
       "duplicateUrl": "This URL is already registered",
       "verifyFirst": "Verify connection before registering"
     },

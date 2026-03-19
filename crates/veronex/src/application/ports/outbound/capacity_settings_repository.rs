@@ -18,7 +18,7 @@ pub struct CapacitySettings {
 impl Default for CapacitySettings {
     fn default() -> Self {
         Self {
-            analyzer_model:     "qwen2.5:3b".to_string(),
+            analyzer_model:     String::new(),
             sync_enabled:       true,
             sync_interval_secs: 300,
             probe_permits:      1,

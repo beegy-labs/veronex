@@ -262,7 +262,7 @@ pub async fn chat_completions(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
     headers: axum::http::HeaderMap,
-    Json(req): Json<ChatCompletionRequest>,
+    Json(mut req): Json<ChatCompletionRequest>,
 ) -> Response {
     if validate_model_name(&req.model).is_err() {
         return (
@@ -287,10 +287,10 @@ pub async fn chat_completions(
             .into_response();
     }
 
-    // Validate images against lab_settings
+    // Validate + compress oversized images
     if req.images.is_some() {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-        if let Some(msg) = super::inference_helpers::validate_images(&req.images, &lab) {
+        if let Some(msg) = super::inference_helpers::validate_and_compress_images(&mut req.images, &lab).await {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": {"message": msg, "type": "invalid_request_error"}}))).into_response();
         }
     }

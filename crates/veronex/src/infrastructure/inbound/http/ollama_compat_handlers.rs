@@ -28,7 +28,7 @@ use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
 use super::handlers::sanitize_sse_error;
 use super::inference_helpers::{validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
-use super::inference_helpers::validate_images;
+use super::inference_helpers::validate_and_compress_images;
 use super::state::AppState;
 
 /// Collected output from a non-streaming token stream.
@@ -178,7 +178,7 @@ pub async fn generate(
     State(state): State<AppState>,
     axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
     headers: axum::http::HeaderMap,
-    Json(req): Json<OllamaGenerateBody>,
+    Json(mut req): Json<OllamaGenerateBody>,
 ) -> Response {
     let conversation_id = extract_conversation_id(&headers);
     if validate_model_name(&req.model).is_err() {
@@ -203,10 +203,10 @@ pub async fn generate(
             .into_response();
     }
 
-    // Validate images against lab_settings
+    // Validate + compress oversized images
     if req.images.is_some() {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-        if let Some(msg) = validate_images(&req.images, &lab) {
+        if let Some(msg) = validate_and_compress_images(&mut req.images, &lab).await {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response();
         }
     }
@@ -343,7 +343,7 @@ pub async fn chat(
     let prompt = extract_last_user_prompt(&req.messages).to_string();
 
     // Extract images from user messages (Ollama chat format: message-level `images` field).
-    let images: Option<Vec<String>> = {
+    let mut images: Option<Vec<String>> = {
         let imgs: Vec<String> = req.messages.iter()
             .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
             .filter_map(|m| m.get("images"))
@@ -353,10 +353,10 @@ pub async fn chat(
         if imgs.is_empty() { None } else { Some(imgs) }
     };
 
-    // Validate images against lab_settings
+    // Validate + compress oversized images
     if images.is_some() {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-        if let Some(msg) = validate_images(&images, &lab) {
+        if let Some(msg) = validate_and_compress_images(&mut images, &lab).await {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response();
         }
     }
