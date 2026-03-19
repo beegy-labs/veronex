@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef } from 'react'
+import { useRef, useState, useCallback } from 'react'
 import { Send, ImagePlus, X, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -22,7 +22,6 @@ interface ApiTestFormProps {
   availableOptions: ProviderOption[]
   availableModels: string[]
   isGeminiProvider: boolean
-  isAnyStreaming: boolean
   canRun: boolean
   authUsername: string | null
   endpoint: Endpoint
@@ -43,7 +42,7 @@ export function ApiTestForm({
   providerType, model, prompt,
   images, maxImages, isCompressing,
   availableOptions, availableModels, isGeminiProvider,
-  isAnyStreaming, canRun, authUsername,
+  canRun, authUsername,
   endpoint, useApiKey, apiKeyValue,
   onProviderChange, onModelChange, onPromptChange,
   onImageAdd, onImageRemove,
@@ -52,6 +51,7 @@ export function ApiTestForm({
 }: ApiTestFormProps) {
   const { t } = useTranslation()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     if (e.target.files && e.target.files.length > 0) {
@@ -63,8 +63,39 @@ export function ApiTestForm({
 
   const canAddMore = images.length < maxImages && !isGeminiProvider && maxImages > 0
 
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    if (canAddMore) setIsDragging(true)
+  }, [canAddMore])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    if (!canAddMore) return
+    const files = e.dataTransfer.files
+    if (files.length > 0) {
+      const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'))
+      if (imageFiles.length > 0) {
+        const dt = new DataTransfer()
+        imageFiles.forEach((f) => dt.items.add(f))
+        onImageAdd(dt.files)
+      }
+    }
+  }, [canAddMore, onImageAdd])
+
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onRun() }} className="space-y-4 pb-4">
+    <form
+      onSubmit={(e) => { e.preventDefault(); onRun() }}
+      className={`space-y-4 pb-4 ${isDragging ? 'ring-2 ring-ring ring-offset-2 rounded-md' : ''}`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       {/* Provider + Model */}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
@@ -72,7 +103,6 @@ export function ApiTestForm({
           <Select
             value={providerType}
             onValueChange={(v) => { onProviderChange(v); onModelChange('') }}
-            disabled={isAnyStreaming}
           >
             <SelectTrigger id="test-provider" aria-label={t('test.provider')}><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -87,7 +117,7 @@ export function ApiTestForm({
           <Select
             value={model}
             onValueChange={onModelChange}
-            disabled={isAnyStreaming || availableModels.length === 0}
+            disabled={availableModels.length === 0}
           >
             <SelectTrigger id="test-model" aria-label={t('test.model')}>
               <SelectValue placeholder={
@@ -111,7 +141,6 @@ export function ApiTestForm({
         <Select
           value={endpoint}
           onValueChange={(v) => onEndpointChange(v as Endpoint)}
-          disabled={isAnyStreaming}
         >
           <SelectTrigger id="test-endpoint" aria-label={t('test.endpoint')}><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -129,7 +158,6 @@ export function ApiTestForm({
             id="test-use-api-key"
             checked={useApiKey}
             onCheckedChange={onUseApiKeyChange}
-            disabled={isAnyStreaming}
           />
           <Label htmlFor="test-use-api-key" className="cursor-pointer">{t('test.apiKeyToggle')}</Label>
           {!useApiKey && (
@@ -142,7 +170,6 @@ export function ApiTestForm({
             placeholder={t('test.apiKeyPlaceholder')}
             value={apiKeyValue}
             onChange={(e) => onApiKeyValueChange(e.target.value)}
-            disabled={isAnyStreaming}
           />
         )}
       </div>
@@ -177,7 +204,7 @@ export function ApiTestForm({
                 type="button"
                 variant="outline"
                 size="icon"
-                disabled={!canAddMore || isAnyStreaming || isCompressing}
+                disabled={!canAddMore || isCompressing}
                 aria-label={t('test.imageAttach')}
                 title={t('test.imageAttach')}
                 onClick={() => fileInputRef.current?.click()}

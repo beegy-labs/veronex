@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useTranslation } from '@/i18n'
 import { renderWithMermaid } from '@/components/mermaid-block'
+import { CopyButton } from '@/components/copy-button'
 import type { Run } from '@/components/api-test-types'
 
 interface ApiTestRunsProps {
@@ -106,9 +107,29 @@ export function ApiTestRuns({
             </div>
           )}
 
+          {/* Attached images */}
+          {activeRun.images && activeRun.images.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {activeRun.images.map((b64, i) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={b64.slice(0, 16)}
+                  src={`data:image/jpeg;base64,${b64}`}
+                  alt={`image-${i + 1}`}
+                  className="h-12 w-12 sm:h-16 sm:w-16 rounded-md object-cover border border-border"
+                />
+              ))}
+            </div>
+          )}
+
           {/* Output */}
           {(activeRun.text.length > 0 || activeRun.status === 'streaming') && (
-            <div className="rounded-md border border-border bg-muted/20 p-3 min-h-[64px]">
+            <div className="relative rounded-md border border-border bg-muted/20 p-3 min-h-[64px] group/output">
+              {activeRun.text.length > 0 && (
+                <div className="absolute top-1.5 right-1.5 opacity-0 group-hover/output:opacity-100 transition-opacity">
+                  <CopyButton text={activeRun.text} />
+                </div>
+              )}
               <div className="text-sm text-foreground font-mono leading-relaxed">
                 {renderWithMermaid(activeRun.text, activeRun.status === 'streaming')}
               </div>
