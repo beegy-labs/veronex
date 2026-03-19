@@ -231,7 +231,7 @@ mod tests {
         let key = ApiKey {
             id: uuid::Uuid::now_v7(),
             key_hash: "hash".to_string(),
-            key_prefix: "iq_test".to_string(),
+            key_prefix: "vnx_test".to_string(),
             tenant_id: "t".to_string(),
             name: "test".to_string(),
             is_active: true,
