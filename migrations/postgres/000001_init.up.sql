@@ -253,7 +253,7 @@ CREATE TABLE model_vram_profiles (
 
 CREATE TABLE capacity_settings (
     id                  INT     PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    analyzer_model      TEXT    NOT NULL DEFAULT 'qwen2.5:3b',
+    analyzer_model      TEXT    NOT NULL DEFAULT '',
     sync_enabled        BOOLEAN NOT NULL DEFAULT true,
     sync_interval_secs  INT     NOT NULL DEFAULT 300,
     probe_permits       INT     NOT NULL DEFAULT 1,

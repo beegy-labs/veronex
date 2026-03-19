@@ -319,8 +319,8 @@ mod tests {
     fn create_key_response_serialization() {
         let resp = CreateKeyResponse {
             id: Uuid::now_v7(),
-            key: "iq_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
-            key_prefix: "iq_01ARZ3NDEK".to_string(),
+            key: "vnx_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            key_prefix: "vnx_01ARZ3NDE".to_string(),
             tenant_id: "tenant-1".to_string(),
             created_at: Utc::now(),
         };
@@ -336,7 +336,7 @@ mod tests {
     fn key_summary_serialization() {
         let summary = KeySummary {
             id: Uuid::now_v7(),
-            key_prefix: "iq_01ARZ3NDEK".to_string(),
+            key_prefix: "vnx_01ARZ3NDE".to_string(),
             tenant_id: "tenant-1".to_string(),
             name: "test-key".to_string(),
             is_active: true,

@@ -18,6 +18,24 @@ async function fetchPublic<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+/** Shared verify fetch — POST url to verify endpoint, handle network errors. */
+async function verifyEndpoint(path: string, url: string): Promise<{ reachable: boolean }> {
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ url }),
+    })
+  } catch {
+    throw new ApiHttpError('NETWORK_ERROR', 0)
+  }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new ApiHttpError((data as { error?: string }).error ?? `${res.status}`, res.status)
+  return data as { reachable: boolean }
+}
+
 export const api = {
   // ── Dashboard (JWT-protected) ─────────────────────────────────────────────
   stats: () =>
@@ -108,17 +126,7 @@ export const api = {
   registerServer: (body: RegisterGpuServerRequest) =>
     apiClient.post<{ id: string }>('/v1/servers', body),
 
-  verifyServer: async (url: string): Promise<{ reachable: boolean }> => {
-    const res = await fetch(`${BASE}/v1/servers/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ url }),
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new ApiHttpError((data as { error?: string }).error ?? `${res.status}`, res.status)
-    return data as { reachable: boolean }
-  },
+  verifyServer: (url: string) => verifyEndpoint('/v1/servers/verify', url),
 
   updateServer: (id: string, body: UpdateGpuServerRequest) =>
     apiClient.patch<GpuServer>(`/v1/servers/${id}`, body),
@@ -139,17 +147,7 @@ export const api = {
   registerProvider: (body: RegisterProviderRequest) =>
     apiClient.post<RegisterProviderResponse>('/v1/providers', body),
 
-  verifyProvider: async (url: string): Promise<{ reachable: boolean }> => {
-    const res = await fetch(`${BASE}/v1/providers/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ url }),
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new ApiHttpError((data as { error?: string }).error ?? `${res.status}`, res.status)
-    return data as { reachable: boolean }
-  },
+  verifyProvider: (url: string) => verifyEndpoint('/v1/providers/verify', url),
 
   deleteProvider: (id: string) =>
     apiClient.delete<void>(`/v1/providers/${id}`),
@@ -287,4 +285,21 @@ export const api = {
     const q = qs.toString()
     return apiClient.get<AuditEvent[]>(`/v1/audit${q ? '?' + q : ''}`)
   },
+}
+
+// ── Verify error message helper ──────────────────────────────────────────────
+
+interface VerifyErrorLabels {
+  duplicate: string; network: string; unreachable: string; fallback: string
+}
+
+export function verifyErrorMessage(e: unknown, labels: VerifyErrorLabels): string {
+  if (e instanceof ApiHttpError) {
+    if (e.status === 409) return labels.duplicate
+    if (e.message === 'NETWORK_ERROR') return labels.network
+    if (e.status === 502) return labels.unreachable
+    return e.message
+  }
+  if (e instanceof Error) return e.message
+  return labels.fallback
 }

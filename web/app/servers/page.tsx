@@ -4,8 +4,8 @@ import { useState, useMemo, useCallback, memo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { serversQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
-import type { GpuServer, RegisterGpuServerRequest, UpdateGpuServerRequest, VerifyState } from '@/lib/types'
-import { ApiHttpError } from '@/lib/types'
+import type { GpuServer, RegisterGpuServerRequest, UpdateGpuServerRequest } from '@/lib/types'
+import { useVerifyUrl } from '@/hooks/use-verify-url'
 import {
   Plus, Trash2, BarChart2, Pencil,
   Server, HardDrive,
@@ -46,34 +46,19 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
   const [nodeExporterUrl, setNodeExporterUrl] = useState('')
-  const [verifyState, setVerifyState] = useState<VerifyState>('idle')
-  const [verifyError, setVerifyError] = useState('')
-  const [verifiedUrl, setVerifiedUrl] = useState('')
   const queryClient = useQueryClient()
 
-  const handleUrlChange = (val: string) => {
-    setNodeExporterUrl(val)
-    if (verifyState !== 'idle') {
-      setVerifyState('idle')
-      setVerifyError('')
-    }
-  }
-
-  const verifyMutation = useMutation({
-    mutationFn: () => api.verifyServer(nodeExporterUrl.trim()),
-    onSuccess: () => {
-      setVerifyState('ok')
-      setVerifiedUrl(nodeExporterUrl.trim())
-    },
-    onError: (e) => {
-      setVerifyState('error')
-      setVerifyError(
-        e instanceof ApiHttpError && e.status === 409
-          ? t('providers.servers.duplicateUrl')
-          : (e instanceof Error ? e.message : t('providers.servers.connectionFailed'))
-      )
+  const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
+    verifyFn: api.verifyServer,
+    labels: {
+      duplicate: t('providers.servers.duplicateUrl'),
+      network: t('providers.servers.networkError'),
+      unreachable: t('providers.servers.unreachableError'),
+      fallback: t('providers.servers.connectionFailed'),
     },
   })
+
+  const handleUrlChange = (val: string) => { setNodeExporterUrl(val); onVerifyReset() }
 
   const registerMutation = useMutation({
     mutationFn: () => {
@@ -123,7 +108,7 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
                 size="sm"
                 className="shrink-0"
                 disabled={!canVerify}
-                onClick={() => { setVerifyState('checking'); verifyMutation.mutate() }}
+                onClick={() => verify(nodeExporterUrl.trim())}
               >
                 {verifyState === 'checking'
                   ? t('providers.servers.verifying')
@@ -177,6 +162,21 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
   const [nodeExporterUrl, setNodeExporterUrl] = useState(server.node_exporter_url ?? '')
   const queryClient = useQueryClient()
 
+  const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
+    verifyFn: api.verifyServer,
+    labels: {
+      duplicate: t('providers.servers.duplicateUrl'),
+      network: t('providers.servers.networkError'),
+      unreachable: t('providers.servers.unreachableError'),
+      fallback: t('providers.servers.connectionFailed'),
+    },
+    initialUrl: server.node_exporter_url ?? '',
+  })
+
+  const urlChanged = nodeExporterUrl.trim() !== (server.node_exporter_url ?? '')
+
+  const handleUrlChange = (val: string) => { setNodeExporterUrl(val); onVerifyReset() }
+
   const mutation = useMutation({
     mutationFn: () => {
       const body: UpdateGpuServerRequest = {
@@ -185,8 +185,13 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
       }
       return api.updateServer(server.id, body)
     },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }); onClose() },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }); onClose() },
+    onError: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }) },
   })
+
+  const canVerify = !!nodeExporterUrl.trim() && verifyState !== 'checking'
+  const isVerified = !urlChanged || (verifyState === 'ok' && nodeExporterUrl.trim() === verifiedUrl)
+  const canSave = !!name.trim() && isVerified && !mutation.isPending
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -209,9 +214,23 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
             <Label htmlFor="edit-server-ne-url">
               {t('providers.servers.nodeExporterUrl')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span>
             </Label>
-            <Input id="edit-server-ne-url" type="url" value={nodeExporterUrl}
-              onChange={(e) => setNodeExporterUrl(e.target.value)}
-              placeholder={t('providers.servers.nodeExporterUrlPlaceholder')} />
+            <div className="flex gap-2">
+              <Input id="edit-server-ne-url" type="url" value={nodeExporterUrl}
+                onChange={(e) => handleUrlChange(e.target.value)}
+                placeholder={t('providers.servers.nodeExporterUrlPlaceholder')}
+                className={verifyState === 'ok' ? 'border-status-success' : verifyState === 'error' ? 'border-destructive' : ''} />
+              {urlChanged && (
+                <Button type="button" variant="outline" size="sm" className="shrink-0"
+                  disabled={!canVerify}
+                  onClick={() => verify(nodeExporterUrl.trim())}>
+                  {verifyState === 'checking' ? t('providers.servers.verifying')
+                    : verifyState === 'ok' ? <><CheckCircle2 className="h-3.5 w-3.5 mr-1 text-status-success-fg" />{t('providers.servers.connected')}</>
+                    : t('providers.servers.verifyConnection')}
+                </Button>
+              )}
+            </div>
+            {verifyState === 'error' && <p className="text-xs text-destructive flex items-center gap-1"><XCircle className="h-3 w-3" />{verifyError}</p>}
+            {urlChanged && verifyState === 'idle' && <p className="text-xs text-muted-foreground">{t('providers.servers.verifyFirst')}</p>}
             <p className="text-xs text-muted-foreground">{t('providers.servers.nodeExporterHint')}</p>
           </div>
         </div>
@@ -224,7 +243,7 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
 
         <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={() => mutation.mutate()} disabled={!name.trim() || mutation.isPending}>
+          <Button onClick={() => mutation.mutate()} disabled={!canSave}>
             {mutation.isPending ? `${t('common.save')}…` : t('common.save')}
           </Button>
         </DialogFooter>
