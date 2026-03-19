@@ -367,6 +367,11 @@ pub async fn pick_best_provider(
             best.map(|(b, _)| b)
                 .ok_or_else(|| anyhow::anyhow!("no Ollama provider with available VRAM"))
         }
+
+        ProviderType::Whisper => {
+            // Whisper is an STT provider — it does not participate in LLM inference dispatch.
+            Err(anyhow::anyhow!("Whisper providers cannot be used for text inference"))
+        }
     }
 }
 
@@ -594,6 +599,11 @@ pub fn make_adapter(cfg: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
             // Gemini uses a fixed Google API host; URL validation is N/A.
             let key = cfg.api_key_encrypted.as_deref().unwrap_or("");
             Arc::new(GeminiAdapter::new(key))
+        }
+        ProviderType::Whisper => {
+            // Whisper is an STT provider — it is not an InferenceProviderPort.
+            // This path should never be reached in normal dispatch.
+            Arc::new(BlockedAdapter("Whisper is an STT provider, not an LLM inference provider".to_string()))
         }
     }
 }

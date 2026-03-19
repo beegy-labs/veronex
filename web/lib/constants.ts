@@ -7,17 +7,20 @@ export const BASE_API_URL =
 /** Provider type identifiers — single source of truth. */
 export const PROVIDER_OLLAMA = 'ollama' as const
 export const PROVIDER_GEMINI = 'gemini' as const
+export const PROVIDER_WHISPER = 'whisper' as const
 
 /** Provider type → Tailwind badge class. */
 export const PROVIDER_BADGE: Record<string, string> = {
   ollama: 'bg-primary/10 text-primary border-primary/30',
   gemini: 'bg-status-info/10 text-status-info-fg border-status-info/30',
+  whisper: 'bg-status-success/10 text-status-success-fg border-status-success/30',
 }
 
 /** Provider type → CSS custom-property chart colour. */
 export const PROVIDER_COLORS: Record<string, string> = {
   ollama: tokens.brand.primary,
   gemini: tokens.status.info,
+  whisper: tokens.status.success,
 }
 
 /** Job status → chart/SVG colour (CSS variable). */

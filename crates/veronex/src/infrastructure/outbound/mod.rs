@@ -10,6 +10,7 @@ pub mod hw_metrics;
 pub mod model_manager;
 pub mod observability;
 pub mod ollama;
+pub mod whisper;
 pub mod persistence;
 pub mod pubsub;
 pub mod session_grouping;

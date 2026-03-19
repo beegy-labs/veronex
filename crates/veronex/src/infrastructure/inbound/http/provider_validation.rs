@@ -7,8 +7,9 @@ use super::error::AppError;
 /// Parse a provider type string (case-insensitive).
 pub(super) fn parse_provider_type(s: &str) -> Option<ProviderType> {
     match s.to_lowercase().as_str() {
-        "ollama" => Some(ProviderType::Ollama),
-        "gemini" => Some(ProviderType::Gemini),
+        "ollama"  => Some(ProviderType::Ollama),
+        "gemini"  => Some(ProviderType::Gemini),
+        "whisper" => Some(ProviderType::Whisper),
         _ => None,
     }
 }

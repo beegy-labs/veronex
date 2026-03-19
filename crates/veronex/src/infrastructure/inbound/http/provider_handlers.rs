@@ -66,6 +66,9 @@ async fn fetch_models_live(client: &reqwest::Client, provider: &LlmProvider) -> 
 
             gemini_helpers::fetch_gemini_models(client, api_key).await
         }
+        ProviderType::Whisper => {
+            Err(anyhow::anyhow!("Whisper providers do not expose model lists"))
+        }
     }
 }
 
@@ -284,7 +287,7 @@ pub async fn register_provider(
     Json(req): Json<RegisterProviderRequest>,
 ) -> impl IntoResponse {
     let Some(provider_type) = parse_provider_type(&req.provider_type) else {
-        return AppError::BadRequest("provider_type must be 'ollama' or 'gemini'".into())
+        return AppError::BadRequest("provider_type must be 'ollama', 'gemini', or 'whisper'".into())
             .into_response();
     };
 
@@ -321,6 +324,16 @@ pub async fn register_provider(
             if req.api_key.as_deref().unwrap_or("").is_empty() {
                 return AppError::BadRequest("api_key is required for gemini providers".into())
                     .into_response();
+            }
+        }
+        ProviderType::Whisper => {
+            let url = req.url.as_deref().unwrap_or("");
+            if url.is_empty() {
+                return AppError::BadRequest("url is required for whisper providers".into())
+                    .into_response();
+            }
+            if let Err(e) = validate_provider_url(url) {
+                return e.into_response();
             }
         }
     }
@@ -563,12 +576,21 @@ pub async fn sync_provider_models(
         Err(e) => return e.into_response(),
     };
 
-    // Gemini model sync is global — direct the caller to the correct endpoint.
-    if matches!(provider.provider_type, ProviderType::Gemini) {
-        return AppError::BadRequest(
-            "Use POST /v1/gemini/models/sync to sync Gemini models globally".into(),
-        )
-        .into_response();
+    // Gemini / Whisper model listing is not supported via this endpoint.
+    match provider.provider_type {
+        ProviderType::Gemini => {
+            return AppError::BadRequest(
+                "Use POST /v1/gemini/models/sync to sync Gemini models globally".into(),
+            )
+            .into_response();
+        }
+        ProviderType::Whisper => {
+            return AppError::BadRequest(
+                "Whisper providers do not expose model lists. Use POST /v1/audio/transcriptions".into(),
+            )
+            .into_response();
+        }
+        ProviderType::Ollama => {}
     }
 
     match fetch_models_live(&state.http_client, &provider).await {
