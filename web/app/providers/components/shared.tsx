@@ -43,7 +43,7 @@ export function StatusBadge({ status }: { status: Provider['status'] }) {
 // ── VRAM input with MiB / GiB toggle ──────────────────────────────────────────
 
 export function VramInput({ valueMb, onChange, 'aria-label': ariaLabel }: { valueMb: string; onChange: (mb: string) => void; 'aria-label'?: string }) {
-  const [unit, setUnit] = useState<'mb' | 'gb'>('mb')
+  const [unit, setUnit] = useState<'mb' | 'gb'>('gb')
   const mbNum = parseInt(valueMb) || 0
   const display = mbNum > 0
     ? (unit === 'gb' ? String(Math.round(mbNum / 1024 * 10) / 10) : String(mbNum))

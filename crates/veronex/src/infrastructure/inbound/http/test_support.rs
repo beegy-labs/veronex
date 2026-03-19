@@ -285,7 +285,7 @@ pub(crate) fn make_app() -> axum::Router {
     let fake_key = ApiKey {
         id: Uuid::now_v7(),
         key_hash: "testhash".to_string(),
-        key_prefix: "iq_test".to_string(),
+        key_prefix: "vnx_test".to_string(),
         tenant_id: "test-tenant".to_string(),
         name: "test-key".to_string(),
         is_active: true,

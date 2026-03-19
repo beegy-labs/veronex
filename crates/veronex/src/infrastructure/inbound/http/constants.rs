@@ -53,6 +53,16 @@ pub const MAX_PROMPT_BYTES: usize = 1_000_000;
 /// generous enough for any realistic model tag while blocking abuse.
 pub const MAX_MODEL_NAME_BYTES: usize = 256;
 
+/// Maximum longest edge (px) for server-side image compression.
+///
+/// Oversized images are resized to fit this dimension (aspect-ratio preserved)
+/// and re-encoded as WebP before forwarding to Ollama and storing in S3.
+/// 1024px covers the sweet spot for most vision models:
+/// - Qwen3-VL / Qwen2.5-VL optimal range: 480–2560px
+/// - Gemma 3 internal: 896px
+/// - LLaVA internal: 336px
+pub const IMAGE_COMPRESS_MAX_EDGE: u32 = 1024;
+
 // ── Provider type identifiers ────────────────────────────────────────────────
 
 /// Provider type string for Ollama providers (used in submit calls and routing).

@@ -27,7 +27,8 @@ pub fn generate_api_key() -> (Uuid, String, String, String) {
     hasher.update(plaintext.as_bytes());
     let key_hash = hex::encode(hasher.finalize());
 
-    let key_prefix = plaintext[..12].to_string();
+    let prefix_end = plaintext.len().min(12);
+    let key_prefix = plaintext[..prefix_end].to_string();
 
     (id, plaintext, key_hash, key_prefix)
 }
@@ -49,7 +50,7 @@ mod tests {
     fn generate_api_key_structure_example() {
         let (id, plaintext, key_hash, key_prefix) = generate_api_key();
         assert_eq!(id.get_version_num(), 7);
-        assert!(plaintext.starts_with("iq_"));
+        assert!(plaintext.starts_with("vnx_"));
         assert_eq!(key_prefix.len(), 12);
         assert_eq!(&plaintext[..12], key_prefix);
         assert_eq!(key_hash, hash_api_key(&plaintext));
@@ -63,7 +64,7 @@ mod tests {
             // UUIDv7
             prop_assert_eq!(id.get_version_num(), 7);
             // Prefix
-            prop_assert!(plaintext.starts_with("iq_"));
+            prop_assert!(plaintext.starts_with("vnx_"));
             prop_assert_eq!(key_prefix.len(), 12);
             prop_assert_eq!(&plaintext[..12], key_prefix.as_str());
             // Hash: Blake2b-256 = 64 hex chars

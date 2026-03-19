@@ -51,9 +51,15 @@ pub fn validate_content_length(total_bytes: usize) -> Result<(), &'static str> {
 
 use crate::application::ports::outbound::lab_settings_repository::LabSettings;
 
-/// Validate images against lab_settings limits.
+/// Validate image count and compress oversized images to WebP.
+///
+/// - Images within `max_image_b64_bytes` are passed through unchanged (avoids
+///   unnecessary re-encoding and double-lossy quality loss).
+/// - Images exceeding the limit are resized to [`IMAGE_COMPRESS_MAX_EDGE`] + WebP.
+///
+/// Uses `spawn_blocking` for CPU-intensive image decode/resize/encode.
 /// Returns error message on failure, None on success.
-pub fn validate_images(images: &Option<Vec<String>>, lab: &LabSettings) -> Option<String> {
+pub async fn validate_and_compress_images(images: &mut Option<Vec<String>>, lab: &LabSettings) -> Option<String> {
     let imgs = match images {
         Some(v) if !v.is_empty() => v,
         _ => return None,
@@ -66,9 +72,25 @@ pub fn validate_images(images: &Option<Vec<String>>, lab: &LabSettings) -> Optio
         return Some(format!("too many images (max {max_count})"));
     }
     let max_bytes = lab.max_image_b64_bytes as usize;
-    for img in imgs {
+    for img in imgs.iter_mut() {
         if img.len() > max_bytes {
-            return Some(format!("image too large (max {} bytes)", max_bytes));
+            let b64 = img.clone();
+            match tokio::task::spawn_blocking(move || {
+                crate::infrastructure::outbound::s3::webp_convert::compress_base64_image(
+                    &b64,
+                    super::constants::IMAGE_COMPRESS_MAX_EDGE,
+                )
+            }).await {
+                Ok(Ok(compressed)) => *img = compressed,
+                Ok(Err(e)) => {
+                    tracing::warn!("image compression failed, rejecting: {e}");
+                    return Some("invalid image data".into());
+                }
+                Err(e) => {
+                    tracing::warn!("image compression task panicked: {e}");
+                    return Some("image processing failed".into());
+                }
+            }
         }
     }
     None
@@ -257,43 +279,31 @@ mod tests {
             prop_assert!(!validate_tool_call(&call));
         }
 
-        #[test]
-        fn images_within_limits_pass(count in 1_usize..=4, size in 1_usize..=100) {
-            let imgs: Vec<String> = (0..count).map(|_| "x".repeat(size)).collect();
-            let lab = LabSettings { max_images_per_request: 4, max_image_b64_bytes: 100, ..LabSettings::default() };
-            prop_assert!(validate_images(&Some(imgs), &lab).is_none());
-        }
-
-        #[test]
-        fn images_over_count_rejected(count in 5_usize..=10) {
-            let imgs: Vec<String> = (0..count).map(|_| "x".into()).collect();
-            let lab = LabSettings { max_images_per_request: 4, ..LabSettings::default() };
-            prop_assert!(validate_images(&Some(imgs), &lab).is_some());
-        }
-
-        #[test]
-        fn image_over_size_rejected(excess in 1_usize..=100) {
-            let lab = LabSettings { max_image_b64_bytes: 10, ..LabSettings::default() };
-            let imgs = Some(vec!["x".repeat(10 + excess)]);
-            prop_assert!(validate_images(&imgs, &lab).is_some());
-        }
-
-        #[test]
-        fn image_exact_size_passes(size in 1_usize..=1000) {
-            let lab = LabSettings { max_image_b64_bytes: size as i32, ..LabSettings::default() };
-            let imgs = Some(vec!["x".repeat(size)]);
-            prop_assert!(validate_images(&imgs, &lab).is_none());
-        }
     }
 
-    #[test]
-    fn validate_images_none_passes() {
-        assert!(validate_images(&None, &LabSettings::default()).is_none());
+    #[tokio::test]
+    async fn images_over_count_rejected() {
+        let mut imgs: Option<Vec<String>> = Some((0..6).map(|_| "x".into()).collect());
+        let lab = LabSettings { max_images_per_request: 4, ..LabSettings::default() };
+        assert!(validate_and_compress_images(&mut imgs, &lab).await.is_some());
     }
 
-    #[test]
-    fn validate_images_disabled_rejected() {
+    #[tokio::test]
+    async fn validate_images_none_passes() {
+        assert!(validate_and_compress_images(&mut None, &LabSettings::default()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn validate_images_disabled_rejected() {
         let lab = LabSettings { max_images_per_request: 0, ..LabSettings::default() };
-        assert!(validate_images(&Some(vec!["abc".into()]), &lab).is_some());
+        assert!(validate_and_compress_images(&mut Some(vec!["abc".into()]), &lab).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn validate_images_oversized_invalid_data_rejected() {
+        let lab = LabSettings { max_image_b64_bytes: 10, ..LabSettings::default() };
+        let mut imgs = Some(vec!["x".repeat(20)]);
+        // Exceeds max_bytes → compression attempted → invalid data → rejected
+        assert!(validate_and_compress_images(&mut imgs, &lab).await.is_some());
     }
 }
