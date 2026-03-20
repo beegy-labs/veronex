@@ -15,8 +15,7 @@
     "ollama": "Ollama",
     "gemini": "Gemini",
     "accounts": "계정",
-    "audit": "감사 로그",
-    "whisper": "Whisper"
+    "audit": "감사 로그"
   },
   "common": {
     "all": "전체",
@@ -306,8 +305,7 @@
     "tabs": {
       "servers": "GPU 서버",
       "ollama": "Ollama",
-      "gemini": "Gemini",
-      "whisper": "Whisper STT"
+      "gemini": "Gemini"
     },
     "servers": {
       "title": "서버",
@@ -508,27 +506,6 @@
       "noStatusResults": "등록된 활성 Gemini 프로바이더가 없습니다.",
       "noBackends": "등록된 Gemini 프로바이더가 없습니다",
       "noBackendsHint": "Gemini API 키를 추가하여 Google 클라우드 인퍼런스 라우팅을 시작하세요."
-    },
-    "whisper": {
-      "title": "Whisper STT 프로바이더",
-      "registerProvider": "Whisper 프로바이더 등록",
-      "registerTitle": "Whisper 프로바이더 등록",
-      "editTitle": "Whisper 프로바이더 수정",
-      "whisperUrl": "Whisper URL",
-      "urlPlaceholder": "https://whisper-asr-1.kr1.girok.dev",
-      "noProviders": "등록된 Whisper STT 프로바이더가 없습니다",
-      "noProvidersHint": "Whisper ASR 엔드포인트를 추가하여 음성 전사 기능을 활성화하세요.",
-      "loadingProviders": "프로바이더 불러오는 중…",
-      "failedProviders": "프로바이더 불러오기 실패",
-      "verifyFirst": "등록 전 연결을 확인하세요",
-      "name": "이름",
-      "namePlaceholder": "내 Whisper ASR",
-      "status": "상태",
-      "registeredAt": "등록일",
-      "duplicateUrl": "이 URL의 Whisper 프로바이더가 이미 등록되어 있습니다",
-      "networkError": "Whisper 서버에 연결할 수 없습니다 — URL과 네트워크를 확인하세요",
-      "unreachableError": "Whisper 서버에서 오류가 반환되었습니다 — URL과 포트를 확인하세요",
-      "connectionFailed": "Whisper 서버 연결에 실패했습니다"
     },
     "healthcheck": "헬스체크",
     "runHealthcheck": "헬스체크 실행",
