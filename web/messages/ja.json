@@ -524,7 +524,11 @@
       "name": "名前",
       "namePlaceholder": "マイ Whisper ASR",
       "status": "ステータス",
-      "registeredAt": "登録日"
+      "registeredAt": "登録日",
+      "duplicateUrl": "このURLのWhisperプロバイダーはすでに登録されています",
+      "networkError": "Whisperサーバーに接続できません — URLとネットワークを確認してください",
+      "unreachableError": "Whisperサーバーがエラーを返しました — URLとポートを確認してください",
+      "connectionFailed": "Whisperサーバーへの接続に失敗しました"
     },
     "healthcheck": "ヘルスチェック",
     "runHealthcheck": "ヘルスチェック実行",

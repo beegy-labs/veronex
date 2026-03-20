@@ -524,7 +524,11 @@
       "name": "Name",
       "namePlaceholder": "My Whisper ASR",
       "status": "Status",
-      "registeredAt": "Registered At"
+      "registeredAt": "Registered At",
+      "duplicateUrl": "A Whisper provider with this URL is already registered",
+      "networkError": "Cannot reach the Whisper server — check URL and network",
+      "unreachableError": "Whisper server returned an error — check URL and port",
+      "connectionFailed": "Failed to connect to Whisper server"
     },
     "healthcheck": "Healthcheck",
     "runHealthcheck": "Run health check",

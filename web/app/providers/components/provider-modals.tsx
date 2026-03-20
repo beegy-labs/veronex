@@ -41,14 +41,24 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
   const [gpuIndex, setGpuIndex] = useState(provider.gpu_index !== null ? String(provider.gpu_index) : 'none')
   const [serverId, setServerId] = useState<string>(provider.server_id ?? 'none')
   const [isFreeTier, setIsFreeTier] = useState(provider.is_free_tier)
+  const isWhisperProvider = provider.provider_type === PROVIDER_WHISPER
   const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
-    verifyFn: api.verifyProvider,
-    labels: {
-      duplicate: t('providers.ollama.duplicateUrl'),
-      network: t('providers.ollama.networkError'),
-      unreachable: t('providers.ollama.unreachableError'),
-      fallback: t('providers.ollama.connectionFailed'),
-    },
+    verifyFn: isWhisperProvider
+      ? (u: string) => api.verifyProvider(u, 'whisper')
+      : api.verifyProvider,
+    labels: isWhisperProvider
+      ? {
+          duplicate: t('providers.whisper.duplicateUrl'),
+          network: t('providers.whisper.networkError'),
+          unreachable: t('providers.whisper.unreachableError'),
+          fallback: t('providers.whisper.connectionFailed'),
+        }
+      : {
+          duplicate: t('providers.ollama.duplicateUrl'),
+          network: t('providers.ollama.networkError'),
+          unreachable: t('providers.ollama.unreachableError'),
+          fallback: t('providers.ollama.connectionFailed'),
+        },
     initialUrl: provider.url,
   })
 
@@ -268,13 +278,22 @@ export function RegisterModal({
   const [isFreeTier, setIsFreeTier] = useState(false)
 
   const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
-    verifyFn: api.verifyProvider,
-    labels: {
-      duplicate: t('providers.ollama.duplicateUrl'),
-      network: t('providers.ollama.networkError'),
-      unreachable: t('providers.ollama.unreachableError'),
-      fallback: t('providers.ollama.connectionFailed'),
-    },
+    verifyFn: initialType === 'whisper'
+      ? (u: string) => api.verifyProvider(u, 'whisper')
+      : api.verifyProvider,
+    labels: initialType === 'whisper'
+      ? {
+          duplicate: t('providers.whisper.duplicateUrl'),
+          network: t('providers.whisper.networkError'),
+          unreachable: t('providers.whisper.unreachableError'),
+          fallback: t('providers.whisper.connectionFailed'),
+        }
+      : {
+          duplicate: t('providers.ollama.duplicateUrl'),
+          network: t('providers.ollama.networkError'),
+          unreachable: t('providers.ollama.unreachableError'),
+          fallback: t('providers.ollama.connectionFailed'),
+        },
   })
 
   const { data: serverMetrics } = useQuery({

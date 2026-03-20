@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
+use crate::domain::constants::{OLLAMA_HEALTH_CHECK_TIMEOUT, WHISPER_HEALTH_CHECK_TIMEOUT};
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
@@ -107,6 +107,9 @@ async fn load_models_cache(pool: &fred::clients::Pool, key: &str) -> Option<Vec<
 #[derive(Debug, Deserialize)]
 pub struct VerifyProviderRequest {
     pub url: String,
+    /// Provider type — determines which health probe to use.
+    /// Defaults to `"ollama"` if omitted (backward-compatible).
+    pub provider_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,11 +237,15 @@ pub async fn verify_provider(
         return e.into_response();
     }
 
+    let is_whisper = req.provider_type.as_deref() == Some("whisper");
+    let db_type = if is_whisper { "whisper" } else { "ollama" };
+
     // Duplicate check.
     let count_result: Result<(i64,), _> = sqlx::query_as(
-        "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'ollama'",
+        "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = $2",
     )
     .bind(&url)
+    .bind(db_type)
     .fetch_one(&state.pg_pool)
     .await;
 
@@ -251,12 +258,17 @@ pub async fn verify_provider(
         _ => {}
     }
 
-    // Connectivity check: GET {url}/api/version must succeed.
-    let check_url = format!("{}/api/version", url.trim_end_matches('/'));
+    // Connectivity check — Whisper: GET {url}, Ollama: GET {url}/api/version.
+    let (check_url, timeout) = if is_whisper {
+        (url.trim_end_matches('/').to_string(), WHISPER_HEALTH_CHECK_TIMEOUT)
+    } else {
+        (format!("{}/api/version", url.trim_end_matches('/')), OLLAMA_HEALTH_CHECK_TIMEOUT)
+    };
+
     match state
         .http_client
         .get(&check_url)
-        .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
+        .timeout(timeout)
         .send()
         .await
     {
@@ -264,15 +276,13 @@ pub async fn verify_provider(
             (StatusCode::OK, Json(serde_json::json!({"reachable": true}))).into_response()
         }
         Ok(r) => {
-            tracing::warn!(url = %url, status = %r.status(), "Ollama verify probe returned unexpected status");
-            AppError::BadGateway(
-                format!("Ollama returned unexpected status {}", r.status()),
-            )
-            .into_response()
+            tracing::warn!(url = %url, status = %r.status(), "verify probe returned unexpected status");
+            AppError::BadGateway(format!("provider returned unexpected status {}", r.status()))
+                .into_response()
         }
         Err(e) => {
-            tracing::warn!(url = %url, error = %e, "Ollama verify probe failed");
-            AppError::BadGateway("Ollama is not reachable at the given URL".into())
+            tracing::warn!(url = %url, error = %e, "verify probe failed");
+            AppError::BadGateway("provider is not reachable at the given URL".into())
                 .into_response()
         }
     }

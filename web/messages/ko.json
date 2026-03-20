@@ -524,7 +524,11 @@
       "name": "이름",
       "namePlaceholder": "내 Whisper ASR",
       "status": "상태",
-      "registeredAt": "등록일"
+      "registeredAt": "등록일",
+      "duplicateUrl": "이 URL의 Whisper 프로바이더가 이미 등록되어 있습니다",
+      "networkError": "Whisper 서버에 연결할 수 없습니다 — URL과 네트워크를 확인하세요",
+      "unreachableError": "Whisper 서버에서 오류가 반환되었습니다 — URL과 포트를 확인하세요",
+      "connectionFailed": "Whisper 서버 연결에 실패했습니다"
     },
     "healthcheck": "헬스체크",
     "runHealthcheck": "헬스체크 실행",
