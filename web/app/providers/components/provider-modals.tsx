@@ -6,7 +6,7 @@ import { api } from '@/lib/api'
 import type { Provider, GpuServer, RegisterProviderRequest, UpdateProviderRequest } from '@/lib/types'
 import { useVerifyUrl } from '@/hooks/use-verify-url'
 import { serverMetricsQuery } from '@/lib/queries'
-import { Server, Key, CheckCircle2, XCircle } from 'lucide-react'
+import { Server, Key, Mic, CheckCircle2, XCircle } from 'lucide-react'
 import { fmtMb, fmtTemp, fmtPower } from '@/lib/chart-theme'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI } from '@/lib/constants'
+import { PROVIDER_OLLAMA, PROVIDER_GEMINI, PROVIDER_WHISPER } from '@/lib/constants'
 import { extractHost, VramInput } from './shared'
 
 // ── Edit provider modal ─────────────────────────────────────────────────────────
@@ -41,14 +41,24 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
   const [gpuIndex, setGpuIndex] = useState(provider.gpu_index !== null ? String(provider.gpu_index) : 'none')
   const [serverId, setServerId] = useState<string>(provider.server_id ?? 'none')
   const [isFreeTier, setIsFreeTier] = useState(provider.is_free_tier)
+  const isWhisperProvider = provider.provider_type === PROVIDER_WHISPER
   const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
-    verifyFn: api.verifyProvider,
-    labels: {
-      duplicate: t('providers.ollama.duplicateUrl'),
-      network: t('providers.ollama.networkError'),
-      unreachable: t('providers.ollama.unreachableError'),
-      fallback: t('providers.ollama.connectionFailed'),
-    },
+    verifyFn: isWhisperProvider
+      ? (u: string) => api.verifyProvider(u, 'whisper')
+      : api.verifyProvider,
+    labels: isWhisperProvider
+      ? {
+          duplicate: t('providers.whisper.duplicateUrl'),
+          network: t('providers.whisper.networkError'),
+          unreachable: t('providers.whisper.unreachableError'),
+          fallback: t('providers.whisper.connectionFailed'),
+        }
+      : {
+          duplicate: t('providers.ollama.duplicateUrl'),
+          network: t('providers.ollama.networkError'),
+          unreachable: t('providers.ollama.unreachableError'),
+          fallback: t('providers.ollama.connectionFailed'),
+        },
     initialUrl: provider.url,
   })
 
@@ -70,7 +80,7 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
     mutationFn: () => {
       const body: UpdateProviderRequest = {
         name: name.trim(),
-        url: provider.provider_type === PROVIDER_OLLAMA ? url.trim() : undefined,
+        url: (provider.provider_type === PROVIDER_OLLAMA || provider.provider_type === PROVIDER_WHISPER) ? url.trim() : undefined,
         api_key: apiKey.trim() || undefined,
         total_vram_mb: vram ? parseInt(vram, 10) : 0,
         gpu_index: gpuIndex !== 'none' && gpuIndex !== '' ? parseInt(gpuIndex, 10) : null,
@@ -88,7 +98,9 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {provider.provider_type === PROVIDER_OLLAMA
+            {provider.provider_type === PROVIDER_WHISPER
+              ? <><Mic className="h-4 w-4 text-status-success-fg" /> {t('providers.whisper.editTitle')}</>
+              : provider.provider_type === PROVIDER_OLLAMA
               ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('providers.ollama.editTitle')}</>
               : <><Key className="h-4 w-4 text-accent-gpu" /> {t('providers.gemini.editTitle')}</>}
           </DialogTitle>
@@ -205,6 +217,27 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
               </div>
             </div>
           )}
+
+          {provider.provider_type === PROVIDER_WHISPER && (
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-url">{t('providers.whisper.whisperUrl')}</Label>
+              <div className="flex gap-2">
+                <Input id="edit-url" type="url" value={url}
+                  onChange={(e) => handleUrlChange(e.target.value)}
+                  className={urlChanged ? (verifyState === 'ok' ? 'border-status-success' : verifyState === 'error' ? 'border-destructive' : '') : ''} />
+                {urlChanged && (
+                  <Button type="button" variant="outline" size="sm" className="shrink-0"
+                    disabled={!url.trim() || verifyState === 'checking'}
+                    onClick={() => verify(url.trim())}>
+                    {verifyState === 'checking' ? t('providers.ollama.verifying')
+                      : verifyState === 'ok' ? <><CheckCircle2 className="h-3.5 w-3.5 mr-1 text-status-success-fg" />{t('providers.ollama.connected')}</>
+                      : t('providers.ollama.verifyConnection')}
+                  </Button>
+                )}
+              </div>
+              {verifyState === 'error' && <p className="text-xs text-destructive flex items-center gap-1"><XCircle className="h-3 w-3" />{verifyError}</p>}
+            </div>
+          )}
         </div>
 
         {mutation.error && (
@@ -215,7 +248,7 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
 
         <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={() => mutation.mutate()} disabled={!name.trim() || (provider.provider_type === PROVIDER_OLLAMA && !isOllamaUrlVerified) || mutation.isPending}>
+          <Button onClick={() => mutation.mutate()} disabled={!name.trim() || ((provider.provider_type === PROVIDER_OLLAMA || provider.provider_type === PROVIDER_WHISPER) && !isOllamaUrlVerified) || mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}
           </Button>
         </DialogFooter>
@@ -232,7 +265,7 @@ export function RegisterModal({
   onClose,
 }: {
   servers: GpuServer[]
-  initialType: 'ollama' | 'gemini'
+  initialType: 'ollama' | 'gemini' | 'whisper'
   onClose: () => void
 }) {
   const { t } = useTranslation()
@@ -245,13 +278,22 @@ export function RegisterModal({
   const [isFreeTier, setIsFreeTier] = useState(false)
 
   const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
-    verifyFn: api.verifyProvider,
-    labels: {
-      duplicate: t('providers.ollama.duplicateUrl'),
-      network: t('providers.ollama.networkError'),
-      unreachable: t('providers.ollama.unreachableError'),
-      fallback: t('providers.ollama.connectionFailed'),
-    },
+    verifyFn: initialType === 'whisper'
+      ? (u: string) => api.verifyProvider(u, 'whisper')
+      : api.verifyProvider,
+    labels: initialType === 'whisper'
+      ? {
+          duplicate: t('providers.whisper.duplicateUrl'),
+          network: t('providers.whisper.networkError'),
+          unreachable: t('providers.whisper.unreachableError'),
+          fallback: t('providers.whisper.connectionFailed'),
+        }
+      : {
+          duplicate: t('providers.ollama.duplicateUrl'),
+          network: t('providers.ollama.networkError'),
+          unreachable: t('providers.ollama.unreachableError'),
+          fallback: t('providers.ollama.connectionFailed'),
+        },
   })
 
   const { data: serverMetrics } = useQuery({
@@ -279,6 +321,9 @@ export function RegisterModal({
           api_key: apiKey.trim(),
           is_free_tier: isFreeTier,
         }),
+        ...(initialType === 'whisper' && {
+          url: url.trim(),
+        }),
       }
       return api.registerProvider(body)
     },
@@ -287,7 +332,9 @@ export function RegisterModal({
 
   const isOllamaVerified = verifyState === 'ok' && url.trim() === verifiedUrl
   const isValid = name.trim() && (
-    initialType === 'ollama' ? isOllamaVerified : apiKey.trim()
+    initialType === 'ollama' ? isOllamaVerified
+    : initialType === 'whisper' ? isOllamaVerified
+    : apiKey.trim()
   )
 
   return (
@@ -295,7 +342,9 @@ export function RegisterModal({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {initialType === 'ollama'
+            {initialType === 'whisper'
+              ? <><Mic className="h-4 w-4 text-status-success-fg" /> {t('providers.whisper.registerTitle')}</>
+              : initialType === 'ollama'
               ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('providers.ollama.registerTitle')}</>
               : <><Key className="h-4 w-4 text-accent-gpu" /> {t('providers.gemini.registerTitle')}</>}
           </DialogTitle>
@@ -305,8 +354,48 @@ export function RegisterModal({
           <div className="space-y-1.5">
             <Label htmlFor="provider-name">{t('providers.ollama.name')} <span className="text-destructive">*</span></Label>
             <Input id="provider-name" value={name} onChange={(e) => setName(e.target.value)}
-              placeholder={initialType === 'ollama' ? t('providers.ollama.namePlaceholder') : t('providers.gemini.namePlaceholder')} />
+              placeholder={initialType === 'ollama' ? t('providers.ollama.namePlaceholder') : initialType === 'whisper' ? t('providers.whisper.namePlaceholder') : t('providers.gemini.namePlaceholder')} />
           </div>
+
+          {initialType === 'whisper' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-url">{t('providers.whisper.whisperUrl')} <span className="text-destructive">*</span></Label>
+              <div className="flex gap-2">
+                <Input
+                  id="provider-url"
+                  type="url"
+                  value={url}
+                  onChange={(e) => handleUrlChange(e.target.value)}
+                  placeholder={t('providers.whisper.urlPlaceholder')}
+                  className={verifyState === 'ok' ? 'border-status-success' : verifyState === 'error' ? 'border-destructive' : ''}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={!url.trim() || verifyState === 'checking'}
+                  onClick={() => verify(url.trim())}
+                >
+                  {verifyState === 'checking'
+                    ? t('providers.ollama.verifying')
+                    : t('providers.ollama.verifyConnection')}
+                </Button>
+              </div>
+              {verifyState === 'ok' && (
+                <p className="flex items-center gap-1.5 text-xs text-status-success-fg">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {t('providers.ollama.connected')}
+                </p>
+              )}
+              {verifyState === 'error' && (
+                <p className="flex items-center gap-1.5 text-xs text-destructive">
+                  <XCircle className="h-3.5 w-3.5" />
+                  {verifyError}
+                </p>
+              )}
+            </div>
+          )}
 
           {initialType === 'ollama' && (
             <>
@@ -435,7 +524,7 @@ export function RegisterModal({
           <Button
             onClick={() => mutation.mutate()}
             disabled={!isValid || mutation.isPending}
-            title={initialType === 'ollama' && !isOllamaVerified ? t('providers.ollama.verifyFirst') : undefined}
+            title={(initialType === 'ollama' || initialType === 'whisper') && !isOllamaVerified ? t('providers.ollama.verifyFirst') : undefined}
           >
             {mutation.isPending ? `${t('common.register')}…` : t('common.register')}
           </Button>

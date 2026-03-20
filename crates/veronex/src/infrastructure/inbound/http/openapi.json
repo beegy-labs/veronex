@@ -871,6 +871,62 @@
         }
       }
     },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "summary": "Audio transcription (Whisper STT)",
+        "description": "Transcribes audio using the active Whisper STT provider. Accepts OpenAI-compatible multipart/form-data. Returns { \"text\": \"...\" }.",
+        "tags": ["Audio"],
+        "security": [{ "ApiKeyAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Audio file (≤ 25 MB)"
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Accepted but ignored — server uses its configured model"
+                  },
+                  "language": {
+                    "type": "string",
+                    "description": "BCP-47 language code (e.g. 'ko'). Auto-detected if absent."
+                  },
+                  "diarize": {
+                    "type": "string",
+                    "enum": ["true", "false"],
+                    "description": "Enable speaker diarization"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transcription result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "text": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Missing or invalid audio file" },
+          "503": { "description": "No active Whisper provider registered" }
+        }
+      }
+    },
     "/v1/gemini/policies": {
       "get": {
         "tags": ["gemini"],

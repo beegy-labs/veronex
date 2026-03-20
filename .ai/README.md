@@ -34,7 +34,7 @@ Three Rust crates:
 |--------|------|---------|
 | Auth | `docs/llm/auth/` | jwt-sessions (+impl), api-keys, security |
 | Inference | `docs/llm/inference/` | job-lifecycle, job-api, session-grouping, job-analytics, openai-compat, capacity, model-pricing, lab-features |
-| Providers | `docs/llm/providers/` | ollama (+impl), ollama-models, gemini, gemini-models, hardware |
+| Providers | `docs/llm/providers/` | ollama (+impl), ollama-models, gemini, gemini-models, whisper-stt, hardware |
 | Infra | `docs/llm/infra/` | deploy, otel-pipeline (+ops), build-optimization |
 | Frontend | `docs/llm/frontend/` | design-system (core, i18n, components), charts, pages/* |
 | Research | `docs/llm/research/` | 2026 best practices (frontend, backend, infra, security) |

@@ -19,14 +19,14 @@ async function fetchPublic<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** Shared verify fetch — POST url to verify endpoint, handle network errors. */
-async function verifyEndpoint(path: string, url: string): Promise<{ reachable: boolean }> {
+async function verifyEndpoint(path: string, url: string, extra?: Record<string, string>): Promise<{ reachable: boolean }> {
   let res: Response
   try {
     res = await fetch(`${BASE}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, ...extra }),
     })
   } catch {
     throw new ApiHttpError('NETWORK_ERROR', 0)
@@ -147,7 +147,8 @@ export const api = {
   registerProvider: (body: RegisterProviderRequest) =>
     apiClient.post<RegisterProviderResponse>('/v1/providers', body),
 
-  verifyProvider: (url: string) => verifyEndpoint('/v1/providers/verify', url),
+  verifyProvider: (url: string, providerType?: string) =>
+    verifyEndpoint('/v1/providers/verify', url, providerType ? { provider_type: providerType } : undefined),
 
   deleteProvider: (id: string) =>
     apiClient.delete<void>(`/v1/providers/${id}`),
