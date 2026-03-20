@@ -15,7 +15,8 @@
     "ollama": "Ollama",
     "gemini": "Gemini",
     "accounts": "Accounts",
-    "audit": "Audit Log"
+    "audit": "Audit Log",
+    "whisper": "Whisper"
   },
   "common": {
     "all": "All",
@@ -305,7 +306,8 @@
     "tabs": {
       "servers": "GPU Servers",
       "ollama": "Ollama",
-      "gemini": "Gemini"
+      "gemini": "Gemini",
+      "whisper": "Whisper STT"
     },
     "servers": {
       "title": "Servers",
@@ -506,6 +508,27 @@
       "noStatusResults": "No active Gemini providers registered.",
       "noBackends": "No Gemini providers registered",
       "noBackendsHint": "Add a Gemini API key to start routing inference to Google cloud."
+    },
+    "whisper": {
+      "title": "Whisper STT Providers",
+      "registerProvider": "Register Whisper Provider",
+      "registerTitle": "Register Whisper Provider",
+      "editTitle": "Edit Whisper Provider",
+      "whisperUrl": "Whisper URL",
+      "urlPlaceholder": "https://whisper-asr-1.kr1.girok.dev",
+      "noProviders": "No Whisper STT providers registered",
+      "noProvidersHint": "Add a Whisper ASR endpoint to enable audio transcription.",
+      "loadingProviders": "Loading providers…",
+      "failedProviders": "Failed to load providers",
+      "verifyFirst": "Verify connection before registering",
+      "name": "Name",
+      "namePlaceholder": "My Whisper ASR",
+      "status": "Status",
+      "registeredAt": "Registered At",
+      "duplicateUrl": "A Whisper provider with this URL is already registered",
+      "networkError": "Cannot reach the Whisper server — check URL and network",
+      "unreachableError": "Whisper server returned an error — check URL and port",
+      "connectionFailed": "Failed to connect to Whisper server"
     },
     "healthcheck": "Healthcheck",
     "runHealthcheck": "Run health check",

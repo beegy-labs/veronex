@@ -16,6 +16,7 @@ use crate::infrastructure::outbound::valkey_keys;
 use crate::domain::constants::{
     OLLAMA_HEALTH_CHECK_TIMEOUT as OLLAMA_HEALTH_TIMEOUT,
     GEMINI_HEALTH_CHECK_TIMEOUT as GEMINI_HEALTH_TIMEOUT,
+    WHISPER_HEALTH_CHECK_TIMEOUT as WHISPER_HEALTH_TIMEOUT,
     THERMAL_HARD_COOLDOWN_SECS,
     THERMAL_THROTTLE_KEY_TTL_SECS,
 };
@@ -67,6 +68,24 @@ pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) ->
                 }
                 Err(e) => {
                     tracing::warn!(provider_id = %provider.id, error = %e, "Gemini health check failed");
+                    LlmProviderStatus::Offline
+                }
+            }
+        }
+        ProviderType::Whisper => {
+            let url = provider.url.trim_end_matches('/').to_string();
+            match client.get(&url).timeout(WHISPER_HEALTH_TIMEOUT).send().await {
+                Ok(r) if r.status().is_success() => LlmProviderStatus::Online,
+                Ok(r) => {
+                    tracing::warn!(
+                        provider_id = %provider.id,
+                        status = %r.status(),
+                        "Whisper health check returned non-2xx"
+                    );
+                    LlmProviderStatus::Offline
+                }
+                Err(e) => {
+                    tracing::warn!(provider_id = %provider.id, error = %e, "Whisper health check failed");
                     LlmProviderStatus::Offline
                 }
             }
