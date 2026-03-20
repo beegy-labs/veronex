@@ -12,6 +12,7 @@ import { PROVIDER_OLLAMA } from '@/lib/constants'
 import { EditModal, RegisterModal } from './components/modals'
 import { OllamaTab } from './components/ollama-tab'
 import { GeminiTab } from './components/gemini-tab'
+import { WhisperTab } from './components/whisper-tab'
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -23,7 +24,7 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   // Fall back to 'ollama' when Gemini is disabled and the URL says ?s=gemini
   const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'ollama' : sectionParam
 
-  const [registerProviderType, setRegisterProviderType] = useState<'ollama' | 'gemini' | null>(null)
+  const [registerProviderType, setRegisterProviderType] = useState<'ollama' | 'gemini' | 'whisper' | null>(null)
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
 
   // Servers needed for RegisterModal/EditModal dropdowns
@@ -92,6 +93,18 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
           syncPending={syncProviderMutation.isPending}
           onToggleActive={(b) => toggleActiveMutation.mutate(b)}
           toggleActivePending={toggleActiveMutation.isPending}
+          onDelete={(id, name) => { if (confirm(t('providers.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
+          deleteIsPending={deleteMutation.isPending}
+        />
+      )}
+
+      {section === 'whisper' && (
+        <WhisperTab
+          providers={providers}
+          isLoading={providersLoading}
+          error={providersError as Error | null}
+          onRegister={() => setRegisterProviderType('whisper')}
+          onEdit={(b) => setEditingProvider(b)}
           onDelete={(id, name) => { if (confirm(t('providers.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
           deleteIsPending={deleteMutation.isPending}
         />

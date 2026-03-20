@@ -15,7 +15,8 @@
     "ollama": "Ollama",
     "gemini": "Gemini",
     "accounts": "アカウント",
-    "audit": "監査ログ"
+    "audit": "監査ログ",
+    "whisper": "Whisper"
   },
   "common": {
     "all": "すべて",
@@ -305,7 +306,8 @@
     "tabs": {
       "servers": "GPUサーバー",
       "ollama": "Ollama",
-      "gemini": "Gemini"
+      "gemini": "Gemini",
+      "whisper": "Whisper STT"
     },
     "servers": {
       "title": "サーバー",
@@ -506,6 +508,27 @@
       "noStatusResults": "登録済みのアクティブな Gemini プロバイダーがありません。",
       "noBackends": "Geminiプロバイダーが登録されていません",
       "noBackendsHint": "Gemini APIキーを追加してGoogleクラウドへの推論ルーティングを開始してください。"
+    },
+    "whisper": {
+      "title": "Whisper STT プロバイダー",
+      "registerProvider": "Whisperプロバイダーを登録",
+      "registerTitle": "Whisperプロバイダーを登録",
+      "editTitle": "Whisperプロバイダーを編集",
+      "whisperUrl": "Whisper URL",
+      "urlPlaceholder": "https://whisper-asr-1.kr1.girok.dev",
+      "noProviders": "Whisper STTプロバイダーが登録されていません",
+      "noProvidersHint": "Whisper ASRエンドポイントを追加して音声転写機能を有効にしてください。",
+      "loadingProviders": "プロバイダーを読み込み中…",
+      "failedProviders": "プロバイダーの読み込みに失敗しました",
+      "verifyFirst": "登録前に接続を確認してください",
+      "name": "名前",
+      "namePlaceholder": "マイ Whisper ASR",
+      "status": "ステータス",
+      "registeredAt": "登録日",
+      "duplicateUrl": "このURLのWhisperプロバイダーはすでに登録されています",
+      "networkError": "Whisperサーバーに接続できません — URLとネットワークを確認してください",
+      "unreachableError": "Whisperサーバーがエラーを返しました — URLとポートを確認してください",
+      "connectionFailed": "Whisperサーバーへの接続に失敗しました"
     },
     "healthcheck": "ヘルスチェック",
     "runHealthcheck": "ヘルスチェック実行",

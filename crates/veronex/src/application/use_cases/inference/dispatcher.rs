@@ -136,6 +136,8 @@ fn score_and_claim(
                 } else { base }
             }
             ProviderType::Gemini => i64::MAX,
+            // Whisper is an STT provider — excluded from LLM inference scoring.
+            ProviderType::Whisper => continue,
         };
         scored.push((b, avail));
     }

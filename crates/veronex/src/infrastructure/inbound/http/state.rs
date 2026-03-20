@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::domain::value_objects::{FlowStats, JobStatusEvent};
 
 use crate::application::ports::inbound::inference_use_case::InferenceUseCase;
+use crate::application::ports::outbound::stt_provider_port::SttProviderPort;
 use crate::application::ports::outbound::account_repository::AccountRepository;
 use crate::application::ports::outbound::image_store::ImageStore;
 use crate::application::ports::outbound::message_store::MessageStore;
@@ -106,4 +107,7 @@ pub struct AppState {
     pub sse_connections: Arc<AtomicU32>,
     /// Persistent VRAM budget state per provider (safety_permil, source, kv_cache_type).
     pub vram_budget_repo: Arc<dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository>,
+    /// Active Whisper STT provider adapter.
+    /// `None` when no Whisper provider is registered and active in the DB.
+    pub stt_port: Option<Arc<dyn SttProviderPort>>,
 }

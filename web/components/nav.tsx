@@ -7,7 +7,7 @@ import {
   LayoutDashboard, List, Key, Server,
   BarChart2, Gauge, Sun, Moon, ChevronLeft,
   BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
-  Users, Shield, LogOut, Settings2,
+  Users, Shield, LogOut, Settings2, Mic,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
@@ -85,8 +85,9 @@ const navItems: NavItem[] = [
     basePath: '/providers',
     menuId: 'providers',
     children: [
-      { href: '/providers?s=ollama', labelKey: 'nav.ollama', icon: OllamaIcon, section: 'ollama', menuId: 'providers' },
-      { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini', menuId: 'providers' },
+      { href: '/providers?s=ollama',   labelKey: 'nav.ollama',   icon: OllamaIcon, section: 'ollama',   menuId: 'providers' },
+      { href: '/providers?s=gemini',   labelKey: 'nav.gemini',   icon: Sparkles,   section: 'gemini',   menuId: 'providers' },
+      { href: '/providers?s=whisper',  labelKey: 'nav.whisper',  icon: Mic,        section: 'whisper',  menuId: 'providers' },
     ],
   },
 ]
