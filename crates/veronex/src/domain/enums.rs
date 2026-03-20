@@ -189,24 +189,21 @@ impl std::str::FromStr for JobSource {
 pub enum ProviderType {
     Ollama,
     Gemini,
-    Whisper,
 }
 
 impl ProviderType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Ollama  => "ollama",
-            Self::Gemini  => "gemini",
-            Self::Whisper => "whisper",
+            Self::Ollama => "ollama",
+            Self::Gemini => "gemini",
         }
     }
 
     /// Audit trail resource type string for this provider type.
     pub fn resource_type(&self) -> &'static str {
         match self {
-            Self::Ollama  => "ollama_provider",
-            Self::Gemini  => "gemini_provider",
-            Self::Whisper => "whisper_provider",
+            Self::Ollama => "ollama_provider",
+            Self::Gemini => "gemini_provider",
         }
     }
 }
@@ -215,10 +212,9 @@ impl std::str::FromStr for ProviderType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ollama"  => Ok(Self::Ollama),
-            "gemini"  => Ok(Self::Gemini),
-            "whisper" => Ok(Self::Whisper),
-            other     => Err(format!("unknown provider type: {other}")),
+            "ollama" => Ok(Self::Ollama),
+            "gemini" => Ok(Self::Gemini),
+            other => Err(format!("unknown provider type: {other}")),
         }
     }
 }

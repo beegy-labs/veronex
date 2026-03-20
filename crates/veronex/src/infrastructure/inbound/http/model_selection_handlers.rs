@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::domain::enums::ProviderType;
 use crate::infrastructure::inbound::http::provider_handlers::get_provider;
 
-use super::error::{db_error, AppError};
+use super::error::db_error;
 use super::state::AppState;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
@@ -81,13 +81,6 @@ pub async fn list_selected_models(
                 })
                 .collect();
             (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
-        }
-
-        ProviderType::Whisper => {
-            return AppError::BadRequest(
-                "Whisper providers do not have model selections. Use POST /v1/audio/transcriptions".into(),
-            )
-            .into_response();
         }
 
         ProviderType::Gemini => {

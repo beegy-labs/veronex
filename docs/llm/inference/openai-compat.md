@@ -12,7 +12,6 @@
 | Update OpenAPI spec | `infrastructure/inbound/http/openapi.json` | Edit JSON directly — embedded via `include_str!` at build time |
 | Change /docs auth (require auth) | `router.rs` | Move `/docs/*` routes inside auth middleware layer |
 | Add a new OpenAI-compat stub endpoint (501) | `openai_media_handlers.rs` | Add async fn + register in `router.rs` |
-| Enable Whisper transcription endpoint | `openai_media_handlers.rs` + `bootstrap/repositories.rs` | Register a Whisper provider in DB; `stt_port` auto-wired at startup |
 
 ## Key Files
 
@@ -23,7 +22,7 @@
 | `crates/veronex/src/infrastructure/inbound/http/openai_completions_handlers.rs` | `POST /v1/completions` — legacy text completions |
 | `crates/veronex/src/infrastructure/inbound/http/openai_embeddings_handlers.rs` | `POST /v1/embeddings` — OpenAI-compat embeddings (proxies to Ollama /api/embed) |
 | `crates/veronex/src/infrastructure/inbound/http/openai_models_handlers.rs` | `GET /v1/models`, `GET /v1/models/{model_id}` — model listing |
-| `crates/veronex/src/infrastructure/inbound/http/openai_media_handlers.rs` | `POST /v1/audio/transcriptions` — Whisper STT proxy (active provider); other media endpoints — 501 stubs |
+| `crates/veronex/src/infrastructure/inbound/http/openai_media_handlers.rs` | `POST /v1/audio/*`, `/v1/images/generations`, `/v1/moderations` — 501 stubs |
 | `crates/veronex/src/infrastructure/inbound/http/handlers.rs` | Native `/v1/inference` handlers |
 | `crates/veronex/src/infrastructure/inbound/http/docs_handlers.rs` | Swagger / ReDoc / OpenAPI spec |
 | `crates/veronex/src/infrastructure/inbound/http/router.rs` | Route registration |
@@ -41,7 +40,7 @@
 | POST | `/v1/embeddings` | `openai_embeddings_handlers.rs` | Proxies to Ollama `/api/embed`; SSRF-validated |
 | GET | `/v1/models` | `openai_models_handlers.rs` | Lists all Ollama + Gemini models from DB |
 | GET | `/v1/models/{model_id}` | `openai_models_handlers.rs` | Looks up by model ID; 404 if not found |
-| POST | `/v1/audio/transcriptions` | `openai_media_handlers.rs` | Whisper STT — proxies to active Whisper provider; 503 if none registered |
+| POST | `/v1/audio/transcriptions` | `openai_media_handlers.rs` | 501 Not Implemented stub |
 | POST | `/v1/audio/speech` | `openai_media_handlers.rs` | 501 Not Implemented stub |
 | POST | `/v1/images/generations` | `openai_media_handlers.rs` | 501 Not Implemented stub |
 | POST | `/v1/moderations` | `openai_media_handlers.rs` | 501 Not Implemented stub |

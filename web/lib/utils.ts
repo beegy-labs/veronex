@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI, PROVIDER_WHISPER, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from './constants'
+import { PROVIDER_OLLAMA, PROVIDER_GEMINI, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from './constants'
 import type { Provider } from './types'
 
 export function cn(...inputs: ClassValue[]) {
@@ -15,9 +15,6 @@ export const getOllamaProviders = (providers: Provider[] | undefined) =>
 
 export const getGeminiProviders = (providers: Provider[] | undefined) =>
   providers?.filter(p => p.provider_type === PROVIDER_GEMINI) ?? []
-
-export const getWhisperProviders = (providers: Provider[] | undefined) =>
-  providers?.filter(p => p.provider_type === PROVIDER_WHISPER) ?? []
 
 // ── Status counting ───────────────────────────────────────────────────────
 
