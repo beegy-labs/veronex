@@ -161,12 +161,6 @@ pub const OLLAMA_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// Timeout for Gemini health check (lightweight models list).
 pub const GEMINI_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Timeout for Whisper ASR health check (`GET /`).
-pub const WHISPER_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Timeout for Whisper ASR transcription requests (large audio files).
-pub const WHISPER_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
-
 /// Timeout for LLM single-model analysis call.
 pub const LLM_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30);
 

@@ -47,9 +47,6 @@ use veronex::infrastructure::outbound::persistence::session_repository::Postgres
 use veronex::infrastructure::outbound::s3::image_store::S3ImageStore;
 use veronex::infrastructure::outbound::s3::message_store::S3MessageStore;
 use veronex::infrastructure::outbound::valkey_adapter::ValkeyAdapter;
-use veronex::infrastructure::outbound::whisper::WhisperAdapter;
-use veronex::application::ports::outbound::stt_provider_port::SttProviderPort;
-use veronex::domain::enums::ProviderType;
 
 use super::background::InfraContext;
 use super::config::AppConfig;
@@ -80,7 +77,6 @@ pub struct Repositories {
     pub message_store: Option<Arc<dyn MessageStore>>,
     pub image_store: Option<Arc<dyn ImageStore>>,
     pub vram_budget_repo: Arc<dyn ProviderVramBudgetRepository>,
-    pub stt_port: Option<Arc<dyn SttProviderPort>>,
 }
 
 /// Wire all repositories from database pools and configuration.
@@ -302,19 +298,6 @@ pub async fn wire_repositories(
     let vram_budget_repo: Arc<dyn ProviderVramBudgetRepository> =
         Arc::new(PostgresProviderVramBudgetRepository::new(pg_pool.clone()));
 
-    // ── Whisper STT adapter ────────────────────────────────────────
-    // Find the first active Whisper provider registered in DB.
-    let stt_port: Option<Arc<dyn SttProviderPort>> = provider_registry
-        .list_active()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .find(|p| p.provider_type == ProviderType::Whisper)
-        .map(|p| {
-            tracing::info!(url = %p.url, "Whisper STT adapter enabled");
-            Arc::new(WhisperAdapter::new(&p.url, http_client.clone())) as Arc<dyn SttProviderPort>
-        });
-
     Ok(Repositories {
         account_repo,
         api_key_repo,
@@ -340,7 +323,6 @@ pub async fn wire_repositories(
         message_store,
         image_store,
         vram_budget_repo,
-        stt_port,
     })
 }
 

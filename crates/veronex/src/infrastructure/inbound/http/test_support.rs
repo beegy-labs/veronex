@@ -338,7 +338,6 @@ pub(crate) fn make_app() -> axum::Router {
         lab_settings_repo: Arc::new(MockLabSettingsRepo),
         sse_connections: Arc::new(AtomicU32::new(0)),
         vram_budget_repo: Arc::new(MockVramBudgetRepo),
-        stt_port: None,
     };
     // Inject a fake ApiKey extension so handlers that extract it work in tests.
     router::build_api_router()

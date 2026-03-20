@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::constants::{OLLAMA_HEALTH_CHECK_TIMEOUT, WHISPER_HEALTH_CHECK_TIMEOUT};
+use crate::domain::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
@@ -66,9 +66,6 @@ async fn fetch_models_live(client: &reqwest::Client, provider: &LlmProvider) -> 
 
             gemini_helpers::fetch_gemini_models(client, api_key).await
         }
-        ProviderType::Whisper => {
-            Err(anyhow::anyhow!("Whisper providers do not expose model lists"))
-        }
     }
 }
 
@@ -107,9 +104,6 @@ async fn load_models_cache(pool: &fred::clients::Pool, key: &str) -> Option<Vec<
 #[derive(Debug, Deserialize)]
 pub struct VerifyProviderRequest {
     pub url: String,
-    /// Provider type — determines which health probe to use.
-    /// Defaults to `"ollama"` if omitted (backward-compatible).
-    pub provider_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,15 +231,11 @@ pub async fn verify_provider(
         return e.into_response();
     }
 
-    let is_whisper = req.provider_type.as_deref() == Some("whisper");
-    let db_type = if is_whisper { "whisper" } else { "ollama" };
-
     // Duplicate check.
     let count_result: Result<(i64,), _> = sqlx::query_as(
-        "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = $2",
+        "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'ollama'",
     )
     .bind(&url)
-    .bind(db_type)
     .fetch_one(&state.pg_pool)
     .await;
 
@@ -258,17 +248,12 @@ pub async fn verify_provider(
         _ => {}
     }
 
-    // Connectivity check — Whisper: GET {url}, Ollama: GET {url}/api/version.
-    let (check_url, timeout) = if is_whisper {
-        (url.trim_end_matches('/').to_string(), WHISPER_HEALTH_CHECK_TIMEOUT)
-    } else {
-        (format!("{}/api/version", url.trim_end_matches('/')), OLLAMA_HEALTH_CHECK_TIMEOUT)
-    };
-
+    // Connectivity check: GET {url}/api/version must succeed.
+    let check_url = format!("{}/api/version", url.trim_end_matches('/'));
     match state
         .http_client
         .get(&check_url)
-        .timeout(timeout)
+        .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
         .send()
         .await
     {
@@ -276,13 +261,15 @@ pub async fn verify_provider(
             (StatusCode::OK, Json(serde_json::json!({"reachable": true}))).into_response()
         }
         Ok(r) => {
-            tracing::warn!(url = %url, status = %r.status(), "verify probe returned unexpected status");
-            AppError::BadGateway(format!("provider returned unexpected status {}", r.status()))
-                .into_response()
+            tracing::warn!(url = %url, status = %r.status(), "Ollama verify probe returned unexpected status");
+            AppError::BadGateway(
+                format!("Ollama returned unexpected status {}", r.status()),
+            )
+            .into_response()
         }
         Err(e) => {
-            tracing::warn!(url = %url, error = %e, "verify probe failed");
-            AppError::BadGateway("provider is not reachable at the given URL".into())
+            tracing::warn!(url = %url, error = %e, "Ollama verify probe failed");
+            AppError::BadGateway("Ollama is not reachable at the given URL".into())
                 .into_response()
         }
     }
@@ -297,7 +284,7 @@ pub async fn register_provider(
     Json(req): Json<RegisterProviderRequest>,
 ) -> impl IntoResponse {
     let Some(provider_type) = parse_provider_type(&req.provider_type) else {
-        return AppError::BadRequest("provider_type must be 'ollama', 'gemini', or 'whisper'".into())
+        return AppError::BadRequest("provider_type must be 'ollama' or 'gemini'".into())
             .into_response();
     };
 
@@ -334,16 +321,6 @@ pub async fn register_provider(
             if req.api_key.as_deref().unwrap_or("").is_empty() {
                 return AppError::BadRequest("api_key is required for gemini providers".into())
                     .into_response();
-            }
-        }
-        ProviderType::Whisper => {
-            let url = req.url.as_deref().unwrap_or("");
-            if url.is_empty() {
-                return AppError::BadRequest("url is required for whisper providers".into())
-                    .into_response();
-            }
-            if let Err(e) = validate_provider_url(url) {
-                return e.into_response();
             }
         }
     }
@@ -586,21 +563,12 @@ pub async fn sync_provider_models(
         Err(e) => return e.into_response(),
     };
 
-    // Gemini / Whisper model listing is not supported via this endpoint.
-    match provider.provider_type {
-        ProviderType::Gemini => {
-            return AppError::BadRequest(
-                "Use POST /v1/gemini/models/sync to sync Gemini models globally".into(),
-            )
-            .into_response();
-        }
-        ProviderType::Whisper => {
-            return AppError::BadRequest(
-                "Whisper providers do not expose model lists. Use POST /v1/audio/transcriptions".into(),
-            )
-            .into_response();
-        }
-        ProviderType::Ollama => {}
+    // Gemini model sync is global — direct the caller to the correct endpoint.
+    if matches!(provider.provider_type, ProviderType::Gemini) {
+        return AppError::BadRequest(
+            "Use POST /v1/gemini/models/sync to sync Gemini models globally".into(),
+        )
+        .into_response();
     }
 
     match fetch_models_live(&state.http_client, &provider).await {
