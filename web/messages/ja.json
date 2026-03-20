@@ -522,6 +522,7 @@
       "failedProviders": "プロバイダーの読み込みに失敗しました",
       "verifyFirst": "登録前に接続を確認してください",
       "name": "名前",
+      "namePlaceholder": "マイ Whisper ASR",
       "status": "ステータス",
       "registeredAt": "登録日"
     },

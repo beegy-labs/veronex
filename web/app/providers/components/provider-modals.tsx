@@ -335,7 +335,7 @@ export function RegisterModal({
           <div className="space-y-1.5">
             <Label htmlFor="provider-name">{t('providers.ollama.name')} <span className="text-destructive">*</span></Label>
             <Input id="provider-name" value={name} onChange={(e) => setName(e.target.value)}
-              placeholder={initialType === 'ollama' ? t('providers.ollama.namePlaceholder') : initialType === 'whisper' ? t('providers.whisper.urlPlaceholder') : t('providers.gemini.namePlaceholder')} />
+              placeholder={initialType === 'ollama' ? t('providers.ollama.namePlaceholder') : initialType === 'whisper' ? t('providers.whisper.namePlaceholder') : t('providers.gemini.namePlaceholder')} />
           </div>
 
           {initialType === 'whisper' && (

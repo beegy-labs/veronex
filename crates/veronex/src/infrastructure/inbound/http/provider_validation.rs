@@ -85,6 +85,7 @@ mod tests {
     fn parse_provider_type_examples() {
         assert_eq!(parse_provider_type("Ollama"), Some(ProviderType::Ollama));
         assert_eq!(parse_provider_type("GEMINI"), Some(ProviderType::Gemini));
+        assert_eq!(parse_provider_type("Whisper"), Some(ProviderType::Whisper));
         assert_eq!(parse_provider_type("unknown"), None);
     }
 
@@ -111,7 +112,7 @@ mod tests {
         fn parse_provider_type_unknown_returns_none(
             s in "[a-z]{1,20}"
         ) {
-            prop_assume!(s.to_lowercase() != "ollama" && s.to_lowercase() != "gemini");
+            prop_assume!(s.to_lowercase() != "ollama" && s.to_lowercase() != "gemini" && s.to_lowercase() != "whisper");
             prop_assert_eq!(parse_provider_type(&s), None);
         }
 

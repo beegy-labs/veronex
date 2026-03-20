@@ -522,6 +522,7 @@
       "failedProviders": "Failed to load providers",
       "verifyFirst": "Verify connection before registering",
       "name": "Name",
+      "namePlaceholder": "My Whisper ASR",
       "status": "Status",
       "registeredAt": "Registered At"
     },
