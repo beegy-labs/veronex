@@ -43,7 +43,7 @@ import { hasPermission } from '@/lib/auth'
 const ALL_PERMISSIONS = [
   'dashboard_view', 'api_test', 'provider_manage',
   'key_manage', 'account_manage', 'audit_view', 'settings_manage',
-  'role_manage',
+  'role_manage', 'model_manage',
 ] as const
 
 const ALL_MENUS = [

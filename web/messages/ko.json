@@ -36,6 +36,7 @@
     "revoke": "폐기",
     "active": "활성",
     "inactive": "비활성",
+    "disabled": "비활성화됨",
     "online": "온라인",
     "offline": "오프라인",
     "degraded": "저하됨",
@@ -787,7 +788,8 @@
       "account_manage": "계정 관리",
       "audit_view": "감사 로그",
       "settings_manage": "설정",
-      "role_manage": "역할 관리"
+      "role_manage": "역할 관리",
+      "model_manage": "모델 관리"
     },
     "menu": {
       "dashboard": "대시보드",
