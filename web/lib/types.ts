@@ -437,7 +437,21 @@ export interface OllamaProviderForModel {
   name: string
   url: string
   status: string
-  is_enabled?: boolean
+  is_enabled: boolean
+}
+
+export interface OllamaModelPage {
+  models: OllamaModelWithCount[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface OllamaProviderPage {
+  providers: OllamaProviderForModel[]
+  total: number
+  page: number
+  limit: number
 }
 
 /**
