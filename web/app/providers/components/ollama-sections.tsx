@@ -133,16 +133,6 @@ export function OllamaSyncSection() {
                       key={m.model_name}
                       className={`flex items-center gap-3 px-3 py-2.5 hover:bg-muted/40 transition-colors ${isDisabled ? 'opacity-50' : ''}`}
                     >
-                      {canManageModels && (
-                        <Switch
-                          checked={!isDisabled}
-                          onCheckedChange={(checked) =>
-                            toggleGlobalMutation.mutate({ model: m.model_name, enabled: checked })
-                          }
-                          disabled={toggleGlobalMutation.isPending}
-                          aria-label={`${m.model_name} global toggle`}
-                        />
-                      )}
                       <button
                         className="flex items-center gap-3 flex-1 text-left min-w-0"
                         onClick={() => setSelectedModel(m.model_name)}
@@ -158,6 +148,16 @@ export function OllamaSyncSection() {
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-status-error-fg border-status-error/30 whitespace-nowrap">
                           {t('common.disabled')}
                         </Badge>
+                      )}
+                      {canManageModels && (
+                        <Switch
+                          checked={!isDisabled}
+                          onCheckedChange={(checked) =>
+                            toggleGlobalMutation.mutate({ model: m.model_name, enabled: checked })
+                          }
+                          disabled={toggleGlobalMutation.isPending}
+                          aria-label={`${m.model_name} global toggle`}
+                        />
                       )}
                     </div>
                   )
