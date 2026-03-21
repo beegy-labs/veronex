@@ -19,7 +19,7 @@ export function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      {data.by_providers.map((b) => {
+      {data.by_providers.slice(0, 6).map((b) => {
         const pct = calcPercentage(b.request_count, total)
         const color = PROVIDER_COLORS[b.provider_type] ?? tokens.brand.primary
         const totalTok = b.prompt_tokens + b.completion_tokens

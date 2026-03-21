@@ -149,6 +149,7 @@
     "tempCritical": "危険",
     "tempWarning": "注意",
     "checkServers": "サーバー確認",
+    "allServersNormal": "全サーバー正常",
     "moreServers": "件のサーバーを表示",
     "waiting": "待機中",
     "running": "実行中",
