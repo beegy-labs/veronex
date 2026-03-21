@@ -229,6 +229,12 @@ flowchart LR
     subgraph "Server"
         SV1[List] --> SV2[Create] --> SV3[Update name] --> SV4[Delete]
     end
+    subgraph "Global Model"
+        GM1[List] --> GM2[Disable] --> GM3[Verify disabled] --> GM4[Re-enable]
+    end
+    subgraph "Key Provider Access"
+        KP1[List] --> KP2[Deny] --> KP3[Allow]
+    end
 ```
 
 | Test | Validates |
@@ -261,6 +267,14 @@ flowchart LR
 | Create server | POST /v1/servers with node_exporter_url → 201 (or 409 if duplicate) |
 | Update server name | PATCH /v1/servers/{id} → 200 |
 | Delete server | DELETE /v1/servers/{id} → 204 |
+| List global model settings | GET /v1/models/global-settings → 200 |
+| List disabled models | GET /v1/models/global-disabled → 200 |
+| Disable model globally | PATCH /v1/models/global-settings/{model} is_enabled=false → 200 |
+| Verify disabled list | Model appears in /v1/models/global-disabled |
+| Re-enable model | PATCH /v1/models/global-settings/{model} is_enabled=true → 200 |
+| List key provider access | GET /v1/keys/{id}/providers → 200 |
+| Deny provider access | PATCH /v1/keys/{id}/providers/{pid} is_allowed=false → 200 |
+| Allow provider access | PATCH /v1/keys/{id}/providers/{pid} is_allowed=true → 200 |
 
 ---
 

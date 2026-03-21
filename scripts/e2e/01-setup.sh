@@ -199,8 +199,10 @@ if [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ]; then
   API_KEY=$(echo "$KEY_RES" | jv '["key"]' || echo "")
   [ -n "$API_KEY" ] && [ "$API_KEY" != "None" ] \
     && pass "Paid API key created: ${API_KEY:0:12}..." || fail "API key creation failed"
+  API_KEY_ID_PAID=$(echo "$KEY_RES" | jv '["id"]' || echo "")
   save_var API_KEY "$API_KEY"
   save_var API_KEY_PAID "$API_KEY"
+  save_var API_KEY_ID_PAID "$API_KEY_ID_PAID"
 
   # Also create a standard key for tier-priority tests
   STD_KEY_RES=$(apost "/v1/keys" \
