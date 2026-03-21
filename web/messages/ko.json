@@ -247,10 +247,12 @@
     "groupingSuccess": "세션 묶기가 시작되었습니다",
     "groupingError": "세션 묶기 실행에 실패했습니다",
     "groupingAlreadyRunning": "세션 묶기가 이미 실행 중입니다",
-    "providerName": "프로바이더",
+    "providerName": "서버명",
     "images": "이미지",
-    "filterModel": "모델…",
-    "filterProvider": "프로바이더…"
+    "filterModel": "모델",
+    "filterProvider": "프로바이더",
+    "filters": "필터",
+    "filtersActive": "필터 ({{count}})"
   },
   "keys": {
     "title": "API 키",
