@@ -149,6 +149,7 @@
     "tempCritical": "Critical",
     "tempWarning": "Warning",
     "checkServers": "Check Servers",
+    "moreServers": "more servers",
     "waiting": "Waiting",
     "running": "Running",
     "pendingJobs": "pending jobs",
