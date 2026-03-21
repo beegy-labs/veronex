@@ -13,6 +13,7 @@ pub mod api_key_repository;
 pub mod audit_port;
 pub mod provider_model_selection;
 pub mod global_model_settings;
+pub mod api_key_provider_access;
 pub mod gemini_model_repository;
 pub mod gemini_policy_repository;
 pub mod gemini_sync_config_repository;

@@ -193,6 +193,16 @@ impl crate::application::ports::outbound::global_model_settings::GlobalModelSett
     async fn list_disabled(&self) -> Result<Vec<String>> { Ok(vec![]) }
 }
 
+pub(crate) struct MockApiKeyProviderAccessRepo;
+
+#[async_trait]
+impl crate::application::ports::outbound::api_key_provider_access::ApiKeyProviderAccessRepository for MockApiKeyProviderAccessRepo {
+    async fn list_allowed(&self, _api_key_id: Uuid) -> Result<Vec<Uuid>> { Ok(vec![]) }
+    async fn set_access(&self, _api_key_id: Uuid, _provider_id: Uuid, _allowed: bool) -> Result<()> { Ok(()) }
+    async fn list(&self, _api_key_id: Uuid) -> Result<Vec<(Uuid, bool)>> { Ok(vec![]) }
+    async fn has_restrictions(&self, _api_key_id: Uuid) -> Result<bool> { Ok(false) }
+}
+
 pub(crate) struct MockOllamaModelRepo;
 
 #[async_trait]
@@ -325,6 +335,7 @@ pub(crate) fn make_app() -> axum::Router {
         gemini_model_repo: Arc::new(MockGeminiModelRepo),
         model_selection_repo: Arc::new(MockModelSelectionRepo),
         global_model_settings_repo: Arc::new(MockGlobalModelSettingsRepo),
+        api_key_provider_access_repo: Arc::new(MockApiKeyProviderAccessRepo),
         ollama_model_repo: Arc::new(MockOllamaModelRepo),
         ollama_sync_job_repo: Arc::new(MockOllamaSyncJobRepo),
         valkey_pool: None,

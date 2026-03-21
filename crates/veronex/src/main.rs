@@ -101,6 +101,7 @@ async fn main() -> Result<()> {
         gemini_model_repo: repos.gemini_model_repo,
         model_selection_repo: repos.model_selection_repo,
         global_model_settings_repo: repos.global_model_settings_repo,
+        api_key_provider_access_repo: repos.api_key_provider_access_repo,
         ollama_model_repo: repos.ollama_model_repo,
         ollama_sync_job_repo: repos.ollama_sync_job_repo,
         valkey_pool,
