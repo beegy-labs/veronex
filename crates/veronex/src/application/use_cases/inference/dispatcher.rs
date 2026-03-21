@@ -14,6 +14,7 @@ use crate::application::ports::outbound::observability_port::ObservabilityPort;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
+use crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::entities::{InferenceJob, LlmProvider};
@@ -33,16 +34,29 @@ use super::runner::run_job;
 
 // ── Provider filtering ──────────────────────────────────────────────────────
 
-/// Four-stage filter: active+type+tier → model availability → model selection → preload exclusion.
+/// Five-stage filter: global model gate → active+type+tier → model availability → model selection → preload exclusion.
 async fn filter_candidates(
     registry: &dyn LlmProviderRegistry,
     ollama_model_repo: &Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: &Option<Arc<dyn ProviderModelSelectionRepository>>,
+    global_model_settings_repo: &Option<Arc<dyn GlobalModelSettingsRepository>>,
     vram_pool: &dyn VramPoolPort,
     provider_type: ProviderType,
     model: &str,
     gemini_tier: Option<&str>,
 ) -> Vec<LlmProvider> {
+    // Stage 0: global model gate — if model is globally disabled, reject immediately
+    if !model.is_empty() {
+        if let Some(repo) = global_model_settings_repo {
+            if let Ok(enabled) = repo.is_enabled(model).await {
+                if !enabled {
+                    tracing::debug!(model, "model globally disabled — rejecting all providers");
+                    return vec![];
+                }
+            }
+        }
+    }
+
     let all = registry.list_all().await.unwrap_or_default();
 
     // Stage 1: active + type + tier (standby providers included — woken on demand)
@@ -302,6 +316,7 @@ pub(super) async fn queue_dispatcher_loop(
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
     ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
+    global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
     shutdown: CancellationToken,
 ) {
     tracing::info!("queue dispatcher started — ZSET scoring (locality + age × perf_factor)");
@@ -396,6 +411,7 @@ pub(super) async fn queue_dispatcher_loop(
             // Find provider + claim VRAM
             let candidates = filter_candidates(
                 registry.as_ref(), &ollama_model_repo, &model_selection_repo,
+                &global_model_settings_repo,
                 vram_pool.as_ref(), job.provider_type, model, gemini_tier.as_deref(),
             ).await;
 

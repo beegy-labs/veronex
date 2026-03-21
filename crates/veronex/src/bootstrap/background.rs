@@ -165,6 +165,7 @@ pub async fn spawn_background_tasks(
         repos.image_store.clone(),
         Some(repos.ollama_model_repo.clone()),
         Some(repos.model_selection_repo.clone()),
+        Some(repos.global_model_settings_repo.clone()),
         infra.instance_id.clone(),
     ));
 
