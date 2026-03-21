@@ -4,12 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Valkey TTL for hardware metrics cache (seconds).
-pub const HW_METRICS_TTL: i64 = 60;
-
-pub fn hw_metrics_key(provider_id: Uuid) -> String {
-    super::valkey_keys::hw_metrics(provider_id)
-}
+use crate::domain::constants::{HW_METRICS_TTL, NODE_METRICS_TTL};
 
 // ── Hardware metrics (from node-exporter) ─────────────────────────────────────
 
@@ -66,7 +61,7 @@ pub async fn load_hw_metrics(
     provider_id: Uuid,
 ) -> Option<HwMetrics> {
     use fred::prelude::*;
-    let key = hw_metrics_key(provider_id);
+    let key = super::valkey_keys::hw_metrics(provider_id);
     let cached: Option<String> = pool.get(&key).await.unwrap_or(None);
     serde_json::from_str(&cached?).ok()
 }
@@ -79,7 +74,7 @@ pub async fn store_hw_metrics(
     metrics: &HwMetrics,
 ) {
     use fred::prelude::*;
-    let key = hw_metrics_key(provider_id);
+    let key = super::valkey_keys::hw_metrics(provider_id);
     let Ok(json) = serde_json::to_string(metrics) else {
         return;
     };
@@ -90,9 +85,6 @@ pub async fn store_hw_metrics(
         tracing::warn!(provider_id = %provider_id, "hw_metrics: failed to cache: {e}");
     }
 }
-
-/// Valkey TTL for full NodeMetrics cache per server (seconds).
-pub const NODE_METRICS_TTL: i64 = 60;
 
 /// Read cached NodeMetrics for a GPU server from Valkey.
 pub async fn load_node_metrics(
@@ -184,12 +176,20 @@ pub struct GpuNodeMetrics {
 pub async fn fetch_node_metrics(
     node_exporter_url: &str,
     prev_snapshot: Option<&CpuSnapshot>,
+    client: Option<&reqwest::Client>,
 ) -> Result<(NodeMetrics, CpuSnapshot)> {
     let url = format!("{}/metrics", node_exporter_url.trim_end_matches('/'));
 
-    let client = reqwest::Client::builder()
-        .timeout(crate::domain::constants::NODE_EXPORTER_TIMEOUT)
-        .build()?;
+    let owned;
+    let client = match client {
+        Some(c) => c,
+        None => {
+            owned = reqwest::Client::builder()
+                .timeout(crate::domain::constants::NODE_EXPORTER_TIMEOUT)
+                .build()?;
+            &owned
+        }
+    };
 
     let text = client.get(&url).send().await?.text().await?;
     let (mut metrics, snapshot) = parse_prometheus_metrics(&text);
