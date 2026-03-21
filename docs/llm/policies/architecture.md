@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-16 | Classification: Constitutional
+> SSOT | **Last Updated**: 2026-03-22 | Classification: Constitutional
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision

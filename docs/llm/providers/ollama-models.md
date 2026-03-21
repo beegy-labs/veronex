@@ -1,6 +1,6 @@
 # Providers -- Ollama: Global Model Sync & Model-Aware Routing
 
-> SSOT | **Last Updated**: 2026-03-04 (trimmed: compressed ports, condensed examples, cross-refs)
+> SSOT | **Last Updated**: 2026-03-22
 
 ## Task Guide
 
@@ -63,7 +63,7 @@ CREATE TABLE ollama_sync_jobs (
 |--------|--------|
 | `OllamaModel` | `model_name: String`, `provider_id: Uuid`, `synced_at: DateTime<Utc>` |
 | `OllamaModelWithCount` | `model_name: String`, `provider_count: i64` |
-| `OllamaProviderForModel` | `provider_id: Uuid`, `name: String`, `url: String`, `status: String` |
+| `OllamaProviderForModel` | `provider_id: Uuid`, `name: String`, `url: String`, `status: String`, `is_enabled: bool` |
 | `OllamaSyncJob` | `id: Uuid`, `started_at`, `completed_at: Option`, `status: String`, `total_providers: i32`, `done_providers: i32`, `results: serde_json::Value` |
 
 ### Trait Methods
@@ -72,9 +72,9 @@ CREATE TABLE ollama_sync_jobs (
 |-------|--------|---------|
 | `OllamaModelRepository` | `sync_provider_models(provider_id, &[String])` | `Result<()>` -- atomic DELETE + INSERT |
 | | `list_all()` | `Result<Vec<String>>` -- legacy, prefer `list_with_counts` |
-| | `list_with_counts()` | `Result<Vec<OllamaModelWithCount>>` |
+| | `list_with_counts_page(search, limit, offset)` | `Result<(Vec<OllamaModelWithCount>, i64)>` -- paginated, ILIKE search |
 | | `providers_for_model(model_name)` | `Result<Vec<Uuid>>` -- used for routing |
-| | `providers_info_for_model(model_name)` | `Result<Vec<OllamaProviderForModel>>` -- used by UI |
+| | `providers_info_for_model_page(model_name, limit, offset)` | `Result<(Vec<OllamaProviderForModel>, i64)>` -- paginated, includes is_enabled from provider_selected_models |
 | | `models_for_provider(provider_id)` | `Result<Vec<String>>` -- used by UI |
 | `OllamaSyncJobRepository` | `create(total_providers)` | `Result<Uuid>` |
 | | `update_progress(id, result: Value)` | `Result<()>` -- appends result, increments done |
@@ -88,8 +88,9 @@ CREATE TABLE ollama_sync_jobs (
 ### Global Model Pool
 
 ```
-GET /v1/ollama/models
-  -> { models: [{ model_name: "llama3", provider_count: 3 }, ...] }
+GET /v1/ollama/models?search=&page=1&limit=20
+  -> { models: [{ model_name: "llama3", provider_count: 3 }, ...], total: N, page: 1, limit: 20 }
+  Defaults: limit=20, max=200
 ```
 
 ### Global Sync (async background)
@@ -125,7 +126,7 @@ Example (completed with one failure):
 
 | Endpoint | Response |
 |----------|----------|
-| `GET /v1/ollama/models/{model}/providers` | `{ providers: [{ provider_id, name, url, status }] }` -- ordered by name |
+| `GET /v1/ollama/models/{model}/providers?page=1&limit=10` | `{ providers: [{ provider_id, name, url, status, is_enabled }], total: N, page: 1, limit: 10 }` |
 | `GET /v1/ollama/providers/{id}/models` | `{ models: ["codellama", "llama3", ...] }` -- sorted |
 
 ### Per-Provider Sync (provider_handlers.rs)
@@ -138,6 +139,23 @@ POST /v1/providers/{id}/models/sync
   4. upsert_models(id, &models) (non-fatal) -> is_enabled=true for new rows
   5. Returns { models, synced: true }
 ```
+
+---
+
+### Global Model Settings
+
+Globally disable a model across all providers (Stage 0 dispatcher gate).
+When `is_enabled = false`, the model is blocked regardless of per-provider `selected_models` state.
+
+| Endpoint | Auth | Response |
+|----------|------|----------|
+| `GET /v1/models/global-settings` | `RequireModelManage` | `Vec<{ model_name, is_enabled, updated_at }>` |
+| `GET /v1/models/global-disabled` | `RequireModelManage` | `Vec<String>` — model names where is_enabled = false |
+| `PATCH /v1/models/global-settings/{model_name}` | `RequireModelManage` | `{ is_enabled: bool }` → 200 |
+
+DB: `global_model_settings (model_name TEXT PK, is_enabled BOOL, updated_at TIMESTAMPTZ)` — migration 000010.
+
+Permission: `model_manage` (9th permission in `ALL_PERMISSIONS`).
 
 ---
 

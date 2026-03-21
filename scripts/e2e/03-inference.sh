@@ -91,10 +91,10 @@ fi
 save_var AIMD_LIMIT "$AIMD_LIMIT"
 
 # SDD: AIMD cold start = num_parallel; after learning, max_concurrent ≤ num_parallel
-PROVIDERS_JSON=$(aget "/v1/providers" 2>/dev/null || echo "[]")
+PROVIDERS_JSON=$(aget "/v1/providers" 2>/dev/null || echo '{"providers":[]}')
 NP_CHECK=$(echo "$PROVIDERS_JSON" | python3 -c "
 import sys, json
-providers = json.loads(sys.stdin.read())
+providers = json.loads(sys.stdin.read()).get('providers', [])
 nps = [p.get('num_parallel', 4) for p in providers if p.get('provider_type') == 'ollama' and p.get('is_active')]
 print(max(nps) if nps else 4)
 " 2>/dev/null || echo "4")
@@ -250,7 +250,7 @@ if [ -n "$AIMD_FINAL" ]; then
   pass "AIMD converged state: $AIMD_FINAL"
   # max_concurrent가 num_parallel 미만이면 AIMD가 실제로 학습해 하향 조정한 것
   NP_MAX=$(aget "/v1/providers" 2>/dev/null | python3 -c "
-import sys,json; p=json.load(sys.stdin)
+import sys,json; p=json.load(sys.stdin).get('providers',[])
 nps=[x.get('num_parallel',4) for x in p if x.get('is_active')]
 print(max(nps) if nps else 4)
 " 2>/dev/null || echo "4")
