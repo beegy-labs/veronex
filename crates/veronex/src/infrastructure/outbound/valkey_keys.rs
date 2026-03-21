@@ -70,6 +70,12 @@ pub fn hw_metrics(provider_id: Uuid) -> String {
     format!("veronex:hw:{provider_id}")
 }
 
+/// Full node-exporter metrics cache for a GPU server.
+/// Cached by health_checker, read by dashboard API.
+pub fn server_node_metrics(server_id: Uuid) -> String {
+    format!("veronex:server_metrics:{server_id}")
+}
+
 // ── Gemini rate-limit counters ───────────────────────────────────────────────
 
 /// Gemini RPM counter (per provider + model + minute).
