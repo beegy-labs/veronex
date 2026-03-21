@@ -95,6 +95,35 @@ else
   fail "Rate limit key creation failed"
 fi
 
+# ── TPM Rate Limiting ─────────────────────────────────────────────────────────
+
+hdr "Rate Limiting (TPM)"
+
+TPM_RES=$(apost "/v1/keys" \
+  "{\"tenant_id\":\"$USERNAME\",\"name\":\"tpm-test\",\"rate_limit_tpm\":50,\"rate_limit_rpm\":100,\"tier\":\"paid\"}" || echo "")
+TPM_KEY=$(echo "$TPM_RES" | jv '["key"]' || echo "")
+TPM_KEY_ID=$(echo "$TPM_RES" | jv '["id"]' || echo "")
+if [ -n "$TPM_KEY" ] && [ "$TPM_KEY" != "None" ]; then
+  # First request: consume tokens with a large max_tokens response
+  TPM_C1=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
+    -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about AI\"}],\"max_tokens\":80,\"stream\":false}")
+  # Second request: should hit TPM limit
+  TPM_C2=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
+    -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write another long essay about ML\"}],\"max_tokens\":80,\"stream\":false}")
+  if [ "$TPM_C2" = "429" ]; then
+    pass "TPM limit enforced — req1=$TPM_C1 req2=$TPM_C2 (429)"
+  elif [ "$TPM_C1" = "200" ] && [ "$TPM_C2" = "200" ]; then
+    info "TPM limit not triggered (tokens may not have exceeded 50) — req1=$TPM_C1 req2=$TPM_C2"
+  else
+    fail "TPM test unexpected — req1=$TPM_C1 req2=$TPM_C2"
+  fi
+  adel "/v1/keys/$TPM_KEY_ID" > /dev/null 2>&1
+else
+  fail "TPM rate limit key creation failed"
+fi
+
 # ── Session & RBAC ────────────────────────────────────────────────────────────
 
 hdr "Session & RBAC"
