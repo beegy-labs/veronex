@@ -50,20 +50,22 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   // ── Providers ─────────────────────────────────────────────────────────────────
   const { data: providers } = useQuery(providersQuery)
 
+  const geminiEnabled = labSettings?.gemini_function_calling ?? false
+
   const availableOptions = useMemo((): ProviderOption[] => {
     if (!providers) return [{ value: 'ollama', label: 'Ollama', isGemini: false }]
     const opts: ProviderOption[] = []
     if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_OLLAMA)) {
       opts.push({ value: 'ollama', label: 'Ollama', isGemini: false })
     }
-    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
+    if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
       opts.push({ value: 'gemini-free', label: t('test.geminiFree'), isGemini: true })
     }
-    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
+    if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
       opts.push({ value: 'gemini', label: t('test.gemini'), isGemini: true })
     }
     return opts.length > 0 ? opts : [{ value: 'ollama', label: 'Ollama', isGemini: false }]
-  }, [providers, t])
+  }, [providers, t, geminiEnabled])
 
   const isGeminiProvider = availableOptions.find((o) => o.value === providerType)?.isGemini ?? false
 
