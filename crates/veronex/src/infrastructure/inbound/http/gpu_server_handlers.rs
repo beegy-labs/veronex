@@ -235,33 +235,26 @@ pub async fn delete_gpu_server(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /v1/servers/{id}/metrics` — Live hardware metrics from node-exporter.
+/// `GET /v1/servers/{id}/metrics` — Cached hardware metrics from Valkey.
+///
+/// The health_checker background loop scrapes node-exporter every cycle
+/// and caches full `NodeMetrics` per server. This endpoint reads from
+/// cache instead of live-scraping, avoiding per-request network calls
+/// and scaling to 10K+ providers.
 pub async fn get_server_metrics(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> HandlerResult<Json<hw_metrics::NodeMetrics>> {
-    let server = get_gpu_server(&state, id).await?;
+    // Verify server exists
+    let _server = get_gpu_server(&state, id).await?;
 
-    let Some(ne_url) = server.node_exporter_url.filter(|u| !u.is_empty()) else {
-        return Err(AppError::UnprocessableEntity(
-            "no node_exporter_url configured for this server".into(),
-        ));
+    let Some(pool) = state.valkey_pool.as_ref() else {
+        return Ok(Json(hw_metrics::NodeMetrics::default()));
     };
 
-    let prev_snapshot = state
-        .cpu_snapshot_cache
-        .get(&id)
-        .map(|r| r.clone());
-
-    match hw_metrics::fetch_node_metrics(&ne_url, prev_snapshot.as_ref()).await {
-        Ok((metrics, snapshot)) => {
-            state.cpu_snapshot_cache.insert(id, snapshot);
-            Ok(Json(metrics))
-        }
-        Err(e) => {
-            tracing::warn!(%id, url = %ne_url, error = %e, "failed to fetch node metrics");
-            Ok(Json(hw_metrics::NodeMetrics::default()))
-        }
+    match hw_metrics::load_node_metrics(pool, id).await {
+        Some(metrics) => Ok(Json(metrics)),
+        None => Ok(Json(hw_metrics::NodeMetrics::default())),
     }
 }
 

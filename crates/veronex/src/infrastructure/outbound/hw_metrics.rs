@@ -91,6 +91,39 @@ pub async fn store_hw_metrics(
     }
 }
 
+/// Valkey TTL for full NodeMetrics cache per server (seconds).
+pub const NODE_METRICS_TTL: i64 = 60;
+
+/// Read cached NodeMetrics for a GPU server from Valkey.
+pub async fn load_node_metrics(
+    pool: &fred::clients::Pool,
+    server_id: Uuid,
+) -> Option<NodeMetrics> {
+    use fred::prelude::*;
+    let key = super::valkey_keys::server_node_metrics(server_id);
+    let cached: Option<String> = pool.get(&key).await.unwrap_or(None);
+    serde_json::from_str(&cached?).ok()
+}
+
+/// Write NodeMetrics for a GPU server to Valkey (TTL = 60 s).
+pub async fn store_node_metrics(
+    pool: &fred::clients::Pool,
+    server_id: Uuid,
+    metrics: &NodeMetrics,
+) {
+    use fred::prelude::*;
+    let key = super::valkey_keys::server_node_metrics(server_id);
+    let Ok(json) = serde_json::to_string(metrics) else {
+        return;
+    };
+    if let Err(e) = pool
+        .set::<String, _, _>(key, json, Some(Expiration::EX(NODE_METRICS_TTL)), None, false)
+        .await
+    {
+        tracing::warn!(server_id = %server_id, "node_metrics: failed to cache: {e}");
+    }
+}
+
 // ── Node-exporter live fetch ───────────────────────────────────────────────────
 
 /// Raw CPU counter snapshot used for delta-based usage calculation.

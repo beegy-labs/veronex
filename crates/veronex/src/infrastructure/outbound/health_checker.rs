@@ -9,7 +9,7 @@ use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegis
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::outbound::capacity::thermal::{ThermalThrottleMap, ThrottleLevel};
-use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, fetch_node_metrics, HwMetrics};
+use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, store_node_metrics, fetch_node_metrics, HwMetrics};
 use crate::infrastructure::outbound::gemini::adapter::GEMINI_BASE_URL;
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -143,6 +143,11 @@ async fn poll_node_exporter_metrics(
     );
 
     store_hw_metrics(valkey_pool, provider.id, &hw).await;
+
+    // Cache full NodeMetrics per server for dashboard API (avoids live scraping).
+    if let Some(server_id) = provider.server_id {
+        store_node_metrics(valkey_pool, server_id, &node_metrics).await;
+    }
 }
 
 // ── Background task ────────────────────────────────────────────────────────────
