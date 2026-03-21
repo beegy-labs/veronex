@@ -89,7 +89,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
 
   // ── Models ────────────────────────────────────────────────────────────────────
   const { data: ollamaModelsData } = useQuery({
-    ...ollamaModelsQuery,
+    ...ollamaModelsQuery(),
     enabled: !isGeminiProvider,
   })
 

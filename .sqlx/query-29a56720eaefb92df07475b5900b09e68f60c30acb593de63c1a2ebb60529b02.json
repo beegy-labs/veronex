@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT model_name, synced_at FROM gemini_models ORDER BY model_name ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "synced_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "29a56720eaefb92df07475b5900b09e68f60c30acb593de63c1a2ebb60529b02"
+}

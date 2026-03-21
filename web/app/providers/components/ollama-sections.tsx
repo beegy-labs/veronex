@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { OllamaSyncJob } from '@/lib/types'
@@ -20,6 +20,7 @@ export { OllamaCapacitySection, ThermalBadge, VramBar } from './ollama-capacity-
 // ── Shared page size ───────────────────────────────────────────────────────────
 
 export const PAGE_SIZE = 10
+const MODEL_LIMIT = 20
 
 // ── Ollama Global Sync Section ─────────────────────────────────────────────────
 
@@ -27,6 +28,8 @@ export function OllamaSyncSection() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [page, setPage] = useState(1)
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
 
   const { data: syncJob } = useQuery({
@@ -37,18 +40,16 @@ export function OllamaSyncSection() {
     },
   })
 
-  const { data: ollamaModelsData } = useQuery(ollamaModelsQuery)
+  const { data: ollamaModelsData } = useQuery(ollamaModelsQuery({ search: debouncedSearch, page, limit: MODEL_LIMIT }))
 
   const { data: globalSettings } = useQuery({
     queryKey: ['global-model-settings'],
     queryFn: () => api.globalModelSettings(),
   })
 
-  const globalDisabledSet = useMemo(() => {
-    const set = new Set<string>()
-    globalSettings?.forEach(s => { if (!s.is_enabled) set.add(s.model_name) })
-    return set
-  }, [globalSettings])
+  const globalDisabledSet = new Set<string>(
+    (globalSettings ?? []).filter(s => !s.is_enabled).map(s => s.model_name)
+  )
 
   const canManageModels = hasPermission('model_manage')
 
@@ -67,21 +68,20 @@ export function OllamaSyncSection() {
   })
 
   const isRunning = syncJob?.status === 'running' || syncMutation.isPending
-  const allModels = ollamaModelsData?.models ?? []
-  const [modelPage, setModelPage] = useState(0)
-  const MODEL_PAGE_SIZE = 20
-  const filteredModels = useMemo(() =>
-    allModels.filter((m) =>
-      m.model_name.toLowerCase().includes(search.toLowerCase())
-    ),
-    [allModels, search],
-  )
-  const modelTotalPages = Math.max(1, Math.ceil(filteredModels.length / MODEL_PAGE_SIZE))
-  const modelSafePage = Math.min(modelPage, modelTotalPages - 1)
-  const modelPageItems = useMemo(() =>
-    filteredModels.slice(modelSafePage * MODEL_PAGE_SIZE, (modelSafePage + 1) * MODEL_PAGE_SIZE),
-    [filteredModels, modelSafePage],
-  )
+  const models = ollamaModelsData?.models ?? []
+  const total = ollamaModelsData?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / MODEL_LIMIT))
+
+  // Debounce search input
+  function handleSearch(v: string) {
+    setSearch(v)
+    setPage(1)
+    clearTimeout((handleSearch as unknown as { _t?: ReturnType<typeof setTimeout> })._t)
+    ;(handleSearch as unknown as { _t?: ReturnType<typeof setTimeout> })._t = setTimeout(
+      () => setDebouncedSearch(v),
+      300,
+    )
+  }
 
   return (
     <div className="space-y-3">
@@ -107,11 +107,11 @@ export function OllamaSyncSection() {
             )}
           </div>
 
-          {allModels.length === 0 && (
+          {total === 0 && !debouncedSearch && (
             <p className="text-xs text-muted-foreground italic">{t('providers.ollama.ollamaNoSync')}</p>
           )}
 
-          {allModels.length > 0 && (
+          {(total > 0 || debouncedSearch) && (
             <div className="space-y-3">
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground/60 pointer-events-none" />
@@ -119,22 +119,22 @@ export function OllamaSyncSection() {
                   className="pl-8 h-8 text-sm"
                   placeholder={t('providers.ollama.ollamaSearchModels')}
                   value={search}
-                  onChange={(e) => { setSearch(e.target.value); setModelPage(0) }}
+                  onChange={(e) => handleSearch(e.target.value)}
                 />
               </div>
               <div className="flex items-center justify-between">
                 <p className="text-xs font-medium text-muted-foreground">
                   {t('providers.ollama.ollamaAvailableModels')}
                 </p>
-                <span className="text-xs text-muted-foreground">{filteredModels.length}/{allModels.length}</span>
+                <span className="text-xs text-muted-foreground tabular-nums">{total}</span>
               </div>
               <div className="divide-y divide-border rounded-md border border-border overflow-hidden">
-                {filteredModels.length === 0 && search && (
+                {models.length === 0 && debouncedSearch && (
                   <p className="text-xs text-muted-foreground italic py-3 px-3">
-                    {t('providers.ollama.noModelsMatch')} &ldquo;{search}&rdquo;
+                    {t('providers.ollama.noModelsMatch')} &ldquo;{debouncedSearch}&rdquo;
                   </p>
                 )}
-                {modelPageItems.map((m) => {
+                {models.map((m) => {
                   const isDisabled = globalDisabledSet.has(m.model_name)
                   return (
                     <div
@@ -171,17 +171,17 @@ export function OllamaSyncSection() {
                   )
                 })}
               </div>
-              {modelTotalPages > 1 && (
+              {totalPages > 1 && (
                 <div className="flex items-center justify-end gap-1 mt-2">
                   <span className="text-xs text-muted-foreground tabular-nums mr-2">
-                    {modelSafePage * MODEL_PAGE_SIZE + 1}–{Math.min((modelSafePage + 1) * MODEL_PAGE_SIZE, filteredModels.length)} / {filteredModels.length}
+                    {(page - 1) * MODEL_LIMIT + 1}–{Math.min(page * MODEL_LIMIT, total)} / {total}
                   </span>
-                  <Button variant="outline" size="icon" className="h-7 w-7" disabled={modelSafePage <= 0}
-                    onClick={() => setModelPage(p => p - 1)}>
+                  <Button variant="outline" size="icon" className="h-7 w-7" disabled={page <= 1}
+                    onClick={() => setPage(p => p - 1)}>
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </Button>
-                  <Button variant="outline" size="icon" className="h-7 w-7" disabled={modelSafePage >= modelTotalPages - 1}
-                    onClick={() => setModelPage(p => p + 1)}>
+                  <Button variant="outline" size="icon" className="h-7 w-7" disabled={page >= totalPages}
+                    onClick={() => setPage(p => p + 1)}>
                     <ChevronRight className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -197,4 +197,3 @@ export function OllamaSyncSection() {
     </div>
   )
 }
-

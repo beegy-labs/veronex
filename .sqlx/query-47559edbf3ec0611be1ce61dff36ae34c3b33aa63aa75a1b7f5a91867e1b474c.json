@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO gemini_sync_config (id, api_key_encrypted, updated_at)\n            VALUES (1, $1, NOW())\n            ON CONFLICT (id) DO UPDATE\n                SET api_key_encrypted = EXCLUDED.api_key_encrypted,\n                    updated_at        = NOW()\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "47559edbf3ec0611be1ce61dff36ae34c3b33aa63aa75a1b7f5a91867e1b474c"
+}
