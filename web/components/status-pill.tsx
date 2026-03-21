@@ -18,7 +18,7 @@ export function StatusPill({
   className?: string
 }) {
   return (
-    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${className ?? 'bg-muted/60 border border-border text-muted-foreground'}`}>
+    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${className ?? 'bg-muted/60 border border-border text-muted-foreground'}`}>
       {icon}
       <span className="tabular-nums">{count}</span>
       <span>{label}</span>

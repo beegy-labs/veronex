@@ -309,7 +309,7 @@
     },
     "servers": {
       "title": "サーバー",
-      "description": "物理GPUサーバー — サーバーごとにnode-exporterが1つ。",
+      "description": "GPUサーバーを登録し、ハードウェアメトリクスを監視します。",
       "name": "名前",
       "nodeExporterUrl": "node-exporterエンドポイント",
       "registeredAt": "登録日時",
@@ -342,6 +342,7 @@
     },
     "ollama": {
       "title": "Ollamaプロバイダー",
+      "description": "Ollamaサーバーを登録し、推論ルーティングを管理します。",
       "name": "名前",
       "url": "URL",
       "vram": "VRAM",
@@ -439,7 +440,8 @@
       "colActiveLimit": "アクティブ / 制限"
     },
     "gemini": {
-      "title": "Gemini APIキー",
+      "title": "Geminiプロバイダー",
+      "description": "Gemini APIキーを登録し、クラウド推論ルーティングを管理します。",
       "name": "名前",
       "apiKey": "APIキー",
       "freeTier": "無料プラン",

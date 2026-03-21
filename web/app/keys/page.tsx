@@ -300,16 +300,16 @@ export default function KeysPage() {
             <DataTable minWidth="720px">
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('keys.name')}</TableHead>
-                  <TableHead>{t('keys.prefix')}</TableHead>
-                  <TableHead>{t('keys.tenant')}</TableHead>
-                  <TableHead>{t('keys.tier')}</TableHead>
-                  <TableHead>{t('keys.status')}</TableHead>
-                  <TableHead>{t('keys.activeToggle')}</TableHead>
-                  <TableHead>{t('keys.rpmTpm')}</TableHead>
-                  {hasCreatedBy && <TableHead>{t('keys.createdBy')}</TableHead>}
-                  <TableHead>{t('keys.createdAt')}</TableHead>
-                  <TableHead className="text-right">{t('keys.actions')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.name')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.prefix')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.tenant')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.tier')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.status')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.activeToggle')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.rpmTpm')}</TableHead>
+                  {hasCreatedBy && <TableHead className="whitespace-nowrap">{t('keys.createdBy')}</TableHead>}
+                  <TableHead className="whitespace-nowrap">{t('keys.createdAt')}</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -338,11 +338,11 @@ export default function KeysPage() {
                     <TableCell>
                       <Badge
                         variant="outline"
-                        className={
+                        className={`whitespace-nowrap ${
                           key.is_active
                             ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
                             : 'bg-muted text-muted-foreground'
-                        }
+                        }`}
                       >
                         {key.is_active ? t('common.active') : t('common.inactive')}
                       </Badge>

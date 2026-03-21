@@ -61,8 +61,12 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t('providers.title')}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{t('providers.description')}</p>
+        <h1 className="text-2xl font-bold tracking-tight">
+          {section === 'gemini' ? t('providers.gemini.title') : t('providers.ollama.title')}
+        </h1>
+        <p className="text-muted-foreground mt-1 text-sm">
+          {section === 'gemini' ? t('providers.gemini.description') : t('providers.ollama.description')}
+        </p>
       </div>
 
       {section === 'ollama' && (
