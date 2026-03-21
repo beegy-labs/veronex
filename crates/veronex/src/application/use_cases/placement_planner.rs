@@ -219,7 +219,7 @@ async fn planner_tick(
         .collect();
 
     // Provisional free VRAM tracking (prevents multi-model collision in same cycle)
-    let mut provisional_free: HashMap<Uuid, u32> = HashMap::new();
+    let mut provisional_free: HashMap<Uuid, u64> = HashMap::new();
     for p in &scale_out_candidates {
         provisional_free.insert(p.id, vram_pool.available_vram_mb(p.id));
     }
