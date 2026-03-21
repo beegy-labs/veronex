@@ -22,8 +22,7 @@ pub async fn list_global_model_settings(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<GlobalModelSettingResponse>>, AppError> {
-    let settings = state.global_model_settings_repo.list().await
-        .map_err(|e| AppError::Internal(e))?;
+    let settings = state.global_model_settings_repo.list().await?;
     Ok(Json(settings.into_iter().map(|s| GlobalModelSettingResponse {
         model_name: s.model_name,
         is_enabled: s.is_enabled,
@@ -35,8 +34,7 @@ pub async fn list_global_disabled_models(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<String>>, AppError> {
-    let disabled = state.global_model_settings_repo.list_disabled().await
-        .map_err(|e| AppError::Internal(e))?;
+    let disabled = state.global_model_settings_repo.list_disabled().await?;
     Ok(Json(disabled))
 }
 
@@ -47,8 +45,7 @@ pub async fn set_global_model_enabled(
     Path(model_name): Path<String>,
     Json(body): Json<SetEnabledBody>,
 ) -> Result<Json<GlobalModelSettingResponse>, AppError> {
-    state.global_model_settings_repo.set_enabled(&model_name, body.is_enabled).await
-        .map_err(|e| AppError::Internal(e))?;
+    state.global_model_settings_repo.set_enabled(&model_name, body.is_enabled).await?;
     Ok(Json(GlobalModelSettingResponse {
         model_name,
         is_enabled: body.is_enabled,

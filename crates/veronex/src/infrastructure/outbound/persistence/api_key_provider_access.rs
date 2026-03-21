@@ -59,8 +59,7 @@ impl ApiKeyProviderAccessRepository for PostgresApiKeyProviderAccessRepository {
         )
         .bind(api_key_id)
         .fetch_one(&self.pool)
-        .await
-        .unwrap_or(0);
+        .await?;
         Ok(count > 0)
     }
 }
