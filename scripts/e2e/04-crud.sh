@@ -167,4 +167,45 @@ else
   fail "Create temp server failed ($TMP_SRV_CODE)"
 fi
 
+# ── Global Model Settings ─────────────────────────────────────────────────────
+
+hdr "Global Model Settings"
+
+assert_get "/v1/models/global-settings" 200 "List global model settings"
+assert_get "/v1/models/global-disabled" 200 "List globally disabled models"
+
+# Disable a model globally
+GMS_RES=$(apatchc "/v1/models/global-settings/$MODEL" '{"is_enabled":false}')
+GMS_CODE=$(echo "$GMS_RES" | code)
+if [ "$GMS_CODE" = "200" ]; then
+  pass "Disable model globally → 200"
+
+  # Verify it appears in disabled list
+  DISABLED=$(aget "/v1/models/global-disabled" 2>/dev/null || echo "[]")
+  echo "$DISABLED" | grep -q "$MODEL" \
+    && pass "Model in disabled list" || fail "Model not in disabled list"
+
+  # Re-enable
+  c=$(apatchc "/v1/models/global-settings/$MODEL" '{"is_enabled":true}' | code)
+  [ "$c" = "200" ] && pass "Re-enable model globally → 200" || fail "Re-enable → $c"
+else
+  fail "Disable model globally → $GMS_CODE"
+fi
+
+# ── API Key Provider Access ───────────────────────────────────────────────────
+
+hdr "API Key Provider Access"
+
+if [ -n "${API_KEY_ID_PAID:-}" ] && [ "$API_KEY_ID_PAID" != "None" ] && [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
+  assert_get "/v1/keys/$API_KEY_ID_PAID/providers" 200 "List key provider access"
+
+  c=$(apatchc "/v1/keys/$API_KEY_ID_PAID/providers/$PROVIDER_ID_LOCAL" '{"is_allowed":false}' | code)
+  [ "$c" = "200" ] && pass "Deny provider access → 200" || fail "Deny → $c"
+
+  c=$(apatchc "/v1/keys/$API_KEY_ID_PAID/providers/$PROVIDER_ID_LOCAL" '{"is_allowed":true}' | code)
+  [ "$c" = "200" ] && pass "Allow provider access → 200" || fail "Allow → $c"
+else
+  info "Skipping key provider access (no paid key or local provider)"
+fi
+
 save_counts
