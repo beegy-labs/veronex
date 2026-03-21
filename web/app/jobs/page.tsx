@@ -17,6 +17,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useTranslation } from '@/i18n'
 import { StatusPill } from '@/components/status-pill'
+import { useLabSettings } from '@/components/lab-settings-provider'
 import { fmtNumber } from '@/lib/date'
 import { api } from '@/lib/api'
 
@@ -105,6 +106,8 @@ interface JobsSectionProps {
 
 function JobsSection({ source, onRetry }: JobsSectionProps) {
   const { t } = useTranslation()
+  const { labSettings } = useLabSettings()
+  const geminiEnabled = labSettings?.gemini_function_calling ?? false
   const [page, setPage] = useState(0)
   const [status, setStatus] = useState('all')
   const [search, setSearch] = useState('')
@@ -195,7 +198,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
             <SelectContent>
               <SelectItem value="all">{t('jobs.allProviders')}</SelectItem>
               <SelectItem value="ollama">Ollama</SelectItem>
-              <SelectItem value="gemini">Gemini</SelectItem>
+              {geminiEnabled && <SelectItem value="gemini">Gemini</SelectItem>}
             </SelectContent>
           </Select>
           <Input

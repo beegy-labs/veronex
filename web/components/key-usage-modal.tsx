@@ -22,7 +22,7 @@ import {
 import { DataTable } from '@/components/data-table'
 import StatsCard from '@/components/stats-card'
 import { useTranslation } from '@/i18n'
-import { TimeRangeSelector } from '@/components/time-range-selector'
+import { TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
 import { tokens } from '@/lib/design-tokens'
@@ -37,7 +37,8 @@ export function KeyUsageModal({
 }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const [hours, setHours] = useState(24)
+  const [range, setRange] = useState<TimeRange>({ hours: 24 })
+  const hours = range.hours
 
   const { data: hourly, isLoading } = useQuery(keyUsageQuery(apiKey.id, hours))
   const { data: models } = useQuery(keyModelBreakdownQuery(apiKey.id, hours))
@@ -87,7 +88,7 @@ export function KeyUsageModal({
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <TimeRangeSelector value={hours} onChange={setHours} />
+              <TimeRangeSelector value={range} onChange={setRange} />
             </div>
           </div>
         </DialogHeader>
