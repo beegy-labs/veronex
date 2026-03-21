@@ -9,6 +9,12 @@ source "$SCRIPT_DIR/_lib.sh"; load_state
 hdr "Account CRUD"
 
 assert_get "/v1/accounts" 200 "List accounts"
+assert_get "/v1/accounts?page=1&limit=10" 200 "List accounts paginated"
+assert_get "/v1/accounts?search=test&page=1&limit=5" 200 "List accounts search+paginated"
+# Verify response has total field
+ACCT_TOTAL=$(aget "/v1/accounts?limit=10" 2>/dev/null | jv '["total"]' 2>/dev/null || echo "")
+[ -n "$ACCT_TOTAL" ] && [ "$ACCT_TOTAL" != "None" ] \
+  && pass "Accounts response has total=$ACCT_TOTAL" || fail "Accounts response missing total field"
 
 TEST_USER="e2e-user-$(python3 -c 'import uuid;print(str(uuid.uuid4())[:8])')"
 ACCT_RES=$(apostc "/v1/accounts" \
@@ -44,6 +50,11 @@ esac
 hdr "API Key CRUD"
 
 assert_get "/v1/keys" 200 "List keys"
+assert_get "/v1/keys?page=1&limit=10" 200 "List keys paginated"
+assert_get "/v1/keys?search=e2e&page=1&limit=5" 200 "List keys search+paginated"
+KEYS_TOTAL=$(aget "/v1/keys?limit=10" 2>/dev/null | jv '["total"]' 2>/dev/null || echo "")
+[ -n "$KEYS_TOTAL" ] && [ "$KEYS_TOTAL" != "None" ] \
+  && pass "Keys response has total=$KEYS_TOTAL" || fail "Keys response missing total field"
 
 KEY_RES=$(apostc "/v1/keys" \
   "{\"tenant_id\":\"$USERNAME\",\"name\":\"e2e-lifecycle\",\"tier\":\"free\"}")
@@ -72,6 +83,31 @@ fi
 
 # ── Provider CRUD (including num_parallel) ────────────────────────────────────
 
+hdr "Provider List Pagination"
+
+assert_get "/v1/providers" 200 "List providers"
+assert_get "/v1/providers?page=1&limit=10" 200 "List providers paginated"
+assert_get "/v1/providers?search=ollama&page=1&limit=5" 200 "List providers search+paginated"
+PROV_TOTAL=$(aget "/v1/providers?limit=10" 2>/dev/null | jv '["total"]' 2>/dev/null || echo "")
+[ -n "$PROV_TOTAL" ] && [ "$PROV_TOTAL" != "None" ] \
+  && pass "Providers response has total=$PROV_TOTAL" || fail "Providers response missing total field"
+
+# Ollama model list pagination
+assert_get "/v1/ollama/models" 200 "List ollama models"
+assert_get "/v1/ollama/models?page=1&limit=20" 200 "List ollama models paginated"
+OLLAMA_TOTAL=$(aget "/v1/ollama/models?limit=20" 2>/dev/null | jv '["total"]' 2>/dev/null || echo "")
+[ -n "$OLLAMA_TOTAL" ] && [ "$OLLAMA_TOTAL" != "None" ] \
+  && pass "Ollama models response has total=$OLLAMA_TOTAL" || fail "Ollama models missing total field"
+
+# Ollama model→providers pagination
+if [ -n "${MODEL:-}" ]; then
+  MENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$MODEL'))" 2>/dev/null || echo "$MODEL")
+  assert_get "/v1/ollama/models/$MENC/providers?page=1&limit=10" 200 "Model providers paginated"
+  MP_TOTAL=$(aget "/v1/ollama/models/$MENC/providers?limit=10" 2>/dev/null | jv '["total"]' 2>/dev/null || echo "")
+  [ -n "$MP_TOTAL" ] && [ "$MP_TOTAL" != "None" ] \
+    && pass "Model providers response has total=$MP_TOTAL" || fail "Model providers missing total field"
+fi
+
 hdr "Provider CRUD — num_parallel Field (SDD)"
 
 # Verify num_parallel in existing providers
@@ -79,7 +115,8 @@ if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
   PROV_JSON=$(agetc "/v1/providers/$PROVIDER_ID_LOCAL" | body 2>/dev/null || echo "{}")
   # Fall back to list endpoint
   PROV_JSON=$(aget "/v1/providers" 2>/dev/null | python3 -c "
-import sys,json; providers=json.loads(sys.stdin.read())
+import sys,json; d=json.loads(sys.stdin.read())
+providers=d.get('providers', d) if isinstance(d, dict) else d
 p=[p for p in providers if p.get('id')=='$PROVIDER_ID_LOCAL']
 import json; print(json.dumps(p[0]) if p else '{}')
 " 2>/dev/null || echo "{}")
@@ -99,7 +136,8 @@ if [ "$TMP_CODE" = "201" ] && [ -n "$TMP_ID" ] && [ "$TMP_ID" != "None" ]; then
 
   # Verify num_parallel=8 in list
   TMP_NP=$(aget "/v1/providers" 2>/dev/null | python3 -c "
-import sys,json; providers=json.loads(sys.stdin.read())
+import sys,json; d=json.loads(sys.stdin.read())
+providers=d.get('providers', d) if isinstance(d, dict) else d
 p=[p for p in providers if p.get('id')=='$TMP_ID']
 print(p[0].get('num_parallel','?') if p else '?')
 " 2>/dev/null || echo "?")
@@ -145,6 +183,11 @@ c=$(agetc "/v1/ollama/models/$MODEL/providers" | code)
 hdr "Server CRUD"
 
 assert_get "/v1/servers" 200 "List servers"
+assert_get "/v1/servers?page=1&limit=10" 200 "List servers paginated"
+assert_get "/v1/servers?search=local&page=1&limit=5" 200 "List servers search+paginated"
+SRVS_TOTAL=$(aget "/v1/servers?limit=10" 2>/dev/null | jv '["total"]' 2>/dev/null || echo "")
+[ -n "$SRVS_TOTAL" ] && [ "$SRVS_TOTAL" != "None" ] \
+  && pass "Servers response has total=$SRVS_TOTAL" || fail "Servers response missing total field"
 
 # Validation tests (missing URL, duplicate, unreachable) → 11-verify-liveness.sh
 
