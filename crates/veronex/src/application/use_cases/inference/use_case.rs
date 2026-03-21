@@ -20,6 +20,7 @@ use crate::application::ports::outbound::observability_port::ObservabilityPort;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
+use crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
 use crate::application::ports::outbound::thermal_drain_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
@@ -58,6 +59,7 @@ pub struct InferenceUseCaseImpl {
     image_store: Option<Arc<dyn ImageStore>>,
     ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
+    global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
     instance_id: Arc<str>,
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
 }
@@ -79,6 +81,7 @@ impl InferenceUseCaseImpl {
         image_store: Option<Arc<dyn ImageStore>>,
         ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
         model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
+        global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
         instance_id: Arc<str>,
     ) -> Self {
         Self {
@@ -86,6 +89,7 @@ impl InferenceUseCaseImpl {
             jobs: Arc::new(DashMap::new()),
             vram_pool, thermal, circuit_breaker, provider_dispatch,
             event_tx, message_store, image_store, ollama_model_repo, model_selection_repo,
+            global_model_settings_repo,
             instance_id, cancel_notifiers: Arc::new(DashMap::new()),
         }
     }
@@ -168,16 +172,16 @@ impl InferenceUseCaseImpl {
             self.vram_pool.clone(), self.thermal.clone(),
             self.circuit_breaker.clone(), self.provider_dispatch.clone(),
         );
-        let (ev, iid, cn, omr, msr) = (
+        let (ev, iid, cn, omr, msr, gmsr) = (
             self.event_tx.clone(), self.instance_id.clone(),
             self.cancel_notifiers.clone(), self.ollama_model_repo.clone(),
-            self.model_selection_repo.clone(),
+            self.model_selection_repo.clone(), self.global_model_settings_repo.clone(),
         );
         tracing::info!("multi-provider queue dispatcher started");
         async move {
             queue_dispatcher_loop(
                 jobs, registry, job_repo, valkey, obs, mm, vram, thermal,
-                cb, pd, ev, iid, cn, omr, msr, shutdown,
+                cb, pd, ev, iid, cn, omr, msr, gmsr, shutdown,
             ).await;
         }.boxed()
     }
