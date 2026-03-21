@@ -247,10 +247,12 @@
     "groupingSuccess": "セッションのまとめを開始しました",
     "groupingError": "セッションのまとめに失敗しました",
     "groupingAlreadyRunning": "セッションのまとめは既に実行中です",
-    "providerName": "プロバイダー",
+    "providerName": "サーバー名",
     "images": "画像",
-    "filterModel": "モデル…",
-    "filterProvider": "プロバイダー…"
+    "filterModel": "モデル",
+    "filterProvider": "プロバイダー",
+    "filters": "フィルター",
+    "filtersActive": "フィルター ({{count}})"
   },
   "keys": {
     "title": "APIキー",

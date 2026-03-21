@@ -247,10 +247,12 @@
     "groupingSuccess": "Session grouping triggered",
     "groupingError": "Failed to trigger session grouping",
     "groupingAlreadyRunning": "Session grouping already in progress",
-    "providerName": "Provider",
+    "providerName": "Server",
     "images": "Images",
-    "filterModel": "Model…",
-    "filterProvider": "Provider…"
+    "filterModel": "Model",
+    "filterProvider": "Provider",
+    "filters": "Filters",
+    "filtersActive": "Filters ({{count}})"
   },
   "keys": {
     "title": "API Keys",
