@@ -309,7 +309,7 @@
     },
     "servers": {
       "title": "Servers",
-      "description": "Physical GPU servers — one node-exporter per server.",
+      "description": "Register GPU servers and monitor hardware metrics.",
       "name": "Name",
       "nodeExporterUrl": "node-exporter endpoint",
       "registeredAt": "Registered",
@@ -342,6 +342,7 @@
     },
     "ollama": {
       "title": "Ollama Providers",
+      "description": "Register Ollama servers and manage inference routing.",
       "name": "Name",
       "url": "URL",
       "vram": "VRAM",
@@ -439,7 +440,8 @@
       "colActiveLimit": "Active / Limit"
     },
     "gemini": {
-      "title": "Gemini API Keys",
+      "title": "Gemini Providers",
+      "description": "Register Gemini API keys and manage cloud inference routing.",
       "name": "Name",
       "apiKey": "API Key",
       "freeTier": "Free Tier",

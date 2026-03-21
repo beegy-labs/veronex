@@ -170,9 +170,9 @@ export function OllamaTab({
               <TableHead>{t('providers.ollama.name')}</TableHead>
               <TableHead>{t('providers.ollama.server')}</TableHead>
               <TableHead className="min-w-52">{t('providers.servers.liveMetrics')}</TableHead>
-              <TableHead>{t('providers.ollama.status')}</TableHead>
-              <TableHead>{t('providers.servers.registeredAt')}</TableHead>
-              <TableHead className="text-right">{t('keys.actions')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('providers.ollama.status')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
+              <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
             </TableRow>
           </TableHeader>
               <TableBody>
