@@ -146,11 +146,7 @@ hdr "Server CRUD"
 
 assert_get "/v1/servers" 200 "List servers"
 
-# node_exporter_url is now required — missing URL should → 400
-TMP_SRV_NO_URL=$(apostc "/v1/servers" '{"name":"tmp-srv-no-url"}' | code)
-[ "$TMP_SRV_NO_URL" = "400" ] \
-  && pass "Server without node_exporter_url → 400" \
-  || fail "Server without node_exporter_url → $TMP_SRV_NO_URL (expected 400)"
+# Validation tests (missing URL, duplicate, unreachable) → 11-verify-liveness.sh
 
 # Create with valid URL (use existing node-exporter that is already registered → 409 expected)
 TMP_SRV_URL="${NODE_EXPORTER_LOCAL:-http://host.docker.internal:9100}"
