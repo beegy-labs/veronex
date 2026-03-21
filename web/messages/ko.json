@@ -251,6 +251,7 @@
     "images": "이미지",
     "filterModel": "모델",
     "filterProvider": "프로바이더",
+    "allProviders": "전체 프로바이더",
     "filters": "필터",
     "filtersActive": "필터 ({{count}})"
   },

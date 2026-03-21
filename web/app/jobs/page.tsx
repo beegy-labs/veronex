@@ -110,7 +110,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const [search, setSearch] = useState('')
   const [query, setQuery] = useState('')
   const [modelFilter, setModelFilter] = useState('')
-  const [providerFilter, setProviderFilter] = useState('')
+  const [providerTypeFilter, setProviderTypeFilter] = useState('all')
   const [serverNameFilter, setServerNameFilter] = useState('')
   const [showFilters, setShowFilters] = useState(false)
 
@@ -126,7 +126,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const offset = page * PAGE_SIZE
 
   const { data, isLoading, error } = useQuery(
-    dashboardJobsQuery({ source, page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: providerFilter || undefined }),
+    dashboardJobsQuery({ source, page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: serverNameFilter || undefined, providerType: providerTypeFilter !== 'all' ? providerTypeFilter : undefined }),
   )
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
@@ -136,7 +136,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const commitSearch = useCallback(() => { setQuery(search); setPage(0) }, [search])
   const clearSearch = useCallback(() => { setSearch(''); setQuery(''); setPage(0) }, [])
   const goTo = (p: number) => setPage(Math.max(0, Math.min(totalPages - 1, p)))
-  const activeFilterCount = (modelFilter ? 1 : 0) + (providerFilter ? 1 : 0) + (serverNameFilter ? 1 : 0) + (status !== 'all' ? 1 : 0)
+  const activeFilterCount = (modelFilter ? 1 : 0) + (providerTypeFilter !== 'all' ? 1 : 0) + (serverNameFilter ? 1 : 0) + (status !== 'all' ? 1 : 0)
 
   return (
     <div className="space-y-4">
@@ -194,12 +194,16 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
             value={modelFilter}
             onChange={(e) => { setModelFilter(e.target.value); setPage(0) }}
           />
-          <Input
-            className="w-36 h-9 text-sm"
-            placeholder={t('jobs.filterProvider')}
-            value={providerFilter}
-            onChange={(e) => { setProviderFilter(e.target.value); setPage(0) }}
-          />
+          <Select value={providerTypeFilter} onValueChange={(val) => { setProviderTypeFilter(val); setPage(0) }}>
+            <SelectTrigger className="w-36 h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t('jobs.allProviders')}</SelectItem>
+              <SelectItem value="ollama">Ollama</SelectItem>
+              <SelectItem value="gemini">Gemini</SelectItem>
+            </SelectContent>
+          </Select>
           <Input
             className="w-36 h-9 text-sm"
             placeholder={t('jobs.providerName')}
