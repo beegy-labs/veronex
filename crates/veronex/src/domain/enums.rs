@@ -26,6 +26,7 @@ pub enum Permission {
     AuditView,
     SettingsManage,
     RoleManage,
+    ModelManage,
 }
 
 impl Permission {
@@ -39,6 +40,7 @@ impl Permission {
             Self::AuditView => "audit_view",
             Self::SettingsManage => "settings_manage",
             Self::RoleManage => "role_manage",
+            Self::ModelManage => "model_manage",
         }
     }
 }
@@ -47,7 +49,7 @@ impl Permission {
 pub const ALL_PERMISSIONS: &[&str] = &[
     "dashboard_view", "api_test", "provider_manage",
     "key_manage", "account_manage", "audit_view", "settings_manage",
-    "role_manage",
+    "role_manage", "model_manage",
 ];
 
 // ── Menu ────────────────────────────────────────────────────────────────────
