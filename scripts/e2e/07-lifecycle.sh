@@ -243,6 +243,8 @@ fi
 assert_get "/v1/dashboard/jobs?status=completed&limit=5" 200 "Jobs filter: status=completed"
 assert_get "/v1/dashboard/jobs?q=hello&limit=5" 200 "Jobs filter: full-text search"
 assert_get "/v1/dashboard/jobs?source=api&limit=5" 200 "Jobs filter: source=api"
+assert_get "/v1/dashboard/jobs?provider_type=ollama&limit=5" 200 "Jobs filter: provider_type=ollama"
+assert_get "/v1/dashboard/jobs?provider_type=gemini&limit=5" 200 "Jobs filter: provider_type=gemini"
 
 # Session revocation: tested in 05-security.sh (security phase owns this)
 
