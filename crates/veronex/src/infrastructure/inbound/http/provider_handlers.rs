@@ -22,14 +22,7 @@ use super::state::AppState;
 
 use super::constants::MODELS_CACHE_TTL;
 
-// ── Pagination params ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, Default)]
-pub struct ListPageParams {
-    pub search: Option<String>,
-    pub page: Option<i64>,
-    pub limit: Option<i64>,
-}
+use super::handlers::ListPageParams;
 
 // ── Model cache helpers ─────────────────────────────────────────────────────────
 
@@ -399,27 +392,21 @@ pub async fn register_provider(
 pub async fn list_providers(
     State(state): State<AppState>,
     Query(params): Query<ListPageParams>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(100).clamp(1, 1000);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
 
-    match state.provider_registry.list_page(&search, limit, offset).await {
-        Ok((providers, total)) => {
-            let summaries: Vec<ProviderSummary> = providers.into_iter().map(Into::into).collect();
-            (StatusCode::OK, Json(serde_json::json!({
-                "providers": summaries,
-                "total": total,
-                "page": page,
-                "limit": limit,
-            }))).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to list providers");
-            db_error(e).into_response()
-        }
-    }
+    let (providers, total) = state.provider_registry.list_page(&search, limit, offset).await
+        .map_err(|e| { tracing::error!(error = %e, "failed to list providers"); db_error(e) })?;
+    let summaries: Vec<ProviderSummary> = providers.into_iter().map(Into::into).collect();
+    Ok(Json(serde_json::json!({
+        "providers": summaries,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
 /// `DELETE /v1/providers/{id}` — soft-delete (deactivate) a provider.

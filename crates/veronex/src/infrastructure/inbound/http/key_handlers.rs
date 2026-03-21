@@ -132,12 +132,7 @@ pub(super) async fn resolve_tenant_id(state: &AppState, claims: &Claims) -> Resu
     Ok(account.username)
 }
 
-#[derive(serde::Deserialize, Default)]
-pub struct ListPageParams {
-    pub search: Option<String>,
-    pub page: Option<i64>,
-    pub limit: Option<i64>,
-}
+use super::handlers::ListPageParams;
 
 /// GET /v1/keys — List keys for the authenticated tenant with optional search/pagination.
 ///
@@ -146,9 +141,7 @@ pub async fn list_keys(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Query(params): Query<ListPageParams>,
-) -> Result<axum::response::Response, AppError> {
-    use axum::response::IntoResponse;
-
+) -> Result<Json<serde_json::Value>, AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(50).clamp(1, 1000);
     let page = params.page.unwrap_or(1).max(1);
@@ -192,12 +185,12 @@ pub async fn list_keys(
         })
         .collect();
 
-    Ok((StatusCode::OK, Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "keys": summaries,
         "total": total,
         "page": page,
         "limit": limit,
-    }))).into_response())
+    })))
 }
 
 /// DELETE /v1/keys/{id} — Soft-delete an API key (hidden from list, blocked from auth).
