@@ -111,6 +111,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const [query, setQuery] = useState('')
   const [modelFilter, setModelFilter] = useState('')
   const [providerFilter, setProviderFilter] = useState('')
+  const [serverNameFilter, setServerNameFilter] = useState('')
   const [showFilters, setShowFilters] = useState(false)
 
   const STATUS_OPTIONS = useMemo(() => [
@@ -135,7 +136,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const commitSearch = useCallback(() => { setQuery(search); setPage(0) }, [search])
   const clearSearch = useCallback(() => { setSearch(''); setQuery(''); setPage(0) }, [])
   const goTo = (p: number) => setPage(Math.max(0, Math.min(totalPages - 1, p)))
-  const activeFilterCount = (modelFilter ? 1 : 0) + (providerFilter ? 1 : 0) + (status !== 'all' ? 1 : 0)
+  const activeFilterCount = (modelFilter ? 1 : 0) + (providerFilter ? 1 : 0) + (serverNameFilter ? 1 : 0) + (status !== 'all' ? 1 : 0)
 
   return (
     <div className="space-y-4">
@@ -199,6 +200,12 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
             value={providerFilter}
             onChange={(e) => { setProviderFilter(e.target.value); setPage(0) }}
           />
+          <Input
+            className="w-36 h-9 text-sm"
+            placeholder={t('jobs.providerName')}
+            value={serverNameFilter}
+            onChange={(e) => { setServerNameFilter(e.target.value); setPage(0) }}
+          />
           <Select value={status} onValueChange={(val) => { setStatus(val); setPage(0) }}>
             <SelectTrigger className="w-36 h-9">
               <SelectValue />
@@ -245,13 +252,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
       {/* Pagination */}
       {data && (
         <div className="flex items-center justify-end gap-4 flex-wrap">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-muted/60 border border-border text-muted-foreground whitespace-nowrap">
-            <span className="tabular-nums">
-              {data.total === 0
-                ? t('jobs.noJobs')
-                : `${fmtNumber(firstItem)}–${fmtNumber(lastItem)} / ${fmtNumber(data.total)}`}
-            </span>
-          </div>
+          <StatusPill label={data.total === 0 ? t('jobs.noJobs') : `${fmtNumber(firstItem)}–${fmtNumber(lastItem)} / ${fmtNumber(data.total)}`} />
           {totalPages > 1 && (
             <div className="flex items-center gap-1">
               <Button variant="outline" size="icon" className="h-8 w-8"
@@ -305,13 +306,13 @@ export default function JobsPage() {
 
   const { data: providers } = useQuery(providersQuery)
 
-  function handleRetry(params: RetryParams) {
+  const handleRetry = useCallback((params: RetryParams) => {
     setRetryParams(params)
     setActiveTab('test')
     setTimeout(() => {
       testPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 50)
-  }
+  }, [])
 
   return (
     <div className="space-y-6">

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { accountsQuery, rolesQuery, accountSessionsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
@@ -455,6 +455,23 @@ function EditRolesModal({
   )
 }
 
+function AccountStatusPills({ accounts }: { accounts: Account[] }) {
+  const { t } = useTranslation()
+  const activeCount = useMemo(() => accounts.filter(a => a.is_active).length, [accounts])
+  return (
+    <div className="flex items-center gap-2 flex-wrap mt-2">
+      <StatusPill icon={<Users className="h-3 w-3 shrink-0" />} count={accounts.length} label={t('accounts.registered')} />
+      {activeCount > 0 && (
+        <StatusPill
+          icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+          count={activeCount} label={t('common.active')}
+          className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+        />
+      )}
+    </div>
+  )
+}
+
 // ── Roles tab ─────────────────────────────────────────────────────────────────
 
 function RolesTab() {
@@ -636,16 +653,7 @@ export default function AccountsPage() {
             </div>
             <p className="text-sm text-muted-foreground mt-0.5">{t('accounts.description')}</p>
             {accounts.length > 0 && (
-              <div className="flex items-center gap-2 flex-wrap mt-2">
-                <StatusPill icon={<Users className="h-3 w-3 shrink-0" />} count={accounts.length} label={t('accounts.registered')} />
-                {accounts.filter((a: Account) => a.is_active).length > 0 && (
-                  <StatusPill
-                    icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
-                    count={accounts.filter((a: Account) => a.is_active).length} label={t('common.active')}
-                    className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
-                  />
-                )}
-              </div>
+              <AccountStatusPills accounts={accounts} />
             )}
           </div>
 

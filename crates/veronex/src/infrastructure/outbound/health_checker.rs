@@ -99,7 +99,7 @@ async fn poll_node_exporter_metrics(
         return;
     };
 
-    let (node_metrics, _snapshot) = match fetch_node_metrics(&node_exporter_url, None).await {
+    let (node_metrics, _snapshot) = match fetch_node_metrics(&node_exporter_url, None, None).await {
         Ok(result) => result,
         Err(e) => {
             tracing::warn!(
