@@ -17,3 +17,9 @@ CREATE TABLE IF NOT EXISTS api_key_provider_access (
     is_allowed   BOOLEAN NOT NULL DEFAULT true,
     PRIMARY KEY (api_key_id, provider_id)
 );
+
+-- Add model_manage permission to super role.
+UPDATE roles
+SET permissions = array_append(permissions, 'model_manage')
+WHERE name = 'super'
+  AND NOT ('model_manage' = ANY(permissions));

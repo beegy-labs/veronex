@@ -36,6 +36,7 @@
     "revoke": "Revoke",
     "active": "Active",
     "inactive": "Inactive",
+    "disabled": "Disabled",
     "online": "Online",
     "offline": "Offline",
     "degraded": "Degraded",
@@ -787,7 +788,8 @@
       "account_manage": "Account Management",
       "audit_view": "Audit Log",
       "settings_manage": "Settings",
-      "role_manage": "Role Management"
+      "role_manage": "Role Management",
+      "model_manage": "Model Management"
     },
     "menu": {
       "dashboard": "Dashboard",
