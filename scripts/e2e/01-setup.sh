@@ -129,7 +129,7 @@ if [ -n "$PROVIDER_ID_REMOTE" ] && [ "$PROVIDER_ID_REMOTE" != "None" ] && \
 fi
 
 # Verify both providers listed
-PROV_COUNT=$(aget "/v1/providers" | jv '.__len__()' || echo "0")
+PROV_COUNT=$(aget "/v1/providers" | jv '["total"]' || echo "0")
 [ "$PROV_COUNT" -ge 2 ] && pass "Both providers registered (count=$PROV_COUNT)" \
   || fail "Expected ≥2 providers, got $PROV_COUNT"
 
@@ -192,7 +192,7 @@ AM=$(echo "$S3" | jv '["analyzer_model"]' || echo "")
 
 hdr "Phase 7: API Key"
 
-ACCOUNT_ID=$(aget "/v1/accounts" | jv '[0]["id"]' || echo "")
+ACCOUNT_ID=$(aget "/v1/accounts" | jv '["accounts"][0]["id"]' || echo "")
 if [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ]; then
   KEY_RES=$(apost "/v1/keys" \
     "{\"tenant_id\":\"$ACCOUNT_ID\",\"name\":\"e2e-paid\",\"tier\":\"paid\"}" || echo "")
@@ -221,7 +221,7 @@ fi
 hdr "Phase 8: Provider Online Wait"
 
 for attempt in $(seq 1 12); do
-  STATUS=$(aget "/v1/providers" 2>/dev/null | jv '[0]["status"]' 2>/dev/null || echo "")
+  STATUS=$(aget "/v1/providers" 2>/dev/null | jv '["providers"][0]["status"]' 2>/dev/null || echo "")
   if [ "$STATUS" = "online" ]; then
     pass "Provider online (attempt $attempt)"
     break

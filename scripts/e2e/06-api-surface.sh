@@ -261,8 +261,8 @@ if [ -n "$LAB" ] && [ "$LAB" != "None" ]; then
 fi
 
 # Per-key usage
-KEY_LIST=$(aget "/v1/keys" 2>/dev/null || echo "[]")
-FIRST_KEY_ID=$(echo "$KEY_LIST" | jv '[0]["id"]' 2>/dev/null || echo "")
+KEY_LIST=$(aget "/v1/keys" 2>/dev/null || echo '{"keys":[]}')
+FIRST_KEY_ID=$(echo "$KEY_LIST" | jv '["keys"][0]["id"]' 2>/dev/null || echo "")
 if [ -n "$FIRST_KEY_ID" ] && [ "$FIRST_KEY_ID" != "None" ]; then
   assert_get "/v1/usage/$FIRST_KEY_ID?hours=24" 200 "Per-key usage"
   assert_get "/v1/usage/$FIRST_KEY_ID/jobs?hours=24" 200 "Per-key jobs"
