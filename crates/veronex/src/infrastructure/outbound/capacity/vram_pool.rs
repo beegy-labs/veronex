@@ -380,7 +380,24 @@ impl VramPoolPort for VramPool {
     fn available_vram_mb(&self, provider_id: Uuid) -> u32 {
         self.providers
             .get(&provider_id)
-            .map(|s| Self::compute_available(&s).max(0) as u32)
+            .map(|s| {
+                let raw = Self::compute_available(&s);
+                if raw == i64::MAX {
+                    // VRAM not probed (APU/iGPU unified memory).
+                    // Return a concurrency-headroom-based score so unprobed providers
+                    // compete fairly with VRAM-probed providers instead of always winning
+                    // (i64::MAX as u32 overflows to u32::MAX = 4,294,967,295).
+                    let active = s.total_active_count.load(Ordering::Acquire);
+                    let mc = s.models.iter()
+                        .map(|e| e.max_concurrent.load(Ordering::Acquire))
+                        .max()
+                        .unwrap_or(4);
+                    // 1,024 MB per free slot — at least 1 so it's not filtered out
+                    mc.saturating_sub(active).saturating_mul(1_024).max(1)
+                } else {
+                    raw.max(0) as u32
+                }
+            })
             .unwrap_or(0)
     }
 
