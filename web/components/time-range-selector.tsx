@@ -14,15 +14,14 @@ export const TIME_OPTIONS = [
   { label: '30d', hours: 720 },
 ] as const
 
-/** O(1) hours → label lookup. */
 export const TIME_LABEL_MAP = new Map<number, string>(
   TIME_OPTIONS.map(o => [o.hours, o.label]),
 )
 
 export interface TimeRange {
   hours: number
-  from?: string  // ISO-8601
-  to?: string    // ISO-8601
+  from?: string
+  to?: string
 }
 
 interface TimeRangeSelectorProps {
@@ -42,13 +41,17 @@ export function TimeRangeSelector({ value, onChange, className }: TimeRangeSelec
   function applyCustom() {
     if (!customFrom) return
     const from = new Date(customFrom)
-    const to = customTo ? new Date(customTo) : new Date()
+    const to = customTo ? new Date(customTo + 'T23:59:59') : new Date()
     const diffMs = to.getTime() - from.getTime()
     if (diffMs <= 0) return
     const hours = Math.ceil(diffMs / (1000 * 60 * 60))
     onChange({ hours, from: from.toISOString(), to: to.toISOString() })
     setShowCustom(false)
   }
+
+  const customLabel = value.from
+    ? `${value.from.slice(0, 10)} ~ ${(value.to ?? '').slice(0, 10) || 'now'}`
+    : null
 
   return (
     <div className={`flex items-center gap-1.5 flex-wrap${className ? ` ${className}` : ''}`}>
@@ -70,24 +73,22 @@ export function TimeRangeSelector({ value, onChange, className }: TimeRangeSelec
         onClick={() => setShowCustom(v => !v)}
       >
         <Calendar className="h-3 w-3 mr-1" />
-        {!isPreset && !showCustom
-          ? (value.from ? `${value.from.slice(5, 16)} ~ ${(value.to ?? 'now').slice(5, 16)}` : `${value.hours}h`)
-          : t('common.custom')}
+        {customLabel ?? t('common.custom')}
       </Button>
       {showCustom && (
-        <div className="flex items-center gap-2 p-2 rounded-lg border border-border bg-muted/30 w-full sm:w-auto">
+        <div className="flex items-center gap-2 mt-1 w-full">
           <Input
-            type="datetime-local"
+            type="date"
             value={customFrom}
             onChange={(e) => setCustomFrom(e.target.value)}
-            className="h-8 text-xs w-44"
+            className="h-8 text-xs w-36"
           />
           <span className="text-xs text-muted-foreground">~</span>
           <Input
-            type="datetime-local"
+            type="date"
             value={customTo}
             onChange={(e) => setCustomTo(e.target.value)}
-            className="h-8 text-xs w-44"
+            className="h-8 text-xs w-36"
           />
           <Button size="sm" className="h-8 text-xs" onClick={applyCustom} disabled={!customFrom}>
             {t('common.apply')}

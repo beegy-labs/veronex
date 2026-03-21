@@ -181,6 +181,12 @@ export const api = {
   setGlobalModelEnabled: (modelName: string, isEnabled: boolean) =>
     apiClient.patch<{ model_name: string; is_enabled: boolean }>(`/v1/models/global-settings/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
 
+  // ── API key → provider access (JWT-protected) ─────────────────────────────
+  keyProviderAccess: (keyId: string) =>
+    apiClient.get<{ provider_id: string; is_allowed: boolean }[]>(`/v1/keys/${keyId}/providers`),
+  setKeyProviderAccess: (keyId: string, providerId: string, isAllowed: boolean) =>
+    apiClient.patch<{ provider_id: string; is_allowed: boolean }>(`/v1/keys/${keyId}/providers/${providerId}`, { is_allowed: isAllowed }),
+
   // ── Gemini (JWT-protected) ────────────────────────────────────────────────
   geminiPolicies: () =>
     apiClient.get<GeminiRateLimitPolicy[]>('/v1/gemini/policies'),
