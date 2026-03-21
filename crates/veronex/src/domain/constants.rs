@@ -175,6 +175,12 @@ pub const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ── Cache TTL ──────────────────────────────────────────────────────────────
 
+/// TTL for per-provider HwMetrics in Valkey (seconds).
+pub const HW_METRICS_TTL: i64 = 60;
+
+/// TTL for per-server NodeMetrics in Valkey (seconds).
+pub const NODE_METRICS_TTL: i64 = 60;
+
 /// TTL for OllamaModel provider-for-model lookup cache (hot path).
 pub const OLLAMA_MODEL_CACHE_TTL: Duration = Duration::from_secs(10);
 

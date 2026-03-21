@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { keysQuery, resourceAuditQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
@@ -39,6 +39,31 @@ import { useApiMutation } from '@/hooks/use-api-mutation'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
+
+function KeyStatusPills({ keys }: { keys: ApiKey[] }) {
+  const { t } = useTranslation()
+  const activeCount = useMemo(() => keys.filter(k => k.is_active).length, [keys])
+  const inactiveCount = keys.length - activeCount
+  return (
+    <div className="flex items-center gap-2 flex-wrap mt-2">
+      <StatusPill icon={<Key className="h-3 w-3 shrink-0" />} count={keys.length} label={t('keys.registered')} />
+      {activeCount > 0 && (
+        <StatusPill
+          icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+          count={activeCount} label={t('common.active')}
+          className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+        />
+      )}
+      {inactiveCount > 0 && (
+        <StatusPill
+          icon={<span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />}
+          count={inactiveCount} label={t('common.inactive')}
+          className="bg-status-error/10 border border-status-error/30 text-status-error-fg"
+        />
+      )}
+    </div>
+  )
+}
 
 function CreateKeyModal({
   onClose,
@@ -271,23 +296,7 @@ export default function KeysPage() {
         </div>
         <p className="text-muted-foreground mt-1 text-sm">{t('keys.description')}</p>
         {keys ? (
-          <div className="flex items-center gap-2 flex-wrap mt-2">
-            <StatusPill icon={<Key className="h-3 w-3 shrink-0" />} count={keys.length} label={t('keys.registered')} />
-            {keys.filter(k => k.is_active).length > 0 && (
-              <StatusPill
-                icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
-                count={keys.filter(k => k.is_active).length} label={t('common.active')}
-                className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
-              />
-            )}
-            {keys.filter(k => !k.is_active).length > 0 && (
-              <StatusPill
-                icon={<span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />}
-                count={keys.filter(k => !k.is_active).length} label={t('common.inactive')}
-                className="bg-status-error/10 border border-status-error/30 text-status-error-fg"
-              />
-            )}
-          </div>
+          <KeyStatusPills keys={keys} />
         ) : (
           <p className="text-sm text-muted-foreground mt-2 animate-pulse">{t('common.loading')}</p>
         )}
