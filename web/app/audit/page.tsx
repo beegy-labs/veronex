@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { auditQuery } from '@/lib/queries'
 import type { AuditEvent } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -39,8 +40,14 @@ export default function AuditPage() {
   const { tz } = useTimezone()
   const [action, setAction] = useState<string>('all')
   const [resourceType, setResourceType] = useState<string>('all')
+  const [page, setPage] = useState(0)
+  const PAGE_SIZE = 50
 
   const { data: events = [], isLoading, isError, refetch } = useQuery(auditQuery(action, resourceType))
+
+  const totalPages = Math.max(1, Math.ceil(events.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages - 1)
+  const pageItems = useMemo(() => events.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE), [events, safePage])
 
   return (
     <div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto">
@@ -93,6 +100,7 @@ export default function AuditPage() {
       ) : events.length === 0 ? (
         <DataTableEmpty>{t('audit.noEvents')}</DataTableEmpty>
       ) : (
+        <>
         <DataTable minWidth="800px">
           <TableHeader>
             <TableRow>
@@ -105,7 +113,7 @@ export default function AuditPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {events.map((e: AuditEvent) => (
+            {pageItems.map((e: AuditEvent) => (
                 <TableRow key={`${e.event_time}-${e.account_id}-${e.action}-${e.resource_id}`}>
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                     {fmtDatetime(e.event_time, tz)}
@@ -124,6 +132,22 @@ export default function AuditPage() {
             }
           </TableBody>
         </DataTable>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-end gap-2">
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, events.length)} / {events.length}
+            </span>
+            <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage <= 0}
+              onClick={() => setPage(p => p - 1)}>
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </Button>
+            <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage >= totalPages - 1}
+              onClick={() => setPage(p => p + 1)}>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
+        </>
       )}
     </div>
   )

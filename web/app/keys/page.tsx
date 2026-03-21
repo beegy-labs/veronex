@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { keysQuery, resourceAuditQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, CreateKeyResponse } from '@/lib/types'
-import { Plus, Trash2, BarChart2, RefreshCw, History, Key } from 'lucide-react'
+import { Plus, Trash2, BarChart2, RefreshCw, History, Key, ChevronLeft, ChevronRight } from 'lucide-react'
 import { CopyButton } from '@/components/copy-button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -253,8 +253,13 @@ export default function KeysPage() {
   const [historyKey, setHistoryKey] = useState<ApiKey | null>(null)
 
   const { data: keys, isLoading, error } = useQuery(keysQuery)
+  const [keyPage, setKeyPage] = useState(0)
+  const KEY_PAGE_SIZE = 20
 
   const hasCreatedBy = keys?.some((k) => k.created_by)
+  const keyTotalPages = keys ? Math.max(1, Math.ceil(keys.length / KEY_PAGE_SIZE)) : 0
+  const keySafePage = Math.min(keyPage, Math.max(0, keyTotalPages - 1))
+  const keyPageItems = useMemo(() => keys?.slice(keySafePage * KEY_PAGE_SIZE, (keySafePage + 1) * KEY_PAGE_SIZE) ?? [], [keys, keySafePage])
 
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteKey(id),
@@ -339,7 +344,7 @@ export default function KeysPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {keys.map((key) => (
+                {keyPageItems.map((key) => (
                   <TableRow key={key.id} className={!key.is_active ? 'opacity-50' : ''}>
                     <TableCell className="font-medium">{key.name}</TableCell>
                     <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
@@ -445,6 +450,21 @@ export default function KeysPage() {
               </TableBody>
             </DataTable>
           )
+      )}
+      {keys && keys.length > 0 && keyTotalPages > 1 && (
+        <div className="flex items-center justify-end gap-2">
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {keySafePage * KEY_PAGE_SIZE + 1}–{Math.min((keySafePage + 1) * KEY_PAGE_SIZE, keys.length)} / {keys.length}
+          </span>
+          <Button variant="outline" size="icon" className="h-7 w-7" disabled={keySafePage <= 0}
+            onClick={() => setKeyPage(p => p - 1)}>
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="outline" size="icon" className="h-7 w-7" disabled={keySafePage >= keyTotalPages - 1}
+            onClick={() => setKeyPage(p => p + 1)}>
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       )}
 
       {showCreate && (
