@@ -104,7 +104,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
 
         {!isLoading && total === 0 && !debouncedSearch && (
           <p className="text-sm text-muted-foreground py-4 text-center italic">
-            {t('providers.ollama.noBackendsSynced')}
+            {t('providers.ollama.noProvidersSynced')}
           </p>
         )}
 
@@ -234,7 +234,7 @@ export function OllamaProviderModelsModal({ provider, onClose }: { provider: Pro
 
         {!isLoading && models.length === 0 && (
           <p className="text-sm text-muted-foreground py-4 text-center">
-            {t('providers.ollama.noBackendModels')}
+            {t('providers.ollama.noProviderModels')}
           </p>
         )}
 

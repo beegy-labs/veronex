@@ -175,18 +175,13 @@ pub async fn register_gpu_server(
     Ok((StatusCode::CREATED, Json(serde_json::json!({"id": id}))))
 }
 
-#[derive(Debug, serde::Deserialize, Default)]
-pub struct ListPageParams {
-    pub search: Option<String>,
-    pub page: Option<i64>,
-    pub limit: Option<i64>,
-}
+use super::handlers::ListPageParams;
 
 /// `GET /v1/servers`
 pub async fn list_gpu_servers(
     State(state): State<AppState>,
     Query(params): Query<ListPageParams>,
-) -> HandlerResult<impl axum::response::IntoResponse> {
+) -> HandlerResult<axum::Json<serde_json::Value>> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(100).clamp(1, 1000);
     let page = params.page.unwrap_or(1).max(1);

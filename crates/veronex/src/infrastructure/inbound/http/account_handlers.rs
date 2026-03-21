@@ -141,18 +141,13 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
 
 // ── GET /v1/accounts ──────────────────────────────────────────────────────────
 
-#[derive(serde::Deserialize, Default)]
-pub struct ListPageParams {
-    pub search: Option<String>,
-    pub page: Option<i64>,
-    pub limit: Option<i64>,
-}
+use super::handlers::ListPageParams;
 
 pub async fn list_accounts(
     RequireAccountManage(_claims): RequireAccountManage,
     State(state): State<AppState>,
     Query(params): Query<ListPageParams>,
-) -> Result<axum::response::Response, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(100).clamp(1, 1000);
     let page = params.page.unwrap_or(1).max(1);
@@ -168,13 +163,12 @@ pub async fn list_accounts(
         result.push(to_summary(a, &state.pg_pool).await?);
     }
 
-    use axum::response::IntoResponse;
-    Ok((axum::http::StatusCode::OK, Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "accounts": result,
         "total": total,
         "page": page,
         "limit": limit,
-    }))).into_response())
+    })))
 }
 
 // ── POST /v1/accounts ─────────────────────────────────────────────────────────
