@@ -1,4 +1,4 @@
-import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, RoleSummary, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, KeyPage, Provider, ProviderPage, ProviderSelectedModel, CapacityResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
@@ -88,8 +88,14 @@ export const api = {
     apiClient.patch<LabSettings>('/v1/dashboard/lab', body),
 
   // ── Key management (JWT-protected) ────────────────────────────────────────
-  keys: () =>
-    apiClient.get<ApiKey[]>('/v1/keys'),
+  keys: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<KeyPage>(`/v1/keys${q ? '?' + q : ''}`)
+  },
 
   createKey: (body: CreateKeyRequest) =>
     apiClient.post<CreateKeyResponse>('/v1/keys', body),
@@ -120,8 +126,14 @@ export const api = {
     apiClient.get<UsageBreakdown>(`/v1/usage/breakdown?hours=${hours}`),
 
   // ── GPU servers (JWT-protected) ───────────────────────────────────────────
-  servers: () =>
-    apiClient.get<GpuServer[]>('/v1/servers'),
+  servers: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<ServerPage>(`/v1/servers${q ? '?' + q : ''}`)
+  },
 
   registerServer: (body: RegisterGpuServerRequest) =>
     apiClient.post<{ id: string }>('/v1/servers', body),
@@ -141,8 +153,14 @@ export const api = {
     apiClient.get<ServerMetricsPoint[]>(`/v1/servers/${id}/metrics/history?hours=${hours}`),
 
   // ── Providers (JWT-protected) ──────────────────────────────────────────────
-  providers: () =>
-    apiClient.get<Provider[]>('/v1/providers'),
+  providers: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<ProviderPage>(`/v1/providers${q ? '?' + q : ''}`)
+  },
 
   registerProvider: (body: RegisterProviderRequest) =>
     apiClient.post<RegisterProviderResponse>('/v1/providers', body),
@@ -260,8 +278,14 @@ export const api = {
     }),
 
   // ── Accounts (JWT-protected) ──────────────────────────────────────────────
-  accounts: () =>
-    apiClient.get<Account[]>('/v1/accounts'),
+  accounts: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<AccountPage>(`/v1/accounts${q ? '?' + q : ''}`)
+  },
 
   createAccount: (body: CreateAccountRequest) =>
     apiClient.post<CreateAccountResponse>('/v1/accounts', body),

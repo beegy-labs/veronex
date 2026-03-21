@@ -1,5 +1,5 @@
 use anyhow::Result;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -21,6 +21,15 @@ use super::provider_validation::{parse_provider_type, validate_provider_url};
 use super::state::AppState;
 
 use super::constants::MODELS_CACHE_TTL;
+
+// ── Pagination params ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+pub struct ListPageParams {
+    pub search: Option<String>,
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+}
 
 // ── Model cache helpers ─────────────────────────────────────────────────────────
 
@@ -386,12 +395,25 @@ pub async fn register_provider(
         .into_response()
 }
 
-/// `GET /v1/providers` — list all registered providers.
-pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
-    match state.provider_registry.list_all().await {
-        Ok(providers) => {
+/// `GET /v1/providers` — list registered providers with optional search/pagination.
+pub async fn list_providers(
+    State(state): State<AppState>,
+    Query(params): Query<ListPageParams>,
+) -> impl IntoResponse {
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(100).clamp(1, 1000);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+
+    match state.provider_registry.list_page(&search, limit, offset).await {
+        Ok((providers, total)) => {
             let summaries: Vec<ProviderSummary> = providers.into_iter().map(Into::into).collect();
-            (StatusCode::OK, Json(summaries)).into_response()
+            (StatusCode::OK, Json(serde_json::json!({
+                "providers": summaries,
+                "total": total,
+                "page": page,
+                "limit": limit,
+            }))).into_response()
         }
         Err(e) => {
             tracing::error!(error = %e, "failed to list providers");

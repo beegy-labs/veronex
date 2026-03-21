@@ -4,9 +4,9 @@ import { STALE_TIME_FAST } from '@/lib/constants'
 
 // ── Accounts list ─────────────────────────────────────────────────────────────
 
-export const accountsQuery = queryOptions({
-  queryKey: ['accounts'] as const,
-  queryFn: () => api.accounts(),
+export const accountsQuery = (params?: { search?: string; page?: number; limit?: number }) => queryOptions({
+  queryKey: ['accounts', params] as const,
+  queryFn: () => api.accounts(params),
   staleTime: Infinity,
 })
 

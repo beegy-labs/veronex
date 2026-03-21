@@ -101,6 +101,12 @@ impl ApiKeyRepository for MockApiKeyRepo {
     async fn list_all(&self) -> Result<Vec<ApiKey>> {
         Ok(vec![])
     }
+    async fn list_page(&self, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<ApiKey>, i64)> {
+        Ok((vec![], 0))
+    }
+    async fn list_by_tenant_page(&self, _tenant_id: &str, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<ApiKey>, i64)> {
+        Ok((vec![], 0))
+    }
     async fn revoke(&self, _key_id: &Uuid) -> Result<()> {
         Ok(())
     }
@@ -131,6 +137,7 @@ impl LlmProviderRegistry for MockProviderRegistry {
     async fn register(&self, _provider: &LlmProvider) -> Result<()> { Ok(()) }
     async fn list_active(&self) -> Result<Vec<LlmProvider>> { Ok(vec![]) }
     async fn list_all(&self) -> Result<Vec<LlmProvider>> { Ok(vec![]) }
+    async fn list_page(&self, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<LlmProvider>, i64)> { Ok((vec![], 0)) }
     async fn get(&self, _id: Uuid) -> Result<Option<LlmProvider>> { Ok(None) }
     async fn update_status(&self, _id: Uuid, _status: LlmProviderStatus) -> Result<()> { Ok(()) }
     async fn deactivate(&self, _id: Uuid) -> Result<()> { Ok(()) }
@@ -143,6 +150,7 @@ pub(crate) struct MockGpuServerRegistry;
 impl GpuServerRegistry for MockGpuServerRegistry {
     async fn register(&self, _server: GpuServer) -> Result<()> { Ok(()) }
     async fn list_all(&self) -> Result<Vec<GpuServer>> { Ok(vec![]) }
+    async fn list_page(&self, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<GpuServer>, i64)> { Ok((vec![], 0)) }
     async fn get(&self, _id: Uuid) -> Result<Option<GpuServer>> { Ok(None) }
     async fn update(&self, _server: &GpuServer) -> Result<()> { Ok(()) }
     async fn delete(&self, _id: Uuid) -> Result<()> { Ok(()) }
@@ -238,6 +246,7 @@ impl AccountRepository for MockAccountRepo {
     async fn get_by_id(&self, _id: &Uuid) -> Result<Option<Account>> { Ok(None) }
     async fn get_by_username(&self, _username: &str) -> Result<Option<Account>> { Ok(None) }
     async fn list_all(&self) -> Result<Vec<Account>> { Ok(vec![]) }
+    async fn list_page(&self, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<Account>, i64)> { Ok((vec![], 0)) }
     async fn update(&self, _account: &Account) -> Result<()> { Ok(()) }
     async fn soft_delete(&self, _id: &Uuid) -> Result<()> { Ok(()) }
     async fn soft_delete_cascade(&self, _account_id: &Uuid, _tenant_id: &str) -> Result<u64> { Ok(0) }

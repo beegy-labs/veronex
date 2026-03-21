@@ -431,7 +431,8 @@ export default function ServersPage() {
   const [editingServer, setEditingServer] = useState<GpuServer | null>(null)
   const [historyServer, setHistoryServer] = useState<GpuServer | null>(null)
 
-  const { data: servers, isLoading } = useQuery(serversQuery)
+  const { data: serversData, isLoading } = useQuery(serversQuery())
+  const servers = serversData?.servers
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteServer(id),
