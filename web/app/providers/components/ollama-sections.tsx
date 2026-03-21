@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { OllamaSyncJob } from '@/lib/types'
 import { ollamaSyncStatusQuery, ollamaModelsQuery } from '@/lib/queries'
-import { RotateCcw, Search, Cpu, Server } from 'lucide-react'
+import { RotateCcw, Search, Cpu, Server, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -68,11 +68,19 @@ export function OllamaSyncSection() {
 
   const isRunning = syncJob?.status === 'running' || syncMutation.isPending
   const allModels = ollamaModelsData?.models ?? []
+  const [modelPage, setModelPage] = useState(0)
+  const MODEL_PAGE_SIZE = 20
   const filteredModels = useMemo(() =>
     allModels.filter((m) =>
       m.model_name.toLowerCase().includes(search.toLowerCase())
     ),
     [allModels, search],
+  )
+  const modelTotalPages = Math.max(1, Math.ceil(filteredModels.length / MODEL_PAGE_SIZE))
+  const modelSafePage = Math.min(modelPage, modelTotalPages - 1)
+  const modelPageItems = useMemo(() =>
+    filteredModels.slice(modelSafePage * MODEL_PAGE_SIZE, (modelSafePage + 1) * MODEL_PAGE_SIZE),
+    [filteredModels, modelSafePage],
   )
 
   return (
@@ -111,7 +119,7 @@ export function OllamaSyncSection() {
                   className="pl-8 h-8 text-sm"
                   placeholder={t('providers.ollama.ollamaSearchModels')}
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => { setSearch(e.target.value); setModelPage(0) }}
                 />
               </div>
               <div className="flex items-center justify-between">
@@ -121,12 +129,12 @@ export function OllamaSyncSection() {
                 <span className="text-xs text-muted-foreground">{filteredModels.length}/{allModels.length}</span>
               </div>
               <div className="divide-y divide-border rounded-md border border-border overflow-hidden">
-                {filteredModels.length === 0 && (
+                {filteredModels.length === 0 && search && (
                   <p className="text-xs text-muted-foreground italic py-3 px-3">
                     {t('providers.ollama.noModelsMatch')} &ldquo;{search}&rdquo;
                   </p>
                 )}
-                {filteredModels.map((m) => {
+                {modelPageItems.map((m) => {
                   const isDisabled = globalDisabledSet.has(m.model_name)
                   return (
                     <div
@@ -163,6 +171,21 @@ export function OllamaSyncSection() {
                   )
                 })}
               </div>
+              {modelTotalPages > 1 && (
+                <div className="flex items-center justify-end gap-1 mt-2">
+                  <span className="text-xs text-muted-foreground tabular-nums mr-2">
+                    {modelSafePage * MODEL_PAGE_SIZE + 1}–{Math.min((modelSafePage + 1) * MODEL_PAGE_SIZE, filteredModels.length)} / {filteredModels.length}
+                  </span>
+                  <Button variant="outline" size="icon" className="h-7 w-7" disabled={modelSafePage <= 0}
+                    onClick={() => setModelPage(p => p - 1)}>
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon" className="h-7 w-7" disabled={modelSafePage >= modelTotalPages - 1}
+                    onClick={() => setModelPage(p => p + 1)}>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </CardContent>

@@ -437,6 +437,7 @@ export interface OllamaProviderForModel {
   name: string
   url: string
   status: string
+  is_enabled?: boolean
 }
 
 /**
