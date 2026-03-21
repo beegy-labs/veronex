@@ -22,6 +22,8 @@ pub trait ApiKeyRepository: Send + Sync {
 
     /// List all non-deleted keys across all tenants (admin use).
     async fn list_all(&self) -> Result<Vec<ApiKey>>;
+    async fn list_page(&self, search: &str, limit: i64, offset: i64) -> Result<(Vec<ApiKey>, i64)>;
+    async fn list_by_tenant_page(&self, tenant_id: &str, search: &str, limit: i64, offset: i64) -> Result<(Vec<ApiKey>, i64)>;
 
     /// Revoke (soft-delete) a key by setting is_active = false.
     async fn revoke(&self, key_id: &Uuid) -> Result<()>;
@@ -101,6 +103,14 @@ mod tests {
         async fn list_all(&self) -> Result<Vec<ApiKey>> {
             let keys = self.keys.lock().await;
             Ok(keys.iter().filter(|k| k.deleted_at.is_none()).cloned().collect())
+        }
+
+        async fn list_page(&self, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<ApiKey>, i64)> {
+            Ok((vec![], 0))
+        }
+
+        async fn list_by_tenant_page(&self, _tenant_id: &str, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<ApiKey>, i64)> {
+            Ok((vec![], 0))
         }
 
         async fn revoke(&self, key_id: &Uuid) -> Result<()> {

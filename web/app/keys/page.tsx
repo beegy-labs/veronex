@@ -252,7 +252,8 @@ export default function KeysPage() {
   const [usageKey, setUsageKey] = useState<ApiKey | null>(null)
   const [historyKey, setHistoryKey] = useState<ApiKey | null>(null)
 
-  const { data: keys, isLoading, error } = useQuery(keysQuery)
+  const { data: keysData, isLoading, error } = useQuery(keysQuery())
+  const keys = keysData?.keys
   const [keyPage, setKeyPage] = useState(0)
   const KEY_PAGE_SIZE = 20
 

@@ -48,7 +48,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const readersRef = useRef<Map<number, ReadableStreamDefaultReader<Uint8Array>>>(new Map())
 
   // ── Providers ─────────────────────────────────────────────────────────────────
-  const { data: providers } = useQuery(providersQuery)
+  const { data: providersData } = useQuery(providersQuery())
+  const providers = providersData?.providers
 
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 

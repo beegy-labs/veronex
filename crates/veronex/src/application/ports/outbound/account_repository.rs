@@ -16,6 +16,7 @@ pub trait AccountRepository: Send + Sync {
     async fn get_by_id(&self, id: &Uuid) -> Result<Option<Account>>;
     async fn get_by_username(&self, username: &str) -> Result<Option<Account>>;
     async fn list_all(&self) -> Result<Vec<Account>>;
+    async fn list_page(&self, search: &str, limit: i64, offset: i64) -> Result<(Vec<Account>, i64)>;
     async fn update(&self, account: &Account) -> Result<()>;
     async fn soft_delete(&self, id: &Uuid) -> Result<()>;
     /// Soft-delete an account and all its API keys in a single transaction.

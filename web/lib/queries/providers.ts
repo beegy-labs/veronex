@@ -4,9 +4,9 @@ import { STALE_TIME_SLOW, STALE_TIME_FAST, REFETCH_INTERVAL_FAST } from '@/lib/c
 
 // ── LLM providers list ─────────────────────────────────────────────────────────
 
-export const providersQuery = queryOptions({
-  queryKey: ['providers'] as const,
-  queryFn: () => api.providers(),
+export const providersQuery = (params?: { search?: string; page?: number; limit?: number }) => queryOptions({
+  queryKey: ['providers', params] as const,
+  queryFn: () => api.providers(params),
   staleTime: STALE_TIME_FAST,
   refetchInterval: REFETCH_INTERVAL_FAST,
   refetchIntervalInBackground: false,

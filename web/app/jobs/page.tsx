@@ -311,7 +311,8 @@ export default function JobsPage() {
   }, [])
   const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
 
-  const { data: providers } = useQuery(providersQuery)
+  const { data: providersData } = useQuery(providersQuery())
+  const providers = providersData?.providers
 
   const handleRetry = useCallback((params: RetryParams) => {
     setRetryParams(params)
