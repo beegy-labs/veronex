@@ -27,9 +27,11 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
 
   // Servers needed for RegisterModal/EditModal dropdowns
-  const { data: servers } = useQuery(serversQuery)
+  const { data: serversData } = useQuery(serversQuery())
+  const servers = serversData?.servers
 
-  const { data: providers, isLoading: providersLoading, error: providersError } = useQuery(providersQuery)
+  const { data: providersData, isLoading: providersLoading, error: providersError } = useQuery(providersQuery())
+  const providers = providersData?.providers
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteProvider(id),

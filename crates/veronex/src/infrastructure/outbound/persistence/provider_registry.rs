@@ -230,6 +230,39 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         Ok(())
     }
 
+    async fn list_page(&self, search: &str, limit: i64, offset: i64) -> Result<(Vec<LlmProvider>, i64)> {
+        let pattern = format!("%{}%", search);
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM llm_providers WHERE name ILIKE $1 OR url ILIKE $1"
+        )
+        .bind(&pattern)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count providers")?;
+
+        let sql = format!(
+            "SELECT {PROVIDER_COLS} FROM llm_providers WHERE name ILIKE $1 OR url ILIKE $1 ORDER BY registered_at ASC LIMIT $2 OFFSET $3"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(&pattern)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .context("failed to list providers page")?;
+
+        let mut providers = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let (p, needs) = row_to_provider(r, &self.master_key)?;
+            if needs && let Some(ref key) = p.api_key_encrypted {
+                tracing::warn!(id = %p.id, "legacy plaintext provider key — re-encrypting");
+                self.re_encrypt_key(p.id, key).await;
+            }
+            providers.push(p);
+        }
+        Ok((providers, total))
+    }
+
     async fn update(&self, provider: &LlmProvider) -> Result<()> {
         let encrypted_key = provider
             .api_key_encrypted

@@ -594,7 +594,8 @@ export default function AccountsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   const [editRolesTarget, setEditRolesTarget] = useState<Account | null>(null)
 
-  const { data: accounts = [], isLoading, isError } = useQuery(accountsQuery)
+  const { data: accountsData, isLoading, isError } = useQuery(accountsQuery())
+  const accounts = accountsData?.accounts ?? []
   const { data: roles = [] } = useQuery(rolesQuery)
   const [acctPage, setAcctPage] = useState(0)
   const ACCT_PAGE_SIZE = 20
