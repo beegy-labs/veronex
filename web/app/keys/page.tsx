@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { keysQuery, resourceAuditQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, CreateKeyResponse } from '@/lib/types'
-import { Plus, Trash2, BarChart2, RefreshCw, History } from 'lucide-react'
+import { Plus, Trash2, BarChart2, RefreshCw, History, Key } from 'lucide-react'
 import { CopyButton } from '@/components/copy-button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -33,6 +33,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
+import { StatusPill } from '@/components/status-pill'
 import { KeyUsageModal } from '@/components/key-usage-modal'
 import { useApiMutation } from '@/hooks/use-api-mutation'
 import { useTranslation } from '@/i18n'
@@ -261,19 +262,35 @@ export default function KeysPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
+      <div>
+        <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight">{t('keys.title')}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            {keys
-              ? t('keys.keysCount', { count: keys.length })
-              : t('common.loading')}
-          </p>
+          <Button onClick={() => setShowCreate(true)} className="shrink-0">
+            <Plus className="h-4 w-4 mr-2" />{t('keys.createKey')}
+          </Button>
         </div>
-        <Button onClick={() => setShowCreate(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          {t('keys.createKey')}
-        </Button>
+        <p className="text-muted-foreground mt-1 text-sm">{t('keys.description')}</p>
+        {keys ? (
+          <div className="flex items-center gap-2 flex-wrap mt-2">
+            <StatusPill icon={<Key className="h-3 w-3 shrink-0" />} count={keys.length} label={t('keys.registered')} />
+            {keys.filter(k => k.is_active).length > 0 && (
+              <StatusPill
+                icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+                count={keys.filter(k => k.is_active).length} label={t('common.active')}
+                className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+              />
+            )}
+            {keys.filter(k => !k.is_active).length > 0 && (
+              <StatusPill
+                icon={<span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />}
+                count={keys.filter(k => !k.is_active).length} label={t('common.inactive')}
+                className="bg-status-error/10 border border-status-error/30 text-status-error-fg"
+              />
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground mt-2 animate-pulse">{t('common.loading')}</p>
+        )}
       </div>
 
       {isLoading && (

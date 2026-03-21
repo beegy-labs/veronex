@@ -286,6 +286,7 @@
     "tier": "Tier",
     "tierFree": "Free",
     "tierPaid": "Paid",
+    "registered": "registered",
     "keysCount": "{{count}} keys",
     "viewUsage": "View usage",
     "usageTitle": "Usage — {{name}}",
@@ -724,6 +725,7 @@
   "accounts": {
     "title": "Accounts",
     "description": "Manage admin accounts and access control.",
+    "registered": "registered",
     "username": "Username",
     "name": "Name",
     "role": "Role",
