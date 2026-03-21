@@ -251,6 +251,7 @@
     "images": "Images",
     "filterModel": "Model",
     "filterProvider": "Provider",
+    "allProviders": "All Providers",
     "filters": "Filters",
     "filtersActive": "Filters ({{count}})"
   },
