@@ -687,10 +687,11 @@ pub async fn sync_provider(
 
     let temp_c = hw.as_ref().map(|h| h.max_temp_c());
 
-    // Set total VRAM on the pool
-    if vram_total_mb > 0 {
-        vram_pool.set_total_vram(provider_id, vram_total_mb);
-    }
+    // Set total VRAM on the pool.
+    // Always call even when 0 (APU/unprobed) so the provider entry exists in VramPool.
+    // Without this, available_vram_mb() returns 0 and APU providers are filtered out
+    // of score_and_claim before try_reserve is ever attempted.
+    vram_pool.set_total_vram(provider_id, vram_total_mb);
 
     // APU mem drift: if mem_available_mb changed >15% from last observed value,
     // reset AIMD learning epoch for all loaded models to prevent stale baselines.
