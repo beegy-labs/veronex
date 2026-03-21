@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn all_permissions_count() {
-        assert_eq!(ALL_PERMISSIONS.len(), 8);
+        assert_eq!(ALL_PERMISSIONS.len(), 9);
     }
 
     #[test]
