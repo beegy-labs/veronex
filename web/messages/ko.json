@@ -149,6 +149,7 @@
     "tempCritical": "위험",
     "tempWarning": "주의",
     "checkServers": "서버 점검",
+    "moreServers": "개 서버 더보기",
     "waiting": "대기중",
     "running": "동작중",
     "pendingJobs": "대기 작업",
