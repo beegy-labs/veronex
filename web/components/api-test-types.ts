@@ -6,7 +6,7 @@ export interface OpenAIChunk {
 
 export type ProviderOption = { value: string; label: string; isGemini: boolean }
 export type StreamStatus = 'idle' | 'streaming' | 'done' | 'error'
-export type Endpoint = '/v1/chat/completions' | '/api/chat' | '/api/generate'
+export type Endpoint = '/v1/chat/completions' | '/api/chat' | '/api/generate' | '/v1beta/models'
 
 export interface Run {
   id: number
