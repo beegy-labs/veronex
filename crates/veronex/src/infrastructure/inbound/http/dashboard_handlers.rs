@@ -182,9 +182,9 @@ pub struct LoadedModelInfo {
 pub struct ProviderVramInfo {
     pub provider_id:     String,
     pub provider_name:   String,
-    pub total_vram_mb:   u32,
-    pub used_vram_mb:    u32,
-    pub available_vram_mb: u32,
+    pub total_vram_mb:   u64,
+    pub used_vram_mb:    u64,
+    pub available_vram_mb: u64,
     pub thermal_state:   String,
     pub temp_c:          Option<f32>,
     pub loaded_models:   Vec<LoadedModelInfo>,
