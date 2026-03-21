@@ -309,7 +309,7 @@
     },
     "servers": {
       "title": "서버",
-      "description": "물리 GPU 서버 — 서버당 node-exporter 1개.",
+      "description": "GPU 서버를 등록하고 하드웨어 메트릭을 모니터링합니다.",
       "name": "이름",
       "nodeExporterUrl": "node-exporter 엔드포인트",
       "registeredAt": "등록일",
@@ -342,6 +342,7 @@
     },
     "ollama": {
       "title": "Ollama 프로바이더",
+      "description": "Ollama 서버를 등록하고 추론 라우팅을 관리합니다.",
       "name": "이름",
       "url": "URL",
       "vram": "VRAM",
@@ -439,7 +440,8 @@
       "colActiveLimit": "활성 / 제한"
     },
     "gemini": {
-      "title": "Gemini API 키",
+      "title": "Gemini 프로바이더",
+      "description": "Gemini API 키를 등록하고 클라우드 추론 라우팅을 관리합니다.",
       "name": "이름",
       "apiKey": "API 키",
       "freeTier": "무료 티어",
