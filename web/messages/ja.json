@@ -286,6 +286,7 @@
     "tier": "ティア",
     "tierFree": "無料",
     "tierPaid": "有料",
+    "registered": "登録済み",
     "keysCount": "{{count}}件",
     "viewUsage": "使用量を見る",
     "usageTitle": "使用量 — {{name}}",
@@ -724,6 +725,7 @@
   "accounts": {
     "title": "アカウント",
     "description": "管理者アカウントとアクセス制御を管理します。",
+    "registered": "登録済み",
     "username": "ユーザー名",
     "name": "名前",
     "role": "役割",
