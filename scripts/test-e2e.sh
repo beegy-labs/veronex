@@ -3,13 +3,13 @@
 #
 # Validates the full scheduler stack with dual Ollama providers:
 #   - Local:  OLLAMA_LOCAL  (default: http://localhost:11434)  + NODE_EXPORTER_LOCAL  (default: http://localhost:9100)
-#   - Remote: OLLAMA_REMOTE (default: https://ollama.girok.dev) + NODE_EXPORTER_REMOTE (default: http://192.168.1.21:9100)
+#   - Remote: OLLAMA_REMOTE (default: https://ollama-1.kr1.girok.dev) + NODE_EXPORTER_REMOTE (default: http://192.168.1.21:9100)
 #
 # Usage:
 #   ./scripts/test-e2e.sh
 #   SKIP_DB_RESET=1 ./scripts/test-e2e.sh
 #   MODEL=qwen3:8b CONCURRENT=8 ./scripts/test-e2e.sh
-#   OLLAMA_LOCAL=http://localhost:11434 OLLAMA_REMOTE=https://ollama.girok.dev ./scripts/test-e2e.sh
+#   OLLAMA_LOCAL=http://localhost:11434 OLLAMA_REMOTE=https://ollama-1.kr1.girok.dev ./scripts/test-e2e.sh
 #
 # Phase execution:
 #   Sequential : 01-setup → 03-inference
@@ -40,7 +40,7 @@ echo -e "${CYAN}${BOLD}  Veronex E2E — Dual-Provider Scheduler Test${NC}"
 echo -e "${CYAN}${BOLD}══════════════════════════════════════════════${NC}"
 echo -e "  ${CYAN}API        = ${API_URL:-http://localhost:3001}${NC}"
 echo -e "  ${CYAN}Local      = ${OLLAMA_LOCAL:-http://localhost:11434} (node: ${NODE_EXPORTER_LOCAL:-http://localhost:9100})${NC}"
-echo -e "  ${CYAN}Remote     = ${OLLAMA_REMOTE:-https://ollama.girok.dev} (node: ${NODE_EXPORTER_REMOTE:-http://192.168.1.21:9100})${NC}"
+echo -e "  ${CYAN}Remote     = ${OLLAMA_REMOTE:-https://ollama-1.kr1.girok.dev} (node: ${NODE_EXPORTER_REMOTE:-http://192.168.1.21:9100})${NC}"
 echo -e "  ${CYAN}Model      = ${MODEL:-qwen3:8b}  Concurrency = ${CONCURRENT:-6}${NC}"
 echo ""
 
