@@ -101,12 +101,11 @@ pub struct DynamicProviderRouter {
     registry: Arc<dyn LlmProviderRegistry>,
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
     ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
-    global_model_settings_repo: Option<Arc<dyn crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository>>,
 }
 
 impl DynamicProviderRouter {
     pub fn new(registry: Arc<dyn LlmProviderRegistry>) -> Self {
-        Self { registry, model_selection_repo: None, ollama_model_repo: None, global_model_settings_repo: None }
+        Self { registry, model_selection_repo: None, ollama_model_repo: None }
     }
 
     pub fn with_model_selection(
@@ -122,14 +121,6 @@ impl DynamicProviderRouter {
         repo: Arc<dyn OllamaModelRepository>,
     ) -> Self {
         self.ollama_model_repo = Some(repo);
-        self
-    }
-
-    pub fn with_global_model_settings(
-        mut self,
-        repo: Arc<dyn crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository>,
-    ) -> Self {
-        self.global_model_settings_repo = Some(repo);
         self
     }
 
