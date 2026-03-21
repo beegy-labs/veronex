@@ -96,12 +96,12 @@ export default function AuditPage() {
         <DataTable minWidth="800px">
           <TableHeader>
             <TableRow>
-              <TableHead>{t('audit.time')}</TableHead>
-              <TableHead>{t('audit.account')}</TableHead>
-              <TableHead>{t('audit.action')}</TableHead>
-              <TableHead>{t('audit.resourceType')}</TableHead>
-              <TableHead>{t('audit.resourceName')}</TableHead>
-              <TableHead>{t('audit.ip')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.time')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.account')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.action')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.resourceType')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.resourceName')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.ip')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -112,7 +112,7 @@ export default function AuditPage() {
                   </TableCell>
                   <TableCell className="font-mono text-xs">{e.account_name}</TableCell>
                   <TableCell>
-                    <Badge variant={ACTION_COLORS[e.action] ?? 'outline'} className="text-xs">
+                    <Badge variant={ACTION_COLORS[e.action] ?? 'outline'} className="text-xs whitespace-nowrap">
                       {e.action}
                     </Badge>
                   </TableCell>

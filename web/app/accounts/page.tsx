@@ -241,7 +241,7 @@ function CreateAccountModal({
                       onCheckedChange={() => toggleRole(r.id)}
                     />
                     <span>{r.name}</span>
-                    {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1">{t('roles.system')}</Badge>}
+                    {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
                   </label>
                 ))}
               </div>
@@ -319,7 +319,7 @@ function RoleEditorModal({
         <DialogHeader>
           <DialogTitle>
             {isNew ? t('roles.createRole') : t('roles.editRole')}
-            {isSystem && <Badge variant="secondary" className="ml-2">{t('roles.system')}</Badge>}
+            {isSystem && <Badge variant="secondary" className="ml-2 whitespace-nowrap">{t('roles.system')}</Badge>}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-1">
@@ -426,7 +426,7 @@ function EditRolesModal({
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium flex items-center gap-1.5">
                   {r.name}
-                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1">{t('roles.system')}</Badge>}
+                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {t('roles.permissionCount', { count: r.permissions.length })} · {t('roles.menuCount', { count: r.menus.length })}
@@ -502,13 +502,13 @@ function RolesTab() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium flex items-center gap-2">
                   {r.name}
-                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1">{t('roles.system')}</Badge>}
+                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 pb-3">
                 <div className="flex flex-wrap gap-1">
                   {r.permissions.map(p => (
-                    <Badge key={p} variant="outline" className="text-[10px] font-normal">
+                    <Badge key={p} variant="outline" className="text-[10px] font-normal whitespace-nowrap">
                       {t(`roles.perm.${p}` as Parameters<typeof t>[0])}
                     </Badge>
                   ))}
@@ -685,13 +685,13 @@ export default function AccountsPage() {
             <DataTable minWidth="700px">
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('accounts.username')}</TableHead>
-                  <TableHead>{t('accounts.name')}</TableHead>
-                  <TableHead>{t('accounts.role')}</TableHead>
-                  <TableHead>{t('accounts.department')}</TableHead>
-                  <TableHead>{t('accounts.status')}</TableHead>
-                  <TableHead>{t('accounts.lastLogin')}</TableHead>
-                  <TableHead>{t('accounts.actions')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.username')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.name')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.role')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.department')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.status')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.lastLogin')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

@@ -363,11 +363,11 @@ const ServersTable = memo(function ServersTable({
         >
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-48">{t('providers.servers.name')}</TableHead>
-              <TableHead>{t('providers.servers.nodeExporterUrl')}</TableHead>
-              <TableHead className="min-w-64">{t('providers.servers.liveMetrics')}</TableHead>
-              <TableHead className="w-32">{t('providers.servers.registeredAt')}</TableHead>
-              <TableHead className="text-right w-24">{t('keys.actions')}</TableHead>
+              <TableHead className="w-48 whitespace-nowrap">{t('providers.servers.name')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('providers.servers.nodeExporterUrl')}</TableHead>
+              <TableHead className="min-w-64 whitespace-nowrap">{t('providers.servers.liveMetrics')}</TableHead>
+              <TableHead className="w-32 whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
+              <TableHead className="text-right w-24 whitespace-nowrap">{t('keys.actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
