@@ -1,6 +1,6 @@
 # Veronex E2E Test Suite
 
-> **Last Updated**: 2026-03-17
+> **Last Updated**: 2026-03-21
 
 ---
 
@@ -22,43 +22,29 @@ SKIP_DB_RESET=1 ./scripts/test-e2e.sh
 
 ```mermaid
 flowchart TD
-    subgraph "Sequential"
+    subgraph "Phase 1 (sequential)"
         S01["01-setup.sh"]
-        S03["03-inference.sh"]
-        S01 --> S03
     end
 
-    subgraph "Parallel"
-        P02["02-scheduler.sh"]
+    subgraph "Phase 2 (parallel)"
+        S03["03-inference.sh (seq gate)"]
         P04["04-crud.sh"]
         P05["05-security.sh"]
-        P06["06-api-surface.sh"]
-        P07["07-lifecycle.sh"]
-    end
-
-    subgraph "Sequential (clean state)"
-        S08["08-sdd-advanced.sh"]
-    end
-
-    S03 --> P02 & P04 & P05 & P06 & P07 & P11
-    P02 & P04 & P05 & P06 & P07 & P11 --> S08
-
-    subgraph "Parallel 1"
-        P02["02-scheduler.sh"]
-        P04["04-crud.sh"]
-        P05["05-security.sh"]
-        P06["06-api-surface.sh"]
-        P07["07-lifecycle.sh"]
+        P09["09-metrics-pipeline.sh"]
+        P10["10-image-storage.sh"]
         P11["11-verify-liveness.sh"]
     end
 
-    subgraph "Parallel 2"
-        P09["09-metrics-pipeline.sh"]
-        P10["10-image-storage.sh"]
+    subgraph "Phase 3 (parallel, after 03 completes)"
+        P02["02-scheduler.sh"]
+        P06["06-api-surface.sh"]
+        P07["07-lifecycle.sh"]
+        P08["08-sdd-advanced.sh"]
     end
 
-    S08 --> P09 & P10
-    P09 & P10 --> Result["Aggregate Results"]
+    S01 --> S03 & P04 & P05 & P09 & P10 & P11
+    S03 --> P02 & P06 & P07 & P08
+    P02 & P04 & P05 & P06 & P07 & P08 & P09 & P10 & P11 --> Result["Aggregate Results"]
 ```
 
 ---
@@ -662,11 +648,16 @@ The logic is fully implemented in `thermal.rs`. To enable: deploy the agent or m
 
 ## File Listing
 
+Execution strategy (optimized for speed):
+- **Phase 1** (sequential): `01-setup`
+- **Phase 2** (parallel): `03-inference` (sequential gate) + `[04, 05, 09, 10, 11]` (parallel independents)
+- **Phase 3** (parallel): `[02, 06, 07, 08]` — starts after `03-inference` completes (AIMD state needed)
+
 | File | Phase | Role |
 |------|-------|------|
 | `_lib.sh` | — | Shared helpers (pass/fail/info, curl wrappers, valkey functions) |
 | `01-setup.sh` | 1 (seq) | Infrastructure bootstrap |
-| `03-inference.sh` | 2 (parallel) | Inference burst + AIMD learning |
+| `03-inference.sh` | 2 (seq gate) | Inference burst + AIMD learning (must complete before Phase 3) |
 | `04-crud.sh` | 2 (parallel) | Account / Key / Provider / Server CRUD |
 | `05-security.sh` | 2 (parallel) | Auth, security headers, SSRF, RPM/TPM rate limit, RBAC |
 | `09-metrics-pipeline.sh` | 2 (parallel) | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
