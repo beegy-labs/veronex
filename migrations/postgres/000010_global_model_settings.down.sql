@@ -1,2 +1,10 @@
+DROP INDEX IF EXISTS idx_provider_selected_models_lookup;
+DROP INDEX IF EXISTS idx_gpu_servers_name_trgm;
+DROP INDEX IF EXISTS idx_api_keys_name_trgm;
+DROP INDEX IF EXISTS idx_accounts_username_trgm;
+DROP INDEX IF EXISTS idx_accounts_name_trgm;
+DROP INDEX IF EXISTS idx_llm_providers_url_trgm;
+DROP INDEX IF EXISTS idx_llm_providers_name_trgm;
+DROP INDEX IF EXISTS idx_ollama_models_name_trgm;
 DROP TABLE IF EXISTS api_key_provider_access;
 DROP TABLE IF EXISTS global_model_settings;

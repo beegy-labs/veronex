@@ -23,3 +23,33 @@ UPDATE roles
 SET permissions = array_append(permissions, 'model_manage')
 WHERE name = 'super'
   AND NOT ('model_manage' = ANY(permissions));
+
+-- ── Trigram indexes for 10K+ scale ILIKE search ───────────────────────────────
+-- Required by paginated list endpoints: ?search=... uses ILIKE which needs
+-- pg_trgm GIN indexes to avoid full table scans at scale.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX IF NOT EXISTS idx_ollama_models_name_trgm
+    ON ollama_models USING GIN (model_name gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_llm_providers_name_trgm
+    ON llm_providers USING GIN (name gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_llm_providers_url_trgm
+    ON llm_providers USING GIN (url gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_accounts_name_trgm
+    ON accounts USING GIN (name gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_accounts_username_trgm
+    ON accounts USING GIN (username gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_name_trgm
+    ON api_keys USING GIN (name gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_gpu_servers_name_trgm
+    ON gpu_servers USING GIN (name gin_trgm_ops);
+
+-- Composite index for providers_info_for_model_page LEFT JOIN
+CREATE INDEX IF NOT EXISTS idx_provider_selected_models_lookup
+    ON provider_selected_models (provider_id, model_name);
