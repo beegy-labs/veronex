@@ -27,9 +27,12 @@ export const providerKeyQuery = (providerId: string) => queryOptions({
   enabled: false,
 })
 
-export const ollamaModelProvidersQuery = (modelName: string) => queryOptions({
-  queryKey: ['ollama-model-providers', modelName] as const,
-  queryFn: () => api.ollamaModelProviders(modelName),
+export const ollamaModelProvidersQuery = (
+  modelName: string,
+  params?: { search?: string; page?: number; limit?: number },
+) => queryOptions({
+  queryKey: ['ollama-model-providers', modelName, params] as const,
+  queryFn: () => api.ollamaModelProviders(modelName, params),
   staleTime: STALE_TIME_FAST,
 })
 
@@ -42,9 +45,11 @@ export const selectedModelsQuery = (providerId: string) => queryOptions({
 
 // ── Ollama ────────────────────────────────────────────────────────────────────
 
-export const ollamaModelsQuery = queryOptions({
-  queryKey: ['ollama-models'] as const,
-  queryFn: () => api.ollamaModels(),
+export const ollamaModelsQuery = (
+  params?: { search?: string; page?: number; limit?: number },
+) => queryOptions({
+  queryKey: ['ollama-models', params] as const,
+  queryFn: () => api.ollamaModels(params),
   staleTime: STALE_TIME_SLOW,
   retry: false,
 })

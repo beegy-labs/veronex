@@ -1,4 +1,4 @@
-import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, RoleSummary, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, RoleSummary, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
@@ -210,8 +210,14 @@ export const api = {
     apiClient.get<{ models: GeminiModel[] }>('/v1/gemini/models'),
 
   // ── Ollama (JWT-protected) ────────────────────────────────────────────────
-  ollamaModels: () =>
-    apiClient.get<{ models: OllamaModelWithCount[] }>('/v1/ollama/models'),
+  ollamaModels: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<OllamaModelPage>(`/v1/ollama/models${q ? '?' + q : ''}`)
+  },
 
   syncOllamaModels: () =>
     apiClient.post<{ job_id: string; status: string }>('/v1/ollama/models/sync'),
@@ -219,8 +225,14 @@ export const api = {
   ollamaSyncStatus: () =>
     apiClient.get<OllamaSyncJob>('/v1/ollama/sync/status'),
 
-  ollamaModelProviders: (modelName: string) =>
-    apiClient.get<{ providers: OllamaProviderForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers`),
+  ollamaModelProviders: (modelName: string, params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<OllamaProviderPage>(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers${q ? '?' + q : ''}`)
+  },
 
   ollamaProviderModels: (providerId: string) =>
     apiClient.get<{ models: string[] }>(`/v1/ollama/providers/${providerId}/models`),

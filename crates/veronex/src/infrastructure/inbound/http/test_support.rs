@@ -11,7 +11,7 @@ use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyR
 use crate::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
 use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
-use crate::application::ports::outbound::ollama_model_repository::{OllamaProviderForModel, OllamaModelRepository, OllamaModelWithCount};
+use crate::application::ports::outbound::ollama_model_repository::{ModelPage, OllamaProviderForModel, OllamaModelRepository, OllamaModelWithCount, ProviderPage};
 use crate::application::ports::outbound::ollama_sync_job_repository::{OllamaSyncJob, OllamaSyncJobRepository};
 use crate::application::ports::outbound::provider_vram_budget_repository::{ProviderVramBudget, ProviderVramBudgetRepository};
 use crate::application::ports::outbound::session_repository::SessionRepository;
@@ -210,8 +210,13 @@ impl OllamaModelRepository for MockOllamaModelRepo {
     async fn sync_provider_models(&self, _provider_id: Uuid, _model_names: &[String]) -> Result<()> { Ok(()) }
     async fn list_all(&self) -> Result<Vec<String>> { Ok(vec![]) }
     async fn list_with_counts(&self) -> Result<Vec<OllamaModelWithCount>> { Ok(vec![]) }
+    async fn list_with_counts_page(&self, _search: &str, _limit: i64, _offset: i64) -> Result<ModelPage> {
+        Ok(ModelPage { items: vec![], total: 0 })
+    }
     async fn providers_for_model(&self, _model_name: &str) -> Result<Vec<Uuid>> { Ok(vec![]) }
-    async fn providers_info_for_model(&self, _model_name: &str) -> Result<Vec<OllamaProviderForModel>> { Ok(vec![]) }
+    async fn providers_info_for_model_page(&self, _model_name: &str, _search: &str, _limit: i64, _offset: i64) -> Result<ProviderPage> {
+        Ok(ProviderPage { items: vec![], total: 0 })
+    }
     async fn models_for_provider(&self, _provider_id: Uuid) -> Result<Vec<String>> { Ok(vec![]) }
 }
 
