@@ -244,23 +244,7 @@ assert_get "/v1/dashboard/jobs?status=completed&limit=5" 200 "Jobs filter: statu
 assert_get "/v1/dashboard/jobs?q=hello&limit=5" 200 "Jobs filter: full-text search"
 assert_get "/v1/dashboard/jobs?source=api&limit=5" 200 "Jobs filter: source=api"
 
-# Session revoke
-SESS_LOGIN=$(curl -si "$API/v1/auth/login" \
-  -H 'Content-Type: application/json' -d @/tmp/_sched_login.json 2>/dev/null)
-SESS_TK=$(echo "$SESS_LOGIN" | sed -n 's/.*veronex_access_token=\([^;]*\).*/\1/p' | head -1)
-if [ -n "$SESS_TK" ]; then
-  ADMIN_ID=$(aget "/v1/accounts" 2>/dev/null | jv '[0]["id"]' 2>/dev/null || echo "")
-  if [ -n "$ADMIN_ID" ] && [ "$ADMIN_ID" != "None" ]; then
-    SESS_ID=$(aget "/v1/accounts/$ADMIN_ID/sessions" 2>/dev/null | python3 -c "
-import sys,json; d=json.loads(sys.stdin.read())
-print(d[-1].get('id',d[-1].get('session_id','')) if isinstance(d,list) and d else '')
-" 2>/dev/null || echo "")
-    if [ -n "$SESS_ID" ]; then
-      c=$(adelc "/v1/sessions/$SESS_ID" | code)
-      case "$c" in 200|204) pass "Revoke session → $c" ;; *) fail "Revoke → $c" ;; esac
-    fi
-  fi
-fi
+# Session revocation: tested in 05-security.sh (security phase owns this)
 
 FINAL_JOBS=$(aget "/v1/dashboard/stats" 2>/dev/null | jv '["total_jobs"]' 2>/dev/null || echo "0")
 [ "$FINAL_JOBS" != "0" ] && [ "$FINAL_JOBS" != "None" ] \

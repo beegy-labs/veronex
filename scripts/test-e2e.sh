@@ -11,11 +11,12 @@
 #   MODEL=qwen3:8b CONCURRENT=8 ./scripts/test-e2e.sh
 #   OLLAMA_LOCAL=http://localhost:11434 OLLAMA_REMOTE=https://ollama-1.kr1.girok.dev ./scripts/test-e2e.sh
 #
-# Phase execution:
-#   Sequential : 01-setup → 03-inference
-#   Parallel 1 : 02-scheduler, 04-crud, 05-security, 06-api-surface, 07-lifecycle, 11-verify-liveness
-#   Sequential : 08-sdd-advanced
-#   Parallel 2 : 09-metrics-pipeline, 10-image-storage
+# Execution strategy (optimized for speed):
+#   Phase 1 (sequential) : 01-setup
+#   Phase 2 (parallel)   : 03-inference + [04-crud, 05-security, 09-metrics, 10-image, 11-verify]
+#   Phase 3 (parallel)   : [02-scheduler, 06-api-surface, 07-lifecycle, 08-sdd-advanced]
+#     → Phase 3 starts only after 03-inference completes (AIMD state needed)
+#     → Phase 2 independents start immediately after setup
 #
 # Prerequisites:
 #   - docker compose up (Veronex stack running)
@@ -33,8 +34,40 @@ COUNTS_FILE="$E2E_STATE.counts"
 cleanup() { rm -f "$E2E_STATE" "$COUNTS_FILE" "$COUNTS_FILE".* /tmp/_sched_login.json 2>/dev/null; }
 trap cleanup EXIT
 
-# ── Banner ────────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 CYAN='\033[0;36m'; BOLD='\033[1m'; GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
+PARALLEL_EXIT=0
+ALL_PHASE_COUNTS=("$COUNTS_FILE")
+
+run_phase() {
+  local phase="$1"
+  local phase_counts="$COUNTS_FILE.${phase%.sh}"
+  : > "$phase_counts"
+  ALL_PHASE_COUNTS+=("$phase_counts")
+  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase"
+}
+
+run_phase_bg() {
+  local phase="$1"
+  local phase_counts="$COUNTS_FILE.${phase%.sh}"
+  : > "$phase_counts"
+  ALL_PHASE_COUNTS+=("$phase_counts")
+  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase" &
+  echo $!
+}
+
+wait_pids() {
+  local -n _pids=$1
+  local -n _names=$2
+  for i in "${!_pids[@]}"; do
+    if ! wait "${_pids[$i]}"; then
+      echo -e "${RED}[ERROR]${NC} ${_names[$i]} exited non-zero" >&2
+      PARALLEL_EXIT=1
+    fi
+  done
+}
+
+# ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${CYAN}${BOLD}══════════════════════════════════════════════${NC}"
 echo -e "${CYAN}${BOLD}  Veronex E2E — Dual-Provider Scheduler Test${NC}"
 echo -e "${CYAN}${BOLD}══════════════════════════════════════════════${NC}"
@@ -44,88 +77,57 @@ echo -e "  ${CYAN}Remote     = ${OLLAMA_REMOTE:-https://ollama-1.kr1.girok.dev} 
 echo -e "  ${CYAN}Model      = ${MODEL:-qwen3:8b}  Concurrency = ${CONCURRENT:-6}${NC}"
 echo ""
 
-# ── Sequential phases (state must be established before parallel) ─────────────
-echo -e "${CYAN}${BOLD}[01] Setup: infra + auth + dual providers + API keys${NC}"
-bash "$E2E_DIR/01-setup.sh"
+# ── Phase 1: Setup (sequential — must complete before anything else) ──────────
+echo -e "${CYAN}${BOLD}[Phase 1] Setup: infra + auth + dual providers + API keys${NC}"
+run_phase "01-setup.sh"
 
-echo -e "${CYAN}${BOLD}[03] Inference: concurrent bursts + AIMD learning${NC}"
-bash "$E2E_DIR/03-inference.sh"
-
-# ── Parallel group 1 ─────────────────────────────────────────────────────────
-# 11-verify-liveness is stateless (HTTP verify calls + Valkey key checks)
-# so it runs safely alongside the other parallel phases.
-PARALLEL_PHASES=(
-  "02-scheduler.sh"          # ZSET queue, thermal, num_parallel, AIMD constraint
-  "04-crud.sh"               # Account / Key / Provider(num_parallel) / Server CRUD
-  "05-security.sh"           # Auth edge cases, SSRF, rate limiting, RBAC, Roles
-  "06-api-surface.sh"        # Multi-format inference, endpoint smoke tests
-  "07-lifecycle.sh"          # Job cancel, SSE, native API, password reset, edge cases
-  "11-verify-liveness.sh"    # Server/provider verify, duplicate 409, heartbeat
-)
-PARALLEL_PIDS=()
-PARALLEL_COUNTS=()
-PARALLEL_EXIT=0
-
+# ── Phase 2: Inference + Independent tests (parallel) ────────────────────────
+# 03-inference runs alongside independent tests that don't need AIMD state.
+# This saves ~2-3 minutes by not waiting for inference to finish before CRUD/security.
 echo ""
-echo -e "${CYAN}${BOLD}Running parallel group 1: ${PARALLEL_PHASES[*]}${NC}"
+echo -e "${CYAN}${BOLD}[Phase 2] Inference + independent tests (parallel)${NC}"
 
-for phase in "${PARALLEL_PHASES[@]}"; do
-  phase_counts="$COUNTS_FILE.${phase%.sh}"
-  : > "$phase_counts"
-  PARALLEL_COUNTS+=("$phase_counts")
-  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase" &
-  PARALLEL_PIDS+=($!)
+P2_PIDS=()
+P2_NAMES=()
+
+# Inference (needs to finish before Phase 3)
+INFERENCE_COUNTS="$COUNTS_FILE.03-inference"
+: > "$INFERENCE_COUNTS"
+ALL_PHASE_COUNTS+=("$INFERENCE_COUNTS")
+E2E_COUNTS_FILE="$INFERENCE_COUNTS" bash "$E2E_DIR/03-inference.sh" &
+INFERENCE_PID=$!
+P2_PIDS+=($INFERENCE_PID)
+P2_NAMES+=("03-inference.sh")
+
+# Independent tests (no AIMD dependency)
+for phase in 04-crud.sh 05-security.sh 09-metrics-pipeline.sh 10-image-storage.sh 11-verify-liveness.sh; do
+  pid=$(run_phase_bg "$phase")
+  P2_PIDS+=($pid)
+  P2_NAMES+=("$phase")
 done
 
-for i in "${!PARALLEL_PIDS[@]}"; do
-  if ! wait "${PARALLEL_PIDS[$i]}"; then
-    echo -e "${RED}[ERROR]${NC} ${PARALLEL_PHASES[$i]} exited non-zero" >&2
-    PARALLEL_EXIT=1
-  fi
-done
+# Wait for ALL Phase 2 (inference must finish for Phase 3)
+wait_pids P2_PIDS P2_NAMES
 
-# ── Sequential: SDD advanced tests (needs clean state after parallel) ────────
+# ── Phase 3: AIMD-dependent tests (parallel) ─────────────────────────────────
+# These tests require AIMD learning data from 03-inference.
 echo ""
-echo -e "${CYAN}${BOLD}[08] SDD Advanced: AIMD decrease, multi-model, scale-in/out, thermal${NC}"
-SDD_COUNTS="$COUNTS_FILE.08-sdd-advanced"
-: > "$SDD_COUNTS"
-if E2E_COUNTS_FILE="$SDD_COUNTS" bash "$E2E_DIR/08-sdd-advanced.sh"; then
-  true
-else
-  echo -e "${RED}[ERROR]${NC} 08-sdd-advanced.sh exited non-zero" >&2
-  PARALLEL_EXIT=1
-fi
+echo -e "${CYAN}${BOLD}[Phase 3] AIMD-dependent tests (parallel)${NC}"
 
-# ── Parallel group 2: independent infra tests ────────────────────────────────
-# 09 (metrics pipeline) and 10 (image storage) are independent:
-#   09 only touches agent + ClickHouse, no inference
-#   10 does image inference but doesn't touch metrics pipeline
-PARALLEL2_PHASES=("09-metrics-pipeline.sh" "10-image-storage.sh")
-PARALLEL2_PIDS=()
-PARALLEL2_COUNTS=()
+P3_PIDS=()
+P3_NAMES=()
 
-echo ""
-echo -e "${CYAN}${BOLD}Running parallel group 2: ${PARALLEL2_PHASES[*]}${NC}"
-
-for phase in "${PARALLEL2_PHASES[@]}"; do
-  phase_counts="$COUNTS_FILE.${phase%.sh}"
-  : > "$phase_counts"
-  PARALLEL2_COUNTS+=("$phase_counts")
-  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase" &
-  PARALLEL2_PIDS+=($!)
+for phase in 02-scheduler.sh 06-api-surface.sh 07-lifecycle.sh 08-sdd-advanced.sh; do
+  pid=$(run_phase_bg "$phase")
+  P3_PIDS+=($pid)
+  P3_NAMES+=("$phase")
 done
 
-for i in "${!PARALLEL2_PIDS[@]}"; do
-  if ! wait "${PARALLEL2_PIDS[$i]}"; then
-    echo -e "${RED}[ERROR]${NC} ${PARALLEL2_PHASES[$i]} exited non-zero" >&2
-    PARALLEL_EXIT=1
-  fi
-done
+wait_pids P3_PIDS P3_NAMES
 
 # ── Aggregate results ─────────────────────────────────────────────────────────
-ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}" "$SDD_COUNTS" "${PARALLEL2_COUNTS[@]}")
 TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
-for cf in "${ALL_COUNTS_FILES[@]}"; do
+for cf in "${ALL_PHASE_COUNTS[@]}"; do
   [ -f "$cf" ] || continue
   while IFS= read -r line; do
     case "$line" in
