@@ -325,15 +325,20 @@ export function DashboardTab({
                 <p className="text-xs text-muted-foreground py-3">{t('overview.noServers')}</p>
               ) : (
                 <div className="space-y-1">
-                  {serverStatus.map(s => (
+                  {serverStatus.slice(0, 5).map(s => (
                     <div key={s.id} className={`flex items-center justify-between py-2 px-2 gap-2 rounded-sm ${THERMAL_ROW_CLS[s.thermal]}`}>
                       <span className={`text-sm font-medium truncate min-w-0 ${THERMAL_NAME_CLS[s.thermal]}`}>{s.name}</span>
-                      <div className="flex items-center gap-3 flex-shrink-0">
+                      <div className="flex items-center gap-3 flex-shrink-0 whitespace-nowrap">
                         <ConnectionDot connected={s.connected} />
                         <ThermalLevelBadge level={s.thermal} temp={s.maxTemp} />
                       </div>
                     </div>
                   ))}
+                  {serverStatus.length > 5 && (
+                    <p className="text-xs text-muted-foreground text-center py-1">
+                      +{serverStatus.length - 5} {t('overview.moreServers')}
+                    </p>
+                  )}
                 </div>
               )}
               <div className="mt-3 pt-2 border-t border-border">
