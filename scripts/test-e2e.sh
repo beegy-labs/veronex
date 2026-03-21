@@ -47,13 +47,14 @@ run_phase() {
   E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase"
 }
 
-run_phase_bg() {
+_launch_bg() {
+  # Usage: _launch_bg <phase> → sets _BG_PID
   local phase="$1"
   local phase_counts="$COUNTS_FILE.${phase%.sh}"
   : > "$phase_counts"
   ALL_PHASE_COUNTS+=("$phase_counts")
   E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase" &
-  echo $!
+  _BG_PID=$!
 }
 
 wait_all() {
@@ -98,8 +99,8 @@ P2_WAIT_ARGS+=($! "03-inference.sh")
 
 # Independent tests (no AIMD dependency)
 for phase in 04-crud.sh 05-security.sh 09-metrics-pipeline.sh 10-image-storage.sh 11-verify-liveness.sh; do
-  pid=$(run_phase_bg "$phase")
-  P2_WAIT_ARGS+=($pid "$phase")
+  _launch_bg "$phase"
+  P2_WAIT_ARGS+=($_BG_PID "$phase")
 done
 
 # Wait for ALL Phase 2 (inference must finish for Phase 3)
@@ -113,8 +114,8 @@ echo -e "${CYAN}${BOLD}[Phase 3] AIMD-dependent tests (parallel)${NC}"
 P3_WAIT_ARGS=()
 
 for phase in 02-scheduler.sh 06-api-surface.sh 07-lifecycle.sh 08-sdd-advanced.sh; do
-  pid=$(run_phase_bg "$phase")
-  P3_WAIT_ARGS+=($pid "$phase")
+  _launch_bg "$phase"
+  P3_WAIT_ARGS+=($_BG_PID "$phase")
 done
 
 wait_all "${P3_WAIT_ARGS[@]}"
