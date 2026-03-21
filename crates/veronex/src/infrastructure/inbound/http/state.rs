@@ -18,6 +18,7 @@ use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
 use crate::application::ports::outbound::audit_port::AuditPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
+use crate::application::ports::outbound::api_key_provider_access::ApiKeyProviderAccessRepository;
 use crate::application::ports::outbound::capacity_settings_repository::CapacitySettingsRepository;
 use crate::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
 use crate::application::ports::outbound::gemini_model_repository::GeminiModelRepository;
@@ -52,6 +53,7 @@ pub struct AppState {
     pub gemini_model_repo: Arc<dyn GeminiModelRepository>,
     pub model_selection_repo: Arc<dyn ProviderModelSelectionRepository>,
     pub global_model_settings_repo: Arc<dyn GlobalModelSettingsRepository>,
+    pub api_key_provider_access_repo: Arc<dyn ApiKeyProviderAccessRepository>,
     pub ollama_model_repo: Arc<dyn OllamaModelRepository>,
     pub ollama_sync_job_repo: Arc<dyn OllamaSyncJobRepository>,
     pub valkey_pool: Option<fred::clients::Pool>,
