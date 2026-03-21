@@ -4,12 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Valkey TTL for hardware metrics cache (seconds).
-pub const HW_METRICS_TTL: i64 = 60;
-
-pub fn hw_metrics_key(provider_id: Uuid) -> String {
-    super::valkey_keys::hw_metrics(provider_id)
-}
+use crate::domain::constants::{HW_METRICS_TTL, NODE_METRICS_TTL};
 
 // ── Hardware metrics (from node-exporter) ─────────────────────────────────────
 
@@ -66,7 +61,7 @@ pub async fn load_hw_metrics(
     provider_id: Uuid,
 ) -> Option<HwMetrics> {
     use fred::prelude::*;
-    let key = hw_metrics_key(provider_id);
+    let key = super::valkey_keys::hw_metrics(provider_id);
     let cached: Option<String> = pool.get(&key).await.unwrap_or(None);
     serde_json::from_str(&cached?).ok()
 }
@@ -79,7 +74,7 @@ pub async fn store_hw_metrics(
     metrics: &HwMetrics,
 ) {
     use fred::prelude::*;
-    let key = hw_metrics_key(provider_id);
+    let key = super::valkey_keys::hw_metrics(provider_id);
     let Ok(json) = serde_json::to_string(metrics) else {
         return;
     };
@@ -88,6 +83,36 @@ pub async fn store_hw_metrics(
         .await
     {
         tracing::warn!(provider_id = %provider_id, "hw_metrics: failed to cache: {e}");
+    }
+}
+
+/// Read cached NodeMetrics for a GPU server from Valkey.
+pub async fn load_node_metrics(
+    pool: &fred::clients::Pool,
+    server_id: Uuid,
+) -> Option<NodeMetrics> {
+    use fred::prelude::*;
+    let key = super::valkey_keys::server_node_metrics(server_id);
+    let cached: Option<String> = pool.get(&key).await.unwrap_or(None);
+    serde_json::from_str(&cached?).ok()
+}
+
+/// Write NodeMetrics for a GPU server to Valkey (TTL = 60 s).
+pub async fn store_node_metrics(
+    pool: &fred::clients::Pool,
+    server_id: Uuid,
+    metrics: &NodeMetrics,
+) {
+    use fred::prelude::*;
+    let key = super::valkey_keys::server_node_metrics(server_id);
+    let Ok(json) = serde_json::to_string(metrics) else {
+        return;
+    };
+    if let Err(e) = pool
+        .set::<String, _, _>(key, json, Some(Expiration::EX(NODE_METRICS_TTL)), None, false)
+        .await
+    {
+        tracing::warn!(server_id = %server_id, "node_metrics: failed to cache: {e}");
     }
 }
 
@@ -151,12 +176,20 @@ pub struct GpuNodeMetrics {
 pub async fn fetch_node_metrics(
     node_exporter_url: &str,
     prev_snapshot: Option<&CpuSnapshot>,
+    client: Option<&reqwest::Client>,
 ) -> Result<(NodeMetrics, CpuSnapshot)> {
     let url = format!("{}/metrics", node_exporter_url.trim_end_matches('/'));
 
-    let client = reqwest::Client::builder()
-        .timeout(crate::domain::constants::NODE_EXPORTER_TIMEOUT)
-        .build()?;
+    let owned;
+    let client = match client {
+        Some(c) => c,
+        None => {
+            owned = reqwest::Client::builder()
+                .timeout(crate::domain::constants::NODE_EXPORTER_TIMEOUT)
+                .build()?;
+            &owned
+        }
+    };
 
     let text = client.get(&url).send().await?.text().await?;
     let (mut metrics, snapshot) = parse_prometheus_metrics(&text);

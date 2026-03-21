@@ -21,6 +21,7 @@ use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
 use super::handlers::{SseStream, try_acquire_sse};
 use super::state::AppState;
+use super::query_helpers::validate_hours;
 use super::usage_handlers::UsageQuery;
 
 // ── Query parameters ───────────────────────────────────────────────
@@ -154,12 +155,14 @@ pub async fn get_performance(
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<PerformanceMetrics>, AppError> {
+    let hours = params.effective_hours()?;
+    validate_hours(hours)?;
     if let Some(repo) = state.analytics_repo.as_ref()
-        && let Ok(metrics) = repo.performance(params.hours).await
+        && let Ok(metrics) = repo.performance(hours).await
             && metrics.total_requests > 0 {
                 return Ok(Json(metrics));
             }
-    Ok(Json(dashboard_queries::pg_performance(&state.pg_pool, params.hours).await?))
+    Ok(Json(dashboard_queries::pg_performance(&state.pg_pool, hours).await?))
 }
 
 // ── Capacity API response types ─────────────────────────────────────
@@ -179,9 +182,9 @@ pub struct LoadedModelInfo {
 pub struct ProviderVramInfo {
     pub provider_id:     String,
     pub provider_name:   String,
-    pub total_vram_mb:   u32,
-    pub used_vram_mb:    u32,
-    pub available_vram_mb: u32,
+    pub total_vram_mb:   u64,
+    pub used_vram_mb:    u64,
+    pub available_vram_mb: u64,
     pub thermal_state:   String,
     pub temp_c:          Option<f32>,
     pub loaded_models:   Vec<LoadedModelInfo>,

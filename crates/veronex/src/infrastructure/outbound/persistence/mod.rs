@@ -27,6 +27,8 @@ pub mod lab_settings_repository;
 pub mod model_capacity_repository;
 pub mod api_key_repository;
 pub mod provider_model_selection;
+pub mod global_model_settings;
+pub mod api_key_provider_access;
 pub mod gemini_model_repository;
 pub mod gemini_policy_repository;
 pub mod gemini_sync_config;

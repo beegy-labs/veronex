@@ -1,6 +1,6 @@
 # Web -- Component Patterns & Auth Architecture
 
-> SSOT | **Last Updated**: 2026-03-18 | Split from design-system.md
+> SSOT | **Last Updated**: 2026-03-21 | Split from design-system.md
 
 Related files:
 - [design-system.md](design-system.md) -- brand, tokens, theme, nav, DataTable, state management
@@ -15,6 +15,59 @@ Related files:
 | Change auth cookie expiry | `web/lib/auth.ts` cookie settings | Currently 7 days, `SameSite=Strict` |
 | Change refresh mutex behavior | `web/lib/auth-guard.ts` `tryRefresh()` | Module-level state, survives re-renders |
 | Add new flow visualization panel | `web/app/overview/components/` | Create panel + update `network-flow-tab.tsx` |
+
+---
+
+## Shared Components (SSOT for extraction)
+
+Components designed for reuse across Veronex and future projects (veronex-ai, etc).
+
+### Primitives (`web/components/ui/`)
+
+Radix-based, unstyled. All use `--theme-*` CSS tokens.
+
+| Component | File | Notes |
+|-----------|------|-------|
+| Badge | `badge.tsx` | Always add `whitespace-nowrap` for i18n text |
+| Button | `button.tsx` | Variants: default, secondary, outline, ghost, destructive |
+| Card | `card.tsx` | CardHeader, CardContent, CardTitle, CardDescription |
+| Checkbox | `checkbox.tsx` | |
+| Dialog | `dialog.tsx` | Modal with overlay |
+| Input | `input.tsx` | |
+| Label | `label.tsx` | |
+| Select | `select.tsx` | Radix Select with trigger, content, item |
+| Separator | `separator.tsx` | |
+| Switch | `switch.tsx` | |
+| Table | `table.tsx` | TableHeader, TableBody, TableRow, TableHead, TableCell |
+| Tabs | `tabs.tsx` | TabsList, TabsTrigger, TabsContent |
+| Tooltip | `tooltip.tsx` | TooltipProvider, TooltipTrigger, TooltipContent |
+
+### Domain Components (`web/components/`)
+
+| Component | File | Purpose | Reusable? |
+|-----------|------|---------|-----------|
+| StatusPill | `status-pill.tsx` | Count pill with icon + label. Optional `count`. `whitespace-nowrap` built-in. | Yes |
+| StatusBadge | `providers/shared.tsx` | Online/Offline/Degraded badge with icon | Yes |
+| DataTable | `data-table.tsx` | Scrollable table wrapper with `minWidth` + optional footer | Yes |
+| TimeRangeSelector | `time-range-selector.tsx` | Preset buttons (1h/6h/24h/7d/30d) + custom date range (calendar) | Yes |
+| StatsCard | `stats-card.tsx` | KPI card with title, value, subtitle, icon | Yes |
+| ProgressBar | `progress-bar.tsx` | Colored progress bar with percentage | Yes |
+| SectionLabel | `section-label.tsx` | Section header text | Yes |
+| ConfirmDialog | `confirm-dialog.tsx` | Delete/action confirmation | Yes |
+| CopyButton | `copy-button.tsx` | Clipboard copy with feedback | Yes |
+
+### Design Tokens (`web/lib/design-tokens.ts`)
+
+Single source for all programmatic color references (charts, dynamic styles).
+CSS custom properties defined in `web/styles/tokens.css`.
+
+### Extraction Guide
+
+To extract shared components into a separate package:
+1. Move `web/components/ui/` → `packages/ui/`
+2. Move domain components (StatusPill, DataTable, TimeRangeSelector, etc.) → `packages/veronex-ui/`
+3. Keep `web/lib/design-tokens.ts` and `web/styles/tokens.css` in the UI package
+4. Import via workspace alias: `@veronex/ui`
 
 ---
 

@@ -1,6 +1,6 @@
 # Hardware — GPU Server & Metrics
 
-> SSOT | **Last Updated**: 2026-03-15 (rev: cpu_usage_pct in ServerMetricsPoint, counter delta CTE for CPU usage history)
+> SSOT | **Last Updated**: 2026-03-21 (rev: cpu_usage_pct in ServerMetricsPoint, counter delta CTE for CPU usage history)
 
 ## Task Guide
 
@@ -76,8 +76,9 @@ PATCH  /v1/servers/{id}        UpdateGpuServerRequest → 200
 DELETE /v1/servers/{id}        → 204
 
 GET    /v1/servers/{id}/metrics
-       Live fetch from node-exporter (5s timeout)
-       scrape_ok=false → unreachable; 422 → node_exporter_url not set
+       Reads cached NodeMetrics from Valkey (written by health_checker every 30s cycle).
+       Returns default (empty) NodeMetrics when Valkey is unavailable or no cached data exists.
+       No live node-exporter scrape — scales to 10K+ providers.
        → NodeMetrics
 
 GET    /v1/servers/{id}/metrics/history?hours=N

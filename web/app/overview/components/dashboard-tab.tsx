@@ -190,7 +190,7 @@ export function DashboardTab({
     [breakdown?.by_model, geminiEnabled],
   )
 
-  const recentJobs: Job[] = recentJobsData?.jobs ?? []
+  // recentJobs removed — dashboard shows stats/issues, not individual jobs
   const perfMap = { daily: perf, weekly: perf7d, monthly: perf30d }
 
   /* ── render ─────────────────────────────────────────────── */
@@ -323,19 +323,29 @@ export function DashboardTab({
             <CardContent className="pt-0">
               {serverStatus.length === 0 ? (
                 <p className="text-xs text-muted-foreground py-3">{t('overview.noServers')}</p>
-              ) : (
-                <div className="space-y-1">
-                  {serverStatus.map(s => (
-                    <div key={s.id} className={`flex items-center justify-between py-2 px-2 gap-2 rounded-sm ${THERMAL_ROW_CLS[s.thermal]}`}>
-                      <span className={`text-sm font-medium truncate min-w-0 ${THERMAL_NAME_CLS[s.thermal]}`}>{s.name}</span>
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <ConnectionDot connected={s.connected} />
-                        <ThermalLevelBadge level={s.thermal} temp={s.maxTemp} />
+              ) : (() => {
+                const abnormal = serverStatus.filter(s => !s.connected || s.thermal === 'warning' || s.thermal === 'critical')
+                return abnormal.length === 0 ? (
+                  <p className="text-xs text-status-success-fg py-3">{t('overview.allServersNormal')}</p>
+                ) : (
+                  <div className="space-y-1">
+                    {abnormal.slice(0, 5).map(s => (
+                      <div key={s.id} className={`flex items-center justify-between py-2 px-2 gap-2 rounded-sm ${THERMAL_ROW_CLS[s.thermal]}`}>
+                        <span className={`text-sm font-medium truncate min-w-0 ${THERMAL_NAME_CLS[s.thermal]}`}>{s.name}</span>
+                        <div className="flex items-center gap-3 flex-shrink-0 whitespace-nowrap">
+                          <ConnectionDot connected={s.connected} />
+                          <ThermalLevelBadge level={s.thermal} temp={s.maxTemp} />
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                    {abnormal.length > 5 && (
+                      <p className="text-xs text-muted-foreground text-center py-1">
+                        +{abnormal.length - 5} {t('overview.moreServers')}
+                      </p>
+                    )}
+                  </div>
+                )
+              })()}
               <div className="mt-3 pt-2 border-t border-border">
                 <Link href="/servers" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
                   {t('overview.checkServers')} <ArrowRight className="h-3 w-3" />
@@ -542,7 +552,6 @@ export function DashboardTab({
 
       <RequestTrendSection trendData={trendData} />
       <TopModelsSection modelBarData={modelBarData} geminiEnabled={geminiEnabled} />
-      <RecentJobsSection recentJobs={recentJobs} tz={tz} />
       <TokenSummarySection usage={usage} />
     </div>
   )

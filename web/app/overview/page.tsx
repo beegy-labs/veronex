@@ -16,8 +16,10 @@ export default function OverviewPage() {
   // Single aggregated query for stats + perf(24h) + capacity + queue + lab
   const { data: overview, isLoading: overviewLoading, error: overviewError } = useQuery(dashboardOverviewQuery)
 
-  const { data: providers } = useQuery(providersQuery)
-  const { data: servers } = useQuery(serversQuery)
+  const { data: providersData } = useQuery(providersQuery())
+  const providers = providersData?.providers
+  const { data: serversData } = useQuery(serversQuery())
+  const servers = serversData?.servers
 
   const serverMetricQueries = useQueries({
     queries: (servers ?? []).map(s => serverMetricsQuery(s.id)),

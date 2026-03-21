@@ -53,12 +53,13 @@ export default function JobTable({
 
   return (
     <>
-      <DataTable minWidth="900px">
+      <DataTable minWidth="1000px">
         <TableHeader>
           <TableRow>
             <TableHead className="whitespace-nowrap">{t('jobs.id')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.model')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.provider')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.providerName')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.apiKey')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.endpoint')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.status')}</TableHead>
@@ -78,8 +79,11 @@ export default function JobTable({
                 <span title={job.id}>{truncateId(job.id)}</span>
               </TableCell>
               <TableCell>{job.model_name}</TableCell>
-              <TableCell className="text-muted-foreground">
-                {job.provider_name ?? job.provider_type}
+              <TableCell className="text-muted-foreground capitalize">
+                {job.provider_type}
+              </TableCell>
+              <TableCell className="text-muted-foreground text-sm">
+                {job.provider_name ?? <span className="opacity-40">—</span>}
               </TableCell>
               <TableCell className="text-xs text-primary/80">
                 {job.source === 'test'
@@ -99,7 +103,7 @@ export default function JobTable({
                   )}
                 </div>
               </TableCell>
-              <TableCell className="text-xs text-muted-foreground">
+              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                 {fmtDatetime(job.created_at, tz)}
               </TableCell>
               <TableCell className="text-right tabular-nums text-muted-foreground text-xs">

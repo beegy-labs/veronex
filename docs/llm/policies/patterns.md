@@ -1,6 +1,6 @@
 # Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-03-22 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Rust Edition 2024 · Axum 0.8 · sqlx 0.8
 > Frontend patterns -> `policies/patterns-frontend.md`
 
@@ -61,6 +61,38 @@ let row = sqlx::query_as!(ProviderRow,
 ).fetch_optional(&self.pool).await?;
 // Never SELECT * -- column order breaks with JOINs
 ```
+
+## Pagination Pattern
+
+Shared params struct in `handlers.rs` (single definition, imported by all list handlers):
+
+```rust
+// infrastructure/inbound/http/handlers.rs
+pub struct ListPageParams {
+    pub search: Option<String>,
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+}
+```
+
+Handler signature:
+```rust
+pub async fn list_things(
+    State(state): State<AppState>,
+    Query(params): Query<ListPageParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(DEFAULT).clamp(1, MAX);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+    let (items, total) = state.repo.list_page(&search, limit, offset).await?;
+    Ok(Json(serde_json::json!({ "things": items, "total": total, "page": page, "limit": limit })))
+}
+```
+
+Response shape: `{ <plural_name>: [...], total: i64, page: i64, limit: i64 }`
+
+Search uses ILIKE with pg_trgm GIN indexes (migration 000010). Default limits vary per endpoint (20–100); max 1000.
 
 ## async-trait (Required)
 

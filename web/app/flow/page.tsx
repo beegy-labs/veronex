@@ -8,7 +8,8 @@ import { NetworkFlowTab } from '@/app/overview/components/network-flow-tab'
 export default function FlowPage() {
   const { t } = useTranslation()
 
-  const { data: providers } = useQuery(providersQuery)
+  const { data: providersData } = useQuery(providersQuery())
+  const providers = providersData?.providers
 
   return (
     <div className="space-y-6">

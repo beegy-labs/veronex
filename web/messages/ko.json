@@ -36,6 +36,7 @@
     "revoke": "폐기",
     "active": "활성",
     "inactive": "비활성",
+    "disabled": "비활성화됨",
     "online": "온라인",
     "offline": "오프라인",
     "degraded": "저하됨",
@@ -73,6 +74,7 @@
     "customTimezoneHint": "IANA 시간대 식별자를 입력하세요.",
     "customTimezoneInvalid": "유효하지 않은 시간대입니다.",
     "custom": "사용자 정의",
+    "apply": "적용",
     "settings": "설정",
     "language": "언어",
     "labFeatures": "실험실 기능",
@@ -149,6 +151,8 @@
     "tempCritical": "위험",
     "tempWarning": "주의",
     "checkServers": "서버 점검",
+    "allServersNormal": "모든 서버 정상",
+    "moreServers": "개 서버 더보기",
     "waiting": "대기중",
     "running": "동작중",
     "pendingJobs": "대기 작업",
@@ -184,7 +188,7 @@
   },
   "jobs": {
     "title": "작업",
-    "description": "추론 작업 이력 및 상태.",
+    "description": "추론 작업 이력과 실시간 상태를 관리합니다.",
     "id": "작업 ID",
     "model": "모델",
     "provider": "프로바이더",
@@ -247,10 +251,13 @@
     "groupingSuccess": "세션 묶기가 시작되었습니다",
     "groupingError": "세션 묶기 실행에 실패했습니다",
     "groupingAlreadyRunning": "세션 묶기가 이미 실행 중입니다",
-    "providerName": "프로바이더",
+    "providerName": "서버명",
     "images": "이미지",
-    "filterModel": "모델…",
-    "filterProvider": "프로바이더…"
+    "filterModel": "모델",
+    "filterProvider": "프로바이더",
+    "allProviders": "전체 프로바이더",
+    "filters": "필터",
+    "filtersActive": "필터 ({{count}})"
   },
   "keys": {
     "title": "API 키",
@@ -286,6 +293,7 @@
     "tier": "등급",
     "tierFree": "무료",
     "tierPaid": "유료",
+    "registered": "등록됨",
     "keysCount": "{{count}}개",
     "viewUsage": "사용량 보기",
     "usageTitle": "사용량 — {{name}}",
@@ -309,7 +317,7 @@
     },
     "servers": {
       "title": "서버",
-      "description": "물리 GPU 서버 — 서버당 node-exporter 1개.",
+      "description": "GPU 서버를 등록하고 하드웨어 메트릭을 모니터링합니다.",
       "name": "이름",
       "nodeExporterUrl": "node-exporter 엔드포인트",
       "registeredAt": "등록일",
@@ -342,6 +350,7 @@
     },
     "ollama": {
       "title": "Ollama 프로바이더",
+      "description": "Ollama 서버를 등록하고 추론 라우팅을 관리합니다.",
       "name": "이름",
       "url": "URL",
       "vram": "VRAM",
@@ -439,7 +448,8 @@
       "colActiveLimit": "활성 / 제한"
     },
     "gemini": {
-      "title": "Gemini API 키",
+      "title": "Gemini 프로바이더",
+      "description": "Gemini API 키를 등록하고 클라우드 추론 라우팅을 관리합니다.",
       "name": "이름",
       "apiKey": "API 키",
       "freeTier": "무료 티어",
@@ -722,6 +732,7 @@
   "accounts": {
     "title": "계정",
     "description": "관리자 계정 및 접근 제어를 관리합니다.",
+    "registered": "등록됨",
     "username": "사용자명",
     "name": "이름",
     "role": "역할",
@@ -777,7 +788,8 @@
       "account_manage": "계정 관리",
       "audit_view": "감사 로그",
       "settings_manage": "설정",
-      "role_manage": "역할 관리"
+      "role_manage": "역할 관리",
+      "model_manage": "모델 관리"
     },
     "menu": {
       "dashboard": "대시보드",

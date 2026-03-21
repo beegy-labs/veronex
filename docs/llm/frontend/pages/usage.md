@@ -1,6 +1,6 @@
 # Web — Usage Page
 
-> CDD Layer 2 | **Last Updated**: 2026-03-08
+> CDD Layer 2 | **Last Updated**: 2026-03-21
 
 ## Layout (Tabs)
 
@@ -48,6 +48,17 @@ KPI row (always visible) then tabs:
 
 Default: `hours=24`. Any positive integer supported.
 
+### Date Range Parameters (`from`/`to`)
+
+All usage and performance endpoints accept optional ISO-8601 `from`/`to` query parameters that override `hours`:
+
+| Param | Format | Example | Notes |
+|-------|--------|---------|-------|
+| `from` | ISO-8601 | `2026-03-20T00:00:00Z` | Start time. When set, `hours` is ignored. |
+| `to` | ISO-8601 | `2026-03-21T00:00:00Z` | End time. Defaults to now when absent. |
+
+Accepted formats: RFC 3339 (`...Z` / `...+09:00`), `YYYY-MM-DDTHH:MM:SS`, `YYYY-MM-DDTHH:MM`. The backend computes `effective_hours = (to - from).hours.clamp(1, 8760)`. Error 400 if format is invalid.
+
 ## Response Types
 
 ### UsageAggregate
@@ -87,6 +98,8 @@ Top-level: `by_providers: ProviderBreakdown[]`, `by_key: KeyBreakdown[]`, `by_mo
 |-------|------|-------|
 | `key_id`, `key_name`, `key_prefix` | string | Key identifiers |
 | `request_count`, `success_count` | number | |
+| `error_count` | number | Failed requests |
+| `cancelled_count` | number | Cancelled requests |
 | `prompt_tokens`, `completion_tokens` | number | |
 | `success_rate` | number | 0-100 |
 | `estimated_cost_usd` | number/null | |

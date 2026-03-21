@@ -175,13 +175,13 @@ export function GeminiTab({
           >
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>{t('providers.gemini.name')}</TableHead>
-                <TableHead>{t('providers.gemini.apiKey')}</TableHead>
-                <TableHead>{t('providers.gemini.freeTier')}</TableHead>
-                <TableHead>{t('providers.gemini.activeToggle')}</TableHead>
-                <TableHead>{t('providers.gemini.status')}</TableHead>
-                <TableHead>{t('providers.servers.registeredAt')}</TableHead>
-                <TableHead className="text-right">{t('keys.actions')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.name')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.apiKey')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.freeTier')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.activeToggle')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.status')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
+                <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -195,11 +195,11 @@ export function GeminiTab({
                   </TableCell>
                   <TableCell>
                     {b.is_free_tier ? (
-                      <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-2 py-0.5">
+                      <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-2 py-0.5 whitespace-nowrap">
                         {t('providers.gemini.freeTier')}
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-2 py-0.5">
+                      <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-2 py-0.5 whitespace-nowrap">
                         {t('providers.gemini.paid')}
                       </Badge>
                     )}

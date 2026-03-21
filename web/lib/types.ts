@@ -9,7 +9,7 @@
  * and serializes UUIDs/dates as strings.
  */
 
-import type { JobStatus, JobSource, ProviderType, LlmProviderStatus } from './generated'
+import type { JobStatus, JobSource, ProviderType, LlmProviderStatus, GpuServer } from './generated'
 
 /** Connection verification state for server/provider registration modals. */
 export type VerifyState = 'idle' | 'checking' | 'ok' | 'error'
@@ -216,6 +216,8 @@ export interface KeyBreakdown {
   key_prefix: string
   request_count: number
   success_count: number
+  error_count: number
+  cancelled_count: number
   prompt_tokens: number
   completion_tokens: number
   success_rate: number
@@ -302,6 +304,34 @@ export interface Provider {
   registered_at: string
   /** Masked API key shown in the UI (e.g. `AIza...x1y2`). Gemini only. */
   api_key_masked: string | null
+}
+
+export interface ProviderPage {
+  providers: Provider[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface KeyPage {
+  keys: ApiKey[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface AccountPage {
+  accounts: Account[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface ServerPage {
+  servers: GpuServer[]
+  total: number
+  page: number
+  limit: number
 }
 
 export interface RegisterProviderRequest {
@@ -435,6 +465,21 @@ export interface OllamaProviderForModel {
   name: string
   url: string
   status: string
+  is_enabled: boolean
+}
+
+export interface OllamaModelPage {
+  models: OllamaModelWithCount[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface OllamaProviderPage {
+  providers: OllamaProviderForModel[]
+  total: number
+  page: number
+  limit: number
 }
 
 /**

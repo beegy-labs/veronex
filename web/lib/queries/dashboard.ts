@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { STALE_TIME_FAST, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_SLOW } from '@/lib/constants'
+import { STALE_TIME_FAST, STALE_TIME_LIVE, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_LIVE, REFETCH_INTERVAL_SLOW } from '@/lib/constants'
 
 // ── Dashboard overview (aggregated snapshot) ──────────────────────────────────
 
@@ -44,10 +44,11 @@ export interface JobsQueryParams {
   pageSize: number
   model?: string
   provider?: string
+  providerType?: string
 }
 
 export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
-  queryKey: ['dashboard-jobs', p.source, p.page, p.status, p.query, p.model ?? '', p.provider ?? ''] as const,
+  queryKey: ['dashboard-jobs', p.source, p.page, p.status, p.query, p.model ?? '', p.provider ?? '', p.providerType ?? ''] as const,
   queryFn: () => {
     const qs = new URLSearchParams({
       limit: String(p.pageSize),
@@ -58,6 +59,7 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
     if (p.query.trim()) qs.set('q', p.query.trim())
     if (p.model) qs.set('model', p.model)
     if (p.provider) qs.set('provider', p.provider)
+    if (p.providerType) qs.set('provider_type', p.providerType)
     return api.jobs(qs.toString())
   },
   staleTime: STALE_TIME_FAST,
@@ -70,8 +72,8 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
 export const queueDepthQuery = queryOptions({
   queryKey: ['queue-depth'] as const,
   queryFn: () => api.queueDepth(),
-  staleTime: 2_000,
-  refetchInterval: 3_000,
+  staleTime: STALE_TIME_LIVE,
+  refetchInterval: REFETCH_INTERVAL_LIVE,
   refetchIntervalInBackground: false,
 })
 

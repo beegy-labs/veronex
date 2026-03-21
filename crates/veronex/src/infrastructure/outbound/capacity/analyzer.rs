@@ -414,10 +414,10 @@ async fn call_llm_analysis(
     provider_name:  &str,
     model_name:     &str,
     weight_mb:      i32,
-    vram_total_mb:  u32,
+    vram_total_mb:  u64,
     temp_c:         Option<f32>,
     arch:           &ModelArchProfile,
-    kv_per_req_mb:  u32,
+    kv_per_req_mb:  u64,
     stats:          &ThroughputStats,
 ) -> Result<LlmCapacityAnalysis> {
     let prompt = format!(
@@ -483,8 +483,8 @@ Is there a concern? Respond ONLY with valid JSON:
 /// Collected per-model data for batch LLM analysis.
 struct ModelSnapshot {
     name:          String,
-    weight_mb:     u32,
-    kv_per_req_mb: u32,
+    weight_mb:     u64,
+    kv_per_req_mb: u64,
     tps:           f64,
     p95_ms:        f64,
     samples:       i64,
@@ -497,7 +497,7 @@ async fn call_llm_batch_analysis(
     analyzer_url:   &str,
     analyzer_model: &str,
     provider_name:  &str,
-    vram_total_mb:  u32,
+    vram_total_mb:  u64,
     temp_c:         Option<f32>,
     models:         &[ModelSnapshot],
 ) -> Result<LlmBatchRecommendation> {
@@ -507,7 +507,7 @@ async fn call_llm_batch_analysis(
 
     // Build model summary table
     let mut model_lines = String::new();
-    let mut total_weight = 0u32;
+    let mut total_weight = 0u64;
     for m in models {
         total_weight += m.weight_mb;
         model_lines.push_str(&format!(
@@ -664,16 +664,16 @@ pub async fn sync_provider(
     } else {
         None
     };
-    let drm_vram_mb = hw.as_ref().map(|h| h.vram_total_mb)
+    let drm_vram_mb = hw.as_ref().map(|h| h.vram_total_mb as u64)
         .filter(|&v| v > 0)
         .unwrap_or({
-            if provider_total_vram_mb > 0 { provider_total_vram_mb as u32 } else { 0 }
+            if provider_total_vram_mb > 0 { provider_total_vram_mb as u64 } else { 0 }
         });
 
     // APU / unified-memory detection: AMD Ryzen AI (iGPU) and similar APUs report only
     // the dedicated BIOS-allocated VRAM via DRM (e.g. 1024 MiB), while Ollama transparently
     // uses shared system RAM. Use mem_available_mb from node-exporter as the real capacity.
-    let mem_available_mb = hw.as_ref().map(|h| h.mem_available_mb).unwrap_or(0);
+    let mem_available_mb = hw.as_ref().map(|h| h.mem_available_mb as u64).unwrap_or(0u64);
     let is_apu = hw.as_ref().is_some_and(|h| {
         h.gpu_vendor == "amd" && drm_vram_mb > 0 && mem_available_mb > drm_vram_mb * 2
     });
@@ -725,7 +725,7 @@ pub async fn sync_provider(
             };
             vram_budget_repo.upsert(&budget).await.ok();
         }
-        vram_pool.set_last_mem_available_mb(provider_id, mem_available_mb);
+        vram_pool.set_last_mem_available_mb(provider_id, mem_available_mb as u32);
     }
 
     // ── Governor: reset dispatch_blocked and governor_cap for all loaded models ──
@@ -849,7 +849,7 @@ pub async fn sync_provider(
         }
     }
     for model in &ps.models {
-        let weight_mb = (model.size_vram / 1_048_576) as u32;
+        let weight_mb = (model.size_vram / 1_048_576) as u64;
         vram_pool.mark_model_loaded(provider_id, &model.name, weight_mb);
     }
 
@@ -885,7 +885,7 @@ pub async fn sync_provider(
             let t0 = std::time::Instant::now();
             let result = call_llm_analysis(
                 client, ollama_url, analyzer_model, provider_name,
-                &model.name, weight_mb, vram_total_mb, temp_c, &arch, kv_per_req, &stats,
+                &model.name, weight_mb, vram_total_mb, temp_c, &arch, kv_per_req as u64, &stats,
             ).await.unwrap_or_default();
             let elapsed = t0.elapsed().as_millis() as i32;
             let prompt_summary = format!("VRAM analysis: {} on {} ({}MB)", model.name, provider_name, weight_mb);
@@ -899,9 +899,9 @@ pub async fn sync_provider(
             provider_id,
             &model.name,
             ModelVramProfile {
-                weight_mb: weight_mb as u32,
+                weight_mb: weight_mb as u64,
                 weight_estimated: false,
-                kv_per_request_mb: kv_per_req,
+                kv_per_request_mb: kv_per_req as u64,
                 num_layers: arch.num_layers as u16,
                 num_kv_heads: arch.num_kv_heads as u16,
                 head_dim: arch.head_dim as u16,
@@ -1011,8 +1011,8 @@ pub async fn sync_provider(
         // Collect snapshot for batch LLM analysis
         model_snapshots.push(ModelSnapshot {
             name:           model.name.clone(),
-            weight_mb:      weight_mb as u32,
-            kv_per_req_mb:  kv_per_req,
+            weight_mb:      weight_mb as u64,
+            kv_per_req_mb:  kv_per_req as u64,
             tps:            stats.avg_tokens_per_sec,
             p95_ms:         stats.p95_latency_ms,
             samples:        stats.sample_count,
