@@ -9,8 +9,10 @@ import { RotateCcw, Search, Cpu, Server } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
+import { hasPermission } from '@/lib/auth'
 import { OllamaModelProvidersModal } from './modals'
 
 export { OllamaCapacitySection, ThermalBadge, VramBar } from './ollama-capacity-section'
@@ -36,6 +38,25 @@ export function OllamaSyncSection() {
   })
 
   const { data: ollamaModelsData } = useQuery(ollamaModelsQuery)
+
+  const { data: globalSettings } = useQuery({
+    queryKey: ['global-model-settings'],
+    queryFn: () => api.globalModelSettings(),
+  })
+
+  const globalDisabledSet = useMemo(() => {
+    const set = new Set<string>()
+    globalSettings?.forEach(s => { if (!s.is_enabled) set.add(s.model_name) })
+    return set
+  }, [globalSettings])
+
+  const canManageModels = hasPermission('model_manage')
+
+  const toggleGlobalMutation = useMutation({
+    mutationFn: ({ model, enabled }: { model: string; enabled: boolean }) =>
+      api.setGlobalModelEnabled(model, enabled),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['global-model-settings'] }),
+  })
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncOllamaModels(),
@@ -105,20 +126,42 @@ export function OllamaSyncSection() {
                     {t('providers.ollama.noModelsMatch')} &ldquo;{search}&rdquo;
                   </p>
                 )}
-                {filteredModels.map((m) => (
-                  <button
-                    key={m.model_name}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-muted/40 transition-colors text-left"
-                    onClick={() => setSelectedModel(m.model_name)}
-                  >
-                    <Cpu className="h-3.5 w-3.5 text-accent-gpu/70 shrink-0" />
-                    <span className="font-mono text-sm text-text-bright flex-1 truncate">{m.model_name}</span>
-                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0 gap-1">
-                      <Server className="h-2.5 w-2.5" />
-                      {m.provider_count}
-                    </Badge>
-                  </button>
-                ))}
+                {filteredModels.map((m) => {
+                  const isDisabled = globalDisabledSet.has(m.model_name)
+                  return (
+                    <div
+                      key={m.model_name}
+                      className={`flex items-center gap-3 px-3 py-2.5 hover:bg-muted/40 transition-colors ${isDisabled ? 'opacity-50' : ''}`}
+                    >
+                      {canManageModels && (
+                        <Switch
+                          checked={!isDisabled}
+                          onCheckedChange={(checked) =>
+                            toggleGlobalMutation.mutate({ model: m.model_name, enabled: checked })
+                          }
+                          disabled={toggleGlobalMutation.isPending}
+                          aria-label={`${m.model_name} global toggle`}
+                        />
+                      )}
+                      <button
+                        className="flex items-center gap-3 flex-1 text-left min-w-0"
+                        onClick={() => setSelectedModel(m.model_name)}
+                      >
+                        <Cpu className="h-3.5 w-3.5 text-accent-gpu/70 shrink-0" />
+                        <span className="font-mono text-sm text-text-bright flex-1 truncate">{m.model_name}</span>
+                      </button>
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0 gap-1 whitespace-nowrap">
+                        <Server className="h-2.5 w-2.5" />
+                        {m.provider_count}
+                      </Badge>
+                      {isDisabled && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-status-error-fg border-status-error/30 whitespace-nowrap">
+                          {t('common.disabled')}
+                        </Badge>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
