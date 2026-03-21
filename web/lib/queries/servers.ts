@@ -4,9 +4,9 @@ import { STALE_TIME_SLOW, STALE_TIME_FAST, STALE_TIME_HISTORY, REFETCH_INTERVAL_
 
 // ── GPU servers list ──────────────────────────────────────────────────────────
 
-export const serversQuery = queryOptions({
-  queryKey: ['servers'] as const,
-  queryFn: () => api.servers(),
+export const serversQuery = (params?: { search?: string; page?: number; limit?: number }) => queryOptions({
+  queryKey: ['servers', params] as const,
+  queryFn: () => api.servers(params),
   staleTime: STALE_TIME_SLOW,
   refetchInterval: REFETCH_INTERVAL_SLOW,
   refetchIntervalInBackground: false,

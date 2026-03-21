@@ -175,11 +175,31 @@ pub async fn register_gpu_server(
     Ok((StatusCode::CREATED, Json(serde_json::json!({"id": id}))))
 }
 
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct ListPageParams {
+    pub search: Option<String>,
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+}
+
 /// `GET /v1/servers`
-pub async fn list_gpu_servers(State(state): State<AppState>) -> HandlerResult<Json<Vec<GpuServerSummary>>> {
-    let servers = state.gpu_server_registry.list_all().await.map_err(db_error)?;
+pub async fn list_gpu_servers(
+    State(state): State<AppState>,
+    Query(params): Query<ListPageParams>,
+) -> HandlerResult<impl axum::response::IntoResponse> {
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(100).clamp(1, 1000);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+
+    let (servers, total) = state.gpu_server_registry.list_page(&search, limit, offset).await.map_err(db_error)?;
     let summaries: Vec<GpuServerSummary> = servers.into_iter().map(Into::into).collect();
-    Ok(Json(summaries))
+    Ok(axum::Json(serde_json::json!({
+        "servers": summaries,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
 // ── Update ─────────────────────────────────────────────────────────────────────

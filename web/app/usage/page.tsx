@@ -37,7 +37,8 @@ export default function UsagePage() {
   const { data: analytics } = useQuery(analyticsQuery(hours))
   const { data: perf } = useQuery(performanceQuery(hours))
   const { data: breakdown } = useQuery(usageBreakdownQuery(hours))
-  const { data: keys } = useQuery(keysQuery)
+  const { data: keysData } = useQuery(keysQuery())
+  const keys = keysData?.keys
 
   const errorRate = agg && agg.request_count > 0
     ? calcPercentage(agg.error_count, agg.request_count) : 0

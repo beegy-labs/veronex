@@ -1,4 +1,4 @@
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use chrono::Utc;
@@ -132,18 +132,33 @@ pub(super) async fn resolve_tenant_id(state: &AppState, claims: &Claims) -> Resu
     Ok(account.username)
 }
 
-/// GET /v1/keys — List keys for the authenticated tenant.
+#[derive(serde::Deserialize, Default)]
+pub struct ListPageParams {
+    pub search: Option<String>,
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+/// GET /v1/keys — List keys for the authenticated tenant with optional search/pagination.
 ///
 /// Returns key prefix only — never the hash or plaintext.
 pub async fn list_keys(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
-) -> Result<Json<Vec<KeySummary>>, AppError> {
-    let keys = if claims.role == crate::domain::enums::AccountRole::Super {
-        state.api_key_repo.list_all().await?
+    Query(params): Query<ListPageParams>,
+) -> Result<axum::response::Response, AppError> {
+    use axum::response::IntoResponse;
+
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(50).clamp(1, 1000);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+
+    let (keys, total) = if claims.role == crate::domain::enums::AccountRole::Super {
+        state.api_key_repo.list_page(&search, limit, offset).await?
     } else {
         let tenant_id = resolve_tenant_id(&state, &claims).await?;
-        state.api_key_repo.list_by_tenant(&tenant_id).await?
+        state.api_key_repo.list_by_tenant_page(&tenant_id, &search, limit, offset).await?
     };
 
     // Batch-resolve account_id → username in O(1) query (accounts table is small — admin only)
@@ -177,7 +192,12 @@ pub async fn list_keys(
         })
         .collect();
 
-    Ok(Json(summaries))
+    Ok((StatusCode::OK, Json(serde_json::json!({
+        "keys": summaries,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    }))).into_response())
 }
 
 /// DELETE /v1/keys/{id} — Soft-delete an API key (hidden from list, blocked from auth).
