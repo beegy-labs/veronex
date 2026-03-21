@@ -225,7 +225,7 @@ function KeyHistoryModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => v
           {events?.map((ev) => (
             <div key={`${ev.event_time}-${ev.account_id}-${ev.action}-${ev.resource_id}`} className="rounded-lg border px-3 py-2 text-sm space-y-0.5">
               <div className="flex items-center justify-between gap-2">
-                <Badge variant="outline" className="text-[10px]">{ev.action}</Badge>
+                <Badge variant="outline" className="text-[10px] whitespace-nowrap">{ev.action}</Badge>
                 <span className="text-xs text-muted-foreground">{fmtDateOnly(ev.event_time, tz)}</span>
               </div>
               <p className="text-xs text-muted-foreground">{ev.details}</p>

@@ -237,6 +237,14 @@ pub const THERMAL_HARD_COOLDOWN_SECS: i64 = 300;
 /// from expiring before the cooldown window is checked.
 pub const THERMAL_THROTTLE_KEY_TTL_SECS: i64 = 360;
 
+// ── Gemini rate-limit TTLs ──────────────────────────────────────────────
+
+/// TTL (seconds) for the per-minute Gemini RPM counter key.
+pub const GEMINI_RPM_TTL_SECS: i64 = 120;
+
+/// TTL (seconds) for the per-day Gemini RPD counter key (~25 hours).
+pub const GEMINI_RPD_TTL_SECS: i64 = 90_000;
+
 // ── Circuit breaker / reaper ─────────────────────────────────────────────
 
 /// Cooldown before half-open probe after circuit opens.

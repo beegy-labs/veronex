@@ -361,7 +361,7 @@ pub(super) async fn pg_usage_breakdown(
              LIMIT 1
          ) pricing ON true
          WHERE j.created_at >= now() - make_interval(hours => $1)
-         GROUP BY j.provider_type, j.provider_type, pricing.input_per_1m, pricing.output_per_1m
+         GROUP BY j.provider_type, pricing.input_per_1m, pricing.output_per_1m
          ORDER BY request_count DESC",
     )
     .bind(hours as i32)

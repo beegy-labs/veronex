@@ -727,7 +727,7 @@ export default function AccountsPage() {
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {a.roles.map(r => (
-                          <Badge key={r.id} variant={r.name === 'super' ? 'default' : 'secondary'}>
+                          <Badge key={r.id} variant={r.name === 'super' ? 'default' : 'secondary'} className="whitespace-nowrap">
                             {r.name}
                           </Badge>
                         ))}

@@ -27,7 +27,7 @@ export function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
           <Card key={b.provider_type} className="overflow-hidden">
             <CardContent className="p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <Badge variant="outline" className={`text-xs font-mono ${PROVIDER_BADGE[b.provider_type] ?? ''}`}>
+                <Badge variant="outline" className={`text-xs font-mono whitespace-nowrap ${PROVIDER_BADGE[b.provider_type] ?? ''}`}>
                   {b.provider_type}
                 </Badge>
                 <span className="text-2xl font-bold tabular-nums">{fmtCompact(b.request_count)}</span>
