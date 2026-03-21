@@ -183,6 +183,16 @@ impl ProviderModelSelectionRepository for MockModelSelectionRepo {
     async fn list_enabled(&self, _provider_id: Uuid) -> Result<Vec<String>> { Ok(vec![]) }
 }
 
+pub(crate) struct MockGlobalModelSettingsRepo;
+
+#[async_trait]
+impl crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository for MockGlobalModelSettingsRepo {
+    async fn list(&self) -> Result<Vec<crate::application::ports::outbound::global_model_settings::GlobalModelSetting>> { Ok(vec![]) }
+    async fn is_enabled(&self, _model_name: &str) -> Result<bool> { Ok(true) }
+    async fn set_enabled(&self, _model_name: &str, _enabled: bool) -> Result<()> { Ok(()) }
+    async fn list_disabled(&self) -> Result<Vec<String>> { Ok(vec![]) }
+}
+
 pub(crate) struct MockOllamaModelRepo;
 
 #[async_trait]
@@ -314,6 +324,7 @@ pub(crate) fn make_app() -> axum::Router {
         gemini_sync_config_repo: Arc::new(MockGeminiSyncConfigRepo),
         gemini_model_repo: Arc::new(MockGeminiModelRepo),
         model_selection_repo: Arc::new(MockModelSelectionRepo),
+        global_model_settings_repo: Arc::new(MockGlobalModelSettingsRepo),
         ollama_model_repo: Arc::new(MockOllamaModelRepo),
         ollama_sync_job_repo: Arc::new(MockOllamaSyncJobRepo),
         valkey_pool: None,

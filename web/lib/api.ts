@@ -173,6 +173,14 @@ export const api = {
   setModelEnabled: (providerId: string, modelName: string, isEnabled: boolean) =>
     apiClient.patch<void>(`/v1/providers/${providerId}/selected-models/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
 
+  // ── Global model settings (JWT-protected) ─────────────────────────────────
+  globalModelSettings: () =>
+    apiClient.get<{ model_name: string; is_enabled: boolean }[]>('/v1/models/global-settings'),
+  globalDisabledModels: () =>
+    apiClient.get<string[]>('/v1/models/global-disabled'),
+  setGlobalModelEnabled: (modelName: string, isEnabled: boolean) =>
+    apiClient.patch<{ model_name: string; is_enabled: boolean }>(`/v1/models/global-settings/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
+
   // ── Gemini (JWT-protected) ────────────────────────────────────────────────
   geminiPolicies: () =>
     apiClient.get<GeminiRateLimitPolicy[]>('/v1/gemini/policies'),
