@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { accountsQuery, rolesQuery, accountSessionsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { Account, CreateAccountResponse, RoleSummary, SessionRecord } from '@/lib/types'
-import { Plus, Trash2, Link, Shield, Settings2, Users } from 'lucide-react'
+import { Plus, Trash2, Link, Shield, Settings2, Users, ChevronLeft, ChevronRight } from 'lucide-react'
 import { CopyButton } from '@/components/copy-button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -596,6 +596,11 @@ export default function AccountsPage() {
 
   const { data: accounts = [], isLoading, isError } = useQuery(accountsQuery)
   const { data: roles = [] } = useQuery(rolesQuery)
+  const [acctPage, setAcctPage] = useState(0)
+  const ACCT_PAGE_SIZE = 20
+  const acctTotalPages = Math.max(1, Math.ceil(accounts.length / ACCT_PAGE_SIZE))
+  const acctSafePage = Math.min(acctPage, Math.max(0, acctTotalPages - 1))
+  const acctPageItems = useMemo(() => accounts.slice(acctSafePage * ACCT_PAGE_SIZE, (acctSafePage + 1) * ACCT_PAGE_SIZE), [accounts, acctSafePage])
 
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteAccount(id),
@@ -715,7 +720,7 @@ export default function AccountsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {accounts.map((a: Account) => (
+                {acctPageItems.map((a: Account) => (
                   <TableRow key={a.id}>
                     <TableCell className="font-mono text-xs">{a.username}</TableCell>
                     <TableCell>{a.name}</TableCell>
@@ -787,6 +792,21 @@ export default function AccountsPage() {
                 ))}
               </TableBody>
             </DataTable>
+          )}
+          {accounts.length > 0 && acctTotalPages > 1 && (
+            <div className="flex items-center justify-end gap-2">
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {acctSafePage * ACCT_PAGE_SIZE + 1}–{Math.min((acctSafePage + 1) * ACCT_PAGE_SIZE, accounts.length)} / {accounts.length}
+              </span>
+              <Button variant="outline" size="icon" className="h-7 w-7" disabled={acctSafePage <= 0}
+                onClick={() => setAcctPage(p => p - 1)}>
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="outline" size="icon" className="h-7 w-7" disabled={acctSafePage >= acctTotalPages - 1}
+                onClick={() => setAcctPage(p => p + 1)}>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           )}
 
           {deleteTarget && (
