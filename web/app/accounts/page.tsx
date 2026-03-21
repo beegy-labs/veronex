@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { accountsQuery, rolesQuery, accountSessionsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { Account, CreateAccountResponse, RoleSummary, SessionRecord } from '@/lib/types'
-import { Plus, Trash2, Link, Shield, Settings2 } from 'lucide-react'
+import { Plus, Trash2, Link, Shield, Settings2, Users } from 'lucide-react'
 import { CopyButton } from '@/components/copy-button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -30,6 +30,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
+import { StatusPill } from '@/components/status-pill'
 import { useApiMutation } from '@/hooks/use-api-mutation'
 import { usePageGuard } from '@/hooks/use-page-guard'
 import { useTranslation } from '@/i18n'
@@ -626,15 +627,26 @@ export default function AccountsPage() {
       {/* Accounts tab */}
       {tab === 'accounts' && (
         <>
-          <div className="flex items-center justify-between">
-            <div>
+          <div>
+            <div className="flex items-center justify-between">
               <h1 className="text-xl font-semibold">{t('accounts.title')}</h1>
-              <p className="text-sm text-muted-foreground mt-0.5">{t('accounts.description')}</p>
+              <Button size="sm" onClick={() => setShowCreate(true)} className="shrink-0">
+                <Plus className="h-4 w-4 mr-1.5" />{t('accounts.createAccount')}
+              </Button>
             </div>
-            <Button size="sm" onClick={() => setShowCreate(true)}>
-              <Plus className="h-4 w-4 mr-1.5" />
-              {t('accounts.createAccount')}
-            </Button>
+            <p className="text-sm text-muted-foreground mt-0.5">{t('accounts.description')}</p>
+            {accounts.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap mt-2">
+                <StatusPill icon={<Users className="h-3 w-3 shrink-0" />} count={accounts.length} label={t('accounts.registered')} />
+                {accounts.filter((a: Account) => a.is_active).length > 0 && (
+                  <StatusPill
+                    icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+                    count={accounts.filter((a: Account) => a.is_active).length} label={t('common.active')}
+                    className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+                  />
+                )}
+              </div>
+            )}
           </div>
 
           <CreateAccountModal open={showCreate} onClose={() => setShowCreate(false)} roles={roles} />

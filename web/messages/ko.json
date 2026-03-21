@@ -184,7 +184,7 @@
   },
   "jobs": {
     "title": "작업",
-    "description": "추론 작업 이력 및 상태.",
+    "description": "추론 작업 이력과 실시간 상태를 관리합니다.",
     "id": "작업 ID",
     "model": "모델",
     "provider": "프로바이더",
@@ -286,6 +286,7 @@
     "tier": "등급",
     "tierFree": "무료",
     "tierPaid": "유료",
+    "registered": "등록됨",
     "keysCount": "{{count}}개",
     "viewUsage": "사용량 보기",
     "usageTitle": "사용량 — {{name}}",
@@ -724,6 +725,7 @@
   "accounts": {
     "title": "계정",
     "description": "관리자 계정 및 접근 제어를 관리합니다.",
+    "registered": "등록됨",
     "username": "사용자명",
     "name": "이름",
     "role": "역할",
