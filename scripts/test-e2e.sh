@@ -56,12 +56,12 @@ run_phase_bg() {
   echo $!
 }
 
-wait_pids() {
-  local -n _pids=$1
-  local -n _names=$2
-  for i in "${!_pids[@]}"; do
-    if ! wait "${_pids[$i]}"; then
-      echo -e "${RED}[ERROR]${NC} ${_names[$i]} exited non-zero" >&2
+wait_all() {
+  # Args: pid1 name1 pid2 name2 ...
+  while [ $# -ge 2 ]; do
+    local pid="$1" name="$2"; shift 2
+    if ! wait "$pid"; then
+      echo -e "${RED}[ERROR]${NC} $name exited non-zero" >&2
       PARALLEL_EXIT=1
     fi
   done
@@ -87,43 +87,37 @@ run_phase "01-setup.sh"
 echo ""
 echo -e "${CYAN}${BOLD}[Phase 2] Inference + independent tests (parallel)${NC}"
 
-P2_PIDS=()
-P2_NAMES=()
+P2_WAIT_ARGS=()
 
 # Inference (needs to finish before Phase 3)
 INFERENCE_COUNTS="$COUNTS_FILE.03-inference"
 : > "$INFERENCE_COUNTS"
 ALL_PHASE_COUNTS+=("$INFERENCE_COUNTS")
 E2E_COUNTS_FILE="$INFERENCE_COUNTS" bash "$E2E_DIR/03-inference.sh" &
-INFERENCE_PID=$!
-P2_PIDS+=($INFERENCE_PID)
-P2_NAMES+=("03-inference.sh")
+P2_WAIT_ARGS+=($! "03-inference.sh")
 
 # Independent tests (no AIMD dependency)
 for phase in 04-crud.sh 05-security.sh 09-metrics-pipeline.sh 10-image-storage.sh 11-verify-liveness.sh; do
   pid=$(run_phase_bg "$phase")
-  P2_PIDS+=($pid)
-  P2_NAMES+=("$phase")
+  P2_WAIT_ARGS+=($pid "$phase")
 done
 
 # Wait for ALL Phase 2 (inference must finish for Phase 3)
-wait_pids P2_PIDS P2_NAMES
+wait_all "${P2_WAIT_ARGS[@]}"
 
 # ── Phase 3: AIMD-dependent tests (parallel) ─────────────────────────────────
 # These tests require AIMD learning data from 03-inference.
 echo ""
 echo -e "${CYAN}${BOLD}[Phase 3] AIMD-dependent tests (parallel)${NC}"
 
-P3_PIDS=()
-P3_NAMES=()
+P3_WAIT_ARGS=()
 
 for phase in 02-scheduler.sh 06-api-surface.sh 07-lifecycle.sh 08-sdd-advanced.sh; do
   pid=$(run_phase_bg "$phase")
-  P3_PIDS+=($pid)
-  P3_NAMES+=("$phase")
+  P3_WAIT_ARGS+=($pid "$phase")
 done
 
-wait_pids P3_PIDS P3_NAMES
+wait_all "${P3_WAIT_ARGS[@]}"
 
 # ── Aggregate results ─────────────────────────────────────────────────────────
 TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
