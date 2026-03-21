@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { OllamaSyncJob } from '@/lib/types'
@@ -47,8 +47,9 @@ export function OllamaSyncSection() {
     queryFn: () => api.globalModelSettings(),
   })
 
-  const globalDisabledSet = new Set<string>(
-    (globalSettings ?? []).filter(s => !s.is_enabled).map(s => s.model_name)
+  const globalDisabledSet = useMemo(
+    () => new Set<string>((globalSettings ?? []).filter(s => !s.is_enabled).map(s => s.model_name)),
+    [globalSettings]
   )
 
   const canManageModels = hasPermission('model_manage')
@@ -177,11 +178,11 @@ export function OllamaSyncSection() {
                     {(page - 1) * MODEL_LIMIT + 1}–{Math.min(page * MODEL_LIMIT, total)} / {total}
                   </span>
                   <Button variant="outline" size="icon" className="h-7 w-7" disabled={page <= 1}
-                    onClick={() => setPage(p => p - 1)}>
+                    aria-label="Previous page" onClick={() => setPage(p => p - 1)}>
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </Button>
                   <Button variant="outline" size="icon" className="h-7 w-7" disabled={page >= totalPages}
-                    onClick={() => setPage(p => p + 1)}>
+                    aria-label="Next page" onClick={() => setPage(p => p + 1)}>
                     <ChevronRight className="h-3.5 w-3.5" />
                   </Button>
                 </div>
