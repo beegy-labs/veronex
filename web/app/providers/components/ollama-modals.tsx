@@ -18,6 +18,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useTranslation } from '@/i18n'
+import { hasPermission } from '@/lib/auth'
 import {
   PROVIDER_STATUS_DOT, PROVIDER_STATUS_BADGE, PROVIDER_STATUS_I18N,
 } from '@/lib/constants'
@@ -29,10 +30,21 @@ const PROVIDERS_PAGE_SIZE = 8
 
 export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: string; onClose: () => void }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const canManage = hasPermission('model_manage')
 
   const { data, isLoading } = useQuery(ollamaModelProvidersQuery(modelName))
+
+  const toggleModelMutation = useMutation({
+    mutationFn: ({ providerId, enabled }: { providerId: string; enabled: boolean }) =>
+      api.setModelEnabled(providerId, modelName, enabled),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['selected-models'] })
+      queryClient.invalidateQueries({ queryKey: ['ollama-model-providers', modelName] })
+    },
+  })
 
   const allProviders = data?.providers ?? []
   const { filtered, totalPages, safePage, pageStart, pageItems } = useMemo(() => {
@@ -108,9 +120,19 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
                   <p className="text-sm font-medium text-text-bright truncate">{b.name}</p>
                   <p className="text-xs font-mono text-muted-foreground truncate">{extractHost(b.url)}</p>
                 </div>
-                <Badge variant="outline" className={statusBadgeCls(b.status)}>
+                <Badge variant="outline" className={`whitespace-nowrap ${statusBadgeCls(b.status)}`}>
                   {statusLabel(b.status)}
                 </Badge>
+                {canManage && (
+                  <Switch
+                    checked={b.is_enabled !== false}
+                    onCheckedChange={(checked) =>
+                      toggleModelMutation.mutate({ providerId: b.provider_id, enabled: checked })
+                    }
+                    disabled={toggleModelMutation.isPending}
+                    aria-label={`${b.name} ${modelName} toggle`}
+                  />
+                )}
               </div>
             ))}
           </div>
