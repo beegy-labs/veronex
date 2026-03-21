@@ -67,7 +67,7 @@ async fn get_gpu_server(state: &AppState, id: Uuid) -> Result<GpuServer, AppErro
         .gpu_server_registry
         .get(id)
         .await
-        .map_err(|e| db_error(e))?
+        .map_err(db_error)?
         .ok_or_else(|| AppError::NotFound("server not found".into()))
 }
 
@@ -146,7 +146,7 @@ pub async fn register_gpu_server(
     .bind(&node_exporter_url)
     .fetch_one(&state.pg_pool)
     .await
-    .map_err(|e| db_error(e))?;
+    .map_err(db_error)?;
     if count > 0 {
         return Err(AppError::Conflict("a server with this URL is already registered".into()));
     }
@@ -167,7 +167,7 @@ pub async fn register_gpu_server(
     };
 
     let id = server.id;
-    state.gpu_server_registry.register(server).await.map_err(|e| db_error(e))?;
+    state.gpu_server_registry.register(server).await.map_err(db_error)?;
 
     emit_audit(&state, &claims, "create", "gpu_server", &id.to_string(), &req.name,
         &format!("GPU server '{}' registered (id: {})", req.name, id)).await;
@@ -177,7 +177,7 @@ pub async fn register_gpu_server(
 
 /// `GET /v1/servers`
 pub async fn list_gpu_servers(State(state): State<AppState>) -> HandlerResult<Json<Vec<GpuServerSummary>>> {
-    let servers = state.gpu_server_registry.list_all().await.map_err(|e| db_error(e))?;
+    let servers = state.gpu_server_registry.list_all().await.map_err(db_error)?;
     let summaries: Vec<GpuServerSummary> = servers.into_iter().map(Into::into).collect();
     Ok(Json(summaries))
 }
@@ -214,7 +214,7 @@ pub async fn update_gpu_server(
         registered_at: server.registered_at,
     };
 
-    state.gpu_server_registry.update(&updated).await.map_err(|e| db_error(e))?;
+    state.gpu_server_registry.update(&updated).await.map_err(db_error)?;
 
     emit_audit(&state, &claims, "update", "gpu_server", &id.to_string(), &updated.name,
         &format!("GPU server '{}' ({}) configuration updated", updated.name, id)).await;
@@ -228,7 +228,7 @@ pub async fn delete_gpu_server(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> HandlerResult<StatusCode> {
-    state.gpu_server_registry.delete(id).await.map_err(|e| db_error(e))?;
+    state.gpu_server_registry.delete(id).await.map_err(db_error)?;
 
     emit_audit(&state, &claims, "delete", "gpu_server", &id.to_string(), &id.to_string(),
         &format!("GPU server {} permanently deleted", id)).await;

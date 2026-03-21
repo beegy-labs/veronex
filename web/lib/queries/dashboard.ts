@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { STALE_TIME_FAST, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_SLOW } from '@/lib/constants'
+import { STALE_TIME_FAST, STALE_TIME_LIVE, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_LIVE, REFETCH_INTERVAL_SLOW } from '@/lib/constants'
 
 // ── Dashboard overview (aggregated snapshot) ──────────────────────────────────
 
@@ -72,8 +72,8 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
 export const queueDepthQuery = queryOptions({
   queryKey: ['queue-depth'] as const,
   queryFn: () => api.queueDepth(),
-  staleTime: 2_000,
-  refetchInterval: 3_000,
+  staleTime: STALE_TIME_LIVE,
+  refetchInterval: REFETCH_INTERVAL_LIVE,
   refetchIntervalInBackground: false,
 })
 
