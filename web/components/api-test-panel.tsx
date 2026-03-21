@@ -77,6 +77,16 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     }
   }, [availableOptions, providerType, providers])
 
+  // Auto-switch endpoint when provider type changes
+  useEffect(() => {
+    if (isGeminiProvider && endpoint !== '/v1/chat/completions' && endpoint !== '/v1beta/models') {
+      setEndpoint('/v1/chat/completions')
+    }
+    if (!isGeminiProvider && endpoint === '/v1beta/models') {
+      setEndpoint('/v1/chat/completions')
+    }
+  }, [isGeminiProvider, endpoint])
+
   // ── Models ────────────────────────────────────────────────────────────────────
   const { data: ollamaModelsData } = useQuery({
     ...ollamaModelsQuery,
@@ -255,7 +265,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
 
       if (p.useApiKey && apiKeyValue.trim()) {
         url = `${BASE}${p.endpoint}`
-        if (p.endpoint === '/v1/chat/completions') {
+        if (p.endpoint === '/v1/chat/completions' || p.endpoint === '/v1beta/models') {
           headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
         } else {
           headers['X-API-Key'] = apiKeyValue.trim()
@@ -265,12 +275,17 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           '/v1/chat/completions': '/v1/test/completions',
           '/api/chat': '/v1/test/api/chat',
           '/api/generate': '/v1/test/api/generate',
+          '/v1beta/models': '/v1/test/completions',
         }
         url = `${BASE}${testEndpointMap[p.endpoint]}`
       }
 
       let body: Record<string, unknown>
-      if (p.endpoint === '/api/generate') {
+      if (p.endpoint === '/v1beta/models') {
+        // Gemini native: POST /v1beta/models/{model}:generateContent
+        url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
+        body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
+      } else if (p.endpoint === '/api/generate') {
         body = { model: p.model, prompt: p.prompt.trim(), stream: isStreaming }
       } else if (p.endpoint === '/api/chat') {
         body = {
@@ -305,9 +320,11 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
         await consumeStream(runId, reader, jobIdRef)
       } else {
         const json = await resp.json()
-        const text = p.endpoint === '/api/generate'
-          ? (json.response ?? '')
-          : (json.message?.content ?? '')
+        const text = p.endpoint === '/v1beta/models'
+          ? (json.candidates?.[0]?.content?.parts?.[0]?.text ?? JSON.stringify(json))
+          : p.endpoint === '/api/generate'
+            ? (json.response ?? '')
+            : (json.message?.content ?? '')
         dispatch({ type: 'APPEND', id: runId, token: text })
         dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
       }
