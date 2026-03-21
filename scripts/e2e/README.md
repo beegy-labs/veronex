@@ -333,6 +333,7 @@ flowchart TD
 | SSRF: GCP metadata | metadata.google.internal URL registration blocked |
 | Oversized model name | 300-char model name → 400/413/422 |
 | RPM rate limit | rate_limit_rpm=2 key with 3 requests → 429 |
+| TPM rate limit | rate_limit_tpm=50 key with large responses → 429 |
 | Expired key rejection | expires_at in past → 401 |
 | Session revocation | DELETE /v1/sessions/{id} → subsequent request 401 |
 | RBAC viewer → accounts | Viewer accessing /v1/accounts → 403 |
