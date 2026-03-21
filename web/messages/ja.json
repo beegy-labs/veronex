@@ -73,6 +73,7 @@
     "customTimezoneHint": "IANAタイムゾーン識別子を入力してください。",
     "customTimezoneInvalid": "無効なタイムゾーンです。",
     "custom": "カスタム",
+    "apply": "適用",
     "settings": "設定",
     "language": "言語",
     "labFeatures": "ラボ機能",

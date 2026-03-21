@@ -73,6 +73,7 @@
     "customTimezoneHint": "IANA 시간대 식별자를 입력하세요.",
     "customTimezoneInvalid": "유효하지 않은 시간대입니다.",
     "custom": "사용자 정의",
+    "apply": "적용",
     "settings": "설정",
     "language": "언어",
     "labFeatures": "실험실 기능",

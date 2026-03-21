@@ -73,6 +73,7 @@
     "customTimezoneHint": "Enter any IANA timezone identifier.",
     "customTimezoneInvalid": "Invalid timezone identifier.",
     "custom": "Custom…",
+    "apply": "Apply",
     "settings": "Settings",
     "language": "Language",
     "labFeatures": "Lab Features",

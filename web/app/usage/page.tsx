@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useTranslation } from '@/i18n'
-import { TIME_LABEL_MAP, TimeRangeSelector } from '@/components/time-range-selector'
+import { TIME_LABEL_MAP, TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
 import { SectionLabel } from '@/components/section-label'
 
 import { OverviewTab } from './components/overview-tab'
@@ -29,7 +29,8 @@ import { ModelLatencyChart } from './components/model-latency-chart'
 /* ─── page ────────────────────────────────────────────────── */
 export default function UsagePage() {
   const { t } = useTranslation()
-  const [hours, setHours] = useState(24)
+  const [range, setRange] = useState<TimeRange>({ hours: 24 })
+  const hours = range.hours
   const [modelFilter, setModelFilter] = useState('')
 
   const { data: agg, isLoading: aggLoading, error: aggError } = useQuery(usageAggregateQuery(hours))
@@ -41,7 +42,9 @@ export default function UsagePage() {
   const errorRate = agg && agg.request_count > 0
     ? calcPercentage(agg.error_count, agg.request_count) : 0
 
-  const currentLabel = TIME_LABEL_MAP.get(hours) ?? `${hours}h`
+  const currentLabel = range.from
+    ? `${range.from.slice(5, 16)} ~ ${(range.to ?? 'now').slice(5, 16)}`
+    : TIME_LABEL_MAP.get(hours) ?? `${hours}h`
 
   return (
     <div className="space-y-6">
@@ -51,7 +54,7 @@ export default function UsagePage() {
           <h1 className="text-2xl font-bold tracking-tight">{t('usage.title')}</h1>
           <p className="text-muted-foreground mt-1 text-sm">{t('usage.description')}</p>
         </div>
-        <TimeRangeSelector value={hours} onChange={setHours} />
+        <TimeRangeSelector value={range} onChange={setRange} />
       </div>
 
       {aggError && (
