@@ -188,12 +188,6 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
       {/* Filter panel */}
       {showFilters && (
         <div className="flex items-center gap-2 flex-wrap p-3 rounded-lg border border-border bg-muted/30">
-          <Input
-            className="w-36 h-9 text-sm"
-            placeholder={t('jobs.filterModel')}
-            value={modelFilter}
-            onChange={(e) => { setModelFilter(e.target.value); setPage(0) }}
-          />
           <Select value={providerTypeFilter} onValueChange={(val) => { setProviderTypeFilter(val); setPage(0) }}>
             <SelectTrigger className="w-36 h-9">
               <SelectValue />
@@ -209,6 +203,12 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
             placeholder={t('jobs.providerName')}
             value={serverNameFilter}
             onChange={(e) => { setServerNameFilter(e.target.value); setPage(0) }}
+          />
+          <Input
+            className="w-36 h-9 text-sm"
+            placeholder={t('jobs.filterModel')}
+            value={modelFilter}
+            onChange={(e) => { setModelFilter(e.target.value); setPage(0) }}
           />
           <Select value={status} onValueChange={(val) => { setStatus(val); setPage(0) }}>
             <SelectTrigger className="w-36 h-9">
