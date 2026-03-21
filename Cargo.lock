@@ -4494,7 +4494,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "veronex"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -4544,7 +4544,7 @@ dependencies = [
 
 [[package]]
 name = "veronex-agent"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "fred",
@@ -4564,7 +4564,7 @@ dependencies = [
 
 [[package]]
 name = "veronex-analytics"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
@@ -5254,7 +5254,7 @@ dependencies = [
 
 [[package]]
 name = "workspace-hack"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "bitflags",
