@@ -216,6 +216,8 @@ export interface KeyBreakdown {
   key_prefix: string
   request_count: number
   success_count: number
+  error_count: number
+  cancelled_count: number
   prompt_tokens: number
   completion_tokens: number
   success_rate: number
