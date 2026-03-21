@@ -1,7 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSettingsManage;
 use super::error::AppError;
@@ -26,8 +25,7 @@ pub async fn list_key_provider_access(
     Path(key_id): Path<String>,
 ) -> Result<Json<Vec<ProviderAccessEntry>>, AppError> {
     let uuid = parse_uuid(&key_id)?;
-    let rows = state.api_key_provider_access_repo.list(uuid).await
-        .map_err(|e| AppError::Internal(e))?;
+    let rows = state.api_key_provider_access_repo.list(uuid).await?;
     Ok(Json(rows.into_iter().map(|(pid, allowed)| ProviderAccessEntry {
         provider_id: pid.to_string(),
         is_allowed: allowed,
@@ -43,8 +41,7 @@ pub async fn set_key_provider_access(
 ) -> Result<Json<ProviderAccessEntry>, AppError> {
     let key_uuid = parse_uuid(&key_id)?;
     let provider_uuid = parse_uuid(&provider_id)?;
-    state.api_key_provider_access_repo.set_access(key_uuid, provider_uuid, body.is_allowed).await
-        .map_err(|e| AppError::Internal(e))?;
+    state.api_key_provider_access_repo.set_access(key_uuid, provider_uuid, body.is_allowed).await?;
     Ok(Json(ProviderAccessEntry {
         provider_id,
         is_allowed: body.is_allowed,

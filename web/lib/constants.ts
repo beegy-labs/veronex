@@ -77,6 +77,12 @@ export const REFETCH_INTERVAL_FAST = 30_000
 /** Refetch interval for data that changes infrequently (keys, usage, models). */
 export const REFETCH_INTERVAL_SLOW = 60_000
 
+/** Stale time for live-polled data (queue depth). */
+export const STALE_TIME_LIVE = 2_000
+
+/** Refetch interval for live-polled data (queue depth — 3s). */
+export const REFETCH_INTERVAL_LIVE = 3_000
+
 /** Refetch interval for historical data (power history, metric history). */
 export const REFETCH_INTERVAL_HISTORY = 5 * 60_000
 
