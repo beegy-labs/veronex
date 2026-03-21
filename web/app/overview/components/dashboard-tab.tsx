@@ -324,7 +324,7 @@ export function DashboardTab({
               {serverStatus.length === 0 ? (
                 <p className="text-xs text-muted-foreground py-3">{t('overview.noServers')}</p>
               ) : (() => {
-                const abnormal = serverStatus.filter(s => !s.connected || s.thermal !== 'normal')
+                const abnormal = serverStatus.filter(s => !s.connected || s.thermal === 'warning' || s.thermal === 'critical')
                 return abnormal.length === 0 ? (
                   <p className="text-xs text-status-success-fg py-3">{t('overview.allServersNormal')}</p>
                 ) : (
