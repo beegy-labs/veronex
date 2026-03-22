@@ -4,6 +4,7 @@ target/
 Cargo.lock.bak
 
 # Node / Next.js
+node_modules/
 web/node_modules/
 web/.next/
 web/.env.local
