@@ -145,8 +145,15 @@ export function ApiTestForm({
           <SelectTrigger id="test-endpoint" aria-label={t('test.endpoint')}><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="/v1/chat/completions">/v1/chat/completions</SelectItem>
-            <SelectItem value="/api/chat">/api/chat</SelectItem>
-            <SelectItem value="/api/generate">/api/generate</SelectItem>
+            {!isGeminiProvider && (
+              <>
+                <SelectItem value="/api/chat">/api/chat</SelectItem>
+                <SelectItem value="/api/generate">/api/generate</SelectItem>
+              </>
+            )}
+            {isGeminiProvider && (
+              <SelectItem value="/v1beta/models">/v1beta/models (Gemini)</SelectItem>
+            )}
           </SelectContent>
         </Select>
       </div>

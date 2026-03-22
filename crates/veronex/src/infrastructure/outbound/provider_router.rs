@@ -20,11 +20,7 @@ use crate::infrastructure::outbound::hw_metrics::load_hw_metrics;
 use crate::infrastructure::outbound::ollama::OllamaAdapter;
 use crate::infrastructure::outbound::valkey_keys;
 
-/// TTL (seconds) for the per-minute Gemini RPM counter key.
-const GEMINI_RPM_TTL_SECS: i64 = 120;
-
-/// TTL (seconds) for the per-day Gemini RPD counter key (~25 hours).
-const GEMINI_RPD_TTL_SECS: i64 = 90_000;
+use crate::domain::constants::{GEMINI_RPM_TTL_SECS, GEMINI_RPD_TTL_SECS};
 
 // ── Static provider router (kept for tests) ────────────────────────────────────
 

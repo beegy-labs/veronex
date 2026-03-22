@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use chrono::Utc;
@@ -141,20 +141,34 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
 
 // ── GET /v1/accounts ──────────────────────────────────────────────────────────
 
+use super::handlers::ListPageParams;
+
 pub async fn list_accounts(
     RequireAccountManage(_claims): RequireAccountManage,
     State(state): State<AppState>,
-) -> Result<Json<Vec<AccountSummary>>, AppError> {
-    let accounts = state
+    Query(params): Query<ListPageParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(100).clamp(1, 1000);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+
+    let (accounts, total) = state
         .account_repo
-        .list_all()
+        .list_page(&search, limit, offset)
         .await?;
 
     let mut result = Vec::with_capacity(accounts.len());
     for a in accounts {
         result.push(to_summary(a, &state.pg_pool).await?);
     }
-    Ok(Json(result))
+
+    Ok(Json(serde_json::json!({
+        "accounts": result,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
 // ── POST /v1/accounts ─────────────────────────────────────────────────────────

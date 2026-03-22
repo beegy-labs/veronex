@@ -28,7 +28,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // intentionally omitted from the dependency array (pure read, no subscription).
   useEffect(() => {
     if (!isLoginPage && !isSetupPage && isLoggedIn()) {
-      queryClient.prefetchQuery(serversQuery)
+      queryClient.prefetchQuery(serversQuery())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryClient, isLoginPage, isSetupPage])

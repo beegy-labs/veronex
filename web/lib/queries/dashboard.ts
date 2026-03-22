@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { STALE_TIME_FAST, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_SLOW } from '@/lib/constants'
+import { STALE_TIME_FAST, STALE_TIME_LIVE, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_LIVE, REFETCH_INTERVAL_SLOW, withJitter } from '@/lib/constants'
 
 // ── Dashboard overview (aggregated snapshot) ──────────────────────────────────
 
@@ -8,7 +8,7 @@ export const dashboardOverviewQuery = queryOptions({
   queryKey: ['dashboard-overview'] as const,
   queryFn: () => api.overview(),
   staleTime: STALE_TIME_FAST,
-  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
 })
 
@@ -18,7 +18,7 @@ export const dashboardStatsQuery = queryOptions({
   queryKey: ['dashboard-stats'] as const,
   queryFn: () => api.stats(),
   staleTime: STALE_TIME_FAST,
-  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
 })
 
@@ -28,7 +28,7 @@ export const recentJobsQuery = queryOptions({
   queryKey: ['recent-jobs'] as const,
   queryFn: () => api.jobs('limit=10'),
   staleTime: STALE_TIME_FAST,
-  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
 })
 
@@ -44,10 +44,11 @@ export interface JobsQueryParams {
   pageSize: number
   model?: string
   provider?: string
+  providerType?: string
 }
 
 export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
-  queryKey: ['dashboard-jobs', p.source, p.page, p.status, p.query, p.model ?? '', p.provider ?? ''] as const,
+  queryKey: ['dashboard-jobs', p.source, p.page, p.status, p.query, p.model ?? '', p.provider ?? '', p.providerType ?? ''] as const,
   queryFn: () => {
     const qs = new URLSearchParams({
       limit: String(p.pageSize),
@@ -58,10 +59,11 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
     if (p.query.trim()) qs.set('q', p.query.trim())
     if (p.model) qs.set('model', p.model)
     if (p.provider) qs.set('provider', p.provider)
+    if (p.providerType) qs.set('provider_type', p.providerType)
     return api.jobs(qs.toString())
   },
   staleTime: STALE_TIME_FAST,
-  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
 })
 
@@ -70,8 +72,8 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
 export const queueDepthQuery = queryOptions({
   queryKey: ['queue-depth'] as const,
   queryFn: () => api.queueDepth(),
-  staleTime: 2_000,
-  refetchInterval: 3_000,
+  staleTime: STALE_TIME_LIVE,
+  refetchInterval: REFETCH_INTERVAL_LIVE,
   refetchIntervalInBackground: false,
 })
 
@@ -88,7 +90,7 @@ export const performanceQuery = (hours: number) => queryOptions({
   queryKey: ['performance', hours] as const,
   queryFn: () => api.performance(hours),
   staleTime: (PERF_REFETCH[hours] ?? REFETCH_INTERVAL_SLOW) - 1_000,
-  refetchInterval: PERF_REFETCH[hours] ?? REFETCH_INTERVAL_SLOW,
+  refetchInterval: () => withJitter(PERF_REFETCH[hours] ?? REFETCH_INTERVAL_SLOW, 10_000),
   refetchIntervalInBackground: false,
   retry: false,
 })

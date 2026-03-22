@@ -56,6 +56,11 @@ impl LlmProviderRegistry for CachingProviderRegistry {
             .await
     }
 
+    async fn list_page(&self, search: &str, provider_type: Option<&str>, limit: i64, offset: i64) -> Result<(Vec<LlmProvider>, i64)> {
+        // Management path — forward directly, no caching needed.
+        self.inner.list_page(search, provider_type, limit, offset).await
+    }
+
     async fn get(&self, id: Uuid) -> Result<Option<LlmProvider>> {
         // Infrequent management path — forward directly.
         self.inner.get(id).await

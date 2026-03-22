@@ -1,11 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { keysQuery, resourceAuditQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, CreateKeyResponse } from '@/lib/types'
-import { Plus, Trash2, BarChart2, RefreshCw, History } from 'lucide-react'
+import { Plus, Trash2, BarChart2, RefreshCw, History, Key, ChevronLeft, ChevronRight } from 'lucide-react'
 import { CopyButton } from '@/components/copy-button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -33,11 +33,37 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
+import { StatusPill } from '@/components/status-pill'
 import { KeyUsageModal } from '@/components/key-usage-modal'
 import { useApiMutation } from '@/hooks/use-api-mutation'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
+
+function KeyStatusPills({ keys }: { keys: ApiKey[] }) {
+  const { t } = useTranslation()
+  const activeCount = useMemo(() => keys.filter(k => k.is_active).length, [keys])
+  const inactiveCount = keys.length - activeCount
+  return (
+    <div className="flex items-center gap-2 flex-wrap mt-2">
+      <StatusPill icon={<Key className="h-3 w-3 shrink-0" />} count={keys.length} label={t('keys.registered')} />
+      {activeCount > 0 && (
+        <StatusPill
+          icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+          count={activeCount} label={t('common.active')}
+          className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+        />
+      )}
+      {inactiveCount > 0 && (
+        <StatusPill
+          icon={<span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />}
+          count={inactiveCount} label={t('common.inactive')}
+          className="bg-status-error/10 border border-status-error/30 text-status-error-fg"
+        />
+      )}
+    </div>
+  )
+}
 
 function CreateKeyModal({
   onClose,
@@ -199,7 +225,7 @@ function KeyHistoryModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => v
           {events?.map((ev) => (
             <div key={`${ev.event_time}-${ev.account_id}-${ev.action}-${ev.resource_id}`} className="rounded-lg border px-3 py-2 text-sm space-y-0.5">
               <div className="flex items-center justify-between gap-2">
-                <Badge variant="outline" className="text-[10px]">{ev.action}</Badge>
+                <Badge variant="outline" className="text-[10px] whitespace-nowrap">{ev.action}</Badge>
                 <span className="text-xs text-muted-foreground">{fmtDateOnly(ev.event_time, tz)}</span>
               </div>
               <p className="text-xs text-muted-foreground">{ev.details}</p>
@@ -226,9 +252,15 @@ export default function KeysPage() {
   const [usageKey, setUsageKey] = useState<ApiKey | null>(null)
   const [historyKey, setHistoryKey] = useState<ApiKey | null>(null)
 
-  const { data: keys, isLoading, error } = useQuery(keysQuery)
+  const { data: keysData, isLoading, error } = useQuery(keysQuery())
+  const keys = keysData?.keys
+  const [keyPage, setKeyPage] = useState(0)
+  const KEY_PAGE_SIZE = 20
 
   const hasCreatedBy = keys?.some((k) => k.created_by)
+  const keyTotalPages = keys ? Math.max(1, Math.ceil(keys.length / KEY_PAGE_SIZE)) : 0
+  const keySafePage = Math.min(keyPage, Math.max(0, keyTotalPages - 1))
+  const keyPageItems = useMemo(() => keys?.slice(keySafePage * KEY_PAGE_SIZE, (keySafePage + 1) * KEY_PAGE_SIZE) ?? [], [keys, keySafePage])
 
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteKey(id),
@@ -261,19 +293,19 @@ export default function KeysPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
+      <div>
+        <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight">{t('keys.title')}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            {keys
-              ? t('keys.keysCount', { count: keys.length })
-              : t('common.loading')}
-          </p>
+          <Button onClick={() => setShowCreate(true)} className="shrink-0">
+            <Plus className="h-4 w-4 mr-2" />{t('keys.createKey')}
+          </Button>
         </div>
-        <Button onClick={() => setShowCreate(true)}>
-          <Plus className="h-4 w-4 mr-2" />
-          {t('keys.createKey')}
-        </Button>
+        <p className="text-muted-foreground mt-1 text-sm">{t('keys.description')}</p>
+        {keys ? (
+          <KeyStatusPills keys={keys} />
+        ) : (
+          <p className="text-sm text-muted-foreground mt-2 animate-pulse">{t('common.loading')}</p>
+        )}
       </div>
 
       {isLoading && (
@@ -300,20 +332,20 @@ export default function KeysPage() {
             <DataTable minWidth="720px">
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('keys.name')}</TableHead>
-                  <TableHead>{t('keys.prefix')}</TableHead>
-                  <TableHead>{t('keys.tenant')}</TableHead>
-                  <TableHead>{t('keys.tier')}</TableHead>
-                  <TableHead>{t('keys.status')}</TableHead>
-                  <TableHead>{t('keys.activeToggle')}</TableHead>
-                  <TableHead>{t('keys.rpmTpm')}</TableHead>
-                  {hasCreatedBy && <TableHead>{t('keys.createdBy')}</TableHead>}
-                  <TableHead>{t('keys.createdAt')}</TableHead>
-                  <TableHead className="text-right">{t('keys.actions')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.name')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.prefix')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.tenant')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.tier')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.status')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.activeToggle')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('keys.rpmTpm')}</TableHead>
+                  {hasCreatedBy && <TableHead className="whitespace-nowrap">{t('keys.createdBy')}</TableHead>}
+                  <TableHead className="whitespace-nowrap">{t('keys.createdAt')}</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {keys.map((key) => (
+                {keyPageItems.map((key) => (
                   <TableRow key={key.id} className={!key.is_active ? 'opacity-50' : ''}>
                     <TableCell className="font-medium">{key.name}</TableCell>
                     <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
@@ -338,11 +370,11 @@ export default function KeysPage() {
                     <TableCell>
                       <Badge
                         variant="outline"
-                        className={
+                        className={`whitespace-nowrap ${
                           key.is_active
                             ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
                             : 'bg-muted text-muted-foreground'
-                        }
+                        }`}
                       >
                         {key.is_active ? t('common.active') : t('common.inactive')}
                       </Badge>
@@ -419,6 +451,21 @@ export default function KeysPage() {
               </TableBody>
             </DataTable>
           )
+      )}
+      {keys && keys.length > 0 && keyTotalPages > 1 && (
+        <div className="flex items-center justify-end gap-2">
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {keySafePage * KEY_PAGE_SIZE + 1}–{Math.min((keySafePage + 1) * KEY_PAGE_SIZE, keys.length)} / {keys.length}
+          </span>
+          <Button variant="outline" size="icon" className="h-7 w-7" disabled={keySafePage <= 0}
+            onClick={() => setKeyPage(p => p - 1)}>
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="outline" size="icon" className="h-7 w-7" disabled={keySafePage >= keyTotalPages - 1}
+            onClick={() => setKeyPage(p => p + 1)}>
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       )}
 
       {showCreate && (

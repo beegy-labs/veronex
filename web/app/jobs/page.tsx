@@ -7,7 +7,7 @@ import type { RetryParams } from '@/lib/types'
 import JobTable from '@/components/job-table'
 import { ApiTestPanel } from '@/components/api-test-panel'
 import { NetworkFlowTab } from '@/app/overview/components/network-flow-tab'
-import { ChevronLeft, ChevronRight, Search, X, GitMerge } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, X, GitMerge, ListOrdered, SlidersHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -16,6 +16,8 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useTranslation } from '@/i18n'
+import { StatusPill } from '@/components/status-pill'
+import { useLabSettings } from '@/components/lab-settings-provider'
 import { fmtNumber } from '@/lib/date'
 import { api } from '@/lib/api'
 
@@ -104,12 +106,16 @@ interface JobsSectionProps {
 
 function JobsSection({ source, onRetry }: JobsSectionProps) {
   const { t } = useTranslation()
+  const { labSettings } = useLabSettings()
+  const geminiEnabled = labSettings?.gemini_function_calling ?? false
   const [page, setPage] = useState(0)
   const [status, setStatus] = useState('all')
   const [search, setSearch] = useState('')
   const [query, setQuery] = useState('')
   const [modelFilter, setModelFilter] = useState('')
-  const [providerFilter, setProviderFilter] = useState('')
+  const [providerTypeFilter, setProviderTypeFilter] = useState('all')
+  const [serverNameFilter, setServerNameFilter] = useState('')
+  const [showFilters, setShowFilters] = useState(false)
 
   const STATUS_OPTIONS = useMemo(() => [
     { value: 'all',       label: t('jobs.allStatuses') },
@@ -123,7 +129,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const offset = page * PAGE_SIZE
 
   const { data, isLoading, error } = useQuery(
-    dashboardJobsQuery({ source, page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: providerFilter || undefined }),
+    dashboardJobsQuery({ source, page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: serverNameFilter || undefined, providerType: providerTypeFilter !== 'all' ? providerTypeFilter : undefined }),
   )
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
@@ -133,15 +139,18 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const commitSearch = useCallback(() => { setQuery(search); setPage(0) }, [search])
   const clearSearch = useCallback(() => { setSearch(''); setQuery(''); setPage(0) }, [])
   const goTo = (p: number) => setPage(Math.max(0, Math.min(totalPages - 1, p)))
+  const activeFilterCount = (modelFilter ? 1 : 0) + (providerTypeFilter !== 'all' ? 1 : 0) + (serverNameFilter ? 1 : 0) + (status !== 'all' ? 1 : 0)
 
   return (
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <p className="text-sm text-muted-foreground">
-          {data ? `${fmtNumber(data.total)} ${t('jobs.totalLabel')}` : t('common.loading')}
-        </p>
-        <div className="flex items-center gap-2 flex-wrap">
+        {data ? (
+          <StatusPill icon={<ListOrdered className="h-3 w-3 shrink-0" />} count={data.total} label={t('jobs.totalLabel')} />
+        ) : (
+          <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>
+        )}
+        <div className="flex items-center gap-2">
           {/* Search */}
           <div className="relative flex items-center">
             <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
@@ -166,21 +175,44 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
               </button>
             )}
           </div>
-          {/* Model filter */}
+          {/* Filter toggle button */}
+          <Button
+            variant={showFilters ? 'secondary' : 'outline'}
+            size="sm"
+            className="h-9 shrink-0"
+            onClick={() => setShowFilters((v) => !v)}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
+            {activeFilterCount > 0 ? t('jobs.filtersActive', { count: activeFilterCount }) : t('jobs.filters')}
+          </Button>
+        </div>
+      </div>
+
+      {/* Filter panel */}
+      {showFilters && (
+        <div className="flex items-center gap-2 flex-wrap p-3 rounded-lg border border-border bg-muted/30">
+          <Select value={providerTypeFilter} onValueChange={(val) => { setProviderTypeFilter(val); setPage(0) }}>
+            <SelectTrigger className="w-36 h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t('jobs.allProviders')}</SelectItem>
+              <SelectItem value="ollama">Ollama</SelectItem>
+              {geminiEnabled && <SelectItem value="gemini">Gemini</SelectItem>}
+            </SelectContent>
+          </Select>
           <Input
-            className="w-32 h-9 text-sm"
+            className="w-36 h-9 text-sm"
+            placeholder={t('jobs.providerName')}
+            value={serverNameFilter}
+            onChange={(e) => { setServerNameFilter(e.target.value); setPage(0) }}
+          />
+          <Input
+            className="w-36 h-9 text-sm"
             placeholder={t('jobs.filterModel')}
             value={modelFilter}
             onChange={(e) => { setModelFilter(e.target.value); setPage(0) }}
           />
-          {/* Provider filter */}
-          <Input
-            className="w-32 h-9 text-sm"
-            placeholder={t('jobs.filterProvider')}
-            value={providerFilter}
-            onChange={(e) => { setProviderFilter(e.target.value); setPage(0) }}
-          />
-          {/* Status filter */}
           <Select value={status} onValueChange={(val) => { setStatus(val); setPage(0) }}>
             <SelectTrigger className="w-36 h-9">
               <SelectValue />
@@ -192,7 +224,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
             </SelectContent>
           </Select>
         </div>
-      </div>
+      )}
 
       {/* Active search badge */}
       {query && (
@@ -226,12 +258,8 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 
       {/* Pagination */}
       {data && (
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <p className="text-sm text-muted-foreground tabular-nums">
-            {data.total === 0
-              ? t('jobs.noJobs')
-              : `${fmtNumber(firstItem)}–${fmtNumber(lastItem)} / ${fmtNumber(data.total)}`}
-          </p>
+        <div className="flex items-center justify-end gap-4 flex-wrap">
+          <StatusPill label={data.total === 0 ? t('jobs.noJobs') : `${fmtNumber(firstItem)}–${fmtNumber(lastItem)} / ${fmtNumber(data.total)}`} />
           {totalPages > 1 && (
             <div className="flex items-center gap-1">
               <Button variant="outline" size="icon" className="h-8 w-8"
@@ -283,15 +311,16 @@ export default function JobsPage() {
   }, [])
   const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
 
-  const { data: providers } = useQuery(providersQuery)
+  const { data: providersData } = useQuery(providersQuery())
+  const providers = providersData?.providers
 
-  function handleRetry(params: RetryParams) {
+  const handleRetry = useCallback((params: RetryParams) => {
     setRetryParams(params)
     setActiveTab('test')
     setTimeout(() => {
       testPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 50)
-  }
+  }, [])
 
   return (
     <div className="space-y-6">
