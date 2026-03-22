@@ -302,11 +302,18 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
 
     use fred::prelude::*;
 
-    let (paid, api, test): (i64, i64, i64) = tokio::join!(
-        async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or(0) },
-        async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or(0) },
-        async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or(0) },
-    );
+    let (paid, api, test): (i64, i64, i64) = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        async {
+            tokio::join!(
+                async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or(0) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or(0) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or(0) },
+            )
+        },
+    )
+    .await
+    .unwrap_or((0, 0, 0));
 
     QueueDepth {
         api_paid: paid,
@@ -330,42 +337,44 @@ pub struct LabSettingsResponse {
 pub struct DashboardOverview {
     pub stats: DashboardStats,
     pub performance: PerformanceMetrics,
-    pub capacity: CapacityResponse,
     pub queue_depth: QueueDepth,
     pub lab: LabSettingsResponse,
 }
 
 /// `GET /v1/dashboard/overview` — single aggregated snapshot of the entire dashboard.
 ///
-/// Runs stats, performance, capacity, queue depth, and lab settings queries
-/// in parallel and returns a combined JSON response.
+/// Runs stats, performance, queue depth, and lab settings queries in parallel.
+/// Capacity data is served by the dedicated `/capacity` endpoint (paginated).
 pub async fn get_dashboard_overview(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardOverview>, AppError> {
     let default_hours: u32 = 24;
 
-    let (stats_res, perf_res, cap_entries, providers_list, queue, lab_res) = tokio::join!(
-        dashboard_queries::fetch_stats(&state.pg_pool),
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
         async {
-            // ClickHouse primary, PostgreSQL fallback (same logic as get_performance)
-            if let Some(repo) = state.analytics_repo.as_ref()
-                && let Ok(metrics) = repo.performance(default_hours).await
-                && metrics.total_requests > 0
-            {
-                return Ok(metrics);
-            }
-            dashboard_queries::pg_performance(&state.pg_pool, default_hours).await
+            tokio::join!(
+                dashboard_queries::fetch_stats(&state.pg_pool),
+                async {
+                    if let Some(repo) = state.analytics_repo.as_ref()
+                        && let Ok(metrics) = repo.performance(default_hours).await
+                        && metrics.total_requests > 0
+                    {
+                        return Ok(metrics);
+                    }
+                    dashboard_queries::pg_performance(&state.pg_pool, default_hours).await
+                },
+                fetch_queue_depth(&state),
+                async { state.lab_settings_repo.get().await },
+            )
         },
-        async { state.capacity_repo.list_all().await.unwrap_or_default() },
-        async { state.provider_registry.list_all().await.unwrap_or_default() },
-        fetch_queue_depth(&state),
-        async { state.lab_settings_repo.get().await },
-    );
+    )
+    .await
+    .map_err(|_| AppError::Internal(anyhow::anyhow!("overview timeout")))?;
 
+    let (stats_res, perf_res, queue, lab_res) = result;
     let stats = stats_res?;
     let performance = perf_res?;
-    let capacity = build_capacity(&state, cap_entries, providers_list);
-
     let lab_settings = lab_res.unwrap_or_default();
     let lab = LabSettingsResponse {
         gemini_function_calling: lab_settings.gemini_function_calling,
@@ -377,7 +386,6 @@ pub async fn get_dashboard_overview(
     Ok(Json(DashboardOverview {
         stats,
         performance,
-        capacity,
         queue_depth: queue,
         lab,
     }))
@@ -396,15 +404,16 @@ pub async fn get_capacity(
 
     let (providers_page, total) = state
         .provider_registry
-        .list_page(&search, limit, offset)
+        .list_page(&search, None, limit, offset)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
 
-    let mut all_entries = Vec::new();
-    for p in &providers_page {
-        let entries = state.capacity_repo.list_by_provider(p.id).await.unwrap_or_default();
-        all_entries.extend(entries);
-    }
+    let provider_ids: Vec<uuid::Uuid> = providers_page.iter().map(|p| p.id).collect();
+    let all_entries = state
+        .capacity_repo
+        .list_by_providers(&provider_ids)
+        .await
+        .unwrap_or_default();
 
     let capacity = build_capacity(&state, all_entries, providers_page);
     Ok(Json(serde_json::json!({
@@ -413,6 +422,47 @@ pub async fn get_capacity(
         "page": page,
         "limit": limit,
     })))
+}
+
+// ── GET /v1/dashboard/capacity/cluster ─────────────────────────────
+
+#[derive(Serialize)]
+pub struct ClusterModelInfo {
+    pub model_name:        String,
+    pub weight_mb:         i32,
+    pub kv_per_request_mb: i32,
+    pub total_active:      u32,
+    pub total_limit:       u32,
+    pub provider_count:    u32,
+}
+
+/// `GET /v1/dashboard/capacity/cluster`
+///
+/// Aggregates all loaded models across all providers from the in-memory VramPool.
+/// Returns one row per unique model name with summed active/limit counts.
+///
+/// Reads entirely from the in-memory VramPool (no DB scan) — safe at 10K providers.
+pub async fn get_capacity_cluster(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ClusterModelInfo>>, AppError> {
+    let mut result: Vec<ClusterModelInfo> = state
+        .vram_pool
+        .cluster_snapshot()
+        .into_iter()
+        .map(|(model_name, weight_mb, kv_per_request_mb, total_active, total_limit, provider_count)| {
+            ClusterModelInfo {
+                model_name,
+                weight_mb:         weight_mb.min(i32::MAX as u64) as i32,
+                kv_per_request_mb: kv_per_request_mb.min(i32::MAX as u64) as i32,
+                total_active,
+                total_limit,
+                provider_count,
+            }
+        })
+        .collect();
+
+    result.sort_by(|a, b| a.model_name.cmp(&b.model_name));
+    Ok(Json(result))
 }
 
 // ── GET /v1/dashboard/capacity/settings ────────────────────────────

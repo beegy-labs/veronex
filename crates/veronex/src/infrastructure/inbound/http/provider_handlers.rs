@@ -22,8 +22,6 @@ use super::state::AppState;
 
 use super::constants::MODELS_CACHE_TTL;
 
-use super::handlers::ListPageParams;
-
 // ── Model cache helpers ─────────────────────────────────────────────────────────
 
 fn models_cache_key(id: Uuid) -> String {
@@ -388,17 +386,27 @@ pub async fn register_provider(
         .into_response()
 }
 
-/// `GET /v1/providers` — list registered providers with optional search/pagination.
+/// `GET /v1/providers` — list registered providers with optional search/pagination/type filter.
+#[derive(serde::Deserialize)]
+pub struct ListProvidersParams {
+    pub search: Option<String>,
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+    /// Filter by provider type: "ollama" | "gemini". Omit for all types.
+    pub provider_type: Option<String>,
+}
+
 pub async fn list_providers(
     State(state): State<AppState>,
-    Query(params): Query<ListPageParams>,
+    Query(params): Query<ListProvidersParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(100).clamp(1, 1000);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
+    let provider_type = params.provider_type.as_deref();
 
-    let (providers, total) = state.provider_registry.list_page(&search, limit, offset).await
+    let (providers, total) = state.provider_registry.list_page(&search, provider_type, limit, offset).await
         .map_err(|e| { tracing::error!(error = %e, "failed to list providers"); db_error(e) })?;
     let summaries: Vec<ProviderSummary> = providers.into_iter().map(Into::into).collect();
     Ok(Json(serde_json::json!({

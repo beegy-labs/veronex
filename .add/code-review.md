@@ -36,6 +36,17 @@ Read only docs relevant to the changed domain.
 | 5 | Verify via `cargo check`, `cargo test` |
 | 6 | CDD sync — if a new pattern is established, update the specific doc: architecture change → `docs/llm/policies/architecture.md`; code pattern → `docs/llm/policies/patterns.md`; test pattern → `docs/llm/policies/testing-strategy.md` |
 
+## Scale Assumption
+
+All code is written and reviewed against these targets:
+
+| Axis | Target |
+| ---- | ------ |
+| Providers (Ollama servers) | **10,000** |
+| Concurrent requests (TPS) | **1,000,000** |
+
+Every review must validate that no code path introduces O(N) DB scans, sequential awaits, or unbounded memory growth at these scales. Flag any violation as P1 or higher.
+
 ## Rules
 
 | Rule | Detail |

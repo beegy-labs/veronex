@@ -1,14 +1,14 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { STALE_TIME_SLOW, STALE_TIME_FAST, REFETCH_INTERVAL_FAST } from '@/lib/constants'
+import { STALE_TIME_SLOW, STALE_TIME_FAST, REFETCH_INTERVAL_FAST, withJitter } from '@/lib/constants'
 
 // ── LLM providers list ─────────────────────────────────────────────────────────
 
-export const providersQuery = (params?: { search?: string; page?: number; limit?: number }) => queryOptions({
+export const providersQuery = (params?: { search?: string; page?: number; limit?: number; provider_type?: string }) => queryOptions({
   queryKey: ['providers', params] as const,
   queryFn: () => api.providers(params),
   staleTime: STALE_TIME_FAST,
-  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
 })
 
@@ -99,7 +99,7 @@ export const capacityQuery = (params?: { search?: string; page?: number; limit?:
   queryKey: ['capacity', params] as const,
   queryFn: () => api.capacity(params),
   staleTime: STALE_TIME_FAST,
-  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
   retry: false,
 })
@@ -108,5 +108,14 @@ export const syncSettingsQuery = queryOptions({
   queryKey: ['sync-settings'] as const,
   queryFn: () => api.syncSettings(),
   staleTime: Infinity,
+  retry: false,
+})
+
+export const capacityClusterQuery = queryOptions({
+  queryKey: ['capacity-cluster'] as const,
+  queryFn: () => api.capacityCluster(),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
+  refetchIntervalInBackground: false,
   retry: false,
 })

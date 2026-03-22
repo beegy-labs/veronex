@@ -137,7 +137,7 @@ impl LlmProviderRegistry for MockProviderRegistry {
     async fn register(&self, _provider: &LlmProvider) -> Result<()> { Ok(()) }
     async fn list_active(&self) -> Result<Vec<LlmProvider>> { Ok(vec![]) }
     async fn list_all(&self) -> Result<Vec<LlmProvider>> { Ok(vec![]) }
-    async fn list_page(&self, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<LlmProvider>, i64)> { Ok((vec![], 0)) }
+    async fn list_page(&self, _search: &str, _provider_type: Option<&str>, _limit: i64, _offset: i64) -> Result<(Vec<LlmProvider>, i64)> { Ok((vec![], 0)) }
     async fn get(&self, _id: Uuid) -> Result<Option<LlmProvider>> { Ok(None) }
     async fn update_status(&self, _id: Uuid, _status: LlmProviderStatus) -> Result<()> { Ok(()) }
     async fn deactivate(&self, _id: Uuid) -> Result<()> { Ok(()) }
@@ -266,6 +266,7 @@ impl crate::application::ports::outbound::model_capacity_repository::ModelCapaci
     async fn get(&self, _: uuid::Uuid, _: &str) -> Result<Option<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(None) }
     async fn list_all(&self) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(vec![]) }
     async fn list_by_provider(&self, _: uuid::Uuid) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(vec![]) }
+    async fn list_by_providers(&self, _: &[uuid::Uuid]) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(vec![]) }
     async fn compute_throughput_stats(&self, _: uuid::Uuid, _: &str, _: u32) -> Result<Option<crate::application::ports::outbound::model_capacity_repository::ThroughputStats>> { Ok(None) }
 }
 

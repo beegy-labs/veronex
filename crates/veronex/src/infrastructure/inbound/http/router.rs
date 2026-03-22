@@ -197,6 +197,7 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/ollama/providers/{provider_id}/models", get(provider_handlers::list_provider_models))
         // Capacity / VRAM pool
         .route("/v1/dashboard/capacity", get(dashboard_handlers::get_capacity))
+        .route("/v1/dashboard/capacity/cluster", get(dashboard_handlers::get_capacity_cluster))
         .route(
             "/v1/dashboard/capacity/settings",
             get(dashboard_handlers::get_capacity_settings)

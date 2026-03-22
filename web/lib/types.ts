@@ -592,6 +592,15 @@ export interface CapacityPageResponse {
   limit: number
 }
 
+export interface ClusterModelInfo {
+  model_name: string
+  weight_mb: number
+  kv_per_request_mb: number
+  total_active: number
+  total_limit: number
+  provider_count: number
+}
+
 export interface SyncSettings {
   analyzer_model: string
   sync_enabled: boolean
@@ -626,11 +635,10 @@ export interface PatchLabSettings {
   max_image_b64_bytes?: number
 }
 
-/** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/capacity/queue/lab queries. */
+/** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/queue/lab queries. */
 export interface DashboardOverview {
   stats: DashboardStats
   performance: PerformanceStats
-  capacity: CapacityResponse
   queue_depth: QueueDepth
   lab: LabSettings
 }
