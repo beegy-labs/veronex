@@ -12,6 +12,7 @@ use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderM
 
 use super::constants::ERR_DATABASE;
 use super::error::error_json;
+use super::handlers::ListPageParams;
 use super::state::AppState;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
@@ -48,13 +49,6 @@ pub struct OllamaProviderDto {
     pub is_enabled: bool,
 }
 
-#[derive(Debug, Deserialize, Default)]
-pub struct ModelListParams {
-    pub search: Option<String>,
-    pub page: Option<i64>,
-    pub limit: Option<i64>,
-}
-
 const DEFAULT_MODEL_LIMIT: i64 = 20;
 const MAX_MODEL_LIMIT: i64 = 200;
 const DEFAULT_PROVIDER_LIMIT: i64 = 10;
@@ -65,68 +59,56 @@ const MAX_PROVIDER_LIMIT: i64 = 100;
 /// `GET /v1/ollama/models?search=&page=1&limit=20`
 pub async fn list_models(
     State(state): State<AppState>,
-    Query(params): Query<ModelListParams>,
-) -> impl IntoResponse {
+    Query(params): Query<ListPageParams>,
+) -> Result<Json<serde_json::Value>, super::error::AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(DEFAULT_MODEL_LIMIT).clamp(1, MAX_MODEL_LIMIT);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
 
-    match state.ollama_model_repo.list_with_counts_page(&search, limit, offset).await {
-        Ok(page_result) => {
-            let dtos: Vec<OllamaModelDto> = page_result.items
-                .into_iter()
-                .map(|m| OllamaModelDto { model_name: m.model_name, provider_count: m.provider_count })
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!({
-                "models": dtos,
-                "total": page_result.total,
-                "page": page,
-                "limit": limit,
-            }))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("ollama list_models: {e}");
-            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
-        }
-    }
+    let page_result = state.ollama_model_repo.list_with_counts_page(&search, limit, offset).await
+        .map_err(|e| { tracing::error!("ollama list_models: {e}"); super::error::AppError::Internal(e) })?;
+    let dtos: Vec<OllamaModelDto> = page_result.items
+        .into_iter()
+        .map(|m| OllamaModelDto { model_name: m.model_name, provider_count: m.provider_count })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "models": dtos,
+        "total": page_result.total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
 /// `GET /v1/ollama/models/:model_name/providers?search=&page=1&limit=10`
 pub async fn list_model_providers(
     State(state): State<AppState>,
     Path(model_name): Path<String>,
-    Query(params): Query<ModelListParams>,
-) -> impl IntoResponse {
+    Query(params): Query<ListPageParams>,
+) -> Result<Json<serde_json::Value>, super::error::AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(DEFAULT_PROVIDER_LIMIT).clamp(1, MAX_PROVIDER_LIMIT);
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * limit;
 
-    match state.ollama_model_repo.providers_info_for_model_page(&model_name, &search, limit, offset).await {
-        Ok(page_result) => {
-            let dtos: Vec<OllamaProviderDto> = page_result.items
-                .into_iter()
-                .map(|p| OllamaProviderDto {
-                    provider_id: p.provider_id,
-                    name: p.name,
-                    url: p.url,
-                    status: p.status,
-                    is_enabled: p.is_enabled,
-                })
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!({
-                "providers": dtos,
-                "total": page_result.total,
-                "page": page,
-                "limit": limit,
-            }))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("ollama list_model_providers: {e}");
-            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
-        }
-    }
+    let page_result = state.ollama_model_repo.providers_info_for_model_page(&model_name, &search, limit, offset).await
+        .map_err(|e| { tracing::error!("ollama list_model_providers: {e}"); super::error::AppError::Internal(e) })?;
+    let dtos: Vec<OllamaProviderDto> = page_result.items
+        .into_iter()
+        .map(|p| OllamaProviderDto {
+            provider_id: p.provider_id,
+            name: p.name,
+            url: p.url,
+            status: p.status,
+            is_enabled: p.is_enabled,
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "providers": dtos,
+        "total": page_result.total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
 /// `GET /v1/ollama/providers/:provider_id/models`
