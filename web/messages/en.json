@@ -15,7 +15,8 @@
     "ollama": "Ollama",
     "gemini": "Gemini",
     "accounts": "Accounts",
-    "audit": "Audit Log"
+    "audit": "Audit Log",
+    "capacity": "Concurrency"
   },
   "common": {
     "all": "All",
@@ -75,6 +76,7 @@
     "customTimezoneInvalid": "Invalid timezone identifier.",
     "custom": "Custom…",
     "apply": "Apply",
+    "now": "now",
     "settings": "Settings",
     "language": "Language",
     "labFeatures": "Lab Features",
@@ -362,6 +364,7 @@
       "noProvidersHint": "Add a local Ollama server to start routing inference.",
       "registerProvider": "Register Ollama Provider",
       "registerTitle": "Register Ollama Provider",
+      "searchProvider": "Search providers",
       "loadingProviders": "Loading providers…",
       "failedProviders": "Failed to load providers",
       "ollamaSyncSection": "Global Ollama Model Sync",
@@ -371,6 +374,7 @@
       "ollamaAvailableModels": "Available models",
       "ollamaNoSync": "No models synced yet. Click Sync All to fetch models.",
       "ollamaSearchModels": "Search models…",
+      "modelToggle": "Toggle {model}",
       "viewModels": "View models",
       "noServerLinked": "no server linked",
       "searchServers": "Search servers…",
@@ -409,6 +413,7 @@
     },
     "capacity": {
       "title": "Concurrency Control",
+      "pageDesc": "VRAM usage and active requests per provider",
       "desc": "VRAM-aware slot allocation for local Ollama inference",
       "syncNow": "Sync Now",
       "syncing": "Analyzing…",
@@ -446,6 +451,9 @@
       "colWeight": "Weight",
       "colKvPerReq": "KV/req",
       "colActiveLimit": "Active / Limit",
+      "colProviders": "Providers",
+      "viewServer": "Server",
+      "viewCluster": "Cluster",
       "searchProvider": "Search provider",
       "showingProviders": "{{from}}–{{to}} of {{total}}",
       "clusterSummary": "{{total}} providers · {{active}} active requests · {{issues}} issues"

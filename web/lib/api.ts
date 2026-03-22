@@ -75,6 +75,9 @@ export const api = {
     return apiClient.get<CapacityPageResponse>(`/v1/dashboard/capacity${q ? '?' + q : ''}`)
   },
 
+  capacityCluster: () =>
+    apiClient.get<import('./types').ClusterModelInfo[]>('/v1/dashboard/capacity/cluster'),
+
   syncSettings: () =>
     apiClient.get<SyncSettings>('/v1/dashboard/capacity/settings'),
 
@@ -162,11 +165,12 @@ export const api = {
     apiClient.get<ServerMetricsPoint[]>(`/v1/servers/${id}/metrics/history?hours=${hours}`),
 
   // ── Providers (JWT-protected) ──────────────────────────────────────────────
-  providers: (params?: { search?: string; page?: number; limit?: number }) => {
+  providers: (params?: { search?: string; page?: number; limit?: number; provider_type?: string }) => {
     const qs = new URLSearchParams()
     if (params?.search) qs.set('search', params.search)
     if (params?.page) qs.set('page', String(params.page))
     if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.provider_type) qs.set('provider_type', params.provider_type)
     const q = qs.toString()
     return apiClient.get<ProviderPage>(`/v1/providers${q ? '?' + q : ''}`)
   },

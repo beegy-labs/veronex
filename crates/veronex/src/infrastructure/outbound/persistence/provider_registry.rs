@@ -230,21 +230,23 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         Ok(())
     }
 
-    async fn list_page(&self, search: &str, limit: i64, offset: i64) -> Result<(Vec<LlmProvider>, i64)> {
+    async fn list_page(&self, search: &str, provider_type: Option<&str>, limit: i64, offset: i64) -> Result<(Vec<LlmProvider>, i64)> {
         let pattern = format!("%{}%", search);
         let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM llm_providers WHERE name ILIKE $1 OR url ILIKE $1"
+            "SELECT COUNT(*) FROM llm_providers WHERE (name ILIKE $1 OR url ILIKE $1) AND ($2::text IS NULL OR provider_type = $2)"
         )
         .bind(&pattern)
+        .bind(provider_type)
         .fetch_one(&self.pool)
         .await
         .context("failed to count providers")?;
 
         let sql = format!(
-            "SELECT {PROVIDER_COLS} FROM llm_providers WHERE name ILIKE $1 OR url ILIKE $1 ORDER BY registered_at ASC LIMIT $2 OFFSET $3"
+            "SELECT {PROVIDER_COLS} FROM llm_providers WHERE (name ILIKE $1 OR url ILIKE $1) AND ($2::text IS NULL OR provider_type = $2) ORDER BY registered_at ASC LIMIT $3 OFFSET $4"
         );
         let rows = sqlx::query(&sql)
             .bind(&pattern)
+            .bind(provider_type)
             .bind(limit)
             .bind(offset)
             .fetch_all(&self.pool)

@@ -15,7 +15,8 @@
     "ollama": "Ollama",
     "gemini": "Gemini",
     "accounts": "계정",
-    "audit": "감사 로그"
+    "audit": "감사 로그",
+    "capacity": "동시성 제어"
   },
   "common": {
     "all": "전체",
@@ -75,6 +76,7 @@
     "customTimezoneInvalid": "유효하지 않은 시간대입니다.",
     "custom": "사용자 정의",
     "apply": "적용",
+    "now": "현재",
     "settings": "설정",
     "language": "언어",
     "labFeatures": "실험실 기능",
@@ -362,6 +364,7 @@
       "noProvidersHint": "로컬 Ollama 서버를 추가하면 추론 라우팅이 시작됩니다.",
       "registerProvider": "Ollama 프로바이더 등록",
       "registerTitle": "Ollama 프로바이더 등록",
+      "searchProvider": "프로바이더 검색",
       "loadingProviders": "백엔드 로딩 중…",
       "failedProviders": "백엔드 로드 실패",
       "ollamaSyncSection": "글로벌 Ollama 모델 동기화",
@@ -371,6 +374,7 @@
       "ollamaAvailableModels": "사용 가능한 모델",
       "ollamaNoSync": "아직 동기화된 모델이 없습니다. 전체 동기화를 클릭하세요.",
       "ollamaSearchModels": "모델 검색…",
+      "modelToggle": "{model} 활성화 토글",
       "viewModels": "모델 보기",
       "noServerLinked": "서버 없음",
       "searchServers": "서버 검색…",
@@ -409,6 +413,7 @@
     },
     "capacity": {
       "title": "동시성 제어",
+      "pageDesc": "프로바이더별 VRAM 사용량 및 활성 요청 현황",
       "desc": "VRAM 기반 슬롯 자동 할당",
       "syncNow": "즉시 분석",
       "syncing": "분석 중…",
@@ -446,6 +451,9 @@
       "colWeight": "가중치",
       "colKvPerReq": "KV/요청",
       "colActiveLimit": "활성 / 제한",
+      "colProviders": "프로바이더",
+      "viewServer": "서버",
+      "viewCluster": "클러스터",
       "searchProvider": "공급자 검색",
       "showingProviders": "{{from}}–{{to}} / {{total}}개",
       "clusterSummary": "프로바이더 {{total}}개 · 활성 요청 {{active}}건 · 이슈 {{issues}}개"

@@ -110,6 +110,21 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
+    async fn list_by_providers(&self, ids: &[Uuid]) -> Result<Vec<ModelVramProfileEntry>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let rows = sqlx::query_as::<_, VramProfileRow>(
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = ANY($1) ORDER BY provider_id, model_name"),
+        )
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to list model_vram_profiles by providers")?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
     async fn compute_throughput_stats(
         &self,
         provider_id: Uuid,

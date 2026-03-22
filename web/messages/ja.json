@@ -15,7 +15,8 @@
     "ollama": "Ollama",
     "gemini": "Gemini",
     "accounts": "アカウント",
-    "audit": "監査ログ"
+    "audit": "監査ログ",
+    "capacity": "同時実行制御"
   },
   "common": {
     "all": "すべて",
@@ -75,6 +76,7 @@
     "customTimezoneInvalid": "無効なタイムゾーンです。",
     "custom": "カスタム",
     "apply": "適用",
+    "now": "現在",
     "settings": "設定",
     "language": "言語",
     "labFeatures": "ラボ機能",
@@ -362,6 +364,7 @@
       "noProvidersHint": "ローカルOllamaサーバーを追加すると推論ルーティングが開始されます。",
       "registerProvider": "Ollamaプロバイダーを登録",
       "registerTitle": "Ollamaプロバイダーの登録",
+      "searchProvider": "プロバイダーを検索",
       "loadingProviders": "バックエンドを読み込み中…",
       "failedProviders": "バックエンドの読み込みに失敗",
       "ollamaSyncSection": "グローバルOllamaモデル同期",
@@ -371,6 +374,7 @@
       "ollamaAvailableModels": "利用可能なモデル",
       "ollamaNoSync": "まだ同期されたモデルがありません。「全て同期」をクリックしてください。",
       "ollamaSearchModels": "モデルを検索…",
+      "modelToggle": "{model} を切り替え",
       "viewModels": "モデルを表示",
       "noServerLinked": "サーバー未連結",
       "searchServers": "サーバーを検索…",
@@ -409,6 +413,7 @@
     },
     "capacity": {
       "title": "並行処理制御",
+      "pageDesc": "プロバイダーごとのVRAM使用量とアクティブリクエスト状況",
       "desc": "VRAMベースの自動スロット割り当て",
       "syncNow": "今すぐ分析",
       "syncing": "分析中…",
@@ -446,6 +451,9 @@
       "colWeight": "重み",
       "colKvPerReq": "KV/リクエスト",
       "colActiveLimit": "アクティブ / 制限",
+      "colProviders": "プロバイダー",
+      "viewServer": "サーバー",
+      "viewCluster": "クラスター",
       "searchProvider": "プロバイダーを検索",
       "showingProviders": "{{from}}–{{to}} / {{total}}件",
       "clusterSummary": "{{total}} プロバイダー · アクティブリクエスト {{active}} · 問題 {{issues}}"

@@ -30,7 +30,9 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   const { data: serversData } = useQuery(serversQuery())
   const servers = serversData?.servers
 
-  const { data: providersData, isLoading: providersLoading, error: providersError } = useQuery(providersQuery())
+  const { data: providersData, isLoading: providersLoading, error: providersError } = useQuery(
+    providersQuery({ provider_type: 'gemini' })
+  )
   const providers = providersData?.providers
 
   const deleteMutation = useMutation({
@@ -73,10 +75,7 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
 
       {section === 'ollama' && (
         <OllamaTab
-          providers={providers}
           servers={servers ?? []}
-          isLoading={providersLoading}
-          error={providersError as Error | null}
           onRegister={() => setRegisterProviderType('ollama')}
           onEdit={(b) => setEditingProvider(b)}
           onSync={(id) => syncProviderMutation.mutate(id)}

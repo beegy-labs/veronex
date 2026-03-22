@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { OllamaSyncJob } from '@/lib/types'
@@ -30,6 +30,7 @@ export function OllamaSyncSection() {
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [page, setPage] = useState(1)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
 
   const { data: syncJob } = useQuery({
@@ -73,15 +74,13 @@ export function OllamaSyncSection() {
   const total = ollamaModelsData?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / MODEL_LIMIT))
 
-  // Debounce search input
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current) }, [])
+
   function handleSearch(v: string) {
     setSearch(v)
     setPage(1)
-    clearTimeout((handleSearch as unknown as { _t?: ReturnType<typeof setTimeout> })._t)
-    ;(handleSearch as unknown as { _t?: ReturnType<typeof setTimeout> })._t = setTimeout(
-      () => setDebouncedSearch(v),
-      300,
-    )
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => setDebouncedSearch(v), 300)
   }
 
   return (
@@ -165,7 +164,7 @@ export function OllamaSyncSection() {
                             toggleGlobalMutation.mutate({ model: m.model_name, enabled: checked })
                           }
                           disabled={toggleGlobalMutation.isPending}
-                          aria-label={`${m.model_name} global toggle`}
+                          aria-label={t('providers.ollama.modelToggle', { model: m.model_name })}
                         />
                       )}
                     </div>
@@ -178,11 +177,11 @@ export function OllamaSyncSection() {
                     {(page - 1) * MODEL_LIMIT + 1}–{Math.min(page * MODEL_LIMIT, total)} / {total}
                   </span>
                   <Button variant="outline" size="icon" className="h-7 w-7" disabled={page <= 1}
-                    aria-label="Previous page" onClick={() => setPage(p => p - 1)}>
+                    aria-label={t('common.prevPage')} onClick={() => setPage(p => p - 1)}>
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </Button>
                   <Button variant="outline" size="icon" className="h-7 w-7" disabled={page >= totalPages}
-                    aria-label="Next page" onClick={() => setPage(p => p + 1)}>
+                    aria-label={t('common.nextPage')} onClick={() => setPage(p => p + 1)}>
                     <ChevronRight className="h-3.5 w-3.5" />
                   </Button>
                 </div>
