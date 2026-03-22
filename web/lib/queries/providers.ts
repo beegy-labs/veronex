@@ -95,9 +95,9 @@ export const geminiSyncConfigQuery = queryOptions({
 
 // ── Capacity ──────────────────────────────────────────────────────────────────
 
-export const capacityQuery = queryOptions({
-  queryKey: ['capacity'] as const,
-  queryFn: () => api.capacity(),
+export const capacityQuery = (params?: { search?: string; page?: number; limit?: number }) => queryOptions({
+  queryKey: ['capacity', params] as const,
+  queryFn: () => api.capacity(params),
   staleTime: STALE_TIME_FAST,
   refetchInterval: REFETCH_INTERVAL_FAST,
   refetchIntervalInBackground: false,
