@@ -144,6 +144,12 @@ pub fn provider_heartbeat(provider_id: Uuid) -> String {
     format!("veronex:provider:hb:{provider_id}")
 }
 
+/// Capacity state pushed by veronex-agent: loaded models + arch profiles + total_vram_mb.
+/// TTL = 3× scrape interval (default 180s). Written by: agent. Read by: analyzer sync_loop.
+pub fn provider_capacity_state(provider_id: Uuid) -> String {
+    format!("veronex:provider:{provider_id}:capacity_state")
+}
+
 /// Global O(1) counter of currently-online Ollama providers.
 /// Incremented/decremented atomically by health_checker on status transitions.
 /// Read by dashboard to avoid SELECT COUNT(*) from DB.
