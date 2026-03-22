@@ -105,6 +105,9 @@ struct ProviderVramState {
     last_mem_available_mb: AtomicU32,
     /// Cached total active request count across all models — O(1) alternative to summing models.
     total_active_count: Arc<AtomicU32>,
+    /// Cached max(max_concurrent) across all loaded models for this provider.
+    /// Used by available_vram_mb APU path to avoid O(models) scan on every scoring call.
+    apu_max_concurrent_cache: AtomicU32,
 }
 
 /// Default VRAM buffer reserved for system/driver overhead (MB).
@@ -129,6 +132,9 @@ pub struct VramPool {
     probe_rate: Arc<AtomicU32>,
     /// Global set of model names currently loaded on any provider — O(1) cross-provider lookup.
     loaded_models_global: Arc<DashSet<String>>,
+    /// Refcount per model: how many providers currently have it loaded.
+    /// O(1) update on load/unload; replaces O(providers) scan in mark_model_unloaded.
+    loaded_model_refcounts: Arc<DashMap<String, AtomicU64>>,
 }
 
 impl VramPool {
@@ -138,6 +144,7 @@ impl VramPool {
             probe_permits: Arc::new(AtomicI32::new(1)),
             probe_rate: Arc::new(AtomicU32::new(3)),
             loaded_models_global: Arc::new(DashSet::new()),
+            loaded_model_refcounts: Arc::new(DashMap::new()),
         }
     }
 
@@ -155,6 +162,7 @@ impl VramPool {
                     transition_until: AtomicU64::new(0),
                     last_mem_available_mb: AtomicU32::new(0),
                     total_active_count: Arc::new(AtomicU32::new(0)),
+                    apu_max_concurrent_cache: AtomicU32::new(4),
                 })
             })
             .value()
@@ -388,10 +396,8 @@ impl VramPoolPort for VramPool {
                     // Return a concurrency-headroom-based score so unprobed providers
                     // compete fairly with VRAM-probed providers instead of always winning.
                     let active = s.total_active_count.load(Ordering::Acquire);
-                    let mc = s.models.iter()
-                        .map(|e| e.max_concurrent.load(Ordering::Acquire))
-                        .max()
-                        .unwrap_or(4);
+                    // Use cached max_concurrent instead of O(models) scan.
+                    let mc = s.apu_max_concurrent_cache.load(Ordering::Acquire).max(4);
                     // 1,024 MB per free slot — at least 1 so it's not filtered out
                     mc.saturating_sub(active).saturating_mul(1_024).max(1) as u64
                 } else {
@@ -452,11 +458,18 @@ impl VramPoolPort for VramPool {
                 ms
             });
         self.loaded_models_global.insert(model.to_string());
+        // Increment refcount — O(1), replaces O(providers) scan on unload.
+        self.loaded_model_refcounts
+            .entry(model.to_string())
+            .and_modify(|c| { c.fetch_add(1, Ordering::AcqRel); })
+            .or_insert_with(|| AtomicU64::new(1));
     }
 
     fn mark_model_unloaded(&self, provider_id: Uuid, model: &str) {
         let state = self.get_or_create(provider_id);
+        let was_loaded;
         if let Some(mut ms) = state.models.get_mut(model) {
+            was_loaded = ms.is_loaded;
             if ms.is_loaded {
                 // Subtract weight from cache when unloading.
                 state.cached_loaded_weight_mb.fetch_sub(ms.weight_mb.min(
@@ -471,13 +484,21 @@ impl VramPoolPort for VramPool {
             ms.stable_cycle_count.store(0, Ordering::Release);
             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
             ms.learning_epoch_started_at.store(now_ms, Ordering::Release);
+        } else {
+            was_loaded = false;
         }
-        // Remove from global set if no provider has this model loaded anymore.
-        let still_loaded = self.providers.iter().any(|e| {
-            e.value().models.get(model).is_some_and(|ms| ms.is_loaded)
-        });
-        if !still_loaded {
-            self.loaded_models_global.remove(model);
+        // O(1) refcount decrement — no O(providers) scan needed.
+        if was_loaded {
+            let still_loaded = self
+                .loaded_model_refcounts
+                .get(model)
+                .map(|c| c.fetch_sub(1, Ordering::AcqRel))
+                .unwrap_or(0);
+            // still_loaded is the value BEFORE decrement; if it was 1, now 0 → remove.
+            if still_loaded <= 1 {
+                self.loaded_models_global.remove(model);
+                self.loaded_model_refcounts.remove(model);
+            }
         }
     }
 
@@ -519,6 +540,11 @@ impl VramPoolPort for VramPool {
             .entry(model.to_string())
             .and_modify(|ms| { ms.max_concurrent.store(limit, Ordering::Release); })
             .or_insert_with(|| ModelState::new(0, false, 128, limit));
+        // Update APU max_concurrent cache: take max across all models for O(1) APU scoring.
+        let prev = state.apu_max_concurrent_cache.load(Ordering::Acquire);
+        if limit > prev {
+            state.apu_max_concurrent_cache.store(limit, Ordering::Release);
+        }
     }
 
     fn max_concurrent(&self, provider_id: Uuid, model: &str) -> u32 {
