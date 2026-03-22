@@ -1,11 +1,11 @@
 'use client'
 
-import React, { useState, useRef, useMemo } from 'react'
+import React, { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { PatchSyncSettings } from '@/lib/types'
 import { capacityQuery, syncSettingsQuery } from '@/lib/queries'
-import { Activity, AlertTriangle, RefreshCw, Server } from 'lucide-react'
+import { Activity, AlertTriangle, RefreshCw, Search, Server } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -68,7 +68,9 @@ export function OllamaCapacitySection() {
   const { data: capacityData, isLoading: capacityLoading } = useQuery(capacityQuery)
   const { data: settings } = useQuery(syncSettingsQuery)
 
-  const [providerFilter, setProviderFilter] = useState<string>('all')
+  const PROVIDERS_PAGE_SIZE = 20
+  const [providerFilter, setProviderFilter] = useState<string>('')
+  const [providerPage, setProviderPage] = useState(0)
   const [analyzerModel, setAnalyzerModel] = useState<string>('')
   const [syncEnabled, setSyncEnabled] = useState<boolean>(true)
   const [intervalSecs, setIntervalSecs] = useState<string>('')
@@ -116,14 +118,31 @@ export function OllamaCapacitySection() {
     saveMutation.mutate(body)
   }
 
+  useEffect(() => { setProviderPage(0) }, [providerFilter])
+
   const providers = capacityData?.providers ?? []
   const lastRunAt = settings?.last_run_at
   const lastRunStatus = settings?.last_run_status
   const allModels = settings?.available_models ?? {}
 
   const filteredProviders = useMemo(() =>
-    providers.filter((p) => providerFilter === 'all' || p.provider_name.toLowerCase().includes(providerFilter)),
+    providers.filter((p) => !providerFilter || p.provider_name.toLowerCase().includes(providerFilter.toLowerCase())),
     [providers, providerFilter],
+  )
+
+  const pagedProviders = useMemo(() =>
+    filteredProviders.slice(providerPage * PROVIDERS_PAGE_SIZE, (providerPage + 1) * PROVIDERS_PAGE_SIZE),
+    [filteredProviders, providerPage],
+  )
+
+  const totalActive = useMemo(() =>
+    providers.reduce((sum, p) => sum + p.loaded_models.reduce((s, m) => s + m.active_requests, 0), 0),
+    [providers],
+  )
+
+  const issueCount = useMemo(() =>
+    providers.filter(p => p.thermal_state !== 'normal').length,
+    [providers],
   )
 
   // Filter: hide gemini when lab feature is off, apply provider filter
@@ -131,7 +150,7 @@ export function OllamaCapacitySection() {
     Object.fromEntries(
       Object.entries(allModels)
         .filter(([p]) => p !== 'gemini' || geminiEnabled)
-        .filter(([p]) => providerFilter === 'all' || p === providerFilter)
+        .filter(([p]) => !providerFilter || p.toLowerCase().includes(providerFilter.toLowerCase()))
     ),
     [allModels, geminiEnabled, providerFilter],
   )
@@ -191,17 +210,15 @@ export function OllamaCapacitySection() {
           <div className="flex items-end gap-3 flex-wrap">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">{t('usage.providerCol')}</Label>
-              <Select value={providerFilter} onValueChange={setProviderFilter}>
-                <SelectTrigger className="h-8 text-sm w-32">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">{t('common.all')}</SelectItem>
-                  {providerOptions.map((p) => (
-                    <SelectItem key={p} value={p}>{p}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                <Input
+                  className="h-8 text-sm w-40 pl-7"
+                  placeholder={t('providers.capacity.searchProvider')}
+                  value={providerFilter}
+                  onChange={(e) => setProviderFilter(e.target.value)}
+                />
+              </div>
             </div>
             <div className="space-y-1 min-w-44">
               <Label className="text-xs text-muted-foreground">{t('providers.capacity.analyzerModel')}</Label>
@@ -294,7 +311,13 @@ export function OllamaCapacitySection() {
         </Card>
       )}
 
-      {filteredProviders.map((provider) => (
+      {providers.length > 0 && (
+        <div className="flex items-center gap-4 text-xs text-muted-foreground px-1">
+          {t('providers.capacity.clusterSummary', { total: filteredProviders.length, active: totalActive, issues: issueCount })}
+        </div>
+      )}
+
+      {pagedProviders.map((provider) => (
         <Card key={provider.provider_id}>
           <CardContent className="p-0">
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
@@ -364,6 +387,16 @@ export function OllamaCapacitySection() {
           </CardContent>
         </Card>
       ))}
+
+      {filteredProviders.length > PROVIDERS_PAGE_SIZE && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+          <span>{t('providers.capacity.showingProviders', { from: providerPage * PROVIDERS_PAGE_SIZE + 1, to: Math.min((providerPage + 1) * PROVIDERS_PAGE_SIZE, filteredProviders.length), total: filteredProviders.length })}</span>
+          <div className="flex gap-1">
+            <Button size="sm" variant="ghost" disabled={providerPage === 0} onClick={() => setProviderPage(p => p - 1)} aria-label="Previous page">←</Button>
+            <Button size="sm" variant="ghost" disabled={(providerPage + 1) * PROVIDERS_PAGE_SIZE >= filteredProviders.length} onClick={() => setProviderPage(p => p + 1)} aria-label="Next page">→</Button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

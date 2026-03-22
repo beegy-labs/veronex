@@ -445,7 +445,10 @@
       "colModel": "모델",
       "colWeight": "가중치",
       "colKvPerReq": "KV/요청",
-      "colActiveLimit": "활성 / 제한"
+      "colActiveLimit": "활성 / 제한",
+      "searchProvider": "공급자 검색",
+      "showingProviders": "{{from}}–{{to}} / {{total}}개",
+      "clusterSummary": "프로바이더 {{total}}개 · 활성 요청 {{active}}건 · 이슈 {{issues}}개"
     },
     "gemini": {
       "title": "Gemini 프로바이더",
