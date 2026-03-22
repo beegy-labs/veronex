@@ -86,7 +86,7 @@ impl OllamaModelRepository for PostgresOllamaModelRepository {
         .fetch_one(&self.pool)
         .await?;
 
-        let rows = sqlx::query!(
+        let rows: Vec<_> = sqlx::query!(
             r#"
             SELECT model_name, COUNT(provider_id) AS "provider_count!: i64"
             FROM ollama_models
@@ -144,7 +144,7 @@ impl OllamaModelRepository for PostgresOllamaModelRepository {
         .fetch_one(&self.pool)
         .await?;
 
-        let rows = sqlx::query!(
+        let rows: Vec<_> = sqlx::query!(
             r#"
             SELECT
                 om.provider_id AS "provider_id: Uuid",
