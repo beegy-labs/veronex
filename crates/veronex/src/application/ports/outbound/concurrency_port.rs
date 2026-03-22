@@ -287,4 +287,12 @@ pub trait VramPoolPort: Send + Sync {
 
     /// Decay APU safety margin by 10 permil per stable sync (min = DEFAULT_SAFETY_PERMIL = 100).
     fn decay_safety_permil(&self, provider_id: Uuid);
+
+    /// Aggregate all loaded models across all providers.
+    ///
+    /// Returns one entry per unique model name: (model_name, weight_mb, kv_per_request_mb,
+    /// total_active, total_limit, provider_count).
+    ///
+    /// Used by the cluster-view dashboard endpoint to avoid a full DB scan on every poll.
+    fn cluster_snapshot(&self) -> Vec<(String, u64, u64, u32, u32, u32)>;
 }

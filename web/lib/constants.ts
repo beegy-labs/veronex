@@ -86,6 +86,16 @@ export const REFETCH_INTERVAL_LIVE = 3_000
 /** Refetch interval for historical data (power history, metric history). */
 export const REFETCH_INTERVAL_HISTORY = 5 * 60_000
 
+/**
+ * Add random jitter to a refetch interval to prevent synchronized polling storms
+ * when many browser tabs open at the same time.
+ *
+ * Returns base + U[0, maxJitter) ms — always ≥ base, never shrinks the interval.
+ */
+export function withJitter(base: number, maxJitter = 5_000): number {
+  return base + Math.floor(Math.random() * maxJitter)
+}
+
 /** Stale time for long-window historical data (60-day power / metrics history).
  *  Data is refetched in the background every REFETCH_INTERVAL_HISTORY, so it
  *  stays fresh — but navigating away and back within 30 min skips the on-mount

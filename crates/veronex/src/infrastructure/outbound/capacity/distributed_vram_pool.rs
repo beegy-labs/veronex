@@ -370,4 +370,8 @@ impl VramPoolPort for DistributedVramPool {
         self.local.decay_safety_permil(provider_id);
     }
 
+    fn cluster_snapshot(&self) -> Vec<(String, u64, u64, u32, u32, u32)> {
+        self.local.cluster_snapshot()
+    }
+
 }

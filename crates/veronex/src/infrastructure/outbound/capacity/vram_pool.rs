@@ -813,6 +813,29 @@ impl VramPoolPort for VramPool {
         }
     }
 
+    fn cluster_snapshot(&self) -> Vec<(String, u64, u64, u32, u32, u32)> {
+        let mut by_model: std::collections::HashMap<String, (u64, u64, u32, u32, u32)> =
+            std::collections::HashMap::new();
+        for prov_ref in self.providers.iter() {
+            for model_ref in prov_ref.models.iter() {
+                if !model_ref.is_loaded { continue; }
+                let name  = model_ref.key().clone();
+                let active = model_ref.active_count.load(Ordering::Acquire);
+                let limit  = model_ref.max_concurrent.load(Ordering::Acquire);
+                let weight = model_ref.weight_mb;
+                let kv     = model_ref.kv_per_request_mb;
+                let entry = by_model.entry(name).or_insert((weight, kv, 0, 0, 0));
+                entry.2 = entry.2.saturating_add(active);
+                entry.3 = entry.3.saturating_add(limit);
+                entry.4 = entry.4.saturating_add(1);
+            }
+        }
+        by_model
+            .into_iter()
+            .map(|(name, (weight, kv, active, limit, count))| (name, weight, kv, active, limit, count))
+            .collect()
+    }
+
 }
 
 #[cfg(test)]
@@ -909,6 +932,7 @@ mod tests {
             transition_until: AtomicU64::new(0),
             last_mem_available_mb: AtomicU32::new(0),
             total_active_count: Arc::new(AtomicU32::new(0)),
+            apu_max_concurrent_cache: AtomicU32::new(0),
         }
     }
 
@@ -1228,7 +1252,7 @@ mod tests {
     proptest! {
         /// compute_available is always i64::MAX when total=0.
         #[test]
-        fn zero_total_always_unlimited(kv in 0u32..10000, safety in 0u32..500) {
+        fn zero_total_always_unlimited(kv in 0u64..10000, safety in 0u32..500) {
             let state = make_provider_state(0, kv, safety);
             prop_assert_eq!(VramPool::compute_available(&state), i64::MAX);
         }
@@ -1236,8 +1260,8 @@ mod tests {
         /// Higher safety_permil → lower available (monotonically decreasing).
         #[test]
         fn higher_safety_less_available(
-            total in 1000u32..100000,
-            kv in 0u32..1000,
+            total in 1000u64..100000,
+            kv in 0u64..1000,
             safety_a in 0u32..500,
             safety_b in 0u32..500,
         ) {

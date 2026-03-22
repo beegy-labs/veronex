@@ -444,7 +444,7 @@ async fn call_llm_analysis(
     analyzer_model: &str,
     provider_name:  &str,
     model_name:     &str,
-    weight_mb:      i32,
+    weight_mb:      u64,
     vram_total_mb:  u64,
     temp_c:         Option<f32>,
     arch:           &ModelArchProfile,
@@ -914,7 +914,7 @@ pub async fn sync_provider(
     let mut model_snapshots: Vec<ModelSnapshot> = Vec::new();
 
     for model in &ps_models {
-        let weight_mb = (model.size_vram / 1_048_576) as i32;
+        let weight_mb = model.size_vram / 1_048_576;
 
         let arch = if let Some(ref state) = agent_state {
             // Use arch data from agent capacity state (no HTTP call needed)
@@ -970,7 +970,7 @@ pub async fn sync_provider(
             provider_id,
             &model.name,
             ModelVramProfile {
-                weight_mb: weight_mb as u64,
+                weight_mb,
                 weight_estimated: false,
                 kv_per_request_mb: kv_per_req as u64,
                 num_layers: arch.num_layers as u16,
@@ -1001,8 +1001,8 @@ pub async fn sync_provider(
                     // Capped at MAX_COMPUTE_CAP to avoid overwhelming the compute stack.
                     const MAX_COMPUTE_CAP: u32 = 32;
                     let committed = vram_pool.sum_loaded_max_concurrent(provider_id);
-                    let vram_slots = if kv_per_req > 0 && vram_total_mb > weight_mb as u64 {
-                        ((vram_total_mb - weight_mb as u64) / kv_per_req as u64) as u32
+                    let vram_slots = if kv_per_req > 0 && vram_total_mb > weight_mb {
+                        ((vram_total_mb - weight_mb) / kv_per_req as u64) as u32
                     } else {
                         num_parallel
                     };
@@ -1070,7 +1070,7 @@ pub async fn sync_provider(
             .upsert(&ModelVramProfileEntry {
                 provider_id,
                 model_name:        model.name.clone(),
-                weight_mb,
+                weight_mb:         weight_mb as i32,
                 weight_estimated:  false,
                 kv_per_request_mb: kv_per_req as i32,
                 num_layers:        arch.num_layers as i16,
@@ -1090,7 +1090,7 @@ pub async fn sync_provider(
         // Collect snapshot for batch LLM analysis
         model_snapshots.push(ModelSnapshot {
             name:           model.name.clone(),
-            weight_mb:      weight_mb as u64,
+            weight_mb,
             kv_per_req_mb:  kv_per_req as u64,
             tps:            stats.avg_tokens_per_sec,
             p95_ms:         stats.p95_latency_ms,
@@ -1264,36 +1264,53 @@ pub async fn run_sync_loop(
             .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
             .collect();
 
-        let mut any_error = false;
-        for provider in ollama_providers {
-            if let Err(e) = sync_provider(
-                &client,
-                provider.id,
-                &provider.name,
-                &provider.url,
-                provider.total_vram_mb,
-                provider.num_parallel.max(1) as u32,
-                &settings.analyzer_model,
-                &*capacity_repo,
-                &*vram_pool,
-                valkey_pool.as_ref(),
-                &*registry,
-                &*ollama_model_repo,
-                &*model_selection_repo,
-                &*vram_budget_repo,
-                job_repo.as_deref(),
-            )
-            .await
-            {
-                tracing::warn!(
-                    provider = %provider.name,
-                    "sync failed (non-fatal): {e}"
-                );
-                any_error = true;
-            }
-        }
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+        use futures::StreamExt as _;
 
-        let status = if any_error { "partial" } else { "ok" };
+        const MAX_PARALLEL_SYNC: usize = 50;
+        let any_error = Arc::new(AtomicBool::new(false));
+
+        futures::stream::iter(ollama_providers)
+            .for_each_concurrent(MAX_PARALLEL_SYNC, |provider| {
+                let client            = client.clone();
+                let capacity_repo     = Arc::clone(&capacity_repo);
+                let vram_pool         = Arc::clone(&vram_pool);
+                let valkey_pool       = valkey_pool.clone();
+                let registry          = Arc::clone(&registry);
+                let ollama_model_repo = Arc::clone(&ollama_model_repo);
+                let model_selection_repo = Arc::clone(&model_selection_repo);
+                let vram_budget_repo  = Arc::clone(&vram_budget_repo);
+                let job_repo          = job_repo.clone();
+                let analyzer_model    = settings.analyzer_model.clone();
+                let any_error         = Arc::clone(&any_error);
+                async move {
+                    if let Err(e) = sync_provider(
+                        &client,
+                        provider.id,
+                        &provider.name,
+                        &provider.url,
+                        provider.total_vram_mb,
+                        provider.num_parallel.max(1) as u32,
+                        &analyzer_model,
+                        &*capacity_repo,
+                        &*vram_pool,
+                        valkey_pool.as_ref(),
+                        &*registry,
+                        &*ollama_model_repo,
+                        &*model_selection_repo,
+                        &*vram_budget_repo,
+                        job_repo.as_deref(),
+                    )
+                    .await
+                    {
+                        tracing::warn!(provider = %provider.name, "sync failed (non-fatal): {e}");
+                        any_error.store(true, AtomicOrdering::Relaxed);
+                    }
+                }
+            })
+            .await;
+
+        let status = if any_error.load(AtomicOrdering::Relaxed) { "partial" } else { "ok" };
         settings_repo.record_run(status).await.ok();
     }
 
