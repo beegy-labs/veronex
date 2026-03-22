@@ -445,7 +445,10 @@
       "colModel": "Model",
       "colWeight": "Weight",
       "colKvPerReq": "KV/req",
-      "colActiveLimit": "Active / Limit"
+      "colActiveLimit": "Active / Limit",
+      "searchProvider": "Search provider",
+      "showingProviders": "{{from}}–{{to}} of {{total}}",
+      "clusterSummary": "{{total}} providers · {{active}} active requests · {{issues}} issues"
     },
     "gemini": {
       "title": "Gemini Providers",
