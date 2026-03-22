@@ -178,6 +178,7 @@ fn build_jwt_router() -> Router<AppState> {
             "/v1/servers/{id}",
             patch(gpu_server_handlers::update_gpu_server).delete(gpu_server_handlers::delete_gpu_server),
         )
+        .route("/v1/servers/metrics/batch", get(gpu_server_handlers::get_server_metrics_batch))
         .route("/v1/servers/{id}/metrics", get(gpu_server_handlers::get_server_metrics))
         .route("/v1/servers/{id}/metrics/history", get(gpu_server_handlers::get_server_metrics_history))
         // Gemini
