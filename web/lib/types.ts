@@ -585,6 +585,13 @@ export interface CapacityResponse {
   providers: ProviderVramInfo[]
 }
 
+export interface CapacityPageResponse {
+  providers: ProviderVramInfo[]
+  total: number
+  page: number
+  limit: number
+}
+
 export interface SyncSettings {
   analyzer_model: string
   sync_enabled: boolean
