@@ -65,12 +65,20 @@ export function OllamaCapacitySection() {
   const { labSettings } = useLabSettings()
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
-  const { data: capacityData, isLoading: capacityLoading } = useQuery(capacityQuery)
-  const { data: settings } = useQuery(syncSettingsQuery)
-
   const PROVIDERS_PAGE_SIZE = 20
   const [providerFilter, setProviderFilter] = useState<string>('')
   const [providerPage, setProviderPage] = useState(0)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(providerFilter), 300)
+    return () => clearTimeout(t)
+  }, [providerFilter])
+
+  const { data: capacityData, isLoading: capacityLoading } = useQuery(
+    capacityQuery({ search: debouncedSearch || undefined, page: providerPage + 1, limit: PROVIDERS_PAGE_SIZE }),
+  )
+  const { data: settings } = useQuery(syncSettingsQuery)
   const [analyzerModel, setAnalyzerModel] = useState<string>('')
   const [syncEnabled, setSyncEnabled] = useState<boolean>(true)
   const [intervalSecs, setIntervalSecs] = useState<string>('')
@@ -118,22 +126,16 @@ export function OllamaCapacitySection() {
     saveMutation.mutate(body)
   }
 
-  useEffect(() => { setProviderPage(0) }, [providerFilter])
+  useEffect(() => { setProviderPage(0) }, [debouncedSearch])
 
   const providers = capacityData?.providers ?? []
   const lastRunAt = settings?.last_run_at
   const lastRunStatus = settings?.last_run_status
   const allModels = settings?.available_models ?? {}
 
-  const filteredProviders = useMemo(() =>
-    providers.filter((p) => !providerFilter || p.provider_name.toLowerCase().includes(providerFilter.toLowerCase())),
-    [providers, providerFilter],
-  )
-
-  const pagedProviders = useMemo(() =>
-    filteredProviders.slice(providerPage * PROVIDERS_PAGE_SIZE, (providerPage + 1) * PROVIDERS_PAGE_SIZE),
-    [filteredProviders, providerPage],
-  )
+  // Providers are already filtered and paginated by the server
+  const pagedProviders = providers
+  const serverTotal = capacityData?.total ?? 0
 
   const totalActive = useMemo(() =>
     providers.reduce((sum, p) => sum + p.loaded_models.reduce((s, m) => s + m.active_requests, 0), 0),
@@ -313,7 +315,7 @@ export function OllamaCapacitySection() {
 
       {providers.length > 0 && (
         <div className="flex items-center gap-4 text-xs text-muted-foreground px-1">
-          {t('providers.capacity.clusterSummary', { total: filteredProviders.length, active: totalActive, issues: issueCount })}
+          {t('providers.capacity.clusterSummary', { total: serverTotal, active: totalActive, issues: issueCount })}
         </div>
       )}
 
@@ -388,12 +390,12 @@ export function OllamaCapacitySection() {
         </Card>
       ))}
 
-      {filteredProviders.length > PROVIDERS_PAGE_SIZE && (
+      {serverTotal > PROVIDERS_PAGE_SIZE && (
         <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
-          <span>{t('providers.capacity.showingProviders', { from: providerPage * PROVIDERS_PAGE_SIZE + 1, to: Math.min((providerPage + 1) * PROVIDERS_PAGE_SIZE, filteredProviders.length), total: filteredProviders.length })}</span>
+          <span>{t('providers.capacity.showingProviders', { from: providerPage * PROVIDERS_PAGE_SIZE + 1, to: Math.min((providerPage + 1) * PROVIDERS_PAGE_SIZE, serverTotal), total: serverTotal })}</span>
           <div className="flex gap-1">
             <Button size="sm" variant="ghost" disabled={providerPage === 0} onClick={() => setProviderPage(p => p - 1)} aria-label="Previous page">←</Button>
-            <Button size="sm" variant="ghost" disabled={(providerPage + 1) * PROVIDERS_PAGE_SIZE >= filteredProviders.length} onClick={() => setProviderPage(p => p + 1)} aria-label="Next page">→</Button>
+            <Button size="sm" variant="ghost" disabled={(providerPage + 1) * PROVIDERS_PAGE_SIZE >= serverTotal} onClick={() => setProviderPage(p => p + 1)} aria-label="Next page">→</Button>
           </div>
         </div>
       )}

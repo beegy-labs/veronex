@@ -19,7 +19,7 @@ use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 use super::audit_helpers::emit_audit;
 use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
-use super::handlers::{SseStream, try_acquire_sse};
+use super::handlers::{SseStream, try_acquire_sse, ListPageParams};
 use super::state::AppState;
 use super::query_helpers::validate_hours;
 use super::usage_handlers::UsageQuery;
@@ -385,16 +385,34 @@ pub async fn get_dashboard_overview(
 
 // ── GET /v1/dashboard/capacity ──────────────────────────────────────
 
-pub async fn get_capacity(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    let entries = match state.capacity_repo.list_all().await {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!("get_capacity: failed to list: {e}");
-            return Json(CapacityResponse { providers: vec![] }).into_response();
-        }
-    };
-    let providers_list = state.provider_registry.list_all().await.unwrap_or_default();
-    Json(build_capacity(&state, entries, providers_list)).into_response()
+pub async fn get_capacity(
+    State(state): State<AppState>,
+    Query(params): Query<ListPageParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 200);
+    let offset = (page - 1) * limit;
+    let search = params.search.as_deref().unwrap_or("").to_string();
+
+    let (providers_page, total) = state
+        .provider_registry
+        .list_page(&search, limit, offset)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let mut all_entries = Vec::new();
+    for p in &providers_page {
+        let entries = state.capacity_repo.list_by_provider(p.id).await.unwrap_or_default();
+        all_entries.extend(entries);
+    }
+
+    let capacity = build_capacity(&state, all_entries, providers_page);
+    Ok(Json(serde_json::json!({
+        "providers": capacity.providers,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
 // ── GET /v1/dashboard/capacity/settings ────────────────────────────

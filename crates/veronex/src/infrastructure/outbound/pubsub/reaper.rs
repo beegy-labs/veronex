@@ -7,27 +7,27 @@
 //! ## Double-execution prevention
 //!
 //! All re-enqueue operations use Lua CAS scripts to prevent TOCTOU races:
-//! - `LUA_REAP_OWNED_JOB`: atomically checks heartbeat + owner match before re-enqueue.
-//! - `LUA_REAP_OWNERLESS_JOB`: claims ownership with SET NX before re-enqueue,
-//!   preventing multiple reapers from racing on the same job.
+//! - `LUA_REAP_OWNED_JOB`: atomically checks heartbeat + owner match before removing from processing.
+//! - `LUA_REAP_OWNERLESS_JOB`: claims ownership with SET NX before removing from processing.
+//! After Lua removal, the Rust caller re-enqueues to QUEUE_ZSET with model from DB.
 
 use std::sync::Arc;
 
 use fred::prelude::*;
 use tokio_util::sync::CancellationToken;
 
+use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP, TIER_BONUS_PAID};
 use crate::infrastructure::outbound::capacity::distributed_vram_pool::DistributedVramPool;
 use crate::infrastructure::outbound::valkey_keys;
 
-/// Lua CAS: atomically verify dead owner + re-enqueue.
+/// Lua CAS: atomically verify dead owner + remove from processing.
 ///
-/// Prevents double execution: only re-enqueues if `job:owner` still matches
-/// the expected (dead) instance AND that instance's heartbeat is gone.
+/// Only removes if `job:owner` still matches the expected (dead) instance
+/// AND that instance's heartbeat is gone. Rust caller does the ZADD to QUEUE_ZSET.
 ///
 /// KEYS[1] = job:owner:{job_id}
 /// KEYS[2] = heartbeat:{instance_id}
 /// KEYS[3] = veronex:queue:processing
-/// KEYS[4] = veronex:queue:jobs (target re-enqueue queue)
 /// ARGV[1] = job UUID string
 /// ARGV[2] = expected dead instance_id
 const LUA_REAP_OWNED_JOB: &str = r#"
@@ -40,18 +40,17 @@ if alive == 1 then
     return 0
 end
 redis.call('LREM', KEYS[3], 1, ARGV[1])
-redis.call('RPUSH', KEYS[4], ARGV[1])
 redis.call('DEL', KEYS[1])
 return 1
 "#;
 
-/// Lua CAS: claim ownerless job before re-enqueue.
+/// Lua CAS: claim ownerless job before removing from processing.
 ///
 /// Uses SET NX to prevent multiple reapers from racing on the same ownerless job.
+/// Rust caller does the ZADD to QUEUE_ZSET.
 ///
 /// KEYS[1] = job:owner:{job_id}
 /// KEYS[2] = veronex:queue:processing
-/// KEYS[3] = veronex:queue:jobs (target re-enqueue queue)
 /// ARGV[1] = job UUID string
 const LUA_REAP_OWNERLESS_JOB: &str = r#"
 local owner = redis.call('GET', KEYS[1])
@@ -63,7 +62,6 @@ if not claimed then
     return 0
 end
 redis.call('LREM', KEYS[2], 1, ARGV[1])
-redis.call('RPUSH', KEYS[3], ARGV[1])
 redis.call('DEL', KEYS[1])
 return 1
 "#;
@@ -77,7 +75,7 @@ pub async fn run_reaper_loop(
     pool: Pool,
     instance_id: Arc<str>,
     distributed_vram_pool: Option<Arc<DistributedVramPool>>,
-    _pg_pool: sqlx::PgPool,
+    pg_pool: sqlx::PgPool,
     shutdown: CancellationToken,
 ) {
     let mut heartbeat_interval = tokio::time::interval(crate::domain::constants::REAPER_HEARTBEAT_INTERVAL);
@@ -103,7 +101,7 @@ pub async fn run_reaper_loop(
                 }
             }
             _ = queue_reap_interval.tick() => {
-                reap_orphaned_jobs(&pool).await;
+                reap_orphaned_jobs(&pool, &pg_pool).await;
             }
         }
     }
@@ -126,9 +124,10 @@ async fn refresh_heartbeat(pool: &Pool, instance_id: &str) {
 
 /// Scan the processing list for jobs whose owner instance is dead, re-enqueue them.
 ///
-/// Uses Lua CAS scripts to prevent double-execution: each re-enqueue is atomic
-/// (check owner + heartbeat + LREM + RPUSH + DEL in one Lua eval).
-async fn reap_orphaned_jobs(pool: &Pool) {
+/// Uses Lua CAS scripts to prevent double-execution: each LREM from processing is atomic
+/// (check owner + heartbeat + LREM + DEL in one Lua eval). After Lua, re-enqueues to
+/// QUEUE_ZSET with emergency priority by looking up the model from DB.
+async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
     let entries: Vec<String> = match pool.lrange(valkey_keys::QUEUE_PROCESSING, 0, -1).await {
         Ok(e) => e,
         Err(e) => {
@@ -154,11 +153,10 @@ async fn reap_orphaned_jobs(pool: &Pool) {
         let owner_key = valkey_keys::job_owner(uuid);
         let owner: Option<String> = pool.get(&owner_key).await.unwrap_or(None);
 
-        match owner {
+        let reaped_ok = match owner {
             Some(instance_id) => {
                 let hb_key = valkey_keys::heartbeat(&instance_id);
-
-                // Atomic CAS: re-enqueue only if owner still matches AND heartbeat is dead.
+                // Atomic CAS: LREM from processing only if owner matches AND heartbeat is dead.
                 let result: Result<i64, _> = pool
                     .eval(
                         LUA_REAP_OWNED_JOB,
@@ -166,49 +164,120 @@ async fn reap_orphaned_jobs(pool: &Pool) {
                             owner_key,
                             hb_key,
                             valkey_keys::QUEUE_PROCESSING.to_string(),
-                            valkey_keys::QUEUE_JOBS.to_string(),
                         ],
                         vec![uuid_str.clone(), instance_id.clone()],
                     )
                     .await;
                 match result {
-                    Ok(1) => {
-                        tracing::info!(%uuid, %instance_id, "reaped orphaned job (CAS)");
-                        reaped += 1;
-                        // DB cleanup (mark_job_failed) delegated to veronex-agent orphan sweeper.
-                    }
-                    Ok(_) => {} // owner changed or instance recovered — skip
-                    Err(e) => tracing::warn!(%uuid, "reap CAS failed: {e}"),
+                    Ok(1) => { tracing::info!(%uuid, %instance_id, "reaped orphaned job (CAS)"); true }
+                    Ok(_) => false, // owner changed or instance recovered — skip
+                    Err(e) => { tracing::warn!(%uuid, "reap CAS failed: {e}"); false }
                 }
             }
             None => {
-                // Atomic CAS: claim ownerless job via SET NX before re-enqueue.
+                // Atomic CAS: claim ownerless job via SET NX before removing from processing.
                 let result: Result<i64, _> = pool
                     .eval(
                         LUA_REAP_OWNERLESS_JOB,
                         vec![
                             owner_key,
                             valkey_keys::QUEUE_PROCESSING.to_string(),
-                            valkey_keys::QUEUE_JOBS.to_string(),
                         ],
                         vec![uuid_str.clone()],
                     )
                     .await;
                 match result {
-                    Ok(1) => {
-                        tracing::info!(%uuid, "reaped ownerless job (CAS)");
-                        reaped += 1;
-                        // DB cleanup delegated to veronex-agent orphan sweeper.
-                    }
-                    Ok(_) => {} // another reaper claimed it — skip
-                    Err(e) => tracing::warn!(%uuid, "reap ownerless CAS failed: {e}"),
+                    Ok(1) => { tracing::info!(%uuid, "reaped ownerless job (CAS)"); true }
+                    Ok(_) => false, // another reaper claimed it — skip
+                    Err(e) => { tracing::warn!(%uuid, "reap ownerless CAS failed: {e}"); false }
                 }
             }
+        };
+
+        if !reaped_ok {
+            continue;
         }
+
+        // Re-enqueue to QUEUE_ZSET: look up model from DB, ZADD with emergency priority.
+        reenqueue_reaped_job(pool, pg_pool, uuid, uuid_str).await;
+        reaped += 1;
     }
 
     if reaped > 0 {
-        tracing::info!(reaped, "reaper re-enqueued orphaned jobs");
+        tracing::info!(reaped, "reaper re-enqueued orphaned jobs to ZSET");
+    }
+}
+
+/// Look up job model from DB and ZADD to QUEUE_ZSET with emergency priority.
+async fn reenqueue_reaped_job(
+    pool: &Pool,
+    pg_pool: &sqlx::PgPool,
+    uuid: uuid::Uuid,
+    uuid_str: &str,
+) {
+    // Fetch model_name from DB (not in Valkey model_map after dispatch).
+    let row = sqlx::query_scalar::<_, String>(
+        "SELECT model_name FROM inference_jobs WHERE id = $1"
+    )
+    .bind(uuid)
+    .fetch_optional(pg_pool)
+    .await;
+
+    let model = match row {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            tracing::warn!(%uuid, "reaped job not found in DB — skipping re-enqueue");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(%uuid, "DB lookup for reaped job failed: {e}");
+            return;
+        }
+    };
+
+    // Reset DB status to pending so the job shows correctly while queued.
+    let _ = sqlx::query(
+        "UPDATE inference_jobs SET status = 'pending', started_at = NULL WHERE id = $1 AND status = 'running'"
+    )
+    .bind(uuid)
+    .execute(pg_pool)
+    .await;
+
+    // ZADD QUEUE_ZSET with emergency priority (lowest score = highest priority).
+    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+    let score = now_ms.saturating_sub(TIER_BONUS_PAID) as f64;
+    let demand_key = format!("veronex:demand:{}", model);
+
+    // ZADD + side-hash updates (enqueue_at + model_map) — mirror of LUA_ZSET_ENQUEUE
+    // but without the capacity guard (reaped jobs get emergency admission).
+    let result: Result<(), _> = pool
+        .eval(
+            r#"
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+local v = redis.call('INCR', KEYS[2])
+if v < 0 then redis.call('SET', KEYS[2], 1) end
+redis.call('HSET', KEYS[3], ARGV[1], ARGV[3])
+redis.call('HSET', KEYS[4], ARGV[1], ARGV[4])
+return 1
+"#,
+            vec![
+                QUEUE_ZSET.to_string(),
+                demand_key,
+                QUEUE_ENQUEUE_AT.to_string(),
+                QUEUE_MODEL_MAP.to_string(),
+            ],
+            vec![
+                uuid_str.to_string(),
+                score.to_string(),
+                now_ms.to_string(),
+                model.clone(),
+            ],
+        )
+        .await;
+
+    match result {
+        Ok(()) => tracing::info!(%uuid, %model, "reaped job re-enqueued to QUEUE_ZSET"),
+        Err(e) => tracing::warn!(%uuid, "failed to ZADD reaped job to QUEUE_ZSET: {e}"),
     }
 }
 

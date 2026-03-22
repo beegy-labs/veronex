@@ -1,4 +1,4 @@
-import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, KeyPage, Provider, ProviderPage, ProviderSelectedModel, CapacityResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, KeyPage, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
@@ -66,8 +66,14 @@ export const api = {
     apiClient.get<QueueDepth>('/v1/dashboard/queue/depth'),
 
   // ── Capacity (JWT-protected) ──────────────────────────────────────────────
-  capacity: () =>
-    apiClient.get<CapacityResponse>('/v1/dashboard/capacity'),
+  capacity: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<CapacityPageResponse>(`/v1/dashboard/capacity${q ? '?' + q : ''}`)
+  },
 
   syncSettings: () =>
     apiClient.get<SyncSettings>('/v1/dashboard/capacity/settings'),

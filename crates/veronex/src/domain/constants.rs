@@ -211,6 +211,11 @@ pub fn job_owner_key(job_id: uuid::Uuid) -> String {
     format!("veronex:job:owner:{job_id}")
 }
 
+/// Instance heartbeat key — present (EX 30s) while the instance is alive.
+pub fn heartbeat_key(instance_id: &str) -> String {
+    format!("veronex:heartbeat:{instance_id}")
+}
+
 /// TPM (tokens per minute) counter key for an API key at a given minute epoch.
 pub fn ratelimit_tpm_key(key_id: uuid::Uuid, minute: i64) -> String {
     format!("veronex:ratelimit:tpm:{key_id}:{minute}")

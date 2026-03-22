@@ -188,6 +188,14 @@ impl InferenceUseCaseImpl {
 
     pub async fn recover_pending_jobs(&self) -> anyhow::Result<()> {
         let Some(ref valkey) = self.valkey else { return Ok(()); };
+
+        // Drain legacy QUEUE_JOBS list (jobs mis-routed there by old reaper code).
+        // These are recovered via DB below; stale list entries are just discarded.
+        let legacy_drained = valkey.list_drain(crate::domain::constants::QUEUE_JOBS).await.unwrap_or(0);
+        if legacy_drained > 0 {
+            tracing::info!(legacy_drained, "drained legacy QUEUE_JOBS list (will recover via DB)");
+        }
+
         let pending = self.job_repo.list_pending().await?;
         if pending.is_empty() { return Ok(()); }
 
@@ -195,16 +203,26 @@ impl InferenceUseCaseImpl {
         for mut job in pending {
             let uuid = job.id.0;
             if job.status == JobStatus::Running {
-                // Check if another node currently owns this job — skip if so.
+                // Check if another node currently owns this job.
+                // Skip only if the other node is still alive (heartbeat present).
                 let owner_key = crate::domain::constants::job_owner_key(uuid);
                 if let Ok(Some(owner)) = valkey.kv_get(&owner_key).await
                     && owner != self.instance_id.as_ref()
                 {
+                    let hb_key = crate::domain::constants::heartbeat_key(&owner);
+                    // owner_alive: fail-closed (true) if Valkey error
+                    let owner_alive = valkey.kv_get(&hb_key).await.unwrap_or(Some(String::new())).is_some();
+                    if owner_alive {
+                        tracing::info!(
+                            %uuid, current_owner = %owner,
+                            "skipping recovery — job owned by another live node"
+                        );
+                        continue;
+                    }
                     tracing::info!(
-                        %uuid, current_owner = %owner,
-                        "skipping recovery — job owned by another node"
+                        %uuid, dead_owner = %owner,
+                        "taking over job from dead instance (heartbeat expired)"
                     );
-                    continue;
                 }
                 if let Err(e) = self.job_repo.update_status(&job.id, JobStatus::Pending).await {
                     tracing::warn!(%uuid, "failed to reset running→pending: {e}");
