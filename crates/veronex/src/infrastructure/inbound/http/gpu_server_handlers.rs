@@ -273,6 +273,44 @@ pub async fn get_server_metrics(
     }
 }
 
+// ── Batch metrics ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct BatchMetricsQuery {
+    /// Comma-separated server UUIDs (max 100).
+    pub ids: String,
+}
+
+/// `GET /v1/servers/metrics/batch?ids=id1,id2,...`
+///
+/// Returns a map of server_id → NodeMetrics for up to 100 servers in a single
+/// request. Replaces N individual `/metrics` calls from the dashboard.
+pub async fn get_server_metrics_batch(
+    State(state): State<AppState>,
+    Query(params): Query<BatchMetricsQuery>,
+) -> HandlerResult<Json<std::collections::HashMap<String, hw_metrics::NodeMetrics>>> {
+    let Some(pool) = state.valkey_pool.as_ref() else {
+        return Ok(Json(std::collections::HashMap::new()));
+    };
+
+    let ids: Vec<Uuid> = params
+        .ids
+        .split(',')
+        .take(100)
+        .filter_map(|s| Uuid::parse_str(s.trim()).ok())
+        .collect();
+
+    let mut result = std::collections::HashMap::with_capacity(ids.len());
+    for id in ids {
+        let metrics = hw_metrics::load_node_metrics(pool, id)
+            .await
+            .unwrap_or_default();
+        result.insert(id.to_string(), metrics);
+    }
+
+    Ok(Json(result))
+}
+
 // ── Metrics history via analytics-service ─────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

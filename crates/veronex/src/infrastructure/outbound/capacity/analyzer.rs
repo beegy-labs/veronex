@@ -925,10 +925,18 @@ pub async fn sync_provider(
             if stats.sample_count > 0 {
                 vram_pool.set_baseline_tps(provider_id, &model.name, current_tps_x100);
                 if current_limit == 0 {
-                    // Preloader did not run (model was loaded before registration).
-                    // Apply same committed_parallel defense as preloader.
+                    // Preloader did not run — initialize from VRAM budget.
+                    // Compute KV-slot budget: how many concurrent requests fit given
+                    // remaining VRAM after model weights are subtracted.
+                    // Capped at MAX_COMPUTE_CAP to avoid overwhelming the compute stack.
+                    const MAX_COMPUTE_CAP: u32 = 32;
                     let committed = vram_pool.sum_loaded_max_concurrent(provider_id);
-                    let initial = num_parallel.min(num_parallel.saturating_sub(committed)).max(1);
+                    let vram_slots = if kv_per_req > 0 && vram_total_mb > weight_mb as u64 {
+                        ((vram_total_mb - weight_mb as u64) / kv_per_req as u64) as u32
+                    } else {
+                        num_parallel
+                    };
+                    let initial = vram_slots.min(MAX_COMPUTE_CAP).saturating_sub(committed).max(1);
                     vram_pool.set_max_concurrent(provider_id, &model.name, initial);
                 }
                 if stats.p95_latency_ms > 0.0 {

@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { PatchSyncSettings } from '@/lib/types'
 import { capacityQuery, syncSettingsQuery } from '@/lib/queries'
-import { Activity, AlertTriangle, RefreshCw, Search, Server } from 'lucide-react'
+import { Activity, AlertTriangle, Layers, RefreshCw, Search, Server } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -66,6 +66,7 @@ export function OllamaCapacitySection() {
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   const PROVIDERS_PAGE_SIZE = 20
+  const [viewMode, setViewMode] = useState<'server' | 'cluster'>('server')
   const [providerFilter, setProviderFilter] = useState<string>('')
   const [providerPage, setProviderPage] = useState(0)
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -146,6 +147,21 @@ export function OllamaCapacitySection() {
     providers.filter(p => p.thermal_state !== 'normal').length,
     [providers],
   )
+
+  // Cluster view: aggregate loaded models across all providers by model name
+  const clusterModels = useMemo(() => {
+    const map = new Map<string, { weight_mb: number; kv_per_request_mb: number; active: number; limit: number; providers: number }>()
+    for (const p of providers) {
+      for (const m of p.loaded_models) {
+        const entry = map.get(m.model_name) ?? { weight_mb: m.weight_mb, kv_per_request_mb: m.kv_per_request_mb, active: 0, limit: 0, providers: 0 }
+        entry.active += m.active_requests
+        entry.limit += m.max_concurrent
+        entry.providers++
+        map.set(m.model_name, entry)
+      }
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [providers])
 
   // Filter: hide gemini when lab feature is off, apply provider filter
   const availableModels = useMemo(() =>
@@ -314,13 +330,71 @@ export function OllamaCapacitySection() {
       )}
 
       {providers.length > 0 && (
-        <div className="flex items-center gap-4 text-xs text-muted-foreground px-1">
-          {t('providers.capacity.clusterSummary', { total: serverTotal, active: totalActive, issues: issueCount })}
+        <div className="flex items-center justify-between gap-4 px-1">
+          <span className="text-xs text-muted-foreground">
+            {t('providers.capacity.clusterSummary', { total: serverTotal, active: totalActive, issues: issueCount })}
+          </span>
+          <div className="flex items-center rounded-md border border-border overflow-hidden text-xs">
+            <button
+              className={`px-2.5 py-1 flex items-center gap-1 transition-colors ${viewMode === 'server' ? 'bg-muted text-text-bright font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+              onClick={() => setViewMode('server')}
+            >
+              <Server className="h-3 w-3" />서버
+            </button>
+            <button
+              className={`px-2.5 py-1 flex items-center gap-1 transition-colors border-l border-border ${viewMode === 'cluster' ? 'bg-muted text-text-bright font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+              onClick={() => setViewMode('cluster')}
+            >
+              <Layers className="h-3 w-3" />클러스터
+            </button>
+          </div>
         </div>
       )}
 
-      {pagedProviders.map((provider) => (
-        <Card key={provider.provider_id}>
+      {/* Cluster aggregate view */}
+      {viewMode === 'cluster' && clusterModels.length > 0 && (
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="px-4 py-2 text-left font-medium text-muted-foreground">{t('providers.capacity.colModel')}</th>
+                    <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.colWeight')}</th>
+                    <th className="px-3 py-2 text-right font-medium text-muted-foreground">{t('providers.capacity.colKvPerReq')}</th>
+                    <th className="px-3 py-2 text-right font-medium text-muted-foreground">프로바이더</th>
+                    <th className="px-3 py-2 text-center font-medium text-muted-foreground">{t('providers.capacity.colActiveLimit')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {clusterModels.map(([modelName, agg]) => (
+                    <tr key={modelName} className="hover:bg-muted/20 transition-colors">
+                      <td className="px-4 py-2.5">
+                        <span className="font-mono font-medium text-text-bright">{modelName}</span>
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {fmtMbShort(agg.weight_mb)}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">
+                        {fmtMbShort(agg.kv_per_request_mb)}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">
+                        {agg.providers}개
+                      </td>
+                      <td className="px-3 py-2.5 text-center tabular-nums text-muted-foreground">
+                        {agg.active}{agg.limit > 0 ? `/${agg.limit}` : ''}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {viewMode === 'server' && pagedProviders.map((provider) => (
+        <Card key={provider.provider_id} >
           <CardContent className="p-0">
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
               <Server className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -390,7 +464,7 @@ export function OllamaCapacitySection() {
         </Card>
       ))}
 
-      {serverTotal > PROVIDERS_PAGE_SIZE && (
+      {viewMode === 'server' && serverTotal > PROVIDERS_PAGE_SIZE && (
         <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
           <span>{t('providers.capacity.showingProviders', { from: providerPage * PROVIDERS_PAGE_SIZE + 1, to: Math.min((providerPage + 1) * PROVIDERS_PAGE_SIZE, serverTotal), total: serverTotal })}</span>
           <div className="flex gap-1">

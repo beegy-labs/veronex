@@ -13,6 +13,19 @@ export const serversQuery = (params?: { search?: string; page?: number; limit?: 
   retry: false,
 })
 
+// ── Batch node-exporter metrics for the overview dashboard ────────────────────
+// Single request replaces N individual /metrics calls when servers.length > 1.
+
+export const serverMetricsBatchQuery = (serverIds: string[]) => queryOptions({
+  queryKey: ['server-metrics-batch', serverIds] as const,
+  queryFn: () => serverIds.length > 0 ? api.serverMetricsBatch(serverIds) : Promise.resolve({} as Record<string, import('@/lib/types').NodeMetrics>),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchIntervalInBackground: false,
+  retry: false,
+  enabled: serverIds.length > 0,
+})
+
 // ── Live node-exporter metrics for a single server ────────────────────────────
 
 export const serverMetricsQuery = (serverId: string) => queryOptions({
