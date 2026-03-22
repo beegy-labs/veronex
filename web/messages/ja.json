@@ -445,7 +445,10 @@
       "colModel": "モデル",
       "colWeight": "重み",
       "colKvPerReq": "KV/リクエスト",
-      "colActiveLimit": "アクティブ / 制限"
+      "colActiveLimit": "アクティブ / 制限",
+      "searchProvider": "プロバイダーを検索",
+      "showingProviders": "{{from}}–{{to}} / {{total}}件",
+      "clusterSummary": "{{total}} プロバイダー · アクティブリクエスト {{active}} · 問題 {{issues}}"
     },
     "gemini": {
       "title": "Geminiプロバイダー",
