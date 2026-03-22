@@ -40,6 +40,8 @@ pub trait ModelCapacityRepository: Send + Sync {
     async fn get(&self, provider_id: Uuid, model: &str) -> Result<Option<ModelVramProfileEntry>>;
     async fn list_all(&self) -> Result<Vec<ModelVramProfileEntry>>;
     async fn list_by_provider(&self, provider_id: Uuid) -> Result<Vec<ModelVramProfileEntry>>;
+    /// Fetch entries for a batch of providers in a single query.
+    async fn list_by_providers(&self, ids: &[Uuid]) -> Result<Vec<ModelVramProfileEntry>>;
     /// Aggregate throughput stats from completed inference_jobs over the last `window_hours`.
     async fn compute_throughput_stats(
         &self,

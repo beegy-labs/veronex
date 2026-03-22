@@ -20,7 +20,7 @@ OLLAMA_LOCAL="${OLLAMA_LOCAL:-http://host.docker.internal:11434}"
 NODE_EXPORTER_LOCAL="${NODE_EXPORTER_LOCAL:-http://host.docker.internal:9100}"
 
 # Remote Ollama provider (k8s-worker-ai-01)
-OLLAMA_REMOTE="${OLLAMA_REMOTE:-https://ollama.girok.dev}"
+OLLAMA_REMOTE="${OLLAMA_REMOTE:-https://ollama-1.kr1.girok.dev}"
 NODE_EXPORTER_REMOTE="${NODE_EXPORTER_REMOTE:-http://192.168.1.21:9100}"
 
 USERNAME="${USERNAME:-test}"

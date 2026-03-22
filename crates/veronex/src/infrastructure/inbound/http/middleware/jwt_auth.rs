@@ -188,3 +188,4 @@ define_require_permission!(RequireAccountManage,  "account_manage");
 define_require_permission!(RequireAuditView,      "audit_view");
 define_require_permission!(RequireSettingsManage, "settings_manage");
 define_require_permission!(RequireRoleManage,     "role_manage");
+define_require_permission!(RequireModelManage,    "model_manage");

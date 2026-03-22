@@ -11,6 +11,8 @@ use super::audit_handlers;
 use super::auth_handlers;
 use super::role_handlers;
 use super::model_selection_handlers;
+use super::global_model_handlers;
+use super::key_provider_access_handlers;
 use super::provider_handlers;
 use super::dashboard_handlers;
 use super::docs_handlers;
@@ -162,6 +164,13 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/providers/{id}/key", get(provider_handlers::reveal_provider_key))
         .route("/v1/providers/{id}/selected-models", get(model_selection_handlers::list_selected_models))
         .route("/v1/providers/{id}/selected-models/{model_name}", patch(model_selection_handlers::set_model_enabled))
+        // Global model settings
+        .route("/v1/models/global-settings", get(global_model_handlers::list_global_model_settings))
+        .route("/v1/models/global-disabled", get(global_model_handlers::list_global_disabled_models))
+        .route("/v1/models/global-settings/{model_name}", patch(global_model_handlers::set_global_model_enabled))
+        // API key → provider access
+        .route("/v1/keys/{key_id}/providers", get(key_provider_access_handlers::list_key_provider_access))
+        .route("/v1/keys/{key_id}/providers/{provider_id}", patch(key_provider_access_handlers::set_key_provider_access))
         // GPU server management
         .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers).post(gpu_server_handlers::register_gpu_server))
         .route("/v1/servers/verify", post(gpu_server_handlers::verify_gpu_server))
@@ -169,6 +178,7 @@ fn build_jwt_router() -> Router<AppState> {
             "/v1/servers/{id}",
             patch(gpu_server_handlers::update_gpu_server).delete(gpu_server_handlers::delete_gpu_server),
         )
+        .route("/v1/servers/metrics/batch", get(gpu_server_handlers::get_server_metrics_batch))
         .route("/v1/servers/{id}/metrics", get(gpu_server_handlers::get_server_metrics))
         .route("/v1/servers/{id}/metrics/history", get(gpu_server_handlers::get_server_metrics_history))
         // Gemini
@@ -187,6 +197,7 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/ollama/providers/{provider_id}/models", get(provider_handlers::list_provider_models))
         // Capacity / VRAM pool
         .route("/v1/dashboard/capacity", get(dashboard_handlers::get_capacity))
+        .route("/v1/dashboard/capacity/cluster", get(dashboard_handlers::get_capacity_cluster))
         .route(
             "/v1/dashboard/capacity/settings",
             get(dashboard_handlers::get_capacity_settings)

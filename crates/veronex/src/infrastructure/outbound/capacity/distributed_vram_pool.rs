@@ -159,7 +159,7 @@ impl VramPoolPort for DistributedVramPool {
         });
 
         // On drop: decrement local + async release Valkey lease.
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<u32>();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<u64>();
         let pool = self.pool.clone();
         tokio::spawn(async move {
             if let Ok(released_kv) = release_rx.await {
@@ -176,19 +176,19 @@ impl VramPoolPort for DistributedVramPool {
         Some(VramPermit::combined(kv_mb, reserved_kv, active_count, release_tx, prov_active))
     }
 
-    fn total_vram_mb(&self, provider_id: Uuid) -> u32 {
+    fn total_vram_mb(&self, provider_id: Uuid) -> u64 {
         self.local.total_vram_mb(provider_id)
     }
 
-    fn used_vram_mb(&self, provider_id: Uuid) -> u32 {
+    fn used_vram_mb(&self, provider_id: Uuid) -> u64 {
         self.local.used_vram_mb(provider_id)
     }
 
-    fn available_vram_mb(&self, provider_id: Uuid) -> u32 {
+    fn available_vram_mb(&self, provider_id: Uuid) -> u64 {
         self.local.available_vram_mb(provider_id)
     }
 
-    fn set_total_vram(&self, provider_id: Uuid, total_mb: u32) {
+    fn set_total_vram(&self, provider_id: Uuid, total_mb: u64) {
         self.local.set_total_vram(provider_id, total_mb);
     }
 
@@ -196,7 +196,7 @@ impl VramPoolPort for DistributedVramPool {
         self.local.set_model_profile(provider_id, model, profile);
     }
 
-    fn mark_model_loaded(&self, provider_id: Uuid, model: &str, weight_mb: u32) {
+    fn mark_model_loaded(&self, provider_id: Uuid, model: &str, weight_mb: u64) {
         self.local.mark_model_loaded(provider_id, model, weight_mb);
     }
 
@@ -334,7 +334,7 @@ impl VramPoolPort for DistributedVramPool {
         self.local.sum_loaded_max_concurrent(provider_id)
     }
 
-    fn model_weight_mb(&self, provider_id: Uuid, model: &str) -> u32 {
+    fn model_weight_mb(&self, provider_id: Uuid, model: &str) -> u64 {
         self.local.model_weight_mb(provider_id, model)
     }
 
@@ -368,6 +368,10 @@ impl VramPoolPort for DistributedVramPool {
 
     fn decay_safety_permil(&self, provider_id: Uuid) {
         self.local.decay_safety_permil(provider_id);
+    }
+
+    fn cluster_snapshot(&self) -> Vec<(String, u64, u64, u32, u32, u32)> {
+        self.local.cluster_snapshot()
     }
 
 }

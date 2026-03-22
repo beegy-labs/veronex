@@ -120,6 +120,16 @@ pub(super) fn validate_username(username: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+// ── Shared pagination params ────────────────────────────────────────────────
+
+/// Common query params for paginated list endpoints: `?search=&page=N&limit=N`.
+#[derive(Debug, Deserialize, Default)]
+pub struct ListPageParams {
+    pub search: Option<String>,
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+}
+
 // ── Request / Response types ───────────────────────────────────────
 
 #[derive(Deserialize)]

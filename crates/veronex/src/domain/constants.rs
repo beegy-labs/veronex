@@ -175,6 +175,12 @@ pub const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ── Cache TTL ──────────────────────────────────────────────────────────────
 
+/// TTL for per-provider HwMetrics in Valkey (seconds).
+pub const HW_METRICS_TTL: i64 = 60;
+
+/// TTL for per-server NodeMetrics in Valkey (seconds).
+pub const NODE_METRICS_TTL: i64 = 60;
+
 /// TTL for OllamaModel provider-for-model lookup cache (hot path).
 pub const OLLAMA_MODEL_CACHE_TTL: Duration = Duration::from_secs(10);
 
@@ -205,6 +211,11 @@ pub fn job_owner_key(job_id: uuid::Uuid) -> String {
     format!("veronex:job:owner:{job_id}")
 }
 
+/// Instance heartbeat key — present (EX 30s) while the instance is alive.
+pub fn heartbeat_key(instance_id: &str) -> String {
+    format!("veronex:heartbeat:{instance_id}")
+}
+
 /// TPM (tokens per minute) counter key for an API key at a given minute epoch.
 pub fn ratelimit_tpm_key(key_id: uuid::Uuid, minute: i64) -> String {
     format!("veronex:ratelimit:tpm:{key_id}:{minute}")
@@ -230,6 +241,14 @@ pub const THERMAL_HARD_COOLDOWN_SECS: i64 = 300;
 /// Slightly longer than `THERMAL_HARD_COOLDOWN_SECS` to prevent stale key
 /// from expiring before the cooldown window is checked.
 pub const THERMAL_THROTTLE_KEY_TTL_SECS: i64 = 360;
+
+// ── Gemini rate-limit TTLs ──────────────────────────────────────────────
+
+/// TTL (seconds) for the per-minute Gemini RPM counter key.
+pub const GEMINI_RPM_TTL_SECS: i64 = 120;
+
+/// TTL (seconds) for the per-day Gemini RPD counter key (~25 hours).
+pub const GEMINI_RPD_TTL_SECS: i64 = 90_000;
 
 // ── Circuit breaker / reaper ─────────────────────────────────────────────
 

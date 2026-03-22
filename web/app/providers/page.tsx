@@ -27,9 +27,13 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
 
   // Servers needed for RegisterModal/EditModal dropdowns
-  const { data: servers } = useQuery(serversQuery)
+  const { data: serversData } = useQuery(serversQuery())
+  const servers = serversData?.servers
 
-  const { data: providers, isLoading: providersLoading, error: providersError } = useQuery(providersQuery)
+  const { data: providersData, isLoading: providersLoading, error: providersError } = useQuery(
+    providersQuery({ provider_type: 'gemini' })
+  )
+  const providers = providersData?.providers
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteProvider(id),
@@ -61,16 +65,17 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t('providers.title')}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{t('providers.description')}</p>
+        <h1 className="text-2xl font-bold tracking-tight">
+          {section === 'gemini' ? t('providers.gemini.title') : t('providers.ollama.title')}
+        </h1>
+        <p className="text-muted-foreground mt-1 text-sm">
+          {section === 'gemini' ? t('providers.gemini.description') : t('providers.ollama.description')}
+        </p>
       </div>
 
       {section === 'ollama' && (
         <OllamaTab
-          providers={providers}
           servers={servers ?? []}
-          isLoading={providersLoading}
-          error={providersError as Error | null}
           onRegister={() => setRegisterProviderType('ollama')}
           onEdit={(b) => setEditingProvider(b)}
           onSync={(id) => syncProviderMutation.mutate(id)}

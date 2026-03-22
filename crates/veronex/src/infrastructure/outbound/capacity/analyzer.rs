@@ -115,6 +115,37 @@ struct TagModel {
     name: String,
 }
 
+// ── Agent capacity state (Valkey cache) ──────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct AgentLoadedModel {
+    name:          String,
+    size_vram:     u64,
+    num_layers:    u32,
+    num_kv_heads:  u32,
+    head_dim:      u32,
+    max_ctx:       u32,
+    configured_ctx: u32,
+}
+
+#[derive(serde::Deserialize)]
+struct AgentCapacityState {
+    loaded_models: Vec<AgentLoadedModel>,
+    total_vram_mb: u64,
+}
+
+/// Try to read the capacity state pushed by veronex-agent from Valkey.
+async fn read_agent_capacity_state(
+    pool: &fred::clients::Pool,
+    provider_id: Uuid,
+) -> Option<AgentCapacityState> {
+    use fred::prelude::*;
+    let key = crate::infrastructure::outbound::valkey_keys::provider_capacity_state(provider_id);
+    let raw: Option<String> = pool.get(&key).await.ok()?;
+    let json = raw?;
+    serde_json::from_str(&json).ok()
+}
+
 // ── Architecture profile from /api/show ──────────────────────────────────────
 
 #[derive(Default, Debug, Clone)]
@@ -413,11 +444,11 @@ async fn call_llm_analysis(
     analyzer_model: &str,
     provider_name:  &str,
     model_name:     &str,
-    weight_mb:      i32,
-    vram_total_mb:  u32,
+    weight_mb:      u64,
+    vram_total_mb:  u64,
     temp_c:         Option<f32>,
     arch:           &ModelArchProfile,
-    kv_per_req_mb:  u32,
+    kv_per_req_mb:  u64,
     stats:          &ThroughputStats,
 ) -> Result<LlmCapacityAnalysis> {
     let prompt = format!(
@@ -483,8 +514,8 @@ Is there a concern? Respond ONLY with valid JSON:
 /// Collected per-model data for batch LLM analysis.
 struct ModelSnapshot {
     name:          String,
-    weight_mb:     u32,
-    kv_per_req_mb: u32,
+    weight_mb:     u64,
+    kv_per_req_mb: u64,
     tps:           f64,
     p95_ms:        f64,
     samples:       i64,
@@ -497,7 +528,7 @@ async fn call_llm_batch_analysis(
     analyzer_url:   &str,
     analyzer_model: &str,
     provider_name:  &str,
-    vram_total_mb:  u32,
+    vram_total_mb:  u64,
     temp_c:         Option<f32>,
     models:         &[ModelSnapshot],
 ) -> Result<LlmBatchRecommendation> {
@@ -507,7 +538,7 @@ async fn call_llm_batch_analysis(
 
     // Build model summary table
     let mut model_lines = String::new();
-    let mut total_weight = 0u32;
+    let mut total_weight = 0u64;
     for m in models {
         total_weight += m.weight_mb;
         model_lines.push_str(&format!(
@@ -649,14 +680,33 @@ pub async fn sync_provider(
         let _: Result<(), _> = pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await;
     }
 
-    // 3. VRAM probing: GET /api/ps
-    let ps: OllamaProcessStatus = client
-        .get(format!("{ollama_url}/api/ps"))
-        .timeout(OLLAMA_METADATA_TIMEOUT)
-        .send()
-        .await?
-        .json()
-        .await?;
+    // 3. VRAM probing: prefer agent capacity_state from Valkey (avoids O(N_models) HTTP calls).
+    //    Falls back to GET /api/ps + /api/show per model when agent state is absent.
+    let agent_state = if let Some(pool) = valkey_pool {
+        read_agent_capacity_state(pool, provider_id).await
+    } else {
+        None
+    };
+
+    // Derive loaded models from agent state or fall back to /api/ps
+    let (ps_models, agent_total_vram_mb): (Vec<OllamaRunningModel>, Option<u64>) =
+        if let Some(ref state) = agent_state {
+            let models = state
+                .loaded_models
+                .iter()
+                .map(|m| OllamaRunningModel { name: m.name.clone(), size_vram: m.size_vram })
+                .collect();
+            (models, Some(state.total_vram_mb))
+        } else {
+            let ps: OllamaProcessStatus = client
+                .get(format!("{ollama_url}/api/ps"))
+                .timeout(OLLAMA_METADATA_TIMEOUT)
+                .send()
+                .await?
+                .json()
+                .await?;
+            (ps.models, None)
+        };
 
     // hw_metrics from Valkey → total GPU VRAM, fallback to provider DB field
     let hw = if let Some(pool) = valkey_pool {
@@ -664,16 +714,20 @@ pub async fn sync_provider(
     } else {
         None
     };
-    let drm_vram_mb = hw.as_ref().map(|h| h.vram_total_mb)
+    let drm_vram_mb = hw.as_ref().map(|h| h.vram_total_mb as u64)
         .filter(|&v| v > 0)
-        .unwrap_or({
-            if provider_total_vram_mb > 0 { provider_total_vram_mb as u32 } else { 0 }
+        .unwrap_or_else(|| {
+            // Prefer agent-reported total_vram_mb (from discovery labels / provider DB),
+            // fall back to provider DB field directly.
+            agent_total_vram_mb.filter(|&v| v > 0).unwrap_or({
+                if provider_total_vram_mb > 0 { provider_total_vram_mb as u64 } else { 0 }
+            })
         });
 
     // APU / unified-memory detection: AMD Ryzen AI (iGPU) and similar APUs report only
     // the dedicated BIOS-allocated VRAM via DRM (e.g. 1024 MiB), while Ollama transparently
     // uses shared system RAM. Use mem_available_mb from node-exporter as the real capacity.
-    let mem_available_mb = hw.as_ref().map(|h| h.mem_available_mb).unwrap_or(0);
+    let mem_available_mb = hw.as_ref().map(|h| h.mem_available_mb as u64).unwrap_or(0u64);
     let is_apu = hw.as_ref().is_some_and(|h| {
         h.gpu_vendor == "amd" && drm_vram_mb > 0 && mem_available_mb > drm_vram_mb * 2
     });
@@ -687,10 +741,11 @@ pub async fn sync_provider(
 
     let temp_c = hw.as_ref().map(|h| h.max_temp_c());
 
-    // Set total VRAM on the pool
-    if vram_total_mb > 0 {
-        vram_pool.set_total_vram(provider_id, vram_total_mb);
-    }
+    // Set total VRAM on the pool.
+    // Always call even when 0 (APU/unprobed) so the provider entry exists in VramPool.
+    // Without this, available_vram_mb() returns 0 and APU providers are filtered out
+    // of score_and_claim before try_reserve is ever attempted.
+    vram_pool.set_total_vram(provider_id, vram_total_mb);
 
     // APU mem drift: if mem_available_mb changed >15% from last observed value,
     // reset AIMD learning epoch for all loaded models to prevent stale baselines.
@@ -725,7 +780,7 @@ pub async fn sync_provider(
             };
             vram_budget_repo.upsert(&budget).await.ok();
         }
-        vram_pool.set_last_mem_available_mb(provider_id, mem_available_mb);
+        vram_pool.set_last_mem_available_mb(provider_id, mem_available_mb as u32);
     }
 
     // ── Governor: reset dispatch_blocked and governor_cap for all loaded models ──
@@ -841,27 +896,43 @@ pub async fn sync_provider(
 
     // Mark loaded models + unload models no longer in /api/ps
     let ps_names: std::collections::HashSet<&str> =
-        ps.models.iter().map(|m| m.name.as_str()).collect();
+        ps_models.iter().map(|m| m.name.as_str()).collect();
     for name in vram_pool.loaded_model_names(provider_id) {
         if !ps_names.contains(name.as_str()) {
             vram_pool.mark_model_unloaded(provider_id, &name);
             tracing::info!(provider = %provider_name, model = %name, "model unloaded (no longer in /api/ps)");
         }
     }
-    for model in &ps.models {
-        let weight_mb = (model.size_vram / 1_048_576) as u32;
+    for model in &ps_models {
+        let weight_mb = (model.size_vram / 1_048_576) as u64;
         vram_pool.mark_model_loaded(provider_id, &model.name, weight_mb);
     }
 
-    // 4. Architecture analysis + KV cache for each loaded model
+    // 4. Architecture analysis + KV cache for each loaded model.
+    //    When agent_state is present, arch is read from Valkey (no HTTP).
+    //    Otherwise, falls back to POST /api/show per model.
     let mut model_snapshots: Vec<ModelSnapshot> = Vec::new();
 
-    for model in &ps.models {
-        let weight_mb = (model.size_vram / 1_048_576) as i32;
+    for model in &ps_models {
+        let weight_mb = model.size_vram / 1_048_576;
 
-        let arch = fetch_model_arch_profile(client, ollama_url, &model.name)
-            .await
-            .unwrap_or_default();
+        let arch = if let Some(ref state) = agent_state {
+            // Use arch data from agent capacity state (no HTTP call needed)
+            state.loaded_models.iter()
+                .find(|m| m.name == model.name)
+                .map(|m| ModelArchProfile {
+                    num_layers:     m.num_layers,
+                    num_kv_heads:   m.num_kv_heads,
+                    head_dim:       m.head_dim,
+                    max_ctx:        m.max_ctx,
+                    configured_ctx: m.configured_ctx,
+                })
+                .unwrap_or_default()
+        } else {
+            fetch_model_arch_profile(client, ollama_url, &model.name)
+                .await
+                .unwrap_or_default()
+        };
 
         let stats = match capacity_repo
             .compute_throughput_stats(provider_id, &model.name, 1)
@@ -885,7 +956,7 @@ pub async fn sync_provider(
             let t0 = std::time::Instant::now();
             let result = call_llm_analysis(
                 client, ollama_url, analyzer_model, provider_name,
-                &model.name, weight_mb, vram_total_mb, temp_c, &arch, kv_per_req, &stats,
+                &model.name, weight_mb, vram_total_mb, temp_c, &arch, kv_per_req as u64, &stats,
             ).await.unwrap_or_default();
             let elapsed = t0.elapsed().as_millis() as i32;
             let prompt_summary = format!("VRAM analysis: {} on {} ({}MB)", model.name, provider_name, weight_mb);
@@ -899,9 +970,9 @@ pub async fn sync_provider(
             provider_id,
             &model.name,
             ModelVramProfile {
-                weight_mb: weight_mb as u32,
+                weight_mb,
                 weight_estimated: false,
-                kv_per_request_mb: kv_per_req,
+                kv_per_request_mb: kv_per_req as u64,
                 num_layers: arch.num_layers as u16,
                 num_kv_heads: arch.num_kv_heads as u16,
                 head_dim: arch.head_dim as u16,
@@ -924,10 +995,18 @@ pub async fn sync_provider(
             if stats.sample_count > 0 {
                 vram_pool.set_baseline_tps(provider_id, &model.name, current_tps_x100);
                 if current_limit == 0 {
-                    // Preloader did not run (model was loaded before registration).
-                    // Apply same committed_parallel defense as preloader.
+                    // Preloader did not run — initialize from VRAM budget.
+                    // Compute KV-slot budget: how many concurrent requests fit given
+                    // remaining VRAM after model weights are subtracted.
+                    // Capped at MAX_COMPUTE_CAP to avoid overwhelming the compute stack.
+                    const MAX_COMPUTE_CAP: u32 = 32;
                     let committed = vram_pool.sum_loaded_max_concurrent(provider_id);
-                    let initial = num_parallel.min(num_parallel.saturating_sub(committed)).max(1);
+                    let vram_slots = if kv_per_req > 0 && vram_total_mb > weight_mb {
+                        ((vram_total_mb - weight_mb) / kv_per_req as u64) as u32
+                    } else {
+                        num_parallel
+                    };
+                    let initial = vram_slots.min(MAX_COMPUTE_CAP).saturating_sub(committed).max(1);
                     vram_pool.set_max_concurrent(provider_id, &model.name, initial);
                 }
                 if stats.p95_latency_ms > 0.0 {
@@ -991,7 +1070,7 @@ pub async fn sync_provider(
             .upsert(&ModelVramProfileEntry {
                 provider_id,
                 model_name:        model.name.clone(),
-                weight_mb,
+                weight_mb:         weight_mb as i32,
                 weight_estimated:  false,
                 kv_per_request_mb: kv_per_req as i32,
                 num_layers:        arch.num_layers as i16,
@@ -1011,8 +1090,8 @@ pub async fn sync_provider(
         // Collect snapshot for batch LLM analysis
         model_snapshots.push(ModelSnapshot {
             name:           model.name.clone(),
-            weight_mb:      weight_mb as u32,
-            kv_per_req_mb:  kv_per_req,
+            weight_mb,
+            kv_per_req_mb:  kv_per_req as u64,
             tps:            stats.avg_tokens_per_sec,
             p95_ms:         stats.p95_latency_ms,
             samples:        stats.sample_count,
@@ -1185,36 +1264,53 @@ pub async fn run_sync_loop(
             .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
             .collect();
 
-        let mut any_error = false;
-        for provider in ollama_providers {
-            if let Err(e) = sync_provider(
-                &client,
-                provider.id,
-                &provider.name,
-                &provider.url,
-                provider.total_vram_mb,
-                provider.num_parallel.max(1) as u32,
-                &settings.analyzer_model,
-                &*capacity_repo,
-                &*vram_pool,
-                valkey_pool.as_ref(),
-                &*registry,
-                &*ollama_model_repo,
-                &*model_selection_repo,
-                &*vram_budget_repo,
-                job_repo.as_deref(),
-            )
-            .await
-            {
-                tracing::warn!(
-                    provider = %provider.name,
-                    "sync failed (non-fatal): {e}"
-                );
-                any_error = true;
-            }
-        }
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+        use futures::StreamExt as _;
 
-        let status = if any_error { "partial" } else { "ok" };
+        const MAX_PARALLEL_SYNC: usize = 50;
+        let any_error = Arc::new(AtomicBool::new(false));
+
+        futures::stream::iter(ollama_providers)
+            .for_each_concurrent(MAX_PARALLEL_SYNC, |provider| {
+                let client            = client.clone();
+                let capacity_repo     = Arc::clone(&capacity_repo);
+                let vram_pool         = Arc::clone(&vram_pool);
+                let valkey_pool       = valkey_pool.clone();
+                let registry          = Arc::clone(&registry);
+                let ollama_model_repo = Arc::clone(&ollama_model_repo);
+                let model_selection_repo = Arc::clone(&model_selection_repo);
+                let vram_budget_repo  = Arc::clone(&vram_budget_repo);
+                let job_repo          = job_repo.clone();
+                let analyzer_model    = settings.analyzer_model.clone();
+                let any_error         = Arc::clone(&any_error);
+                async move {
+                    if let Err(e) = sync_provider(
+                        &client,
+                        provider.id,
+                        &provider.name,
+                        &provider.url,
+                        provider.total_vram_mb,
+                        provider.num_parallel.max(1) as u32,
+                        &analyzer_model,
+                        &*capacity_repo,
+                        &*vram_pool,
+                        valkey_pool.as_ref(),
+                        &*registry,
+                        &*ollama_model_repo,
+                        &*model_selection_repo,
+                        &*vram_budget_repo,
+                        job_repo.as_deref(),
+                    )
+                    .await
+                    {
+                        tracing::warn!(provider = %provider.name, "sync failed (non-fatal): {e}");
+                        any_error.store(true, AtomicOrdering::Relaxed);
+                    }
+                }
+            })
+            .await;
+
+        let status = if any_error.load(AtomicOrdering::Relaxed) { "partial" } else { "ok" };
         settings_repo.record_run(status).await.ok();
     }
 

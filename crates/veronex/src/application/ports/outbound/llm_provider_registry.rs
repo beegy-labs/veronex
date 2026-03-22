@@ -17,6 +17,10 @@ pub trait LlmProviderRegistry: Send + Sync {
     /// Return all providers regardless of status (used for management UI).
     async fn list_all(&self) -> Result<Vec<LlmProvider>>;
 
+    /// Paginated + searchable provider list (search on name or url, case-insensitive).
+    /// `provider_type`: optional filter ("ollama" | "gemini"); None returns all types.
+    async fn list_page(&self, search: &str, provider_type: Option<&str>, limit: i64, offset: i64) -> Result<(Vec<LlmProvider>, i64)>;
+
     /// Look up a single provider by ID.
     async fn get(&self, id: Uuid) -> Result<Option<LlmProvider>>;
 

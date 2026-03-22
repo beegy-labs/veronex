@@ -19,7 +19,7 @@ export function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      {data.by_providers.map((b) => {
+      {data.by_providers.slice(0, 6).map((b) => {
         const pct = calcPercentage(b.request_count, total)
         const color = PROVIDER_COLORS[b.provider_type] ?? tokens.brand.primary
         const totalTok = b.prompt_tokens + b.completion_tokens
@@ -27,7 +27,7 @@ export function ProviderBreakdownSection({ data }: { data: UsageBreakdown }) {
           <Card key={b.provider_type} className="overflow-hidden">
             <CardContent className="p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <Badge variant="outline" className={`text-xs font-mono ${PROVIDER_BADGE[b.provider_type] ?? ''}`}>
+                <Badge variant="outline" className={`text-xs font-mono whitespace-nowrap ${PROVIDER_BADGE[b.provider_type] ?? ''}`}>
                   {b.provider_type}
                 </Badge>
                 <span className="text-2xl font-bold tabular-nums">{fmtCompact(b.request_count)}</span>

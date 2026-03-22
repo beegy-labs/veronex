@@ -7,6 +7,8 @@ pub mod constants;
 pub mod error;
 pub mod cancel_guard;
 pub mod model_selection_handlers;
+pub mod global_model_handlers;
+pub mod key_provider_access_handlers;
 pub mod provider_handlers;
 mod provider_validation;
 pub mod docs_handlers;

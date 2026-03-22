@@ -1,6 +1,6 @@
 # Web — API Test Panel
 
-> SSOT | **Last Updated**: 2026-03-18 (rev: endpoint selector, API key toggle, non-streaming Ollama)
+> SSOT | **Last Updated**: 2026-03-21 (rev: endpoint selector, API key toggle, non-streaming Ollama, lab gate)
 
 ## Task Guide
 
@@ -107,6 +107,10 @@ Test jobs: `api_key_id = NULL`, excluded from usage/perf metrics (`source != 'te
 | Gemini | `"gemini"` | Full global pool |
 
 `gemini-free`: only models with explicit policy `available_on_free_tier=true` (excluding `*`). The `*` global policy is for rate limits only.
+
+### Lab Settings Gate
+
+Gemini provider options (Gemini Free, Gemini) are **only visible** when `labSettings.gemini_function_calling` is enabled. This applies to both the test panel provider selector and the jobs page `provider_type` filter. When the lab flag is off, only Ollama appears as a provider option. The gate uses `useLabSettings()` from `lab-settings-provider.tsx`.
 
 ## Test Endpoints
 

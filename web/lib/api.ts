@@ -1,4 +1,4 @@
-import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, RoleSummary, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, KeyPage, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
@@ -66,8 +66,17 @@ export const api = {
     apiClient.get<QueueDepth>('/v1/dashboard/queue/depth'),
 
   // ── Capacity (JWT-protected) ──────────────────────────────────────────────
-  capacity: () =>
-    apiClient.get<CapacityResponse>('/v1/dashboard/capacity'),
+  capacity: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<CapacityPageResponse>(`/v1/dashboard/capacity${q ? '?' + q : ''}`)
+  },
+
+  capacityCluster: () =>
+    apiClient.get<import('./types').ClusterModelInfo[]>('/v1/dashboard/capacity/cluster'),
 
   syncSettings: () =>
     apiClient.get<SyncSettings>('/v1/dashboard/capacity/settings'),
@@ -88,8 +97,14 @@ export const api = {
     apiClient.patch<LabSettings>('/v1/dashboard/lab', body),
 
   // ── Key management (JWT-protected) ────────────────────────────────────────
-  keys: () =>
-    apiClient.get<ApiKey[]>('/v1/keys'),
+  keys: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<KeyPage>(`/v1/keys${q ? '?' + q : ''}`)
+  },
 
   createKey: (body: CreateKeyRequest) =>
     apiClient.post<CreateKeyResponse>('/v1/keys', body),
@@ -120,8 +135,14 @@ export const api = {
     apiClient.get<UsageBreakdown>(`/v1/usage/breakdown?hours=${hours}`),
 
   // ── GPU servers (JWT-protected) ───────────────────────────────────────────
-  servers: () =>
-    apiClient.get<GpuServer[]>('/v1/servers'),
+  servers: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<ServerPage>(`/v1/servers${q ? '?' + q : ''}`)
+  },
 
   registerServer: (body: RegisterGpuServerRequest) =>
     apiClient.post<{ id: string }>('/v1/servers', body),
@@ -137,12 +158,22 @@ export const api = {
   serverMetrics: (id: string) =>
     apiClient.get<NodeMetrics>(`/v1/servers/${id}/metrics`),
 
+  serverMetricsBatch: (ids: string[]) =>
+    apiClient.get<Record<string, NodeMetrics>>(`/v1/servers/metrics/batch?ids=${ids.join(',')}`),
+
   serverMetricsHistory: (id: string, hours = 1) =>
     apiClient.get<ServerMetricsPoint[]>(`/v1/servers/${id}/metrics/history?hours=${hours}`),
 
   // ── Providers (JWT-protected) ──────────────────────────────────────────────
-  providers: () =>
-    apiClient.get<Provider[]>('/v1/providers'),
+  providers: (params?: { search?: string; page?: number; limit?: number; provider_type?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.provider_type) qs.set('provider_type', params.provider_type)
+    const q = qs.toString()
+    return apiClient.get<ProviderPage>(`/v1/providers${q ? '?' + q : ''}`)
+  },
 
   registerProvider: (body: RegisterProviderRequest) =>
     apiClient.post<RegisterProviderResponse>('/v1/providers', body),
@@ -173,6 +204,20 @@ export const api = {
   setModelEnabled: (providerId: string, modelName: string, isEnabled: boolean) =>
     apiClient.patch<void>(`/v1/providers/${providerId}/selected-models/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
 
+  // ── Global model settings (JWT-protected) ─────────────────────────────────
+  globalModelSettings: () =>
+    apiClient.get<{ model_name: string; is_enabled: boolean }[]>('/v1/models/global-settings'),
+  globalDisabledModels: () =>
+    apiClient.get<string[]>('/v1/models/global-disabled'),
+  setGlobalModelEnabled: (modelName: string, isEnabled: boolean) =>
+    apiClient.patch<{ model_name: string; is_enabled: boolean }>(`/v1/models/global-settings/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
+
+  // ── API key → provider access (JWT-protected) ─────────────────────────────
+  keyProviderAccess: (keyId: string) =>
+    apiClient.get<{ provider_id: string; is_allowed: boolean }[]>(`/v1/keys/${keyId}/providers`),
+  setKeyProviderAccess: (keyId: string, providerId: string, isAllowed: boolean) =>
+    apiClient.patch<{ provider_id: string; is_allowed: boolean }>(`/v1/keys/${keyId}/providers/${providerId}`, { is_allowed: isAllowed }),
+
   // ── Gemini (JWT-protected) ────────────────────────────────────────────────
   geminiPolicies: () =>
     apiClient.get<GeminiRateLimitPolicy[]>('/v1/gemini/policies'),
@@ -196,8 +241,14 @@ export const api = {
     apiClient.get<{ models: GeminiModel[] }>('/v1/gemini/models'),
 
   // ── Ollama (JWT-protected) ────────────────────────────────────────────────
-  ollamaModels: () =>
-    apiClient.get<{ models: OllamaModelWithCount[] }>('/v1/ollama/models'),
+  ollamaModels: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<OllamaModelPage>(`/v1/ollama/models${q ? '?' + q : ''}`)
+  },
 
   syncOllamaModels: () =>
     apiClient.post<{ job_id: string; status: string }>('/v1/ollama/models/sync'),
@@ -205,8 +256,14 @@ export const api = {
   ollamaSyncStatus: () =>
     apiClient.get<OllamaSyncJob>('/v1/ollama/sync/status'),
 
-  ollamaModelProviders: (modelName: string) =>
-    apiClient.get<{ providers: OllamaProviderForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers`),
+  ollamaModelProviders: (modelName: string, params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<OllamaProviderPage>(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers${q ? '?' + q : ''}`)
+  },
 
   ollamaProviderModels: (providerId: string) =>
     apiClient.get<{ models: string[] }>(`/v1/ollama/providers/${providerId}/models`),
@@ -234,8 +291,14 @@ export const api = {
     }),
 
   // ── Accounts (JWT-protected) ──────────────────────────────────────────────
-  accounts: () =>
-    apiClient.get<Account[]>('/v1/accounts'),
+  accounts: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<AccountPage>(`/v1/accounts${q ? '?' + q : ''}`)
+  },
 
   createAccount: (body: CreateAccountRequest) =>
     apiClient.post<CreateAccountResponse>('/v1/accounts', body),

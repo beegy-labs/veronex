@@ -19,8 +19,9 @@ use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 use super::audit_helpers::emit_audit;
 use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
-use super::handlers::{SseStream, try_acquire_sse};
+use super::handlers::{SseStream, try_acquire_sse, ListPageParams};
 use super::state::AppState;
+use super::query_helpers::validate_hours;
 use super::usage_handlers::UsageQuery;
 
 // ── Query parameters ───────────────────────────────────────────────
@@ -154,12 +155,14 @@ pub async fn get_performance(
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<PerformanceMetrics>, AppError> {
+    let hours = params.effective_hours()?;
+    validate_hours(hours)?;
     if let Some(repo) = state.analytics_repo.as_ref()
-        && let Ok(metrics) = repo.performance(params.hours).await
+        && let Ok(metrics) = repo.performance(hours).await
             && metrics.total_requests > 0 {
                 return Ok(Json(metrics));
             }
-    Ok(Json(dashboard_queries::pg_performance(&state.pg_pool, params.hours).await?))
+    Ok(Json(dashboard_queries::pg_performance(&state.pg_pool, hours).await?))
 }
 
 // ── Capacity API response types ─────────────────────────────────────
@@ -179,9 +182,9 @@ pub struct LoadedModelInfo {
 pub struct ProviderVramInfo {
     pub provider_id:     String,
     pub provider_name:   String,
-    pub total_vram_mb:   u32,
-    pub used_vram_mb:    u32,
-    pub available_vram_mb: u32,
+    pub total_vram_mb:   u64,
+    pub used_vram_mb:    u64,
+    pub available_vram_mb: u64,
     pub thermal_state:   String,
     pub temp_c:          Option<f32>,
     pub loaded_models:   Vec<LoadedModelInfo>,
@@ -299,11 +302,18 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
 
     use fred::prelude::*;
 
-    let (paid, api, test): (i64, i64, i64) = tokio::join!(
-        async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or(0) },
-        async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or(0) },
-        async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or(0) },
-    );
+    let (paid, api, test): (i64, i64, i64) = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        async {
+            tokio::join!(
+                async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or(0) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or(0) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or(0) },
+            )
+        },
+    )
+    .await
+    .unwrap_or((0, 0, 0));
 
     QueueDepth {
         api_paid: paid,
@@ -327,42 +337,44 @@ pub struct LabSettingsResponse {
 pub struct DashboardOverview {
     pub stats: DashboardStats,
     pub performance: PerformanceMetrics,
-    pub capacity: CapacityResponse,
     pub queue_depth: QueueDepth,
     pub lab: LabSettingsResponse,
 }
 
 /// `GET /v1/dashboard/overview` — single aggregated snapshot of the entire dashboard.
 ///
-/// Runs stats, performance, capacity, queue depth, and lab settings queries
-/// in parallel and returns a combined JSON response.
+/// Runs stats, performance, queue depth, and lab settings queries in parallel.
+/// Capacity data is served by the dedicated `/capacity` endpoint (paginated).
 pub async fn get_dashboard_overview(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardOverview>, AppError> {
     let default_hours: u32 = 24;
 
-    let (stats_res, perf_res, cap_entries, providers_list, queue, lab_res) = tokio::join!(
-        dashboard_queries::fetch_stats(&state.pg_pool),
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
         async {
-            // ClickHouse primary, PostgreSQL fallback (same logic as get_performance)
-            if let Some(repo) = state.analytics_repo.as_ref()
-                && let Ok(metrics) = repo.performance(default_hours).await
-                && metrics.total_requests > 0
-            {
-                return Ok(metrics);
-            }
-            dashboard_queries::pg_performance(&state.pg_pool, default_hours).await
+            tokio::join!(
+                dashboard_queries::fetch_stats(&state.pg_pool),
+                async {
+                    if let Some(repo) = state.analytics_repo.as_ref()
+                        && let Ok(metrics) = repo.performance(default_hours).await
+                        && metrics.total_requests > 0
+                    {
+                        return Ok(metrics);
+                    }
+                    dashboard_queries::pg_performance(&state.pg_pool, default_hours).await
+                },
+                fetch_queue_depth(&state),
+                async { state.lab_settings_repo.get().await },
+            )
         },
-        async { state.capacity_repo.list_all().await.unwrap_or_default() },
-        async { state.provider_registry.list_all().await.unwrap_or_default() },
-        fetch_queue_depth(&state),
-        async { state.lab_settings_repo.get().await },
-    );
+    )
+    .await
+    .map_err(|_| AppError::Internal(anyhow::anyhow!("overview timeout")))?;
 
+    let (stats_res, perf_res, queue, lab_res) = result;
     let stats = stats_res?;
     let performance = perf_res?;
-    let capacity = build_capacity(&state, cap_entries, providers_list);
-
     let lab_settings = lab_res.unwrap_or_default();
     let lab = LabSettingsResponse {
         gemini_function_calling: lab_settings.gemini_function_calling,
@@ -374,7 +386,6 @@ pub async fn get_dashboard_overview(
     Ok(Json(DashboardOverview {
         stats,
         performance,
-        capacity,
         queue_depth: queue,
         lab,
     }))
@@ -382,16 +393,76 @@ pub async fn get_dashboard_overview(
 
 // ── GET /v1/dashboard/capacity ──────────────────────────────────────
 
-pub async fn get_capacity(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    let entries = match state.capacity_repo.list_all().await {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!("get_capacity: failed to list: {e}");
-            return Json(CapacityResponse { providers: vec![] }).into_response();
-        }
-    };
-    let providers_list = state.provider_registry.list_all().await.unwrap_or_default();
-    Json(build_capacity(&state, entries, providers_list)).into_response()
+pub async fn get_capacity(
+    State(state): State<AppState>,
+    Query(params): Query<ListPageParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = params.limit.unwrap_or(20).clamp(1, 200);
+    let offset = (page - 1) * limit;
+    let search = params.search.as_deref().unwrap_or("").to_string();
+
+    let (providers_page, total) = state
+        .provider_registry
+        .list_page(&search, None, limit, offset)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
+
+    let provider_ids: Vec<uuid::Uuid> = providers_page.iter().map(|p| p.id).collect();
+    let all_entries = state
+        .capacity_repo
+        .list_by_providers(&provider_ids)
+        .await
+        .unwrap_or_default();
+
+    let capacity = build_capacity(&state, all_entries, providers_page);
+    Ok(Json(serde_json::json!({
+        "providers": capacity.providers,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    })))
+}
+
+// ── GET /v1/dashboard/capacity/cluster ─────────────────────────────
+
+#[derive(Serialize)]
+pub struct ClusterModelInfo {
+    pub model_name:        String,
+    pub weight_mb:         i32,
+    pub kv_per_request_mb: i32,
+    pub total_active:      u32,
+    pub total_limit:       u32,
+    pub provider_count:    u32,
+}
+
+/// `GET /v1/dashboard/capacity/cluster`
+///
+/// Aggregates all loaded models across all providers from the in-memory VramPool.
+/// Returns one row per unique model name with summed active/limit counts.
+///
+/// Reads entirely from the in-memory VramPool (no DB scan) — safe at 10K providers.
+pub async fn get_capacity_cluster(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ClusterModelInfo>>, AppError> {
+    let mut result: Vec<ClusterModelInfo> = state
+        .vram_pool
+        .cluster_snapshot()
+        .into_iter()
+        .map(|(model_name, weight_mb, kv_per_request_mb, total_active, total_limit, provider_count)| {
+            ClusterModelInfo {
+                model_name,
+                weight_mb:         weight_mb.min(i32::MAX as u64) as i32,
+                kv_per_request_mb: kv_per_request_mb.min(i32::MAX as u64) as i32,
+                total_active,
+                total_limit,
+                provider_count,
+            }
+        })
+        .collect();
+
+    result.sort_by(|a, b| a.model_name.cmp(&b.model_name));
+    Ok(Json(result))
 }
 
 // ── GET /v1/dashboard/capacity/settings ────────────────────────────

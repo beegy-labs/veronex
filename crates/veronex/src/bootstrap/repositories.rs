@@ -20,6 +20,8 @@ use veronex::application::ports::outbound::observability_port::ObservabilityPort
 use veronex::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use veronex::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository;
 use veronex::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
+use veronex::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
+use veronex::application::ports::outbound::api_key_provider_access::ApiKeyProviderAccessRepository;
 use veronex::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository;
 use veronex::application::ports::outbound::session_repository::SessionRepository;
 use veronex::infrastructure::outbound::analytics::HttpAnalyticsClient;
@@ -41,6 +43,8 @@ use veronex::infrastructure::outbound::persistence::model_capacity_repository::P
 use veronex::infrastructure::outbound::persistence::ollama_model_repository::PostgresOllamaModelRepository;
 use veronex::infrastructure::outbound::persistence::ollama_sync_job_repository::PostgresOllamaSyncJobRepository;
 use veronex::infrastructure::outbound::persistence::provider_model_selection::PostgresProviderModelSelectionRepository;
+use veronex::infrastructure::outbound::persistence::global_model_settings::PostgresGlobalModelSettingsRepository;
+use veronex::infrastructure::outbound::persistence::api_key_provider_access::PostgresApiKeyProviderAccessRepository;
 use veronex::infrastructure::outbound::persistence::provider_registry::PostgresProviderRegistry;
 use veronex::infrastructure::outbound::persistence::provider_vram_budget_repository::PostgresProviderVramBudgetRepository;
 use veronex::infrastructure::outbound::persistence::session_repository::PostgresSessionRepository;
@@ -60,6 +64,8 @@ pub struct Repositories {
     pub gpu_server_registry: Arc<dyn GpuServerRegistry>,
     pub gemini_policy_repo: Arc<dyn GeminiPolicyRepository>,
     pub model_selection_repo: Arc<dyn ProviderModelSelectionRepository>,
+    pub global_model_settings_repo: Arc<dyn GlobalModelSettingsRepository>,
+    pub api_key_provider_access_repo: Arc<dyn ApiKeyProviderAccessRepository>,
     pub gemini_sync_config_repo: Arc<dyn GeminiSyncConfigRepository>,
     pub gemini_model_repo: Arc<dyn GeminiModelRepository>,
     pub ollama_model_repo: Arc<dyn OllamaModelRepository>,
@@ -242,6 +248,10 @@ pub async fn wire_repositories(
         Arc::new(CachingModelSelection::new(Arc::new(
             PostgresProviderModelSelectionRepository::new(pg_pool.clone()),
         )));
+    let global_model_settings_repo: Arc<dyn GlobalModelSettingsRepository> =
+        Arc::new(PostgresGlobalModelSettingsRepository::new(pg_pool.clone()));
+    let api_key_provider_access_repo: Arc<dyn ApiKeyProviderAccessRepository> =
+        Arc::new(PostgresApiKeyProviderAccessRepository::new(pg_pool.clone()));
     let gemini_sync_config_repo: Arc<dyn GeminiSyncConfigRepository> =
         Arc::new(PostgresGeminiSyncConfigRepository::new(pg_pool.clone(), config.gemini_encryption_key));
     let gemini_model_repo: Arc<dyn GeminiModelRepository> =
@@ -306,6 +316,8 @@ pub async fn wire_repositories(
         gpu_server_registry,
         gemini_policy_repo,
         model_selection_repo,
+        global_model_settings_repo,
+        api_key_provider_access_repo,
         gemini_sync_config_repo,
         gemini_model_repo,
         ollama_model_repo,

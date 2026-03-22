@@ -5,7 +5,7 @@
 //! - `demand_resync`: 60s — reconciles demand counters + GC stale side-hash entries
 //! - `queue_wait_cancel`: 30s — cancels jobs exceeding MAX_QUEUE_WAIT_SECS (§7 G15)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -131,51 +131,61 @@ pub async fn run_demand_resync_loop(
 }
 
 async fn demand_resync_pass(pool: &Pool) -> anyhow::Result<()> {
-    // 1. ZSCAN queue:zset — collect all job_ids (ZSET = single source of truth)
-    let mut zset_members: Vec<String> = Vec::new();
+    // ZCARD guard: skip entirely if queue is tiny (no significant drift possible)
+    let zcard: u64 = pool.zcard(QUEUE_ZSET).await.unwrap_or(0);
+    if zcard < 50 {
+        return Ok(());
+    }
+
+    let mut model_counts: HashMap<String, u64> = HashMap::new();
+    let mut zset_set: HashSet<String> = HashSet::new();
+
+    // Stream ZSCAN and process each page directly with HMGET (no pre-allocation of all members)
     let stream = pool.next().zscan(QUEUE_ZSET, "*", Some(200));
     futures::pin_mut!(stream);
 
     while let Some(result) = stream.next().await {
         let mut page = result?;
         if let Some(entries) = page.take_results() {
-            for (value, _score) in entries {
-                if let Some(member) = value.as_string() {
-                    zset_members.push(member);
-                }
+            // Collect this page's job_ids
+            let page_ids: Vec<String> = entries
+                .into_iter()
+                .filter_map(|(value, _score)| value.as_string())
+                .collect();
+
+            if page_ids.is_empty() {
+                continue;
+            }
+
+            // Batch HMGET for this page immediately — no global Vec accumulation
+            let keys: Vec<&str> = page_ids.iter().map(|s| s.as_str()).collect();
+            let models: Vec<Option<String>> = pool.hmget(QUEUE_MODEL_MAP, keys).await?;
+
+            for model_opt in models.into_iter().flatten() {
+                *model_counts.entry(model_opt).or_insert(0) += 1;
+            }
+
+            // Build GC set during the same stream pass
+            for id in page_ids {
+                zset_set.insert(id);
             }
         }
     }
 
-    // 2. Batch HMGET queue:model for all ZSET members → model lookup
-    let mut model_counts: HashMap<String, u64> = HashMap::new();
-
-    for chunk in zset_members.chunks(200) {
-        let keys: Vec<&str> = chunk.iter().map(|s| s.as_str()).collect();
-        let models: Vec<Option<String>> = pool.hmget(QUEUE_MODEL_MAP, keys).await?;
-
-        for model_opt in models.into_iter().flatten() {
-            *model_counts.entry(model_opt).or_insert(0) += 1;
-        }
-    }
-
-    // 3. SET demand:{model} to actual count (overwrite any drift)
+    // SET demand:{model} to actual count (overwrite any drift)
     for (model, count) in &model_counts {
         let key = crate::domain::constants::demand_key(model);
         let _: () = pool.set(&key, count.to_string(), None, None, false).await?;
     }
 
-    // 4. Stale GC: HSCAN queue:model — remove entries not in ZSET
-    let zset_set: std::collections::HashSet<&str> =
-        zset_members.iter().map(|s| s.as_str()).collect();
-
+    // Stale GC: HSCAN side hashes — remove entries not in ZSET
     gc_stale_hash(pool, QUEUE_MODEL_MAP, &zset_set).await;
     gc_stale_hash(pool, QUEUE_ENQUEUE_AT, &zset_set).await;
 
     if !model_counts.is_empty() {
         tracing::debug!(
             models = model_counts.len(),
-            zset_size = zset_members.len(),
+            zset_size = zset_set.len(),
             "demand_resync completed"
         );
     }
@@ -227,7 +237,8 @@ async fn queue_wait_cancel_pass(
     let threshold_ms = MAX_QUEUE_WAIT_SECS * 1000;
     let mut cancelled = 0_u32;
 
-    // HSCAN queue:enqueue_at — find jobs older than MAX_QUEUE_WAIT_SECS
+    // Pass 1: HSCAN queue:enqueue_at — collect expired (job_id, enqueue_at_ms) pairs
+    let mut expired: Vec<(String, u64)> = Vec::new();
     let stream = pool.next().hscan(QUEUE_ENQUEUE_AT, "*", Some(200));
     futures::pin_mut!(stream);
 
@@ -243,51 +254,56 @@ async fn queue_wait_cancel_pass(
                     Some(v) => v,
                     None => continue,
                 };
-
                 let wait_ms = now_ms.saturating_sub(enqueue_at_ms);
-                if wait_ms <= threshold_ms {
-                    continue;
+                if wait_ms > threshold_ms {
+                    expired.push((job_id_str, enqueue_at_ms));
                 }
+            }
+        }
+    }
 
-                // Look up the model from side hash for ZSET cancel
-                let model: String = pool
-                    .hget(QUEUE_MODEL_MAP, &job_id_str)
-                    .await
-                    .unwrap_or_default();
+    if expired.is_empty() {
+        return Ok(());
+    }
 
-                // Atomic ZSET cancel (ZREM + DECR demand + HDEL side hashes)
-                match valkey.zset_cancel(&job_id_str, &model).await {
-                    Ok(true) => {
-                        // Mark DB as failed with reason
-                        let uuid = match uuid::Uuid::parse_str(&job_id_str) {
-                            Ok(u) => u,
-                            Err(_) => continue,
-                        };
-                        let job_id = crate::domain::value_objects::JobId(uuid);
-                        if let Err(e) = job_repo.fail_with_reason(
-                            &job_id,
-                            "queue_wait_exceeded",
-                            Some("queue wait exceeded 300s"),
-                        ).await {
-                            tracing::warn!(%uuid, "failed to persist queue_wait_exceeded: {e}");
-                        }
-                        // pending → failed (queue_wait_exceeded): DECR pending
-                        if let Err(e) = valkey.incr_by(JOBS_PENDING_COUNTER, -1).await {
-                            tracing::warn!("DECR pending counter failed: {e}");
-                        }
-                        cancelled += 1;
-                        tracing::info!(
-                            %uuid, wait_secs = wait_ms / 1000,
-                            "queue_wait_exceeded — job cancelled after {}s", wait_ms / 1000,
-                        );
-                    }
-                    Ok(false) => {
-                        // Already dispatched — processing cancel will handle it
-                    }
-                    Err(e) => {
-                        tracing::warn!(job_id = %job_id_str, "ZSET cancel failed: {e}");
-                    }
+    // Pass 2: single HMGET to fetch all models for expired jobs
+    let expired_ids: Vec<&str> = expired.iter().map(|(id, _)| id.as_str()).collect();
+    let models: Vec<Option<String>> = pool.hmget(QUEUE_MODEL_MAP, expired_ids).await?;
+
+    // Pass 3: process each cancellation
+    for ((job_id_str, enqueue_at_ms), model_opt) in expired.iter().zip(models.into_iter()) {
+        let model: String = model_opt.unwrap_or_default();
+        let wait_ms = now_ms.saturating_sub(*enqueue_at_ms);
+
+        match valkey.zset_cancel(job_id_str, &model).await {
+            Ok(true) => {
+                let uuid = match uuid::Uuid::parse_str(job_id_str) {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                let job_id = crate::domain::value_objects::JobId(uuid);
+                if let Err(e) = job_repo.fail_with_reason(
+                    &job_id,
+                    "queue_wait_exceeded",
+                    Some("queue wait exceeded 300s"),
+                ).await {
+                    tracing::warn!(%uuid, "failed to persist queue_wait_exceeded: {e}");
                 }
+                // pending → failed (queue_wait_exceeded): DECR pending
+                if let Err(e) = valkey.incr_by(JOBS_PENDING_COUNTER, -1).await {
+                    tracing::warn!("DECR pending counter failed: {e}");
+                }
+                cancelled += 1;
+                tracing::info!(
+                    %uuid, wait_secs = wait_ms / 1000,
+                    "queue_wait_exceeded — job cancelled after {}s", wait_ms / 1000,
+                );
+            }
+            Ok(false) => {
+                // Already dispatched — processing cancel will handle it
+            }
+            Err(e) => {
+                tracing::warn!(job_id = %job_id_str, "ZSET cancel failed: {e}");
             }
         }
     }
@@ -300,10 +316,11 @@ async fn queue_wait_cancel_pass(
 }
 
 /// Remove hash entries whose keys are not in the ZSET member set.
+/// Batches HDEL per HSCAN page to avoid per-entry round trips.
 async fn gc_stale_hash(
     pool: &Pool,
     hash_key: &str,
-    valid_members: &std::collections::HashSet<&str>,
+    valid_members: &HashSet<String>,
 ) {
     let mut stale_count = 0_u32;
     let stream = pool.next().hscan(hash_key, "*", Some(200));
@@ -319,15 +336,23 @@ async fn gc_stale_hash(
         };
 
         if let Some(map) = page.take_results() {
-            for (field, _value) in map.inner() {
-                let field_str: &str = match field.as_str() {
-                    Some(s) => s,
-                    None => continue,
-                };
-                if !valid_members.contains(field_str) {
-                    let _: Result<i64, _> = pool.hdel(hash_key, field_str).await;
-                    stale_count += 1;
-                }
+            // Collect all stale fields in this page, then issue a single HDEL
+            let stale_fields: Vec<String> = map
+                .inner()
+                .iter()
+                .filter_map(|(field, _value)| {
+                    let s = field.as_str()?;
+                    if !valid_members.contains(s) {
+                        Some(s.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if !stale_fields.is_empty() {
+                stale_count += stale_fields.len() as u32;
+                let _: Result<i64, _> = pool.hdel(hash_key, stale_fields).await;
             }
         }
     }
