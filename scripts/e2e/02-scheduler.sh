@@ -77,17 +77,17 @@ esac
 
 hdr "Provider num_parallel Field (SDD: AIMD upper bound)"
 
-PROVIDERS_JSON=$(aget "/v1/providers" 2>/dev/null || echo "[]")
+PROVIDERS_JSON=$(aget "/v1/providers" 2>/dev/null || echo '{"providers":[]}')
 echo "$PROVIDERS_JSON" | python3 -c "
 import sys, json
-providers = json.loads(sys.stdin.read())
+providers = json.loads(sys.stdin.read()).get('providers', [])
 for p in providers:
     print(f'  {p[\"name\"]}: num_parallel={p.get(\"num_parallel\",\"MISSING\")}')
 " 2>/dev/null || true
 
 NP_OK=$(echo "$PROVIDERS_JSON" | python3 -c "
 import sys, json
-providers = json.loads(sys.stdin.read())
+providers = json.loads(sys.stdin.read()).get('providers', [])
 if not providers: print('skip'); exit()
 missing = [p['name'] for p in providers if 'num_parallel' not in p or p['num_parallel'] is None]
 print('fail:' + ','.join(missing) if missing else 'ok')
@@ -325,7 +325,7 @@ hdr "SDD §1/§8: AIMD Cold Start — committed_parallel guard"
 
 # After inference load in phase 03, max_concurrent must be ≤ num_parallel per provider
 CAP2=$(aget "/v1/dashboard/capacity" 2>/dev/null || echo '{"providers":[]}')
-PROVIDERS_JSON2=$(aget "/v1/providers" 2>/dev/null || echo "[]")
+PROVIDERS_JSON2=$(aget "/v1/providers" 2>/dev/null || echo '{"providers":[]}')
 COMMITTED_GUARD=$(echo "$CAP2" | python3 -c "
 import sys, json
 cap = json.loads(sys.stdin.read())

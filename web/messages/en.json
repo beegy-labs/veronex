@@ -15,7 +15,8 @@
     "ollama": "Ollama",
     "gemini": "Gemini",
     "accounts": "Accounts",
-    "audit": "Audit Log"
+    "audit": "Audit Log",
+    "capacity": "Concurrency"
   },
   "common": {
     "all": "All",
@@ -36,6 +37,7 @@
     "revoke": "Revoke",
     "active": "Active",
     "inactive": "Inactive",
+    "disabled": "Disabled",
     "online": "Online",
     "offline": "Offline",
     "degraded": "Degraded",
@@ -73,6 +75,8 @@
     "customTimezoneHint": "Enter any IANA timezone identifier.",
     "customTimezoneInvalid": "Invalid timezone identifier.",
     "custom": "Custom…",
+    "apply": "Apply",
+    "now": "now",
     "settings": "Settings",
     "language": "Language",
     "labFeatures": "Lab Features",
@@ -149,6 +153,8 @@
     "tempCritical": "Critical",
     "tempWarning": "Warning",
     "checkServers": "Check Servers",
+    "allServersNormal": "All servers normal",
+    "moreServers": "more servers",
     "waiting": "Waiting",
     "running": "Running",
     "pendingJobs": "pending jobs",
@@ -247,10 +253,13 @@
     "groupingSuccess": "Session grouping triggered",
     "groupingError": "Failed to trigger session grouping",
     "groupingAlreadyRunning": "Session grouping already in progress",
-    "providerName": "Provider",
+    "providerName": "Server",
     "images": "Images",
-    "filterModel": "Model…",
-    "filterProvider": "Provider…"
+    "filterModel": "Model",
+    "filterProvider": "Provider",
+    "allProviders": "All Providers",
+    "filters": "Filters",
+    "filtersActive": "Filters ({{count}})"
   },
   "keys": {
     "title": "API Keys",
@@ -286,6 +295,7 @@
     "tier": "Tier",
     "tierFree": "Free",
     "tierPaid": "Paid",
+    "registered": "registered",
     "keysCount": "{{count}} keys",
     "viewUsage": "View usage",
     "usageTitle": "Usage — {{name}}",
@@ -309,7 +319,7 @@
     },
     "servers": {
       "title": "Servers",
-      "description": "Physical GPU servers — one node-exporter per server.",
+      "description": "Register GPU servers and monitor hardware metrics.",
       "name": "Name",
       "nodeExporterUrl": "node-exporter endpoint",
       "registeredAt": "Registered",
@@ -342,6 +352,7 @@
     },
     "ollama": {
       "title": "Ollama Providers",
+      "description": "Register Ollama servers and manage inference routing.",
       "name": "Name",
       "url": "URL",
       "vram": "VRAM",
@@ -353,6 +364,7 @@
       "noProvidersHint": "Add a local Ollama server to start routing inference.",
       "registerProvider": "Register Ollama Provider",
       "registerTitle": "Register Ollama Provider",
+      "searchProvider": "Search providers",
       "loadingProviders": "Loading providers…",
       "failedProviders": "Failed to load providers",
       "ollamaSyncSection": "Global Ollama Model Sync",
@@ -362,6 +374,7 @@
       "ollamaAvailableModels": "Available models",
       "ollamaNoSync": "No models synced yet. Click Sync All to fetch models.",
       "ollamaSearchModels": "Search models…",
+      "modelToggle": "Toggle {model}",
       "viewModels": "View models",
       "noServerLinked": "no server linked",
       "searchServers": "Search servers…",
@@ -400,6 +413,7 @@
     },
     "capacity": {
       "title": "Concurrency Control",
+      "pageDesc": "VRAM usage and active requests per provider",
       "desc": "VRAM-aware slot allocation for local Ollama inference",
       "syncNow": "Sync Now",
       "syncing": "Analyzing…",
@@ -436,10 +450,17 @@
       "colModel": "Model",
       "colWeight": "Weight",
       "colKvPerReq": "KV/req",
-      "colActiveLimit": "Active / Limit"
+      "colActiveLimit": "Active / Limit",
+      "colProviders": "Providers",
+      "viewServer": "Server",
+      "viewCluster": "Cluster",
+      "searchProvider": "Search provider",
+      "showingProviders": "{{from}}–{{to}} of {{total}}",
+      "clusterSummary": "{{total}} providers · {{active}} active requests · {{issues}} issues"
     },
     "gemini": {
-      "title": "Gemini API Keys",
+      "title": "Gemini Providers",
+      "description": "Register Gemini API keys and manage cloud inference routing.",
       "name": "Name",
       "apiKey": "API Key",
       "freeTier": "Free Tier",
@@ -722,6 +743,7 @@
   "accounts": {
     "title": "Accounts",
     "description": "Manage admin accounts and access control.",
+    "registered": "registered",
     "username": "Username",
     "name": "Name",
     "role": "Role",
@@ -777,7 +799,8 @@
       "account_manage": "Account Management",
       "audit_view": "Audit Log",
       "settings_manage": "Settings",
-      "role_manage": "Role Management"
+      "role_manage": "Role Management",
+      "model_manage": "Model Management"
     },
     "menu": {
       "dashboard": "Dashboard",

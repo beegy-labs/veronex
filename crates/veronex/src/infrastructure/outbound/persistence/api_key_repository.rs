@@ -135,6 +135,56 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
         rows.iter().map(row_to_api_key).collect()
     }
 
+    async fn list_page(&self, search: &str, limit: i64, offset: i64) -> Result<(Vec<ApiKey>, i64)> {
+        let pattern = format!("%{}%", search);
+        let total: i64 = sqlx::query_scalar(
+            &format!("SELECT COUNT(*) FROM api_keys WHERE {SOFT_DELETE} AND name ILIKE $1")
+        )
+        .bind(&pattern)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count api keys")?;
+
+        let sql = format!(
+            "SELECT {API_KEY_COLS} FROM api_keys WHERE {SOFT_DELETE} AND name ILIKE $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(&pattern)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .context("failed to list api keys page")?;
+
+        rows.iter().map(row_to_api_key).collect::<Result<Vec<_>>>().map(|v| (v, total))
+    }
+
+    async fn list_by_tenant_page(&self, tenant_id: &str, search: &str, limit: i64, offset: i64) -> Result<(Vec<ApiKey>, i64)> {
+        let pattern = format!("%{}%", search);
+        let total: i64 = sqlx::query_scalar(
+            &format!("SELECT COUNT(*) FROM api_keys WHERE tenant_id = $1 AND {SOFT_DELETE} AND name ILIKE $2")
+        )
+        .bind(tenant_id)
+        .bind(&pattern)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count tenant api keys")?;
+
+        let sql = format!(
+            "SELECT {API_KEY_COLS} FROM api_keys WHERE tenant_id = $1 AND {SOFT_DELETE} AND name ILIKE $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(tenant_id)
+            .bind(&pattern)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .context("failed to list tenant api keys page")?;
+
+        rows.iter().map(row_to_api_key).collect::<Result<Vec<_>>>().map(|v| (v, total))
+    }
+
     async fn revoke(&self, key_id: &Uuid) -> Result<()> {
         sqlx::query(&format!("UPDATE api_keys SET is_active = FALSE WHERE id = $1 AND {SOFT_DELETE}"))
             .bind(key_id)

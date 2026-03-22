@@ -1,11 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { accountsQuery, rolesQuery, accountSessionsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { Account, CreateAccountResponse, RoleSummary, SessionRecord } from '@/lib/types'
-import { Plus, Trash2, Link, Shield, Settings2 } from 'lucide-react'
+import { Plus, Trash2, Link, Shield, Settings2, Users, ChevronLeft, ChevronRight } from 'lucide-react'
 import { CopyButton } from '@/components/copy-button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -30,6 +30,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
+import { StatusPill } from '@/components/status-pill'
 import { useApiMutation } from '@/hooks/use-api-mutation'
 import { usePageGuard } from '@/hooks/use-page-guard'
 import { useTranslation } from '@/i18n'
@@ -42,7 +43,7 @@ import { hasPermission } from '@/lib/auth'
 const ALL_PERMISSIONS = [
   'dashboard_view', 'api_test', 'provider_manage',
   'key_manage', 'account_manage', 'audit_view', 'settings_manage',
-  'role_manage',
+  'role_manage', 'model_manage',
 ] as const
 
 const ALL_MENUS = [
@@ -241,7 +242,7 @@ function CreateAccountModal({
                       onCheckedChange={() => toggleRole(r.id)}
                     />
                     <span>{r.name}</span>
-                    {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1">{t('roles.system')}</Badge>}
+                    {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
                   </label>
                 ))}
               </div>
@@ -319,7 +320,7 @@ function RoleEditorModal({
         <DialogHeader>
           <DialogTitle>
             {isNew ? t('roles.createRole') : t('roles.editRole')}
-            {isSystem && <Badge variant="secondary" className="ml-2">{t('roles.system')}</Badge>}
+            {isSystem && <Badge variant="secondary" className="ml-2 whitespace-nowrap">{t('roles.system')}</Badge>}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-1">
@@ -426,7 +427,7 @@ function EditRolesModal({
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium flex items-center gap-1.5">
                   {r.name}
-                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1">{t('roles.system')}</Badge>}
+                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {t('roles.permissionCount', { count: r.permissions.length })} · {t('roles.menuCount', { count: r.menus.length })}
@@ -451,6 +452,23 @@ function EditRolesModal({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function AccountStatusPills({ accounts }: { accounts: Account[] }) {
+  const { t } = useTranslation()
+  const activeCount = useMemo(() => accounts.filter(a => a.is_active).length, [accounts])
+  return (
+    <div className="flex items-center gap-2 flex-wrap mt-2">
+      <StatusPill icon={<Users className="h-3 w-3 shrink-0" />} count={accounts.length} label={t('accounts.registered')} />
+      {activeCount > 0 && (
+        <StatusPill
+          icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+          count={activeCount} label={t('common.active')}
+          className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+        />
+      )}
+    </div>
   )
 }
 
@@ -502,13 +520,13 @@ function RolesTab() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium flex items-center gap-2">
                   {r.name}
-                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1">{t('roles.system')}</Badge>}
+                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 pb-3">
                 <div className="flex flex-wrap gap-1">
                   {r.permissions.map(p => (
-                    <Badge key={p} variant="outline" className="text-[10px] font-normal">
+                    <Badge key={p} variant="outline" className="text-[10px] font-normal whitespace-nowrap">
                       {t(`roles.perm.${p}` as Parameters<typeof t>[0])}
                     </Badge>
                   ))}
@@ -576,8 +594,14 @@ export default function AccountsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   const [editRolesTarget, setEditRolesTarget] = useState<Account | null>(null)
 
-  const { data: accounts = [], isLoading, isError } = useQuery(accountsQuery)
+  const { data: accountsData, isLoading, isError } = useQuery(accountsQuery())
+  const accounts = accountsData?.accounts ?? []
   const { data: roles = [] } = useQuery(rolesQuery)
+  const [acctPage, setAcctPage] = useState(0)
+  const ACCT_PAGE_SIZE = 20
+  const acctTotalPages = Math.max(1, Math.ceil(accounts.length / ACCT_PAGE_SIZE))
+  const acctSafePage = Math.min(acctPage, Math.max(0, acctTotalPages - 1))
+  const acctPageItems = useMemo(() => accounts.slice(acctSafePage * ACCT_PAGE_SIZE, (acctSafePage + 1) * ACCT_PAGE_SIZE), [accounts, acctSafePage])
 
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteAccount(id),
@@ -626,15 +650,17 @@ export default function AccountsPage() {
       {/* Accounts tab */}
       {tab === 'accounts' && (
         <>
-          <div className="flex items-center justify-between">
-            <div>
+          <div>
+            <div className="flex items-center justify-between">
               <h1 className="text-xl font-semibold">{t('accounts.title')}</h1>
-              <p className="text-sm text-muted-foreground mt-0.5">{t('accounts.description')}</p>
+              <Button size="sm" onClick={() => setShowCreate(true)} className="shrink-0">
+                <Plus className="h-4 w-4 mr-1.5" />{t('accounts.createAccount')}
+              </Button>
             </div>
-            <Button size="sm" onClick={() => setShowCreate(true)}>
-              <Plus className="h-4 w-4 mr-1.5" />
-              {t('accounts.createAccount')}
-            </Button>
+            <p className="text-sm text-muted-foreground mt-0.5">{t('accounts.description')}</p>
+            {accounts.length > 0 && (
+              <AccountStatusPills accounts={accounts} />
+            )}
           </div>
 
           <CreateAccountModal open={showCreate} onClose={() => setShowCreate(false)} roles={roles} />
@@ -685,24 +711,24 @@ export default function AccountsPage() {
             <DataTable minWidth="700px">
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('accounts.username')}</TableHead>
-                  <TableHead>{t('accounts.name')}</TableHead>
-                  <TableHead>{t('accounts.role')}</TableHead>
-                  <TableHead>{t('accounts.department')}</TableHead>
-                  <TableHead>{t('accounts.status')}</TableHead>
-                  <TableHead>{t('accounts.lastLogin')}</TableHead>
-                  <TableHead>{t('accounts.actions')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.username')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.name')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.role')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.department')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.status')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.lastLogin')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('accounts.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {accounts.map((a: Account) => (
+                {acctPageItems.map((a: Account) => (
                   <TableRow key={a.id}>
                     <TableCell className="font-mono text-xs">{a.username}</TableCell>
                     <TableCell>{a.name}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {a.roles.map(r => (
-                          <Badge key={r.id} variant={r.name === 'super' ? 'default' : 'secondary'}>
+                          <Badge key={r.id} variant={r.name === 'super' ? 'default' : 'secondary'} className="whitespace-nowrap">
                             {r.name}
                           </Badge>
                         ))}
@@ -767,6 +793,21 @@ export default function AccountsPage() {
                 ))}
               </TableBody>
             </DataTable>
+          )}
+          {accounts.length > 0 && acctTotalPages > 1 && (
+            <div className="flex items-center justify-end gap-2">
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {acctSafePage * ACCT_PAGE_SIZE + 1}–{Math.min((acctSafePage + 1) * ACCT_PAGE_SIZE, accounts.length)} / {accounts.length}
+              </span>
+              <Button variant="outline" size="icon" className="h-7 w-7" disabled={acctSafePage <= 0}
+                onClick={() => setAcctPage(p => p - 1)}>
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="outline" size="icon" className="h-7 w-7" disabled={acctSafePage >= acctTotalPages - 1}
+                onClick={() => setAcctPage(p => p + 1)}>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           )}
 
           {deleteTarget && (

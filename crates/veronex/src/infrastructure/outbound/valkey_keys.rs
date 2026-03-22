@@ -70,6 +70,12 @@ pub fn hw_metrics(provider_id: Uuid) -> String {
     format!("veronex:hw:{provider_id}")
 }
 
+/// Full node-exporter metrics cache for a GPU server.
+/// Cached by health_checker, read by dashboard API.
+pub fn server_node_metrics(server_id: Uuid) -> String {
+    format!("veronex:server_metrics:{server_id}")
+}
+
 // ── Gemini rate-limit counters ───────────────────────────────────────────────
 
 /// Gemini RPM counter (per provider + model + minute).
@@ -136,6 +142,12 @@ pub const PUBSUB_CANCEL_PATTERN: &str = "veronex:pubsub:cancel:*";
 /// Written by: veronex-agent. Read by: health_checker (MGET batch).
 pub fn provider_heartbeat(provider_id: Uuid) -> String {
     format!("veronex:provider:hb:{provider_id}")
+}
+
+/// Capacity state pushed by veronex-agent: loaded models + arch profiles + total_vram_mb.
+/// TTL = 3× scrape interval (default 180s). Written by: agent. Read by: analyzer sync_loop.
+pub fn provider_capacity_state(provider_id: Uuid) -> String {
+    format!("veronex:provider:{provider_id}:capacity_state")
 }
 
 /// Global O(1) counter of currently-online Ollama providers.

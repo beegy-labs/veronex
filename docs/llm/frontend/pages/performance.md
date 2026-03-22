@@ -1,4 +1,4 @@
-> CDD Layer 2 | **Last Updated**: 2026-03-08
+> CDD Layer 2 | **Last Updated**: 2026-03-21
 
 # Web — Performance Page
 
@@ -37,6 +37,8 @@ Chart: Error Rate / Hour (LineChart 0–100%)
 | Model latency table | `usageBreakdownQuery.by_model` (avg_latency_ms) + `analyticsQuery.models` (success_rate) | Partial | Yes |
 | Key performance table | `usageBreakdownQuery.by_key` | No | N/A (always PG) |
 | Hourly charts | `performanceQuery.hourly` | Yes | hourly GROUP BY on `inference_jobs` |
+
+All endpoints accept `from`/`to` ISO-8601 query parameters (see [usage.md](usage.md) "Date Range Parameters" section) in addition to the `hours` param. When `from` is set, `hours` is ignored.
 
 All ClickHouse-dependent endpoints use **ClickHouse primary + PG fallback**: if ClickHouse returns empty results (`total_requests == 0`) or errors, the handler falls back to PostgreSQL `inference_jobs`.
 

@@ -27,6 +27,7 @@ use tokio::signal;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+mod capacity_push;
 mod health;
 mod heartbeat;
 mod orphan_sweeper;
@@ -386,13 +387,24 @@ async fn scrape_cycle(
                         (labels, metrics)
                     }
                     "ollama" => {
-                        let metrics = scraper::scrape_ollama(client, &url).await;
-                        // Push heartbeat when scrape succeeded (non-empty = Ollama responded).
-                        // Missing key (TTL expired) signals offline to veronex health_checker.
+                        let raw = scraper::scrape_ollama_raw(client, &url).await;
+                        let metrics = scraper::ollama_gauges_from_raw(&raw);
+                        // Push heartbeat + capacity state when scrape succeeded.
                         if let (Some(pool), Some(provider_id)) = (&valkey, labels.get("provider_id")) {
-                            if !metrics.is_empty() {
+                            if !raw.is_empty() || metrics.iter().any(|g| g.name == "ollama_loaded_models") {
                                 heartbeat::set_online(pool, provider_id, HEARTBEAT_TTL_SECS).await;
                             }
+                            // Push capacity state (arch profiles) even when no models are loaded —
+                            // this lets the analyzer skip HTTP /api/ps + /api/show calls.
+                            let total_vram_mb: u64 = labels
+                                .get("total_vram_mb")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0);
+                            let loaded: Vec<(String, u64)> = raw
+                                .iter()
+                                .filter_map(|m| Some((m.name.clone()?, m.size_vram.unwrap_or(0))))
+                                .collect();
+                            capacity_push::push(client, pool, &url, provider_id, total_vram_mb, &loaded).await;
                         }
                         (labels, metrics)
                     }
