@@ -48,7 +48,10 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const readersRef = useRef<Map<number, ReadableStreamDefaultReader<Uint8Array>>>(new Map())
 
   // ── Providers ─────────────────────────────────────────────────────────────────
-  const { data: providers } = useQuery(providersQuery)
+  const { data: providersData } = useQuery(providersQuery())
+  const providers = providersData?.providers
+
+  const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   const availableOptions = useMemo((): ProviderOption[] => {
     if (!providers) return [{ value: 'ollama', label: 'Ollama', isGemini: false }]
@@ -56,14 +59,14 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_OLLAMA)) {
       opts.push({ value: 'ollama', label: 'Ollama', isGemini: false })
     }
-    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
+    if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
       opts.push({ value: 'gemini-free', label: t('test.geminiFree'), isGemini: true })
     }
-    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
+    if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
       opts.push({ value: 'gemini', label: t('test.gemini'), isGemini: true })
     }
     return opts.length > 0 ? opts : [{ value: 'ollama', label: 'Ollama', isGemini: false }]
-  }, [providers, t])
+  }, [providers, t, geminiEnabled])
 
   const isGeminiProvider = availableOptions.find((o) => o.value === providerType)?.isGemini ?? false
 
@@ -75,9 +78,19 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     }
   }, [availableOptions, providerType, providers])
 
+  // Auto-switch endpoint when provider type changes
+  useEffect(() => {
+    if (isGeminiProvider && endpoint !== '/v1/chat/completions' && endpoint !== '/v1beta/models') {
+      setEndpoint('/v1/chat/completions')
+    }
+    if (!isGeminiProvider && endpoint === '/v1beta/models') {
+      setEndpoint('/v1/chat/completions')
+    }
+  }, [isGeminiProvider, endpoint])
+
   // ── Models ────────────────────────────────────────────────────────────────────
   const { data: ollamaModelsData } = useQuery({
-    ...ollamaModelsQuery,
+    ...ollamaModelsQuery(),
     enabled: !isGeminiProvider,
   })
 
@@ -253,7 +266,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
 
       if (p.useApiKey && apiKeyValue.trim()) {
         url = `${BASE}${p.endpoint}`
-        if (p.endpoint === '/v1/chat/completions') {
+        if (p.endpoint === '/v1/chat/completions' || p.endpoint === '/v1beta/models') {
           headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
         } else {
           headers['X-API-Key'] = apiKeyValue.trim()
@@ -263,12 +276,17 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           '/v1/chat/completions': '/v1/test/completions',
           '/api/chat': '/v1/test/api/chat',
           '/api/generate': '/v1/test/api/generate',
+          '/v1beta/models': '/v1/test/completions',
         }
         url = `${BASE}${testEndpointMap[p.endpoint]}`
       }
 
       let body: Record<string, unknown>
-      if (p.endpoint === '/api/generate') {
+      if (p.endpoint === '/v1beta/models') {
+        // Gemini native: POST /v1beta/models/{model}:generateContent
+        url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
+        body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
+      } else if (p.endpoint === '/api/generate') {
         body = { model: p.model, prompt: p.prompt.trim(), stream: isStreaming }
       } else if (p.endpoint === '/api/chat') {
         body = {
@@ -303,9 +321,11 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
         await consumeStream(runId, reader, jobIdRef)
       } else {
         const json = await resp.json()
-        const text = p.endpoint === '/api/generate'
-          ? (json.response ?? '')
-          : (json.message?.content ?? '')
+        const text = p.endpoint === '/v1beta/models'
+          ? (json.candidates?.[0]?.content?.parts?.[0]?.text ?? JSON.stringify(json))
+          : p.endpoint === '/api/generate'
+            ? (json.response ?? '')
+            : (json.message?.content ?? '')
         dispatch({ type: 'APPEND', id: runId, token: text })
         dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
       }

@@ -1,6 +1,6 @@
 # Veronex E2E Test Suite
 
-> **Last Updated**: 2026-03-17
+> **Last Updated**: 2026-03-21
 
 ---
 
@@ -22,43 +22,29 @@ SKIP_DB_RESET=1 ./scripts/test-e2e.sh
 
 ```mermaid
 flowchart TD
-    subgraph "Sequential"
+    subgraph "Phase 1 (sequential)"
         S01["01-setup.sh"]
-        S03["03-inference.sh"]
-        S01 --> S03
     end
 
-    subgraph "Parallel"
-        P02["02-scheduler.sh"]
+    subgraph "Phase 2 (parallel)"
+        S03["03-inference.sh (seq gate)"]
         P04["04-crud.sh"]
         P05["05-security.sh"]
-        P06["06-api-surface.sh"]
-        P07["07-lifecycle.sh"]
-    end
-
-    subgraph "Sequential (clean state)"
-        S08["08-sdd-advanced.sh"]
-    end
-
-    S03 --> P02 & P04 & P05 & P06 & P07 & P11
-    P02 & P04 & P05 & P06 & P07 & P11 --> S08
-
-    subgraph "Parallel 1"
-        P02["02-scheduler.sh"]
-        P04["04-crud.sh"]
-        P05["05-security.sh"]
-        P06["06-api-surface.sh"]
-        P07["07-lifecycle.sh"]
+        P09["09-metrics-pipeline.sh"]
+        P10["10-image-storage.sh"]
         P11["11-verify-liveness.sh"]
     end
 
-    subgraph "Parallel 2"
-        P09["09-metrics-pipeline.sh"]
-        P10["10-image-storage.sh"]
+    subgraph "Phase 3 (parallel, after 03 completes)"
+        P02["02-scheduler.sh"]
+        P06["06-api-surface.sh"]
+        P07["07-lifecycle.sh"]
+        P08["08-sdd-advanced.sh"]
     end
 
-    S08 --> P09 & P10
-    P09 & P10 --> Result["Aggregate Results"]
+    S01 --> S03 & P04 & P05 & P09 & P10 & P11
+    S03 --> P02 & P06 & P07 & P08
+    P02 & P04 & P05 & P06 & P07 & P08 & P09 & P10 & P11 --> Result["Aggregate Results"]
 ```
 
 ---
@@ -243,6 +229,12 @@ flowchart LR
     subgraph "Server"
         SV1[List] --> SV2[Create] --> SV3[Update name] --> SV4[Delete]
     end
+    subgraph "Global Model"
+        GM1[List] --> GM2[Disable] --> GM3[Verify disabled] --> GM4[Re-enable]
+    end
+    subgraph "Key Provider Access"
+        KP1[List] --> KP2[Deny] --> KP3[Allow]
+    end
 ```
 
 | Test | Validates |
@@ -275,6 +267,14 @@ flowchart LR
 | Create server | POST /v1/servers with node_exporter_url → 201 (or 409 if duplicate) |
 | Update server name | PATCH /v1/servers/{id} → 200 |
 | Delete server | DELETE /v1/servers/{id} → 204 |
+| List global model settings | GET /v1/models/global-settings → 200 |
+| List disabled models | GET /v1/models/global-disabled → 200 |
+| Disable model globally | PATCH /v1/models/global-settings/{model} is_enabled=false → 200 |
+| Verify disabled list | Model appears in /v1/models/global-disabled |
+| Re-enable model | PATCH /v1/models/global-settings/{model} is_enabled=true → 200 |
+| List key provider access | GET /v1/keys/{id}/providers → 200 |
+| Deny provider access | PATCH /v1/keys/{id}/providers/{pid} is_allowed=false → 200 |
+| Allow provider access | PATCH /v1/keys/{id}/providers/{pid} is_allowed=true → 200 |
 
 ---
 
@@ -333,6 +333,7 @@ flowchart TD
 | SSRF: GCP metadata | metadata.google.internal URL registration blocked |
 | Oversized model name | 300-char model name → 400/413/422 |
 | RPM rate limit | rate_limit_rpm=2 key with 3 requests → 429 |
+| TPM rate limit | rate_limit_tpm=50 key with large responses → 429 |
 | Expired key rejection | expires_at in past → 401 |
 | Session revocation | DELETE /v1/sessions/{id} → subsequent request 401 |
 | RBAC viewer → accounts | Viewer accessing /v1/accounts → 403 |
@@ -661,20 +662,25 @@ The logic is fully implemented in `thermal.rs`. To enable: deploy the agent or m
 
 ## File Listing
 
-| File | Execution | Role |
-|------|-----------|------|
+Execution strategy (optimized for speed):
+- **Phase 1** (sequential): `01-setup`
+- **Phase 2** (parallel): `03-inference` (sequential gate) + `[04, 05, 09, 10, 11]` (parallel independents)
+- **Phase 3** (parallel): `[02, 06, 07, 08]` — starts after `03-inference` completes (AIMD state needed)
+
+| File | Phase | Role |
+|------|-------|------|
 | `_lib.sh` | — | Shared helpers (pass/fail/info, curl wrappers, valkey functions) |
-| `01-setup.sh` | Sequential 1 | Infrastructure bootstrap |
-| `02-scheduler.sh` | Parallel | Core scheduler validation |
-| `03-inference.sh` | Sequential 2 | Inference burst + AIMD learning |
-| `04-crud.sh` | Parallel | Account / Key / Provider / Server CRUD |
-| `05-security.sh` | Parallel | Auth, security headers, SSRF, rate limit, RBAC |
-| `06-api-surface.sh` | Parallel | Multi-format inference + endpoints + Pull Drain |
-| `07-lifecycle.sh` | Parallel | Cancel + SSE + password reset + crash recovery |
-| `08-sdd-advanced.sh` | Sequential 3 | AIMD decrease + Scale-In/Out + thermal deep validation |
-| `09-metrics-pipeline.sh` | Parallel 2 | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
-| `10-image-storage.sh` | Parallel 2 | Image inference, S3 WebP storage, thumbnails, provider_name |
-| `11-verify-liveness.sh` | Parallel 1 | Server/provider verify endpoints, registration validation, liveness |
+| `01-setup.sh` | 1 (seq) | Infrastructure bootstrap |
+| `03-inference.sh` | 2 (seq gate) | Inference burst + AIMD learning (must complete before Phase 3) |
+| `04-crud.sh` | 2 (parallel) | Account / Key / Provider / Server CRUD |
+| `05-security.sh` | 2 (parallel) | Auth, security headers, SSRF, RPM/TPM rate limit, RBAC |
+| `09-metrics-pipeline.sh` | 2 (parallel) | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
+| `10-image-storage.sh` | 2 (parallel) | Image inference, S3 WebP storage, thumbnails, provider_name |
+| `11-verify-liveness.sh` | 2 (parallel) | Server/provider verify endpoints, registration validation, liveness |
+| `02-scheduler.sh` | 3 (parallel) | Core scheduler validation (needs AIMD state) |
+| `06-api-surface.sh` | 3 (parallel) | Multi-format inference + endpoints + Pull Drain |
+| `07-lifecycle.sh` | 3 (parallel) | Cancel + SSE + password reset + crash recovery |
+| `08-sdd-advanced.sh` | 3 (parallel) | AIMD decrease + Scale-In/Out + thermal deep validation |
 
 ---
 

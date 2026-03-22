@@ -174,6 +174,30 @@ impl AccountRepository for PostgresAccountRepository {
         rows.iter().map(row_to_account).collect()
     }
 
+    async fn list_page(&self, search: &str, limit: i64, offset: i64) -> Result<(Vec<Account>, i64)> {
+        let pattern = format!("%{}%", search);
+        let total: i64 = sqlx::query_scalar(
+            &format!("SELECT COUNT(*) FROM accounts WHERE {SOFT_DELETE} AND (name ILIKE $1 OR username ILIKE $1)")
+        )
+        .bind(&pattern)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count accounts")?;
+
+        let sql = format!(
+            "SELECT {ACCOUNT_COLS} FROM accounts WHERE {SOFT_DELETE} AND (name ILIKE $1 OR username ILIKE $1) ORDER BY created_at ASC LIMIT $2 OFFSET $3"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(&pattern)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .context("failed to list accounts page")?;
+
+        rows.iter().map(row_to_account).collect::<Result<Vec<_>>>().map(|v| (v, total))
+    }
+
     async fn update(&self, account: &Account) -> Result<()> {
         sqlx::query(
             "UPDATE accounts

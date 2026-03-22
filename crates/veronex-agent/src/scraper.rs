@@ -323,14 +323,15 @@ struct OllamaPsResponse {
 }
 
 #[derive(Deserialize)]
-struct OllamaPsModel {
-    name: Option<String>,
-    size_vram: Option<u64>,
-    size: Option<u64>,
+pub struct OllamaPsModel {
+    pub name: Option<String>,
+    pub size_vram: Option<u64>,
+    pub size: Option<u64>,
 }
 
-/// Scrape Ollama /api/ps — forward raw byte values, no conversion.
-pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
+/// Scrape Ollama /api/ps — returns raw model list (capped at MAX_OLLAMA_MODELS).
+/// Returns empty vec on any error.
+pub async fn scrape_ollama_raw(client: &reqwest::Client, base_url: &str) -> Vec<OllamaPsModel> {
     let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
     let resp: OllamaPsResponse = match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
         Ok(r) => {
@@ -362,13 +363,16 @@ pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gaug
             return vec![];
         }
     };
-
-    let models = resp.models.unwrap_or_default();
+    let mut models = resp.models.unwrap_or_default();
     if models.len() > MAX_OLLAMA_MODELS {
         tracing::warn!(count = models.len(), "ollama returned too many models, truncating");
+        models.truncate(MAX_OLLAMA_MODELS);
     }
-    let models = &models[..models.len().min(MAX_OLLAMA_MODELS)];
+    models
+}
 
+/// Convert raw OllamaPsModel list to OTLP gauges.
+pub fn ollama_gauges_from_raw(models: &[OllamaPsModel]) -> Vec<Gauge> {
     let mut gauges = Vec::with_capacity(models.len() * 2 + 1);
 
     gauges.push(Gauge {
@@ -400,6 +404,12 @@ pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gaug
     }
 
     gauges
+}
+
+/// Scrape Ollama /api/ps — forward raw byte values, no conversion.
+pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
+    let models = scrape_ollama_raw(client, base_url).await;
+    ollama_gauges_from_raw(&models)
 }
 
 #[cfg(test)]

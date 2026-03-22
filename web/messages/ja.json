@@ -15,7 +15,8 @@
     "ollama": "Ollama",
     "gemini": "Gemini",
     "accounts": "アカウント",
-    "audit": "監査ログ"
+    "audit": "監査ログ",
+    "capacity": "同時実行制御"
   },
   "common": {
     "all": "すべて",
@@ -36,6 +37,7 @@
     "revoke": "無効化",
     "active": "有効",
     "inactive": "無効",
+    "disabled": "無効化",
     "online": "オンライン",
     "offline": "オフライン",
     "degraded": "低下",
@@ -73,6 +75,8 @@
     "customTimezoneHint": "IANAタイムゾーン識別子を入力してください。",
     "customTimezoneInvalid": "無効なタイムゾーンです。",
     "custom": "カスタム",
+    "apply": "適用",
+    "now": "現在",
     "settings": "設定",
     "language": "言語",
     "labFeatures": "ラボ機能",
@@ -149,6 +153,8 @@
     "tempCritical": "危険",
     "tempWarning": "注意",
     "checkServers": "サーバー確認",
+    "allServersNormal": "全サーバー正常",
+    "moreServers": "件のサーバーを表示",
     "waiting": "待機中",
     "running": "実行中",
     "pendingJobs": "待機ジョブ",
@@ -247,10 +253,13 @@
     "groupingSuccess": "セッションのまとめを開始しました",
     "groupingError": "セッションのまとめに失敗しました",
     "groupingAlreadyRunning": "セッションのまとめは既に実行中です",
-    "providerName": "プロバイダー",
+    "providerName": "サーバー名",
     "images": "画像",
-    "filterModel": "モデル…",
-    "filterProvider": "プロバイダー…"
+    "filterModel": "モデル",
+    "filterProvider": "プロバイダー",
+    "allProviders": "全プロバイダー",
+    "filters": "フィルター",
+    "filtersActive": "フィルター ({{count}})"
   },
   "keys": {
     "title": "APIキー",
@@ -286,6 +295,7 @@
     "tier": "ティア",
     "tierFree": "無料",
     "tierPaid": "有料",
+    "registered": "登録済み",
     "keysCount": "{{count}}件",
     "viewUsage": "使用量を見る",
     "usageTitle": "使用量 — {{name}}",
@@ -309,7 +319,7 @@
     },
     "servers": {
       "title": "サーバー",
-      "description": "物理GPUサーバー — サーバーごとにnode-exporterが1つ。",
+      "description": "GPUサーバーを登録し、ハードウェアメトリクスを監視します。",
       "name": "名前",
       "nodeExporterUrl": "node-exporterエンドポイント",
       "registeredAt": "登録日時",
@@ -342,6 +352,7 @@
     },
     "ollama": {
       "title": "Ollamaプロバイダー",
+      "description": "Ollamaサーバーを登録し、推論ルーティングを管理します。",
       "name": "名前",
       "url": "URL",
       "vram": "VRAM",
@@ -353,6 +364,7 @@
       "noProvidersHint": "ローカルOllamaサーバーを追加すると推論ルーティングが開始されます。",
       "registerProvider": "Ollamaプロバイダーを登録",
       "registerTitle": "Ollamaプロバイダーの登録",
+      "searchProvider": "プロバイダーを検索",
       "loadingProviders": "バックエンドを読み込み中…",
       "failedProviders": "バックエンドの読み込みに失敗",
       "ollamaSyncSection": "グローバルOllamaモデル同期",
@@ -362,6 +374,7 @@
       "ollamaAvailableModels": "利用可能なモデル",
       "ollamaNoSync": "まだ同期されたモデルがありません。「全て同期」をクリックしてください。",
       "ollamaSearchModels": "モデルを検索…",
+      "modelToggle": "{model} を切り替え",
       "viewModels": "モデルを表示",
       "noServerLinked": "サーバー未連結",
       "searchServers": "サーバーを検索…",
@@ -400,6 +413,7 @@
     },
     "capacity": {
       "title": "並行処理制御",
+      "pageDesc": "プロバイダーごとのVRAM使用量とアクティブリクエスト状況",
       "desc": "VRAMベースの自動スロット割り当て",
       "syncNow": "今すぐ分析",
       "syncing": "分析中…",
@@ -436,10 +450,17 @@
       "colModel": "モデル",
       "colWeight": "重み",
       "colKvPerReq": "KV/リクエスト",
-      "colActiveLimit": "アクティブ / 制限"
+      "colActiveLimit": "アクティブ / 制限",
+      "colProviders": "プロバイダー",
+      "viewServer": "サーバー",
+      "viewCluster": "クラスター",
+      "searchProvider": "プロバイダーを検索",
+      "showingProviders": "{{from}}–{{to}} / {{total}}件",
+      "clusterSummary": "{{total}} プロバイダー · アクティブリクエスト {{active}} · 問題 {{issues}}"
     },
     "gemini": {
-      "title": "Gemini APIキー",
+      "title": "Geminiプロバイダー",
+      "description": "Gemini APIキーを登録し、クラウド推論ルーティングを管理します。",
       "name": "名前",
       "apiKey": "APIキー",
       "freeTier": "無料プラン",
@@ -722,6 +743,7 @@
   "accounts": {
     "title": "アカウント",
     "description": "管理者アカウントとアクセス制御を管理します。",
+    "registered": "登録済み",
     "username": "ユーザー名",
     "name": "名前",
     "role": "役割",
@@ -777,7 +799,8 @@
       "account_manage": "アカウント管理",
       "audit_view": "監査ログ",
       "settings_manage": "設定",
-      "role_manage": "ロール管理"
+      "role_manage": "ロール管理",
+      "model_manage": "モデル管理"
     },
     "menu": {
       "dashboard": "ダッシュボード",

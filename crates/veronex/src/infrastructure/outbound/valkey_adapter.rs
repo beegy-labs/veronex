@@ -122,6 +122,14 @@ impl ValkeyPort for ValkeyAdapter {
         Ok(())
     }
 
+    async fn list_drain(&self, key: &str) -> Result<u64> {
+        let len: u64 = self.pool.llen(key).await.unwrap_or(0);
+        if len > 0 {
+            self.pool.del::<i64, _>(key).await?;
+        }
+        Ok(len)
+    }
+
     // ── ZSET queue operations (Phase 3) ──────────────────────────────
 
     async fn zset_enqueue(

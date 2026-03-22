@@ -9,7 +9,7 @@
  * and serializes UUIDs/dates as strings.
  */
 
-import type { JobStatus, JobSource, ProviderType, LlmProviderStatus } from './generated'
+import type { JobStatus, JobSource, ProviderType, LlmProviderStatus, GpuServer } from './generated'
 
 /** Connection verification state for server/provider registration modals. */
 export type VerifyState = 'idle' | 'checking' | 'ok' | 'error'
@@ -216,6 +216,8 @@ export interface KeyBreakdown {
   key_prefix: string
   request_count: number
   success_count: number
+  error_count: number
+  cancelled_count: number
   prompt_tokens: number
   completion_tokens: number
   success_rate: number
@@ -302,6 +304,34 @@ export interface Provider {
   registered_at: string
   /** Masked API key shown in the UI (e.g. `AIza...x1y2`). Gemini only. */
   api_key_masked: string | null
+}
+
+export interface ProviderPage {
+  providers: Provider[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface KeyPage {
+  keys: ApiKey[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface AccountPage {
+  accounts: Account[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface ServerPage {
+  servers: GpuServer[]
+  total: number
+  page: number
+  limit: number
 }
 
 export interface RegisterProviderRequest {
@@ -435,6 +465,21 @@ export interface OllamaProviderForModel {
   name: string
   url: string
   status: string
+  is_enabled: boolean
+}
+
+export interface OllamaModelPage {
+  models: OllamaModelWithCount[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface OllamaProviderPage {
+  providers: OllamaProviderForModel[]
+  total: number
+  page: number
+  limit: number
 }
 
 /**
@@ -540,6 +585,22 @@ export interface CapacityResponse {
   providers: ProviderVramInfo[]
 }
 
+export interface CapacityPageResponse {
+  providers: ProviderVramInfo[]
+  total: number
+  page: number
+  limit: number
+}
+
+export interface ClusterModelInfo {
+  model_name: string
+  weight_mb: number
+  kv_per_request_mb: number
+  total_active: number
+  total_limit: number
+  provider_count: number
+}
+
 export interface SyncSettings {
   analyzer_model: string
   sync_enabled: boolean
@@ -574,11 +635,10 @@ export interface PatchLabSettings {
   max_image_b64_bytes?: number
 }
 
-/** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/capacity/queue/lab queries. */
+/** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/queue/lab queries. */
 export interface DashboardOverview {
   stats: DashboardStats
   performance: PerformanceStats
-  capacity: CapacityResponse
   queue_depth: QueueDepth
   lab: LabSettings
 }

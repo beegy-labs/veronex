@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, started_at, completed_at, status, total_providers, done_providers, results\n            FROM ollama_sync_jobs\n            ORDER BY started_at DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "completed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_providers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "done_providers",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "results",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9a1babbc7e3b61ea6d672b1c7db48afaaea7b882a42e8cf3399ea8cb1d171e64"
+}

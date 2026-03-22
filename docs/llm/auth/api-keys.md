@@ -1,6 +1,6 @@
 # API Keys — Server-Side: Auth & Rate Limiting
 
-> SSOT | **Last Updated**: 2026-03-08 (rev: account_id, created_by, regenerate)
+> SSOT | **Last Updated**: 2026-03-22
 
 ## Task Guide
 
@@ -94,13 +94,13 @@ CREATE TABLE api_keys (
 ```
 POST   /v1/keys              CreateKeyRequest → CreateKeyResponse (plaintext shown once)
                               Names are non-unique labels; unique id = UUIDv7
-GET    /v1/keys              → Vec<KeySummary> (excludes soft-deleted; excludes key_type = 'test')
+GET    /v1/keys?search=&page=1&limit=50 → { keys: Vec<KeySummary>, total: N, page: 1, limit: 50 } (excludes soft-deleted; excludes key_type = 'test')
 DELETE /v1/keys/{id}         → 204 (soft-delete: sets deleted_at = NOW())
 PATCH  /v1/keys/{id}         PatchKeyRequest { is_active?, tier? } → 204
 POST   /v1/keys/{id}/regenerate → CreateKeyResponse (new hash + prefix, same id)
 ```
 
-`GET /v1/keys` filters out test keys (`key_type = 'test'`) server-side. Scope: **super admin** sees all keys (`list_all()`); non-super users see only their own tenant's keys (`list_by_tenant(username)`).
+`GET /v1/keys` filters out test keys (`key_type = 'test'`) server-side. Scope: **super admin** sees all keys (`list_all()`); non-super users see only their own tenant's keys (`list_by_tenant(username)`). Pagination: ?search= (ILIKE on name), ?page=N, ?limit=N (default 50, max 1000).
 
 ### Request / Response Structs
 
@@ -252,6 +252,21 @@ All key operations emit audit events to ClickHouse via OTel:
 | `regenerate` | `api_key` | Key regenerated (new hash) |
 
 Per-key history: `GET /v1/audit?resource_type=api_key&resource_id={key_id}` returns all audit events for a specific key. The web UI shows a History button per key row.
+
+---
+
+## API Key Provider Access
+
+Per-key provider allow/deny control. When no rows exist for a key, all providers are accessible (default allow-all). When rows exist, only providers with `is_allowed = true` are routable for that key.
+
+DB: `api_key_provider_access (api_key_id UUID FK, provider_id UUID FK, is_allowed BOOL, PK(api_key_id, provider_id))` — migration 000010.
+
+| Endpoint | Auth | Body | Response |
+|----------|------|------|----------|
+| `GET /v1/keys/{key_id}/providers` | `RequireSettingsManage` | — | `Vec<{ provider_id, provider_name, is_allowed }>` |
+| `PATCH /v1/keys/{key_id}/providers/{provider_id}` | `RequireSettingsManage` | `{ is_allowed: bool }` | 200 |
+
+Handler: `key_provider_access_handlers.rs`
 
 ---
 

@@ -3,19 +3,20 @@
 #
 # Validates the full scheduler stack with dual Ollama providers:
 #   - Local:  OLLAMA_LOCAL  (default: http://localhost:11434)  + NODE_EXPORTER_LOCAL  (default: http://localhost:9100)
-#   - Remote: OLLAMA_REMOTE (default: https://ollama.girok.dev) + NODE_EXPORTER_REMOTE (default: http://192.168.1.21:9100)
+#   - Remote: OLLAMA_REMOTE (default: https://ollama-1.kr1.girok.dev) + NODE_EXPORTER_REMOTE (default: http://192.168.1.21:9100)
 #
 # Usage:
 #   ./scripts/test-e2e.sh
 #   SKIP_DB_RESET=1 ./scripts/test-e2e.sh
 #   MODEL=qwen3:8b CONCURRENT=8 ./scripts/test-e2e.sh
-#   OLLAMA_LOCAL=http://localhost:11434 OLLAMA_REMOTE=https://ollama.girok.dev ./scripts/test-e2e.sh
+#   OLLAMA_LOCAL=http://localhost:11434 OLLAMA_REMOTE=https://ollama-1.kr1.girok.dev ./scripts/test-e2e.sh
 #
-# Phase execution:
-#   Sequential : 01-setup → 03-inference
-#   Parallel 1 : 02-scheduler, 04-crud, 05-security, 06-api-surface, 07-lifecycle, 11-verify-liveness
-#   Sequential : 08-sdd-advanced
-#   Parallel 2 : 09-metrics-pipeline, 10-image-storage
+# Execution strategy (optimized for speed):
+#   Phase 1 (sequential) : 01-setup
+#   Phase 2 (parallel)   : 03-inference + [04-crud, 05-security, 09-metrics, 10-image, 11-verify]
+#   Phase 3 (parallel)   : [02-scheduler, 06-api-surface, 07-lifecycle, 08-sdd-advanced]
+#     → Phase 3 starts only after 03-inference completes (AIMD state needed)
+#     → Phase 2 independents start immediately after setup
 #
 # Prerequisites:
 #   - docker compose up (Veronex stack running)
@@ -33,99 +34,95 @@ COUNTS_FILE="$E2E_STATE.counts"
 cleanup() { rm -f "$E2E_STATE" "$COUNTS_FILE" "$COUNTS_FILE".* /tmp/_sched_login.json 2>/dev/null; }
 trap cleanup EXIT
 
-# ── Banner ────────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 CYAN='\033[0;36m'; BOLD='\033[1m'; GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
+PARALLEL_EXIT=0
+ALL_PHASE_COUNTS=("$COUNTS_FILE")
+
+run_phase() {
+  local phase="$1"
+  local phase_counts="$COUNTS_FILE.${phase%.sh}"
+  : > "$phase_counts"
+  ALL_PHASE_COUNTS+=("$phase_counts")
+  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase"
+}
+
+_launch_bg() {
+  # Usage: _launch_bg <phase> → sets _BG_PID
+  local phase="$1"
+  local phase_counts="$COUNTS_FILE.${phase%.sh}"
+  : > "$phase_counts"
+  ALL_PHASE_COUNTS+=("$phase_counts")
+  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase" &
+  _BG_PID=$!
+}
+
+wait_all() {
+  # Args: pid1 name1 pid2 name2 ...
+  while [ $# -ge 2 ]; do
+    local pid="$1" name="$2"; shift 2
+    if ! wait "$pid"; then
+      echo -e "${RED}[ERROR]${NC} $name exited non-zero" >&2
+      PARALLEL_EXIT=1
+    fi
+  done
+}
+
+# ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${CYAN}${BOLD}══════════════════════════════════════════════${NC}"
 echo -e "${CYAN}${BOLD}  Veronex E2E — Dual-Provider Scheduler Test${NC}"
 echo -e "${CYAN}${BOLD}══════════════════════════════════════════════${NC}"
 echo -e "  ${CYAN}API        = ${API_URL:-http://localhost:3001}${NC}"
 echo -e "  ${CYAN}Local      = ${OLLAMA_LOCAL:-http://localhost:11434} (node: ${NODE_EXPORTER_LOCAL:-http://localhost:9100})${NC}"
-echo -e "  ${CYAN}Remote     = ${OLLAMA_REMOTE:-https://ollama.girok.dev} (node: ${NODE_EXPORTER_REMOTE:-http://192.168.1.21:9100})${NC}"
+echo -e "  ${CYAN}Remote     = ${OLLAMA_REMOTE:-https://ollama-1.kr1.girok.dev} (node: ${NODE_EXPORTER_REMOTE:-http://192.168.1.21:9100})${NC}"
 echo -e "  ${CYAN}Model      = ${MODEL:-qwen3:8b}  Concurrency = ${CONCURRENT:-6}${NC}"
 echo ""
 
-# ── Sequential phases (state must be established before parallel) ─────────────
-echo -e "${CYAN}${BOLD}[01] Setup: infra + auth + dual providers + API keys${NC}"
-bash "$E2E_DIR/01-setup.sh"
+# ── Phase 1: Setup (sequential — must complete before anything else) ──────────
+echo -e "${CYAN}${BOLD}[Phase 1] Setup: infra + auth + dual providers + API keys${NC}"
+run_phase "01-setup.sh"
 
-echo -e "${CYAN}${BOLD}[03] Inference: concurrent bursts + AIMD learning${NC}"
-bash "$E2E_DIR/03-inference.sh"
-
-# ── Parallel group 1 ─────────────────────────────────────────────────────────
-# 11-verify-liveness is stateless (HTTP verify calls + Valkey key checks)
-# so it runs safely alongside the other parallel phases.
-PARALLEL_PHASES=(
-  "02-scheduler.sh"          # ZSET queue, thermal, num_parallel, AIMD constraint
-  "04-crud.sh"               # Account / Key / Provider(num_parallel) / Server CRUD
-  "05-security.sh"           # Auth edge cases, SSRF, rate limiting, RBAC, Roles
-  "06-api-surface.sh"        # Multi-format inference, endpoint smoke tests
-  "07-lifecycle.sh"          # Job cancel, SSE, native API, password reset, edge cases
-  "11-verify-liveness.sh"    # Server/provider verify, duplicate 409, heartbeat
-)
-PARALLEL_PIDS=()
-PARALLEL_COUNTS=()
-PARALLEL_EXIT=0
-
+# ── Phase 2: Inference + Independent tests (parallel) ────────────────────────
+# 03-inference runs alongside independent tests that don't need AIMD state.
+# This saves ~2-3 minutes by not waiting for inference to finish before CRUD/security.
 echo ""
-echo -e "${CYAN}${BOLD}Running parallel group 1: ${PARALLEL_PHASES[*]}${NC}"
+echo -e "${CYAN}${BOLD}[Phase 2] Inference + independent tests (parallel)${NC}"
 
-for phase in "${PARALLEL_PHASES[@]}"; do
-  phase_counts="$COUNTS_FILE.${phase%.sh}"
-  : > "$phase_counts"
-  PARALLEL_COUNTS+=("$phase_counts")
-  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase" &
-  PARALLEL_PIDS+=($!)
+P2_WAIT_ARGS=()
+
+# Inference (needs to finish before Phase 3)
+INFERENCE_COUNTS="$COUNTS_FILE.03-inference"
+: > "$INFERENCE_COUNTS"
+ALL_PHASE_COUNTS+=("$INFERENCE_COUNTS")
+E2E_COUNTS_FILE="$INFERENCE_COUNTS" bash "$E2E_DIR/03-inference.sh" &
+P2_WAIT_ARGS+=($! "03-inference.sh")
+
+# Independent tests (no AIMD dependency)
+for phase in 04-crud.sh 05-security.sh 09-metrics-pipeline.sh 10-image-storage.sh 11-verify-liveness.sh; do
+  _launch_bg "$phase"
+  P2_WAIT_ARGS+=($_BG_PID "$phase")
 done
 
-for i in "${!PARALLEL_PIDS[@]}"; do
-  if ! wait "${PARALLEL_PIDS[$i]}"; then
-    echo -e "${RED}[ERROR]${NC} ${PARALLEL_PHASES[$i]} exited non-zero" >&2
-    PARALLEL_EXIT=1
-  fi
-done
+# Wait for ALL Phase 2 (inference must finish for Phase 3)
+wait_all "${P2_WAIT_ARGS[@]}"
 
-# ── Sequential: SDD advanced tests (needs clean state after parallel) ────────
+# ── Phase 3: AIMD-dependent tests (parallel) ─────────────────────────────────
+# These tests require AIMD learning data from 03-inference.
 echo ""
-echo -e "${CYAN}${BOLD}[08] SDD Advanced: AIMD decrease, multi-model, scale-in/out, thermal${NC}"
-SDD_COUNTS="$COUNTS_FILE.08-sdd-advanced"
-: > "$SDD_COUNTS"
-if E2E_COUNTS_FILE="$SDD_COUNTS" bash "$E2E_DIR/08-sdd-advanced.sh"; then
-  true
-else
-  echo -e "${RED}[ERROR]${NC} 08-sdd-advanced.sh exited non-zero" >&2
-  PARALLEL_EXIT=1
-fi
+echo -e "${CYAN}${BOLD}[Phase 3] AIMD-dependent tests (parallel)${NC}"
 
-# ── Parallel group 2: independent infra tests ────────────────────────────────
-# 09 (metrics pipeline) and 10 (image storage) are independent:
-#   09 only touches agent + ClickHouse, no inference
-#   10 does image inference but doesn't touch metrics pipeline
-PARALLEL2_PHASES=("09-metrics-pipeline.sh" "10-image-storage.sh")
-PARALLEL2_PIDS=()
-PARALLEL2_COUNTS=()
+P3_WAIT_ARGS=()
 
-echo ""
-echo -e "${CYAN}${BOLD}Running parallel group 2: ${PARALLEL2_PHASES[*]}${NC}"
-
-for phase in "${PARALLEL2_PHASES[@]}"; do
-  phase_counts="$COUNTS_FILE.${phase%.sh}"
-  : > "$phase_counts"
-  PARALLEL2_COUNTS+=("$phase_counts")
-  E2E_COUNTS_FILE="$phase_counts" bash "$E2E_DIR/$phase" &
-  PARALLEL2_PIDS+=($!)
+for phase in 02-scheduler.sh 06-api-surface.sh 07-lifecycle.sh 08-sdd-advanced.sh; do
+  _launch_bg "$phase"
+  P3_WAIT_ARGS+=($_BG_PID "$phase")
 done
 
-for i in "${!PARALLEL2_PIDS[@]}"; do
-  if ! wait "${PARALLEL2_PIDS[$i]}"; then
-    echo -e "${RED}[ERROR]${NC} ${PARALLEL2_PHASES[$i]} exited non-zero" >&2
-    PARALLEL_EXIT=1
-  fi
-done
+wait_all "${P3_WAIT_ARGS[@]}"
 
 # ── Aggregate results ─────────────────────────────────────────────────────────
-ALL_COUNTS_FILES=("$COUNTS_FILE" "${PARALLEL_COUNTS[@]}" "$SDD_COUNTS" "${PARALLEL2_COUNTS[@]}")
 TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
-for cf in "${ALL_COUNTS_FILES[@]}"; do
+for cf in "${ALL_PHASE_COUNTS[@]}"; do
   [ -f "$cf" ] || continue
   while IFS= read -r line; do
     case "$line" in

@@ -17,7 +17,7 @@ import { Timer, TrendingUp, CheckCircle, AlertTriangle, Zap } from 'lucide-react
 import StatsCard from '@/components/stats-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
-import { TIME_LABEL_MAP, TimeRangeSelector } from '@/components/time-range-selector'
+import { TIME_LABEL_MAP, TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
 import { ModelLatencySection } from './components/model-latency-section'
@@ -28,7 +28,8 @@ import { tokens } from '@/lib/design-tokens'
 export default function PerformancePage() {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const [hours, setHours] = useState(24)
+  const [range, setRange] = useState<TimeRange>({ hours: 24 })
+  const hours = range.hours
 
   const { data, isLoading, error } = useQuery(performanceQuery(hours))
   const { data: breakdown } = useQuery(usageBreakdownQuery(hours))
@@ -82,7 +83,7 @@ export default function PerformancePage() {
           <h1 className="text-2xl font-bold tracking-tight">{t('performance.title')}</h1>
           <p className="text-muted-foreground mt-1 text-sm">{t('performance.description')}</p>
         </div>
-        <TimeRangeSelector value={hours} onChange={setHours} />
+        <TimeRangeSelector value={range} onChange={setRange} />
       </div>
 
       {/* ClickHouse unavailable */}

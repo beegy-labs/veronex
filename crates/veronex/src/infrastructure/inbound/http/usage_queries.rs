@@ -34,6 +34,8 @@ pub struct KeyBreakdown {
     pub key_prefix: String,
     pub request_count: i64,
     pub success_count: i64,
+    pub error_count: i64,
+    pub cancelled_count: i64,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub success_rate: f64,
@@ -359,7 +361,7 @@ pub(super) async fn pg_usage_breakdown(
              LIMIT 1
          ) pricing ON true
          WHERE j.created_at >= now() - make_interval(hours => $1)
-         GROUP BY j.provider_type, j.provider_type, pricing.input_per_1m, pricing.output_per_1m
+         GROUP BY j.provider_type, pricing.input_per_1m, pricing.output_per_1m
          ORDER BY request_count DESC",
     )
     .bind(hours as i32)
@@ -392,6 +394,8 @@ pub(super) async fn pg_usage_breakdown(
             k.key_prefix,
             COUNT(j.id)                                            AS request_count,
             COUNT(j.id) FILTER (WHERE j.status = 'completed')     AS success_count,
+            COUNT(j.id) FILTER (WHERE j.status = 'failed')        AS error_count,
+            COUNT(j.id) FILTER (WHERE j.status = 'cancelled')     AS cancelled_count,
             COALESCE(SUM(j.prompt_tokens), 0)                     AS prompt_tokens,
             COALESCE(SUM(j.completion_tokens), 0)                 AS completion_tokens,
             SUM(
@@ -425,6 +429,8 @@ pub(super) async fn pg_usage_breakdown(
                 key_prefix: r.try_get("key_prefix").unwrap_or_default(),
                 request_count,
                 success_count,
+                error_count: r.try_get("error_count").unwrap_or(0),
+                cancelled_count: r.try_get("cancelled_count").unwrap_or(0),
                 prompt_tokens: r.try_get("prompt_tokens").unwrap_or(0),
                 completion_tokens: r.try_get("completion_tokens").unwrap_or(0),
                 success_rate: pct(success_count, request_count),

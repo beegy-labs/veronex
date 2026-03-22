@@ -28,6 +28,9 @@ pub trait ValkeyPort: Send + Sync {
     /// LREM: remove one occurrence of a value from a list.
     async fn list_remove(&self, key: &str, value: &str) -> Result<()>;
 
+    /// DEL + return count: delete a list key entirely. Used to drain legacy queues.
+    async fn list_drain(&self, key: &str) -> Result<u64>;
+
     // ── ZSET queue operations (Phase 3) ──────────────────────────────
 
     /// Atomic Lua: ZCARD guard + ZADD + INCR demand + HSET enqueue_at + HSET model.

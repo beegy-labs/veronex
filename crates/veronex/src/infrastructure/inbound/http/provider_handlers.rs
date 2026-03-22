@@ -1,5 +1,5 @@
 use anyhow::Result;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -386,18 +386,35 @@ pub async fn register_provider(
         .into_response()
 }
 
-/// `GET /v1/providers` — list all registered providers.
-pub async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
-    match state.provider_registry.list_all().await {
-        Ok(providers) => {
-            let summaries: Vec<ProviderSummary> = providers.into_iter().map(Into::into).collect();
-            (StatusCode::OK, Json(summaries)).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to list providers");
-            db_error(e).into_response()
-        }
-    }
+/// `GET /v1/providers` — list registered providers with optional search/pagination/type filter.
+#[derive(serde::Deserialize)]
+pub struct ListProvidersParams {
+    pub search: Option<String>,
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+    /// Filter by provider type: "ollama" | "gemini". Omit for all types.
+    pub provider_type: Option<String>,
+}
+
+pub async fn list_providers(
+    State(state): State<AppState>,
+    Query(params): Query<ListProvidersParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(100).clamp(1, 1000);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+    let provider_type = params.provider_type.as_deref();
+
+    let (providers, total) = state.provider_registry.list_page(&search, provider_type, limit, offset).await
+        .map_err(|e| { tracing::error!(error = %e, "failed to list providers"); db_error(e) })?;
+    let summaries: Vec<ProviderSummary> = providers.into_iter().map(Into::into).collect();
+    Ok(Json(serde_json::json!({
+        "providers": summaries,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
 /// `DELETE /v1/providers/{id}` — soft-delete (deactivate) a provider.
