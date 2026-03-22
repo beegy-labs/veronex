@@ -11,6 +11,7 @@
 //! - `LUA_REAP_OWNERLESS_JOB`: claims ownership with SET NX before removing from processing.
 //! After Lua removal, the Rust caller re-enqueues to QUEUE_ZSET with model from DB.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use fred::prelude::*;
@@ -19,6 +20,9 @@ use tokio_util::sync::CancellationToken;
 use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP, TIER_BONUS_PAID};
 use crate::infrastructure::outbound::capacity::distributed_vram_pool::DistributedVramPool;
 use crate::infrastructure::outbound::valkey_keys;
+
+/// Max entries to inspect per reap cycle — bounds LRANGE memory at 10K+ provider scale.
+const REAP_CHUNK_SIZE: i64 = 500;
 
 /// Lua CAS: atomically verify dead owner + remove from processing.
 ///
@@ -63,6 +67,25 @@ if not claimed then
 end
 redis.call('LREM', KEYS[2], 1, ARGV[1])
 redis.call('DEL', KEYS[1])
+return 1
+"#;
+
+/// Lua: ZADD to QUEUE_ZSET with emergency priority + update side hashes.
+///
+/// KEYS[1] = QUEUE_ZSET
+/// KEYS[2] = demand key (veronex:demand:{model})
+/// KEYS[3] = QUEUE_ENQUEUE_AT
+/// KEYS[4] = QUEUE_MODEL_MAP
+/// ARGV[1] = job UUID string
+/// ARGV[2] = score (f64 as string)
+/// ARGV[3] = enqueue_at ms
+/// ARGV[4] = model name
+const LUA_EMERGENCY_ENQUEUE: &str = r#"
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+local v = redis.call('INCR', KEYS[2])
+if v < 0 then redis.call('SET', KEYS[2], 1) end
+redis.call('HSET', KEYS[3], ARGV[1], ARGV[3])
+redis.call('HSET', KEYS[4], ARGV[1], ARGV[4])
 return 1
 "#;
 
@@ -124,11 +147,16 @@ async fn refresh_heartbeat(pool: &Pool, instance_id: &str) {
 
 /// Scan the processing list for jobs whose owner instance is dead, re-enqueue them.
 ///
-/// Uses Lua CAS scripts to prevent double-execution: each LREM from processing is atomic
-/// (check owner + heartbeat + LREM + DEL in one Lua eval). After Lua, re-enqueues to
-/// QUEUE_ZSET with emergency priority by looking up the model from DB.
+/// Processes at most `REAP_CHUNK_SIZE` entries per cycle to bound Redis memory usage.
+/// Uses batched MGET for owner and heartbeat lookups (2 round trips for the whole chunk),
+/// then Lua CAS per confirmed-dead job. Collects reaped jobs and calls
+/// `reenqueue_reaped_jobs_batch` for a single DB SELECT + single UPDATE.
 async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
-    let entries: Vec<String> = match pool.lrange(valkey_keys::QUEUE_PROCESSING, 0, -1).await {
+    // Step 1: bounded LRANGE — at most REAP_CHUNK_SIZE entries per cycle.
+    let entries: Vec<String> = match pool
+        .lrange(valkey_keys::QUEUE_PROCESSING, 0, REAP_CHUNK_SIZE - 1)
+        .await
+    {
         Ok(e) => e,
         Err(e) => {
             tracing::warn!("queue reap: failed to read processing list: {e}");
@@ -140,42 +168,112 @@ async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
         return;
     }
 
-    let mut reaped = 0u32;
-    for uuid_str in &entries {
-        let uuid = match uuid::Uuid::parse_str(uuid_str) {
-            Ok(u) => u,
+    // Step 2: filter valid UUIDs; evict garbage entries asynchronously.
+    let jobs: Vec<(uuid::Uuid, String)> = entries
+        .into_iter()
+        .filter_map(|s| match uuid::Uuid::parse_str(&s) {
+            Ok(u) => Some((u, s)),
             Err(_) => {
-                let _ = pool.lrem::<i64, _, _>(valkey_keys::QUEUE_PROCESSING, 1, uuid_str).await;
-                continue;
+                let pool = pool.clone();
+                let s_owned = s.clone();
+                tokio::spawn(async move {
+                    let _ = pool
+                        .lrem::<i64, _, _>(valkey_keys::QUEUE_PROCESSING, 1, &s_owned)
+                        .await;
+                });
+                None
             }
-        };
+        })
+        .collect();
 
-        let owner_key = valkey_keys::job_owner(uuid);
-        let owner: Option<String> = pool.get(&owner_key).await.unwrap_or(None);
+    if jobs.is_empty() {
+        return;
+    }
 
-        let reaped_ok = match owner {
+    // Step 3: batch MGET all owner keys — 1 round trip.
+    let owner_keys: Vec<String> = jobs
+        .iter()
+        .map(|(uuid, _)| valkey_keys::job_owner(*uuid))
+        .collect();
+
+    let owners: Vec<Option<String>> = pool
+        .mget::<Vec<Option<String>>, _>(owner_keys.clone())
+        .await
+        .unwrap_or_default();
+
+    // Step 4: collect unique non-nil owner instance IDs for heartbeat lookup.
+    let unique_instances: Vec<String> = owners
+        .iter()
+        .filter_map(|o| o.as_deref())
+        .collect::<HashSet<&str>>()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    // Step 5: batch MGET all heartbeat keys — 1 round trip.
+    let alive_instances: HashSet<String> = if unique_instances.is_empty() {
+        HashSet::new()
+    } else {
+        let hb_keys: Vec<String> = unique_instances
+            .iter()
+            .map(|id| valkey_keys::heartbeat(id))
+            .collect();
+
+        let hb_values: Vec<Option<String>> = pool
+            .mget::<Vec<Option<String>>, _>(hb_keys)
+            .await
+            .unwrap_or_default();
+
+        unique_instances
+            .into_iter()
+            .zip(hb_values.into_iter())
+            .filter_map(|(id, val)| if val.is_some() { Some(id) } else { None })
+            .collect()
+    };
+
+    // Step 6: per-job Lua CAS for confirmed-dead or ownerless jobs.
+    // owners may be shorter than jobs if MGET returned fewer — zip with repeat(&None) as fallback.
+    let mut reaped_jobs: Vec<(uuid::Uuid, String)> = Vec::new();
+
+    for ((uuid, uuid_str), owner_opt) in jobs
+        .iter()
+        .zip(owners.iter().chain(std::iter::repeat(&None)))
+    {
+        let owner_key = valkey_keys::job_owner(*uuid);
+
+        let reaped_ok = match owner_opt {
             Some(instance_id) => {
-                let hb_key = valkey_keys::heartbeat(&instance_id);
-                // Atomic CAS: LREM from processing only if owner matches AND heartbeat is dead.
-                let result: Result<i64, _> = pool
-                    .eval(
-                        LUA_REAP_OWNED_JOB,
-                        vec![
-                            owner_key,
-                            hb_key,
-                            valkey_keys::QUEUE_PROCESSING.to_string(),
-                        ],
-                        vec![uuid_str.clone(), instance_id.clone()],
-                    )
-                    .await;
-                match result {
-                    Ok(1) => { tracing::info!(%uuid, %instance_id, "reaped orphaned job (CAS)"); true }
-                    Ok(_) => false, // owner changed or instance recovered — skip
-                    Err(e) => { tracing::warn!(%uuid, "reap CAS failed: {e}"); false }
+                // Skip if the owner instance is still alive.
+                if alive_instances.contains(instance_id.as_str()) {
+                    false
+                } else {
+                    let hb_key = valkey_keys::heartbeat(instance_id);
+                    let result: Result<i64, _> = pool
+                        .eval(
+                            LUA_REAP_OWNED_JOB,
+                            vec![
+                                owner_key,
+                                hb_key,
+                                valkey_keys::QUEUE_PROCESSING.to_string(),
+                            ],
+                            vec![uuid_str.clone(), instance_id.clone()],
+                        )
+                        .await;
+                    match result {
+                        Ok(1) => {
+                            tracing::info!(%uuid, %instance_id, "reaped orphaned job (CAS)");
+                            true
+                        }
+                        Ok(_) => false, // owner changed or instance recovered — skip
+                        Err(e) => {
+                            tracing::warn!(%uuid, "reap CAS failed: {e}");
+                            false
+                        }
+                    }
                 }
             }
             None => {
-                // Atomic CAS: claim ownerless job via SET NX before removing from processing.
+                // Ownerless: atomic claim via SET NX.
                 let result: Result<i64, _> = pool
                     .eval(
                         LUA_REAP_OWNERLESS_JOB,
@@ -187,97 +285,102 @@ async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
                     )
                     .await;
                 match result {
-                    Ok(1) => { tracing::info!(%uuid, "reaped ownerless job (CAS)"); true }
+                    Ok(1) => {
+                        tracing::info!(%uuid, "reaped ownerless job (CAS)");
+                        true
+                    }
                     Ok(_) => false, // another reaper claimed it — skip
-                    Err(e) => { tracing::warn!(%uuid, "reap ownerless CAS failed: {e}"); false }
+                    Err(e) => {
+                        tracing::warn!(%uuid, "reap ownerless CAS failed: {e}");
+                        false
+                    }
                 }
             }
         };
 
-        if !reaped_ok {
-            continue;
+        if reaped_ok {
+            reaped_jobs.push((*uuid, uuid_str.clone()));
         }
-
-        // Re-enqueue to QUEUE_ZSET: look up model from DB, ZADD with emergency priority.
-        reenqueue_reaped_job(pool, pg_pool, uuid, uuid_str).await;
-        reaped += 1;
     }
 
-    if reaped > 0 {
-        tracing::info!(reaped, "reaper re-enqueued orphaned jobs to ZSET");
+    if reaped_jobs.is_empty() {
+        return;
     }
+
+    let reaped_count = reaped_jobs.len();
+    reenqueue_reaped_jobs_batch(pool, pg_pool, reaped_jobs).await;
+    tracing::info!(reaped = reaped_count, "reaper re-enqueued orphaned jobs to ZSET");
 }
 
-/// Look up job model from DB and ZADD to QUEUE_ZSET with emergency priority.
-async fn reenqueue_reaped_job(
+/// Batch re-enqueue reaped jobs: single DB SELECT + single UPDATE + per-job Lua ZADD.
+///
+/// Uses `ANY($1::uuid[])` to avoid N DB round trips regardless of batch size.
+async fn reenqueue_reaped_jobs_batch(
     pool: &Pool,
     pg_pool: &sqlx::PgPool,
-    uuid: uuid::Uuid,
-    uuid_str: &str,
+    reaped: Vec<(uuid::Uuid, String)>,
 ) {
-    // Fetch model_name from DB (not in Valkey model_map after dispatch).
-    let row = sqlx::query_scalar::<_, String>(
-        "SELECT model_name FROM inference_jobs WHERE id = $1"
+    let ids: Vec<uuid::Uuid> = reaped.iter().map(|(id, _)| *id).collect();
+
+    // Single SELECT for all model names.
+    let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT id, model_name FROM inference_jobs WHERE id = ANY($1::uuid[])",
     )
-    .bind(uuid)
-    .fetch_optional(pg_pool)
-    .await;
+    .bind(&ids as &[uuid::Uuid])
+    .fetch_all(pg_pool)
+    .await
+    .unwrap_or_default();
 
-    let model = match row {
-        Ok(Some(m)) => m,
-        Ok(None) => {
-            tracing::warn!(%uuid, "reaped job not found in DB — skipping re-enqueue");
-            return;
-        }
-        Err(e) => {
-            tracing::warn!(%uuid, "DB lookup for reaped job failed: {e}");
-            return;
-        }
-    };
+    // Build id → model_name lookup.
+    let model_map: std::collections::HashMap<uuid::Uuid, String> = rows
+        .into_iter()
+        .map(|(id, model)| (id, model))
+        .collect();
 
-    // Reset DB status to pending so the job shows correctly while queued.
+    // Single batch UPDATE: reset all reaped running jobs to pending.
     let _ = sqlx::query(
-        "UPDATE inference_jobs SET status = 'pending', started_at = NULL WHERE id = $1 AND status = 'running'"
+        "UPDATE inference_jobs SET status = 'pending', started_at = NULL WHERE id = ANY($1::uuid[]) AND status = 'running'",
     )
-    .bind(uuid)
+    .bind(&ids as &[uuid::Uuid])
     .execute(pg_pool)
     .await;
 
-    // ZADD QUEUE_ZSET with emergency priority (lowest score = highest priority).
+    // Per-job Lua ZADD to QUEUE_ZSET with emergency priority (lowest score = highest priority).
     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
     let score = now_ms.saturating_sub(TIER_BONUS_PAID) as f64;
-    let demand_key = format!("veronex:demand:{}", model);
 
-    // ZADD + side-hash updates (enqueue_at + model_map) — mirror of LUA_ZSET_ENQUEUE
-    // but without the capacity guard (reaped jobs get emergency admission).
-    let result: Result<(), _> = pool
-        .eval(
-            r#"
-redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
-local v = redis.call('INCR', KEYS[2])
-if v < 0 then redis.call('SET', KEYS[2], 1) end
-redis.call('HSET', KEYS[3], ARGV[1], ARGV[3])
-redis.call('HSET', KEYS[4], ARGV[1], ARGV[4])
-return 1
-"#,
-            vec![
-                QUEUE_ZSET.to_string(),
-                demand_key,
-                QUEUE_ENQUEUE_AT.to_string(),
-                QUEUE_MODEL_MAP.to_string(),
-            ],
-            vec![
-                uuid_str.to_string(),
-                score.to_string(),
-                now_ms.to_string(),
-                model.clone(),
-            ],
-        )
-        .await;
+    for (uuid, uuid_str) in &reaped {
+        let model: &str = match model_map.get(uuid).map(String::as_str) {
+            Some(m) => m,
+            None => {
+                tracing::warn!(%uuid, "reaped job not found in DB — skipping re-enqueue");
+                continue;
+            }
+        };
 
-    match result {
-        Ok(()) => tracing::info!(%uuid, %model, "reaped job re-enqueued to QUEUE_ZSET"),
-        Err(e) => tracing::warn!(%uuid, "failed to ZADD reaped job to QUEUE_ZSET: {e}"),
+        let demand_key = format!("veronex:demand:{model}");
+
+        let result: Result<(), _> = pool
+            .eval(
+                LUA_EMERGENCY_ENQUEUE,
+                vec![
+                    QUEUE_ZSET.to_string(),
+                    demand_key,
+                    QUEUE_ENQUEUE_AT.to_string(),
+                    QUEUE_MODEL_MAP.to_string(),
+                ],
+                vec![
+                    uuid_str.clone(),
+                    score.to_string(),
+                    now_ms.to_string(),
+                    model.to_string(),
+                ],
+            )
+            .await;
+
+        match result {
+            Ok(()) => tracing::info!(%uuid, %model, "reaped job re-enqueued to QUEUE_ZSET"),
+            Err(e) => tracing::warn!(%uuid, "failed to ZADD reaped job to QUEUE_ZSET: {e}"),
+        }
     }
 }
-
