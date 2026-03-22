@@ -51,7 +51,8 @@ interface Props {
   statsLoading: boolean
   providers: Provider[] | undefined
   servers: GpuServer[] | undefined
-  serverMetricQueries: Array<{ data: NodeMetrics | undefined }>
+  /** Batch metrics map: server_id → NodeMetrics (single request, replaces N individual queries). */
+  serverMetricsBatch: Record<string, NodeMetrics>
   serverHistoryQueries: Array<{ data: ServerMetricsPoint[] | undefined }>
   perf: PerformanceStats | undefined    // 24 h
   perf7d: PerformanceStats | undefined  // 7 d
@@ -65,7 +66,7 @@ interface Props {
 export function DashboardTab({
   stats, statsLoading,
   providers, servers,
-  serverMetricQueries, serverHistoryQueries,
+  serverMetricsBatch, serverHistoryQueries,
   perf, perf7d, perf30d,
   usage, breakdown, recentJobsData,
 }: Props) {
@@ -89,8 +90,8 @@ export function DashboardTab({
 
   /* ── derived: server health (all servers) ───────────────── */
   const serverStatus = useMemo(() =>
-    (servers ?? []).map((s, i) => {
-      const m = serverMetricQueries[i]?.data
+    (servers ?? []).map((s) => {
+      const m = serverMetricsBatch[s.id]
       const connected = m?.scrape_ok === true
       const maxTemp = connected && (m?.gpus?.length ?? 0) > 0
         ? m?.gpus?.reduce((max, g) => Math.max(max, g.temp_junction_c ?? g.temp_c ?? 0, g.temp_mem_c ?? 0), 0) ?? null
@@ -101,8 +102,7 @@ export function DashboardTab({
         : 'normal'
       return { id: s.id, name: s.name, connected, maxTemp, thermal }
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [servers, serverMetricQueries],
+    [servers, serverMetricsBatch],
   )
 
   // Server status counts + thermal alert — derived from memoized serverStatus
@@ -117,8 +117,8 @@ export function DashboardTab({
   }, [serverStatus])
 
   /* ── derived: power ─────────────────────────────────────── */
-  const hasPowerData = serverMetricQueries.some(q =>
-    q.data?.scrape_ok && (q.data.gpus ?? []).some(g => (g.power_w ?? 0) > 0)
+  const hasPowerData = Object.values(serverMetricsBatch).some(m =>
+    m?.scrape_ok && (m.gpus ?? []).some(g => (g.power_w ?? 0) > 0)
   )
 
   function sumKwhInRange(startMs: number, endMs: number): number {

@@ -155,6 +155,9 @@ export const api = {
   serverMetrics: (id: string) =>
     apiClient.get<NodeMetrics>(`/v1/servers/${id}/metrics`),
 
+  serverMetricsBatch: (ids: string[]) =>
+    apiClient.get<Record<string, NodeMetrics>>(`/v1/servers/metrics/batch?ids=${ids.join(',')}`),
+
   serverMetricsHistory: (id: string, hours = 1) =>
     apiClient.get<ServerMetricsPoint[]>(`/v1/servers/${id}/metrics/history?hours=${hours}`),
 
