@@ -106,6 +106,7 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
         labels.insert("type".into(), "ollama".into());
         labels.insert("provider_id".into(), p.id.to_string());
         labels.insert("provider_name".into(), p.name.clone());
+        labels.insert("total_vram_mb".into(), p.total_vram_mb.to_string());
 
         // Link to server when associated
         if let Some(sid) = p.server_id {

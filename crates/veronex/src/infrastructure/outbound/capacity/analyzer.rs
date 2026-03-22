@@ -115,6 +115,37 @@ struct TagModel {
     name: String,
 }
 
+// ── Agent capacity state (Valkey cache) ──────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct AgentLoadedModel {
+    name:          String,
+    size_vram:     u64,
+    num_layers:    u32,
+    num_kv_heads:  u32,
+    head_dim:      u32,
+    max_ctx:       u32,
+    configured_ctx: u32,
+}
+
+#[derive(serde::Deserialize)]
+struct AgentCapacityState {
+    loaded_models: Vec<AgentLoadedModel>,
+    total_vram_mb: u64,
+}
+
+/// Try to read the capacity state pushed by veronex-agent from Valkey.
+async fn read_agent_capacity_state(
+    pool: &fred::clients::Pool,
+    provider_id: Uuid,
+) -> Option<AgentCapacityState> {
+    use fred::prelude::*;
+    let key = crate::infrastructure::outbound::valkey_keys::provider_capacity_state(provider_id);
+    let raw: Option<String> = pool.get(&key).await.ok()?;
+    let json = raw?;
+    serde_json::from_str(&json).ok()
+}
+
 // ── Architecture profile from /api/show ──────────────────────────────────────
 
 #[derive(Default, Debug, Clone)]
@@ -649,14 +680,33 @@ pub async fn sync_provider(
         let _: Result<(), _> = pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await;
     }
 
-    // 3. VRAM probing: GET /api/ps
-    let ps: OllamaProcessStatus = client
-        .get(format!("{ollama_url}/api/ps"))
-        .timeout(OLLAMA_METADATA_TIMEOUT)
-        .send()
-        .await?
-        .json()
-        .await?;
+    // 3. VRAM probing: prefer agent capacity_state from Valkey (avoids O(N_models) HTTP calls).
+    //    Falls back to GET /api/ps + /api/show per model when agent state is absent.
+    let agent_state = if let Some(pool) = valkey_pool {
+        read_agent_capacity_state(pool, provider_id).await
+    } else {
+        None
+    };
+
+    // Derive loaded models from agent state or fall back to /api/ps
+    let (ps_models, agent_total_vram_mb): (Vec<OllamaRunningModel>, Option<u64>) =
+        if let Some(ref state) = agent_state {
+            let models = state
+                .loaded_models
+                .iter()
+                .map(|m| OllamaRunningModel { name: m.name.clone(), size_vram: m.size_vram })
+                .collect();
+            (models, Some(state.total_vram_mb))
+        } else {
+            let ps: OllamaProcessStatus = client
+                .get(format!("{ollama_url}/api/ps"))
+                .timeout(OLLAMA_METADATA_TIMEOUT)
+                .send()
+                .await?
+                .json()
+                .await?;
+            (ps.models, None)
+        };
 
     // hw_metrics from Valkey → total GPU VRAM, fallback to provider DB field
     let hw = if let Some(pool) = valkey_pool {
@@ -666,8 +716,12 @@ pub async fn sync_provider(
     };
     let drm_vram_mb = hw.as_ref().map(|h| h.vram_total_mb as u64)
         .filter(|&v| v > 0)
-        .unwrap_or({
-            if provider_total_vram_mb > 0 { provider_total_vram_mb as u64 } else { 0 }
+        .unwrap_or_else(|| {
+            // Prefer agent-reported total_vram_mb (from discovery labels / provider DB),
+            // fall back to provider DB field directly.
+            agent_total_vram_mb.filter(|&v| v > 0).unwrap_or({
+                if provider_total_vram_mb > 0 { provider_total_vram_mb as u64 } else { 0 }
+            })
         });
 
     // APU / unified-memory detection: AMD Ryzen AI (iGPU) and similar APUs report only
@@ -842,27 +896,43 @@ pub async fn sync_provider(
 
     // Mark loaded models + unload models no longer in /api/ps
     let ps_names: std::collections::HashSet<&str> =
-        ps.models.iter().map(|m| m.name.as_str()).collect();
+        ps_models.iter().map(|m| m.name.as_str()).collect();
     for name in vram_pool.loaded_model_names(provider_id) {
         if !ps_names.contains(name.as_str()) {
             vram_pool.mark_model_unloaded(provider_id, &name);
             tracing::info!(provider = %provider_name, model = %name, "model unloaded (no longer in /api/ps)");
         }
     }
-    for model in &ps.models {
+    for model in &ps_models {
         let weight_mb = (model.size_vram / 1_048_576) as u64;
         vram_pool.mark_model_loaded(provider_id, &model.name, weight_mb);
     }
 
-    // 4. Architecture analysis + KV cache for each loaded model
+    // 4. Architecture analysis + KV cache for each loaded model.
+    //    When agent_state is present, arch is read from Valkey (no HTTP).
+    //    Otherwise, falls back to POST /api/show per model.
     let mut model_snapshots: Vec<ModelSnapshot> = Vec::new();
 
-    for model in &ps.models {
+    for model in &ps_models {
         let weight_mb = (model.size_vram / 1_048_576) as i32;
 
-        let arch = fetch_model_arch_profile(client, ollama_url, &model.name)
-            .await
-            .unwrap_or_default();
+        let arch = if let Some(ref state) = agent_state {
+            // Use arch data from agent capacity state (no HTTP call needed)
+            state.loaded_models.iter()
+                .find(|m| m.name == model.name)
+                .map(|m| ModelArchProfile {
+                    num_layers:     m.num_layers,
+                    num_kv_heads:   m.num_kv_heads,
+                    head_dim:       m.head_dim,
+                    max_ctx:        m.max_ctx,
+                    configured_ctx: m.configured_ctx,
+                })
+                .unwrap_or_default()
+        } else {
+            fetch_model_arch_profile(client, ollama_url, &model.name)
+                .await
+                .unwrap_or_default()
+        };
 
         let stats = match capacity_repo
             .compute_throughput_stats(provider_id, &model.name, 1)
