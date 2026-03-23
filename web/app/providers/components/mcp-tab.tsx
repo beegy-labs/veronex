@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { mcpServersQuery } from '@/lib/queries/mcp'
 import { api } from '@/lib/api'
@@ -112,10 +112,12 @@ export function McpTab() {
 
   const { data: servers, isLoading, error } = useQuery(mcpServersQuery())
 
-  // If the MCP API endpoint doesn't exist (404), hide the MCP nav tab
-  if ((error as { status?: number } | null)?.status === 404) {
-    hideSection('mcp')
-  }
+  // If the MCP API endpoint doesn't exist (404), hide the MCP nav item
+  useEffect(() => {
+    if ((error as { status?: number } | null)?.status === 404) {
+      hideSection('mcp')
+    }
+  }, [error, hideSection])
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, is_enabled }: { id: string; is_enabled: boolean }) =>

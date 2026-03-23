@@ -34,6 +34,8 @@ type NavLink = {
   icon: React.ComponentType<{ className?: string }>
   /** Menu ID for role-based visibility filtering. */
   menuId?: string
+  /** Section ID for 404-based hiding. */
+  section?: string
 }
 
 type NavGroupChild = {
@@ -88,9 +90,9 @@ const navItems: NavItem[] = [
     children: [
       { href: '/providers?s=ollama', labelKey: 'nav.ollama', icon: OllamaIcon, section: 'ollama', menuId: 'providers' },
       { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini', menuId: 'providers' },
-      { href: '/providers?s=mcp',    labelKey: 'nav.mcp',    icon: Plug,       section: 'mcp',    menuId: 'providers' },
     ],
   },
+  { type: 'link', href: '/mcp', labelKey: 'nav.mcp', icon: Plug, menuId: 'providers', section: 'mcp' },
 ]
 
 // ── Inner nav (needs useSearchParams — wrapped in Suspense by parent) ───────────
@@ -268,6 +270,7 @@ function NavContent() {
         {navItems
           // Filter by role-based menu access + 404-hidden sections
           .filter(item => !item.menuId || hasMenu(item.menuId))
+          .filter(item => !('section' in item) || !item.section || !nav404.has(item.section))
           .map(item => {
             if (item.type === 'group') {
               return {
