@@ -12,6 +12,7 @@ import { PROVIDER_OLLAMA } from '@/lib/constants'
 import { EditModal, RegisterModal } from './components/modals'
 import { OllamaTab } from './components/ollama-tab'
 import { GeminiTab } from './components/gemini-tab'
+import { McpTab } from './components/mcp-tab'
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,18 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
   // Fall back to 'ollama' when Gemini is disabled and the URL says ?s=gemini
   const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'ollama' : sectionParam
+
+  if (section === 'mcp') {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">{t('mcp.title')}</h1>
+          <p className="text-muted-foreground mt-1 text-sm">{t('mcp.description')}</p>
+        </div>
+        <McpTab />
+      </div>
+    )
+  }
 
   const [registerProviderType, setRegisterProviderType] = useState<'ollama' | 'gemini' | null>(null)
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)

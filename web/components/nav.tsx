@@ -77,7 +77,6 @@ const navItems: NavItem[] = [
   { type: 'link', href: '/jobs',    labelKey: 'nav.jobs',    icon: List,      menuId: 'jobs' },
   { type: 'link', href: '/keys',    labelKey: 'nav.keys',    icon: Key,       menuId: 'keys' },
   { type: 'link', href: '/servers', labelKey: 'nav.servers', icon: HardDrive, menuId: 'servers' },
-  { type: 'link' as const, href: '/mcp', labelKey: 'nav.mcp', icon: Plug, menuId: 'providers' },
   {
     type: 'group',
     id: 'providers',
@@ -88,6 +87,7 @@ const navItems: NavItem[] = [
     children: [
       { href: '/providers?s=ollama', labelKey: 'nav.ollama', icon: OllamaIcon, section: 'ollama', menuId: 'providers' },
       { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini', menuId: 'providers' },
+      { href: '/providers?s=mcp',    labelKey: 'nav.mcp',    icon: Plug,       section: 'mcp',    menuId: 'providers' },
     ],
   },
 ]
