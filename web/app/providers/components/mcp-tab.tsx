@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/table'
 import { DataTable } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
+import { useNav404 } from '@/components/nav-404-context'
 
 function RegisterMcpModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
@@ -107,8 +108,14 @@ export function McpTab() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showRegister, setShowRegister] = useState(false)
+  const { hideSection } = useNav404()
 
-  const { data: servers, isLoading } = useQuery(mcpServersQuery())
+  const { data: servers, isLoading, error } = useQuery(mcpServersQuery())
+
+  // If the MCP API endpoint doesn't exist (404), hide the MCP nav tab
+  if ((error as { status?: number } | null)?.status === 404) {
+    hideSection('mcp')
+  }
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, is_enabled }: { id: string; is_enabled: boolean }) =>

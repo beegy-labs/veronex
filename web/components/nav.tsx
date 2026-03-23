@@ -18,6 +18,7 @@ import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone } from '@/components/timezone-provider'
 import { NavSettingsDialog } from '@/components/nav-settings-dialog'
 import { HexLogo, OllamaIcon } from '@/components/nav-icons'
+import { useNav404 } from '@/components/nav-404-context'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -100,6 +101,7 @@ function NavContent() {
   const { theme, toggleTheme } = useTheme()
   const { t } = useTranslation()
   const { resetToLocaleDefault } = useTimezone()
+  const { hidden: nav404 } = useNav404()
 
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -264,7 +266,7 @@ function NavContent() {
       {/* ── Nav links ──────────────────────────────────────────────── */}
       <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
         {navItems
-          // Filter by role-based menu access
+          // Filter by role-based menu access + 404-hidden sections
           .filter(item => !item.menuId || hasMenu(item.menuId))
           .map(item => {
             if (item.type === 'group') {
@@ -272,6 +274,7 @@ function NavContent() {
                 ...item,
                 children: item.children
                   .filter(c => !c.menuId || hasMenu(c.menuId))
+                  .filter(c => !c.section || !nav404.has(c.section))
                   .filter(c =>
                     item.id !== 'providers' || c.section !== 'gemini' || (labSettings?.gemini_function_calling ?? false)
                   ),

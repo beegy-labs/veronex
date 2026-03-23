@@ -282,4 +282,46 @@ fi
 # Practical test: verify 429 is returned when inference is requested with no providers
 info "SDD MAX_QUEUE_PER_MODEL=2000, MAX_QUEUE_SIZE=10000 — enforced via Lua atomic enqueue"
 
+# ── Login Rate Limit ──────────────────────────────────────────────────────────
+
+hdr "Login Rate Limit (IP-based)"
+
+# Read LOGIN_RATE_LIMIT from container env via a running process env (or use compose config)
+CONTAINER_LIMIT=$(docker compose exec -T veronex sh -c 'echo ${LOGIN_RATE_LIMIT:-10}' 2>/dev/null | tr -d '\r\n' || echo "10")
+if [ "${CONTAINER_LIMIT:-10}" = "0" ]; then
+  info "LOGIN_RATE_LIMIT=0 — rate limiting disabled in this environment (skipping limit test)"
+  # Still verify that unlimited login works (no false 429)
+  c=$(rawpostc "/v1/auth/login" "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" | code)
+  [ "$c" = "200" ] && pass "Login allowed when rate limit disabled → 200" \
+    || fail "Login failed unexpectedly → $c"
+else
+  # Clear any existing attempt counter for the test IP
+  docker compose exec -T valkey valkey-cli --eval - 0 <<'LUA' > /dev/null 2>&1 || true
+for _,k in ipairs(redis.call('keys','veronex:login_attempts:*')) do redis.call('del',k) end
+LUA
+
+  LIMIT="${CONTAINER_LIMIT:-10}"
+  info "LOGIN_RATE_LIMIT=$LIMIT — testing lockout after $LIMIT failed attempts"
+
+  # Fire LIMIT+1 bad login attempts to trigger lockout
+  LAST_CODE="000"
+  for i in $(seq 1 $((LIMIT + 1))); do
+    LAST_CODE=$(rawpostc "/v1/auth/login" '{"username":"nonexistent_e2e_user","password":"badpass"}' | code)
+  done
+
+  [ "$LAST_CODE" = "429" ] \
+    && pass "Login rate limit enforced — attempt $((LIMIT + 1)) → 429" \
+    || fail "Login rate limit NOT enforced — attempt $((LIMIT + 1)) → $LAST_CODE (expected 429)"
+
+  # Clear counters so subsequent tests aren't affected
+  docker compose exec -T valkey valkey-cli --eval - 0 <<'LUA' > /dev/null 2>&1 || true
+for _,k in ipairs(redis.call('keys','veronex:login_attempts:*')) do redis.call('del',k) end
+LUA
+
+  # Verify legitimate login still works after counter reset
+  c=$(rawpostc "/v1/auth/login" "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" | code)
+  [ "$c" = "200" ] && pass "Legitimate login OK after counter reset → 200" \
+    || fail "Legitimate login failed after reset → $c"
+fi
+
 save_counts
