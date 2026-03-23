@@ -87,6 +87,41 @@ async fn main() -> Result<()> {
 
     // ── Build app state ────────────────────────────────────────────
     let bootstrap::InfraContext { valkey_pool, pg_pool, http_client, .. } = infra;
+
+    // ── Wire MCP bridge (requires Valkey) ──────────────────────────
+    let mcp_bridge = if let Some(ref valkey) = valkey_pool {
+        use std::sync::Arc;
+        use veronex_mcp::{McpCircuitBreaker, McpHttpClient, McpResultCache, McpSessionManager, McpToolCache};
+        use veronex::infrastructure::outbound::mcp::McpBridgeAdapter;
+        let valkey_arc = Arc::new(valkey.clone());
+        let session_mgr = Arc::new(McpSessionManager::new(McpHttpClient::new()));
+        let tool_cache = Arc::new(McpToolCache::new(valkey_arc.clone(), 32));
+        let result_cache = Arc::new(McpResultCache::new(valkey_arc));
+        let circuit_breaker = Arc::new(McpCircuitBreaker::new());
+        let bridge = McpBridgeAdapter {
+            session_manager: session_mgr.clone(),
+            tool_cache,
+            result_cache,
+            circuit_breaker,
+        };
+        #[derive(sqlx::FromRow)]
+        struct McpServerStartup { id: uuid::Uuid, slug: String, url: String }
+        let servers: Vec<McpServerStartup> = sqlx::query_as(
+            "SELECT id, slug, url FROM mcp_servers WHERE is_enabled = true"
+        )
+        .fetch_all(&pg_pool)
+        .await
+        .unwrap_or_default();
+        for s in servers {
+            if let Err(e) = session_mgr.connect(s.id, &s.slug, &s.url).await {
+                tracing::warn!(id = %s.id, error = %e, "MCP startup connect failed");
+            }
+        }
+        Some(Arc::new(bridge))
+    } else {
+        None
+    };
+
     let state = AppState {
         http_client,
         use_case: handles.use_case,
@@ -126,11 +161,7 @@ async fn main() -> Result<()> {
         sync_lock: handles.sync_lock,
         sse_connections: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         vram_budget_repo: repos.vram_budget_repo,
-        // TODO(mcp-phase-2): Initialize McpBridgeAdapter from MCP_SERVERS env var.
-        // Until this is wired, mcp_bridge is always None and should_intercept() always
-        // returns false — the MCP code path is present but inactive in production.
-        // See: crates/veronex/src/infrastructure/outbound/mcp/bridge.rs
-        mcp_bridge: None,
+        mcp_bridge,
     };
 
     let app = build_app(state, config.cors_origins);

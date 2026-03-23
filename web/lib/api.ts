@@ -1,4 +1,4 @@
-import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, KeyPage, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, KeyPage, McpServer, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterMcpServerRequest, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
@@ -336,6 +336,19 @@ export const api = {
 
   deleteRole: (id: string) =>
     apiClient.delete<void>(`/v1/roles/${id}`),
+
+  // ── MCP servers (JWT-protected) ───────────────────────────────────────────
+  mcpServers: () =>
+    apiClient.get<McpServer[]>('/v1/mcp/servers'),
+
+  registerMcpServer: (body: RegisterMcpServerRequest) =>
+    apiClient.post<{ id: string }>('/v1/mcp/servers', body),
+
+  patchMcpServer: (id: string, body: { is_enabled: boolean }) =>
+    apiClient.patch<McpServer>(`/v1/mcp/servers/${id}`, body),
+
+  deleteMcpServer: (id: string) =>
+    apiClient.delete<void>(`/v1/mcp/servers/${id}`),
 
   // ── Audit (JWT-protected) ─────────────────────────────────────────────────
   auditEvents: (params?: { limit?: number; offset?: number; action?: string; resource_type?: string; resource_id?: string }) => {

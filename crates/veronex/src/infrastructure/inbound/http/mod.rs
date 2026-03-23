@@ -20,6 +20,7 @@ pub mod gemini_model_handlers;
 pub mod ollama_compat_handlers;
 pub mod gemini_policy_handlers;
 pub mod gpu_server_handlers;
+pub mod mcp_handlers;
 pub mod handlers;
 pub mod inference_helpers;
 pub mod key_handlers;

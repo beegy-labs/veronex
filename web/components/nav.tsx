@@ -7,7 +7,7 @@ import {
   LayoutDashboard, List, Key, Server,
   BarChart2, Gauge, Sun, Moon, ChevronLeft,
   BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
-  Users, Shield, LogOut, Settings2,
+  Users, Shield, LogOut, Settings2, Plug,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
@@ -77,6 +77,7 @@ const navItems: NavItem[] = [
   { type: 'link', href: '/jobs',    labelKey: 'nav.jobs',    icon: List,      menuId: 'jobs' },
   { type: 'link', href: '/keys',    labelKey: 'nav.keys',    icon: Key,       menuId: 'keys' },
   { type: 'link', href: '/servers', labelKey: 'nav.servers', icon: HardDrive, menuId: 'servers' },
+  { type: 'link' as const, href: '/mcp', labelKey: 'nav.mcp', icon: Plug, menuId: 'providers' },
   {
     type: 'group',
     id: 'providers',

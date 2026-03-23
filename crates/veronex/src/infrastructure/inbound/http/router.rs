@@ -20,6 +20,7 @@ use super::gemini_compat_handlers;
 use super::gemini_model_handlers;
 use super::gemini_policy_handlers;
 use super::gpu_server_handlers;
+use super::mcp_handlers;
 use super::handlers;
 use super::key_handlers;
 use super::metrics_handlers;
@@ -171,6 +172,9 @@ fn build_jwt_router() -> Router<AppState> {
         // API key → provider access
         .route("/v1/keys/{key_id}/providers", get(key_provider_access_handlers::list_key_provider_access))
         .route("/v1/keys/{key_id}/providers/{provider_id}", patch(key_provider_access_handlers::set_key_provider_access))
+        // MCP server management
+        .route("/v1/mcp/servers", get(mcp_handlers::list_mcp_servers).post(mcp_handlers::register_mcp_server))
+        .route("/v1/mcp/servers/{id}", patch(mcp_handlers::patch_mcp_server).delete(mcp_handlers::delete_mcp_server))
         // GPU server management
         .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers).post(gpu_server_handlers::register_gpu_server))
         .route("/v1/servers/verify", post(gpu_server_handlers::verify_gpu_server))

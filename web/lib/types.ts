@@ -258,6 +258,25 @@ export interface RegisterGpuServerRequest {
   node_exporter_url?: string
 }
 
+export interface McpServer {
+  id: string
+  name: string
+  slug: string
+  url: string
+  is_enabled: boolean
+  timeout_secs: number
+  online: boolean
+  tool_count: number
+  created_at: string
+}
+
+export interface RegisterMcpServerRequest {
+  name: string
+  slug: string
+  url: string
+  timeout_secs?: number
+}
+
 export interface UpdateGpuServerRequest {
   name?: string
   node_exporter_url?: string

@@ -16,7 +16,8 @@
     "gemini": "Gemini",
     "accounts": "Accounts",
     "audit": "Audit Log",
-    "capacity": "Concurrency"
+    "capacity": "Concurrency",
+    "mcp": "MCP Servers"
   },
   "common": {
     "all": "All",
@@ -852,5 +853,20 @@
     "utilization": "Utilization",
     "noMetrics": "No metrics available.",
     "scrapeError": "Failed to scrape node-exporter."
+  },
+  "mcp": {
+    "title": "MCP Servers",
+    "description": "Manage Model Context Protocol servers",
+    "register": "Register Server",
+    "name": "Name",
+    "slug": "Slug",
+    "url": "Server URL",
+    "timeout": "Timeout (sec)",
+    "online": "Online",
+    "offline": "Offline",
+    "tools": "tools",
+    "enabled": "Enabled",
+    "deleteConfirm": "Delete MCP server \"{{name}}\"? This will disconnect all active sessions.",
+    "slugHint": "Auto-generated from name. Letters, numbers, underscores only."
   }
 }
