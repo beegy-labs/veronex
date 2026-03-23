@@ -2,11 +2,13 @@
 # Phase 12: MCP Integration Tests
 #
 # Tests the MCP tool-call path through /v1/chat/completions.
-# Full roundtrip requires a live MCP server (MCP_TEST_URL env var).
-# Without MCP_TEST_URL: validates API surface + bridge code path accessibility.
+# weather-mcp is bundled in docker-compose (port 3100) and always available.
+# MCP_TEST_URL defaults to http://localhost:3100.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"; load_state
+
+MCP_TEST_URL="${MCP_TEST_URL:-http://localhost:3100}"
 
 # ── MCP API Surface ───────────────────────────────────────────────────────────
 
@@ -76,28 +78,72 @@ else
   info "Valkey MCP namespace empty (no MCP servers configured — expected in default setup)"
 fi
 
-# ── Full MCP Roundtrip (optional — requires MCP_TEST_URL) ────────────────────
+# ── weather-mcp Direct Protocol Tests ────────────────────────────────────────
 
-MCP_TEST_URL="${MCP_TEST_URL:-}"
-if [ -z "$MCP_TEST_URL" ]; then
-  info "SKIP: MCP roundtrip — set MCP_TEST_URL=http://weather-mcp:3100 to enable full test"
-  save_counts
-  exit 0
-fi
+hdr "weather-mcp Protocol (${MCP_TEST_URL})"
 
-hdr "MCP Full Roundtrip (MCP_TEST_URL=$MCP_TEST_URL)"
-
-# 1. Verify MCP server is reachable
-MCP_PING=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$MCP_TEST_URL" 2>/dev/null || echo "000")
-case "$MCP_PING" in
-  200|404) pass "MCP server reachable ($MCP_PING)" ;;
+# 1. Health check
+MCP_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$MCP_TEST_URL/health" 2>/dev/null || echo "000")
+case "$MCP_HEALTH" in
+  200) pass "weather-mcp /health → 200" ;;
   000)
-    fail "MCP server unreachable at $MCP_TEST_URL"
+    fail "weather-mcp unreachable at $MCP_TEST_URL (is docker compose up?)"
     save_counts
     exit 0
     ;;
-  *) info "MCP server → HTTP $MCP_PING (may still respond to JSON-RPC)" ;;
+  *) fail "weather-mcp /health → $MCP_HEALTH" ;;
 esac
+
+# 2. MCP initialize handshake
+INIT_RES=$(curl -s -w "\n%{http_code}" --max-time 10 "$MCP_TEST_URL/mcp" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"veronex-e2e","version":"1.0"}}}' \
+  2>/dev/null || printf "\n000")
+INIT_CODE=$(echo "$INIT_RES" | tail -1)
+INIT_BODY=$(echo "$INIT_RES" | sed '$d')
+[ "$INIT_CODE" = "200" ] \
+  && pass "weather-mcp initialize → 200" \
+  || fail "weather-mcp initialize → $INIT_CODE"
+
+# 3. Check protocol version in response
+if [ "$INIT_CODE" = "200" ]; then
+  PROTO=$(echo "$INIT_BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('result',{}).get('protocolVersion',''))" 2>/dev/null || echo "")
+  [ "$PROTO" = "2025-03-26" ] \
+    && pass "weather-mcp protocolVersion = 2025-03-26" \
+    || fail "weather-mcp protocolVersion = '$PROTO' (expected 2025-03-26)"
+fi
+
+# 4. tools/list — expect get_coordinates + get_weather
+TOOLS_LIST=$(curl -s --max-time 10 "$MCP_TEST_URL/mcp" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  2>/dev/null || echo "{}")
+TOOL_COUNT=$(echo "$TOOLS_LIST" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(len(d.get('result',{}).get('tools',[])))" 2>/dev/null || echo "0")
+[ "$TOOL_COUNT" -ge 2 ] \
+  && pass "weather-mcp tools/list → $TOOL_COUNT tools (get_coordinates + get_weather)" \
+  || fail "weather-mcp tools/list → $TOOL_COUNT tools (expected >= 2)"
+
+# 5. tools/call get_coordinates (live network — open-meteo.com)
+COORD_RES=$(curl -s --max-time 15 "$MCP_TEST_URL/mcp" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_coordinates","arguments":{"city":"Seoul"}}}' \
+  2>/dev/null || echo "{}")
+COORD_OK=$(echo "$COORD_RES" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+r=d.get('result',{})
+is_err=r.get('isError',True)
+content=r.get('content',[{}])
+text=content[0].get('text','') if content else ''
+print('ok' if not is_err and 'Seoul' in text else f'err:{text[:80]}')
+" 2>/dev/null || echo "parse_error")
+[ "$COORD_OK" = "ok" ] \
+  && pass "weather-mcp get_coordinates(Seoul) → coordinates returned" \
+  || info "weather-mcp get_coordinates(Seoul) → $COORD_OK (network may be unavailable)"
+
+# ── Full MCP Roundtrip via veronex ────────────────────────────────────────────
+
+hdr "MCP Full Roundtrip (veronex → weather-mcp)"
 
 # 2. Inference with MCP tools active — expect tool_call or final answer
 MCP_INF_RES=$(curl -s -w "\n%{http_code}" --max-time 90 "$API/v1/chat/completions" \

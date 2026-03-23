@@ -210,6 +210,22 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  weather-mcp:
+    build:
+      context: .
+      dockerfile: crates/veronex-mcp/Dockerfile
+    environment:
+      PORT: "3100"
+      RUST_LOG: info
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   veronex-agent:
     build:
       context: .
@@ -223,12 +239,17 @@ services:
       RUST_LOG: info
       VALKEY_URL: redis://valkey:6379/0
       DATABASE_URL: postgres://${POSTGRES_USER:-veronex}:${POSTGRES_PASSWORD:-veronex}@postgres:5432/veronex
+      # MCP servers: <uuid>:<url>[,<uuid>:<url>]
+      # weather-mcp is the built-in example server (get_coordinates + get_weather tools)
+      MCP_SERVERS: "${MCP_SERVERS:-550e8400-e29b-41d4-a716-446655440001:http://weather-mcp:3100}"
     ports:
       - "9091:9091"
     depends_on:
       veronex:
         condition: service_started
       otel-collector:
+        condition: service_healthy
+      weather-mcp:
         condition: service_healthy
     restart: unless-stopped
 
