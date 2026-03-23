@@ -4539,6 +4539,7 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "uuid",
+ "veronex-mcp",
  "workspace-hack",
 ]
 
@@ -4580,6 +4581,33 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "veronex-mcp"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum 0.8.8",
+ "chrono",
+ "dashmap",
+ "fred",
+ "futures",
+ "hex",
+ "proptest",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
  "uuid",
  "workspace-hack",
 ]

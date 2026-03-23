@@ -1,0 +1,649 @@
+//! McpBridgeAdapter — wraps the Ollama inference loop with MCP tool execution.
+//!
+//! # Flow (per request)
+//!
+//! ```text
+//! 1. get_all()        — pull available MCP tool defs (Vec<Value>, OpenAI format)
+//! 2. merge tools into request
+//! 3. submit job  → collect tokens  → check for tool_calls
+//! 4. if tool_calls contain MCP tools (prefix "mcp_"):
+//!       a. execute each via McpSessionManager.call_tool()
+//!       b. respect circuit breaker + result cache
+//!       c. emit OTel span (→ ClickHouse mcp_tool_calls)
+//!       d. append assistant + tool result messages
+//!       e. GOTO 3  (max MAX_ROUNDS)
+//! 5. return McpLoopResult
+//! ```
+//!
+//! Duplicate-call detection: if the same (tool_name, args_hash) pair appears
+//! LOOP_DETECT_THRESHOLD times, the loop is broken early.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Instant;
+
+use futures::StreamExt;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use tracing::{debug, info, instrument, warn};
+use uuid::Uuid;
+
+use veronex_mcp::{McpCircuitBreaker, McpResultCache, McpSessionManager, McpToolCache};
+
+use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
+use crate::domain::enums::{ApiFormat, JobSource, KeyTier, ProviderType};
+use crate::domain::value_objects::JobId;
+use crate::infrastructure::inbound::http::inference_helpers::validate_tool_call;
+use crate::infrastructure::inbound::http::state::AppState;
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+/// Maximum agentic loop rounds (tool call → execute → re-submit).
+const MAX_ROUNDS: u8 = 5;
+/// Maximum MCP tools injected per request (context window protection).
+const MAX_TOOLS_PER_REQUEST: usize = 32;
+/// Number of identical (tool, args_hash) pairs in one session before forced break.
+const LOOP_DETECT_THRESHOLD: u8 = 3;
+/// Result cache TTL (seconds).
+const RESULT_CACHE_TTL_SECS: i64 = 300;
+/// Per-tool-call execution timeout. Bridge enforces this; MCP client has its own connection timeout.
+const MCP_TOOL_CALL_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(30);
+
+// ── Public types ───────────────────────────────────────────────────────────────
+
+/// Shared state for the MCP bridge — stored in `AppState.mcp_bridge`.
+#[derive(Clone)]
+pub struct McpBridgeAdapter {
+    pub session_manager: Arc<McpSessionManager>,
+    pub tool_cache: Arc<McpToolCache>,
+    pub result_cache: Arc<McpResultCache>,
+    pub circuit_breaker: Arc<McpCircuitBreaker>,
+}
+
+/// Outcome of a single agentic loop run.
+pub struct McpLoopResult {
+    /// Final assistant text content (populated when `want_stream = false`).
+    pub content: String,
+    /// Final round tool_calls — non-empty when the model finished with non-MCP tools
+    /// or when `want_stream = false`.
+    pub tool_calls: Vec<Value>,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub finish_reason: String,
+    /// How many MCP tool-call rounds were executed.
+    pub rounds: u8,
+    /// When `want_stream = true` and the final round has no MCP tool_calls, this
+    /// contains the final round's JobId so the caller can pipe it through SSE.
+    /// The `content` / `tool_calls` fields are empty in this case.
+    pub final_job_id: Option<JobId>,
+}
+
+// ── McpBridgeAdapter impl ──────────────────────────────────────────────────────
+
+impl McpBridgeAdapter {
+    pub fn new(
+        session_manager: Arc<McpSessionManager>,
+        tool_cache: Arc<McpToolCache>,
+        result_cache: Arc<McpResultCache>,
+        circuit_breaker: Arc<McpCircuitBreaker>,
+    ) -> Self {
+        Self { session_manager, tool_cache, result_cache, circuit_breaker }
+    }
+
+    /// Returns `true` if MCP should intercept this request
+    /// (at least one server session is active).
+    pub fn should_intercept(&self) -> bool {
+        !self.session_manager.server_ids().is_empty()
+    }
+
+    /// Run the full agentic MCP loop.
+    ///
+    /// `base_messages` must be in Ollama format already.
+    /// `base_tools` are caller-supplied tools (injected before MCP tools, up to cap).
+    ///
+    /// When `want_stream = true`, the final round is NOT collected — instead
+    /// `McpLoopResult.final_job_id` is returned so the caller can stream it via SSE.
+    #[instrument(skip_all, fields(model = %model, api_key_id = %api_key_id))]
+    pub async fn run_loop(
+        &self,
+        state: &AppState,
+        api_key_id: Uuid,
+        api_key_tier: KeyTier,
+        model: String,
+        mut messages: Vec<Value>,
+        base_tools: Option<Vec<Value>>,
+        want_stream: bool,
+        conversation_id: Option<String>,
+        stop: Option<Value>,
+        seed: Option<u32>,
+        response_format: Option<Value>,
+        frequency_penalty: Option<f64>,
+        presence_penalty: Option<f64>,
+    ) -> Option<McpLoopResult> {
+        // ── Build the tool list ────────────────────────────────────────────────
+        let mcp_openai_tools = self.tool_cache.get_all().await;
+        let mcp_tool_names: std::collections::HashSet<String> = mcp_openai_tools
+            .iter()
+            .filter_map(|v| v["function"]["name"].as_str().map(str::to_string))
+            .collect();
+
+        let mut all_tools: Vec<Value> = base_tools.unwrap_or_default();
+        for tool in mcp_openai_tools {
+            if all_tools.len() >= MAX_TOOLS_PER_REQUEST {
+                break;
+            }
+            all_tools.push(tool);
+        }
+        let tools_json = if all_tools.is_empty() { None } else { Some(all_tools) };
+
+        // ── Loop state ─────────────────────────────────────────────────────────
+        let mut total_prompt_tokens: u32 = 0;
+        let mut total_completion_tokens: u32 = 0;
+        let mut finish_reason = "stop".to_string();
+        let mut content = String::new();
+        let mut final_tool_calls: Vec<Value> = Vec::new();
+        let mut rounds: u8 = 0;
+        let mut final_job_id: Option<JobId> = None;
+
+        // Loop-detection: (tool_name, args_hash) → count
+        let mut call_sig_counts: HashMap<(String, String), u8> = HashMap::new();
+
+        for round in 0..MAX_ROUNDS {
+            debug!(round, "MCP agentic loop round");
+
+            // ── Submit job ─────────────────────────────────────────────────────
+            let prompt = extract_last_user_prompt(&messages);
+            let job_id = match state.use_case.submit(SubmitJobRequest {
+                prompt,
+                model_name: model.clone(),
+                provider_type: ProviderType::Ollama,
+                gemini_tier: None,
+                api_key_id: Some(api_key_id),
+                account_id: None,
+                source: JobSource::Api,
+                api_format: ApiFormat::OpenaiCompat,
+                messages: Some(Value::Array(messages.clone())),
+                tools: tools_json.clone().map(Value::Array),
+                request_path: Some("/v1/chat/completions".to_string()),
+                conversation_id: conversation_id.clone(),
+                key_tier: Some(api_key_tier),
+                images: None,
+                stop: stop.clone(),
+                seed,
+                response_format: response_format.clone(),
+                frequency_penalty,
+                presence_penalty,
+            }).await {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!("MCP loop: job submit failed on round {round}: {e}");
+                    return None;
+                }
+            };
+
+            // ── Collect response (or defer to streaming on the final round) ────
+            //
+            // Streaming optimisation: on the FIRST round with no MCP tool_calls
+            // (i.e. the model will return text or non-MCP tools), skip collection
+            // and return the job_id so the caller can pipe it through SSE.
+            // All intermediate rounds (with MCP tool_calls) are always collected.
+            //
+            // We don't know whether this round will have MCP calls until we have
+            // collected it, so we always collect — EXCEPT when `want_stream=true`
+            // AND we have already processed at least one tool-call round (rounds>0),
+            // in which case this is almost certainly the final text round.
+            // For the first-round streaming case (no tool rounds yet), we can't
+            // skip collection because we don't know if MCP tools will be called.
+            if want_stream && rounds > 0 {
+                // This is a post-tool round — highly likely to be final text.
+                // Return job_id for streaming; don't collect.
+                final_job_id = Some(job_id);
+                break;
+            }
+
+            let round_result = collect_round(state, &job_id).await;
+            total_prompt_tokens = total_prompt_tokens.saturating_add(round_result.prompt_tokens);
+            total_completion_tokens = total_completion_tokens.saturating_add(round_result.completion_tokens);
+            finish_reason = round_result.finish_reason.clone();
+            content = round_result.content.clone();
+            final_tool_calls = round_result.tool_calls.clone();
+
+            // ── Filter for MCP tool calls ──────────────────────────────────────
+            let mcp_calls: Vec<Value> = round_result
+                .tool_calls
+                .into_iter()
+                .filter(|tc| {
+                    tc["function"]["name"]
+                        .as_str()
+                        .map(|n| mcp_tool_names.contains(n))
+                        .unwrap_or(false)
+                })
+                .collect();
+
+            if mcp_calls.is_empty() {
+                // No MCP tools requested — done.
+                // If streaming was requested on round 0 (no tool calls at all),
+                // we've already collected — set final_job_id only if streaming
+                // AND there were 0 tool rounds (model answered directly).
+                // In that case content is already collected, so leave final_job_id None.
+                break;
+            }
+
+            rounds += 1;
+
+            // ── Loop detection ─────────────────────────────────────────────────
+            let mut loop_detected = false;
+            for tc in &mcp_calls {
+                let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
+                let args_hash = quick_args_hash(args_str);
+                let count = call_sig_counts.entry((name.clone(), args_hash)).or_insert(0);
+                *count += 1;
+                if *count >= LOOP_DETECT_THRESHOLD {
+                    warn!(tool = %name, "MCP loop detected — breaking");
+                    loop_detected = true;
+                    break;
+                }
+            }
+            if loop_detected {
+                break;
+            }
+
+            // ── Append assistant message with tool_calls ───────────────────────
+            messages.push(serde_json::json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": final_tool_calls
+            }));
+
+            // ── Execute MCP tools (join_all: order preserved for index mapping) ─
+            let results = self.execute_calls(state, &mcp_calls, api_key_id, round + 1).await;
+
+            for (tc, result_text) in mcp_calls.iter().zip(results.into_iter()) {
+                let call_id = tc["id"].as_str().unwrap_or("call_0");
+                let tool_name = tc["function"]["name"].as_str().unwrap_or("");
+                messages.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": tool_name,
+                    "content": result_text
+                }));
+            }
+
+            info!(round, mcp_calls = mcp_calls.len(), "MCP round complete");
+        }
+
+        Some(McpLoopResult {
+            content,
+            tool_calls: final_tool_calls,
+            prompt_tokens: total_prompt_tokens,
+            completion_tokens: total_completion_tokens,
+            finish_reason,
+            rounds,
+            final_job_id,
+        })
+    }
+
+    // ── Tool execution ─────────────────────────────────────────────────────────
+
+    async fn execute_calls(
+        &self,
+        _state: &AppState,
+        calls: &[Value],
+        api_key_id: Uuid,
+        loop_round: u8,
+    ) -> Vec<String> {
+        use futures::future::join_all;
+
+        // join_all: preserves submission order — required for Ollama index-based mapping.
+        let futs: Vec<_> = calls
+            .iter()
+            .map(|tc| self.execute_one(tc, api_key_id, loop_round))
+            .collect();
+
+        join_all(futs).await
+    }
+
+    async fn execute_one(&self, tc: &Value, api_key_id: Uuid, loop_round: u8) -> String {
+        let namespaced = tc["function"]["name"].as_str().unwrap_or("");
+        let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
+        let args: Value = serde_json::from_str(args_str)
+            .unwrap_or(Value::Object(Default::default()));
+
+        // ── Resolve server ─────────────────────────────────────────────────────
+        let server_id = match self.tool_cache.server_id_of(namespaced) {
+            Some(id) => id,
+            None => {
+                warn!(tool = %namespaced, "MCP: no server mapping");
+                return format!("{{\"error\": \"unknown tool: {namespaced}\"}}");
+            }
+        };
+
+        // ── Circuit breaker ────────────────────────────────────────────────────
+        if self.circuit_breaker.is_open(server_id) {
+            warn!(tool = %namespaced, server = %server_id, "MCP circuit open — skipping");
+            // Slug/tool_name derived by parsing (tool_def not yet resolved).
+            let slug = server_slug_from_namespaced(namespaced);
+            let rname = raw_tool_name(namespaced);
+            emit_mcp_span(namespaced, slug, rname, server_id, api_key_id, "circuit_open", false, 0, 0, loop_round);
+            return "{\"error\": \"MCP server temporarily unavailable (circuit open)\"}".into();
+        }
+
+        // ── Resolve tool definition + raw name ────────────────────────────────
+        // Prefer the cached tool's original `.name` and `server_name` fields over
+        // parsing the namespaced string — slugs may contain underscores, which
+        // makes simple prefix-stripping ambiguous (e.g. `mcp_my_server_get_weather`).
+        let tool_def = self.tool_cache.get_tool_raw(namespaced);
+        let raw_name_owned: String;
+        let raw_name: &str = if let Some(ref def) = tool_def {
+            &def.name
+        } else {
+            raw_name_owned = raw_tool_name(namespaced).to_string();
+            &raw_name_owned
+        };
+        let server_slug: &str = tool_def
+            .as_ref()
+            .map(|d| d.server_name.as_str())
+            .unwrap_or_else(|| server_slug_from_namespaced(namespaced));
+
+        // ── Result cache ───────────────────────────────────────────────────────
+        if let Some(ref tool_def) = tool_def {
+            if let Some(cached) = self.result_cache.get(tool_def, &args).await {
+                let text = cached.to_llm_string();
+                let bytes = text.len() as u32;
+                emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, "cache_hit", true, 0, bytes, loop_round);
+                return text;
+            }
+        }
+
+        // ── Execute ────────────────────────────────────────────────────────────
+        let started = Instant::now();
+
+        let result = tokio::time::timeout(
+            MCP_TOOL_CALL_TIMEOUT,
+            self.session_manager.call_tool(server_id, raw_name, args.clone()),
+        )
+        .await;
+
+        let latency_ms = started.elapsed().as_millis() as u32;
+
+        match result {
+            Ok(Ok(tool_result)) => {
+                let is_err = tool_result.is_error;
+                if is_err {
+                    self.circuit_breaker.record_failure(server_id);
+                } else {
+                    self.circuit_breaker.record_success(server_id);
+                }
+
+                // Store in result cache if eligible (reuse tool_def from above).
+                if !is_err {
+                    if let Some(ref def) = tool_def {
+                        self.result_cache.set(def, &args, &tool_result, RESULT_CACHE_TTL_SECS).await;
+                    }
+                }
+
+                let text = tool_result.to_llm_string();
+                let bytes = text.len() as u32;
+                let outcome = if is_err { "error" } else { "success" };
+                emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, outcome, false, latency_ms, bytes, loop_round);
+                text
+            }
+            Ok(Err(e)) => {
+                self.circuit_breaker.record_failure(server_id);
+                warn!(tool = %namespaced, error = %e, "MCP tool call error");
+                emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, "error", false, latency_ms, 0, loop_round);
+                format!("{{\"error\": \"{}\"}}", e.to_string().replace('"', "'"))
+            }
+            Err(_elapsed) => {
+                self.circuit_breaker.record_failure(server_id);
+                warn!(tool = %namespaced, "MCP tool call timed out");
+                emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, "timeout", false, latency_ms, 0, loop_round);
+                "{\"error\": \"MCP tool call timed out\"}".into()
+            }
+        }
+    }
+}
+
+// ── Internal helpers ───────────────────────────────────────────────────────────
+
+struct RoundResult {
+    content: String,
+    tool_calls: Vec<Value>,
+    prompt_tokens: u32,
+    completion_tokens: u32,
+    finish_reason: String,
+}
+
+/// Collect all tokens from a submitted job into a `RoundResult`.
+async fn collect_round(state: &AppState, job_id: &JobId) -> RoundResult {
+    let mut token_stream = state.use_case.stream(job_id);
+    let mut content = String::new();
+    let mut tool_calls: Vec<Value> = Vec::new();
+    let mut prompt_tokens: u32 = 0;
+    let mut completion_tokens: u32 = 0;
+    let mut finish_reason = "stop".to_string();
+
+    while let Some(result) = token_stream.next().await {
+        match result {
+            Ok(token) if token.tool_calls.is_some() => {
+                if let Some(calls_val) = token.tool_calls.as_ref() {
+                    if let Some(calls) = calls_val.as_array() {
+                        for (i, c) in calls.iter().enumerate() {
+                            if validate_tool_call(c) {
+                                tool_calls.push(convert_ollama_tool_call(i, c));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(token) if token.is_final => {
+                prompt_tokens = token.prompt_tokens.unwrap_or(0);
+                completion_tokens = token.completion_tokens.unwrap_or(completion_tokens);
+                finish_reason = token.finish_reason.unwrap_or_else(|| {
+                    if tool_calls.is_empty() { "stop".into() } else { "tool_calls".into() }
+                });
+                break;
+            }
+            Ok(token) => {
+                if !token.value.is_empty() {
+                    content.push_str(&token.value);
+                }
+            }
+            Err(e) => {
+                warn!("MCP collect_round: stream error: {e}");
+                break;
+            }
+        }
+    }
+
+    RoundResult { content, tool_calls, prompt_tokens, completion_tokens, finish_reason }
+}
+
+/// Convert an Ollama tool_call to OpenAI format, preserving index as ID.
+fn convert_ollama_tool_call(i: usize, c: &Value) -> Value {
+    let name = c.get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("");
+    let args = c.get("function")
+        .and_then(|f| f.get("arguments"))
+        .map(|a| serde_json::to_string(a).unwrap_or_default())
+        .unwrap_or_default();
+    serde_json::json!({
+        "index": i,
+        "id": format!("call_{i}"),
+        "type": "function",
+        "function": { "name": name, "arguments": args }
+    })
+}
+
+/// Extract the last user message as a plain string prompt.
+fn extract_last_user_prompt(messages: &[Value]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|m| m["role"].as_str() == Some("user"))
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Strip `mcp_{server}_` prefix → raw tool name as registered on the MCP server.
+///
+/// Format: `mcp_{server_name}_{tool_name}`
+/// e.g. `mcp_weather_get_weather` → `get_weather`
+fn raw_tool_name(namespaced: &str) -> &str {
+    // Strip "mcp_" then find next "_" for server boundary
+    namespaced
+        .strip_prefix("mcp_")
+        .and_then(|s| s.find('_').map(|pos| &s[pos + 1..]))
+        .unwrap_or(namespaced)
+}
+
+/// Extract the server slug from a namespaced tool name (best-effort, single-segment).
+///
+/// `mcp_weather_get_weather` → `weather`
+/// `mcp_my_server_get_weather` → `my`  (first segment only — use `tool_def.server_name` when available)
+///
+/// Used only in the circuit-open fallback path before `tool_def` is resolved.
+fn server_slug_from_namespaced(namespaced: &str) -> &str {
+    namespaced
+        .strip_prefix("mcp_")
+        .and_then(|s| s.find('_').map(|pos| &s[..pos]))
+        .unwrap_or("")
+}
+
+/// Quick hash of args string for loop-detection (does not need to be canonical).
+fn quick_args_hash(args_str: &str) -> String {
+    let digest = Sha256::digest(args_str.as_bytes());
+    hex::encode(&digest[..4])
+}
+
+/// Emit an OTel tracing event for a single MCP tool call.
+/// The OTel exporter ships these to ClickHouse via the existing pipeline.
+///
+/// Fields map to the `mcp_tool_calls` ClickHouse schema:
+///   namespaced_name → namespaced_name
+///   tool_name       → tool_name (raw, without mcp_{slug}_ prefix)
+///   server_slug     → server_slug (namespace prefix of the tool)
+///   server_id       → server_id
+///   api_key_id      → api_key_id
+///   outcome         → outcome ('success'|'error'|'timeout'|'circuit_open'|'cache_hit')
+///   cache_hit       → cache_hit (UInt8)
+///   latency_ms      → latency_ms
+///   result_bytes    → result_bytes
+///   loop_round      → loop_round
+fn emit_mcp_span(
+    namespaced_name: &str,
+    server_slug: &str,
+    tool_name: &str,
+    server_id: Uuid,
+    api_key_id: Uuid,
+    outcome: &str,
+    cache_hit: bool,
+    latency_ms: u32,
+    result_bytes: u32,
+    loop_round: u8,
+) {
+    tracing::info!(
+        target: "veronex::mcp::tool_call",
+        namespaced_name,
+        server_slug,
+        tool_name,
+        server_id = %server_id,
+        api_key_id = %api_key_id,
+        outcome,
+        cache_hit,
+        latency_ms,
+        result_bytes,
+        loop_round,
+        "mcp_tool_call"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── server_slug_from_namespaced ───────────────────────────────────────────
+
+    #[test]
+    fn server_slug_simple() {
+        assert_eq!(server_slug_from_namespaced("mcp_weather_get_weather"), "weather");
+    }
+
+    #[test]
+    fn server_slug_multi_word_returns_first_segment() {
+        // Only the first segment is returned — callers should prefer tool_def.server_name.
+        assert_eq!(server_slug_from_namespaced("mcp_my_server_get_weather"), "my");
+    }
+
+    #[test]
+    fn server_slug_no_prefix_returns_empty() {
+        assert_eq!(server_slug_from_namespaced("get_weather"), "");
+    }
+
+    // ── raw_tool_name ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn raw_tool_name_simple_slug() {
+        assert_eq!(raw_tool_name("mcp_weather_get_weather"), "get_weather");
+    }
+
+    /// Multi-word slug: raw_tool_name() strips only the first segment.
+    /// bridge.rs mitigates this by preferring tool_def.name from the cache.
+    #[test]
+    fn raw_tool_name_multi_word_slug_fallback() {
+        // This documents the known limitation of the parsing approach.
+        // The bridge uses tool_def.name to avoid this when the cache is warm.
+        assert_eq!(raw_tool_name("mcp_my_server_get_weather"), "server_get_weather");
+    }
+
+    #[test]
+    fn raw_tool_name_no_prefix_returns_original() {
+        assert_eq!(raw_tool_name("get_weather"), "get_weather");
+    }
+
+    // ── quick_args_hash ───────────────────────────────────────────────────────
+
+    #[test]
+    fn quick_args_hash_is_deterministic() {
+        assert_eq!(quick_args_hash(r#"{"lat":37.5}"#), quick_args_hash(r#"{"lat":37.5}"#));
+    }
+
+    #[test]
+    fn quick_args_hash_different_inputs_differ() {
+        assert_ne!(quick_args_hash(r#"{"lat":37.5}"#), quick_args_hash(r#"{"lat":37.6}"#));
+    }
+
+    #[test]
+    fn quick_args_hash_empty_string() {
+        // Must not panic; must produce a deterministic 8-char hex string.
+        let h = quick_args_hash("");
+        assert_eq!(h.len(), 8);
+    }
+
+    #[test]
+    fn quick_args_hash_max_tools_per_request_boundary() {
+        // Ensure large payloads don't panic (DOS boundary check for MAX_TOOLS_PER_REQUEST).
+        let big = "x".repeat(MAX_TOOLS_PER_REQUEST * 1024);
+        let h = quick_args_hash(&big);
+        assert_eq!(h.len(), 8);
+    }
+
+    // ── Loop-detect threshold constant ───────────────────────────────────────
+
+    #[test]
+    fn loop_detect_threshold_at_least_two() {
+        // Threshold of 1 would break on the first tool call; ≥ 2 is required.
+        assert!(LOOP_DETECT_THRESHOLD >= 2);
+    }
+
+    #[test]
+    fn max_rounds_within_reasonable_cap() {
+        // Sanity: MAX_ROUNDS must be finite and not absurdly large.
+        assert!(MAX_ROUNDS >= 1);
+        assert!(MAX_ROUNDS <= 20);
+    }
+}

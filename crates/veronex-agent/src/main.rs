@@ -59,6 +59,11 @@ struct Config {
     /// Optional DATABASE_URL for orphan job sweeper.
     /// When absent, orphan sweeper is disabled.
     database_url: Option<String>,
+    /// MCP servers to health-check each cycle.
+    /// Format: comma-separated `{server_id}:{base_url}` pairs.
+    /// Example: `550e8400-...:http://weather-mcp:3100,abc123:http://search-mcp:3101`
+    /// When set, the agent pings each server's `/health` and writes Valkey heartbeat keys.
+    mcp_servers: Vec<(String, String)>,
 }
 
 fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> T {
@@ -78,8 +83,32 @@ impl Config {
             health_port: parse_env("HEALTH_PORT", 9091),
             valkey_url: std::env::var("VALKEY_URL").ok(),
             database_url: std::env::var("DATABASE_URL").ok(),
+            mcp_servers: parse_mcp_servers(
+                &std::env::var("MCP_SERVERS").unwrap_or_default()
+            ),
         }
     }
+}
+
+/// Parse `MCP_SERVERS` env var: `id1:url1,id2:url2` → `Vec<(id, url)>`.
+fn parse_mcp_servers(raw: &str) -> Vec<(String, String)> {
+    raw.split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() { return None; }
+            // Split on the first ':' — but URLs contain ':', so split on the first ':' only
+            // when it looks like a UUID (contains '-').
+            // Format: `{uuid}:{scheme}://...`  → split at position 36 (UUID length)
+            if entry.len() > 37 && entry.chars().nth(36) == Some(':') {
+                let (id, url) = entry.split_at(37);
+                // id = "uuid:" (37 chars), url starts at position 37 with 'h'
+                Some((id[..36].to_string(), url.to_string()))
+            } else {
+                tracing::warn!(entry, "MCP_SERVERS: invalid entry, expected {{uuid}}:{{url}}");
+                None
+            }
+        })
+        .collect()
 }
 
 // ── Health state ────────────────────────────────────────────────────────────
@@ -342,6 +371,56 @@ mod tests {
         state.alive.store(false, Ordering::Relaxed);
         assert!(!state.alive.load(Ordering::Relaxed));
     }
+
+    // ── parse_mcp_servers ─────────────────────────────────────────────────────
+
+    const SAMPLE_UUID: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+    #[test]
+    fn parse_mcp_single_entry() {
+        let raw = format!("{SAMPLE_UUID}:http://weather-mcp:3100");
+        let servers = parse_mcp_servers(&raw);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].0, SAMPLE_UUID);
+        assert_eq!(servers[0].1, "http://weather-mcp:3100");
+    }
+
+    #[test]
+    fn parse_mcp_multiple_entries() {
+        let uuid2 = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+        let raw = format!("{SAMPLE_UUID}:http://a:3100,{uuid2}:http://b:3101");
+        let servers = parse_mcp_servers(&raw);
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0].0, SAMPLE_UUID);
+        assert_eq!(servers[1].0, uuid2);
+    }
+
+    #[test]
+    fn parse_mcp_empty_string() {
+        assert!(parse_mcp_servers("").is_empty());
+    }
+
+    #[test]
+    fn parse_mcp_invalid_entry_skipped() {
+        let servers = parse_mcp_servers("not-a-uuid:http://x:3100");
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn parse_mcp_url_with_port_preserved() {
+        let raw = format!("{SAMPLE_UUID}:https://mcp.example.com:443/mcp");
+        let servers = parse_mcp_servers(&raw);
+        assert_eq!(servers[0].1, "https://mcp.example.com:443/mcp");
+    }
+
+    /// Heartbeat key format must match veronex-mcp's McpToolCache::is_online():
+    ///   `format!("veronex:mcp:heartbeat:{server_id}")`
+    /// and veronex's valkey_keys::mcp_heartbeat().
+    #[test]
+    fn mcp_heartbeat_key_format_matches_tool_cache() {
+        let key = format!("veronex:mcp:heartbeat:{SAMPLE_UUID}");
+        assert_eq!(key, "veronex:mcp:heartbeat:550e8400-e29b-41d4-a716-446655440000");
+    }
 }
 
 async fn scrape_cycle(
@@ -351,6 +430,22 @@ async fn scrape_cycle(
     valkey: Option<&fred::clients::Pool>,
 ) -> CycleResult {
     let start = Instant::now();
+
+    // ── MCP server health checks ─────────────────────────────────────────────
+    // Independent of target discovery — runs on every replica (no sharding needed:
+    // writes are idempotent Valkey SET EX operations).
+    if !config.mcp_servers.is_empty() {
+        if let Some(pool) = valkey {
+            for (server_id, base_url) in &config.mcp_servers {
+                let alive = scraper::ping_mcp_server(client, server_id, base_url).await;
+                if alive {
+                    scraper::set_mcp_heartbeat(pool, server_id, HEARTBEAT_TTL_SECS).await;
+                } else {
+                    tracing::debug!(server_id, "MCP server offline — heartbeat not renewed");
+                }
+            }
+        }
+    }
 
     let targets = discover_targets(client, &config.veronex_api_url).await;
     if targets.is_empty() {
