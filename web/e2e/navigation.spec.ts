@@ -16,6 +16,7 @@ test.describe('Navigation @smoke', () => {
       /jobs/i,
       /keys/i,
       /servers/i,
+      /mcp/i,
     ]
     for (const name of navLinks) {
       await expect(

@@ -15,6 +15,8 @@
 #                          10-image  11-verify  12-mcp
 #   Phase 3 (parallel)   : 02-scheduler  06-api-surface  07-lifecycle  08-sdd-advanced
 #     → Phase 3 starts only after 03-inference completes (AIMD state required)
+#   Phase 4 (sequential) : 13-frontend (Playwright UI tests)
+#     → runs after all backend phases complete
 #
 # Checkpoints persist in: ${E2E_CHECKPOINT_DIR:-$HOME/.cache/veronex-e2e}
 # A phase is skipped when its .ok file exists and --no-cache is not set.
@@ -228,6 +230,11 @@ for phase in 02-scheduler.sh 06-api-surface.sh 07-lifecycle.sh 08-sdd-advanced.s
 done
 
 wait_all "${P3_WAIT_ARGS[@]}"
+
+# ── Phase 4: Frontend E2E (Playwright) ───────────────────────────────────────
+echo ""
+echo -e "${CYAN}${BOLD}[Phase 4] Frontend E2E (Playwright)${NC}"
+run_phase "13-frontend.sh"
 
 # ── Aggregate results ─────────────────────────────────────────────────────────
 TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
