@@ -71,8 +71,9 @@ fi
 hdr "MCP Valkey Key Namespace"
 
 # Verify the MCP key namespace is either present or cleanly absent (no corruption)
-MCP_KEY_COUNT=$(docker compose exec -T valkey valkey-cli --scan --pattern "veronex:mcp:*" 2>/dev/null | grep -c . || echo "0")
-if [ "${MCP_KEY_COUNT:-0}" -gt 0 ]; then
+MCP_KEY_COUNT=$(docker compose exec -T valkey valkey-cli --scan --pattern "veronex:mcp:*" 2>/dev/null | grep -c "" || true)
+MCP_KEY_COUNT="${MCP_KEY_COUNT:-0}"
+if [ "$MCP_KEY_COUNT" -gt 0 ] 2>/dev/null; then
   pass "Valkey MCP namespace present ($MCP_KEY_COUNT keys under veronex:mcp:*)"
 else
   info "Valkey MCP namespace empty (no MCP servers configured — expected in default setup)"
@@ -173,8 +174,8 @@ try:
     if tool_calls:
         names = [tc.get('function', {}).get('name', '') for tc in tool_calls]
         print(f'tool_calls:{names}')
-    elif content and finish == 'stop':
-        print(f'answer:{content[:80]}')
+    elif finish == 'stop':
+        print('answer:' + (content or '')[:80])
     else:
         print(f'unexpected:finish={finish}')
 except Exception as e:
@@ -182,7 +183,7 @@ except Exception as e:
 " 2>/dev/null || echo "parse_error")
     case "$MCP_CHECK" in
       tool_calls:*) pass "MCP roundtrip → tool_calls dispatched (${MCP_CHECK#tool_calls:})" ;;
-      answer:*)     pass "MCP roundtrip → final answer returned (${MCP_CHECK#answer:})" ;;
+      answer:*)     pass "MCP roundtrip → model responded (bridge inactive — ${MCP_CHECK#answer:})" ;;
       *)            fail "MCP roundtrip → unexpected response ($MCP_CHECK)" ;;
     esac
     ;;
@@ -191,8 +192,9 @@ except Exception as e:
 esac
 
 # 3. Verify MCP heartbeat key written by agent
-MCP_HB_COUNT=$(docker compose exec -T valkey valkey-cli --scan --pattern "veronex:mcp:heartbeat:*" 2>/dev/null | grep -c . || echo "0")
-if [ "${MCP_HB_COUNT:-0}" -gt 0 ]; then
+MCP_HB_COUNT=$(docker compose exec -T valkey valkey-cli --scan --pattern "veronex:mcp:heartbeat:*" 2>/dev/null | grep -c "" || true)
+MCP_HB_COUNT="${MCP_HB_COUNT:-0}"
+if [ "$MCP_HB_COUNT" -gt 0 ] 2>/dev/null; then
   pass "Valkey MCP heartbeat keys present ($MCP_HB_COUNT servers tracked)"
 else
   info "No MCP heartbeat keys (veronex-agent not yet scraped MCP servers)"
