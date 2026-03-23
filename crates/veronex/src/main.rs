@@ -162,6 +162,10 @@ async fn main() -> Result<()> {
         sse_connections: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         vram_budget_repo: repos.vram_budget_repo,
         mcp_bridge,
+        login_rate_limit: std::env::var("LOGIN_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10),
     };
 
     let app = build_app(state, config.cors_origins);

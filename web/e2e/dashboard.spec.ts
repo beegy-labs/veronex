@@ -1,10 +1,8 @@
 import { test, expect } from '@playwright/test'
-import { login } from './helpers/auth'
 import { T_DEFAULT } from './helpers/constants'
 
 test.describe('Dashboard', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
   })
 
   test('overview page loads with KPI cards', async ({ page }) => {

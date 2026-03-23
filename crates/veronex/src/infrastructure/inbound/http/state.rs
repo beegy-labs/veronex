@@ -114,4 +114,8 @@ pub struct AppState {
     /// MCP bridge adapter — present when at least one MCP server is configured.
     /// `None` disables MCP tool injection on all requests.
     pub mcp_bridge: Option<Arc<McpBridgeAdapter>>,
+    /// Maximum login attempts per IP per 5-minute window.
+    /// `0` disables IP-based rate limiting (e.g. for E2E test environments).
+    /// Controlled via `LOGIN_RATE_LIMIT` env var (default: 10).
+    pub login_rate_limit: u64,
 }

@@ -1,10 +1,8 @@
 import { test, expect } from '@playwright/test'
-import { login } from './helpers/auth'
 import { T_DEFAULT, T_SHORT } from './helpers/constants'
 
 test.describe('Providers', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
     await page.goto('/providers')
   })
 

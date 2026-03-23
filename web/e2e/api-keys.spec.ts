@@ -1,10 +1,8 @@
 import { test, expect } from '@playwright/test'
-import { login } from './helpers/auth'
 import { testId, T_DEFAULT } from './helpers/constants'
 
 test.describe('API Keys', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
     await page.goto('/keys')
   })
 
