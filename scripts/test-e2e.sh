@@ -198,7 +198,9 @@ echo -e "  ${CYAN}Ckpts  = $CKPT${NC}"
 echo ""
 
 # ── Phase 1: Setup (must complete before anything else) ───────────────────────
+# Always re-run setup — JWT tokens expire between runs, so state.env must be fresh
 echo -e "${CYAN}${BOLD}[Phase 1] Setup: infra + auth + dual providers + API keys${NC}"
+rm -f "$CKPT/01-setup.ok"
 run_phase "01-setup.sh"
 
 # ── Phase 2: Inference + independent tests (parallel) ────────────────────────

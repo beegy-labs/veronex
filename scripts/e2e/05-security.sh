@@ -107,11 +107,11 @@ if [ -n "$TPM_KEY" ] && [ "$TPM_KEY" != "None" ]; then
   # First request: consume tokens with a large max_tokens response
   TPM_C1=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about AI\"}],\"max_tokens\":80,\"stream\":false}")
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about AI\"}],\"max_tokens\":80,\"stream\":false}" || echo "000")
   # Second request: should hit TPM limit
   TPM_C2=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write another long essay about ML\"}],\"max_tokens\":80,\"stream\":false}")
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write another long essay about ML\"}],\"max_tokens\":80,\"stream\":false}" || echo "000")
   if [ "$TPM_C2" = "429" ]; then
     pass "TPM limit enforced — req1=$TPM_C1 req2=$TPM_C2 (429)"
   elif [ "$TPM_C1" = "200" ] && [ "$TPM_C2" = "200" ]; then
@@ -295,10 +295,18 @@ if [ "${CONTAINER_LIMIT:-10}" = "0" ]; then
   [ "$c" = "200" ] && pass "Login allowed when rate limit disabled → 200" \
     || fail "Login failed unexpectedly → $c"
 else
+  # Helper: delete all login_attempts keys from host side (avoids xargs dependency in container)
+  _clear_login_rl() {
+    local keys
+    keys=$(docker compose exec -T valkey valkey-cli KEYS 'veronex:login_attempts:*' 2>/dev/null | tr -d '\r')
+    if [ -n "$keys" ]; then
+      # shellcheck disable=SC2086
+      docker compose exec -T valkey valkey-cli del $keys > /dev/null 2>&1 || true
+    fi
+  }
+
   # Clear any existing attempt counter for the test IP
-  docker compose exec -T valkey valkey-cli --eval - 0 <<'LUA' > /dev/null 2>&1 || true
-for _,k in ipairs(redis.call('keys','veronex:login_attempts:*')) do redis.call('del',k) end
-LUA
+  _clear_login_rl
 
   LIMIT="${CONTAINER_LIMIT:-10}"
   info "LOGIN_RATE_LIMIT=$LIMIT — testing lockout after $LIMIT failed attempts"
@@ -314,9 +322,7 @@ LUA
     || fail "Login rate limit NOT enforced — attempt $((LIMIT + 1)) → $LAST_CODE (expected 429)"
 
   # Clear counters so subsequent tests aren't affected
-  docker compose exec -T valkey valkey-cli --eval - 0 <<'LUA' > /dev/null 2>&1 || true
-for _,k in ipairs(redis.call('keys','veronex:login_attempts:*')) do redis.call('del',k) end
-LUA
+  _clear_login_rl
 
   # Verify legitimate login still works after counter reset
   c=$(rawpostc "/v1/auth/login" "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" | code)

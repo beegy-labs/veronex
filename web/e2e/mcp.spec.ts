@@ -13,9 +13,9 @@ test.describe('MCP Servers', () => {
   })
 
   test('server list displays table or empty state', async ({ page }) => {
+    // Either the servers table or the empty-state dashed card should be visible
     await expect(
-      page.locator('table')
-        .or(page.getByText(/no (mcp )?servers|no servers|add/i))
+      page.locator('table').or(page.locator('.border-dashed'))
     ).toBeVisible({ timeout: T_DEFAULT })
   })
 
@@ -36,7 +36,7 @@ test.describe('MCP Servers', () => {
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible({ timeout: T_SHORT })
 
-    await dialog.getByRole('button', { name: /cancel|close/i }).click()
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
     await expect(dialog).not.toBeVisible({ timeout: T_SHORT })
   })
 
@@ -61,16 +61,10 @@ test.describe('MCP Servers', () => {
     // Verify server appears in table
     await expect(page.getByText(name)).toBeVisible({ timeout: T_DEFAULT })
 
-    // Delete the server
+    // Delete the server — accept the native confirm() dialog
+    page.once('dialog', (dialog) => dialog.accept())
     const row = page.locator('tr', { hasText: name })
-    await row.getByRole('button', { name: /delete|remove/i }).click()
-
-    // Confirm deletion if dialog appears
-    const confirmDialog = page.getByRole('dialog')
-    const confirmBtn = confirmDialog.getByRole('button', { name: /delete|confirm|yes/i })
-    if (await confirmBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await confirmBtn.click()
-    }
+    await row.getByRole('button', { name: /delete/i }).click()
 
     await expect(page.getByText(name)).not.toBeVisible({ timeout: T_DEFAULT })
   })
