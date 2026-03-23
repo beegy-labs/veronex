@@ -602,8 +602,15 @@ async fn mcp_ollama_chat(
         .and_then(|o| o.include_usage)
         .unwrap_or(false);
 
-    // Safety: checked before dispatch.
-    let bridge = state.mcp_bridge.as_ref().expect("mcp_bridge must be Some");
+    // Defensive: mcp_bridge is Some here because should_intercept() returned true,
+    // but we avoid expect() in a hot path per patterns.md.
+    let bridge = match state.mcp_bridge.as_ref() {
+        Some(b) => b,
+        None => return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": {"message": "MCP bridge not configured", "type": "server_error"}})),
+        ).into_response(),
+    };
 
     let loop_result = bridge.run_loop(
         &state,

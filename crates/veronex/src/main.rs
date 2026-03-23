@@ -126,7 +126,10 @@ async fn main() -> Result<()> {
         sync_lock: handles.sync_lock,
         sse_connections: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         vram_budget_repo: repos.vram_budget_repo,
-        // MCP bridge: None until MCP servers are configured via the admin API.
+        // TODO(mcp-phase-2): Initialize McpBridgeAdapter from MCP_SERVERS env var.
+        // Until this is wired, mcp_bridge is always None and should_intercept() always
+        // returns false — the MCP code path is present but inactive in production.
+        // See: crates/veronex/src/infrastructure/outbound/mcp/bridge.rs
         mcp_bridge: None,
     };
 

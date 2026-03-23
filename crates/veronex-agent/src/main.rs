@@ -434,12 +434,27 @@ async fn scrape_cycle(
     // ── MCP server health checks ─────────────────────────────────────────────
     // Independent of target discovery — runs on every replica (no sharding needed:
     // writes are idempotent Valkey SET EX operations).
+    // Pings run concurrently (join_all) — sequential await would block the cycle
+    // proportionally to N×SCRAPE_TIMEOUT when servers are slow or down.
     if !config.mcp_servers.is_empty() {
         if let Some(pool) = valkey {
-            for (server_id, base_url) in &config.mcp_servers {
-                let alive = scraper::ping_mcp_server(client, server_id, base_url).await;
+            let ping_futs: Vec<_> = config
+                .mcp_servers
+                .iter()
+                .map(|(server_id, base_url)| {
+                    let sid = server_id.clone();
+                    let url = base_url.clone();
+                    async move {
+                        let alive = scraper::ping_mcp_server(client, &sid, &url).await;
+                        (sid, alive)
+                    }
+                })
+                .collect();
+
+            let ping_results = futures::future::join_all(ping_futs).await;
+            for (server_id, alive) in ping_results {
                 if alive {
-                    scraper::set_mcp_heartbeat(pool, server_id, HEARTBEAT_TTL_SECS).await;
+                    scraper::set_mcp_heartbeat(pool, &server_id, HEARTBEAT_TTL_SECS).await;
                 } else {
                     tracing::debug!(server_id, "MCP server offline — heartbeat not renewed");
                 }

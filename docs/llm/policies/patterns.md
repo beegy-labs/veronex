@@ -573,6 +573,35 @@ Network blips (< 2 min) do not trigger cleanup. The suspect marker auto-expires 
 
 All agents down then restart: `tokio::time::interval` fires immediately on first tick, triggering an immediate scan and cleanup of any dead instances found.
 
+## Cross-Module Error Sentinel Constants
+
+Use a `const &str` to share error markers across module boundaries instead of duplicating string literals.
+
+```rust
+// session.rs — define once
+pub(crate) const SESSION_EXPIRED_MARKER: &str = "session expired";
+
+// client.rs — use in error construction
+return Err(anyhow!("MCP {SESSION_EXPIRED_MARKER} (404) for {}", session.url));
+
+// bridge.rs — use in match guard
+Err(e) if e.to_string().contains(SESSION_EXPIRED_MARKER) => { ... }
+```
+
+Prevents silent drift when one side is renamed. `pub(crate)` keeps the sentinel internal.
+
+## Docker Build Cache — `sharing=locked`
+
+All `--mount=type=cache` directives for the Cargo registry and target directory must use `sharing=locked`:
+
+```dockerfile
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release -p my-crate --recipe-path recipe.json
+```
+
+Without `sharing=locked`, parallel `docker compose build` services extracting the same crates simultaneously cause `EEXIST (os error 17)` failures. Apply to both `cargo chef cook` and `cargo build` steps in every service Dockerfile.
+
 ## Test Code Conventions
 
 | Rule | Rationale |

@@ -15,7 +15,13 @@ use serde_json::json;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::session::SESSION_EXPIRED_MARKER;
 use crate::types::{McpContent, McpTool, McpToolResult};
+
+/// Max bytes for a tool description string. Prevents oversized context injection.
+const MAX_TOOL_DESCRIPTION_BYTES: usize = 4_096;
+/// Max serialized bytes for a tool inputSchema. Prevents deeply-nested JSON bombs.
+const MAX_TOOL_SCHEMA_BYTES: usize = 16_384;
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
@@ -147,26 +153,42 @@ impl McpHttpClient {
             ));
         }
 
-        let tools = v["result"]["tools"]
+        let raw_tools = v["result"]["tools"]
             .as_array()
-            .ok_or_else(|| anyhow!("tools/list: missing `tools` array"))?
-            .iter()
-            .map(|t| {
-                let mut tool: McpTool = serde_json::from_value(t.clone()).unwrap_or_else(|_| {
-                    McpTool {
-                        name: t["name"].as_str().unwrap_or("unknown").to_owned(),
-                        description: t["description"].as_str().unwrap_or("").to_owned(),
-                        input_schema: t["inputSchema"].clone(),
-                        annotations: Default::default(),
-                        server_id: session.server_id,
-                        server_name: session.server_name.clone(),
-                    }
-                });
-                tool.server_id = session.server_id;
-                tool.server_name = session.server_name.clone();
-                tool
-            })
-            .collect();
+            .ok_or_else(|| anyhow!("tools/list: missing `tools` array"))?;
+
+        let mut tools = Vec::with_capacity(raw_tools.len());
+        for t in raw_tools {
+            let mut tool: McpTool = serde_json::from_value(t.clone()).unwrap_or_else(|_| {
+                McpTool {
+                    name: t["name"].as_str().unwrap_or("unknown").to_owned(),
+                    description: t["description"].as_str().unwrap_or("").to_owned(),
+                    input_schema: t["inputSchema"].clone(),
+                    annotations: Default::default(),
+                    server_id: session.server_id,
+                    server_name: session.server_name.clone(),
+                }
+            });
+            tool.server_id = session.server_id;
+            tool.server_name = session.server_name.clone();
+
+            // Guard against oversized fields from malicious/misconfigured servers.
+            if tool.description.len() > MAX_TOOL_DESCRIPTION_BYTES {
+                warn!(tool = %tool.name, "MCP tool description truncated");
+                tool.description.truncate(MAX_TOOL_DESCRIPTION_BYTES);
+            }
+            let schema_bytes = serde_json::to_string(&tool.input_schema)
+                .map(|s| s.len())
+                .unwrap_or(usize::MAX);
+            if schema_bytes > MAX_TOOL_SCHEMA_BYTES {
+                return Err(anyhow!(
+                    "tool {} inputSchema too large ({schema_bytes} bytes > {MAX_TOOL_SCHEMA_BYTES})",
+                    tool.name
+                ));
+            }
+
+            tools.push(tool);
+        }
 
         Ok(tools)
     }
@@ -236,8 +258,9 @@ impl McpHttpClient {
         let resp = req.send().await?;
 
         // 404 = session expired. Caller (McpSessionManager) must re-initialize.
+        // Error message must contain SESSION_EXPIRED_MARKER so with_session can detect it.
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(anyhow!("MCP session expired (404) for {}", session.url));
+            return Err(anyhow!("MCP {SESSION_EXPIRED_MARKER} (404) for {}", session.url));
         }
 
         Ok(resp)

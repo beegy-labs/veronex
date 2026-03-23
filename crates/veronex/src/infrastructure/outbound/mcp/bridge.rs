@@ -48,6 +48,11 @@ const LOOP_DETECT_THRESHOLD: u8 = 3;
 const RESULT_CACHE_TTL_SECS: i64 = 300;
 /// Per-tool-call execution timeout. Bridge enforces this; MCP client has its own connection timeout.
 const MCP_TOOL_CALL_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(30);
+/// Per-round token collection timeout. Bounds worst-case hang at MAX_ROUNDS × this value.
+const COLLECT_ROUND_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(120);
+/// Maximum bytes of a single MCP tool result injected into the messages array.
+/// Prevents OOM from malicious/misconfigured servers at high concurrency.
+const MAX_TOOL_RESULT_BYTES: usize = 32_768;
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
@@ -201,7 +206,18 @@ impl McpBridgeAdapter {
                 break;
             }
 
-            let round_result = collect_round(state, &job_id).await;
+            let round_result = match tokio::time::timeout(
+                COLLECT_ROUND_TIMEOUT,
+                collect_round(state, &job_id),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    warn!(round = rounds, "MCP collect_round timed out — breaking loop");
+                    break;
+                }
+            };
             total_prompt_tokens = total_prompt_tokens.saturating_add(round_result.prompt_tokens);
             total_completion_tokens = total_completion_tokens.saturating_add(round_result.completion_tokens);
             finish_reason = round_result.finish_reason.clone();
@@ -383,7 +399,11 @@ impl McpBridgeAdapter {
                     }
                 }
 
-                let text = tool_result.to_llm_string();
+                let mut text = tool_result.to_llm_string();
+                if text.len() > MAX_TOOL_RESULT_BYTES {
+                    warn!(tool = %namespaced, original_bytes = text.len(), "MCP tool result truncated");
+                    text.truncate(MAX_TOOL_RESULT_BYTES);
+                }
                 let bytes = text.len() as u32;
                 let outcome = if is_err { "error" } else { "success" };
                 emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, outcome, false, latency_ms, bytes, loop_round);
@@ -426,6 +446,15 @@ async fn collect_round(state: &AppState, job_id: &JobId) -> RoundResult {
 
     while let Some(result) = token_stream.next().await {
         match result {
+            // is_final checked first: a final token with tool_calls must still break the loop.
+            Ok(token) if token.is_final => {
+                prompt_tokens = token.prompt_tokens.unwrap_or(0);
+                completion_tokens = token.completion_tokens.unwrap_or(completion_tokens);
+                finish_reason = token.finish_reason.unwrap_or_else(|| {
+                    if tool_calls.is_empty() { "stop".into() } else { "tool_calls".into() }
+                });
+                break;
+            }
             Ok(token) if token.tool_calls.is_some() => {
                 if let Some(calls_val) = token.tool_calls.as_ref() {
                     if let Some(calls) = calls_val.as_array() {
@@ -436,14 +465,6 @@ async fn collect_round(state: &AppState, job_id: &JobId) -> RoundResult {
                         }
                     }
                 }
-            }
-            Ok(token) if token.is_final => {
-                prompt_tokens = token.prompt_tokens.unwrap_or(0);
-                completion_tokens = token.completion_tokens.unwrap_or(completion_tokens);
-                finish_reason = token.finish_reason.unwrap_or_else(|| {
-                    if tool_calls.is_empty() { "stop".into() } else { "tool_calls".into() }
-                });
-                break;
             }
             Ok(token) => {
                 if !token.value.is_empty() {

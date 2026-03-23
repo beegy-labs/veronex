@@ -15,7 +15,6 @@ use fred::prelude::*;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::client::McpHttpClient;
 use crate::session::McpSessionManager;
 use crate::types::McpTool;
 
@@ -87,11 +86,25 @@ impl McpToolCache {
             .map(|e| (*e.key(), e.value().clone()))
             .collect();
 
+        if snapshot.is_empty() {
+            return Vec::new();
+        }
+
+        // Batch liveness check — one MGET instead of N sequential EXISTS round-trips.
+        // At 10K MCP servers, N×RTT on a hot path is unacceptable.
+        let conn: fred::clients::Client = self.valkey.next().clone();
+        let hb_keys: Vec<String> = snapshot.iter().map(|(id, _)| heartbeat_key(*id)).collect();
+        let liveness: Vec<Option<String>> = conn.mget(hb_keys).await.unwrap_or_default();
+        let online: std::collections::HashSet<Uuid> = snapshot
+            .iter()
+            .zip(liveness.into_iter())
+            .filter_map(|((id, _), v)| if v.is_some() { Some(*id) } else { None })
+            .collect();
+
         let mut tools = Vec::new();
 
         for (server_id, cached) in snapshot {
-            // Skip offline servers
-            if !self.is_online(server_id).await {
+            if !online.contains(&server_id) {
                 continue;
             }
 
@@ -187,11 +200,10 @@ impl McpToolCache {
             return;
         }
 
-        // Fetch from MCP server
+        // Fetch from MCP server — reuse the shared client from with_session (connection pool).
         let fetch_result = session_mgr
-            .with_session(server_id, |_, session| {
-                let c = McpHttpClient::new();
-                async move { c.list_tools(&session).await }
+            .with_session(server_id, |client, session| {
+                async move { client.list_tools(&session).await }
             })
             .await;
 

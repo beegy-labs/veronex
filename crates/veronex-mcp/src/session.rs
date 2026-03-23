@@ -13,6 +13,11 @@ use uuid::Uuid;
 use crate::client::{McpHttpClient, McpSession};
 use crate::types::McpToolResult;
 
+/// Sentinel substring in error messages that signals a 404 session-expired condition.
+/// `McpHttpClient::send` produces this string; `with_session` matches it for re-init.
+/// Using a const prevents silent breakage if the message text changes in either place.
+pub(crate) const SESSION_EXPIRED_MARKER: &str = "session expired";
+
 // ── Session entry ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -27,14 +32,15 @@ struct SessionEntry {
 /// Thread-safe session store with automatic re-initialization on expiry.
 pub struct McpSessionManager {
     sessions: Arc<DashMap<Uuid, SessionEntry>>,
-    client: McpHttpClient,
+    /// Shared client — reuse connection pool across all sessions and retries.
+    client: Arc<McpHttpClient>,
 }
 
 impl McpSessionManager {
     pub fn new(client: McpHttpClient) -> Self {
         Self {
             sessions: Arc::new(DashMap::new()),
-            client,
+            client: Arc::new(client),
         }
     }
 
@@ -92,11 +98,11 @@ impl McpSessionManager {
             .map(|e| e.clone())
             .ok_or_else(|| anyhow::anyhow!("No session for server {server_id}"))?;
 
-        let client = Arc::new(McpHttpClient::new());
+        let client = Arc::clone(&self.client);
 
-        match f(client.clone(), entry.session.clone()).await {
+        match f(Arc::clone(&client), entry.session.clone()).await {
             Ok(v) => Ok(v),
-            Err(e) if e.to_string().contains("session expired") => {
+            Err(e) if e.to_string().contains(SESSION_EXPIRED_MARKER) => {
                 warn!(server_id = %server_id, "MCP session expired — re-initializing");
                 // Remove stale session and re-init WITHOUT the old session-id header
                 self.sessions.remove(&server_id);
@@ -116,11 +122,17 @@ impl McpSessionManager {
 
     /// Check liveness of all connected servers.
     pub async fn ping_all(&self) -> Vec<(Uuid, bool)> {
-        let mut results = Vec::new();
-        for entry in self.sessions.iter() {
-            let session = entry.session.clone();
+        // Snapshot to avoid holding DashMap Refs across .await (shard lock violation).
+        let entries: Vec<(Uuid, McpSession)> = self
+            .sessions
+            .iter()
+            .map(|e| (*e.key(), e.value().session.clone()))
+            .collect();
+
+        let mut results = Vec::with_capacity(entries.len());
+        for (id, session) in entries {
             let alive = self.client.ping(&session).await.is_ok();
-            results.push((*entry.key(), alive));
+            results.push((id, alive));
         }
         results
     }

@@ -50,6 +50,7 @@ If E2E breaks on internal function change → **test design flaw** (layer violat
 | `cargo nextest` | Parallel test execution | Always |
 | `proptest` | Property-based testing (pure functions) | When writing units |
 | `cargo-mutants` | Dead test detection | Once before release |
+| `wiremock` | HTTP mock server for async client tests | When testing HTTP clients (e.g. MCP, provider adapters) |
 
 ### TypeScript (Web)
 
