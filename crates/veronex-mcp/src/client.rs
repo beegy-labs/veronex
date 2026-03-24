@@ -16,12 +16,15 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::session::SESSION_EXPIRED_MARKER;
+use crate::truncate_at_char_boundary;
 use crate::types::{McpContent, McpTool, McpToolResult};
 
 /// Max bytes for a tool description string. Prevents oversized context injection.
 const MAX_TOOL_DESCRIPTION_BYTES: usize = 4_096;
 /// Max serialized bytes for a tool inputSchema. Prevents deeply-nested JSON bombs.
 const MAX_TOOL_SCHEMA_BYTES: usize = 16_384;
+/// Max tools a single MCP server may advertise. Prevents OOM from malicious servers.
+const MAX_TOOLS_PER_SERVER: usize = 1_024;
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
@@ -157,6 +160,13 @@ impl McpHttpClient {
             .as_array()
             .ok_or_else(|| anyhow!("tools/list: missing `tools` array"))?;
 
+        if raw_tools.len() > MAX_TOOLS_PER_SERVER {
+            return Err(anyhow!(
+                "tools/list: too many tools ({} > {MAX_TOOLS_PER_SERVER})",
+                raw_tools.len()
+            ));
+        }
+
         let mut tools = Vec::with_capacity(raw_tools.len());
         for t in raw_tools {
             let mut tool: McpTool = serde_json::from_value(t.clone()).unwrap_or_else(|_| {
@@ -175,7 +185,7 @@ impl McpHttpClient {
             // Guard against oversized fields from malicious/misconfigured servers.
             if tool.description.len() > MAX_TOOL_DESCRIPTION_BYTES {
                 warn!(tool = %tool.name, "MCP tool description truncated");
-                tool.description.truncate(MAX_TOOL_DESCRIPTION_BYTES);
+                truncate_at_char_boundary(&mut tool.description, MAX_TOOL_DESCRIPTION_BYTES);
             }
             let schema_bytes = serde_json::to_string(&tool.input_schema)
                 .map(|s| s.len())

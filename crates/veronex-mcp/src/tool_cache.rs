@@ -32,14 +32,50 @@ fn heartbeat_key(server_id: Uuid) -> String {
     format!("veronex:mcp:heartbeat:{server_id}")
 }
 
+#[cfg(test)]
+mod key_format_tests {
+    use super::*;
+
+    /// Guard against silent key renames that would break cross-crate Valkey access.
+    #[test]
+    fn tool_key_format() {
+        let id = Uuid::nil();
+        let key = tool_key(id);
+        assert!(key.starts_with("veronex:mcp:tools:"), "unexpected prefix: {key}");
+        assert!(key.contains(&id.to_string()), "uuid not embedded: {key}");
+    }
+
+    #[test]
+    fn lock_key_format() {
+        let id = Uuid::nil();
+        let key = lock_key(id);
+        assert!(key.starts_with("veronex:mcp:tools:lock:"), "unexpected prefix: {key}");
+        assert!(key.contains(&id.to_string()), "uuid not embedded: {key}");
+    }
+
+    #[test]
+    fn heartbeat_key_format() {
+        let id = Uuid::nil();
+        let key = heartbeat_key(id);
+        assert!(key.starts_with("veronex:mcp:heartbeat:"), "unexpected prefix: {key}");
+        assert!(key.contains(&id.to_string()), "uuid not embedded: {key}");
+    }
+
+    /// All three keys for the same server must be distinct (no collision).
+    #[test]
+    fn tool_lock_heartbeat_keys_are_distinct() {
+        let id = Uuid::nil();
+        let keys = [tool_key(id), lock_key(id), heartbeat_key(id)];
+        let unique: std::collections::HashSet<_> = keys.iter().collect();
+        assert_eq!(unique.len(), 3, "key collision detected");
+    }
+}
+
 // ── Cache entry ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct CachedTools {
     tools: Vec<McpTool>,
-    /// Reverse map: namespaced_name → server_id  (O(1) lookup during dispatch)
-    #[allow(dead_code)]
-    name_to_server: Arc<DashMap<String, Uuid>>,
     fetched_at: Instant,
 }
 
@@ -158,7 +194,11 @@ impl McpToolCache {
 
     /// Invalidate a server's L1 entry (called on `notifications/tools/list_changed`).
     pub fn invalidate(&self, server_id: Uuid) {
-        self.l1.remove(&server_id);
+        if let Some((_, entry)) = self.l1.remove(&server_id) {
+            for tool in &entry.tools {
+                self.name_to_server.remove(&tool.namespaced_name());
+            }
+        }
         debug!(server_id = %server_id, "McpToolCache: L1 invalidated (list_changed)");
     }
 
@@ -178,7 +218,6 @@ impl McpToolCache {
         &self,
         server_id: Uuid,
         session_mgr: &McpSessionManager,
-        _refresh_secs: u64,
     ) {
         // Try to acquire the refresh lock
         let conn: fred::clients::Client = self.valkey.next().clone();
@@ -231,11 +270,7 @@ impl McpToolCache {
                 // Update L1
                 self.l1.insert(
                     server_id,
-                    CachedTools {
-                        tools,
-                        name_to_server: self.name_to_server.clone(),
-                        fetched_at: Instant::now(),
-                    },
+                    CachedTools { tools, fetched_at: Instant::now() },
                 );
             }
             Err(e) => {
@@ -245,15 +280,6 @@ impl McpToolCache {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    async fn is_online(&self, server_id: Uuid) -> bool {
-        let conn: fred::clients::Client = self.valkey.next().clone();
-        let exists: i64 = conn
-            .exists(heartbeat_key(server_id))
-            .await
-            .unwrap_or(0);
-        exists > 0
-    }
 
     async fn load_from_valkey(&self, server_id: Uuid) -> Option<CachedTools> {
         let conn: fred::clients::Client = self.valkey.next().clone();
@@ -273,11 +299,7 @@ impl McpToolCache {
                 .insert(tool.namespaced_name(), server_id);
         }
 
-        let entry = CachedTools {
-            tools,
-            name_to_server: self.name_to_server.clone(),
-            fetched_at: Instant::now(),
-        };
+        let entry = CachedTools { tools, fetched_at: Instant::now() };
         self.l1.insert(server_id, entry.clone());
         Some(entry)
     }

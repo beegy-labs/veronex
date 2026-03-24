@@ -23,8 +23,6 @@ pub(crate) const SESSION_EXPIRED_MARKER: &str = "session expired";
 #[derive(Debug, Clone)]
 struct SessionEntry {
     session: McpSession,
-    server_name: String,
-    url: String,
 }
 
 // ── Manager ───────────────────────────────────────────────────────────────────
@@ -66,10 +64,7 @@ impl McpSessionManager {
             "MCP session established"
         );
 
-        self.sessions.insert(
-            server_id,
-            SessionEntry { session, server_name, url },
-        );
+        self.sessions.insert(server_id, SessionEntry { session });
         Ok(())
     }
 
@@ -106,7 +101,7 @@ impl McpSessionManager {
                 warn!(server_id = %server_id, "MCP session expired — re-initializing");
                 // Remove stale session and re-init WITHOUT the old session-id header
                 self.sessions.remove(&server_id);
-                self.connect(server_id, &entry.server_name, &entry.url).await?;
+                self.connect(server_id, &entry.session.server_name, &entry.session.url).await?;
 
                 let fresh = self
                     .sessions
@@ -120,7 +115,7 @@ impl McpSessionManager {
         }
     }
 
-    /// Check liveness of all connected servers.
+    /// Check liveness of all connected servers (parallel).
     pub async fn ping_all(&self) -> Vec<(Uuid, bool)> {
         // Snapshot to avoid holding DashMap Refs across .await (shard lock violation).
         let entries: Vec<(Uuid, McpSession)> = self
@@ -129,17 +124,26 @@ impl McpSessionManager {
             .map(|e| (*e.key(), e.value().session.clone()))
             .collect();
 
-        let mut results = Vec::with_capacity(entries.len());
-        for (id, session) in entries {
-            let alive = self.client.ping(&session).await.is_ok();
-            results.push((id, alive));
-        }
-        results
+        let client = Arc::clone(&self.client);
+        let futs = entries.into_iter().map(|(id, session)| {
+            let client = Arc::clone(&client);
+            async move {
+                let alive = client.ping(&session).await.is_ok();
+                (id, alive)
+            }
+        });
+        futures::future::join_all(futs).await
     }
 
     /// Returns IDs of all currently tracked servers.
     pub fn server_ids(&self) -> Vec<Uuid> {
         self.sessions.iter().map(|e| *e.key()).collect()
+    }
+
+    /// O(1) check — true when at least one session is active.
+    /// Prefer this over `!server_ids().is_empty()` on hot paths.
+    pub fn has_sessions(&self) -> bool {
+        !self.sessions.is_empty()
     }
 
     /// Convenience: call a tool on a server by ID.

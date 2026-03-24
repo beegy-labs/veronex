@@ -8,9 +8,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
+use crate::infrastructure::outbound::valkey_keys;
 
 use super::audit_helpers::emit_audit;
 use super::error::{AppError, db_error};
+use super::provider_validation::validate_provider_url;
 use super::state::AppState;
 
 type HandlerResult<T> = Result<T, AppError>;
@@ -107,7 +109,7 @@ pub async fn list_mcp_servers(
     // Batch-check Valkey heartbeats
     let online_set: std::collections::HashSet<Uuid> = if let Some(ref pool) = state.valkey_pool {
         let conn: fred::clients::Client = pool.next().clone();
-        let hb_keys: Vec<String> = ids.iter().map(|id| format!("veronex:mcp:heartbeat:{id}")).collect();
+        let hb_keys: Vec<String> = ids.iter().map(|id| valkey_keys::mcp_heartbeat(*id)).collect();
         let liveness: Vec<Option<String>> = conn.mget(hb_keys).await.unwrap_or_default();
         ids.iter()
             .zip(liveness.into_iter())
@@ -162,11 +164,24 @@ pub async fn register_mcp_server(
     if name.is_empty() {
         return Err(AppError::BadRequest("name is required".into()));
     }
-    if slug.is_empty() || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
-        return Err(AppError::BadRequest("slug must match [a-z0-9_]+".into()));
+    if name.len() > 128 {
+        return Err(AppError::BadRequest("name must be 128 characters or fewer".into()));
     }
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(AppError::BadRequest("url must start with http:// or https://".into()));
+    if slug.is_empty()
+        || !slug.starts_with(|c: char| c.is_ascii_lowercase())
+        || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        return Err(AppError::BadRequest("slug must match [a-z][a-z0-9_]*".into()));
+    }
+    if slug.len() > 64 {
+        return Err(AppError::BadRequest("slug must be 64 characters or fewer".into()));
+    }
+    validate_provider_url(&url)?;
+
+    if let Some(t) = req.timeout_secs {
+        if !(1..=300).contains(&t) {
+            return Err(AppError::BadRequest("timeout_secs must be between 1 and 300".into()));
+        }
     }
 
     let id = Uuid::now_v7();
@@ -240,7 +255,7 @@ pub async fn patch_mcp_server(
     // Liveness check for single server
     let online = if let Some(ref pool) = state.valkey_pool {
         let conn: fred::clients::Client = pool.next().clone();
-        let key = format!("veronex:mcp:heartbeat:{id}");
+        let key = valkey_keys::mcp_heartbeat(id);
         let v: Option<String> = conn.get(key).await.unwrap_or(None);
         v.is_some()
     } else {

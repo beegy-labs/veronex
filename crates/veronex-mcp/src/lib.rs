@@ -25,6 +25,17 @@ pub mod session;
 pub mod tool_cache;
 pub mod types;
 
+// ── Shared utilities ──────────────────────────────────────────────────────────
+
+/// Truncate `s` to at most `max_len` bytes, always at a valid UTF-8 char boundary.
+pub fn truncate_at_char_boundary(s: &mut String, max_len: usize) {
+    if s.len() <= max_len {
+        return;
+    }
+    let boundary = (0..=max_len).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+    s.truncate(boundary);
+}
+
 // Convenience re-exports
 pub use client::McpHttpClient;
 pub use session::McpSessionManager;

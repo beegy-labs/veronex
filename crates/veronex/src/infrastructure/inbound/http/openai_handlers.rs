@@ -586,14 +586,6 @@ async fn mcp_ollama_chat(
     conversation_id: Option<String>,
     stream: bool,
 ) -> Response {
-    // Collect images from content array parts (same path as ollama_chat_proxy).
-    let content_images: Vec<String> = req.messages.iter()
-        .filter(|m| m.role == "user")
-        .filter_map(|m| m.content.as_ref())
-        .flat_map(|c| c.extract_images())
-        .collect();
-    let _ = content_images; // images are not forwarded through MCP loop (no vision)
-
     let ollama_messages: Vec<serde_json::Value> =
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
 

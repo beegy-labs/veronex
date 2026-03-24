@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-use veronex_mcp::{McpCircuitBreaker, McpResultCache, McpSessionManager, McpToolCache};
+use veronex_mcp::{McpCircuitBreaker, McpResultCache, McpSessionManager, McpToolCache, truncate_at_char_boundary};
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::enums::{ApiFormat, JobSource, KeyTier, ProviderType};
@@ -41,7 +41,8 @@ use crate::infrastructure::inbound::http::state::AppState;
 /// Maximum agentic loop rounds (tool call → execute → re-submit).
 const MAX_ROUNDS: u8 = 5;
 /// Maximum MCP tools injected per request (context window protection).
-const MAX_TOOLS_PER_REQUEST: usize = 32;
+/// Also used by `McpToolCache::new()` in main.rs — keep in sync.
+pub const MAX_TOOLS_PER_REQUEST: usize = 32;
 /// Number of identical (tool, args_hash) pairs in one session before forced break.
 const LOOP_DETECT_THRESHOLD: u8 = 3;
 /// Result cache TTL (seconds).
@@ -53,6 +54,9 @@ const COLLECT_ROUND_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from
 /// Maximum bytes of a single MCP tool result injected into the messages array.
 /// Prevents OOM from malicious/misconfigured servers at high concurrency.
 const MAX_TOOL_RESULT_BYTES: usize = 32_768;
+/// Maximum bytes of args string fed into `quick_args_hash`.
+/// Loop-detection hashing is O(n); cap prevents unbounded work on inflated payloads.
+const MAX_ARGS_FOR_HASH_BYTES: usize = 4_096;
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
@@ -96,9 +100,9 @@ impl McpBridgeAdapter {
     }
 
     /// Returns `true` if MCP should intercept this request
-    /// (at least one server session is active).
+    /// (at least one server session is active). O(1).
     pub fn should_intercept(&self) -> bool {
-        !self.session_manager.server_ids().is_empty()
+        self.session_manager.has_sessions()
     }
 
     /// Run the full agentic MCP loop.
@@ -331,7 +335,7 @@ impl McpBridgeAdapter {
             Some(id) => id,
             None => {
                 warn!(tool = %namespaced, "MCP: no server mapping");
-                return format!("{{\"error\": \"unknown tool: {namespaced}\"}}");
+                return serde_json::json!({"error": format!("unknown tool: {namespaced}")}).to_string();
             }
         };
 
@@ -402,7 +406,7 @@ impl McpBridgeAdapter {
                 let mut text = tool_result.to_llm_string();
                 if text.len() > MAX_TOOL_RESULT_BYTES {
                     warn!(tool = %namespaced, original_bytes = text.len(), "MCP tool result truncated");
-                    text.truncate(MAX_TOOL_RESULT_BYTES);
+                    truncate_at_char_boundary(&mut text, MAX_TOOL_RESULT_BYTES);
                 }
                 let bytes = text.len() as u32;
                 let outcome = if is_err { "error" } else { "success" };
@@ -413,7 +417,8 @@ impl McpBridgeAdapter {
                 self.circuit_breaker.record_failure(server_id);
                 warn!(tool = %namespaced, error = %e, "MCP tool call error");
                 emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, "error", false, latency_ms, 0, loop_round);
-                format!("{{\"error\": \"{}\"}}", e.to_string().replace('"', "'"))
+                let msg: String = e.to_string().replace('"', "'").chars().take(256).collect();
+                format!("{{\"error\": \"{msg}\"}}")
             }
             Err(_elapsed) => {
                 self.circuit_breaker.record_failure(server_id);
@@ -536,8 +541,11 @@ fn server_slug_from_namespaced(namespaced: &str) -> &str {
 }
 
 /// Quick hash of args string for loop-detection (does not need to be canonical).
+/// Input is capped at `MAX_ARGS_FOR_HASH_BYTES` to bound O(n) hashing cost.
 fn quick_args_hash(args_str: &str) -> String {
-    let digest = Sha256::digest(args_str.as_bytes());
+    let bytes = args_str.as_bytes();
+    let capped = if bytes.len() > MAX_ARGS_FOR_HASH_BYTES { &bytes[..MAX_ARGS_FOR_HASH_BYTES] } else { bytes };
+    let digest = Sha256::digest(capped);
     hex::encode(&digest[..4])
 }
 

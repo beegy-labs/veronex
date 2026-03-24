@@ -3,6 +3,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Sentinel string embedded in skipped-result messages.
+/// Must match the substring checked in `McpToolResult::is_skipped()`.
+const ERR_CIRCUIT_OPEN: &str = "circuit open";
+
 // ── Tool schema ───────────────────────────────────────────────────────────────
 
 /// A tool exposed by an MCP server, extended with Veronex metadata.
@@ -151,7 +155,7 @@ impl McpToolResult {
     }
 
     pub fn skipped() -> Self {
-        Self::error("MCP server circuit open — skipped")
+        Self::error(format!("MCP server {ERR_CIRCUIT_OPEN} — skipped"))
     }
 
     pub fn timeout() -> Self {
@@ -181,7 +185,7 @@ impl McpToolResult {
                 .content
                 .first()
                 .and_then(|c| c.as_text())
-                .is_some_and(|t| t.contains("circuit open"))
+                .is_some_and(|t| t.contains(ERR_CIRCUIT_OPEN))
     }
 
     /// Render content as a single string for the LLM `tool` role message.

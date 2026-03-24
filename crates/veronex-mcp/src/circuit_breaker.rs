@@ -33,21 +33,6 @@ impl ServerState {
         Self { state: State::Closed { consecutive_failures: 0 } }
     }
 
-    #[allow(dead_code)]
-    fn is_open(&self) -> bool {
-        match &self.state {
-            State::Open { since } => {
-                if since.elapsed() >= HALF_OPEN_AFTER {
-                    false // promote to HalfOpen on next check
-                } else {
-                    true
-                }
-            }
-            State::HalfOpen => false, // allow one probe
-            State::Closed { .. } => false,
-        }
-    }
-
     fn record_success(&mut self) {
         self.state = State::Closed { consecutive_failures: 0 };
     }
