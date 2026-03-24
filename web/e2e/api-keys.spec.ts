@@ -27,6 +27,7 @@ test.describe('API Keys', () => {
     await expect(
       page.locator('code').filter({ hasText: /vnx_/ })
         .or(page.getByText(/vnx_/))
+        .first()
     ).toBeVisible({ timeout: T_DEFAULT })
   })
 })

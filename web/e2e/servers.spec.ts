@@ -10,7 +10,8 @@ test.describe('GPU Servers', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: T_DEFAULT })
     await expect(
       page.locator('table')
-        .or(page.getByText(/no servers|register/i))
+        .or(page.getByRole('button', { name: /register/i }))
+        .first()
     ).toBeVisible({ timeout: T_DEFAULT })
   })
 
@@ -19,8 +20,7 @@ test.describe('GPU Servers', () => {
     if (await addButton.isVisible()) {
       await addButton.click()
       await expect(
-        page.getByRole('dialog')
-          .or(page.getByLabel(/name|hostname/i))
+        page.getByRole('dialog').first()
       ).toBeVisible({ timeout: T_SHORT })
     }
   })

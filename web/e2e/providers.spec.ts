@@ -11,7 +11,8 @@ test.describe('Providers', () => {
     // The providers page has tabs for Ollama and Gemini
     await expect(
       page.getByRole('tab', { name: /ollama/i })
-        .or(page.getByText(/ollama/i).first())
+        .or(page.getByText(/ollama/i))
+        .first()
     ).toBeVisible({ timeout: T_DEFAULT })
   })
 
@@ -22,17 +23,15 @@ test.describe('Providers', () => {
     await addButton.click()
 
     // A dialog/modal should appear with form fields
-    await expect(
-      page.getByRole('dialog')
-        .or(page.getByLabel(/name/i))
-    ).toBeVisible({ timeout: T_SHORT })
+    await expect(page.getByRole('dialog').first()).toBeVisible({ timeout: T_SHORT })
   })
 
   test('provider list displays registered providers or empty state', async ({ page }) => {
     // Either a table with providers or an empty state message
     await expect(
       page.locator('table')
-        .or(page.getByText(/no providers|no ollama|register/i))
+        .or(page.getByRole('button', { name: /register/i }))
+        .first()
     ).toBeVisible({ timeout: T_DEFAULT })
   })
 })
