@@ -17,6 +17,17 @@ WEB_URL="${WEB_URL:-http://localhost:3002}"
 WEB_DIR="$(cd "$SCRIPT_DIR/../../web" && pwd)"
 PW_WORKERS="${PW_WORKERS:-4}"
 
+# ── Clear login rate limit before Playwright login ────────────────────────────
+# Phase 2/3 tests fire many login requests; clear IP-based counter so
+# Playwright global-setup login isn't blocked by a leftover 429.
+{
+  RLKEYS=$(docker compose exec -T valkey valkey-cli KEYS 'veronex:login_attempts:*' 2>/dev/null | tr -d '\r')
+  if [ -n "$RLKEYS" ]; then
+    # shellcheck disable=SC2086
+    docker compose exec -T valkey valkey-cli del $RLKEYS > /dev/null 2>&1 || true
+  fi
+} || true
+
 # ── Preflight ─────────────────────────────────────────────────────────────────
 
 hdr "Frontend Preflight"
@@ -73,8 +84,8 @@ PW_EXIT=0
   cd "$WEB_DIR"
   PLAYWRIGHT_BASE_URL="$WEB_URL" \
   PLAYWRIGHT_API_URL="${API:-http://localhost:3001}" \
-  E2E_USERNAME="${E2E_USERNAME:-admin}" \
-  E2E_PASSWORD="${E2E_PASSWORD:-changeme}" \
+  E2E_USERNAME="${E2E_USERNAME:-${USERNAME:-test}}" \
+  E2E_PASSWORD="${E2E_PASSWORD:-${PASSWORD:-test1234!}}" \
   npx playwright test "${PW_ARGS[@]}" 2>&1
 ) || PW_EXIT=$?
 

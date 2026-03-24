@@ -46,7 +46,9 @@ test.describe('API: Capacity', () => {
     expect(typeof body.sync_interval_secs).toBe('number')
     expect(typeof body.probe_permits).toBe('number')
     expect(typeof body.probe_rate).toBe('number')
-    expect(Array.isArray(body.available_models)).toBeTruthy()
+    // available_models is an object keyed by provider type e.g. {ollama: [...]}
+    expect(body.available_models).toBeTruthy()
+    expect(typeof body.available_models).toBe('object')
   })
 
   test.describe.serial('capacity settings CRUD', () => {

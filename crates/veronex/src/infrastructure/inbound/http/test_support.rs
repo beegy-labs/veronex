@@ -376,6 +376,7 @@ pub(crate) fn make_app() -> axum::Router {
         sse_connections: Arc::new(AtomicU32::new(0)),
         vram_budget_repo: Arc::new(MockVramBudgetRepo),
         mcp_bridge: None,
+        login_rate_limit: 0,
     };
     // Inject a fake ApiKey extension so handlers that extract it work in tests.
     router::build_api_router()

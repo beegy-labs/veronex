@@ -13,8 +13,8 @@ test.describe('Authentication @smoke', () => {
 
   test('login with invalid credentials shows error', async ({ page }) => {
     await page.goto('/login')
-    await page.getByLabel('Username').fill('invalid-user')
-    await page.getByLabel('Password').fill('wrong-password')
+    await page.getByLabel('Username', { exact: true }).fill('invalid-user')
+    await page.getByLabel('Password', { exact: true }).fill('wrong-password')
     await page.getByRole('button', { name: /sign in/i }).click()
     await expect(page).toHaveURL(/\/login/)
     await expect(

@@ -19,7 +19,7 @@ test.describe('Navigation @smoke', () => {
     ]
     for (const name of navLinks) {
       await expect(
-        page.getByRole('link', { name }).or(page.getByText(name).first())
+        page.getByRole('link', { name }).first()
       ).toBeVisible({ timeout: T_DEFAULT })
     }
   })

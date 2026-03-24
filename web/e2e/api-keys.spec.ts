@@ -23,10 +23,10 @@ test.describe('API Keys', () => {
       page.getByText(/save this key now/i)
     ).toBeVisible({ timeout: T_DEFAULT })
 
-    // The key itself is rendered in a <code> element
+    // The key itself is rendered in a <code> element (prefix: vnx_)
     await expect(
-      page.locator('code').filter({ hasText: /sk-/ })
-        .or(page.getByText(/sk-/))
+      page.locator('code').filter({ hasText: /vnx_/ })
+        .or(page.getByText(/vnx_/))
     ).toBeVisible({ timeout: T_DEFAULT })
   })
 })
