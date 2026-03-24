@@ -29,9 +29,9 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 blake2 = "0.10"
 base62 = "2"
 hex = "0.4"
-rand = "0.8"
+rand = "0.9"
 argon2 = "0.5"
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 aes-gcm = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
@@ -39,10 +39,10 @@ base64 = "0.22"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-opentelemetry = "0.27"
-opentelemetry-otlp = "0.27"
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
-tracing-opentelemetry = "0.28"
+opentelemetry = "0.31"
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.32"
 
 # Config
 config = "0.14"

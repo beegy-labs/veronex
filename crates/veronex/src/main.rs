@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
         use veronex::infrastructure::outbound::mcp::McpBridgeAdapter;
         let valkey_arc = Arc::new(valkey.clone());
         let session_mgr = Arc::new(McpSessionManager::new(McpHttpClient::new()));
-        let tool_cache = Arc::new(McpToolCache::new(valkey_arc.clone(), 32));
+        let tool_cache = Arc::new(McpToolCache::new(valkey_arc.clone(), veronex::infrastructure::outbound::mcp::bridge::MAX_TOOLS_PER_REQUEST));
         let result_cache = Arc::new(McpResultCache::new(valkey_arc));
         let circuit_breaker = Arc::new(McpCircuitBreaker::new());
         let bridge = McpBridgeAdapter {
@@ -286,18 +286,18 @@ fn mask_database_url(url: &str) -> String {
     url.to_string()
 }
 
-fn build_otlp_tracer(endpoint: &str) -> anyhow::Result<opentelemetry_sdk::trace::Tracer> {
+fn build_otlp_tracer(endpoint: &str) -> anyhow::Result<opentelemetry_sdk::trace::SdkTracer> {
     use opentelemetry_otlp::{SpanExporter, WithExportConfig as _};
-    use opentelemetry_sdk::runtime;
-    use opentelemetry_sdk::trace::TracerProvider;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
 
     let exporter = SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
         .build()?;
 
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+    // runtime::Tokio argument removed in 0.31 — BatchSpanProcessor now uses its own background thread.
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .build();
 
     use opentelemetry::trace::TracerProvider as _;
