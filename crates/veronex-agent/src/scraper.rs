@@ -335,8 +335,14 @@ pub async fn ping_mcp_server(
 ) -> bool {
     let base = base_url.trim_end_matches('/');
 
-    // Stage 1: HTTP health endpoint
-    let health_url = format!("{base}/health");
+    // Stage 1: HTTP health endpoint — always at {scheme}://{host}:{port}/health.
+    // Strips any path (e.g. "/mcp") so "http://weather-mcp:3100/mcp" → "http://weather-mcp:3100/health".
+    let health_url = {
+        // Find end of authority (scheme://host:port) by looking for 3rd '/' or end of string.
+        let after_scheme = base.find("://").map(|i| i + 3).unwrap_or(0);
+        let authority_end = base[after_scheme..].find('/').map(|i| i + after_scheme).unwrap_or(base.len());
+        format!("{}/health", &base[..authority_end])
+    };
     match client.get(&health_url).timeout(SCRAPE_TIMEOUT).send().await {
         Ok(resp) if resp.status().is_success() => {
             tracing::debug!(server_id, "MCP HTTP health ok");

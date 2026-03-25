@@ -241,9 +241,7 @@ services:
       RUST_LOG: info
       VALKEY_URL: redis://valkey:6379/0
       DATABASE_URL: postgres://${POSTGRES_USER:-veronex}:${POSTGRES_PASSWORD:-veronex}@postgres:5432/veronex
-      # MCP servers: <uuid>:<url>[,<uuid>:<url>]
-      # weather-mcp is the built-in example server (get_coordinates + get_weather tools)
-      MCP_SERVERS: "${MCP_SERVERS:-550e8400-e29b-41d4-a716-446655440001:http://weather-mcp:3100}"
+      # MCP server list is fetched dynamically from /v1/mcp/targets each scrape cycle.
     ports:
       - "9091:9091"
     depends_on:

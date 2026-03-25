@@ -332,6 +332,11 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
             "/v1/metrics/targets",
             get(metrics_handlers::list_metrics_targets),
         )
+        // MCP agent discovery — consumed by veronex-agent, no auth required.
+        .route(
+            "/v1/mcp/targets",
+            get(mcp_handlers::list_mcp_targets),
+        )
         // First-run setup (no auth — only usable before any account exists)
         .route("/v1/setup/status", get(auth_handlers::setup_status))
         .route("/v1/setup", post(auth_handlers::setup))
