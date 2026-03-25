@@ -28,15 +28,17 @@ TMPDIR_MF=$(mktemp -d)
   -d "{\"name\":\"$MODEL\"}" > "$TMPDIR_MF/show" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/show") &
 (curl -s -w "\n%{http_code}" "$API/v1beta/models" -H "X-API-Key: $API_KEY" \
   > "$TMPDIR_MF/gemini" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/gemini") &
-(curl -s -w "\n%{http_code}" "$API/v1/test/completions" \
+(curl -s -w "\n%{http_code}" "$API/v1/chat/completions" \
   -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4,\"stream\":false}" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4,\"stream\":false,\"provider_type\":\"ollama\"}" \
   > "$TMPDIR_MF/test_completions" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/test_completions") &
-(apostc "/v1/test/api/chat" \
-  "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"stream\":false}" \
+(curl -s -w "\n%{http_code}" "$API/api/chat" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"stream\":false}" \
   > "$TMPDIR_MF/test_chat" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/test_chat") &
-(apostc "/v1/test/api/generate" \
-  "{\"model\":\"$MODEL\",\"prompt\":\"ping\",\"stream\":false}" \
+(curl -s -w "\n%{http_code}" "$API/api/generate" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"ping\",\"stream\":false}" \
   > "$TMPDIR_MF/test_generate" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/test_generate") &
 wait
 
@@ -446,17 +448,17 @@ except Exception as e:
       && pass "Image count limit (max_images=4): 5 images → 400" \
       || fail "Image count limit: 5 images → $IMG_LIMIT_CODE (expected 400)"
 
-    # /v1/test/completions with bee image (test endpoint)
-    IMG_TEST_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/v1/test/completions" \
+    # /v1/chat/completions with bee image (session auth)
+    IMG_TEST_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/v1/chat/completions" \
       -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
-      -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think What insect is in this image? One word.\"}],\"images\":[\"$BEE_IMG\"],\"stream\":false}" \
+      -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think What insect is in this image? One word.\"}],\"images\":[\"$BEE_IMG\"],\"stream\":false,\"provider_type\":\"ollama\"}" \
       2>/dev/null || printf "\n000")
     IMG_TEST_CODE=$(echo "$IMG_TEST_RES" | tail -1)
     case "$IMG_TEST_CODE" in
-      200) pass "Image inference /v1/test/completions → 200" ;;
-      503) info "Image inference test endpoint → 503 (vision model not synced)" ;;
-      400) info "Image inference test endpoint → 400 (pending implementation)" ;;
-      *)   info "Image inference test endpoint → $IMG_TEST_CODE" ;;
+      200) pass "Image inference /v1/chat/completions (session) → 200" ;;
+      503) info "Image inference session → 503 (vision model not synced)" ;;
+      400) info "Image inference session → 400 (pending implementation)" ;;
+      *)   info "Image inference session → $IMG_TEST_CODE" ;;
     esac
 
     # Image storage verification is in 10-image-storage.sh (runs after parallel phases

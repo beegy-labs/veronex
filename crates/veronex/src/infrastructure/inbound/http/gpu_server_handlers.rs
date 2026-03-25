@@ -335,7 +335,7 @@ pub async fn get_server_metrics_history(
 
     let points = repo.server_metrics_history(&id, hours).await.map_err(|e| {
         tracing::error!(%id, error = %e, "metrics history failed");
-        AppError::Internal(anyhow::anyhow!("query failed"))
+        AppError::ServiceUnavailable("analytics query failed".into())
     })?;
 
     Ok(Json(points))

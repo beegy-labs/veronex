@@ -13,10 +13,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, JobSource, ProviderType};
+use crate::domain::enums::{ApiFormat, ProviderType};
 use crate::domain::value_objects::JobId;
 
 use super::constants::{GEMINI_TIER_FREE, PROVIDER_GEMINI, PROVIDER_OLLAMA, SSE_KEEP_ALIVE, SSE_MAX_CONNECTIONS, SSE_TIMEOUT};
+use super::middleware::infer_auth::InferCaller;
 use super::error::AppError;
 use super::openai_sse_types::CompletionChunk;
 use super::state::AppState;
@@ -160,7 +161,7 @@ pub struct StatusResponse {
 /// POST /v1/inference - Submit a new inference request.
 pub async fn submit_inference(
     State(state): State<AppState>,
-    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     Json(req): Json<SubmitRequest>,
 ) -> Result<Json<SubmitResponse>, AppError> {
     if let Err(e) = super::inference_helpers::validate_content_length(req.prompt.len()) {
@@ -183,15 +184,15 @@ pub async fn submit_inference(
             model_name: req.model,
             provider_type,
             gemini_tier,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::VeronexNative,
             messages: None,
             tools: None,
             request_path: Some("/v1/inference".to_string()),
             conversation_id: None,
-            key_tier: Some(api_key.tier),
+            key_tier: caller.key_tier(),
             images: None,
             stop: None, seed: None, response_format: None,
             frequency_penalty: None, presence_penalty: None,
@@ -270,7 +271,7 @@ pub async fn get_status(
 pub async fn stream_job_openai(
     Path(job_id): Path<Uuid>,
     State(state): State<AppState>,
-    axum::extract::Extension(_api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(_caller): axum::extract::Extension<InferCaller>,
 ) -> Response {
     let guard = match try_acquire_sse(&state.sse_connections) {
         Ok(g) => g,

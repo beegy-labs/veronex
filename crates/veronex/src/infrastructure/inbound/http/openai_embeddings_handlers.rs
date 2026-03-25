@@ -11,6 +11,7 @@ use crate::domain::enums::ProviderType;
 use super::constants::ERR_MODEL_INVALID;
 use super::error::AppError;
 use super::inference_helpers::{validate_content_length, validate_model_name};
+use super::middleware::infer_auth::InferCaller;
 use super::provider_validation::validate_provider_url;
 use super::state::AppState;
 
@@ -66,7 +67,7 @@ struct EmbeddingUsage {
 #[instrument(skip(state, req), fields(model = %req.model))]
 pub async fn create_embeddings(
     State(state): State<AppState>,
-    axum::extract::Extension(_api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(_caller): axum::extract::Extension<InferCaller>,
     Json(req): Json<EmbeddingRequest>,
 ) -> Result<Response, AppError> {
     validate_model_name(&req.model)
