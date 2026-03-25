@@ -92,6 +92,9 @@ pub struct McpToolCache {
     l1: DashMap<Uuid, CachedTools>,
     /// Shared reverse map across all servers.
     name_to_server: Arc<DashMap<String, Uuid>>,
+    /// Slug (server_name) per server_id — survives Valkey round-trips where
+    /// `McpTool.server_name` is not serialized (`#[serde(skip)]`).
+    server_slugs: DashMap<Uuid, String>,
     valkey: Arc<Pool>,
     /// Max tools returned in `get_all` (context window protection).
     max_tools: usize,
@@ -102,6 +105,7 @@ impl McpToolCache {
         Self {
             l1: DashMap::new(),
             name_to_server: Arc::new(DashMap::new()),
+            server_slugs: DashMap::new(),
             valkey,
             max_tools,
         }
@@ -209,6 +213,7 @@ impl McpToolCache {
                 self.name_to_server.remove(&tool.namespaced_name());
             }
         }
+        self.server_slugs.remove(&server_id);
     }
 
     // ── Refresh ───────────────────────────────────────────────────────────────
@@ -248,6 +253,12 @@ impl McpToolCache {
 
         match fetch_result {
             Ok(tools) => {
+                // Cache server slug (server_name) so load_from_valkey can restore it.
+                // McpTool.server_name is #[serde(skip)], so it's absent from Valkey JSON.
+                if let Some(first) = tools.first() {
+                    self.server_slugs.insert(server_id, first.server_name.clone());
+                }
+
                 // Update reverse map
                 for tool in &tools {
                     self.name_to_server
@@ -285,12 +296,20 @@ impl McpToolCache {
         let conn: fred::clients::Client = self.valkey.next().clone();
         let raw: Option<String> = conn.get(tool_key(server_id)).await.unwrap_or(None);
 
-        let tools: Vec<McpTool> = raw
+        let mut tools: Vec<McpTool> = raw
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
         if tools.is_empty() {
             return None;
+        }
+
+        // Restore server_name from the in-process slug cache.
+        // McpTool.server_name is #[serde(skip)] so it's absent from the Valkey JSON.
+        let slug = self.server_slugs.get(&server_id).map(|v| v.clone()).unwrap_or_default();
+        for tool in &mut tools {
+            tool.server_id = server_id;
+            tool.server_name = slug.clone();
         }
 
         // Rebuild reverse map from Valkey data

@@ -300,6 +300,40 @@ impl OllamaAdapter {
             if let Some(pp) = presence_penalty { options["presence_penalty"] = serde_json::json!(pp); }
             if let Some(ref st) = stop { options["stop"] = st.clone(); }
 
+            // ── Normalize messages for Ollama's /api/chat format ─────────────
+            // Ollama /api/chat differs from OpenAI format in two ways:
+            //   1. assistant tool_calls: `arguments` must be a JSON object, not string.
+            //   2. tool result messages: must not contain `tool_call_id` or `name`.
+            let messages = {
+                let mut msgs = messages;
+                if let Some(arr) = msgs.as_array_mut() {
+                    for msg in arr.iter_mut() {
+                        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                        if role == "assistant" {
+                            // Parse arguments strings back to objects.
+                            if let Some(tcs) = msg.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                                for tc in tcs.iter_mut() {
+                                    if let Some(args) = tc.pointer_mut("/function/arguments") {
+                                        if let Some(s) = args.as_str() {
+                                            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(s) {
+                                                *args = obj;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else if role == "tool" {
+                            // Strip OpenAI-only fields that Ollama doesn't accept.
+                            if let Some(obj) = msg.as_object_mut() {
+                                obj.remove("tool_call_id");
+                                obj.remove("name");
+                            }
+                        }
+                    }
+                }
+                msgs
+            };
+
             // Inject images into the last user message (Ollama expects per-message images).
             let messages = if let Some(imgs) = images {
                 let mut msgs = messages;

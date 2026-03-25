@@ -10,6 +10,86 @@ source "$SCRIPT_DIR/_lib.sh"; load_state
 
 MCP_TEST_URL="${MCP_TEST_URL:-http://localhost:3100}"
 
+# ── MCP Server CRUD ──────────────────────────────────────────────────────────
+
+hdr "MCP Server CRUD"
+
+# Register
+MCP_SLUG="e2etestmcp"
+MCP_NAME="e2e-test-mcp"
+REG_RES=$(apost "/v1/mcp/servers" \
+  "{\"name\":\"$MCP_NAME\",\"slug\":\"$MCP_SLUG\",\"url\":\"http://localhost:3100\",\"timeout_secs\":30}" \
+  2>/dev/null || echo "{}")
+MCP_ID=$(echo "$REG_RES" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('id',''))" 2>/dev/null || echo "")
+[ -n "$MCP_ID" ] \
+  && pass "POST /v1/mcp/servers → 201 (id: $MCP_ID)" \
+  || fail "POST /v1/mcp/servers → failed to register (response: $REG_RES)"
+
+# List
+LIST_RES=$(aget "/v1/mcp/servers" 2>/dev/null || echo "[]")
+LIST_COUNT=$(echo "$LIST_RES" | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read())))" 2>/dev/null || echo "0")
+[ "$LIST_COUNT" -gt 0 ] \
+  && pass "GET /v1/mcp/servers → $LIST_COUNT server(s)" \
+  || fail "GET /v1/mcp/servers → empty list after registration"
+
+# Verify structure
+if [ "$LIST_COUNT" -gt 0 ]; then
+  HAS_FIELDS=$(echo "$LIST_RES" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+s=d[0]
+ok=all(k in s for k in ['id','name','slug','url','is_enabled','online','tool_count'])
+print('ok' if ok else 'missing_fields:' + str([k for k in ['id','name','slug','url','is_enabled','online','tool_count'] if k not in s]))
+" 2>/dev/null || echo "parse_error")
+  [ "$HAS_FIELDS" = "ok" ] \
+    && pass "GET /v1/mcp/servers → response has required fields" \
+    || fail "GET /v1/mcp/servers → $HAS_FIELDS"
+fi
+
+# Patch — toggle enabled
+if [ -n "$MCP_ID" ]; then
+  PATCH_RES=$(apatch "/v1/mcp/servers/$MCP_ID" '{"is_enabled":false}' 2>/dev/null || echo "{}")
+  PATCH_ENABLED=$(echo "$PATCH_RES" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print('false' if d.get('is_enabled') == False else 'true')" 2>/dev/null || echo "?")
+  [ "$PATCH_ENABLED" = "false" ] \
+    && pass "PATCH /v1/mcp/servers/:id → is_enabled=false" \
+    || fail "PATCH /v1/mcp/servers/:id → is_enabled=$PATCH_ENABLED (expected false)"
+fi
+
+# Validation — empty name returns 400
+VAL_RES=$(curl -s -w "\n%{http_code}" "$API/v1/mcp/servers" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d '{"name":"","slug":"valid","url":"http://localhost:3100"}' 2>/dev/null || printf "\n000")
+VAL_CODE=$(echo "$VAL_RES" | tail -1)
+[ "$VAL_CODE" = "400" ] \
+  && pass "POST /v1/mcp/servers empty name → 400" \
+  || fail "POST /v1/mcp/servers empty name → $VAL_CODE (expected 400)"
+
+# Validation — invalid slug returns 400
+VAL2_RES=$(curl -s -w "\n%{http_code}" "$API/v1/mcp/servers" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d '{"name":"Valid","slug":"Invalid-Slug","url":"http://localhost:3100"}' 2>/dev/null || printf "\n000")
+VAL2_CODE=$(echo "$VAL2_RES" | tail -1)
+[ "$VAL2_CODE" = "400" ] \
+  && pass "POST /v1/mcp/servers invalid slug → 400" \
+  || fail "POST /v1/mcp/servers invalid slug → $VAL2_CODE (expected 400)"
+
+# Delete
+if [ -n "$MCP_ID" ]; then
+  DEL_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$API/v1/mcp/servers/$MCP_ID" \
+    -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+  [ "$DEL_CODE" = "204" ] \
+    && pass "DELETE /v1/mcp/servers/:id → 204" \
+    || fail "DELETE /v1/mcp/servers/:id → $DEL_CODE (expected 204)"
+fi
+
+# 404 for non-existent id
+NF_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+  "$API/v1/mcp/servers/00000000-0000-0000-0000-000000000000" \
+  -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+[ "$NF_CODE" = "404" ] \
+  && pass "DELETE /v1/mcp/servers non-existent → 404" \
+  || fail "DELETE /v1/mcp/servers non-existent → $NF_CODE (expected 404)"
+
 # ── MCP API Surface ───────────────────────────────────────────────────────────
 
 hdr "MCP API Surface"

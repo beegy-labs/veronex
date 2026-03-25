@@ -168,6 +168,36 @@ async fn main() -> Result<()> {
             .unwrap_or(10),
     };
 
+    // ── MCP tool refresh loop ──────────────────────────────────────
+    // Periodically refresh tool cache for all connected MCP servers.
+    // Interval (25s) keeps L2 Valkey entry alive before its 35s TTL.
+    if state.mcp_bridge.is_some() {
+        let state_clone = state.clone();
+        let cancel_clone = shutdown.clone();
+        tokio::spawn(async move {
+            use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
+            // Initial discovery on startup
+            for server_id in state_clone.mcp_bridge.as_ref().map(|b| b.session_manager.server_ids()).unwrap_or_default() {
+                discover_tools_startup(&state_clone, server_id).await;
+            }
+            // Periodic refresh every 25s
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(25));
+            interval.tick().await; // skip the immediate tick
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Some(ref b) = state_clone.mcp_bridge {
+                            for server_id in b.session_manager.server_ids() {
+                                b.tool_cache.refresh(server_id, &b.session_manager).await;
+                            }
+                        }
+                    }
+                    _ = cancel_clone.cancelled() => break,
+                }
+            }
+        });
+    }
+
     let app = build_app(state, config.cors_origins);
 
     // ── Start server ───────────────────────────────────────────────

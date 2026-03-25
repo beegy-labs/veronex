@@ -90,4 +90,20 @@ test.describe('API: Providers', () => {
     const res = await api.get('/v1/providers/00000000-0000-0000-0000-000000000000/models')
     expect(res.status()).toBe(404)
   })
+
+  test('get selected models on non-existent provider returns 404', async () => {
+    const res = await api.get('/v1/providers/00000000-0000-0000-0000-000000000000/selected-models')
+    expect(res.status()).toBe(404)
+  })
+
+  test('reveal provider key on non-existent provider returns 404', async () => {
+    const res = await api.get('/v1/providers/00000000-0000-0000-0000-000000000000/key')
+    expect(res.status()).toBe(404)
+  })
+
+  test('sync all providers returns 202 or 409', async () => {
+    const res = await api.post('/v1/providers/sync')
+    // 202 ACCEPTED (sync triggered) or 409 CONFLICT (sync already in progress)
+    expect([202, 409]).toContain(res.status())
+  })
 })

@@ -4,10 +4,12 @@ import { testId } from './helpers/constants'
 
 test.describe('API: Accounts', () => {
   let api: ReturnType<typeof authedRequest>
+  let accountId: string
 
   test.beforeEach(async ({ request }) => {
     const tokens = await apiLogin(request)
     api = authedRequest(request, tokens.accessToken)
+    accountId = tokens.accountId
   })
 
   test('list accounts returns array with current user', async () => {
@@ -68,5 +70,17 @@ test.describe('API: Accounts', () => {
     })
     // Backend returns 500 for unique constraint violation (should be 409, but accept 500)
     expect([400, 409, 500]).toContain(res.status())
+  })
+
+  test('list account sessions returns array with active session', async () => {
+    const res = await api.get(`/v1/accounts/${accountId}/sessions`)
+    expect(res.ok()).toBeTruthy()
+    const body = await res.json()
+    expect(Array.isArray(body)).toBeTruthy()
+    expect(body.length).toBeGreaterThanOrEqual(1)
+    if (body.length > 0) {
+      expect(typeof body[0].id).toBe('string')
+      expect(typeof body[0].expires_at).toBe('string')
+    }
   })
 })

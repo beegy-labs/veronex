@@ -48,6 +48,24 @@ test.describe('API: Dashboard & Inference @smoke', () => {
     expect(body).toBeTruthy()
   })
 
+  // ── Dashboard Overview ──────────────────────────────────────────────────────
+  test('dashboard overview returns aggregated snapshot', async () => {
+    const res = await api.get('/v1/dashboard/overview')
+    expect(res.ok()).toBeTruthy()
+    const body = await res.json()
+    expect(typeof body.stats).toBe('object')
+    expect(typeof body.queue_depth).toBe('object')
+    expect(typeof body.lab).toBe('object')
+  })
+
+  // ── Capacity Cluster ────────────────────────────────────────────────────────
+  test('capacity cluster returns array', async () => {
+    const res = await api.get('/v1/dashboard/capacity/cluster')
+    expect(res.ok()).toBeTruthy()
+    const body = await res.json()
+    expect(Array.isArray(body)).toBeTruthy()
+  })
+
   // ── Lab Settings ────────────────────────────────────────────────────────────
   test.describe.serial('lab settings', () => {
     test('lab settings CRUD', async () => {

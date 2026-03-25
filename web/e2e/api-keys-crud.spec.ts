@@ -72,4 +72,27 @@ test.describe('API: Keys CRUD @smoke', () => {
       if (keyId) await api.delete(`/v1/keys/${keyId}`)
     }
   })
+
+  test('regenerate key returns new key value', async () => {
+    let keyId: string | undefined
+    try {
+      const createRes = await api.post('/v1/keys', {
+        tenant_id: accountId,
+        name: `e2e-regen-${testId()}`,
+        tier: 'free',
+      })
+      expect(createRes.ok()).toBeTruthy()
+      const created = await createRes.json()
+      keyId = created.id
+      const originalKey = created.key
+
+      const regenRes = await api.post(`/v1/keys/${keyId}/regenerate`)
+      expect(regenRes.ok()).toBeTruthy()
+      const regen = await regenRes.json()
+      expect(regen.key).toMatch(/^vnx_/)
+      expect(regen.key).not.toBe(originalKey)
+    } finally {
+      if (keyId) await api.delete(`/v1/keys/${keyId}`)
+    }
+  })
 })

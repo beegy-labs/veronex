@@ -56,4 +56,36 @@ test.describe('API: GPU Servers', () => {
     // Delete is idempotent — returns 204 even for non-existent servers
     expect([204, 404]).toContain(res.status())
   })
+
+  test('get server metrics returns object', async () => {
+    const listRes = await api.get('/v1/servers')
+    const { servers } = await listRes.json()
+    if (servers.length === 0) return
+
+    const id = servers[0].id
+    const res = await api.get(`/v1/servers/${id}/metrics`)
+    expect(res.ok()).toBeTruthy()
+    expect(typeof (await res.json())).toBe('object')
+  })
+
+  test('get server metrics batch returns map', async () => {
+    const listRes = await api.get('/v1/servers')
+    const { servers } = await listRes.json()
+    const ids = servers.length > 0
+      ? servers.slice(0, 3).map((s: { id: string }) => s.id).join(',')
+      : '00000000-0000-0000-0000-000000000000'
+    const res = await api.get(`/v1/servers/metrics/batch?ids=${ids}`)
+    expect(res.ok()).toBeTruthy()
+    expect(typeof (await res.json())).toBe('object')
+  })
+
+  test('get server metrics history returns array or 503', async () => {
+    const listRes = await api.get('/v1/servers')
+    const { servers } = await listRes.json()
+    if (servers.length === 0) return
+
+    const id = servers[0].id
+    const res = await api.get(`/v1/servers/${id}/metrics/history?hours=1`)
+    expect([200, 503]).toContain(res.status())
+  })
 })

@@ -15,6 +15,60 @@ use super::error::{AppError, db_error};
 use super::provider_validation::validate_provider_url;
 use super::state::AppState;
 
+// ── Tool discovery helper ──────────────────────────────────────────────────────
+
+/// Fetch tools from MCP server, populate Valkey cache, and persist snapshot to DB.
+/// Public so main.rs can call it at startup for pre-existing servers.
+pub async fn discover_tools_startup(state: &AppState, server_id: Uuid) {
+    discover_and_persist_tools(state, server_id).await;
+}
+
+async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
+    let Some(ref bridge) = state.mcp_bridge else { return };
+
+    let tools = match bridge.session_manager
+        .with_session(server_id, |client, session| async move {
+            client.list_tools(&session).await
+        })
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(%server_id, error = %e, "MCP: tool discovery failed");
+            return;
+        }
+    };
+
+    // Populate Valkey cache via tool_cache refresh path (re-use existing lock logic)
+    bridge.tool_cache.refresh(server_id, &bridge.session_manager).await;
+
+    if tools.is_empty() { return; }
+
+    // Persist snapshot to DB (upsert)
+    for tool in &tools {
+        let schema = serde_json::to_value(&tool.input_schema).unwrap_or_default();
+        let _ = sqlx::query(
+            "INSERT INTO mcp_server_tools (server_id, tool_name, namespaced_name, description, input_schema, discovered_at)
+             VALUES ($1, $2, $3, $4, $5, now())
+             ON CONFLICT (server_id, tool_name) DO UPDATE
+               SET namespaced_name = EXCLUDED.namespaced_name,
+                   description     = EXCLUDED.description,
+                   input_schema    = EXCLUDED.input_schema,
+                   discovered_at   = EXCLUDED.discovered_at"
+        )
+        .bind(server_id)
+        .bind(&tool.name)
+        .bind(tool.namespaced_name())
+        .bind(&tool.description)
+        .bind(schema)
+        .execute(&state.pg_pool)
+        .await
+        .map_err(|e| tracing::warn!(%server_id, tool = %tool.name, error = %e, "MCP: tool persist failed"));
+    }
+
+    tracing::info!(%server_id, count = tools.len(), "MCP: tools discovered and persisted");
+}
+
 type HandlerResult<T> = Result<T, AppError>;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
@@ -199,10 +253,15 @@ pub async fn register_mcp_server(
     .await
     .map_err(db_error)?;
 
-    // Best-effort connect
+    // Best-effort connect + tool discovery
     if let Some(ref bridge) = state.mcp_bridge {
         if let Err(e) = bridge.session_manager.connect(id, &slug, &url).await {
             tracing::warn!(%id, error = %e, "MCP register: session connect failed");
+        } else {
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                discover_and_persist_tools(&state_clone, id).await;
+            });
         }
     }
 
@@ -245,6 +304,11 @@ pub async fn patch_mcp_server(
         } else if new_enabled && !row.is_enabled {
             if let Err(e) = bridge.session_manager.connect(id, &row.slug, &row.url).await {
                 tracing::warn!(%id, error = %e, "MCP patch: session connect failed");
+            } else {
+                let state_clone = state.clone();
+                tokio::spawn(async move {
+                    discover_and_persist_tools(&state_clone, id).await;
+                });
             }
         }
     }
@@ -312,4 +376,30 @@ pub async fn delete_mcp_server(
     tracing::info!(%id, %name, "mcp server deleted");
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Agent discovery (no auth) ──────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct McpTargetEntry {
+    pub id: Uuid,
+    pub url: String,
+}
+
+/// `GET /v1/mcp/targets` — agent discovery endpoint (no auth required).
+///
+/// Returns enabled MCP servers as `[{id, url}]` for the agent to health-check.
+/// Consumed by veronex-agent on each scrape cycle. No auth — internal network only.
+pub async fn list_mcp_targets(State(state): State<AppState>) -> HandlerResult<Json<Vec<McpTargetEntry>>> {
+    #[derive(sqlx::FromRow)]
+    struct Row { id: Uuid, url: String }
+
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT id, url FROM mcp_servers WHERE is_enabled = true ORDER BY created_at"
+    )
+    .fetch_all(&state.pg_pool)
+    .await
+    .map_err(db_error)?;
+
+    Ok(Json(rows.into_iter().map(|r| McpTargetEntry { id: r.id, url: r.url }).collect()))
 }
