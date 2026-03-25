@@ -85,6 +85,33 @@ If E2E breaks on internal function change → **test design flaw** (layer violat
 
 ---
 
+## Persistent Sample Data Policy
+
+E2E test 실행 후 일부 데이터는 **수동 확인이 가능하도록 남겨둔다**.
+
+### 원칙
+
+| 구분 | 처리 |
+|------|------|
+| 임시 테스트 리소스 (CRUD lifecycle용) | 테스트 종료 즉시 삭제 |
+| **대표 샘플 데이터** | **테스트 후에도 유지** — UI/API 직접 접근 가능 |
+
+### 구현 방식
+
+- 각 E2E 스크립트의 마지막 섹션에 **"Persistent Sample Data"** 블록을 작성한다.
+- 블록은 동일 항목 중복 방지를 위해 **stale 데이터 정리 → 재등록** 순서로 실행한다.
+- 샘플 데이터는 서비스 재시작 또는 DB 초기화 전까지 유지된다.
+- 수동 확인 방법은 `pass` 메시지에 접근 경로를 명시한다 (예: `accessible at UI /mcp`).
+
+### 적용 대상
+
+| 리소스 | 샘플 데이터 | 유지 항목 |
+|--------|------------|---------|
+| MCP Servers | 날씨 MCP, 미세먼지 MCP 등록 후 미세먼지 삭제 | 날씨 MCP 1개 |
+| (추후 확장) | 기타 핵심 리소스 | TBD |
+
+---
+
 ## References
 
 - [Testing Trophy — Kent C. Dodds](https://kentcdodds.com/blog/the-testing-trophy-and-testing-classifications)

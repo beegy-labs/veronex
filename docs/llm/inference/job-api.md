@@ -49,7 +49,7 @@ Fires one SSE event per job status transition. Backed by a `tokio::sync::broadca
 
 Client: `web/hooks/use-inference-stream.ts` — `fetch()`-based SSE reader with JWT Bearer auth; exponential backoff reconnect (2s → 30s max).
 
-#### `flow_stats` SSE Event
+### `flow_stats` SSE Event
 
 In addition to `job_status` events, the stream emits `flow_stats` every 1 second:
 

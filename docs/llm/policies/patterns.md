@@ -740,3 +740,43 @@ fn canonical_json(v: &serde_json::Value, depth: u8) -> String {
 }
 // key: SHA-256(tool_name + ":" + canonical_json(args)), first 8 bytes hex-encoded
 ```
+
+---
+
+## Quarterly Audit Commands
+
+Run these greps to surface violations. Expected results noted per check.
+
+```bash
+# P1 — SSRF: validate_provider_url called for URL inputs
+grep -rn "url.*String\|String.*url" crates/veronex/src/infrastructure/inbound/ --include="*.rs" -l
+# → check each file for validate_provider_url call
+
+# P1 — SQL Interval: must use make_interval(), never format!()
+grep -rn "INTERVAL.*format!\|format!.*INTERVAL" crates/ --include="*.rs"
+# → expected: 0 results
+
+# P1 — UTF-8 truncation: must use is_char_boundary() or truncate_at_char_boundary()
+grep -rn "\.truncate(" crates/ --include="*.rs"
+# → all calls must be preceded by is_char_boundary() scan or delegated to truncate_at_char_boundary()
+
+# P2 — Valkey key hardcoding: all veronex:* keys via valkey_keys.rs only
+grep -rn '"veronex:' crates/veronex/src/ | grep -v valkey_keys
+# → expected: 0 results
+
+# P2 — Magic Duration: all timeouts via named const
+grep -rn "Duration::from_secs([0-9]" crates/ --include="*.rs" | grep -v "const "
+# → expected: 0 results
+
+# P2 — O(N) DB scan: COUNT(*) in dashboard hot paths
+grep -rn "COUNT(\*)" crates/veronex/src/ --include="*.rs"
+# → dashboard_queries.rs must use pg_class.reltuples instead
+
+# P2 — Docker cache: sharing=locked on all cache mounts
+grep -rn "mount=type=cache" Dockerfile* **/Dockerfile* 2>/dev/null
+# → all --mount=type=cache entries must have sharing=locked
+
+# P3 — Cross-module error sentinel: no duplicated string literals
+grep -rn '"session expired"' crates/ --include="*.rs"
+# → expected: 1 definition (pub(crate) const), matched via .contains() elsewhere
+```

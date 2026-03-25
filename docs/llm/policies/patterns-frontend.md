@@ -438,3 +438,80 @@ export function usePageGuard(menuId: string): void
 8. web/messages/ja.json        -- Japanese translation
 9. docs/llm/frontend/pages/*   -- update CDD doc
 ```
+
+---
+
+## 4-Layer Component Architecture
+
+| Layer | Path | Rule |
+|-------|------|------|
+| 1. Pages | `app/*/page.tsx` | Route entry — `useQuery` wiring + layout only |
+| 2. Feature components | `app/*/components/` | Page-specific composed UI — not shared |
+| 3. Shared components | `components/` + `components/ui/` | Reusable across pages — no business logic |
+| 4. Foundation | `lib/` · `hooks/` · `lib/queries/` | Types, API, formatters, tokens, query factories |
+
+Violations: shared logic in feature dirs, or page-specific logic in `components/`.
+
+---
+
+## i18n Compliance
+
+| Rule | Detail |
+|------|--------|
+| All UI strings | Must use `t('namespace.key')` — no hardcoded English/Korean/Japanese |
+| Key parity | All keys in `en.json` must exist in `ko.json` and `ja.json` |
+| Formatter usage | Use `fmtMs`, `fmtCompact`, `fmtPct` etc from `chart-theme.ts` — never local `toFixed`/`toLocaleString` for display |
+| Missing keys | Add to all three locale files simultaneously |
+| Namespace | Always `t('namespace.key')` — never top-level single-word keys |
+
+---
+
+## Performance Rules
+
+| Rule | Detail |
+|------|--------|
+| Derived state | Wrap filter/sort/map chains from query data in `useMemo` |
+| Handler refs | Stable references via `useCallback` when passed to child components |
+| Heavy panels | Modals/charts with conditional render → `dynamic(() => import(...), { ssr: false })` |
+| Query dedup | Same `queryKey` in sibling components → lift to parent or share `queryOptions` factory |
+| SSE-driven components | Props updated ≥1/s from SSE or `setInterval` ≤100ms → `React.memo` required |
+| Time-display staleness | Components showing relative time (e.g. "5s ago") → `setInterval` tick (10–30s) required |
+| Zero-value stat containers | Stat rows showing counts from live data → hidden when all values are 0 |
+| React key | Never use array `index` as sole key for reorderable lists |
+
+---
+
+## TypeScript Strictness
+
+| Rule | Detail |
+|------|--------|
+| No `any` | Replace with proper type or `unknown` + type guard |
+| Non-null `!` | Replace with optional chaining or explicit null check where possible |
+| Generated types | Use types from `web/lib/generated/` — never redefine domain enums locally |
+| Zod at boundaries | Parse API responses at `lib/api.ts` — components receive typed data |
+| UI state types | `type Foo = 'a' \| 'b' \| ...` shared across 2+ files → move to `lib/types.ts` |
+
+---
+
+## Accessibility — WCAG 2.1 AA (Admin Dashboard Scope)
+
+| Criterion | Check |
+|-----------|-------|
+| 1.4.1 Use of Color | Status conveyed by color MUST also have icon or text |
+| 1.4.3 Contrast | Min 4.5:1 for normal text — design tokens already exceed AA; flag hardcoded low-contrast |
+| 2.1.1 Keyboard | All interactive elements reachable by Tab; dialogs trap focus |
+| 2.4.7 Focus Visible | All focusable elements have `focus-visible:` ring — use `--theme-focus-ring` token |
+| 4.1.2 Name/Role/Value | Icon-only buttons → `aria-label`; form inputs → `<Label>` or `aria-label` |
+| Loading states | Spinner/skeleton → `aria-label="Loading"` or `aria-busy` |
+
+Not applicable: 1.2.x (no media), 1.4.4 resize (browser-native), 2.4.5 multiple ways (single-page admin).
+
+---
+
+## Review Fix Priority
+
+| Priority | Category |
+|----------|----------|
+| P0 (fix immediately) | Hardcoded hex, wrong token names, broken i18n keys, missing i18n parity |
+| P1 (fix in same pass) | Raw `var(--theme-*)` strings, missing `useMemo`, missing `aria-label`, SSE components without `React.memo`, time-display without interval tick |
+| P2 (fix if touching file) | Component extraction for 3+ duplicates, prop count reduction, zero-value stat containers |
