@@ -31,7 +31,7 @@ base62 = "2"
 hex = "0.4"
 rand = "0.9"
 argon2 = "0.5"
-jsonwebtoken = "10"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 aes-gcm = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
