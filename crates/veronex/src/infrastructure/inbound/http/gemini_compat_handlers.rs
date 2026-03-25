@@ -24,10 +24,11 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, FinishReason, JobSource, ProviderType};
+use crate::domain::enums::{ApiFormat, FinishReason, ProviderType};
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
 use super::handlers::sanitize_sse_error;
 use super::inference_helpers::{build_sse_response, validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
+use super::middleware::infer_auth::InferCaller;
 use super::state::AppState;
 
 // ── Gemini API request types ────────────────────────────────────────────────────
@@ -160,7 +161,7 @@ struct GeminiUsageMetadata {
 #[instrument(skip(state, req, headers), fields(path = %path))]
 pub async fn handle_request(
     State(state): State<AppState>,
-    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     headers: axum::http::HeaderMap,
     Path(path): Path<String>,
     Json(req): Json<GeminiGenerateRequest>,
@@ -207,8 +208,8 @@ pub async fn handle_request(
     }
 
     match action {
-        "streamGenerateContent" => stream_generate(state, api_key, model, req, conversation_id).await,
-        "generateContent" => generate_content(state, api_key, model, req, conversation_id).await,
+        "streamGenerateContent" => stream_generate(state, caller, model, req, conversation_id).await,
+        "generateContent" => generate_content(state, caller, model, req, conversation_id).await,
         _ => gemini_error(
             StatusCode::NOT_FOUND,
             404,
@@ -227,7 +228,7 @@ pub async fn handle_request(
 /// the response as Gemini SSE chunks.
 async fn stream_generate(
     state: AppState,
-    api_key: crate::domain::entities::ApiKey,
+    caller: InferCaller,
     model: String,
     req: GeminiGenerateRequest,
     conversation_id: Option<String>,
@@ -248,15 +249,15 @@ async fn stream_generate(
             model_name: model.clone(),
             provider_type: ProviderType::Ollama,
             gemini_tier: None,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::GeminiNative,
             messages: Some(messages_json),
             tools,
             request_path: Some(request_path),
             conversation_id,
-            key_tier: Some(api_key.tier),
+            key_tier: caller.key_tier(),
             images: None,
             stop: None, seed: None, response_format: None,
             frequency_penalty: None, presence_penalty: None,
@@ -321,7 +322,7 @@ async fn stream_generate(
 /// Gemini-format JSON response.
 async fn generate_content(
     state: AppState,
-    api_key: crate::domain::entities::ApiKey,
+    caller: InferCaller,
     model: String,
     req: GeminiGenerateRequest,
     conversation_id: Option<String>,
@@ -341,15 +342,15 @@ async fn generate_content(
             model_name: model.clone(),
             provider_type: ProviderType::Ollama,
             gemini_tier: None,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::GeminiNative,
             messages: Some(messages_json),
             tools,
             request_path: Some(request_path),
             conversation_id,
-            key_tier: Some(api_key.tier),
+            key_tier: caller.key_tier(),
             images: None,
             stop: None, seed: None, response_format: None,
             frequency_penalty: None, presence_penalty: None,

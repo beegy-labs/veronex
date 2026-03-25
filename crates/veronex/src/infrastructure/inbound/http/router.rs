@@ -24,7 +24,7 @@ use super::mcp_handlers;
 use super::handlers;
 use super::key_handlers;
 use super::metrics_handlers;
-use super::middleware::api_key_auth::api_key_auth;
+use super::middleware::infer_auth::infer_auth;
 use super::middleware::jwt_auth::jwt_auth;
 use super::middleware::rate_limiter::rate_limiter;
 use super::ollama_compat_handlers;
@@ -34,7 +34,6 @@ use super::openai_models_handlers;
 use super::openai_embeddings_handlers;
 use super::openai_completions_handlers;
 use super::openai_media_handlers;
-use super::test_handlers;
 use super::state::AppState;
 use super::usage_handlers;
 
@@ -97,25 +96,6 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/v1/jobs/{id}/stream", get(handlers::stream_job_openai))
 }
 
-/// Build the JWT-protected test run router (no API key, no rate limit).
-///
-/// Each API format has a dedicated test path that returns its native response format:
-/// - `/v1/test/completions`           → OpenAI SSE (web test panel)
-/// - `/v1/test/api/chat`              → Ollama NDJSON
-/// - `/v1/test/api/generate`          → Ollama NDJSON
-/// - `/v1/test/v1beta/models/{*path}` → Gemini SSE
-fn build_test_router() -> Router<AppState> {
-    Router::new()
-        // OpenAI-compat (web test panel)
-        .route("/v1/test/completions", post(test_handlers::test_completions)
-            .layer(DefaultBodyLimit::max(super::constants::IMAGE_BODY_LIMIT)))
-        .route("/v1/test/jobs/{job_id}/stream", get(test_handlers::stream_test_job))
-        // Ollama native test endpoints
-        .route("/v1/test/api/chat", post(test_handlers::test_ollama_chat))
-        .route("/v1/test/api/generate", post(test_handlers::test_ollama_generate))
-        // Gemini native test endpoints
-        .route("/v1/test/v1beta/models/{*path}", post(test_handlers::test_gemini_request))
-}
 
 /// Build the JWT-protected admin router.
 fn build_jwt_router() -> Router<AppState> {
@@ -353,15 +333,8 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                     jwt_auth,
                 )),
         )
-        // JWT-protected test run routes (no API key, no rate limit)
-        .merge(
-            build_test_router()
-                .route_layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    jwt_auth,
-                )),
-        )
-        // API key-authenticated routes (existing, unchanged)
+        // Inference routes — accept API key OR JWT session with api_test permission.
+        // Rate limiting is applied only for API key callers (skipped for session callers).
         .merge(
             build_api_router()
                 .route_layer(middleware::from_fn_with_state(
@@ -370,7 +343,7 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                 ))
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
-                    api_key_auth,
+                    infer_auth,
                 ))
                 .layer(middleware::map_response(openai_compat_headers)),
         )

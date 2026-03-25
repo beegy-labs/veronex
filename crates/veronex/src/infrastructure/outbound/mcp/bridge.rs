@@ -31,9 +31,10 @@ use uuid::Uuid;
 use veronex_mcp::{McpCircuitBreaker, McpResultCache, McpSessionManager, McpToolCache, truncate_at_char_boundary};
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, JobSource, KeyTier, ProviderType};
+use crate::domain::enums::{ApiFormat, ProviderType};
 use crate::domain::value_objects::JobId;
 use crate::infrastructure::inbound::http::inference_helpers::validate_tool_call;
+use crate::infrastructure::inbound::http::middleware::infer_auth::InferCaller;
 use crate::infrastructure::inbound::http::state::AppState;
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -112,12 +113,11 @@ impl McpBridgeAdapter {
     ///
     /// When `want_stream = true`, the final round is NOT collected — instead
     /// `McpLoopResult.final_job_id` is returned so the caller can stream it via SSE.
-    #[instrument(skip_all, fields(model = %model, api_key_id = %api_key_id))]
+    #[instrument(skip_all, fields(model = %model))]
     pub async fn run_loop(
         &self,
         state: &AppState,
-        api_key_id: Uuid,
-        api_key_tier: KeyTier,
+        caller: &InferCaller,
         model: String,
         mut messages: Vec<Value>,
         base_tools: Option<Vec<Value>>,
@@ -167,15 +167,15 @@ impl McpBridgeAdapter {
                 model_name: model.clone(),
                 provider_type: ProviderType::Ollama,
                 gemini_tier: None,
-                api_key_id: Some(api_key_id),
-                account_id: None,
-                source: JobSource::Api,
+                api_key_id: caller.api_key_id(),
+                account_id: caller.account_id(),
+                source: caller.source(),
                 api_format: ApiFormat::OpenaiCompat,
                 messages: Some(Value::Array(messages.clone())),
                 tools: tools_json.clone().map(Value::Array),
                 request_path: Some("/v1/chat/completions".to_string()),
                 conversation_id: conversation_id.clone(),
-                key_tier: Some(api_key_tier),
+                key_tier: caller.key_tier(),
                 images: None,
                 stop: stop.clone(),
                 seed,
@@ -277,7 +277,7 @@ impl McpBridgeAdapter {
             }));
 
             // ── Execute MCP tools (join_all: order preserved for index mapping) ─
-            let results = self.execute_calls(state, &mcp_calls, api_key_id, round + 1).await;
+            let results = self.execute_calls(state, &mcp_calls, caller.api_key_id(), round + 1).await;
 
             for (tc, result_text) in mcp_calls.iter().zip(results.into_iter()) {
                 let call_id = tc["id"].as_str().unwrap_or("call_0");
@@ -310,7 +310,7 @@ impl McpBridgeAdapter {
         &self,
         _state: &AppState,
         calls: &[Value],
-        api_key_id: Uuid,
+        api_key_id: Option<Uuid>,
         loop_round: u8,
     ) -> Vec<String> {
         use futures::future::join_all;
@@ -324,7 +324,7 @@ impl McpBridgeAdapter {
         join_all(futs).await
     }
 
-    async fn execute_one(&self, tc: &Value, api_key_id: Uuid, loop_round: u8) -> String {
+    async fn execute_one(&self, tc: &Value, api_key_id: Option<Uuid>, loop_round: u8) -> String {
         let namespaced = tc["function"]["name"].as_str().unwrap_or("");
         let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
         let args: Value = serde_json::from_str(args_str)
@@ -568,7 +568,7 @@ fn emit_mcp_span(
     server_slug: &str,
     tool_name: &str,
     server_id: Uuid,
-    api_key_id: Uuid,
+    api_key_id: Option<Uuid>,
     outcome: &str,
     cache_hit: bool,
     latency_ms: u32,
@@ -581,7 +581,7 @@ fn emit_mcp_span(
         server_slug,
         tool_name,
         server_id = %server_id,
-        api_key_id = %api_key_id,
+        api_key_id = ?api_key_id,
         outcome,
         cache_hit,
         latency_ms,

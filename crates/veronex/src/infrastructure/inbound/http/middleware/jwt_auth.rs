@@ -93,7 +93,7 @@ pub async fn jwt_auth(
 }
 
 /// Extract the access token value from the `Cookie` header.
-fn extract_access_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+pub fn extract_access_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
     for value in headers.get_all(axum::http::header::COOKIE) {
         if let Ok(s) = value.to_str() {
             for part in s.split(';') {

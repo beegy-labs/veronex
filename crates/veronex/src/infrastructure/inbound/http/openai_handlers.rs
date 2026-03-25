@@ -9,7 +9,7 @@ use futures::StreamExt;
 use serde::Deserialize;
 use tracing::instrument;
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, FinishReason, JobSource, ProviderType};
+use crate::domain::enums::{ApiFormat, FinishReason, ProviderType};
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
 use super::handlers::sanitize_sse_error;
 use super::inference_helpers::{build_sse_response, validate_model_name, validate_content_length, extract_last_user_prompt, validate_tool_call, extract_conversation_id};
@@ -17,6 +17,7 @@ use super::openai_sse_types::{
     ChatCompletion, CompletionChoice, CompletionChunk, CompletionMessage, CompletionTokensDetails,
     PromptTokensDetails, SERVICE_TIER_DEFAULT, StreamOptions, UsageInfo, SYSTEM_FINGERPRINT,
 };
+use super::middleware::infer_auth::InferCaller;
 use super::state::AppState;
 
 // ── Request ────────────────────────────────────────────────────────────────────
@@ -260,7 +261,7 @@ pub struct ChatCompletionRequest {
 #[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn chat_completions(
     State(state): State<AppState>,
-    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     headers: axum::http::HeaderMap,
     Json(mut req): Json<ChatCompletionRequest>,
 ) -> Response {
@@ -304,15 +305,15 @@ pub async fn chat_completions(
             // run the agentic MCP loop instead of the plain Ollama proxy.
             if let Some(ref bridge) = state.mcp_bridge {
                 if bridge.should_intercept() {
-                    return mcp_ollama_chat(state, api_key, req, conversation_id, stream).await;
+                    return mcp_ollama_chat(state, caller, req, conversation_id, stream).await;
                 }
             }
-            ollama_chat_proxy(state, api_key, req, conversation_id, stream).await
+            ollama_chat_proxy(state, caller, req, conversation_id, stream).await
         }
         _ => {
             // Parse "gemini-free" → (Gemini, Some("free")), "gemini" → (Gemini, None)
             let (provider_type, gemini_tier) = parse_provider_str(provider_str);
-            legacy_queue_chat(state, api_key, req, provider_type, gemini_tier, conversation_id, stream).await
+            legacy_queue_chat(state, caller, req, provider_type, gemini_tier, conversation_id, stream).await
         }
     }
 }
@@ -326,7 +327,7 @@ pub async fn chat_completions(
 /// VRAM availability and thermal throttle are checked before dispatch.
 async fn ollama_chat_proxy(
     state: AppState,
-    api_key: crate::domain::entities::ApiKey,
+    caller: InferCaller,
     req: ChatCompletionRequest,
     conversation_id: Option<String>,
     stream: bool,
@@ -371,15 +372,15 @@ async fn ollama_chat_proxy(
             model_name: model_str.clone(),
             provider_type: ProviderType::Ollama,
             gemini_tier: None,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::OpenaiCompat,
             messages: Some(messages),
             tools,
             request_path: Some("/v1/chat/completions".to_string()),
             conversation_id,
-            key_tier: Some(api_key.tier),
+            key_tier: caller.key_tier(),
             images,
             stop: req.stop,
             seed: req.seed,
@@ -581,7 +582,7 @@ async fn collect_completion(
 /// The final response is streamed (or collected) identically to `ollama_chat_proxy`.
 async fn mcp_ollama_chat(
     state: AppState,
-    api_key: crate::domain::entities::ApiKey,
+    caller: InferCaller,
     req: ChatCompletionRequest,
     conversation_id: Option<String>,
     stream: bool,
@@ -606,8 +607,7 @@ async fn mcp_ollama_chat(
 
     let loop_result = bridge.run_loop(
         &state,
-        api_key.id,
-        api_key.tier,
+        &caller,
         model.clone(),
         ollama_messages,
         req.tools,
@@ -736,7 +736,7 @@ fn parse_provider_str(s: &str) -> (ProviderType, Option<String>) {
 
 async fn legacy_queue_chat(
     state: AppState,
-    api_key: crate::domain::entities::ApiKey,
+    caller: InferCaller,
     req: ChatCompletionRequest,
     provider_type: ProviderType,
     gemini_tier: Option<String>,
@@ -770,9 +770,9 @@ async fn legacy_queue_chat(
             model_name: model_str.clone(),
             provider_type,
             gemini_tier,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::OpenaiCompat,
             // Intentionally None: legacy path uses single-prompt inference.
             // The GeminiAdapter and non-Ollama providers use job.prompt, not messages.
@@ -781,7 +781,7 @@ async fn legacy_queue_chat(
             tools: None,
             request_path: Some("/v1/chat/completions".to_string()),
             conversation_id,
-            key_tier: Some(api_key.tier),
+            key_tier: caller.key_tier(),
             images,
             stop: req.stop,
             seed: req.seed,
