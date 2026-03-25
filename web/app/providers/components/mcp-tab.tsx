@@ -4,12 +4,12 @@ import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { mcpServersQuery } from '@/lib/queries/mcp'
 import { api } from '@/lib/api'
-import type { McpServer, RegisterMcpServerRequest } from '@/lib/types'
-import { Plus, Trash2, Plug } from 'lucide-react'
+import type { McpServer, McpServerStat, RegisterMcpServerRequest } from '@/lib/types'
+import { Plus, Trash2, Plug, Bot, BarChart2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import {
   Dialog,
@@ -18,6 +18,14 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Badge } from '@/components/ui/badge'
 import {
   TableBody,
   TableCell,
@@ -104,6 +112,169 @@ function RegisterMcpModal({ onClose }: { onClose: () => void }) {
   )
 }
 
+const NONE_VALUE = '__none__'
+
+function OrchestratorModelSelector() {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [saved, setSaved] = useState(false)
+
+  const { data: lab } = useQuery({
+    queryKey: ['lab-settings'],
+    queryFn: () => api.labSettings(),
+  })
+
+  const { data: syncSettings } = useQuery({
+    queryKey: ['capacity-settings'],
+    queryFn: () => api.syncSettings(),
+  })
+
+  const ollamaModels: string[] = syncSettings?.available_models?.ollama ?? []
+
+  const mutation = useMutation({
+    mutationFn: (model: string | null) =>
+      api.patchLabSettings({ mcp_orchestrator_model: model }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['lab-settings'] })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    },
+  })
+
+  const current = lab?.mcp_orchestrator_model ?? null
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Bot className="h-4 w-4 text-muted-foreground" />
+          {t('mcp.orchestratorModel')}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <p className="text-xs text-muted-foreground">{t('mcp.orchestratorModelDesc')}</p>
+        <div className="flex items-center gap-2">
+          <Select
+            value={current ?? NONE_VALUE}
+            onValueChange={(val) => mutation.mutate(val === NONE_VALUE ? null : val)}
+            disabled={mutation.isPending}
+          >
+            <SelectTrigger className="w-72">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE_VALUE}>{t('mcp.orchestratorModelNone')}</SelectItem>
+              {ollamaModels.map((m) => (
+                <SelectItem key={m} value={m}>{m}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {saved && (
+            <span className="text-xs text-status-success-fg">{t('mcp.orchestratorModelSaved')}</span>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+const HOURS_OPTIONS = [
+  { value: 1,   label: '1h' },
+  { value: 6,   label: '6h' },
+  { value: 24,  label: '24h' },
+  { value: 168, label: '7d' },
+  { value: 720, label: '30d' },
+]
+
+function fmt_pct(v: number) { return `${(v * 100).toFixed(1)}%` }
+function fmt_ms(v: number) { return v < 1 ? '<1 ms' : `${Math.round(v)} ms` }
+
+function McpStatsCard() {
+  const { t } = useTranslation()
+  const [hours, setHours] = useState(24)
+
+  const { data: stats, isLoading, error } = useQuery({
+    queryKey: ['mcp-stats', hours],
+    queryFn: () => api.mcpStats(hours),
+    staleTime: 30_000,
+  })
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-muted-foreground" />
+            {t('mcp.stats')}
+          </CardTitle>
+          <Select value={String(hours)} onValueChange={(v) => setHours(Number(v))}>
+            <SelectTrigger className="h-7 w-20 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {HOURS_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={String(o.value)}>{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <p className="text-xs text-muted-foreground">{t('mcp.statsDesc')}</p>
+      </CardHeader>
+      <CardContent>
+        {isLoading && <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>}
+        {error && <p className="text-sm text-destructive">{t('mcp.statsLoadError')}</p>}
+        {stats && stats.length === 0 && (
+          <p className="text-sm text-muted-foreground">{t('mcp.statsNoData')}</p>
+        )}
+        {stats && stats.length > 0 && (
+          <DataTable minWidth="540px">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="whitespace-nowrap">{t('mcp.name')}</TableHead>
+                <TableHead className="whitespace-nowrap text-right">{t('mcp.statsTotalCalls')}</TableHead>
+                <TableHead className="whitespace-nowrap text-right">{t('mcp.statsSuccessRate')}</TableHead>
+                <TableHead className="whitespace-nowrap text-right">{t('mcp.statsCacheHit')}</TableHead>
+                <TableHead className="whitespace-nowrap text-right">{t('mcp.statsAvgLatency')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {stats.map((s: McpServerStat) => (
+                <TableRow key={s.server_slug}>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{s.server_name}</span>
+                      <span className="font-mono text-xs text-muted-foreground bg-surface-code px-1.5 py-0.5 rounded">{s.server_slug}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{s.total_calls.toLocaleString()}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <Badge
+                      variant="outline"
+                      className={s.success_rate >= 0.95
+                        ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
+                        : s.success_rate >= 0.8
+                          ? 'bg-status-warning/15 text-status-warning-fg border-status-warning/30'
+                          : 'bg-status-error/15 text-status-error-fg border-status-error/30'}
+                    >
+                      {fmt_pct(s.success_rate)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                    {s.cache_hit_count > 0 ? fmt_pct(s.cache_hit_count / s.total_calls) : '—'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                    {fmt_ms(s.avg_latency_ms)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function McpTab() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -138,6 +309,8 @@ export function McpTab() {
 
   return (
     <div className="space-y-4">
+      <OrchestratorModelSelector />
+
       <div className="flex items-center justify-end">
         <Button onClick={() => setShowRegister(true)}>
           <Plus className="h-4 w-4 mr-2" />{t('mcp.register')}
@@ -216,6 +389,8 @@ export function McpTab() {
           </TableBody>
         </DataTable>
       )}
+
+      <McpStatsCard />
 
       {showRegister && <RegisterMcpModal onClose={() => setShowRegister(false)} />}
     </div>

@@ -80,6 +80,7 @@ async fn save_analyzer_job(
         response_format: None,
         frequency_penalty: None,
         presence_penalty: None,
+        mcp_loop_id: None,
     };
     if let Err(e) = repo.save(&job).await {
         tracing::debug!("failed to save analyzer job: {e}");

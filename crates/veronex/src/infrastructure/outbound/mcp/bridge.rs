@@ -18,9 +18,9 @@
 //! Duplicate-call detection: if the same (tool_name, args_hash) pair appears
 //! LOOP_DETECT_THRESHOLD times, the loop is broken early.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use serde_json::Value;
@@ -48,8 +48,6 @@ pub const MAX_TOOLS_PER_REQUEST: usize = 32;
 const LOOP_DETECT_THRESHOLD: u8 = 3;
 /// Result cache TTL (seconds).
 const RESULT_CACHE_TTL_SECS: i64 = 300;
-/// Per-tool-call execution timeout. Bridge enforces this; MCP client has its own connection timeout.
-const MCP_TOOL_CALL_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(30);
 /// Per-round token collection timeout. Bounds worst-case hang at MAX_ROUNDS × this value.
 const COLLECT_ROUND_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(120);
 /// Maximum bytes of a single MCP tool result injected into the messages array.
@@ -58,6 +56,9 @@ const MAX_TOOL_RESULT_BYTES: usize = 32_768;
 /// Maximum bytes of args string fed into `quick_args_hash`.
 /// Loop-detection hashing is O(n); cap prevents unbounded work on inflated payloads.
 const MAX_ARGS_FOR_HASH_BYTES: usize = 4_096;
+/// Maximum number of MCP tool calls executed concurrently within one round.
+/// Prevents thundering-herd against a single MCP server when a model emits many calls.
+const MAX_CONCURRENT_TOOL_CALLS: usize = 8;
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
@@ -129,8 +130,27 @@ impl McpBridgeAdapter {
         frequency_penalty: Option<f64>,
         presence_penalty: Option<f64>,
     ) -> Option<McpLoopResult> {
+        // ── Per-key MCP server ACL ─────────────────────────────────────────────
+        // Default deny: API key callers must have explicit grants in mcp_key_access.
+        // No rows = empty allowlist = no MCP access.
+        // JWT session callers (account_id only, no api_key_id) bypass ACL.
+        let allowed_servers: Option<Arc<HashSet<Uuid>>> =
+            if let Some(key_id) = caller.api_key_id() {
+                let ids: Vec<Uuid> = sqlx::query_scalar(
+                    "SELECT server_id FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true"
+                )
+                .bind(key_id)
+                .fetch_all(&state.pg_pool)
+                .await
+                .unwrap_or_default();
+                // Always wrap in Some — empty set = deny all, non-empty = allow listed servers.
+                Some(Arc::new(ids.into_iter().collect()))
+            } else {
+                None
+            };
+
         // ── Build the tool list ────────────────────────────────────────────────
-        let mcp_openai_tools = self.tool_cache.get_all().await;
+        let mcp_openai_tools = self.tool_cache.get_all(allowed_servers.as_deref()).await;
         let mcp_tool_names: std::collections::HashSet<String> = mcp_openai_tools
             .iter()
             .filter_map(|v| v["function"]["name"].as_str().map(str::to_string))
@@ -144,6 +164,9 @@ impl McpBridgeAdapter {
             all_tools.push(tool);
         }
         let tools_json = if all_tools.is_empty() { None } else { Some(all_tools) };
+
+        // ── Loop ID — groups all rounds into one traceable unit ───────────────
+        let mcp_loop_id = Uuid::new_v4();
 
         // ── Loop state ─────────────────────────────────────────────────────────
         let mut total_prompt_tokens: u32 = 0;
@@ -182,6 +205,7 @@ impl McpBridgeAdapter {
                 response_format: response_format.clone(),
                 frequency_penalty,
                 presence_penalty,
+                mcp_loop_id: Some(mcp_loop_id),
             }).await {
                 Ok(id) => id,
                 Err(e) => {
@@ -277,7 +301,7 @@ impl McpBridgeAdapter {
             }));
 
             // ── Execute MCP tools (join_all: order preserved for index mapping) ─
-            let results = self.execute_calls(state, &mcp_calls, caller.api_key_id(), round + 1).await;
+            let results = self.execute_calls(state, &mcp_calls, caller.api_key_id(), round + 1, mcp_loop_id, job_id.0, allowed_servers.clone()).await;
 
             for (tc, result_text) in mcp_calls.iter().zip(results.into_iter()) {
                 let call_id = tc["id"].as_str().unwrap_or("call_0");
@@ -308,23 +332,44 @@ impl McpBridgeAdapter {
 
     async fn execute_calls(
         &self,
-        _state: &AppState,
+        state: &AppState,
         calls: &[Value],
         api_key_id: Option<Uuid>,
         loop_round: u8,
+        mcp_loop_id: Uuid,
+        triggering_job_id: Uuid,
+        allowed_servers: Option<Arc<HashSet<Uuid>>>,
     ) -> Vec<String> {
-        use futures::future::join_all;
+        use futures::stream::{self, StreamExt};
 
-        // join_all: preserves submission order — required for Ollama index-based mapping.
-        let futs: Vec<_> = calls
-            .iter()
-            .map(|tc| self.execute_one(tc, api_key_id, loop_round))
-            .collect();
-
-        join_all(futs).await
+        // `buffered`: preserves submission order (required for Ollama index-based mapping)
+        // while capping in-flight calls at MAX_CONCURRENT_TOOL_CALLS.
+        // Each future owns clones of the cheap Arc fields — no borrowed lifetime issues.
+        let pg_pool = state.pg_pool.clone();
+        stream::iter(calls.iter().cloned())
+            .map(|tc| {
+                let bridge = self.clone();
+                let pg_pool = pg_pool.clone();
+                let allowed = allowed_servers.clone();
+                async move {
+                    bridge.execute_one(&tc, api_key_id, loop_round, mcp_loop_id, triggering_job_id, &pg_pool, allowed.as_deref()).await
+                }
+            })
+            .buffered(MAX_CONCURRENT_TOOL_CALLS)
+            .collect::<Vec<_>>()
+            .await
     }
 
-    async fn execute_one(&self, tc: &Value, api_key_id: Option<Uuid>, loop_round: u8) -> String {
+    async fn execute_one(
+        &self,
+        tc: &Value,
+        api_key_id: Option<Uuid>,
+        loop_round: u8,
+        mcp_loop_id: Uuid,
+        triggering_job_id: Uuid,
+        pg_pool: &sqlx::PgPool,
+        allowed_servers: Option<&HashSet<Uuid>>,
+    ) -> String {
         let namespaced = tc["function"]["name"].as_str().unwrap_or("");
         let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
         let args: Value = serde_json::from_str(args_str)
@@ -338,6 +383,14 @@ impl McpBridgeAdapter {
                 return serde_json::json!({"error": format!("unknown tool: {namespaced}")}).to_string();
             }
         };
+
+        // ── ACL check ──────────────────────────────────────────────────────────
+        if let Some(allowed) = allowed_servers {
+            if !allowed.contains(&server_id) {
+                warn!(tool = %namespaced, server = %server_id, "MCP ACL: access denied for this key");
+                return "{\"error\": \"MCP server access denied\"}".into();
+            }
+        }
 
         // ── Circuit breaker ────────────────────────────────────────────────────
         if self.circuit_breaker.is_open(server_id) {
@@ -372,6 +425,24 @@ impl McpBridgeAdapter {
                 let text = cached.to_llm_string();
                 let bytes = text.len() as u32;
                 emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, "cache_hit", true, 0, bytes, loop_round);
+                let _ = sqlx::query(
+                    "INSERT INTO mcp_loop_tool_calls \
+                     (mcp_loop_id, job_id, loop_round, server_id, tool_name, namespaced_name, \
+                      args_json, result_text, outcome, cache_hit, latency_ms, result_bytes) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'cache_hit', true, 0, $9)"
+                )
+                .bind(mcp_loop_id)
+                .bind(triggering_job_id)
+                .bind(loop_round as i16)
+                .bind(server_id)
+                .bind(raw_name)
+                .bind(namespaced)
+                .bind(&args)
+                .bind(&text)
+                .bind(bytes as i32)
+                .execute(pg_pool)
+                .await
+                .map_err(|e| warn!(tool = %namespaced, error = %e, "mcp_loop_tool_calls cache_hit insert failed"));
                 return text;
             }
         }
@@ -379,15 +450,18 @@ impl McpBridgeAdapter {
         // ── Execute ────────────────────────────────────────────────────────────
         let started = Instant::now();
 
+        let timeout_dur = Duration::from_secs(
+            self.session_manager.get_timeout_secs(server_id) as u64
+        );
         let result = tokio::time::timeout(
-            MCP_TOOL_CALL_TIMEOUT,
+            timeout_dur,
             self.session_manager.call_tool(server_id, raw_name, args.clone()),
         )
         .await;
 
         let latency_ms = started.elapsed().as_millis() as u32;
 
-        match result {
+        let (text, outcome, result_for_db) = match result {
             Ok(Ok(tool_result)) => {
                 let is_err = tool_result.is_error;
                 if is_err {
@@ -396,7 +470,6 @@ impl McpBridgeAdapter {
                     self.circuit_breaker.record_success(server_id);
                 }
 
-                // Store in result cache if eligible (reuse tool_def from above).
                 if !is_err {
                     if let Some(ref def) = tool_def {
                         self.result_cache.set(def, &args, &tool_result, RESULT_CACHE_TTL_SECS).await;
@@ -408,25 +481,49 @@ impl McpBridgeAdapter {
                     warn!(tool = %namespaced, original_bytes = text.len(), "MCP tool result truncated");
                     truncate_at_char_boundary(&mut text, MAX_TOOL_RESULT_BYTES);
                 }
-                let bytes = text.len() as u32;
                 let outcome = if is_err { "error" } else { "success" };
-                emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, outcome, false, latency_ms, bytes, loop_round);
-                text
+                let db_text = if is_err { None } else { Some(text.clone()) };
+                (text, outcome, db_text)
             }
             Ok(Err(e)) => {
                 self.circuit_breaker.record_failure(server_id);
                 warn!(tool = %namespaced, error = %e, "MCP tool call error");
-                emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, "error", false, latency_ms, 0, loop_round);
                 let msg: String = e.to_string().replace('"', "'").chars().take(256).collect();
-                format!("{{\"error\": \"{msg}\"}}")
+                (format!("{{\"error\": \"{msg}\"}}"), "error", None)
             }
             Err(_elapsed) => {
                 self.circuit_breaker.record_failure(server_id);
                 warn!(tool = %namespaced, "MCP tool call timed out");
-                emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, "timeout", false, latency_ms, 0, loop_round);
-                "{\"error\": \"MCP tool call timed out\"}".into()
+                ("{\"error\": \"MCP tool call timed out\"}".into(), "timeout", None)
             }
-        }
+        };
+
+        let bytes = text.len() as u32;
+        emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, outcome, false, latency_ms, bytes, loop_round);
+
+        // Persist tool execution to mcp_loop_tool_calls
+        let _ = sqlx::query(
+            "INSERT INTO mcp_loop_tool_calls \
+             (mcp_loop_id, job_id, loop_round, server_id, tool_name, namespaced_name, \
+              args_json, result_text, outcome, cache_hit, latency_ms, result_bytes) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10, $11)"
+        )
+        .bind(mcp_loop_id)
+        .bind(triggering_job_id)
+        .bind(loop_round as i16)
+        .bind(server_id)
+        .bind(raw_name)
+        .bind(namespaced)
+        .bind(&args)
+        .bind(&result_for_db)
+        .bind(outcome)
+        .bind(latency_ms as i32)
+        .bind(bytes as i32)
+        .execute(pg_pool)
+        .await
+        .map_err(|e| warn!(tool = %namespaced, error = %e, "mcp_loop_tool_calls insert failed"));
+
+        text
     }
 }
 

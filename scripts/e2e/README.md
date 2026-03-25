@@ -439,7 +439,11 @@ sequenceDiagram
 | Remote server metrics | 200 |
 | Provider key | /v1/providers/{id}/key → 200 or 404 |
 | Session grouping | POST /v1/dashboard/session-grouping/trigger → 200/202 |
+| Lab: all fields present | GET /v1/dashboard/lab includes gemini_function_calling, max_images_*, mcp_orchestrator_model, updated_at |
 | Lab toggle + revert | PATCH /v1/dashboard/lab gemini_function_calling toggle and restore |
+| Lab mcp_orchestrator_model set | PATCH `{"mcp_orchestrator_model":"<model>"}` → response reflects new value |
+| Lab mcp_orchestrator_model absent key | PATCH without key → value unchanged |
+| Lab mcp_orchestrator_model null clear | PATCH `{"mcp_orchestrator_model":null}` → value becomes null |
 | Per-key usage | /v1/usage/{key_id}?hours=24 → 200 |
 | Per-key jobs | /v1/usage/{key_id}/jobs → 200 |
 | Per-key models | /v1/usage/{key_id}/models → 200 |
@@ -699,7 +703,7 @@ Execution strategy (optimized for speed):
 | `09-metrics-pipeline.sh` | 2 (parallel) | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
 | `10-image-storage.sh` | 2 (parallel) | Image inference, S3 WebP storage, thumbnails, provider_name |
 | `11-verify-liveness.sh` | 2 (parallel) | Server/provider verify endpoints, registration validation, liveness |
-| `12-mcp.sh` | 2 (parallel) | MCP API surface, Valkey namespace, optional tool roundtrip |
+| `12-mcp.sh` | 2 (parallel) | MCP CRUD, orchestrator model set/clear/persist, API surface, Valkey namespace, weather-mcp protocol, full integration |
 | `02-scheduler.sh` | 3 (parallel) | Core scheduler validation (needs AIMD state) |
 | `06-api-surface.sh` | 3 (parallel) | Multi-format inference + endpoints + Pull Drain |
 | `07-lifecycle.sh` | 3 (parallel) | Cancel + SSE + password reset + crash recovery |
@@ -717,13 +721,13 @@ Core Scheduler                02               20
 Inference + AIMD Learning     03               16
 CRUD                          04               19
 Security + RBAC + Roles        05               30
-Multi-Format + Endpoints      06               30
+Multi-Format + Endpoints      06               35
 Lifecycle + Cancel            07               23
 Advanced Validation           08               17
 Metrics Pipeline              09               10
 Image Storage                 10                6
 Verify + Liveness             11               18
-MCP Integration               12                8
+MCP Integration               12               15
 ──────────────────────────────────────────────────────
-Total                                          ~212
+Total                                          ~224
 ```

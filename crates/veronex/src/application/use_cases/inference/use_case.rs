@@ -262,7 +262,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             prompt, model_name, provider_type, gemini_tier, api_key_id,
             account_id, source, api_format, messages, tools, request_path,
             conversation_id, key_tier, images, stop, seed, response_format,
-            frequency_penalty, presence_penalty,
+            frequency_penalty, presence_penalty, mcp_loop_id,
         } = req;
 
         let job_id = JobId::new();
@@ -282,6 +282,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             messages_hash: None, messages_prefix_hash: None, failure_reason: None,
             images, image_keys: None,
             stop, seed, response_format, frequency_penalty, presence_penalty,
+            mcp_loop_id,
         };
 
         // Upload messages to S3

@@ -260,7 +260,7 @@ async fn stream_generate(
             key_tier: caller.key_tier(),
             images: None,
             stop: None, seed: None, response_format: None,
-            frequency_penalty: None, presence_penalty: None,
+            frequency_penalty: None, presence_penalty: None, mcp_loop_id: None,
         })
         .await
     {
@@ -353,7 +353,7 @@ async fn generate_content(
             key_tier: caller.key_tier(),
             images: None,
             stop: None, seed: None, response_format: None,
-            frequency_penalty: None, presence_penalty: None,
+            frequency_penalty: None, presence_penalty: None, mcp_loop_id: None,
         })
         .await
     {

@@ -6,12 +6,15 @@
 //! veronex-mcp
 //! ├── types.rs           — McpTool, McpToolResult, McpToolCall, McpContent
 //! ├── client.rs          — McpHttpClient  (Streamable HTTP 2025-03-26)
-//! ├── session.rs         — McpSessionManager  (per-server session lifecycle)
-//! ├── tool_cache.rs      — McpToolCache  (DashMap L1 + Valkey L2)
+//! ├── session.rs         — McpSessionManager  (per-server session lifecycle, per-server timeout)
+//! ├── tool_cache.rs      — McpToolCache  (DashMap L1 + Valkey L2, ACL filter)
 //! ├── result_cache.rs    — McpResultCache  (Valkey, SHA-256 keyed)
 //! ├── circuit_breaker.rs — McpCircuitBreaker  (per-server state machine)
+//! ├── tools/
+//! │   ├── mod.rs         — Tool trait (spec + call)
+//! │   └── weather.rs     — WeatherTool  (get_weather, L1/L2 cache, singleflight)
 //! └── bin/
-//!     └── weather.rs     — Standalone weather MCP server (example)
+//!     └── veronex-mcp.rs — Unified MCP server  (Vec<Arc<dyn Tool>>, O(1) dispatch)
 //! ```
 //!
 //! The bridge adapter (`McpBridgeAdapter`) that wires everything together
@@ -24,6 +27,10 @@ pub mod result_cache;
 pub mod session;
 pub mod tool_cache;
 pub mod types;
+
+// Server-side modules (used by veronex-mcp binary)
+pub mod geo;
+pub mod tools;
 
 // ── Shared utilities ──────────────────────────────────────────────────────────
 

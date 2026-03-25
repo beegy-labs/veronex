@@ -232,7 +232,7 @@ pub async fn generate(
             key_tier: caller.key_tier(),
             images: req.images,
             stop: None, seed: None, response_format: None,
-            frequency_penalty: None, presence_penalty: None,
+            frequency_penalty: None, presence_penalty: None, mcp_loop_id: None,
         })
         .await
     {
@@ -384,7 +384,7 @@ pub async fn chat(
             key_tier: caller.key_tier(),
             images,
             stop: None, seed: None, response_format: None,
-            frequency_penalty: None, presence_penalty: None,
+            frequency_penalty: None, presence_penalty: None, mcp_loop_id: None,
         })
         .await
     {

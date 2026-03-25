@@ -15,7 +15,7 @@ const JOB_COLS: &str = "id, prompt, model_name, provider_type, status, error, re
     created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, \
     prompt_tokens, completion_tokens, cached_tokens, source, provider_id, api_format, \
     request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, \
-    cancelled_at, messages_hash, messages_prefix_hash, failure_reason, image_keys";
+    cancelled_at, messages_hash, messages_prefix_hash, failure_reason, image_keys, mcp_loop_id";
 
 pub struct PostgresJobRepository {
     pool: PgPool,
@@ -76,6 +76,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
     let messages_prefix_hash: Option<String> = row.try_get("messages_prefix_hash").unwrap_or(None);
     let failure_reason: Option<String> = row.try_get("failure_reason").unwrap_or(None);
     let image_keys: Option<Vec<String>> = row.try_get("image_keys").unwrap_or(None);
+    let mcp_loop_id: Option<Uuid> = row.try_get("mcp_loop_id").unwrap_or(None);
 
     Ok(InferenceJob {
         id: JobId(id),
@@ -115,6 +116,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         response_format: None,
         frequency_penalty: None,
         presence_penalty: None,
+        mcp_loop_id,
     })
 }
 
@@ -140,8 +142,8 @@ impl JobRepository for PostgresJobRepository {
 
         sqlx::query(
             "INSERT INTO inference_jobs
-                 (id, prompt, model_name, provider_type, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, provider_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at, messages_hash, messages_prefix_hash, failure_reason, image_keys)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
+                 (id, prompt, model_name, provider_type, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, provider_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at, messages_hash, messages_prefix_hash, failure_reason, image_keys, mcp_loop_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
              ON CONFLICT (id) DO UPDATE SET
                  status                = EXCLUDED.status,
                  error                 = EXCLUDED.error,
@@ -161,7 +163,8 @@ impl JobRepository for PostgresJobRepository {
                  messages_hash         = COALESCE(EXCLUDED.messages_hash, inference_jobs.messages_hash),
                  messages_prefix_hash  = COALESCE(EXCLUDED.messages_prefix_hash, inference_jobs.messages_prefix_hash),
                  failure_reason        = COALESCE(EXCLUDED.failure_reason, inference_jobs.failure_reason),
-                image_keys            = COALESCE(EXCLUDED.image_keys, inference_jobs.image_keys)",
+                 image_keys            = COALESCE(EXCLUDED.image_keys, inference_jobs.image_keys),
+                 mcp_loop_id           = COALESCE(EXCLUDED.mcp_loop_id, inference_jobs.mcp_loop_id)",
         )
         .bind(job.id.0)
         .bind(job.prompt.as_str())
@@ -193,6 +196,7 @@ impl JobRepository for PostgresJobRepository {
         .bind(messages_prefix_hash)
         .bind(&job.failure_reason)
         .bind(&job.image_keys)
+        .bind(job.mcp_loop_id)
         .execute(&self.pool)
         .await
         .context("failed to save inference job")?;

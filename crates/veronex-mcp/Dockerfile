@@ -22,12 +22,12 @@ COPY workspace-hack/ ./workspace-hack/
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
-    cargo build --release -p veronex-mcp --bin weather-mcp && \
-    cp /app/target/release/weather-mcp /app/weather-mcp
+    cargo build --release -p veronex-mcp --bin veronex-mcp && \
+    cp /app/target/release/veronex-mcp /app/veronex-mcp
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates wget
 WORKDIR /app
-COPY --from=builder /app/weather-mcp ./
+COPY --from=builder /app/veronex-mcp ./
 EXPOSE 3100
-CMD ["./weather-mcp"]
+CMD ["./veronex-mcp"]

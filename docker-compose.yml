@@ -219,6 +219,8 @@ services:
     environment:
       PORT: "3100"
       RUST_LOG: info
+      # DB index /1 — separate from veronex's queue/rate-limit keys (index /0)
+      VALKEY_URL: redis://valkey:6379/1
     ports:
       - "3100:3100"
     restart: unless-stopped

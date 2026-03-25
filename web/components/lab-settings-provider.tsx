@@ -44,7 +44,7 @@ export function LabSettingsProvider({ children }: { children: React.ReactNode })
     } catch {
       // Unauthenticated, server error, or login page — default all features off.
       // This mirrors LabSettings::default() on the Rust side.
-      setLabSettings({ gemini_function_calling: false, max_images_per_request: DEFAULT_MAX_IMAGES, max_image_b64_bytes: DEFAULT_MAX_IMAGE_B64_BYTES, updated_at: '' })
+      setLabSettings({ gemini_function_calling: false, max_images_per_request: DEFAULT_MAX_IMAGES, max_image_b64_bytes: DEFAULT_MAX_IMAGE_B64_BYTES, mcp_orchestrator_model: null, updated_at: '' })
     }
   }, [])
 

@@ -44,6 +44,15 @@ app.kubernetes.io/component: agent
 {{- end }}
 
 {{/*
+Selector labels — weather-mcp
+*/}}
+{{- define "veronex.weatherMcp.selectorLabels" -}}
+app.kubernetes.io/name: weather-mcp
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: weather-mcp
+{{- end }}
+
+{{/*
 Selector labels — otel-collector
 */}}
 {{- define "veronex.otel.selectorLabels" -}}

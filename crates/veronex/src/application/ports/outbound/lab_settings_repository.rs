@@ -11,6 +11,8 @@ pub struct LabSettings {
     pub max_images_per_request: i32,
     /// Max base64 bytes per image (default 2MB).
     pub max_image_b64_bytes: i32,
+    /// Ollama model used as the MCP orchestrator. None = use the model from the request.
+    pub mcp_orchestrator_model: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -20,6 +22,7 @@ impl Default for LabSettings {
             gemini_function_calling: false,
             max_images_per_request: 4,
             max_image_b64_bytes: 2 * 1024 * 1024,
+            mcp_orchestrator_model: None,
             updated_at: Utc::now(),
         }
     }
@@ -33,5 +36,6 @@ pub trait LabSettingsRepository: Send + Sync {
         gemini_function_calling: Option<bool>,
         max_images_per_request: Option<i32>,
         max_image_b64_bytes: Option<i32>,
+        mcp_orchestrator_model: Option<Option<String>>,
     ) -> Result<LabSettings>;
 }

@@ -115,9 +115,9 @@ impl McpToolCache {
 
     /// Return all cached tools (across servers) for LLM injection.
     ///
-    /// Filters out servers whose heartbeat key is missing (agent reported offline).
-    /// Caps at `max_tools` to protect the context window.
-    pub async fn get_all(&self) -> Vec<serde_json::Value> {
+    /// `allowed`: if `Some`, only tools whose server_id is in the set are returned.
+    /// `None` = no restriction (default allow all servers).
+    pub async fn get_all(&self, allowed: Option<&std::collections::HashSet<Uuid>>) -> Vec<serde_json::Value> {
         // Snapshot the L1 map synchronously — no awaits while holding DashMap Refs.
         // Holding a Ref across .await locks the shard, blocking all concurrent writes.
         let snapshot: Vec<(Uuid, CachedTools)> = self
@@ -146,6 +146,12 @@ impl McpToolCache {
         for (server_id, cached) in snapshot {
             if !online.contains(&server_id) {
                 continue;
+            }
+            // ACL filter — skip servers the caller is not allowed to use
+            if let Some(ids) = allowed {
+                if !ids.contains(&server_id) {
+                    continue;
+                }
             }
 
             // Refresh stale L1 entry from Valkey (no DashMap ref held at this point)
@@ -214,6 +220,39 @@ impl McpToolCache {
             }
         }
         self.server_slugs.remove(&server_id);
+    }
+
+    // ── Direct cache warm ────────────────────────────────────────────────────
+
+    /// Store a pre-fetched tool list directly into L1 and L2 without acquiring
+    /// the refresh lock or making an HTTP call to the MCP server.
+    ///
+    /// Use this after you have already fetched tools (e.g. for DB persistence)
+    /// to warm the cache without a redundant HTTP round-trip.
+    pub async fn cache_fetched_tools(&self, server_id: Uuid, tools: Vec<McpTool>) {
+        if tools.is_empty() {
+            return;
+        }
+        if let Some(first) = tools.first() {
+            self.server_slugs.insert(server_id, first.server_name.clone());
+        }
+        for tool in &tools {
+            self.name_to_server.insert(tool.namespaced_name(), server_id);
+        }
+        let conn: fred::clients::Client = self.valkey.next().clone();
+        if let Ok(json) = serde_json::to_string(&tools) {
+            let _: std::result::Result<(), _> = conn
+                .set(
+                    tool_key(server_id),
+                    json,
+                    Some(Expiration::EX(L2_TTL_SECS)),
+                    None,
+                    false,
+                )
+                .await;
+        }
+        self.l1.insert(server_id, CachedTools { tools, fetched_at: Instant::now() });
+        debug!(server_id = %server_id, "McpToolCache: warmed from pre-fetched tools");
     }
 
     // ── Refresh ───────────────────────────────────────────────────────────────

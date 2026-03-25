@@ -33,7 +33,7 @@ Three Rust crates:
 | Domain | Path | Content |
 |--------|------|---------|
 | Auth | `docs/llm/auth/` | jwt-sessions (+impl), api-keys, security |
-| Inference | `docs/llm/inference/` | job-lifecycle, job-api, session-grouping, job-analytics, openai-compat, capacity, model-pricing, lab-features |
+| Inference | `docs/llm/inference/` | job-lifecycle, job-api, session-grouping, job-analytics, openai-compat, capacity, model-pricing, lab-features, mcp |
 | Providers | `docs/llm/providers/` | ollama (+impl), ollama-models, gemini, gemini-models, hardware |
 | Infra | `docs/llm/infra/` | deploy, otel-pipeline (+ops), build-optimization |
 | Frontend | `docs/llm/frontend/` | design-system (core, i18n, components), charts, pages/* |

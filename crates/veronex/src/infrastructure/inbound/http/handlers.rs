@@ -195,7 +195,7 @@ pub async fn submit_inference(
             key_tier: caller.key_tier(),
             images: None,
             stop: None, seed: None, response_format: None,
-            frequency_penalty: None, presence_penalty: None,
+            frequency_penalty: None, presence_penalty: None, mcp_loop_id: None,
         })
         .await?;
 

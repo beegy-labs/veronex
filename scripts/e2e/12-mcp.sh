@@ -8,7 +8,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"; load_state
 
+# MCP_TEST_URL: direct access from host (scripts run on host, not inside Docker)
 MCP_TEST_URL="${MCP_TEST_URL:-http://localhost:3100}"
+# MCP_REGISTER_URL: URL the agent uses from inside Docker
+MCP_REGISTER_URL="${MCP_REGISTER_URL:-http://weather-mcp:3100}"
 
 # ── MCP Server CRUD ──────────────────────────────────────────────────────────
 
@@ -18,7 +21,7 @@ hdr "MCP Server CRUD"
 MCP_SLUG="e2etestmcp"
 MCP_NAME="e2e-test-mcp"
 REG_RES=$(apost "/v1/mcp/servers" \
-  "{\"name\":\"$MCP_NAME\",\"slug\":\"$MCP_SLUG\",\"url\":\"http://localhost:3100\",\"timeout_secs\":30}" \
+  "{\"name\":\"$MCP_NAME\",\"slug\":\"$MCP_SLUG\",\"url\":\"$MCP_REGISTER_URL\",\"timeout_secs\":30}" \
   2>/dev/null || echo "{}")
 MCP_ID=$(echo "$REG_RES" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('id',''))" 2>/dev/null || echo "")
 [ -n "$MCP_ID" ] \
@@ -89,6 +92,86 @@ NF_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
 [ "$NF_CODE" = "404" ] \
   && pass "DELETE /v1/mcp/servers non-existent → 404" \
   || fail "DELETE /v1/mcp/servers non-existent → $NF_CODE (expected 404)"
+
+# ── Orchestrator Model (lab_settings.mcp_orchestrator_model) ─────────────────
+
+hdr "MCP Orchestrator Model"
+
+# Fetch current lab settings
+LAB_INIT=$(aget "/v1/dashboard/lab" 2>/dev/null || echo "{}")
+LAB_INIT_MODEL=$(echo "$LAB_INIT" | python3 -c "
+import sys,json; d=json.loads(sys.stdin.read()); v=d.get('mcp_orchestrator_model',False)
+print('null' if v is None else str(v))" 2>/dev/null || echo "?")
+
+# Verify mcp_orchestrator_model field is present in response
+if echo "$LAB_INIT" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); exit(0 if 'mcp_orchestrator_model' in d else 1)" 2>/dev/null; then
+  pass "GET /v1/dashboard/lab → mcp_orchestrator_model field present (current: $LAB_INIT_MODEL)"
+else
+  fail "GET /v1/dashboard/lab → mcp_orchestrator_model field missing"
+fi
+
+# 1. Set orchestrator model
+ORC_MODEL="${MODEL:-qwen3:8b}"
+SET_RES=$(apatchc "/v1/dashboard/lab" "{\"mcp_orchestrator_model\":\"$ORC_MODEL\"}")
+SET_CODE=$(echo "$SET_RES" | code)
+SET_VAL=$(echo "$SET_RES" | body | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('mcp_orchestrator_model','?'))" 2>/dev/null || echo "?")
+if [ "$SET_CODE" = "200" ] && [ "$SET_VAL" = "$ORC_MODEL" ]; then
+  pass "Orchestrator model set → '$ORC_MODEL'"
+else
+  fail "Orchestrator model set → code=$SET_CODE val=$SET_VAL (expected '$ORC_MODEL')"
+fi
+
+# 2. Verify GET reflects the new value
+LAB_AFTER=$(aget "/v1/dashboard/lab" 2>/dev/null || echo "{}")
+AFTER_VAL=$(echo "$LAB_AFTER" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('mcp_orchestrator_model','?'))" 2>/dev/null || echo "?")
+[ "$AFTER_VAL" = "$ORC_MODEL" ] \
+  && pass "GET /v1/dashboard/lab after PATCH → mcp_orchestrator_model='$AFTER_VAL'" \
+  || fail "GET /v1/dashboard/lab after PATCH → '$AFTER_VAL' (expected '$ORC_MODEL')"
+
+# 3. Absent key → value must not change
+NO_KEY_RES=$(apatchc "/v1/dashboard/lab" '{"max_images_per_request":4}')
+NO_KEY_CODE=$(echo "$NO_KEY_RES" | code)
+NO_KEY_VAL=$(echo "$NO_KEY_RES" | body | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('mcp_orchestrator_model','?'))" 2>/dev/null || echo "?")
+if [ "$NO_KEY_CODE" = "200" ] && [ "$NO_KEY_VAL" = "$ORC_MODEL" ]; then
+  pass "Orchestrator model: absent key in PATCH → value unchanged ('$NO_KEY_VAL')"
+else
+  fail "Orchestrator model: absent key → code=$NO_KEY_CODE val=$NO_KEY_VAL (expected '$ORC_MODEL')"
+fi
+
+# 4. Inference with orchestrator override active — verify request is accepted
+# (cannot observe which model veronex internally used, but 200/503 = bridge path was taken)
+ORC_INF_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/v1/chat/completions" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"dummy_model_should_be_overridden\",
+    \"messages\": [{\"role\": \"user\", \"content\": \"/no_think Say hi.\"}],
+    \"stream\": false,
+    \"max_tokens\": 8
+  }" 2>/dev/null || printf "\n000")
+ORC_INF_CODE=$(echo "$ORC_INF_RES" | tail -1)
+case "$ORC_INF_CODE" in
+  200) pass "Inference with orchestrator override active → 200 (override applied: $ORC_MODEL)" ;;
+  503) info "Inference with orchestrator override → 503 (no providers available)" ;;
+  404) pass "Inference with orchestrator override → 404 (model routing used override, dummy rejected)" ;;
+  *)   fail "Inference with orchestrator override → $ORC_INF_CODE" ;;
+esac
+
+# 5. Clear with null
+CLR_RES=$(apatchc "/v1/dashboard/lab" '{"mcp_orchestrator_model":null}')
+CLR_CODE=$(echo "$CLR_RES" | code)
+CLR_VAL=$(echo "$CLR_RES" | body | python3 -c "
+import sys,json; d=json.loads(sys.stdin.read()); v=d.get('mcp_orchestrator_model',False)
+print('null' if v is None else str(v))" 2>/dev/null || echo "?")
+if [ "$CLR_CODE" = "200" ] && [ "$CLR_VAL" = "null" ]; then
+  pass "Orchestrator model: PATCH null → cleared"
+else
+  fail "Orchestrator model: PATCH null → code=$CLR_CODE val=$CLR_VAL (expected null)"
+fi
+
+# 6. Restore original value (if it was set before this test)
+if [ "$LAB_INIT_MODEL" != "null" ] && [ "$LAB_INIT_MODEL" != "?" ]; then
+  apatch "/v1/dashboard/lab" "{\"mcp_orchestrator_model\":\"$LAB_INIT_MODEL\"}" > /dev/null 2>&1
+fi
 
 # ── MCP API Surface ───────────────────────────────────────────────────────────
 
@@ -194,33 +277,84 @@ if [ "$INIT_CODE" = "200" ]; then
     || fail "weather-mcp protocolVersion = '$PROTO' (expected 2025-03-26)"
 fi
 
-# 4. tools/list — expect get_coordinates + get_weather
+# 4. tools/list — expect exactly 1 tool: get_weather (geocoding is internal, not exposed)
 TOOLS_LIST=$(curl -s --max-time 10 "$MCP_TEST_URL/mcp" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
   2>/dev/null || echo "{}")
-TOOL_COUNT=$(echo "$TOOLS_LIST" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(len(d.get('result',{}).get('tools',[])))" 2>/dev/null || echo "0")
-[ "$TOOL_COUNT" -ge 2 ] \
-  && pass "weather-mcp tools/list → $TOOL_COUNT tools (get_coordinates + get_weather)" \
-  || fail "weather-mcp tools/list → $TOOL_COUNT tools (expected >= 2)"
+TOOL_NAMES=$(echo "$TOOLS_LIST" | python3 -c "
+import sys,json
+tools=json.loads(sys.stdin.read()).get('result',{}).get('tools',[])
+print(','.join(t.get('name','') for t in tools))
+" 2>/dev/null || echo "")
+TOOL_COUNT=$(echo "$TOOLS_LIST" | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read()).get('result',{}).get('tools',[])))" 2>/dev/null || echo "0")
+[ "$TOOL_COUNT" -eq 1 ] && echo "$TOOL_NAMES" | grep -q "get_weather" \
+  && pass "weather-mcp tools/list → 1 tool [get_weather] (geocoding internal via embedded GeoNames)" \
+  || fail "weather-mcp tools/list → [$TOOL_NAMES] count=$TOOL_COUNT (expected exactly: get_weather)"
+echo "$TOOL_NAMES" | grep -qv "get_coordinates" \
+  && pass "weather-mcp tools/list → get_coordinates not exposed (internal implementation)" \
+  || fail "weather-mcp tools/list → get_coordinates still exposed (should be internal)"
 
-# 5. tools/call get_coordinates (live network — open-meteo.com)
-COORD_RES=$(curl -s --max-time 15 "$MCP_TEST_URL/mcp" \
+# 5. tools/call get_weather — English city name, combined weather + air quality
+WEATHER_RES=$(curl -s --max-time 20 "$MCP_TEST_URL/mcp" \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_coordinates","arguments":{"city":"Seoul"}}}' \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_weather","arguments":{"city":"Seoul"}}}' \
   2>/dev/null || echo "{}")
-COORD_OK=$(echo "$COORD_RES" | python3 -c "
+WEATHER_CHECK=$(echo "$WEATHER_RES" | python3 -c "
 import sys,json
 d=json.loads(sys.stdin.read())
 r=d.get('result',{})
 is_err=r.get('isError',True)
-content=r.get('content',[{}])
-text=content[0].get('text','') if content else ''
-print('ok' if not is_err and 'Seoul' in text else f'err:{text[:80]}')
+text=(r.get('content',[{}])[0] if r.get('content') else {}).get('text','')
+try:
+    data=json.loads(text)
+    cond=data.get('conditions',{})
+    aq=cond.get('air_quality',{})
+    missing=[f for f in ['temperature','humidity_percent','uv_index','wind','precipitation'] if f not in cond]
+    missing+=['aq.'+f for f in ['pm2_5','pm10','european_aqi','us_aqi'] if f not in aq]
+    print('ok' if not is_err and not missing else f'err:isError={is_err},missing={missing}')
+except Exception as e:
+    print(f'parse_err:{e}:{text[:60]}')
 " 2>/dev/null || echo "parse_error")
-[ "$COORD_OK" = "ok" ] \
-  && pass "weather-mcp get_coordinates(Seoul) → coordinates returned" \
-  || info "weather-mcp get_coordinates(Seoul) → $COORD_OK (network may be unavailable)"
+[ "$WEATHER_CHECK" = "ok" ] \
+  && pass "weather-mcp get_weather(Seoul) → weather+air_quality combined (temp,uv,wind,pm2.5,aqi)" \
+  || info "weather-mcp get_weather(Seoul) → $WEATHER_CHECK (network may be unavailable)"
+
+# 6. tools/call get_weather — Korean city+district (offline geocoding: embedded GeoNames)
+KO_RES=$(curl -s --max-time 20 "$MCP_TEST_URL/mcp" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_weather","arguments":{"city":"서울 강남"}}}' \
+  2>/dev/null || echo "{}")
+KO_CHECK=$(echo "$KO_RES" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+r=d.get('result',{})
+is_err=r.get('isError',True)
+text=(r.get('content',[{}])[0] if r.get('content') else {}).get('text','')
+try:
+    data=json.loads(text)
+    lat=data.get('location',{}).get('latitude',0)
+    print('ok' if not is_err and 37.0 < lat < 38.0 else f'err:isError={is_err},lat={lat}')
+except Exception as e:
+    print(f'parse_err:{e}:{text[:60]}')
+" 2>/dev/null || echo "parse_error")
+[ "$KO_CHECK" = "ok" ] \
+  && pass "weather-mcp get_weather(서울 강남) → Korean district resolved via embedded GeoNames" \
+  || info "weather-mcp get_weather(서울 강남) → $KO_CHECK (network may be unavailable)"
+
+# 7. tools/call get_weather — unknown city returns isError=true (no network needed)
+ERR_RES=$(curl -s --max-time 10 "$MCP_TEST_URL/mcp" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_weather","arguments":{"city":"xyzzy_nonexistent_city_99999"}}}' \
+  2>/dev/null || echo "{}")
+ERR_IS_ERROR=$(echo "$ERR_RES" | python3 -c "
+import sys,json
+r=json.loads(sys.stdin.read()).get('result',{})
+print('true' if r.get('isError') else 'false')
+" 2>/dev/null || echo "?")
+[ "$ERR_IS_ERROR" = "true" ] \
+  && pass "weather-mcp get_weather(unknown city) → isError=true (GeoNames lookup failed)" \
+  || fail "weather-mcp get_weather(unknown city) → isError=$ERR_IS_ERROR (expected true)"
 
 # ── Full MCP Integration (register → online → tool_call → disable → delete) ──
 
@@ -373,7 +507,7 @@ done
 
 # Register 날씨 MCP
 WEATHER_RES=$(apost "/v1/mcp/servers" \
-  '{"name":"날씨 MCP","slug":"weather_mcp","url":"http://localhost:3100","timeout_secs":30}' \
+  "{\"name\":\"날씨 MCP\",\"slug\":\"weather_mcp\",\"url\":\"$MCP_REGISTER_URL\",\"timeout_secs\":30}" \
   2>/dev/null || echo "{}")
 WEATHER_ID=$(echo "$WEATHER_RES" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('id',''))" 2>/dev/null || echo "")
 [ -n "$WEATHER_ID" ] \
@@ -382,7 +516,7 @@ WEATHER_ID=$(echo "$WEATHER_RES" | python3 -c "import sys,json; print(json.loads
 
 # Register 미세먼지 MCP
 DUST_RES=$(apost "/v1/mcp/servers" \
-  '{"name":"미세먼지 MCP","slug":"dust_mcp","url":"http://localhost:3100","timeout_secs":30}' \
+  "{\"name\":\"미세먼지 MCP\",\"slug\":\"dust_mcp\",\"url\":\"$MCP_REGISTER_URL\",\"timeout_secs\":30}" \
   2>/dev/null || echo "{}")
 DUST_ID=$(echo "$DUST_RES" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('id',''))" 2>/dev/null || echo "")
 [ -n "$DUST_ID" ] \

@@ -105,15 +105,15 @@ async fn main() -> Result<()> {
             circuit_breaker,
         };
         #[derive(sqlx::FromRow)]
-        struct McpServerStartup { id: uuid::Uuid, slug: String, url: String }
+        struct McpServerStartup { id: uuid::Uuid, slug: String, url: String, timeout_secs: i16 }
         let servers: Vec<McpServerStartup> = sqlx::query_as(
-            "SELECT id, slug, url FROM mcp_servers WHERE is_enabled = true"
+            "SELECT id, slug, url, timeout_secs FROM mcp_servers WHERE is_enabled = true"
         )
         .fetch_all(&pg_pool)
         .await
         .unwrap_or_default();
         for s in servers {
-            if let Err(e) = session_mgr.connect(s.id, &s.slug, &s.url).await {
+            if let Err(e) = session_mgr.connect(s.id, &s.slug, &s.url, s.timeout_secs as u16).await {
                 tracing::warn!(id = %s.id, error = %e, "MCP startup connect failed");
             }
         }

@@ -13,6 +13,7 @@ use super::role_handlers;
 use super::model_selection_handlers;
 use super::global_model_handlers;
 use super::key_provider_access_handlers;
+use super::key_mcp_access_handlers;
 use super::provider_handlers;
 use super::dashboard_handlers;
 use super::docs_handlers;
@@ -152,9 +153,14 @@ fn build_jwt_router() -> Router<AppState> {
         // API key → provider access
         .route("/v1/keys/{key_id}/providers", get(key_provider_access_handlers::list_key_provider_access))
         .route("/v1/keys/{key_id}/providers/{provider_id}", patch(key_provider_access_handlers::set_key_provider_access))
+        // API key → MCP server access
+        .route("/v1/keys/{key_id}/mcp", get(key_mcp_access_handlers::list_key_mcp_access).post(key_mcp_access_handlers::grant_key_mcp_access))
+        .route("/v1/keys/{key_id}/mcp/{server_id}", delete(key_mcp_access_handlers::revoke_key_mcp_access))
         // MCP server management
         .route("/v1/mcp/servers", get(mcp_handlers::list_mcp_servers).post(mcp_handlers::register_mcp_server))
         .route("/v1/mcp/servers/{id}", patch(mcp_handlers::patch_mcp_server).delete(mcp_handlers::delete_mcp_server))
+        // MCP call statistics
+        .route("/v1/mcp/stats", get(dashboard_handlers::get_mcp_stats))
         // GPU server management
         .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers).post(gpu_server_handlers::register_gpu_server))
         .route("/v1/servers/verify", post(gpu_server_handlers::verify_gpu_server))

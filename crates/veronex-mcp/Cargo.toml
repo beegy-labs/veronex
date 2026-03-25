@@ -9,8 +9,8 @@ name = "veronex_mcp"
 path = "src/lib.rs"
 
 [[bin]]
-name = "weather-mcp"
-path = "src/bin/weather.rs"
+name = "veronex-mcp"
+path = "src/bin/veronex-mcp.rs"
 
 [dependencies]
 # Async runtime
@@ -45,16 +45,31 @@ dashmap = "6"
 futures = "0.3"
 async-trait = "0.1"
 
+# Bounded concurrent cache (W-TinyLFU — better hot-spot detection than LRU)
+moka = { version = "0.12", features = ["sync"] }
+
 # Valkey (result cache, tool cache L2)
 fred = { version = "10", features = ["serde-json", "enable-rustls-ring"] }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 
-# URL encoding (weather binary)
 urlencoding = "2"
 
+# Geo module runtime deps
+postcard = { version = "1", features = ["alloc"] }
+zstd = "0.13"
+unicode-normalization = "0.1"
+
 workspace-hack = { path = "../../workspace-hack" }
+
+[build-dependencies]
+ureq = "2"
+zip = "2"
+postcard = { version = "1", features = ["use-std"] }
+zstd = "0.13"
+serde = { version = "1", features = ["derive"] }
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 proptest = "1"

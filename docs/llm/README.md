@@ -49,7 +49,8 @@
 | OpenAI Compat Native | `inference/openai-compat-native.md` | native endpoints, API doc endpoints, shared constants, SSE parsing, client examples |
 | Capacity | `inference/capacity.md` | VramPool, AIMD+p95, LLM Batch±2, thermal auto-detect, model stickiness, gate chain |
 | Model Pricing | `inference/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, Ollama $0.00, provider wildcard |
-| Lab Features | `inference/lab-features.md` | gemini_function_calling, LabSettingsProvider, LabSettingsRepository, feature gating |
+| Lab Features | `inference/lab-features.md` | gemini_function_calling, mcp_orchestrator_model, LabSettingsProvider, LabSettingsRepository, feature gating |
+| MCP | `inference/mcp.md` | McpBridgeAdapter, run_loop, tool intercept, orchestrator model, mcp_servers, tool naming, concurrency |
 
 ---
 
@@ -80,7 +81,7 @@
 | Distributed Coordination | `infra/distributed.md` | Instance ID, VRAM leases, reliable queue, ZSET, model filter, stickiness |
 | Distributed Ops | `infra/distributed-ops.md` | cross-instance pub/sub, TPM accounting, crash recovery, Valkey key registry, wiring |
 | Build Optimization | `infra/build-optimization.md` | mold, cargo-chef, hakari, nextest, Docker cache mounts, cargo profiles |
-| Crate Structure | `infra/crate-structure.md` | workspace members, dependency rules, veronex, veronex-agent, veronex-analytics |
+| Crate Structure | `infra/crate-structure.md` | workspace members, dependency rules, veronex, veronex-agent, veronex-analytics, veronex-mcp |
 
 ---
 
@@ -161,6 +162,8 @@
 | Security (CORS, crypto) | `auth/security.md` |
 | VRAM pool / AIMD / thermal | `inference/capacity.md` |
 | Lab feature flag | `inference/lab-features.md` |
+| MCP integration / orchestrator model | `inference/mcp.md` |
+| veronex-mcp server / add a tool | `infra/crate-structure.md` (veronex-mcp Layout) |
 | OTel pipeline | `infra/otel-pipeline.md` + `infra/otel-pipeline-ops.md` + `research/infrastructure/observability.md` |
 | Kubernetes / Helm | `infra/deploy.md` |
 | CORS config | `infra/deploy.md` (CORS_ALLOWED_ORIGINS) |

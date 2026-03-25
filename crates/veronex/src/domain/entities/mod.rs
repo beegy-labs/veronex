@@ -155,6 +155,10 @@ pub struct InferenceJob {
     #[serde(default)]
     #[ts(skip)]
     pub presence_penalty: Option<f64>,
+    /// Groups all inference_jobs belonging to one MCP agentic loop run.
+    /// NULL for non-MCP requests (single-turn, no tool calls).
+    #[serde(default)]
+    pub mcp_loop_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,6 +288,7 @@ mod tests {
             response_format: None,
             frequency_penalty: None,
             presence_penalty: None,
+            mcp_loop_id: None,
         }
     }
 
@@ -371,6 +376,7 @@ mod tests {
             response_format: None,
             frequency_penalty: None,
             presence_penalty: None,
+            mcp_loop_id: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());

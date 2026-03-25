@@ -307,7 +307,16 @@
     "regenerating": "再生成中…",
     "keySavedAck": "キーを保存しました",
     "viewHistory": "変更履歴を見る",
-    "historyTitle": "変更履歴 — {{name}}"
+    "historyTitle": "変更履歴 — {{name}}",
+    "mcpAccess": "MCPアクセス",
+    "mcpAccessTitle": "MCPサーバーアクセス — {{name}}",
+    "mcpAccessDesc": "このキーが使用できるMCPサーバーを選択します。権限がないキーはMCPにアクセスできません。",
+    "mcpGranted": "許可済み",
+    "mcpNotGranted": "未許可",
+    "mcpGrant": "許可",
+    "mcpRevoke": "取り消し",
+    "mcpNoServers": "MCPサーバーが登録されていません。",
+    "mcpLoadError": "MCPアクセス情報の読み込みに失敗しました"
   },
   "providers": {
     "title": "プロバイダー",
@@ -852,5 +861,33 @@
     "utilization": "使用率",
     "noMetrics": "メトリクスを利用できません。",
     "scrapeError": "node-exporterの取得に失敗しました。"
+  },
+  "mcp": {
+    "title": "MCPサーバー",
+    "description": "Model Context Protocolサーバーを管理します",
+    "register": "サーバーを登録",
+    "name": "名前",
+    "slug": "スラッグ",
+    "url": "サーバーURL",
+    "timeout": "タイムアウト（秒）",
+    "online": "オンライン",
+    "offline": "オフライン",
+    "tools": "ツール",
+    "enabled": "有効",
+    "deleteConfirm": "MCPサーバー「{{name}}」を削除しますか？アクティブなセッションはすべて切断されます。",
+    "slugHint": "名前から自動生成されます。英小文字・数字・アンダースコアのみ使用できます。",
+    "orchestratorModel": "オーケストレーターモデル",
+    "orchestratorModelDesc": "MCPツール呼び出しループに使用するOllamaモデルです。リクエストのmodelフィールドを上書きします。",
+    "orchestratorModelNone": "リクエストモデルを使用（デフォルト）",
+    "orchestratorModelSaved": "オーケストレーターモデルを保存しました。",
+    "stats": "呼び出し統計",
+    "statsDesc": "選択した期間のMCPツール呼び出し状況です。",
+    "statsHours": "期間",
+    "statsTotalCalls": "呼び出し数",
+    "statsSuccessRate": "成功率",
+    "statsCacheHit": "キャッシュ",
+    "statsAvgLatency": "平均レイテンシ",
+    "statsNoData": "MCPの呼び出し記録がありません。",
+    "statsLoadError": "MCP統計の読み込みに失敗しました。"
   }
 }

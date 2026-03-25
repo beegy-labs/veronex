@@ -645,6 +645,7 @@ export interface LabSettings {
   gemini_function_calling: boolean
   max_images_per_request: number
   max_image_b64_bytes: number
+  mcp_orchestrator_model: string | null
   updated_at: string
 }
 
@@ -652,6 +653,8 @@ export interface PatchLabSettings {
   gemini_function_calling?: boolean
   max_images_per_request?: number
   max_image_b64_bytes?: number
+  /** null = clear override; string = set model; omit key = no change */
+  mcp_orchestrator_model?: string | null
 }
 
 /** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/queue/lab queries. */
@@ -660,6 +663,26 @@ export interface DashboardOverview {
   performance: PerformanceStats
   queue_depth: QueueDepth
   lab: LabSettings
+}
+
+export interface McpServerStat {
+  server_id: string
+  server_name: string
+  server_slug: string
+  total_calls: number
+  success_count: number
+  error_count: number
+  cache_hit_count: number
+  timeout_count: number
+  success_rate: number
+  avg_latency_ms: number
+}
+
+export interface McpServerAccess {
+  server_id: string
+  server_name: string
+  slug: string
+  is_allowed: boolean
 }
 
 export interface AuditEvent {

@@ -39,6 +39,8 @@ pub struct McpSession {
     pub session_id: Option<String>,
     /// Short slug used for tool namespacing, e.g. `weather`.
     pub server_name: String,
+    /// Per-server tool-call timeout (seconds). Set by `McpSessionManager::connect()`.
+    pub timeout_secs: u16,
 }
 
 // ── Client ────────────────────────────────────────────────────────────────────
@@ -124,7 +126,7 @@ impl McpHttpClient {
             warn!("McpHttpClient: failed to send initialized notification to {url}: {e}");
         }
 
-        Ok(McpSession { server_id, url, session_id, server_name })
+        Ok(McpSession { server_id, url, session_id, server_name, timeout_secs: 30 })
     }
 
     // ── Ping ──────────────────────────────────────────────────────────────────

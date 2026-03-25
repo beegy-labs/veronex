@@ -208,26 +208,33 @@ for ep in startup ready health; do
   esac
 done
 
-# ── Lab Settings (image limits) ──────────────────────────────────────────────
+# ── Lab Settings ─────────────────────────────────────────────────────────────
 
-hdr "Lab Settings (image limits)"
+hdr "Lab Settings"
 
 LAB_FULL=$(aget "/v1/dashboard/lab" 2>/dev/null || echo "{}")
+
+# Verify all expected fields present
 LAB_CHECK=$(echo "$LAB_FULL" | python3 -c "
 import sys, json
 try:
     d = json.loads(sys.stdin.read())
-    has_images = 'max_images_per_request' in d and 'max_image_b64_bytes' in d
-    print(f'ok|{d.get(\"max_images_per_request\",\"?\")}|{d.get(\"max_image_b64_bytes\",\"?\")}' if has_images else 'missing')
-except: print('error')
+    required = ['gemini_function_calling', 'max_images_per_request', 'max_image_b64_bytes', 'mcp_orchestrator_model', 'updated_at']
+    missing = [k for k in required if k not in d]
+    if missing:
+        print('missing:' + ','.join(missing))
+    else:
+        print(f'ok|{d[\"max_images_per_request\"]}|{d[\"max_image_b64_bytes\"]}|{d[\"mcp_orchestrator_model\"]}')
+except Exception as e: print(f'error:{e}')
 " 2>/dev/null || echo "error")
 
 if [[ "$LAB_CHECK" == ok* ]]; then
   MAX_IMG=$(echo "$LAB_CHECK" | cut -d'|' -f2)
   MAX_BYTES=$(echo "$LAB_CHECK" | cut -d'|' -f3)
-  pass "Lab settings has image limits (max_images=$MAX_IMG, max_bytes=$MAX_BYTES)"
+  MCP_MODEL=$(echo "$LAB_CHECK" | cut -d'|' -f4)
+  pass "Lab settings: all fields present (max_images=$MAX_IMG, max_bytes=$MAX_BYTES, mcp_orchestrator_model=$MCP_MODEL)"
 else
-  fail "Lab settings missing image limit fields"
+  fail "Lab settings: $LAB_CHECK"
 fi
 
 # Dynamic image limit: set max_images=2, verify 3 images → 400, then revert
@@ -243,23 +250,55 @@ if [ "$PATCH_CODE" = "200" ]; then
   [ "$DYN_CODE" = "400" ] \
     && pass "Dynamic image limit: max_images=2, 3 images → 400" \
     || fail "Dynamic image limit: max_images=2, 3 images → $DYN_CODE (expected 400)"
-  # Revert to default
   apatch "/v1/dashboard/lab" '{"max_images_per_request":4}' > /dev/null 2>&1
 else
   info "Lab settings PATCH failed ($PATCH_CODE), skipping dynamic image test"
 fi
 
-# Lab toggle + revert
-LAB=$(echo "$LAB_FULL" | jv '["gemini_function_calling"]' 2>/dev/null || echo "")
-if [ -n "$LAB" ] && [ "$LAB" != "None" ]; then
-  if [ "$LAB" = "True" ]; then
+# gemini_function_calling toggle + revert
+LAB_GEMINI=$(echo "$LAB_FULL" | jv '["gemini_function_calling"]' 2>/dev/null || echo "")
+if [ -n "$LAB_GEMINI" ] && [ "$LAB_GEMINI" != "None" ]; then
+  if [ "$LAB_GEMINI" = "True" ]; then
     apatch "/v1/dashboard/lab" '{"gemini_function_calling":false}' > /dev/null 2>&1
     apatch "/v1/dashboard/lab" '{"gemini_function_calling":true}' > /dev/null 2>&1
   else
     apatch "/v1/dashboard/lab" '{"gemini_function_calling":true}' > /dev/null 2>&1
     apatch "/v1/dashboard/lab" '{"gemini_function_calling":false}' > /dev/null 2>&1
   fi
-  pass "Lab toggle + revert OK"
+  pass "Lab toggle gemini_function_calling + revert OK"
+fi
+
+# mcp_orchestrator_model: set → verify → absent key = no change → null clear
+MCP_TEST_MODEL="${MODEL:-qwen3:8b}"
+
+# 1. PATCH set model
+SET_RES=$(apatchc "/v1/dashboard/lab" "{\"mcp_orchestrator_model\":\"$MCP_TEST_MODEL\"}")
+SET_CODE=$(echo "$SET_RES" | code)
+SET_VAL=$(echo "$SET_RES" | body | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('mcp_orchestrator_model','?'))" 2>/dev/null || echo "?")
+if [ "$SET_CODE" = "200" ] && [ "$SET_VAL" = "$MCP_TEST_MODEL" ]; then
+  pass "Lab mcp_orchestrator_model: PATCH set → '$MCP_TEST_MODEL'"
+else
+  fail "Lab mcp_orchestrator_model: PATCH set → code=$SET_CODE val=$SET_VAL"
+fi
+
+# 2. Absent key → field must be unchanged
+NO_KEY_RES=$(apatchc "/v1/dashboard/lab" '{"max_images_per_request":4}')
+NO_KEY_CODE=$(echo "$NO_KEY_RES" | code)
+NO_KEY_VAL=$(echo "$NO_KEY_RES" | body | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('mcp_orchestrator_model','?'))" 2>/dev/null || echo "?")
+if [ "$NO_KEY_CODE" = "200" ] && [ "$NO_KEY_VAL" = "$MCP_TEST_MODEL" ]; then
+  pass "Lab mcp_orchestrator_model: absent key → value unchanged ('$NO_KEY_VAL')"
+else
+  fail "Lab mcp_orchestrator_model: absent key → code=$NO_KEY_CODE val=$NO_KEY_VAL (expected '$MCP_TEST_MODEL')"
+fi
+
+# 3. PATCH null → clear
+CLR_RES=$(apatchc "/v1/dashboard/lab" '{"mcp_orchestrator_model":null}')
+CLR_CODE=$(echo "$CLR_RES" | code)
+CLR_VAL=$(echo "$CLR_RES" | body | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); v=d.get('mcp_orchestrator_model',False); print('null' if v is None else str(v))" 2>/dev/null || echo "?")
+if [ "$CLR_CODE" = "200" ] && [ "$CLR_VAL" = "null" ]; then
+  pass "Lab mcp_orchestrator_model: PATCH null → cleared"
+else
+  fail "Lab mcp_orchestrator_model: PATCH null → code=$CLR_CODE val=$CLR_VAL (expected null)"
 fi
 
 # Per-key usage

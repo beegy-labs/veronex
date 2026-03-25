@@ -39,9 +39,6 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
         }
     };
 
-    // Populate Valkey cache via tool_cache refresh path (re-use existing lock logic)
-    bridge.tool_cache.refresh(server_id, &bridge.session_manager).await;
-
     if tools.is_empty() { return; }
 
     // Persist snapshot to DB (upsert)
@@ -66,6 +63,9 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
         .map_err(|e| tracing::warn!(%server_id, tool = %tool.name, error = %e, "MCP: tool persist failed"));
     }
 
+    // Warm the tool cache from the already-fetched data — avoids a second HTTP call.
+    bridge.tool_cache.cache_fetched_tools(server_id, tools.clone()).await;
+
     tracing::info!(%server_id, count = tools.len(), "MCP: tools discovered and persisted");
 }
 
@@ -84,6 +84,8 @@ pub struct RegisterMcpServerRequest {
 #[derive(Debug, Deserialize)]
 pub struct PatchMcpServerRequest {
     pub is_enabled: Option<bool>,
+    pub url: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -255,7 +257,7 @@ pub async fn register_mcp_server(
 
     // Best-effort connect + tool discovery
     if let Some(ref bridge) = state.mcp_bridge {
-        if let Err(e) = bridge.session_manager.connect(id, &slug, &url).await {
+        if let Err(e) = bridge.session_manager.connect(id, &slug, &url, timeout_secs as u16).await {
             tracing::warn!(%id, error = %e, "MCP register: session connect failed");
         } else {
             let state_clone = state.clone();
@@ -289,9 +291,16 @@ pub async fn patch_mcp_server(
     .ok_or_else(|| AppError::NotFound("mcp server not found".into()))?;
 
     let new_enabled = req.is_enabled.unwrap_or(row.is_enabled);
+    let new_url = req.url.as_deref().unwrap_or(&row.url);
+    let new_name = req.name.as_deref().unwrap_or(&row.name);
+    let url_changed = req.url.as_deref().is_some_and(|u| u != row.url);
 
-    sqlx::query("UPDATE mcp_servers SET is_enabled = $1, updated_at = now() WHERE id = $2")
+    sqlx::query(
+        "UPDATE mcp_servers SET is_enabled = $1, url = $2, name = $3, updated_at = now() WHERE id = $4"
+    )
         .bind(new_enabled)
+        .bind(new_url)
+        .bind(new_name)
         .bind(id)
         .execute(&state.pg_pool)
         .await
@@ -301,8 +310,12 @@ pub async fn patch_mcp_server(
         if !new_enabled && row.is_enabled {
             bridge.session_manager.disconnect(id);
             bridge.tool_cache.remove_server(id);
-        } else if new_enabled && !row.is_enabled {
-            if let Err(e) = bridge.session_manager.connect(id, &row.slug, &row.url).await {
+        } else if (new_enabled && !row.is_enabled) || (new_enabled && url_changed) {
+            if url_changed {
+                bridge.session_manager.disconnect(id);
+                bridge.tool_cache.remove_server(id);
+            }
+            if let Err(e) = bridge.session_manager.connect(id, &row.slug, new_url, row.timeout_secs as u16).await {
                 tracing::warn!(%id, error = %e, "MCP patch: session connect failed");
             } else {
                 let state_clone = state.clone();
@@ -313,8 +326,8 @@ pub async fn patch_mcp_server(
         }
     }
 
-    emit_audit(&state, &claims, "update", "mcp_server", &id.to_string(), &row.name,
-        &format!("MCP server '{}' ({}) updated is_enabled={}", row.name, id, new_enabled)).await;
+    emit_audit(&state, &claims, "update", "mcp_server", &id.to_string(), new_name,
+        &format!("MCP server '{}' ({}) updated", new_name, id)).await;
 
     // Liveness check for single server
     let online = if let Some(ref pool) = state.valkey_pool {
@@ -336,9 +349,9 @@ pub async fn patch_mcp_server(
 
     Ok(Json(McpServerResponse {
         id: row.id,
-        name: row.name,
+        name: new_name.to_string(),
         slug: row.slug,
-        url: row.url,
+        url: new_url.to_string(),
         is_enabled: new_enabled,
         timeout_secs: row.timeout_secs,
         online,

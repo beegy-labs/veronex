@@ -387,6 +387,7 @@ async fn ollama_chat_proxy(
             response_format: req.response_format,
             frequency_penalty: req.frequency_penalty,
             presence_penalty: req.presence_penalty,
+            mcp_loop_id: None,
         })
         .await
     {
@@ -590,6 +591,11 @@ async fn mcp_ollama_chat(
     let ollama_messages: Vec<serde_json::Value> =
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
 
+    // Use mcp_orchestrator_model from lab settings if set, otherwise use request model.
+    let orchestrator_model = state.lab_settings_repo.get().await
+        .ok()
+        .and_then(|lab| lab.mcp_orchestrator_model)
+        .unwrap_or_else(|| req.model.clone());
     let model = req.model.clone();
     let include_usage = req.stream_options.as_ref()
         .and_then(|o| o.include_usage)
@@ -608,7 +614,7 @@ async fn mcp_ollama_chat(
     let loop_result = bridge.run_loop(
         &state,
         &caller,
-        model.clone(),
+        orchestrator_model,
         ollama_messages,
         req.tools,
         stream,
@@ -788,6 +794,7 @@ async fn legacy_queue_chat(
             response_format: req.response_format,
             frequency_penalty: req.frequency_penalty,
             presence_penalty: req.presence_penalty,
+            mcp_loop_id: None,
         })
         .await
     {

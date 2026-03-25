@@ -330,6 +330,7 @@ pub struct LabSettingsResponse {
     pub gemini_function_calling: bool,
     pub max_images_per_request: i32,
     pub max_image_b64_bytes: i32,
+    pub mcp_orchestrator_model: Option<String>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -380,6 +381,7 @@ pub async fn get_dashboard_overview(
         gemini_function_calling: lab_settings.gemini_function_calling,
         max_images_per_request: lab_settings.max_images_per_request,
         max_image_b64_bytes: lab_settings.max_image_b64_bytes,
+        mcp_orchestrator_model: lab_settings.mcp_orchestrator_model,
         updated_at: lab_settings.updated_at,
     };
 
@@ -667,6 +669,7 @@ pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::respo
             gemini_function_calling: s.gemini_function_calling,
             max_images_per_request: s.max_images_per_request,
             max_image_b64_bytes: s.max_image_b64_bytes,
+            mcp_orchestrator_model: s.mcp_orchestrator_model,
             updated_at: s.updated_at,
         }).into_response(),
         Err(e) => {
@@ -682,6 +685,51 @@ pub struct PatchLabSettingsBody {
     pub gemini_function_calling: Option<bool>,
     pub max_images_per_request: Option<i32>,
     pub max_image_b64_bytes: Option<i32>,
+    /// `null` = clear the override; a string = set the model; absent = no change.
+    #[serde(default, deserialize_with = "deserialize_optional_nullable_string")]
+    pub mcp_orchestrator_model: Option<Option<String>>,
+}
+
+fn deserialize_optional_nullable_string<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Visitor;
+
+    struct OptNullableString;
+
+    impl<'de> Visitor<'de> for OptNullableString {
+        type Value = Option<Option<String>>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a string or null")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(Some(Some(v.to_string())))
+        }
+
+        fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+            Ok(Some(Some(v)))
+        }
+
+        // JSON "string" → Some(Some("string")) = "set the value"
+        fn visit_some<D2: serde::Deserializer<'de>>(self, d: D2) -> Result<Self::Value, D2::Error> {
+            use serde::Deserialize;
+            Ok(Some(Some(String::deserialize(d)?)))
+        }
+
+        // JSON null → Some(None) = "clear the value"
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Some(None))
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Some(None))
+        }
+    }
+
+    d.deserialize_option(OptNullableString)
 }
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
@@ -694,15 +742,17 @@ pub async fn patch_lab_settings(
         body.gemini_function_calling,
         body.max_images_per_request,
         body.max_image_b64_bytes,
+        body.mcp_orchestrator_model.clone(),
     ).await {
         Ok(s) => {
             emit_audit(&state, &claims, "update", "lab_settings", "lab_settings", "lab_settings",
-                &format!("Lab settings updated: gemini_function_calling={:?}, max_images={:?}",
-                    body.gemini_function_calling, body.max_images_per_request)).await;
+                &format!("Lab settings updated: gemini_function_calling={:?}, max_images={:?}, mcp_orchestrator_model={:?}",
+                    body.gemini_function_calling, body.max_images_per_request, body.mcp_orchestrator_model)).await;
             Json(LabSettingsResponse {
                 gemini_function_calling: s.gemini_function_calling,
                 max_images_per_request: s.max_images_per_request,
                 max_image_b64_bytes: s.max_image_b64_bytes,
+                mcp_orchestrator_model: s.mcp_orchestrator_model,
                 updated_at: s.updated_at,
             }).into_response()
         }
@@ -715,6 +765,69 @@ pub async fn patch_lab_settings(
                 .into_response()
         }
     }
+}
+
+// ── MCP server call stats ────────────────────────────────────────────────────
+
+/// GET /v1/mcp/stats?hours=N — Per-server MCP call statistics.
+///
+/// Queries ClickHouse via the analytics service and joins with Postgres
+/// to attach server_id and server_name. Returns an empty list when
+/// analytics is unavailable or no data exists.
+pub async fn get_mcp_stats(
+    State(state): State<AppState>,
+    Query(params): Query<UsageQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    use crate::application::ports::outbound::analytics_repository::AnalyticsRepository;
+
+    let hours = params.effective_hours()?;
+    validate_hours(hours)?;
+
+    let slug_stats = if let Some(repo) = state.analytics_repo.as_ref() {
+        repo.mcp_server_stats(hours).await.unwrap_or_default()
+    } else {
+        return Ok(Json(vec![]));
+    };
+
+    if slug_stats.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    // Join with Postgres for server_id and server_name.
+    #[derive(sqlx::FromRow)]
+    struct McpRow { id: uuid::Uuid, name: String, slug: String }
+
+    let pg_rows: Vec<McpRow> = sqlx::query_as("SELECT id, name, slug FROM mcp_servers ORDER BY name")
+        .fetch_all(&state.pg_pool)
+        .await?;
+
+    let pg_map: std::collections::HashMap<&str, &McpRow> =
+        pg_rows.iter().map(|r| (r.slug.as_str(), r)).collect();
+
+    let result = slug_stats.into_iter().map(|s| {
+        let (server_id, server_name) = pg_map.get(s.server_slug.as_str())
+            .map(|r| (r.id.to_string(), r.name.clone()))
+            .unwrap_or_else(|| (String::new(), s.server_slug.clone()));
+
+        let success_rate = if s.total_calls > 0 {
+            s.success_count as f64 / s.total_calls as f64
+        } else { 0.0 };
+
+        serde_json::json!({
+            "server_id": server_id,
+            "server_name": server_name,
+            "server_slug": s.server_slug,
+            "total_calls": s.total_calls,
+            "success_count": s.success_count,
+            "error_count": s.error_count,
+            "cache_hit_count": s.cache_hit_count,
+            "timeout_count": s.timeout_count,
+            "success_rate": success_rate,
+            "avg_latency_ms": s.avg_latency_ms,
+        })
+    }).collect();
+
+    Ok(Json(result))
 }
 
 // ────────────────────────────────────────────────────────────────────
