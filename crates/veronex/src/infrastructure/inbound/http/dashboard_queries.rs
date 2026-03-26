@@ -289,7 +289,7 @@ pub(super) async fn fetch_jobs(
          LEFT JOIN api_keys k ON k.id = j.api_key_id
          LEFT JOIN llm_providers p ON p.id = j.provider_id
          WHERE ($1::TEXT IS NULL OR j.status = ANY(string_to_array($1, ',')))
-           AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
+           AND ($2::TEXT IS NULL OR j.prompt_preview ILIKE $2 OR k.name ILIKE $2)
            AND ($3::TEXT IS NULL OR j.source = $3)
            AND ($6::TEXT IS NULL OR j.model_name = $6)
            AND ($7::TEXT IS NULL OR p.name = $7)",
@@ -311,7 +311,7 @@ pub(super) async fn fetch_jobs(
                 j.created_at, j.completed_at, j.latency_ms,
                 j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
                 j.request_path,
-                (j.tool_calls_json IS NOT NULL) AS has_tool_calls,
+                j.has_tool_calls,
                 k.name AS api_key_name,
                 a.name AS account_name,
                 p.name AS provider_name,
@@ -337,7 +337,7 @@ pub(super) async fn fetch_jobs(
              LIMIT 1
          ) pricing ON true
          WHERE ($1::TEXT IS NULL OR j.status = ANY(string_to_array($1, ',')))
-           AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
+           AND ($2::TEXT IS NULL OR j.prompt_preview ILIKE $2 OR k.name ILIKE $2)
            AND ($3::TEXT IS NULL OR j.source = $3)
            AND ($6::TEXT IS NULL OR j.model_name = $6)
            AND ($7::TEXT IS NULL OR p.name = $7)

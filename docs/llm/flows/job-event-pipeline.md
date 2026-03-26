@@ -1,4 +1,4 @@
-# Job Event Pipeline — 전체 플로우
+# Job Write Pipeline — 전체 플로우
 
 > **Last Updated**: 2026-03-26
 
@@ -16,45 +16,37 @@ flowchart TB
         direction TB
         UC["InferenceUseCase"]
 
-        subgraph REPO["KafkaJobRepository"]
-            SAVE["save()\n동기 INSERT"]
-            PRODUCE["produce()\nfire-and-forget\ntokio::spawn"]
+        subgraph REPO["PostgresJobRepository"]
+            SAVE["save()\n동기 INSERT\n(메타데이터 + prompt_preview)"]
+            FINALIZE["finalize()\n동기 UPDATE\n(메트릭 + has_tool_calls)"]
+        end
+
+        subgraph S3STORE["S3MessageStore"]
+            PUT["put_conversation()\nzstd-3 JSON PUT\nconversations/{owner}/{date}/{id}.json.zst"]
         end
 
         DM["DashMap\n(in-memory)"]
         ZSET["Valkey ZSET\n(priority queue)"]
     end
 
-    subgraph REDPANDA["Redpanda"]
-        TOPIC["veronex.job.events"]
-    end
-
-    subgraph WORKER["veronex-worker"]
-        CONSUMER["StreamConsumer"]
-        BATCH["collect_batch()\n50ms or 256개"]
-        FLUSH["flush_batch()\nbulk unnest UPDATE"]
-    end
-
-    PG[("Postgres\ninference_jobs")]
+    PG[("Postgres\ninference_jobs\n(메타데이터만)")]
+    S3[("MinIO / S3\nConversationRecord\n~1.2 KB / job")]
 
     REQ --> UC
     UC --> SAVE
-    UC --> PRODUCE
     UC --> DM
     UC --> ZSET
 
     SAVE -->|"INSERT (동기)"| PG
-    PRODUCE -->|"JobEvent JSON"| TOPIC
 
-    TOPIC --> CONSUMER
-    CONSUMER --> BATCH
-    BATCH --> FLUSH
-    FLUSH -->|"bulk UPDATE"| PG
+    DM -->|"dispatcher → run_job()"| PUT
+    PUT -->|"zstd PUT (non-fatal)"| S3
+    PUT --> FINALIZE
+    FINALIZE -->|"UPDATE (동기)"| PG
 
     style SAVE fill:#e8f5e9,stroke:#43a047
-    style PRODUCE fill:#fff3e0,stroke:#fb8c00
-    style TOPIC fill:#fce4ec,stroke:#e91e63
-    style FLUSH fill:#e3f2fd,stroke:#1e88e5
+    style FINALIZE fill:#e8f5e9,stroke:#43a047
+    style PUT fill:#e3f2fd,stroke:#1e88e5
 ```
 
 ---
@@ -65,36 +57,31 @@ flowchart TB
 flowchart TD
     A(["Client\nPOST /v1/inference"]) --> B["submit(SubmitJobRequest)"]
 
-    B --> C["JobId 생성 (UUIDv7)\nInferenceJob 생성 status=Pending"]
+    B --> C["JobId 생성 (UUIDv7)\nInferenceJob 생성 status=Pending\nprompt_preview 생성 (≤200자, CJK-safe)"]
 
-    C --> D{S3 설정됨?}
-    D -->|Yes| E["message_store.put()\nMinIO zstd 업로드\nnon-fatal"]
-    D -->|No| F
-    E --> F["job_repo.save(messages=None)\n동기 Postgres INSERT"]
+    C --> D["job_repo.save()\n동기 Postgres INSERT\n(메타데이터 + prompt_preview)"]
 
-    F --> G{이미지 있음?}
-    G -->|Yes| H["tokio::spawn\nimage_store.put_base64() → S3\nupdate_image_keys() → Redpanda"]
-    G -->|No| I
-    H --> I
+    D --> E{이미지 있음?}
+    E -->|Yes| F["tokio::spawn\nimage_store.put_base64() → S3\nupdate_image_keys() → Postgres"]
+    E -->|No| G
 
-    I --> J["DashMap에 JobEntry 삽입\ncancel_notify 등록\nincr_pending()"]
-    J --> K["broadcast_event('pending')\nValkey pub/sub"]
+    F --> G["DashMap에 JobEntry 삽입\n(messages 포함, in-memory)\ncancel_notify 등록\nincr_pending()"]
+    G --> H["broadcast_event('pending')\nValkey pub/sub"]
 
-    K --> L["ZSET 점수 계산\ntier_bonus 적용"]
-    L --> M["valkey.zset_enqueue()"]
+    H --> I["ZSET 점수 계산\ntier_bonus 적용"]
+    I --> J["valkey.zset_enqueue()"]
 
-    M --> N{결과}
-    N -->|"Ok(true)\n큐 등록 성공"| O(["JobId 반환 ✓"])
-    N -->|"Ok(false)\n큐 가득 참"| P["decr_pending()\nDashMap 제거\nfail_with_reason() → Redpanda"]
-    P --> Q(["DomainError::QueueFull ✗"])
-    N -->|"Err\nValkey 장애"| R["spawn_job_direct()\n직접 실행"]
-    R --> O
+    J --> K{결과}
+    K -->|"Ok(true)\n큐 등록 성공"| L(["JobId 반환 ✓"])
+    K -->|"Ok(false)\n큐 가득 참"| M["decr_pending()\nDashMap 제거\nfail_with_reason() → Postgres"]
+    M --> N(["DomainError::QueueFull ✗"])
+    K -->|"Err\nValkey 장애"| O["spawn_job_direct()\n직접 실행"]
+    O --> L
 
-    style F fill:#e8f5e9,stroke:#43a047
-    style H fill:#fff3e0,stroke:#fb8c00
-    style P fill:#ffebee,stroke:#e53935
-    style O fill:#e8f5e9,stroke:#43a047
-    style Q fill:#ffebee,stroke:#e53935
+    style D fill:#e8f5e9,stroke:#43a047
+    style M fill:#ffebee,stroke:#e53935
+    style L fill:#e8f5e9,stroke:#43a047
+    style N fill:#ffebee,stroke:#e53935
 ```
 
 ---
@@ -113,12 +100,12 @@ flowchart TD
     C -->|"Pending\nor Running"| D["DashMap:\nstatus=Cancelled, done=true\nnotify_one() ← stream() 깨움\ncancel_notify_one() ← runner 중단"]
 
     D --> D2{이전 상태}
-    D2 -->|Pending| D3["decr_pending()\n(Running이면 runner에서 처리)"]
+    D2 -->|Pending| D3["decr_pending()"]
     D2 -->|Running| E
 
-    D3 --> E["job_repo.cancel_job(now)\nRedpanda produce\nJobEvent::Cancelled"]
+    D3 --> E["job_repo.cancel_job(now)\nPostgres UPDATE (동기)"]
 
-    E --> F["valkey.zset_cancel()\nZSET에서 제거\n(아직 미디스패치 시)"]
+    E --> F["valkey.zset_cancel()\nZSET에서 제거"]
 
     F --> G{로컬 job?}
     G -->|No| H["valkey.publish_cancel()\n크로스 인스턴스\npub/sub 전파"]
@@ -127,7 +114,7 @@ flowchart TD
     H --> I["cancel_notifiers 제거\nschedule_cleanup(delay)"]
     I --> Z2(["Ok(()) ✓"])
 
-    style E fill:#fff3e0,stroke:#fb8c00
+    style E fill:#e8f5e9,stroke:#43a047
     style H fill:#f3e5f5,stroke:#8e24aa
     style Z fill:#e8f5e9,stroke:#43a047
     style Z2 fill:#e8f5e9,stroke:#43a047
@@ -174,31 +161,30 @@ flowchart TD
     C --> D{이미 Cancelled?}
     D -->|Yes| E["decr_pending()\nreturn Ok(None)"]
 
-    D -->|No| F["DashMap: status=Running\nstarted_at 기록\nassigned_provider_id 세팅"]
-    F --> G["job_repo.mark_running()\nRedpanda produce\nJobEvent::Running ← 즉시 반환"]
-    G --> H["decr_pending()\nincr_running()\nbroadcast_event('running')"]
+    D -->|No| F["DashMap: status=Running\nstarted_at 기록\nassigned_provider_id 세팅\n(Postgres 쓰기 없음)"]
+    F --> G["decr_pending()\nincr_running()\nbroadcast_event('running')"]
 
-    H --> I["provider.stream_tokens(&job)\nLLM 스트리밍 시작"]
+    G --> H["provider.stream_tokens(&job)\nLLM 스트리밍 시작\n(messages는 DashMap에서 공급)"]
 
-    I --> J{"tokio::select!\n스트리밍 루프"}
+    H --> I{"tokio::select!\n스트리밍 루프"}
 
-    J -->|"cancel_notify\n.notified()"| K["decr_running()\nreturn Ok(None)"]
+    I -->|"cancel_notify\n.notified()"| K["decr_running()\nreturn Ok(None)"]
 
-    J -->|"stream.next()\n= None (스트림 종료)"| L["break → finalize_job()"]
+    I -->|"stream.next()\n= None (스트림 종료)"| L["break → finalize_job()"]
 
-    J -->|"stream.next()\n= Ok(token)"| M{entry.status\n= Cancelled?}
+    I -->|"stream.next()\n= Ok(token)"| M{entry.status\n= Cancelled?}
     M -->|Yes| K
-    M -->|No| N["DashMap에 토큰 추가\nnotify_one() ← stream() 깨움\nTTFT / 토큰 카운트 측정"]
+    M -->|No| N["DashMap에 토큰 추가\nnotify_one() ← stream() 깨움\nTTFT / 토큰 카운트 측정\ntool_calls 수집"]
     N --> O{token_count\n> MAX?}
     O -->|Yes| P["DashMap: status=Failed\n'token_budget_exceeded'"]
     O -->|No| Q{"30s마다\nowner TTL?"}
     Q -->|Yes| R["Valkey job_owner\nTTL 갱신 (EX 300s)"]
-    Q -->|No| J
-    R --> J
+    Q -->|No| I
+    R --> I
     P --> L
 
-    J -->|"stream.next()\n= Err(e)"| S["handle_stream_error()"]
-    S --> S1["DashMap: status=Failed\njob_repo.fail_with_reason()\nRedpanda produce\nJobEvent::Failed"]
+    I -->|"stream.next()\n= Err(e)"| S["handle_stream_error()"]
+    S --> S1["DashMap: status=Failed\njob_repo.fail_with_reason()\nPostgres UPDATE"]
     S1 --> S2["decr_running()\nemit_inference_event()\nrecord_tpm() 환불"]
     S2 --> T(["Err 반환 ✗"])
 
@@ -207,84 +193,34 @@ flowchart TD
     V --> W["decr_running()"]
     W --> X{Valkey 소유권\n확인}
     X -->|"다른 노드 소유"| Y["ownership lost\nschedule_cleanup()\nreturn None"]
-    X -->|"내 소유"| Z["job_repo.mark_completed()\nRedpanda produce\nJobEvent::Completed ← 즉시 반환"]
-    Z --> AA["broadcast_event('completed')\nrecord_tpm()\nemit_inference_event()\nschedule_cleanup()"]
-    AA --> AB(["Ok(latency_ms) ✓"])
+    X -->|"내 소유"| Z["S3 PUT\nConversationRecord\n(non-fatal)"]
+    Z --> AA["job_repo.finalize()\nPostgres UPDATE\n(메트릭 + has_tool_calls)"]
+    AA --> AB["broadcast_event('completed')\nrecord_tpm()\nemit_inference_event()\nschedule_cleanup()"]
+    AB --> AC(["Ok(latency_ms) ✓"])
 
-    style G fill:#fff3e0,stroke:#fb8c00
-    style S1 fill:#fff3e0,stroke:#fb8c00
-    style Z fill:#fff3e0,stroke:#fb8c00
+    style S1 fill:#e8f5e9,stroke:#43a047
+    style Z fill:#e3f2fd,stroke:#1e88e5
+    style AA fill:#e8f5e9,stroke:#43a047
     style T fill:#ffebee,stroke:#e53935
-    style AB fill:#e8f5e9,stroke:#43a047
+    style AC fill:#e8f5e9,stroke:#43a047
     style E fill:#e8f5e9,stroke:#43a047
 ```
 
 ---
 
-## ⑤ veronex-worker — Redpanda 컨슈머
-
-```mermaid
-flowchart TD
-    A(["veronex-worker 시작\nDATABASE_URL + KAFKA_BROKER"]) --> B["StreamConsumer\nsubscribe(veronex.job.events)"]
-
-    B --> C{"consumer.recv()\n50ms timeout\nor 256개"}
-
-    C -->|"Ok(msg)"| D["serde_json::from_slice\n::<JobEvent>()"]
-    D -->|Ok| E["batch.push(event)"]
-    D -->|Err| F["warn 로그\n(skip)"]
-    E --> G{배치 조건\n달성?}
-    F --> G
-    G -->|"No\n(계속 수집)"| C
-    G -->|"Yes\n(timeout or 256개)"| H
-
-    C -->|"Err\n(kafka recv error)"| I["warn 로그"] --> C
-
-    H["flush_batch(pool, batch)"] --> J["이벤트 타입별 분류"]
-
-    J --> K["Running[]"]
-    J --> L["Completed[]"]
-    J --> M["Failed[]"]
-    J --> N["Cancelled[]"]
-    J --> O["ImageKeysUpdated[]"]
-
-    K --> P["bulk_mark_running()\nUPDATE ... FROM\nunnest(uuid[], timestamptz[],\nuuid[], int4[])"]
-    L --> Q["bulk_mark_completed()\nUPDATE ... FROM\nunnest (9개 배열)"]
-    M --> R["bulk_fail_with_reason()\nUPDATE ... FROM\nunnest (3개 배열)"]
-    N --> S["bulk_cancel_job()\nUPDATE ... FROM\nunnest (2개 배열)"]
-    O --> T["bulk_update_image_keys()\nrow-by-row UPDATE"]
-
-    P & Q & R & S & T --> U{"tokio::try_join!\n결과"}
-
-    U -->|"모두 Ok"| V["consumer.commit(Async)\noffset 커밋"]
-    V --> B
-
-    U -->|"하나라도 Err"| W["error 로그\ncommit 없음\n← 재배달 보장"]
-    W --> B
-
-    style P fill:#e3f2fd,stroke:#1e88e5
-    style Q fill:#e3f2fd,stroke:#1e88e5
-    style R fill:#e3f2fd,stroke:#1e88e5
-    style S fill:#e3f2fd,stroke:#1e88e5
-    style T fill:#e3f2fd,stroke:#1e88e5
-    style V fill:#e8f5e9,stroke:#43a047
-    style W fill:#ffebee,stroke:#e53935
-```
-
----
-
-## ⑥ 상태 전이
+## ⑤ 상태 전이
 
 ```mermaid
 stateDiagram-v2
     [*] --> Pending : submit()\nsave() → INSERT
 
-    Pending --> Running : dispatcher picks up\nmark_running() → Redpanda
-    Pending --> Cancelled : cancel()\ncancel_job() → Redpanda
-    Pending --> Failed : queue full\nfail_with_reason() → Redpanda
+    Pending --> Running : dispatcher picks up\n(Postgres 쓰기 없음)
+    Pending --> Cancelled : cancel()\ncancel_job() → UPDATE
+    Pending --> Failed : queue full\nfail_with_reason() → UPDATE
 
-    Running --> Completed : stream 정상 완료\nmark_completed() → Redpanda
-    Running --> Failed : stream 에러\nfail_with_reason() → Redpanda
-    Running --> Cancelled : cancel_notify 수신\ncancel_job() → Redpanda
+    Running --> Completed : stream 정상 완료\nS3 PUT + finalize() → UPDATE
+    Running --> Failed : stream 에러\nfail_with_reason() → UPDATE
+    Running --> Cancelled : cancel_notify 수신\n(cancel_job은 호출자가 처리)
 
     Completed --> [*]
     Failed --> [*]
@@ -296,12 +232,17 @@ stateDiagram-v2
     note right of Running
         DashMap + job_owner TTL
         (Valkey EX 300s)
+        messages in DashMap (in-memory)
+    end note
+    note right of Completed
+        ConversationRecord in S3
+        메타데이터만 Postgres
     end note
 ```
 
 ---
 
-## ⑦ JobRepository 호출 매핑
+## ⑥ JobRepository 호출 매핑
 
 ```mermaid
 flowchart LR
@@ -310,46 +251,39 @@ flowchart LR
         A2["submit() 큐 가득"]
         A3["submit() 이미지"]
         A4["cancel()"]
-        A5["run_job() 시작"]
-        A6["run_job() 에러"]
-        A7["finalize_job()"]
-        A8["recover_pending_jobs()"]
-        A9["get_status() miss"]
+        A5["run_job() 에러"]
+        A6["finalize_job()"]
+        A7["recover_pending_jobs()"]
+        A8["get_status() miss"]
     end
 
-    subgraph SYNC["동기 (Postgres 직접)"]
-        B1["save()\nINSERT"]
+    subgraph POSTGRES["Postgres (직접)"]
+        B1["save()\nINSERT (metadata + prompt_preview)"]
         B2["list_pending()\nSELECT"]
         B3["update_status()\nUPDATE"]
         B4["get()\nSELECT"]
+        B5["fail_with_reason()\nUPDATE"]
+        B6["cancel_job()\nUPDATE"]
+        B7["finalize()\nUPDATE (metrics + has_tool_calls)"]
+        B8["update_image_keys()\nUPDATE"]
     end
 
-    subgraph ASYNC["비동기 (Redpanda → worker)"]
-        C1["fail_with_reason()\nJobEvent::Failed"]
-        C2["update_image_keys()\nJobEvent::ImageKeysUpdated"]
-        C3["cancel_job()\nJobEvent::Cancelled"]
-        C4["mark_running()\nJobEvent::Running"]
-        C5["mark_completed()\nJobEvent::Completed"]
+    subgraph S3WRITE["S3 (non-fatal)"]
+        C1["put_conversation()\nConversationRecord zstd PUT"]
     end
 
     A1 --> B1
-    A2 --> C1
-    A3 --> C2
-    A4 --> C3
-    A5 --> C4
+    A2 --> B5
+    A3 --> B8
+    A4 --> B6
+    A5 --> B5
     A6 --> C1
-    A7 --> C5
-    A8 --> B2
-    A8 --> B3
-    A9 --> B4
+    A6 --> B7
+    A7 --> B2
+    A7 --> B3
+    A8 --> B4
 
     style B1 fill:#e8f5e9,stroke:#43a047
-    style B2 fill:#e8f5e9,stroke:#43a047
-    style B3 fill:#e8f5e9,stroke:#43a047
-    style B4 fill:#e8f5e9,stroke:#43a047
-    style C1 fill:#fff3e0,stroke:#fb8c00
-    style C2 fill:#fff3e0,stroke:#fb8c00
-    style C3 fill:#fff3e0,stroke:#fb8c00
-    style C4 fill:#fff3e0,stroke:#fb8c00
-    style C5 fill:#fff3e0,stroke:#fb8c00
+    style B7 fill:#e8f5e9,stroke:#43a047
+    style C1 fill:#e3f2fd,stroke:#1e88e5
 ```

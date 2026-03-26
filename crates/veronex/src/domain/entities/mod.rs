@@ -82,8 +82,8 @@ pub struct InferenceJob {
     /// Contains: system prompt + prior turns (user/assistant/tool) + current user message.
     /// When Some, the OllamaAdapter routes to `/api/chat`; when None, to `/api/generate`.
     ///
-    /// Persisted to DB as `messages_json JSONB` (migration 000045).
-    /// Serves as ground-truth training input: input=messages_json, output=result_text+tool_calls_json.
+    /// Stored in S3 `ConversationRecord.messages` (not persisted to Postgres).
+    /// Serves as ground-truth training input: input=messages, output=result+tool_calls.
     /// Can reach 100–500 KB for agentic sessions with large file contents.
     #[serde(default)]
     pub messages: Option<serde_json::Value>,

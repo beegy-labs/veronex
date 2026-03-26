@@ -1,6 +1,6 @@
 # Jobs — Dashboard API & Response Structs
 
-> SSOT | **Last Updated**: 2026-03-16
+> SSOT | **Last Updated**: 2026-03-26
 
 ## API Endpoints
 
@@ -11,7 +11,7 @@ GET /v1/dashboard/stats
     → { total_keys, active_keys, total_jobs, jobs_last_24h, jobs_by_status }
 
 GET /v1/dashboard/jobs?limit=&offset=&status=&q=&source=&model=&provider=
-    q        → prompt ILIKE '%{q}%'
+    q        → prompt_preview ILIKE '%{q}%'  (searches truncated preview, ≤200 chars)
     status   → all | pending | running | completed | failed | cancelled
     source   → api | test | analyzer  (omit for all)
     model    → exact match on model_name (omit for all)
@@ -107,7 +107,7 @@ pub struct JobSummary {
     pub api_key_name: Option<String>, // LEFT JOIN api_keys
     pub account_name: Option<String>, // LEFT JOIN accounts (test run jobs)
     pub request_path: Option<String>, // e.g. "/v1/chat/completions"
-    pub has_tool_calls: bool,         // true when tool_calls_json IS NOT NULL
+    pub has_tool_calls: bool,         // true when model emitted tool/function calls (DB column)
     pub estimated_cost_usd: Option<f64>, // NULL = no pricing data; 0.0 = Ollama; >0 = Gemini
     pub provider_name: Option<String>,   // LEFT JOIN llm_providers (server name)
 }
@@ -119,19 +119,21 @@ pub struct JobSummary {
 pub struct JobDetail {
     // All JobSummary fields +
     pub started_at: Option<String>,
-    pub prompt: String,               // last user message (display; NOT full context)
-    pub result_text: Option<String>,  // None when model responded with tool calls
+    pub prompt: String,               // full prompt from S3 ConversationRecord; falls back to prompt_preview
+    pub result_text: Option<String>,  // from S3 ConversationRecord; None when model responded with tool calls
     pub error: Option<String>,
-    pub messages_json: Option<serde_json::Value>, // full conversation context (JSONB from DB)
-    pub tool_calls_json: Option<serde_json::Value>, // model-returned tool calls (JSONB)
-    pub message_count: Option<i64>,   // JSONB array length of messages_json (conversation turns)
+    pub messages_json: Option<serde_json::Value>, // full conversation context from S3 (messages array)
+    pub tool_calls_json: Option<serde_json::Value>, // tool/function calls from S3 (MCP + OpenAI)
+    pub message_count: Option<i64>,   // array length of messages_json (conversation turns)
     pub estimated_cost_usd: Option<f64>,
     pub image_keys: Option<Vec<String>>,  // S3 object keys for attached images
     pub image_urls: Option<Vec<String>>,  // presigned/direct URLs resolved from image_keys
 }
 ```
 
-> **`result_text` vs `tool_calls_json`**: When a model responds with function calls (agentic loop turn), `result_text = NULL` and `tool_calls_json` is populated. The UI renders a Tool Calls section in these cases instead of showing "(no result stored)".
+> **S3 read on detail**: `GET /v1/dashboard/jobs/{id}` fetches the `ConversationRecord` from S3 (`conversations/{owner_id}/{date}/{job_id}.json.zst`) on each request. ~20–50ms latency, acceptable at admin scale. If S3 is unavailable, `prompt` falls back to `prompt_preview` and content fields return `None`.
+
+> **`result_text` vs `tool_calls_json`**: When a model responds with function calls (agentic loop turn), `result_text = None` and `tool_calls_json` is populated. The UI renders a Tool Calls section in these cases instead of showing "(no result stored)".
 
 > **`estimated_cost_usd`**: Computed via a LATERAL JOIN on `model_pricing`. Ollama always returns `0.0` (self-hosted = no cost). Gemini returns the actual cost per 1M tokens x token counts. `NULL` means no pricing row found (unknown provider or no seed data). See `docs/llm/inference/model-pricing.md`.
 

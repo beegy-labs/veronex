@@ -60,6 +60,7 @@ pub trait JobRepository: Send + Sync {
         prompt_tokens: Option<i32>,
         completion_tokens: Option<i32>,
         cached_tokens: Option<i32>,
+        has_tool_calls: bool,
     ) -> Result<()>;
 
     /// Persist image object-storage keys after async upload completes.

@@ -262,6 +262,7 @@ impl JobRepository for PostgresJobRepository {
         prompt_tokens: Option<i32>,
         completion_tokens: Option<i32>,
         cached_tokens: Option<i32>,
+        has_tool_calls: bool,
     ) -> Result<()> {
         sqlx::query(
             "UPDATE inference_jobs
@@ -274,7 +275,8 @@ impl JobRepository for PostgresJobRepository {
                  ttft_ms           = $7,
                  prompt_tokens     = $8,
                  completion_tokens = $9,
-                 cached_tokens     = $10
+                 cached_tokens     = $10,
+                 has_tool_calls    = $11
              WHERE id = $1",
         )
         .bind(job_id.0)
@@ -287,6 +289,7 @@ impl JobRepository for PostgresJobRepository {
         .bind(prompt_tokens)
         .bind(completion_tokens)
         .bind(cached_tokens)
+        .bind(has_tool_calls)
         .execute(&self.pool)
         .await
         .context("failed to finalize inference job")?;

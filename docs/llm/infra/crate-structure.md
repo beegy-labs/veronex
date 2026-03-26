@@ -1,16 +1,15 @@
 # Crate Structure
 
-> CDD Layer 2 | **Last Updated**: 2026-03-15
+> CDD Layer 2 | **Last Updated**: 2026-03-26
 
 ## Workspace Members
 
 | Crate | Role | Port | Key Dependencies |
 |-------|------|------|-----------------|
-| veronex | Main API server + scheduler | 3000 | axum, sqlx, fred, rdkafka, tokio |
+| veronex | Main API server + scheduler | 3000 | axum, sqlx, fred, tokio |
 | veronex-agent | Metrics collector (node-exporter + Ollama scraper) | 9091 | reqwest, OTLP proto |
 | veronex-analytics | ClickHouse analytics service | 3003 | axum, clickhouse-rs |
 | veronex-mcp | MCP tool server (multi-tool, single deployment) | 3100 | axum, moka, fred, reqwest |
-| veronex-worker | Redpanda consumer — DB writer (bulk unnest UPDATE) | — | rdkafka, sqlx, tokio |
 
 ## Dependency Rules
 
@@ -20,9 +19,7 @@
 | veronex-agent -> veronex | Not allowed (separate binary) |
 | veronex-analytics -> veronex | Not allowed (separate binary) |
 | veronex-mcp -> veronex | Not allowed (separate binary) |
-| **veronex-worker -> veronex** | **Allowed** (lib only — `domain/events.rs` 의 `JobEvent` 타입 공유) |
 | veronex -> veronex-mcp | Allowed (client library only — `McpHttpClient`, `McpSessionManager`, etc.) |
-| Shared types | `JobEvent` enum: veronex `domain/events.rs` → veronex-worker |
 
 ## veronex-mcp Layout
 

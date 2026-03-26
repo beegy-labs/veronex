@@ -230,6 +230,7 @@ async fn finalize_job(
             job.prompt_tokens,
             job.completion_tokens,
             job.cached_tokens,
+            job.tool_calls_json.is_some(),
         )
         .await
     {
