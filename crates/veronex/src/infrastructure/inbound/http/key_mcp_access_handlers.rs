@@ -6,8 +6,18 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSettingsManage;
+use crate::infrastructure::outbound::valkey_keys;
 use super::error::AppError;
 use super::state::AppState;
+
+/// Invalidate the per-key MCP ACL cache entry in Valkey.
+/// Called on grant and revoke so the 60-second TTL does not stale-serve.
+async fn invalidate_mcp_acl_cache(state: &AppState, key_id: Uuid) {
+    if let Some(ref pool) = state.valkey_pool {
+        use fred::prelude::*;
+        let _ = pool.del::<(), _>(&valkey_keys::mcp_key_acl(key_id)).await;
+    }
+}
 
 #[derive(Serialize)]
 pub struct McpAccessEntry {
@@ -100,6 +110,8 @@ pub async fn grant_key_mcp_access(
     .execute(&state.pg_pool)
     .await?;
 
+    invalidate_mcp_acl_cache(&state, key_uuid).await;
+
     Ok((StatusCode::CREATED, Json(McpAccessEntry {
         server_id: server.id,
         server_name: server.name,
@@ -122,6 +134,8 @@ pub async fn revoke_key_mcp_access(
         .bind(server_uuid)
         .execute(&state.pg_pool)
         .await?;
+
+    invalidate_mcp_acl_cache(&state, key_uuid).await;
 
     Ok(StatusCode::NO_CONTENT)
 }

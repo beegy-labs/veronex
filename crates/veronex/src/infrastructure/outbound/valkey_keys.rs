@@ -196,6 +196,14 @@ pub fn mcp_heartbeat(server_id: Uuid) -> String {
     format!("veronex:mcp:heartbeat:{server_id}")
 }
 
+/// Per-API-key MCP server allowlist cache.
+/// Value: JSON array of allowed server UUIDs, e.g. `["uuid1","uuid2"]` or `[]`.
+/// Empty array = no MCP access (default deny). TTL = 60s.
+/// Invalidated on grant/revoke in key_mcp_access_handlers.
+pub fn mcp_key_acl(api_key_id: Uuid) -> String {
+    format!("veronex:mcp:acl:{api_key_id}")
+}
+
 /// Cached MCP tool result keyed by (tool_name, args_hash).
 /// TTL is tool-specific (readOnlyHint + idempotentHint condition).
 /// Written + read by: veronex McpResultCache.

@@ -136,13 +136,7 @@ impl McpBridgeAdapter {
         // JWT session callers (account_id only, no api_key_id) bypass ACL.
         let allowed_servers: Option<Arc<HashSet<Uuid>>> =
             if let Some(key_id) = caller.api_key_id() {
-                let ids: Vec<Uuid> = sqlx::query_scalar(
-                    "SELECT server_id FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true"
-                )
-                .bind(key_id)
-                .fetch_all(&state.pg_pool)
-                .await
-                .unwrap_or_default();
+                let ids = fetch_mcp_acl(state, key_id).await;
                 // Always wrap in Some — empty set = deny all, non-empty = allow listed servers.
                 Some(Arc::new(ids.into_iter().collect()))
             } else {
@@ -644,6 +638,46 @@ fn quick_args_hash(args_str: &str) -> String {
     let capped = if bytes.len() > MAX_ARGS_FOR_HASH_BYTES { &bytes[..MAX_ARGS_FOR_HASH_BYTES] } else { bytes };
     let digest = Sha256::digest(capped);
     hex::encode(&digest[..4])
+}
+
+/// Fetch the list of MCP server IDs allowed for an API key.
+///
+/// Reads from `veronex:mcp:acl:{key_id}` (Valkey, JSON array of UUIDs, TTL=60s).
+/// On cache miss, falls back to DB and populates the cache.
+/// Invalidated by `key_mcp_access_handlers` on grant/revoke.
+pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
+    let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_acl(key_id);
+
+    // ── L1: Valkey ─────────────────────────────────────────────────────────────
+    if let Some(ref pool) = state.valkey_pool {
+        use fred::prelude::*;
+        if let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await {
+            if let Ok(ids) = serde_json::from_str::<Vec<Uuid>>(&cached) {
+                return ids;
+            }
+        }
+    }
+
+    // ── L2: DB (cache miss) ────────────────────────────────────────────────────
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT server_id FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true"
+    )
+    .bind(key_id)
+    .fetch_all(&state.pg_pool)
+    .await
+    .unwrap_or_default();
+
+    // Populate cache — empty array is also cached (negative cache).
+    if let Some(ref pool) = state.valkey_pool {
+        use fred::prelude::*;
+        if let Ok(json) = serde_json::to_string(&ids) {
+            let _ = pool
+                .set::<(), _, _>(&vk_key, json, Some(Expiration::EX(60)), None, false)
+                .await;
+        }
+    }
+
+    ids
 }
 
 /// Emit an OTel tracing event for a single MCP tool call.
