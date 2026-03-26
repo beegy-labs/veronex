@@ -267,6 +267,75 @@ impl JobRepository for PostgresJobRepository {
         Ok(())
     }
 
+    async fn mark_running(
+        &self,
+        job_id: &JobId,
+        started_at: DateTime<Utc>,
+        provider_id: Option<Uuid>,
+        queue_time_ms: i32,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE inference_jobs
+             SET status = 'running', started_at = $2, provider_id = $3, queue_time_ms = $4
+             WHERE id = $1",
+        )
+        .bind(job_id.0)
+        .bind(started_at)
+        .bind(provider_id)
+        .bind(queue_time_ms)
+        .execute(&self.pool)
+        .await
+        .context("failed to mark job as running")?;
+        Ok(())
+    }
+
+    async fn mark_completed(
+        &self,
+        job_id: &JobId,
+        completed_at: DateTime<Utc>,
+        result_text: Option<&str>,
+        tool_calls_json: Option<&serde_json::Value>,
+        latency_ms: i32,
+        ttft_ms: Option<i32>,
+        prompt_tokens: Option<i32>,
+        completion_tokens: Option<i32>,
+        cached_tokens: Option<i32>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE inference_jobs
+             SET status = 'completed', completed_at = $2,
+                 result_text = $3, tool_calls_json = $4,
+                 latency_ms = $5, ttft_ms = $6,
+                 prompt_tokens = $7, completion_tokens = $8, cached_tokens = $9
+             WHERE id = $1",
+        )
+        .bind(job_id.0)
+        .bind(completed_at)
+        .bind(result_text)
+        .bind(tool_calls_json)
+        .bind(latency_ms)
+        .bind(ttft_ms)
+        .bind(prompt_tokens)
+        .bind(completion_tokens)
+        .bind(cached_tokens)
+        .execute(&self.pool)
+        .await
+        .context("failed to mark job as completed")?;
+        Ok(())
+    }
+
+    async fn update_image_keys(&self, job_id: &JobId, image_keys: Vec<String>) -> Result<()> {
+        sqlx::query(
+            "UPDATE inference_jobs SET image_keys = $2 WHERE id = $1",
+        )
+        .bind(job_id.0)
+        .bind(&image_keys)
+        .execute(&self.pool)
+        .await
+        .context("failed to update image_keys")?;
+        Ok(())
+    }
+
     async fn list_pending(&self) -> Result<Vec<InferenceJob>> {
         let rows = sqlx::query(&format!(
             "SELECT {JOB_COLS} FROM inference_jobs \

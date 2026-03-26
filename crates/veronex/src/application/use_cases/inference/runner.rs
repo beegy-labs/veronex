@@ -84,7 +84,10 @@ async fn handle_stream_error(
     job.status = JobStatus::Failed;
     job.error = Some(msg.clone());
     job.failure_reason = Some("provider_error".to_string());
-    if let Err(db_err) = job_repo.save(job).await {
+    if let Err(db_err) = job_repo
+        .fail_with_reason(&job.id, "provider_error", Some(&msg))
+        .await
+    {
         tracing::warn!(job_id = %uuid, "failed to persist failed state: {db_err}");
     }
 
@@ -192,7 +195,20 @@ async fn finalize_job(
     job.prompt_tokens = ts.prompt_tokens.map(|v| v as i32);
     job.completion_tokens = stored_completion;
     job.cached_tokens = ts.cached_tokens.map(|v| v as i32);
-    if let Err(e) = job_repo.save(job).await {
+    if let Err(e) = job_repo
+        .mark_completed(
+            &job.id,
+            completed_at,
+            job.result_text.as_deref(),
+            job.tool_calls_json.as_ref(),
+            stored_latency,
+            job.ttft_ms,
+            job.prompt_tokens,
+            job.completion_tokens,
+            job.cached_tokens,
+        )
+        .await
+    {
         tracing::warn!(job_id = %uuid, "failed to persist completed state: {e}");
     }
 
@@ -303,7 +319,8 @@ pub(super) async fn run_job(
     job.queue_time_ms = Some(
         started_at.signed_duration_since(job.created_at).num_milliseconds().max(0) as i32,
     );
-    if let Err(e) = job_repo.save(&job).await {
+    let q_ms = job.queue_time_ms.unwrap_or(0);
+    if let Err(e) = job_repo.mark_running(&job.id, started_at, provider_id, q_ms).await {
         tracing::warn!(job_id = %uuid, "failed to persist running state: {e}");
     }
 

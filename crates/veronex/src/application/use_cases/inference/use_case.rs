@@ -315,12 +315,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     }
                 }
                 if !keys.is_empty() {
-                    let update_job = InferenceJob {
-                        id: jid, image_keys: Some(keys),
-                        ..job_for_db
-                    };
-                    if let Err(e) = repo.save(&update_job).await {
-                        tracing::warn!("failed to save image_keys: {e}");
+                    if let Err(e) = repo.update_image_keys(&jid, keys).await {
+                        tracing::warn!(job_id = %jid.0, "failed to update image_keys: {e}");
                     }
                 }
             });
@@ -328,8 +324,12 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
         let cancel_notify = Arc::new(Notify::new());
         self.cancel_notifiers.insert(job_id.0, cancel_notify.clone());
+        // Store a messages-stripped copy in DashMap — S3 is authoritative.
+        // Keeping messages here would cause the Running-state DB write to include
+        // 100-500 KB of messages_json on every job dispatch.
+        let job_for_cache = InferenceJob { messages: None, ..job.clone() };
         self.jobs.insert(job_id.0, JobEntry {
-            job: job.clone(), status: JobStatus::Pending,
+            job: job_for_cache, status: JobStatus::Pending,
             tokens: Vec::with_capacity(INITIAL_TOKEN_CAPACITY),
             done: false, api_key_id,
             notify: Arc::new(Notify::new()), cancel_notify,

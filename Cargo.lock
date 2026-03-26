@@ -4901,6 +4901,7 @@ dependencies = [
  "uuid",
  "veronex-mcp",
  "workspace-hack",
+ "zstd",
 ]
 
 [[package]]

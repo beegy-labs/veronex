@@ -50,6 +50,7 @@ config = "0.14"
 # S3 / object storage (MinIO-compatible)
 aws-sdk-s3 = "1"
 bytes = "1"
+zstd = "0.13"
 
 # Image processing (WebP conversion for inference job thumbnails)
 image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png"] }
