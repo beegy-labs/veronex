@@ -76,19 +76,19 @@ pub async fn get_job_detail(
         return Err(AppError::Forbidden("access denied".into()));
     }
 
-    // Resolve messages: S3 first (authoritative for new jobs), DB fallback for old jobs
-    let db_messages = row.db_messages.clone();
-    let messages_json = if let Some(ref store) = state.message_store {
-        match store.get(id).await {
-            Ok(Some(v)) => Some(v),
-            Ok(None) => db_messages, // not in S3 → use DB value (old job)
+    // Fetch full conversation from S3 (prompt, messages, tool_calls, result)
+    let conversation = if let Some(ref store) = state.message_store {
+        let owner_id = row.account_id.or(row.api_key_id).unwrap_or(id);
+        let date = row.common.created_at.date_naive();
+        match store.get_conversation(owner_id, date, id).await {
+            Ok(v) => v,
             Err(e) => {
-                tracing::warn!(job_id = %id, "S3 message fetch failed (using DB fallback): {e}");
-                db_messages
+                tracing::warn!(job_id = %id, "S3 conversation fetch failed (non-fatal): {e}");
+                None
             }
         }
     } else {
-        db_messages
+        None
     };
 
     // Resolve image_keys → URLs
@@ -98,7 +98,7 @@ pub async fn get_job_detail(
         })
     });
 
-    Ok(Json(dashboard_queries::build_job_detail(row, messages_json, image_urls)))
+    Ok(Json(dashboard_queries::build_job_detail(row, conversation, image_urls)))
 }
 
 /// GET /v1/dashboard/jobs — Paginated job list.

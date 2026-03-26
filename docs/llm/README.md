@@ -81,8 +81,9 @@
 | Distributed Coordination | `infra/distributed.md` | Instance ID, VRAM leases, reliable queue, ZSET, model filter, stickiness |
 | Distributed Ops | `infra/distributed-ops.md` | cross-instance pub/sub, TPM accounting, crash recovery, Valkey key registry, wiring |
 | Build Optimization | `infra/build-optimization.md` | mold, cargo-chef, hakari, nextest, Docker cache mounts, cargo profiles |
-| Crate Structure | `infra/crate-structure.md` | workspace members, dependency rules, veronex, veronex-agent, veronex-analytics, veronex-mcp |
+| Crate Structure | `infra/crate-structure.md` | workspace members, dependency rules, veronex, veronex-agent, veronex-analytics, veronex-mcp, veronex-worker |
 | Hot-Path Caching | `infra/hot-path-caching.md` | TtlCache wrappers, Valkey ACL cache, inference hot-path SQL audit, long-term roadmap |
+| Job Event Pipeline | `infra/job-event-pipeline.md` | KafkaJobRepository, JobEvent, veronex.job.events, veronex-worker, bulk unnest UPDATE, at-least-once |
 
 ---
 
@@ -129,6 +130,7 @@
 |----------|------|---------|
 | Index | `flows/README.md` | all subsystems overview |
 | Inference Lifecycle | `flows/inference.md` | submit, queue, dispatch, VRAM reserve, stream, cleanup |
+| Job Event Pipeline | `flows/job-event-pipeline.md` | KafkaJobRepository, fire-and-forget produce, veronex-worker batch flush, unnest UPDATE, fallback |
 | Authentication | `flows/auth.md` | API key BLAKE2b, JWT HS256, InferCaller dual-auth, rate limit, MCP ACL, provider ACL |
 | MCP Agentic Loop | `flows/mcp.md` | run_loop, execute_one, ACL, circuit breaker, result cache, loop detect |
 | Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, placement planner, scale-out/in, circuit breaker |
@@ -202,6 +204,7 @@
 | Job dashboard API | `inference/job-api.md` |
 | Rust performance / allocator | `research/backend/rust-perf-2026.md` |
 | Hot-path DB 최적화 / 캐싱 전략 | `infra/hot-path-caching.md` |
+| Job 상태전환 쓰기 / Redpanda 파이프라인 | `infra/job-event-pipeline.md` + `flows/job-event-pipeline.md` |
 | Add application constant | `policies/architecture.md` — Domain constants live in `domain/constants.rs` |
 | Testing strategy / purity | `policies/testing-strategy.md` — layer responsibility, decision checklist |
 | Build / compile speed | `infra/build-optimization.md` — mold, hakari, cargo-chef, profiles |

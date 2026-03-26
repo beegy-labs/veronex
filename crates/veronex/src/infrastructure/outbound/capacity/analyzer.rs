@@ -45,6 +45,7 @@ async fn save_analyzer_job(
     let job = crate::domain::entities::InferenceJob {
         id: JobId::new(),
         prompt: Prompt::new(&prompt[..prompt.len().min(4096)]).unwrap_or_else(|_| Prompt::new("analyzer").unwrap()),
+        prompt_preview: None,
         model_name: ModelName::new(model).unwrap_or_else(|_| ModelName::new("unknown").unwrap()),
         status: JobStatus::Completed,
         provider_type: ProviderType::Ollama,

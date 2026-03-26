@@ -25,6 +25,10 @@ use super::value_objects::{JobId, ModelName, Prompt};
 pub struct InferenceJob {
     pub id: JobId,
     pub prompt: Prompt,
+    /// First ≤200 characters of the prompt (char boundary, CJK-safe).
+    /// The only part of the prompt persisted to Postgres. Full prompt lives in S3.
+    #[serde(default)]
+    pub prompt_preview: Option<String>,
     pub model_name: ModelName,
     pub status: JobStatus,
     pub provider_type: ProviderType,

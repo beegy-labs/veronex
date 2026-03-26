@@ -9,24 +9,21 @@ use crate::domain::value_objects::JobId;
 
 /// Outbound port for inference job persistence.
 ///
-/// # Write discipline
+/// # Write discipline (simplified S3 design)
 ///
-/// `save()` is the **single insert point** — it performs the initial `INSERT` for a new
-/// job and is the only path that creates a row.  All subsequent state transitions use
-/// targeted `UPDATE` methods (`mark_running`, `mark_completed`, `fail_with_reason`,
-/// `cancel_job`, `update_image_keys`) that touch only the columns they own.
+/// `save()` is the **only INSERT** — initial Pending row, metadata only.
+/// All large content (prompt, messages, result, tool_calls) lives in S3.
 ///
-/// This pattern has two benefits at 1M+ TPS:
-/// 1. **Narrow writes** — each transition sends a minimal payload to Postgres, reducing
-///    WAL volume and index churn.
-/// 2. **Single insert point** — `save()` can be replaced by a Kafka producer (or any
-///    CDC sink) without touching the rest of the call-graph.
+/// `finalize()` is the **single terminal UPDATE** — written once at stream end
+/// with all execution metrics (latency, tokens, provider). No intermediate
+/// state transitions are written to Postgres.
+///
+/// `cancel_job()` and `fail_with_reason()` handle the two early-exit paths
+/// (explicit cancel and queue-full / stream error).
 #[async_trait]
 pub trait JobRepository: Send + Sync {
     /// Insert the initial job row (Pending state).
-    ///
-    /// `messages_json` must be `None` on the entity — messages are stored in
-    /// object storage, not in Postgres.  This is the **only** method that INSERTs.
+    /// Only `prompt_preview` (≤200 chars) is stored — full content goes to S3.
     async fn save(&self, job: &InferenceJob) -> Result<()>;
 
     async fn get(&self, job_id: &JobId) -> Result<Option<InferenceJob>>;
@@ -38,7 +35,7 @@ pub trait JobRepository: Send + Sync {
     async fn cancel_job(&self, job_id: &JobId, cancelled_at: DateTime<Utc>) -> Result<()>;
 
     /// Atomically mark a job as Failed with a machine-readable failure_reason.
-    /// Only affects non-terminal jobs (Pending/Running).
+    /// Used for queue-full rejections and provider stream errors.
     async fn fail_with_reason(
         &self,
         job_id: &JobId,
@@ -46,23 +43,18 @@ pub trait JobRepository: Send + Sync {
         error_msg: Option<&str>,
     ) -> Result<()>;
 
-    /// Transition Pending → Running: record dispatch metadata in a single targeted UPDATE.
-    async fn mark_running(
-        &self,
-        job_id: &JobId,
-        started_at: DateTime<Utc>,
-        provider_id: Option<Uuid>,
-        queue_time_ms: i32,
-    ) -> Result<()>;
-
-    /// Transition Running → Completed: record all result columns in a single targeted UPDATE.
+    /// Single terminal UPDATE for a completed job.
+    ///
+    /// Called once at stream end with all execution metrics.
+    /// Replaces the former mark_running + mark_completed two-step.
     #[allow(clippy::too_many_arguments)]
-    async fn mark_completed(
+    async fn finalize(
         &self,
         job_id: &JobId,
+        started_at: Option<DateTime<Utc>>,
         completed_at: DateTime<Utc>,
-        result_text: Option<&str>,
-        tool_calls_json: Option<&serde_json::Value>,
+        provider_id: Option<Uuid>,
+        queue_time_ms: Option<i32>,
         latency_ms: i32,
         ttft_ms: Option<i32>,
         prompt_tokens: Option<i32>,
