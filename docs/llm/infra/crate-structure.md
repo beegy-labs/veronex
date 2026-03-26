@@ -9,6 +9,7 @@
 | veronex | Main API server + scheduler | 3000 | axum, sqlx, fred, tokio |
 | veronex-agent | Metrics collector (node-exporter + Ollama scraper) | 9091 | reqwest, OTLP proto |
 | veronex-analytics | ClickHouse analytics service | 3003 | axum, clickhouse-rs |
+| veronex-mcp | MCP tool server (multi-tool, single deployment) | 3100 | axum, moka, fred, reqwest |
 
 ## Dependency Rules
 
@@ -17,7 +18,28 @@
 | No circular deps | Cargo workspace enforces |
 | veronex-agent -> veronex | Not allowed (separate binary) |
 | veronex-analytics -> veronex | Not allowed (separate binary) |
-| Shared types | None currently; each crate defines own types |
+| veronex-mcp -> veronex | Not allowed (separate binary) |
+| veronex -> veronex-mcp | Allowed (client library only — `McpHttpClient`, `McpSessionManager`, etc.) |
+| Shared types | None; each crate defines own types |
+
+## veronex-mcp Layout
+
+```
+crates/veronex-mcp/src/
+  lib.rs          — MCP client library (used by veronex)
+  client.rs       — McpHttpClient
+  session.rs      — McpSessionManager
+  tool_cache.rs   — McpToolCache
+  result_cache.rs — McpResultCache
+  circuit_breaker.rs
+  types.rs
+  geo/mod.rs      — Offline geocoding (GeoNames cities1000, embedded at compile time)
+  tools/mod.rs    — Tool trait
+  tools/weather.rs — get_weather tool (L1 Moka + L2 Valkey + singleflight)
+  bin/veronex-mcp.rs — Server binary: tool registry, JSON-RPC dispatch
+```
+
+Architecture: flat module — no hexagonal layers. Tools implement `Tool` trait; main binary registers and dispatches. To add a tool: create `tools/{name}.rs`, implement `Tool`, register in `main()`.
 
 ## Build
 

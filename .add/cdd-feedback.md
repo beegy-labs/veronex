@@ -1,28 +1,49 @@
 # CDD Feedback
 
-> ADD Reference | **Last Updated**: 2026-03-25
+> ADD Execution | **Last Updated**: 2026-03-25
 
 ## Trigger
 
-After any task completion (feature, fix, refactor, migration) — when a new pattern or constraint was discovered.
+After any task completion (feature, fix, refactor, migration).
+Distinct from `doc-sync.md` — this adds **new confirmed knowledge**; doc-sync fixes existing doc-code divergence.
+
+## Read Before Execution
+
+| Domain | Path |
+| ------ | ---- |
+| Completed diff | `git diff` of completed work |
+| Related CDD docs | `docs/llm/` (affected domain) |
+| CDD policy | `docs/llm/policies/cdd.md` |
+
+## Classification Decision
+
+| Classification | Condition | Action |
+| -------------- | --------- | ------ |
+| Constitutional | System identity, boundary, or external contract changed | Update + flag for human approval |
+| Operational | New pattern confirmed through use (convention, architecture decision) | Update freely |
+| Reference | Feature, API, or schema catalog changed | Update index/catalog |
+| None | No new stable knowledge gained | Archive in SDD history only — do NOT update CDD |
 
 ## Execution
 
-CDD sync steps are embedded in every workflow's final step. If a standalone CDD update is needed:
-
 | Step | Action |
-|------|--------|
-| 1 | `git diff` the completed work — identify new patterns or constraints |
-| 2 | Classify: Operational (accumulate freely) vs Constitutional (requires human approval) |
-| 3 | Route to the correct doc — see `.add/README.md` CDD Sync Routing or `best-practices.md` Part 1 "Where to write what" |
-| 4 | Update `Last Updated` date in the target doc |
-| 5 | Constitutional change → flag for human approval before merging |
+| ---- | ------ |
+| 1 | Read completed diff — identify what actually changed |
+| 2 | Ask: is there new stable knowledge not yet in CDD? |
+| 3 | If no → stop. Archive to SDD history only |
+| 4 | Classify each piece of new knowledge (table above) |
+| 5 | Update appropriate CDD doc in `docs/llm/` |
+| 6 | If Constitutional → flag for human approval before merging |
+| 7 | Apply token optimization (`docs/llm/policies/token-optimization.md`) |
 
 ## Rules
 
 | Rule | Detail |
-|------|--------|
-| Operational | Accumulate freely (patterns, conventions, component inventory) |
-| Constitutional | Require human approval (identity, policy, security contracts) |
-| No speculation | Only document what was actually built and verified |
-| No duplication | One fact → one doc. If already documented, update in place |
+| ---- | ------ |
+| Confirmed only | Only document what was actually built and validated |
+| No speculation | Do not add patterns that were considered but not used |
+| No duplication | One fact in one place — reference elsewhere |
+| Constitutional = approval | Never merge Constitutional changes without human sign-off |
+| Operational = accumulate | Add freely; reflects implementation experience |
+| Reference = refresh | Update catalogs/indexes after completion |
+| doc-sync is separate | This workflow adds knowledge; doc-sync fixes divergence |

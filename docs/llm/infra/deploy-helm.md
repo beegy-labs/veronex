@@ -71,6 +71,10 @@ helm install veronex deploy/helm/veronex/ \
 | `veronex-analytics-deployment.yaml` | Deployment | ClickHouse analytics service |
 | `veronex-web-deployment.yaml` | Deployment | Next.js dashboard |
 | `veronex-agent-statefulset.yaml` | StatefulSet + headless Service | Agent (ordinal-based sharding) |
+| `weather-mcp-deployment.yaml` | Deployment | veronex-mcp server (`weatherMcp.enabled=true`) |
+| `weather-mcp-service.yaml` | Service | ClusterIP, port 8080 |
+| `weather-mcp-hpa.yaml` | HPA | CPU-based autoscaling (`autoscaling.keda=false`) |
+| `weather-mcp-keda.yaml` | ScaledObject | KEDA autoscaling (`autoscaling.keda=true`) |
 | `otel-collector-deployment.yaml` | Deployment | OTel Collector (optional) |
 | `clickhouse-init-job.yaml` | Job (hook) | Applies ClickHouse schema on install/upgrade |
 | `secret.yaml` | Secret | Chart-managed (skipped when ESO/CSI/existing) |

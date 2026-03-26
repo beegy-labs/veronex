@@ -141,6 +141,8 @@ assert_get "/v1/dashboard/lab" 200 "Lab settings"
 assert_get "/v1/dashboard/analytics?hours=24" 200 "Dashboard analytics"
 assert_get "/v1/dashboard/queue/depth" 200 "Queue depth"
 assert_get "/v1/dashboard/overview" 200 "Dashboard overview"
+assert_get "/v1/dashboard/capacity/cluster" 200 "Dashboard capacity/cluster"
+assert_get "/v1/mcp/stats" 200 "MCP stats"
 
 c=$(curl -s -w "\n%{http_code}" "$API/docs/openapi.json" | code)
 [ "$c" = "200" ] && pass "OpenAPI spec → 200" || fail "OpenAPI → $c"
@@ -178,6 +180,30 @@ if [ -n "${SERVER_ID_LOCAL:-}" ] && [ "$SERVER_ID_LOCAL" != "None" ]; then
   c=$(agetc "/v1/servers/$SERVER_ID_LOCAL/metrics" | code)
   [ "$c" = "200" ] && pass "Local server metrics → 200" || info "Local server metrics → $c"
   assert_get "/v1/servers/$SERVER_ID_LOCAL/metrics/history?hours=1" 200 "Local metrics history"
+fi
+
+# /v1/servers/metrics/batch — expects JSON array body with server IDs
+BATCH_IDS="[]"
+if [ -n "${SERVER_ID_LOCAL:-}" ] && [ "$SERVER_ID_LOCAL" != "None" ]; then
+  BATCH_IDS="[\"$SERVER_ID_LOCAL\"]"
+fi
+BATCH_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/servers/metrics/batch" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "$BATCH_IDS" 2>/dev/null || echo "000")
+[ "$BATCH_CODE" = "200" ] \
+  && pass "GET /v1/servers/metrics/batch → 200" \
+  || fail "GET /v1/servers/metrics/batch → $BATCH_CODE (expected 200)"
+
+# /v1/models/{model_id} — single model lookup
+if [ -n "${MODEL:-}" ]; then
+  MENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$MODEL'))" 2>/dev/null || echo "$MODEL")
+  MODEL_ID_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/models/$MENC" \
+    -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+  case "$MODEL_ID_CODE" in
+    200) pass "GET /v1/models/:model_id → 200" ;;
+    404) pass "GET /v1/models/:model_id → 404 (model not in OpenAI list — acceptable)" ;;
+    *) fail "GET /v1/models/:model_id → $MODEL_ID_CODE" ;;
+  esac
 fi
 if [ -n "${SERVER_ID_REMOTE:-}" ] && [ "$SERVER_ID_REMOTE" != "None" ]; then
   c=$(agetc "/v1/servers/$SERVER_ID_REMOTE/metrics" | code)
@@ -506,5 +532,35 @@ except Exception as e:
 else
   info "SKIP: No vision model (llava/vl/minicpm/moondream) on local Ollama"
 fi
+
+# ── OpenAI Media & Completions Stubs ─────────────────────────────────────────
+
+hdr "OpenAI Media Stubs (501)"
+
+# These endpoints exist but return 501 Not Implemented (planned features)
+for stub_ep in "audio/transcriptions" "audio/speech" "images/generations" "moderations"; do
+  STUB_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/v1/$stub_ep" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d '{"model":"test"}' 2>/dev/null || echo "000")
+  case "$STUB_CODE" in
+    501) pass "POST /v1/$stub_ep → 501 (stub registered)" ;;
+    400) pass "POST /v1/$stub_ep → 400 (validation before 501 — acceptable)" ;;
+    404) fail "POST /v1/$stub_ep → 404 (route not registered)" ;;
+    *)   info "POST /v1/$stub_ep → $STUB_CODE" ;;
+  esac
+done
+
+# /v1/completions — text completion (legacy, not chat)
+COMPLETIONS_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/v1/completions" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"Say hello.\",\"max_tokens\":8,\"stream\":false}" \
+  2>/dev/null || printf "\n000")
+COMPLETIONS_CODE=$(echo "$COMPLETIONS_RES" | tail -1)
+case "$COMPLETIONS_CODE" in
+  200) pass "POST /v1/completions → 200" ;;
+  501) pass "POST /v1/completions → 501 (stub — not yet implemented)" ;;
+  503) info "POST /v1/completions → 503 (no providers)" ;;
+  *) fail "POST /v1/completions → $COMPLETIONS_CODE" ;;
+esac
 
 save_counts

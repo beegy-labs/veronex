@@ -452,6 +452,7 @@ if [ -n "$INT_ID" ]; then
 fi
 
 # 5. Disable server — inference should proceed without MCP tools
+
 if [ -n "$INT_ID" ]; then
   apatch "/v1/mcp/servers/$INT_ID" '{"is_enabled":false}' > /dev/null 2>&1
   DIS_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/v1/chat/completions" \
@@ -539,6 +540,146 @@ if [ -n "$WEATHER_ID" ]; then
   [ "$STILL" = "yes" ] \
     && pass "Sample data: 날씨 MCP remains registered — accessible at UI /mcp" \
     || fail "Sample data: 날씨 MCP not found in list after delete"
+fi
+
+# ── MCP Stats ─────────────────────────────────────────────────────────────────
+
+hdr "MCP Stats"
+
+STATS_RES=$(agetc "/v1/mcp/stats" 2>/dev/null || printf "\n000")
+STATS_CODE=$(echo "$STATS_RES" | tail -1)
+STATS_BODY=$(echo "$STATS_RES" | sed '$d')
+[ "$STATS_CODE" = "200" ] \
+  && pass "GET /v1/mcp/stats → 200" \
+  || fail "GET /v1/mcp/stats → $STATS_CODE (expected 200)"
+
+if [ "$STATS_CODE" = "200" ]; then
+  STATS_IS_ARRAY=$(echo "$STATS_BODY" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    print('yes' if isinstance(d, list) else 'no:type=' + type(d).__name__)
+except Exception as e:
+    print(f'parse_error:{e}')
+" 2>/dev/null || echo "parse_error")
+  [ "$STATS_IS_ARRAY" = "yes" ] \
+    && pass "GET /v1/mcp/stats → returns array" \
+    || fail "GET /v1/mcp/stats → $STATS_IS_ARRAY (expected array)"
+
+  STATS_COUNT=$(echo "$STATS_BODY" | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read())))" 2>/dev/null || echo "0")
+  if [ "$STATS_COUNT" -gt 0 ] 2>/dev/null; then
+    STATS_FIELDS=$(echo "$STATS_BODY" | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+s = d[0]
+required = ['server_id', 'server_name', 'slug', 'total_calls', 'success_rate', 'avg_latency_ms']
+missing = [f for f in required if f not in s]
+print('ok' if not missing else 'missing:' + ','.join(missing))
+" 2>/dev/null || echo "parse_error")
+    [ "$STATS_FIELDS" = "ok" ] \
+      && pass "GET /v1/mcp/stats → entry has required fields ($STATS_COUNT entries)" \
+      || fail "GET /v1/mcp/stats → $STATS_FIELDS"
+  else
+    pass "GET /v1/mcp/stats → empty array (no calls recorded yet)"
+  fi
+fi
+
+STATS_H1=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/mcp/stats?hours=1" \
+  -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+[ "$STATS_H1" = "200" ] \
+  && pass "GET /v1/mcp/stats?hours=1 → 200" \
+  || fail "GET /v1/mcp/stats?hours=1 → $STATS_H1"
+
+# ── API Key MCP Access ─────────────────────────────────────────────────────────
+
+hdr "API Key MCP Access"
+
+TEST_KEY_ID="${API_KEY_ID_PAID:-}"
+if [ -z "$TEST_KEY_ID" ] || [ "$TEST_KEY_ID" = "None" ]; then
+  TEST_KEY_ID=$(aget "/v1/keys?limit=1" 2>/dev/null \
+    | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); keys=d.get('keys',d) if isinstance(d,dict) else d; print(keys[0]['id'] if keys else '')" 2>/dev/null || echo "")
+fi
+
+if [ -z "$TEST_KEY_ID" ] || [ "$TEST_KEY_ID" = "None" ]; then
+  info "API Key MCP Access: no key available — skipping"
+else
+  LIST_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/keys/$TEST_KEY_ID/mcp" \
+    -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+  [ "$LIST_CODE" = "200" ] \
+    && pass "GET /v1/keys/:id/mcp → 200" \
+    || fail "GET /v1/keys/:id/mcp → $LIST_CODE (expected 200)"
+
+  MCP_SERVERS=$(aget "/v1/mcp/servers" 2>/dev/null || echo "[]")
+  GRANT_SERVER_ID=$(echo "$MCP_SERVERS" | python3 -c "
+import sys, json
+servers = json.loads(sys.stdin.read())
+print(servers[0]['id'] if servers else '')
+" 2>/dev/null || echo "")
+
+  if [ -z "$GRANT_SERVER_ID" ]; then
+    info "API Key MCP Access: no MCP servers registered — skipping grant/revoke"
+  else
+    # Grant
+    GRANT_RES=$(curl -s -w "\n%{http_code}" "$API/v1/keys/$TEST_KEY_ID/mcp" \
+      -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+      -d "{\"server_id\":\"$GRANT_SERVER_ID\"}" 2>/dev/null || printf "\n000")
+    GRANT_CODE=$(echo "$GRANT_RES" | tail -1)
+    GRANT_BODY=$(echo "$GRANT_RES" | sed '$d')
+    [ "$GRANT_CODE" = "201" ] \
+      && pass "POST /v1/keys/:id/mcp → 201 (grant)" \
+      || fail "POST /v1/keys/:id/mcp → $GRANT_CODE (expected 201)"
+
+    if [ "$GRANT_CODE" = "201" ]; then
+      IS_ALLOWED=$(echo "$GRANT_BODY" | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+print('true' if d.get('is_allowed') is True else 'false')
+" 2>/dev/null || echo "?")
+      [ "$IS_ALLOWED" = "true" ] \
+        && pass "POST /v1/keys/:id/mcp → is_allowed=true in response" \
+        || fail "POST /v1/keys/:id/mcp → is_allowed=$IS_ALLOWED"
+    fi
+
+    # Verify list shows allowed
+    AFTER_LIST=$(aget "/v1/keys/$TEST_KEY_ID/mcp" 2>/dev/null || echo "[]")
+    AFTER_ALLOWED=$(echo "$AFTER_LIST" | python3 -c "
+import sys, json
+entries = json.loads(sys.stdin.read())
+match = next((e for e in entries if e.get('server_id') == '$GRANT_SERVER_ID'), None)
+print('true' if match and match.get('is_allowed') else 'not_found' if not match else 'false')
+" 2>/dev/null || echo "?")
+    [ "$AFTER_ALLOWED" = "true" ] \
+      && pass "GET /v1/keys/:id/mcp after grant → is_allowed=true" \
+      || fail "GET /v1/keys/:id/mcp after grant → $AFTER_ALLOWED"
+
+    # Revoke
+    REVOKE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+      -X DELETE "$API/v1/keys/$TEST_KEY_ID/mcp/$GRANT_SERVER_ID" \
+      -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+    [ "$REVOKE_CODE" = "204" ] \
+      && pass "DELETE /v1/keys/:id/mcp/:server_id → 204 (revoke)" \
+      || fail "DELETE /v1/keys/:id/mcp/:server_id → $REVOKE_CODE (expected 204)"
+
+    # After revoke — not allowed
+    AFTER_REVOKE=$(aget "/v1/keys/$TEST_KEY_ID/mcp" 2>/dev/null || echo "[]")
+    REVOKE_STATUS=$(echo "$AFTER_REVOKE" | python3 -c "
+import sys, json
+entries = json.loads(sys.stdin.read())
+match = next((e for e in entries if e.get('server_id') == '$GRANT_SERVER_ID'), None)
+print('ok' if not match or not match.get('is_allowed') else 'still_allowed')
+" 2>/dev/null || echo "?")
+    [ "$REVOKE_STATUS" = "ok" ] \
+      && pass "GET /v1/keys/:id/mcp after revoke → not allowed" \
+      || fail "GET /v1/keys/:id/mcp after revoke → $REVOKE_STATUS"
+
+    # Idempotent revoke
+    REVOKE2_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+      -X DELETE "$API/v1/keys/$TEST_KEY_ID/mcp/$GRANT_SERVER_ID" \
+      -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+    [ "$REVOKE2_CODE" = "204" ] \
+      && pass "DELETE /v1/keys/:id/mcp/:server_id (idempotent) → 204" \
+      || fail "DELETE /v1/keys/:id/mcp/:server_id (idempotent) → $REVOKE2_CODE"
+  fi
 fi
 
 save_counts

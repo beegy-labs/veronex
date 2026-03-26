@@ -1,6 +1,6 @@
 # Refactor
 
-> ADD Execution | **Last Updated**: 2026-03-25
+> ADD Execution | **Last Updated**: 2026-03-15
 
 ## Trigger
 
@@ -8,34 +8,27 @@ User requests refactoring, or code review identifies structural issues.
 
 ## Read Before Execution
 
-| Domain | Path | When |
-|--------|------|------|
-| Review output | `.add/code-review.md` results | Always |
-| Code patterns (Rust) | `docs/llm/policies/patterns.md` | Rust changes |
-| Code patterns (Frontend) | `docs/llm/policies/patterns-frontend.md` | Frontend changes |
-| Architecture | `docs/llm/policies/architecture.md` | Structural changes |
-| Testing | `docs/llm/policies/testing-strategy.md` | Test refactors |
+| Domain | Path |
+| ------ | ---- |
+| Review output | `.add/code-review.md` results |
+| Patterns | `docs/llm/policies/patterns.md` |
+| Testing | `docs/llm/policies/testing-strategy.md` |
+| Architecture | `docs/llm/policies/architecture.md` |
 
 ## Execution
 
-The refactor workflow is defined in [`best-practices.md`](best-practices.md) Part 2.
-
-Quick summary:
-
 | Step | Action |
-|------|--------|
-| 1 | Define scope — which rule, which module |
-| 2 | Find violations — Part 3 greps (Frontend) or `patterns.md` audit commands (Rust) |
-| 3 | Prioritize — P1 → P2 → P3 |
-| 4 | Fix in rounds — one rule, one file group at a time |
-| 5 | Verify each round — see `.add/README.md` Verification Commands |
-| 6 | CDD sync — route per `.add/README.md` CDD Sync Routing |
+| ---- | ------ |
+| 1 | Capture current behavior with tests |
+| 2 | Refactor in small rounds (fix -> verify -> repeat) |
+| 3 | Run full test suite after each round |
+| 4 | CDD feedback — run `.add/cdd-feedback.md` if new patterns confirmed |
 
 ## Rules
 
 | Rule | Detail |
-|------|--------|
-| Behavior-preserving | No logic changes — refactor only |
-| Round-based | Verify after each round |
-| Scope limit | No refactoring outside requested modules |
-| Tests must pass | Green state after all rounds |
+| ---- | ------ |
+| Behavior-preserving | No logic changes during refactor |
+| Round-based | Small steps, verify after each |
+| Tests must pass | Every round ends with green tests |
+| CDD feedback | Only if new stable pattern confirmed — not for every refactor |

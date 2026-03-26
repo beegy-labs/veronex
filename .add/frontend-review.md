@@ -35,7 +35,7 @@ User requests frontend code review, optimization, design token audit, i18n audit
 | 5 | For i18n: update `en.json`, `ko.json`, `ja.json` simultaneously |
 | 6 | Run `npx tsc --noEmit` — zero errors required |
 | 7 | If N rounds requested: repeat steps 2–6 until N rounds consumed or no violations remain |
-| 8 | CDD sync — update the relevant doc if a new pattern is established |
+| 8 | CDD feedback — run `.add/cdd-feedback.md` if a new pattern is confirmed (target doc table below) |
 
 ### Agent Scope
 
