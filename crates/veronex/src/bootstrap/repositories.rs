@@ -39,6 +39,7 @@ use veronex::infrastructure::outbound::persistence::gemini_model_repository::Pos
 use veronex::infrastructure::outbound::persistence::gemini_policy_repository::PostgresGeminiPolicyRepository;
 use veronex::infrastructure::outbound::persistence::gemini_sync_config::PostgresGeminiSyncConfigRepository;
 use veronex::infrastructure::outbound::persistence::gpu_server_registry::PostgresGpuServerRegistry;
+use veronex::infrastructure::outbound::persistence::async_write_job_repository::AsyncWriteJobRepository;
 use veronex::infrastructure::outbound::persistence::job_repository::PostgresJobRepository;
 use veronex::infrastructure::outbound::persistence::lab_settings_repository::PostgresLabSettingsRepository;
 use veronex::infrastructure::outbound::persistence::model_capacity_repository::PostgresModelCapacityRepository;
@@ -61,7 +62,7 @@ use super::config::AppConfig;
 pub struct Repositories {
     pub account_repo: Arc<dyn AccountRepository>,
     pub api_key_repo: Arc<dyn ApiKeyRepository>,
-    pub job_repo: Arc<PostgresJobRepository>,
+    pub job_repo: Arc<dyn veronex::application::ports::outbound::job_repository::JobRepository>,
     pub provider_registry: Arc<dyn LlmProviderRegistry>,
     pub gpu_server_registry: Arc<dyn GpuServerRegistry>,
     pub gemini_policy_repo: Arc<dyn GeminiPolicyRepository>,
@@ -239,7 +240,12 @@ pub async fn wire_repositories(
         Arc::new(CachingApiKeyRepo::new(Arc::new(
             PostgresApiKeyRepository::new(pg_pool.clone()),
         )));
-    let job_repo = Arc::new(PostgresJobRepository::new(pg_pool.clone()));
+    let job_repo: Arc<dyn veronex::application::ports::outbound::job_repository::JobRepository> =
+        Arc::new(AsyncWriteJobRepository::new(
+            Arc::new(PostgresJobRepository::new(pg_pool.clone())),
+            65_536, // channel capacity: ~65ms buffer at 1M TPS
+            256,    // batch size: ops flushed concurrently per writer tick
+        ));
     let provider_registry: Arc<dyn LlmProviderRegistry> = Arc::new(CachingProviderRegistry::new(
         Arc::new(PostgresProviderRegistry::new(pg_pool.clone(), config.gemini_encryption_key)),
         veronex::domain::constants::PROVIDER_REGISTRY_CACHE_TTL,

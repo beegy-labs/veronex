@@ -37,6 +37,7 @@ pub mod gemini_sync_config;
 pub mod provider_registry;
 pub mod database;
 pub mod gpu_server_registry;
+pub mod async_write_job_repository;
 pub mod job_repository;
 pub mod ollama_model_repository;
 pub mod ollama_sync_job_repository;
