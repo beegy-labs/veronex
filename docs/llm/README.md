@@ -82,6 +82,7 @@
 | Distributed Ops | `infra/distributed-ops.md` | cross-instance pub/sub, TPM accounting, crash recovery, Valkey key registry, wiring |
 | Build Optimization | `infra/build-optimization.md` | mold, cargo-chef, hakari, nextest, Docker cache mounts, cargo profiles |
 | Crate Structure | `infra/crate-structure.md` | workspace members, dependency rules, veronex, veronex-agent, veronex-analytics, veronex-mcp |
+| Hot-Path Caching | `infra/hot-path-caching.md` | TtlCache wrappers, Valkey ACL cache, inference hot-path SQL audit, long-term roadmap |
 
 ---
 
@@ -200,6 +201,7 @@
 | Session grouping | `inference/session-grouping.md` + `frontend/pages/jobs.md` |
 | Job dashboard API | `inference/job-api.md` |
 | Rust performance / allocator | `research/backend/rust-perf-2026.md` |
+| Hot-path DB 최적화 / 캐싱 전략 | `infra/hot-path-caching.md` |
 | Add application constant | `policies/architecture.md` — Domain constants live in `domain/constants.rs` |
 | Testing strategy / purity | `policies/testing-strategy.md` — layer responsibility, decision checklist |
 | Build / compile speed | `infra/build-optimization.md` — mold, hakari, cargo-chef, profiles |

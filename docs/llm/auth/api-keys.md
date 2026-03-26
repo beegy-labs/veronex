@@ -21,9 +21,14 @@
 | `crates/veronex/src/domain/entities/api_key.rs` | `ApiKey` entity |
 | `crates/veronex/src/application/ports/outbound/api_key_repository.rs` | `ApiKeyRepository` trait |
 | `crates/veronex/src/infrastructure/outbound/persistence/api_key_repository.rs` | `PostgresApiKeyRepository` impl |
+| `crates/veronex/src/infrastructure/outbound/persistence/caching_api_key_repo.rs` | `CachingApiKeyRepo` — TtlCache 60s wrapper (hot-path) |
 | `crates/veronex/src/infrastructure/inbound/http/key_handlers.rs` | CRUD handlers |
 | `crates/veronex/src/infrastructure/inbound/http/middleware/rate_limiter.rs` | RPM/TPM middleware |
 | `crates/veronex/src/main.rs` | Bootstrap key creation on startup (planned) |
+
+`api_key_repo` in `AppState` is wired as `CachingApiKeyRepo(PostgresApiKeyRepository)`.
+`get_by_hash()` (hot path) hits in-memory cache; all writes call `invalidate_all()`.
+→ See `infra/hot-path-caching.md` for full caching strategy.
 
 ---
 

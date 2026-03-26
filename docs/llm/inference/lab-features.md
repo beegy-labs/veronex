@@ -125,7 +125,12 @@ pub trait LabSettingsRepository: Send + Sync {
 }
 ```
 
-Implementation: `PostgresLabSettingsRepository` in `infrastructure/outbound/persistence/lab_settings_repository.rs`
+Implementation: `CachingLabSettingsRepo(PostgresLabSettingsRepository)` — TtlCache 30s wrapper.
+`get()` hits in-memory cache (hot path: every image/MCP request). `update()` invalidates cache.
+→ See `infra/hot-path-caching.md` for full caching strategy.
+
+Raw impl: `infrastructure/outbound/persistence/lab_settings_repository.rs`
+Cache wrapper: `infrastructure/outbound/persistence/caching_lab_settings_repo.rs`
 
 AppState field: `lab_settings_repo: Arc<dyn LabSettingsRepository>`
 
