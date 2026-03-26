@@ -60,6 +60,7 @@ Quick reference:
 | Design token / nav / DataTable | `docs/llm/frontend/design-system.md` |
 | Component pattern (ConfirmDialog, 2-Step Verify) | `docs/llm/frontend/design-system-components-patterns.md` |
 | DB schema | `docs/llm/` affected domain |
+| **Control flow / algorithm change** | **`docs/llm/flows/{subsystem}.md`** |
 
 ## File Ownership
 

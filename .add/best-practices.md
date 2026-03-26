@@ -39,8 +39,11 @@ Two workflows:
 | `docs/llm/frontend/design-system-i18n.md` | i18n config, timezone, date formatters |
 | `docs/llm/frontend/charts.md` | Recharts patterns, formatters, SSOT for chart theme |
 | `docs/llm/frontend/pages/{page}.md` | Per-page architecture, components, types, i18n keys, known violations |
+| `docs/llm/flows/{subsystem}.md` | Control flow and algorithm for one subsystem — read before implementing, update when logic changes |
 
 Rule: if a pattern applies across pages → `policies/patterns-frontend.md`. If it's page-specific → `pages/{page}.md`. Never duplicate the same rule in both.
+
+Rule: flows docs are algorithm contracts. When logic in a subsystem changes, update the corresponding `flows/` doc in the same commit.
 
 ### Steps
 

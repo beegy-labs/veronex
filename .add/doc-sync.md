@@ -37,6 +37,7 @@
 | 5 | Remove duplicate content across docs |
 | 6 | Check line limits — split if >30 lines over limit (`token-optimization.md#split-guidelines`) |
 | 7 | Update `docs/llm/README.md` index if docs added/removed |
+| 8 | If control flow changed — update `docs/llm/flows/{subsystem}.md` to match code |
 
 ## Rules
 

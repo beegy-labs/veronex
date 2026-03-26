@@ -119,6 +119,23 @@
 
 ---
 
+## Logic Flows (`flows/`)
+
+> Algorithm reference — read before implementing logic in any subsystem.
+> Flowcharts are the source of truth for control flow; code must match.
+
+| Document | Path | Keywords |
+|----------|------|---------|
+| Index | `flows/README.md` | all subsystems overview |
+| Inference Lifecycle | `flows/inference.md` | submit, queue, dispatch, VRAM reserve, stream, cleanup |
+| Authentication | `flows/auth.md` | API key BLAKE2b, JWT HS256, InferCaller dual-auth, rate limit, MCP ACL, provider ACL |
+| MCP Agentic Loop | `flows/mcp.md` | run_loop, execute_one, ACL, circuit breaker, result cache, loop detect |
+| Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, placement planner, scale-out/in, circuit breaker |
+| Thermal Protection | `flows/thermal.md` | Normal→Soft→Hard→Cooldown→RampUp, forced drain, 60s/90s watchdog |
+| Agent Scrape Cycle | `flows/agent.md` | scrape_cycle, MCP heartbeat, node-exporter, ollama, OTLP, sharding |
+
+---
+
 ## Research (`research/`)
 
 | Document | Path | Status |
@@ -160,9 +177,10 @@
 | Account RBAC | `auth/jwt-sessions.md` + `frontend/pages/accounts.md` |
 | API keys / rate limiting | `auth/api-keys.md` + `frontend/pages/keys.md` |
 | Security (CORS, crypto) | `auth/security.md` |
-| VRAM pool / AIMD / thermal | `inference/capacity.md` |
+| VRAM pool / AIMD / thermal | `inference/capacity.md` + `flows/scheduler.md` + `flows/thermal.md` |
 | Lab feature flag | `inference/lab-features.md` |
-| MCP integration / orchestrator model | `inference/mcp.md` |
+| MCP integration / orchestrator model | `inference/mcp.md` + `flows/mcp.md` |
+| Any subsystem logic / control flow | `flows/{subsystem}.md` |
 | veronex-mcp server / add a tool | `infra/crate-structure.md` (veronex-mcp Layout) |
 | OTel pipeline | `infra/otel-pipeline.md` + `infra/otel-pipeline-ops.md` + `research/infrastructure/observability.md` |
 | Kubernetes / Helm | `infra/deploy.md` |
