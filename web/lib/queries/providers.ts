@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { STALE_TIME_SLOW, STALE_TIME_FAST, REFETCH_INTERVAL_FAST, withJitter } from '@/lib/constants'
+import { STALE_TIME_SLOW, STALE_TIME_FAST, STALE_TIME_LIVE, REFETCH_INTERVAL_FAST, withJitter } from '@/lib/constants'
 
 // ── LLM providers list ─────────────────────────────────────────────────────────
 
@@ -57,8 +57,14 @@ export const ollamaModelsQuery = (
 export const ollamaSyncStatusQuery = queryOptions({
   queryKey: ['ollama-sync-status'] as const,
   queryFn: () => api.ollamaSyncStatus(),
-  staleTime: 4_900,
+  staleTime: STALE_TIME_LIVE,
   retry: false,
+})
+
+export const globalModelSettingsQuery = queryOptions({
+  queryKey: ['global-model-settings'] as const,
+  queryFn: () => api.globalModelSettings(),
+  staleTime: STALE_TIME_SLOW,
 })
 
 // ── Query key constants (for invalidation) ──────────────────────────────────

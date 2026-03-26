@@ -223,6 +223,7 @@ async fn check_tpm(
 mod tests {
     use super::*;
 
+    use crate::domain::entities::ApiKey;
     use crate::domain::enums::{KeyTier, KeyType};
 
     #[test]

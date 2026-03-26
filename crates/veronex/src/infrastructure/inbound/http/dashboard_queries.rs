@@ -115,7 +115,8 @@ pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, A
          FROM inference_jobs
          WHERE source NOT IN ('test', 'analyzer')
            AND created_at >= now() - interval '7 days'
-         GROUP BY status",
+         GROUP BY status
+         LIMIT 10",
     )
     .fetch_all(pool)
     .await?;
@@ -409,7 +410,8 @@ pub(super) async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<Pe
          FROM inference_jobs
          WHERE created_at >= NOW() - make_interval(hours => $1)
          GROUP BY DATE_TRUNC('hour', created_at)
-         ORDER BY hour"
+         ORDER BY hour
+         LIMIT 8760"
     )
     .bind(hours_i32)
     .fetch_all(pool)

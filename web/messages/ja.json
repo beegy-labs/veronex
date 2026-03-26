@@ -16,7 +16,8 @@
     "gemini": "Gemini",
     "accounts": "アカウント",
     "audit": "監査ログ",
-    "capacity": "同時実行制御"
+    "capacity": "同時実行制御",
+    "mcp": "MCPサーバー"
   },
   "common": {
     "all": "すべて",
@@ -876,6 +877,9 @@
     "enabled": "有効",
     "deleteConfirm": "MCPサーバー「{{name}}」を削除しますか？アクティブなセッションはすべて切断されます。",
     "slugHint": "名前から自動生成されます。英小文字・数字・アンダースコアのみ使用できます。",
+    "namePlaceholder": "My MCP Server",
+    "slugPlaceholder": "my_mcp_server",
+    "urlPlaceholder": "https://mcp.example.com",
     "orchestratorModel": "オーケストレーターモデル",
     "orchestratorModelDesc": "MCPツール呼び出しループに使用するOllamaモデルです。リクエストのmodelフィールドを上書きします。",
     "orchestratorModelNone": "リクエストモデルを使用（デフォルト）",
@@ -888,6 +892,8 @@
     "statsCacheHit": "キャッシュ",
     "statsAvgLatency": "平均レイテンシ",
     "statsNoData": "MCPの呼び出し記録がありません。",
-    "statsLoadError": "MCP統計の読み込みに失敗しました。"
+    "statsLoadError": "MCP統計の読み込みに失敗しました。",
+    "status": "ステータス",
+    "deleteTitle": "MCPサーバーを削除"
   }
 }

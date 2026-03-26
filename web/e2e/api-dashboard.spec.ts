@@ -77,15 +77,17 @@ test.describe('API: Dashboard & Inference @smoke', () => {
 
       // Patch — toggle gemini_function_calling and revert
       const current = settings.gemini_function_calling
-      const patchRes = await api.patch('/v1/dashboard/lab', {
-        gemini_function_calling: !current,
-      })
-      expect(patchRes.ok()).toBeTruthy()
-
-      // Revert
-      await api.patch('/v1/dashboard/lab', {
-        gemini_function_calling: current,
-      })
+      try {
+        const patchRes = await api.patch('/v1/dashboard/lab', {
+          gemini_function_calling: !current,
+        })
+        expect(patchRes.ok()).toBeTruthy()
+      } finally {
+        // Always revert to original state
+        await api.patch('/v1/dashboard/lab', {
+          gemini_function_calling: current,
+        })
+      }
     })
   })
 })

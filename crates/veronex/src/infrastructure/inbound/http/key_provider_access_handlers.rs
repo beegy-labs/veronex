@@ -1,10 +1,10 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSettingsManage;
 use super::error::AppError;
-use super::handlers::parse_uuid;
 use super::state::AppState;
 
 #[derive(Serialize)]
@@ -22,10 +22,9 @@ pub struct SetAccessBody {
 pub async fn list_key_provider_access(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
-    Path(key_id): Path<String>,
+    Path(key_id): Path<Uuid>,
 ) -> Result<Json<Vec<ProviderAccessEntry>>, AppError> {
-    let uuid = parse_uuid(&key_id)?;
-    let rows = state.api_key_provider_access_repo.list(uuid).await?;
+    let rows = state.api_key_provider_access_repo.list(key_id).await?;
     Ok(Json(rows.into_iter().map(|(pid, allowed)| ProviderAccessEntry {
         provider_id: pid.to_string(),
         is_allowed: allowed,
@@ -36,14 +35,12 @@ pub async fn list_key_provider_access(
 pub async fn set_key_provider_access(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
-    Path((key_id, provider_id)): Path<(String, String)>,
+    Path((key_id, provider_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<SetAccessBody>,
 ) -> Result<Json<ProviderAccessEntry>, AppError> {
-    let key_uuid = parse_uuid(&key_id)?;
-    let provider_uuid = parse_uuid(&provider_id)?;
-    state.api_key_provider_access_repo.set_access(key_uuid, provider_uuid, body.is_allowed).await?;
+    state.api_key_provider_access_repo.set_access(key_id, provider_id, body.is_allowed).await?;
     Ok(Json(ProviderAccessEntry {
-        provider_id,
+        provider_id: provider_id.to_string(),
         is_allowed: body.is_allowed,
     }))
 }

@@ -128,4 +128,9 @@ failure_reason: string | null,
  * S3 keys for stored WebP images (full + thumbnail pairs).
  * Populated after async image upload completes. Persisted in DB.
  */
-image_keys: Array<string> | null, };
+image_keys: Array<string> | null, 
+/**
+ * Groups all inference_jobs belonging to one MCP agentic loop run.
+ * NULL for non-MCP requests (single-turn, no tool calls).
+ */
+mcp_loop_id: string | null, };

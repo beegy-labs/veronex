@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useOptimistic } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { OllamaSyncJob } from '@/lib/types'
-import { ollamaSyncStatusQuery, ollamaModelsQuery } from '@/lib/queries'
+import { ollamaSyncStatusQuery, ollamaModelsQuery, globalModelSettingsQuery } from '@/lib/queries'
 import { RotateCcw, Search, Cpu, Server, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,6 +21,26 @@ export { OllamaCapacitySection, ThermalBadge, VramBar } from './ollama-capacity-
 
 export const PAGE_SIZE = 10
 const MODEL_LIMIT = 20
+
+// ── Global model toggle with optimistic update ─────────────────────────────────
+
+function GlobalModelToggle({ modelName, isEnabled }: { modelName: string; isEnabled: boolean }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [optimistic, setOptimistic] = useOptimistic(isEnabled, (_, v: boolean) => v)
+  const mutation = useMutation({
+    mutationFn: (enabled: boolean) => api.setGlobalModelEnabled(modelName, enabled),
+    onError: () => setOptimistic(isEnabled),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['global-model-settings'] }),
+  })
+  return (
+    <Switch
+      checked={optimistic}
+      onCheckedChange={(checked) => { setOptimistic(checked); mutation.mutate(checked) }}
+      aria-label={t('providers.ollama.modelToggle', { model: modelName })}
+    />
+  )
+}
 
 // ── Ollama Global Sync Section ─────────────────────────────────────────────────
 
@@ -43,10 +63,7 @@ export function OllamaSyncSection() {
 
   const { data: ollamaModelsData } = useQuery(ollamaModelsQuery({ search: debouncedSearch, page, limit: MODEL_LIMIT }))
 
-  const { data: globalSettings } = useQuery({
-    queryKey: ['global-model-settings'],
-    queryFn: () => api.globalModelSettings(),
-  })
+  const { data: globalSettings } = useQuery(globalModelSettingsQuery)
 
   const globalDisabledSet = useMemo(
     () => new Set<string>((globalSettings ?? []).filter(s => !s.is_enabled).map(s => s.model_name)),
@@ -54,12 +71,6 @@ export function OllamaSyncSection() {
   )
 
   const canManageModels = hasPermission('model_manage')
-
-  const toggleGlobalMutation = useMutation({
-    mutationFn: ({ model, enabled }: { model: string; enabled: boolean }) =>
-      api.setGlobalModelEnabled(model, enabled),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['global-model-settings'] }),
-  })
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncOllamaModels(),
@@ -158,14 +169,7 @@ export function OllamaSyncSection() {
                         </Badge>
                       )}
                       {canManageModels && (
-                        <Switch
-                          checked={!isDisabled}
-                          onCheckedChange={(checked) =>
-                            toggleGlobalMutation.mutate({ model: m.model_name, enabled: checked })
-                          }
-                          disabled={toggleGlobalMutation.isPending}
-                          aria-label={t('providers.ollama.modelToggle', { model: m.model_name })}
-                        />
+                        <GlobalModelToggle modelName={m.model_name} isEnabled={!isDisabled} />
                       )}
                     </div>
                   )

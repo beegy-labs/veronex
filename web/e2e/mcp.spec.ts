@@ -41,9 +41,11 @@ test.describe('MCP Servers', () => {
     await expect(dialog).not.toBeVisible({ timeout: T_SHORT })
   })
 
-  test('register and delete MCP server', async ({ page }) => {
+  test('register and delete MCP server', async ({ page, request }) => {
     const name = `test-mcp-${testId()}`
     const url = 'http://localhost:3100'
+    const tokens = await apiLogin(request)
+    const api = authedRequest(request, tokens.accessToken)
 
     // Open register dialog
     const addButton = page.getByRole('button', { name: /add|register|connect/i }).first()
@@ -62,12 +64,22 @@ test.describe('MCP Servers', () => {
     // Verify server appears in table
     await expect(page.getByText(name)).toBeVisible({ timeout: T_DEFAULT })
 
-    // Delete the server — accept the native confirm() dialog
-    page.once('dialog', (dialog) => dialog.accept())
-    const row = page.locator('tr', { hasText: name })
-    await row.getByRole('button', { name: /delete/i }).click()
+    try {
+      // Delete the server via ConfirmDialog
+      const row = page.locator('tr', { hasText: name })
+      await row.getByRole('button', { name: /delete/i }).click()
+      const confirmDialog = page.getByRole('dialog')
+      await expect(confirmDialog).toBeVisible({ timeout: T_SHORT })
+      await confirmDialog.getByRole('button', { name: /delete|confirm/i }).last().click()
 
-    await expect(page.getByText(name)).not.toBeVisible({ timeout: T_DEFAULT })
+      await expect(page.getByText(name)).not.toBeVisible({ timeout: T_DEFAULT })
+    } finally {
+      // Always cleanup via API in case UI deletion fails
+      const listRes = await api.get('/v1/mcp/servers')
+      const servers: Array<{ id: string; name: string }> = await listRes.json()
+      const created = servers.find((s) => s.name === name)
+      if (created) await api.delete(`/v1/mcp/servers/${created.id}`)
+    }
   })
 
   test('registered server shows status and tool count in table', async ({ page, request }) => {
@@ -86,31 +98,33 @@ test.describe('MCP Servers', () => {
     await dialog.getByRole('button', { name: /register/i }).last().click()
     await expect(dialog).not.toBeVisible({ timeout: T_DEFAULT })
 
-    // Row appears in table
-    const row = page.locator('tr', { hasText: name })
-    await expect(row).toBeVisible({ timeout: T_DEFAULT })
+    try {
+      // Row appears in table
+      const row = page.locator('tr', { hasText: name })
+      await expect(row).toBeVisible({ timeout: T_DEFAULT })
 
-    // Status cell shows "Online" or "Offline"
-    await expect(row.getByText(/online|offline/i)).toBeVisible({ timeout: T_DEFAULT })
+      // Status cell shows "Online" or "Offline"
+      await expect(row.getByText(/online|offline/i)).toBeVisible({ timeout: T_DEFAULT })
 
-    // Tool count cell shows "<N> tools"
-    await expect(row.getByText(/\d+\s+tools/i)).toBeVisible({ timeout: T_DEFAULT })
+      // Tool count cell shows "<N> tools"
+      await expect(row.getByText(/\d+\s+tools/i)).toBeVisible({ timeout: T_DEFAULT })
 
-    // If server comes online within T_LONG, verify tool count > 0
-    const statusCell = row.getByText(/online/i)
-    const isOnline = await statusCell.isVisible({ timeout: T_LONG }).catch(() => false)
-    if (isOnline) {
-      // tool_count should be > 0 for a live weather-mcp server
-      const toolText = await row.getByText(/\d+\s+tools/i).textContent()
-      const toolCount = parseInt(toolText ?? '0')
-      expect(toolCount).toBeGreaterThan(0)
+      // If server comes online within T_LONG, verify tool count > 0
+      const statusCell = row.getByText(/online/i)
+      const isOnline = await statusCell.isVisible({ timeout: T_LONG }).catch(() => false)
+      if (isOnline) {
+        // tool_count should be > 0 for a live weather-mcp server
+        const toolText = await row.getByText(/\d+\s+tools/i).textContent()
+        const toolCount = parseInt(toolText ?? '0')
+        expect(toolCount).toBeGreaterThan(0)
+      }
+    } finally {
+      // Always cleanup via API
+      const listRes = await api.get('/v1/mcp/servers')
+      const servers: Array<{ id: string; name: string }> = await listRes.json()
+      const created = servers.find((s) => s.name === name)
+      if (created) await api.delete(`/v1/mcp/servers/${created.id}`)
     }
-
-    // Cleanup via API
-    const listRes = await api.get('/v1/mcp/servers')
-    const servers: Array<{ id: string; name: string }> = await listRes.json()
-    const created = servers.find((s) => s.name === name)
-    if (created) await api.delete(`/v1/mcp/servers/${created.id}`)
   })
 
   test('enable/disable toggle works', async ({ page }) => {

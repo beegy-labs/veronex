@@ -877,6 +877,9 @@
     "enabled": "Enabled",
     "deleteConfirm": "Delete MCP server \"{{name}}\"? This will disconnect all active sessions.",
     "slugHint": "Auto-generated from name. Letters, numbers, underscores only.",
+    "namePlaceholder": "My MCP Server",
+    "slugPlaceholder": "my_mcp_server",
+    "urlPlaceholder": "https://mcp.example.com",
     "orchestratorModel": "Orchestrator Model",
     "orchestratorModelDesc": "Ollama model used for MCP tool-call loops. Overrides the model field in each request.",
     "orchestratorModelNone": "Use request model (default)",
@@ -889,6 +892,8 @@
     "statsCacheHit": "Cache",
     "statsAvgLatency": "Avg Latency",
     "statsNoData": "No MCP calls recorded yet.",
-    "statsLoadError": "Failed to load MCP statistics."
+    "statsLoadError": "Failed to load MCP statistics.",
+    "status": "Status",
+    "deleteTitle": "Delete MCP Server"
   }
 }

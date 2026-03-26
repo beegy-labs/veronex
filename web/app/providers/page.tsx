@@ -9,6 +9,7 @@ import type { Provider } from '@/lib/types'
 import { useTranslation } from '@/i18n'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { PROVIDER_OLLAMA } from '@/lib/constants'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { EditModal, RegisterModal } from './components/modals'
 import { OllamaTab } from './components/ollama-tab'
 import { GeminiTab } from './components/gemini-tab'
@@ -26,6 +27,7 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
 
   const [registerProviderType, setRegisterProviderType] = useState<'ollama' | 'gemini' | null>(null)
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
 
   // Servers needed for RegisterModal/EditModal dropdowns
   const { data: serversData } = useQuery(serversQuery())
@@ -82,7 +84,7 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
           onSync={(id) => syncProviderMutation.mutate(id)}
           syncPending={syncProviderMutation.isPending}
           syncVars={syncProviderMutation.variables}
-          onDelete={(id, name) => { if (confirm(t('providers.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
+          onDelete={(id, name) => setDeleteTarget({ id, name })}
           deleteIsPending={deleteMutation.isPending}
         />
       )}
@@ -98,7 +100,7 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
           syncPending={syncProviderMutation.isPending}
           onToggleActive={(b) => toggleActiveMutation.mutate(b)}
           toggleActivePending={toggleActiveMutation.isPending}
-          onDelete={(id, name) => { if (confirm(t('providers.deleteConfirm', { name }))) deleteMutation.mutate(id) }}
+          onDelete={(id, name) => setDeleteTarget({ id, name })}
           deleteIsPending={deleteMutation.isPending}
         />
       )}
@@ -115,6 +117,17 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
           provider={editingProvider}
           servers={servers ?? []}
           onClose={() => setEditingProvider(null)}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmDialog
+          open
+          title={t('providers.deleteProvider')}
+          description={t('providers.deleteConfirm', { name: deleteTarget.name })}
+          confirmLabel={deleteMutation.isPending ? t('common.deleting') : t('common.delete')}
+          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
+          onClose={() => setDeleteTarget(null)}
+          isLoading={deleteMutation.isPending}
         />
       )}
     </div>

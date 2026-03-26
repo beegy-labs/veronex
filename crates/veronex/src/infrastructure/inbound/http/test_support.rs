@@ -16,6 +16,7 @@ use crate::application::ports::outbound::ollama_sync_job_repository::{OllamaSync
 use crate::application::ports::outbound::provider_vram_budget_repository::{ProviderVramBudget, ProviderVramBudgetRepository};
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::domain::entities::{Account, ApiKey, GeminiRateLimitPolicy, GpuServer, LlmProvider, Session};
+use crate::infrastructure::inbound::http::middleware::infer_auth::InferCaller;
 use crate::domain::enums::{JobStatus, KeyTier, KeyType, LlmProviderStatus};
 use crate::domain::errors::DomainError;
 use crate::domain::value_objects::{JobId, StreamToken};
@@ -290,7 +291,7 @@ impl LabSettingsRepository for MockLabSettingsRepo {
     async fn get(&self) -> Result<LabSettings> {
         Ok(LabSettings::default())
     }
-    async fn update(&self, _gemini_function_calling: Option<bool>, _max_images: Option<i32>, _max_image_bytes: Option<i32>) -> Result<LabSettings> {
+    async fn update(&self, _gemini_function_calling: Option<bool>, _max_images: Option<i32>, _max_image_bytes: Option<i32>, _mcp_orchestrator_model: Option<Option<String>>) -> Result<LabSettings> {
         Ok(LabSettings::default())
     }
 }
@@ -378,8 +379,8 @@ pub(crate) fn make_app() -> axum::Router {
         mcp_bridge: None,
         login_rate_limit: 0,
     };
-    // Inject a fake ApiKey extension so handlers that extract it work in tests.
+    // Inject a fake InferCaller extension so handlers that extract it work in tests.
     router::build_api_router()
-        .layer(axum::Extension(fake_key))
+        .layer(axum::Extension(InferCaller::ApiKey(fake_key)))
         .with_state(state)
 }

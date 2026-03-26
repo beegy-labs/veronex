@@ -94,7 +94,13 @@ async fn store_models_cache(pool: &fred::clients::Pool, key: &str, models: &[Str
 async fn load_models_cache(pool: &fred::clients::Pool, key: &str) -> Option<Vec<String>> {
     use fred::prelude::*;
 
-    let cached: Option<String> = pool.get(key).await.unwrap_or(None);
+    let cached: Option<String> = match pool.get(key).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(key, error = %e, "models cache: Valkey get failed");
+            None
+        }
+    };
     let json_str = cached?;
     serde_json::from_str::<Vec<String>>(&json_str).ok()
 }

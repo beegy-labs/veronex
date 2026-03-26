@@ -1,6 +1,6 @@
 # Testing Strategy
 
-> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational
+> SSOT | **Last Updated**: 2026-03-25 | Classification: Operational
 
 ## Methodology: Testing Trophy + Contract Testing
 
@@ -56,9 +56,66 @@ If E2E breaks on internal function change → **test design flaw** (layer violat
 
 | Tool | Purpose | Config |
 |------|---------|--------|
-| vitest | Unit + Integration | `pool: threads`, `fileParallelism: true` |
+| vitest | Unit + Integration | `maxWorkers: N`, `fileParallelism: true` (v4+) |
 | Playwright | E2E | `fullyParallel: true`, CI workers=4 |
 | vitest-openapi | API schema validation | OpenAPI spec based |
+
+### vitest v4 Config Changes
+
+**Pool options moved to top level** (`poolOptions` removed):
+
+```ts
+// BEFORE (v3)
+poolOptions: {
+  threads: { maxThreads: 4, singleThread: true }
+}
+
+// AFTER (v4)
+maxWorkers: 4,
+isolate: false,   // replaces singleThread
+```
+
+**Environment assignment via `projects`** (`environmentMatchGlobs` removed):
+
+```ts
+// BEFORE (v3)
+environmentMatchGlobs: [['**/*.spec.ts', 'jsdom']]
+
+// AFTER (v4)
+projects: [
+  { test: { include: ['**/*.spec.ts'], environment: 'jsdom' } }
+]
+```
+
+**Test options argument position changed**:
+
+```ts
+// BEFORE (v3)
+test('name', () => {}, { retry: 2 })
+
+// AFTER (v4)
+test('name', { retry: 2 }, () => {})
+```
+
+**`done` callback removed** — use `async`/`await`:
+
+```ts
+// BEFORE
+test('async', (done) => { done() })
+
+// AFTER
+test('async', async () => { await something() })
+```
+
+**Mock behavior changes**:
+- `vi.restoreAllMocks()` no longer resets `vi.fn()` — add `vi.clearAllMocks()` explicitly if needed
+- Mock default name changed from `'spy'` → `'vi.fn()'` — update any snapshots asserting on mock names
+- Module factory must return an export object: `vi.mock('./x', () => ({ default: 'val' }))` (not bare value)
+
+**Reporter changes**:
+- `basic` reporter removed → use `{ reporter: 'default', summary: false }`
+
+**Minimum requirements**: Node.js >= 20, Vite >= 6
 
 ### Bash E2E
 

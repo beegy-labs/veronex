@@ -155,7 +155,7 @@ export function NavigationProgressProvider({ children }: { children: React.React
   const { pct, phase, start, finish, done, reset } = useProgressMachine()
 
   const rawId = useId()
-  const safeId = rawId.replace(/:/g, '')
+  const safeId = rawId.replace(/[^a-zA-Z0-9]/g, '')
   const trackId = `vx-track-${safeId}`
   const fillId  = `vx-fill-${safeId}`
 

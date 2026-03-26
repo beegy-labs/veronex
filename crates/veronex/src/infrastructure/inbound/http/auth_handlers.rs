@@ -72,7 +72,8 @@ pub(crate) async fn resolve_roles_for_account(pg: &sqlx::PgPool, account_id: Uui
         "SELECT r.name, r.permissions, r.menus, r.is_system
          FROM roles r
          JOIN account_roles ar ON ar.role_id = r.id
-         WHERE ar.account_id = $1"
+         WHERE ar.account_id = $1
+         LIMIT 50"
     )
     .bind(account_id)
     .fetch_all(pg)
@@ -295,9 +296,15 @@ pub async fn login(
             use fred::prelude::*;
             let ip = addr.ip().to_string();
             let key = valkey_keys::login_attempts(&ip);
-            let count: i64 = pool.incr_by(&key, 1).await.unwrap_or(1);
+            let count: i64 = pool.incr_by(&key, 1).await.unwrap_or_else(|e| {
+                tracing::warn!(ip, error = %e, "login rate-limit: incr_by failed, defaulting to 1");
+                1
+            });
             if count == 1 {
-                let _: bool = pool.expire(&key, 300, None).await.unwrap_or(false);
+                let _: bool = pool.expire(&key, 300, None).await.unwrap_or_else(|e| {
+                    tracing::warn!(ip, error = %e, "login rate-limit: expire failed, key may not expire");
+                    false
+                });
             }
             if count > state.login_rate_limit as i64 {
                 return Err(AppError::TooManyRequests { retry_after: 300 });

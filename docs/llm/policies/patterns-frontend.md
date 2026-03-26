@@ -1,6 +1,6 @@
 # Code Patterns: Frontend — 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-03-26 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Next.js 16 · React 19 · TanStack Query v5 · Tailwind v4 · Zod
 > Rust patterns -> `policies/patterns.md`
 
@@ -43,8 +43,170 @@ All `staleTime` and `refetchInterval` values come from `web/lib/constants.ts`:
 | `STALE_TIME_FAST` | 29s | dashboard stats, capacity, providers |
 | `STALE_TIME_HISTORY` | 30min | long-window historical queries (metrics history) |
 | `REFETCH_INTERVAL_FAST` | 30s | dashboard stats, capacity, providers |
+| `REFETCH_INTERVAL_HISTORY` | 5min | background refresh for historical data |
 
 Never hardcode timing values in query definitions — import from constants.
+
+### `withJitter()` — Polling Storm Prevention
+
+Use `withJitter()` on every `refetchInterval` to prevent synchronized polling bursts when many browser tabs open simultaneously:
+
+```typescript
+import { REFETCH_INTERVAL_FAST, withJitter } from '@/lib/constants'
+
+export const mcpServersQuery = () => queryOptions({
+  queryKey: ['mcp-servers'],
+  queryFn: () => api.mcpServers(),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST), // ✓ jittered
+  refetchIntervalInBackground: false,
+})
+
+// Wrong — all tabs fire at exactly the same time
+refetchInterval: REFETCH_INTERVAL_FAST  // ✗
+```
+
+`withJitter(base, maxJitter=5_000)` returns `base + U[0, maxJitter)` ms — always ≥ base.
+
+### `queryOptions()` — Object vs Factory Function
+
+Use a **plain object** when the query has no dynamic parameters:
+
+```typescript
+// Plain object — use when queryKey has no variables
+export const dashboardStatsQuery = queryOptions({
+  queryKey: ['dashboard', 'stats'],
+  queryFn: () => api.stats(),
+  staleTime: STALE_TIME_FAST,
+})
+
+// Usage: useQuery(dashboardStatsQuery)  — no call parens
+```
+
+Use a **factory function** when the query depends on a parameter:
+
+```typescript
+// Factory function — use when queryKey contains a variable
+export const mcpServersQuery = () => queryOptions({
+  queryKey: ['mcp-servers'],
+  queryFn: () => api.mcpServers(),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
+})
+
+export const serverMetricsHistoryQuery = (serverId: string) => queryOptions({
+  queryKey: ['server-metrics-history', serverId],
+  queryFn: () => api.serverMetricsHistory(serverId),
+  staleTime: STALE_TIME_HISTORY,
+})
+
+// Usage: useQuery(mcpServersQuery())  — with call parens
+```
+
+| Case | Form | Reason |
+|------|------|--------|
+| Static queryKey, no `refetchInterval` callback | Plain object | Simpler call site |
+| queryKey contains a variable | Factory function | Key must vary per argument |
+| `refetchInterval: () => withJitter(...)` | Factory function | Callback form requires factory; `withJitter` MUST be a callback to prevent polling storms |
+
+Rule: when `refetchInterval` uses a callback (`() => withJitter(...)`), the query MUST be a factory function — plain objects cannot hold function-valued `refetchInterval` without the factory wrapper.
+
+### `mutationOptions()` Factory (v5.82+)
+
+The mutation equivalent of `queryOptions()`. Define mutation config once and reuse with `useMutation`, `useIsMutating`, and `queryClient.isMutating`:
+
+```typescript
+// web/lib/queries/mcp.ts
+import { mutationOptions } from '@tanstack/react-query'
+
+export const registerMcpServerMutation = mutationOptions({
+  mutationKey: ['mcp-register'],
+  mutationFn: (body: RegisterMcpServerRequest) => api.registerMcpServer(body),
+})
+
+// Usage
+const mutation = useMutation(registerMcpServerMutation)
+```
+
+Use when the same mutation is referenced from multiple components or when you need typed `mutationKey` for `useIsMutating`.
+
+### `useSuspenseQuery` — Data-Guaranteed Rendering
+
+Prefer `useSuspenseQuery` over `useQuery` when the component always needs data to render. Eliminates `data | undefined` type overhead — `data` is always `T`.
+
+```typescript
+// ✓ useSuspenseQuery — data is T, no undefined check needed
+const { data } = useSuspenseQuery(dashboardStatsQuery)
+return <Chart data={data} />
+
+// ✗ useQuery — data is T | undefined, requires null check
+const { data } = useQuery(dashboardStatsQuery)
+if (!data) return null
+return <Chart data={data} />
+```
+
+Wrap the page or component with `<Suspense fallback={<Loading />}>`. `useSuspenseQuery` does not accept `enabled` — use `skipToken` instead for conditional queries.
+
+### `skipToken` — Conditional Queries (TypeScript-idiomatic)
+
+Use `skipToken` instead of `enabled: false` when the query depends on a value that may be undefined:
+
+```typescript
+import { skipToken } from '@tanstack/react-query'
+
+const { data } = useQuery({
+  queryKey: ['job-detail', jobId],
+  queryFn: jobId ? () => api.jobDetail(jobId) : skipToken,
+})
+```
+
+Rule: `enabled: false` is still valid for boolean flags (e.g. `enabled: !!jobId && open`). Use `skipToken` when the `queryFn` itself would be invalid to call (no valid arguments).
+
+### `useMutationState` — Cross-Component Mutation Observation
+
+Read in-flight or completed mutation state from the global `MutationCache` without prop drilling:
+
+```typescript
+import { useMutationState } from '@tanstack/react-query'
+
+// Show a global loading indicator for any pending key registration
+const pendingKeyNames = useMutationState({
+  filters: { mutationKey: ['key-register'], status: 'pending' },
+  select: (mutation) => mutation.state.variables as string,
+})
+```
+
+### `experimental_streamedQuery` — SSE Streaming Queries
+
+For SSE or `AsyncIterable`-returning endpoints (LLM streaming, real-time feeds):
+
+```typescript
+import { experimental_streamedQuery } from '@tanstack/react-query'
+
+useQuery({
+  queryKey: ['chat', threadId],
+  queryFn: experimental_streamedQuery({
+    queryFn: ({ signal }) => api.streamChat(threadId, signal),
+    refetchMode: 'reset',   // 'append' | 'reset' | 'replace'
+    maxChunks: 100,
+  }),
+})
+```
+
+Query enters `success` after the first chunk; data is an array of all received chunks. Currently prefixed `experimental_` — do not use in stable production paths.
+
+### `isEnabled` Return Value (v5.83+)
+
+`useQuery` now returns `isEnabled` — use it instead of recomputing the enabled condition in render:
+
+```typescript
+const { data, isEnabled } = useQuery({
+  queryKey: ['lab-settings'],
+  queryFn: () => api.labSettings(),
+  enabled: featureFlag && isLoggedIn,
+})
+if (!isEnabled) return null
+```
 
 ### Query Key Constants — Invalidation SSOT
 
@@ -74,8 +236,10 @@ const { data } = useQuery({
 
 ### Mutation -- `onSettled` for cache invalidation
 
+`invalidateQueries` MUST be in `onSettled`, never in `onSuccess`. `onSuccess` skips on network error, leaving stale data in the UI until the next refetch cycle.
+
 ```typescript
-// CORRECT -- onSettled runs on both success and error
+// REQUIRED — onSettled runs on both success and error
 const mutation = useMutation({
   mutationFn: (id: string) => api.deleteProvider(id),
   onSettled: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
@@ -84,9 +248,12 @@ const mutation = useMutation({
 mutation.mutate(id)            // fire-and-forget
 await mutation.mutateAsync(id) // await inside async handler
 
-// WRONG -- onSuccess skips invalidation on error (stale UI)
-onSuccess: () => queryClient.invalidateQueries(...)
+// WRONG — onSuccess skips invalidation on error (stale UI)
+onSuccess: () => queryClient.invalidateQueries(...)  // ✗
 ```
+
+Rule: every `useMutation` that changes server state MUST include `onSettled` with `invalidateQueries` for the affected query key(s).
+`onSuccess` may still be used for UI-only side effects (closing a dialog on success, showing a saved indicator) — the restriction applies to `invalidateQueries` only.
 
 ---
 
@@ -303,9 +470,33 @@ All E2E test constants live in `web/e2e/helpers/constants.ts`:
 
 ### Resource Cleanup
 
-CRUD lifecycle tests use `try/finally` to clean up created resources:
+All tests that create or modify resources MUST use `try/finally` to guarantee cleanup even on assertion failure:
 
 ```typescript
+// UI create + API fallback cleanup (preferred for UI tests)
+test('create and delete server', async ({ page, request }) => {
+  const name = `e2e-${testId()}`
+  const tokens = await apiLogin(request)
+  const api = authedRequest(request, tokens.accessToken)
+
+  // Create via UI
+  await page.getByRole('button', { name: /register/i }).click()
+  await page.getByLabel(/name/i).fill(name)
+  await page.getByRole('button', { name: /register/i }).last().click()
+
+  try {
+    // Verify + interact
+    await expect(page.getByText(name)).toBeVisible({ timeout: T_DEFAULT })
+    // ... more assertions ...
+  } finally {
+    // Always cleanup via API regardless of UI assertion outcome
+    const list = await api.get('/v1/resource').then(r => r.json())
+    const created = list.find((s: { name: string }) => s.name === name)
+    if (created) await api.delete(`/v1/resource/${created.id}`)
+  }
+})
+
+// Pure API test (simpler pattern)
 let createdId: string | undefined
 try {
   const res = await api.post('/v1/keys', { name: `e2e-${testId()}` })
@@ -314,6 +505,39 @@ try {
 } finally {
   if (createdId) await api.delete(`/v1/keys/${createdId}`)
 }
+```
+
+### API Auth Helper Pattern
+
+Tests that need direct API calls use `apiLogin` + `authedRequest` from `web/e2e/helpers/api.ts`:
+
+```typescript
+import { apiLogin, authedRequest } from './helpers/api'
+
+test('...', async ({ page, request }) => {
+  const tokens = await apiLogin(request)      // POST /v1/auth/login
+  const api = authedRequest(request, tokens.accessToken)  // adds Authorization header
+
+  const res = await api.post('/v1/mcp/servers', { data: { name, url } })
+  // use api.get / api.post / api.patch / api.delete
+})
+```
+
+Fixture: always destructure `{ page, request }` — `request` is the Playwright `APIRequestContext`.
+
+### Dialog Interaction (ConfirmDialog)
+
+NEVER use `page.once('dialog', ...)` — this intercepts native browser dialogs, not app-rendered React modals:
+
+```typescript
+// CORRECT — query the React-rendered ConfirmDialog
+const confirmDialog = page.getByRole('dialog')
+await expect(confirmDialog).toBeVisible({ timeout: T_SHORT })
+await confirmDialog.getByRole('button', { name: /delete|confirm/i }).last().click()
+await expect(confirmDialog).not.toBeVisible({ timeout: T_DEFAULT })
+
+// WRONG — dead code for React-managed modals
+page.once('dialog', (dialog) => dialog.accept()) // ✗ only fires for window.confirm()
 ```
 
 ---
@@ -458,7 +682,8 @@ Violations: shared logic in feature dirs, or page-specific logic in `components/
 
 | Rule | Detail |
 |------|--------|
-| All UI strings | Must use `t('namespace.key')` — no hardcoded English/Korean/Japanese |
+| All UI strings | Must use `t('namespace.key')` — no hardcoded English/Korean/Japanese in JSX content |
+| Props included | `placeholder=`, `title=`, `aria-label=`, `label=` values that are user-visible must also use `t()` |
 | Key parity | All keys in `en.json` must exist in `ko.json` and `ja.json` |
 | Formatter usage | Use `fmtMs`, `fmtCompact`, `fmtPct` etc from `chart-theme.ts` — never local `toFixed`/`toLocaleString` for display |
 | Missing keys | Add to all three locale files simultaneously |
@@ -508,10 +733,125 @@ Not applicable: 1.2.x (no media), 1.4.4 resize (browser-native), 2.4.5 multiple 
 
 ---
 
+## lucide-react v1 Patterns
+
+### `LucideProvider` — Global Icon Defaults
+
+Set default `size`, `strokeWidth`, and `color` for all icons in a subtree without prop drilling:
+
+```tsx
+import { LucideProvider } from 'lucide-react'
+
+// In a layout or section that uses many icons
+<LucideProvider size={16} strokeWidth={1.5}>
+  <Nav />
+  <Sidebar />
+</LucideProvider>
+```
+
+Individual icon props override the provider. Use instead of repeating `size={16}` on every icon.
+
+### `aria-hidden` Default (v1 behavior change)
+
+All icons now render with `aria-hidden="true"` by default. This is correct for decorative icons. For icon-only buttons or standalone status icons that convey meaning, explicitly override:
+
+```tsx
+// Decorative — no change needed (aria-hidden="true" is the default)
+<Trash2 className="h-4 w-4" />
+
+// Semantic — must override (icon conveys meaning without visible text)
+<AlertCircle aria-hidden={false} aria-label={t('status.error')} className="h-4 w-4" />
+```
+
+Rule: any icon used as the *only* indicator of meaning (no adjacent text) needs `aria-hidden={false}` + `aria-label`.
+
+### CSS Class Name Drift
+
+When icons are renamed, lucide keeps the old import name as an alias (TypeScript keeps compiling) but the rendered SVG emits the **canonical new class name**. Example:
+
+```tsx
+import { Home } from 'lucide-react'
+// Import compiles fine, but SVG emits class="lucide lucide-house" (not lucide-home)
+```
+
+**Rule**: do not use `lucide-*` CSS selectors — they are fragile across renames. Style icons via `className` prop only.
+
+### `createLucideIcon` — Custom Icons
+
+For custom SVG icons that should match Lucide's conventions (size, strokeWidth, color props):
+
+```tsx
+import { createLucideIcon } from 'lucide-react'
+
+const HexIcon = createLucideIcon('hex-icon', [
+  ['polygon', { points: '12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5' }],
+])
+
+// Usage — identical to any Lucide icon
+<HexIcon size={20} strokeWidth={1.5} />
+```
+
+Prefer this over hand-rolling SVG components when you need size/color/strokeWidth props to work correctly.
+
+### `DynamicIcon` — CMS-Driven Icons (bundle warning)
+
+```tsx
+import { DynamicIcon } from 'lucide-react/dynamic'
+<DynamicIcon name="camera" size={24} />
+```
+
+**Warning**: this separate entry point imports all icons into the bundle and bypasses tree-shaking. Only use when icon names are genuinely unknown at build time (CMS content, user-configurable). Never use for static UI.
+
+---
+
+## React 19.2 Patterns
+
+### `<Activity>` — State-Preserving Conditional Render
+
+Replaces conditional rendering patterns that lose component state on hide/show (e.g. tab panels, back-navigation preservation):
+
+```tsx
+import { Activity } from 'react'
+
+// Replaces: {isVisible && <ExpensivePanel />}
+<Activity mode={isVisible ? 'visible' : 'hidden'}>
+  <ExpensivePanel />
+</Activity>
+```
+
+When `mode="hidden"`: effects unmount, updates defer (off-screen priority). When `mode="visible"`: effects mount, updates process normally. State is preserved across both modes.
+
+Use for: tab panels that should not remount, routes that need to preserve scroll position, any panel where remounting is expensive.
+
+### `useEffectEvent` — Stable Event Callbacks in Effects
+
+For callbacks inside `useEffect` that need to read latest props/state without being re-listed as dependencies:
+
+```tsx
+import { useEffectEvent } from 'react'
+
+function ChatRoom({ roomId, theme }) {
+  // onConnected always reads latest `theme`, but is not a dep of the effect
+  const onConnected = useEffectEvent(() => {
+    showNotification('Connected!', theme)
+  })
+
+  useEffect(() => {
+    const conn = createConnection(roomId)
+    conn.on('connected', onConnected)
+    return () => conn.disconnect()
+  }, [roomId]) // no `theme` needed here — useEffectEvent handles it
+}
+```
+
+**Rule**: use `useEffectEvent` instead of suppressing `react-hooks/exhaustive-deps` for event-like callbacks. Requires `eslint-plugin-react-hooks` v6 (flat config).
+
+---
+
 ## Review Fix Priority
 
 | Priority | Category |
 |----------|----------|
 | P0 (fix immediately) | Hardcoded hex, wrong token names, broken i18n keys, missing i18n parity |
-| P1 (fix in same pass) | Raw `var(--theme-*)` strings, missing `useMemo`, missing `aria-label`, SSE components without `React.memo`, time-display without interval tick |
+| P1 (fix in same pass) | Raw `var(--theme-*)` strings, missing `useMemo`, missing `aria-label`, SSE components without `React.memo`, time-display without interval tick, `onSuccess` for invalidation (→ `onSettled`), icon-only semantic icons missing `aria-hidden={false}` |
 | P2 (fix if touching file) | Component extraction for 3+ duplicates, prop count reduction, zero-value stat containers |

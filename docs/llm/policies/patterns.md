@@ -1,6 +1,6 @@
 # Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-24 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-03-26 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Rust Edition 2024 · Axum 0.8 · sqlx 0.8
 > Frontend patterns -> `policies/patterns-frontend.md`
 
@@ -28,6 +28,12 @@ pub async fn delete_thing(
   Ok(StatusCode::NO_CONTENT)
 }
 ```
+
+| Rule | Detail |
+|------|--------|
+| `Path<Uuid>` | Always typed for UUID path segments — never `Path<String>` + `Uuid::parse_str` |
+| POST create → 201 | Return `(StatusCode::CREATED, Json(...))` — not implicit 200 |
+| RequireXxx first | Sensitive handlers must declare a `RequireXxx` extractor before `State` |
 
 ## AppError (thiserror v2)
 
@@ -137,6 +143,28 @@ Never hold `Ref`/`RefMut` across `.await` -- it locks the shard.
 
 All `veronex:*` key patterns MUST be defined in `infrastructure/outbound/valkey_keys.rs`.
 This is the single source of truth — never hardcode key strings elsewhere.
+
+## Valkey Error Observability
+
+All Valkey I/O results MUST be handled — never silently discard errors.
+
+```rust
+// CORRECT — match with tracing
+match pool.mget::<Vec<Option<String>>, _>(keys).await {
+    Ok(vals) => vals,
+    Err(e) => { tracing::warn!(error = %e, "mcp: failed to fetch heartbeats from Valkey"); vec![] }
+}
+
+// CORRECT — unwrap_or_else with tracing
+pool.set(key, value, Some(Expiration::EX(ttl)), None, false).await
+    .unwrap_or_else(|e| tracing::warn!(error = %e, key, "Valkey SET failed"));
+
+// WRONG
+let _ = pool.set(...).await;          // ✗ silent discard
+pool.get(key).await.unwrap_or(None)   // ✗ no error logging
+```
+
+Security-critical paths (refresh token claims, JTI revocation) must fail-closed: Valkey error → `AppError::ServiceUnavailable`, not silent success.
 
 ## Valkey Lua Eval
 
@@ -311,6 +339,64 @@ pub async fn list_roles(RequireRoleManage(_claims): RequireRoleManage, ...) { ..
 | `RequireSettingsManage` | `settings_manage` | System settings |
 | `RequireApiTest` | `api_test` | Test inference |
 | `RequireDashboardView` | `dashboard_view` | Dashboard data |
+
+## Audit Trail (`emit_audit`)
+
+All mutating handlers (POST/PATCH/DELETE) MUST call `emit_audit()` after the DB write succeeds:
+
+```rust
+emit_audit(
+    &state, &claims,
+    "action_verb",            // e.g. "create", "update", "delete", "grant", "revoke"
+    "resource_type",          // e.g. "api_key", "account", "mcp_server", "role"
+    &resource_id.to_string(),
+    &resource_name,
+    "Human-readable description of what changed",
+).await;
+```
+
+Location: `infrastructure/inbound/http/super::emit_audit` (imported as `super::emit_audit`).
+Call after the DB mutation succeeds, before returning the response. Non-blocking — fire-and-forget via `.await` is fine.
+
+## Batch DB Writes (N+1 Prevention)
+
+Never execute N sequential queries in a loop. Use UNNEST for inserts, `ANY($1)` for filters and aggregates.
+
+```rust
+// CORRECT — UNNEST batch insert/upsert
+sqlx::query(
+    "INSERT INTO mcp_server_tools (server_id, name, description)
+     SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[])
+     ON CONFLICT (server_id, name) DO UPDATE SET description = EXCLUDED.description"
+)
+.bind(&server_ids as &[Uuid])
+.bind(&names as &[String])
+.bind(&descriptions as &[String])
+.execute(&pool).await?;
+
+// CORRECT — ANY($1) batch aggregate
+let count_rows: Vec<(Uuid, i64)> = sqlx::query_as(
+    "SELECT role_id, COUNT(*)::bigint FROM account_roles
+     WHERE role_id = ANY($1) GROUP BY role_id"
+)
+.bind(&role_ids as &[Uuid])
+.fetch_all(&pool).await?;
+let count_map: HashMap<Uuid, i64> = count_rows.into_iter().collect();
+
+// WRONG — O(N) round-trips
+for id in &ids {
+    let n = sqlx::query_scalar("SELECT COUNT(*) FROM account_roles WHERE role_id = $1")
+        .bind(id).fetch_one(&pool).await?; // one DB call per row
+}
+```
+
+**SQL LIMIT**: all `fetch_all` list queries must have an explicit `LIMIT` clause — unbounded SELECT is prohibited at 10K+ provider scale.
+
+| Scope | Minimum LIMIT |
+|-------|--------------|
+| Admin list queries (servers, keys, accounts) | 500 |
+| Role membership counts | 200 |
+| Aggregate / GROUP BY | Commensurate with distinct count (e.g. 8760 for hourly, 10 for statuses) |
 
 ## Domain Enum Patterns
 
@@ -760,6 +846,10 @@ grep -rn "INTERVAL.*format!\|format!.*INTERVAL" crates/ --include="*.rs"
 grep -rn "\.truncate(" crates/ --include="*.rs"
 # → all calls must be preceded by is_char_boundary() scan or delegated to truncate_at_char_boundary()
 
+# P1 — Valkey: no silent error discard on I/O
+grep -rn "\.await\.unwrap_or\b\|let _.*\.await\|\.await\.ok()" crates/veronex/src/infrastructure/inbound/ --include="*.rs"
+# → each result must be checked: Valkey I/O must log at tracing::warn! on error
+
 # P2 — Valkey key hardcoding: all veronex:* keys via valkey_keys.rs only
 grep -rn '"veronex:' crates/veronex/src/ | grep -v valkey_keys
 # → expected: 0 results
@@ -771,6 +861,14 @@ grep -rn "Duration::from_secs([0-9]" crates/ --include="*.rs" | grep -v "const "
 # P2 — O(N) DB scan: COUNT(*) in dashboard hot paths
 grep -rn "COUNT(\*)" crates/veronex/src/ --include="*.rs"
 # → dashboard_queries.rs must use pg_class.reltuples instead
+
+# P2 — Unbounded SELECT: all fetch_all must have LIMIT
+grep -rn "fetch_all" crates/veronex/src/infrastructure/inbound/ --include="*.rs" -B5 | grep -v "LIMIT\|ANY\|UNNEST\|--"
+# → each result must have a LIMIT clause in the SQL string above it
+
+# P2 — N+1: fetch_all/fetch_one inside for loop
+grep -rn "for.*in.*{" crates/veronex/src/ --include="*.rs" -A6 | grep "fetch_all\|fetch_one\|\.execute("
+# → expected: 0 results (use UNNEST or ANY($1) instead)
 
 # P2 — Docker cache: sharing=locked on all cache mounts
 grep -rn "mount=type=cache" Dockerfile* **/Dockerfile* 2>/dev/null

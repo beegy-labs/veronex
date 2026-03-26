@@ -1,6 +1,6 @@
 # Frontend Review
 
-> ADD Execution — Frontend Optimization & Policy Enforcement | **Last Updated**: 2026-03-24
+> ADD Execution — Frontend Optimization & Policy Enforcement | **Last Updated**: 2026-03-25
 
 ## Trigger
 
@@ -13,10 +13,12 @@ User requests frontend code review, optimization, design token audit, i18n audit
 | Frontend patterns (SSOT) | `docs/llm/policies/patterns-frontend.md` | Always — contains all checklists |
 | Design system (core) | `docs/llm/frontend/design-system.md` | Always |
 | Component patterns | `docs/llm/frontend/design-system-components.md` | Component changes |
+| Component patterns (extended) | `docs/llm/frontend/design-system-components-patterns.md` | ConfirmDialog, useApiMutation, 2-Step Verify, nav-404, Accounts |
 | i18n rules | `docs/llm/frontend/design-system-i18n.md` | i18n changes |
 | Chart patterns | `docs/llm/frontend/charts.md` | Chart/analytics changes |
 | Design tokens | `web/app/tokens.css` + `web/lib/design-tokens.ts` | Token compliance |
 | i18n sources | `web/messages/en.json` + `ko.json` + `ja.json` | Key parity check |
+| Page doc | `docs/llm/frontend/pages/{page}.md` | When reviewing a specific page — read its page doc if it exists |
 
 > Checklist details (4-layer arch, design tokens, i18n, performance, TypeScript, a11y, fix priority) → `docs/llm/policies/patterns-frontend.md`
 
@@ -27,13 +29,50 @@ User requests frontend code review, optimization, design token audit, i18n audit
 | Step | Action |
 |------|--------|
 | 1 | Get the diff: `git diff HEAD` or read user-specified files |
-| 2 | Launch 3 parallel review agents (Reuse · Quality · Efficiency) — pass full diff to each |
+| 2 | Launch 3 parallel review agents (Reuse · Quality · Efficiency) — pass full diff + agent scope below to each |
 | 3 | Aggregate findings; discard false positives with reason |
 | 4 | Fix violations P0 → P1 → P2 (see fix priority in `patterns-frontend.md`) |
 | 5 | For i18n: update `en.json`, `ko.json`, `ja.json` simultaneously |
 | 6 | Run `npx tsc --noEmit` — zero errors required |
 | 7 | If N rounds requested: repeat steps 2–6 until N rounds consumed or no violations remain |
 | 8 | CDD sync — update the relevant doc if a new pattern is established |
+
+### Agent Scope
+
+**Reuse agent** — checks that existing abstractions are used instead of reinvented:
+- `DataTable` used for all tables (never raw Card+Table boilerplate) (→ `design-system.md` § Task Guide)
+- `ConfirmDialog` for destructive actions (never `confirm()` native dialog) (→ `design-system-components-patterns.md` § ConfirmDialog)
+- `CopyButton`, `StatusPill`, `StatsCard`, `ProgressBar`, `TimeRangeSelector` — check for hand-rolled equivalents (→ `design-system-components.md`)
+- `useApiMutation` for mutations needing query invalidation (no repeated `useQueryClient()` + `onSettled` boilerplate) (→ `design-system-components-patterns.md` § useApiMutation)
+- `fmtMs`, `fmtCompact`, `fmtPct`, `fmtMbShort`, `fmtMsAxis` from `chart-theme.ts` — no local `toFixed`/`toLocaleString` for display (→ `patterns-frontend.md` § Chart Theme Formatters)
+- `TOOLTIP_STYLE` from `chart-theme.ts` — never inline tooltip `contentStyle` (→ `patterns-frontend.md` § Chart Tooltip Style)
+- `STATUS_STYLES`, `PROVIDER_BADGE`, `PROVIDER_COLORS`, `FINISH_COLORS` from `constants.ts` — no duplicate style maps (→ `patterns-frontend.md` § Shared Style Constants)
+- `queryOptions()` factory in `web/lib/queries/` — no inline `useQuery({queryKey, queryFn})` for queries used in 2+ places (→ `patterns-frontend.md` § TanStack Query v5 / `queryOptions()` Factory)
+- Query timing constants (`STALE_TIME_FAST/SLOW/HISTORY`, `REFETCH_INTERVAL_FAST`, `withJitter()`) — never hardcode `30_000` or similar values (→ `patterns-frontend.md` § TanStack Query v5 / Query Timing Constants)
+- Query key constants (`GEMINI_QUERY_KEYS` pattern) for groups of related queries (→ `patterns-frontend.md` § TanStack Query v5 / Query Key Constants)
+
+**Quality agent** — checks correctness and pattern compliance:
+- `onSettled` (not `onSuccess`) for mutation cache invalidation (→ `patterns-frontend.md` § TanStack Query v5 / Mutation -- onSettled)
+- `useOptimistic` on all toggle/switch mutations (→ `patterns-frontend.md` § React 19 -- useOptimistic)
+- `ApiHttpError instanceof` checks — never `(e as any).status` or type casts (→ `patterns-frontend.md` § HTTP Errors with Status Code)
+- `usePageGuard(menuId)` present on new pages (→ `patterns-frontend.md` § Page Guard)
+- 2-Step Verify Flow for registration modals: URL change resets verify state, register button gated on `isVerified` and URL hasn't changed (→ `design-system-components-patterns.md` § 2-Step Verify Flow)
+- SVG `<pattern id>` uses `useId()` with non-alphanumeric chars stripped — never static strings in multi-instance components (→ `patterns-frontend.md` § SVG Pattern IDs)
+- `useMemo` wrapping filter/sort/map chains from query data (→ `patterns-frontend.md` § useMemo for Derived Data)
+- `useCallback` on handlers passed to child components (→ `patterns-frontend.md` § Performance Rules)
+- `refetchInterval` uses `withJitter(REFETCH_INTERVAL_FAST)` — never bare constant (prevents tab polling storms) (→ `patterns-frontend.md` § TanStack Query v5 / `withJitter()`)
+- `PUBLIC_PATHS` updated for any new unauthenticated route (→ `design-system-components.md` § Auth Guard)
+- 4-layer architecture: page logic in `app/*/page.tsx`, feature UI in `app/*/components/`, shared in `components/`, foundation in `lib/` (→ `patterns-frontend.md` § 4-Layer Component Architecture)
+- E2E tests: constants from `helpers/constants.ts`, `try/finally` resource cleanup (→ `patterns-frontend.md` § E2E Test Patterns)
+
+**Efficiency agent** — checks rendering and data performance:
+- `React.memo` on components receiving props at ≥1/s (SSE-driven, `setInterval` ≤100ms) (→ `patterns-frontend.md` § Performance Rules)
+- `dynamic(() => import(...), { ssr: false })` for heavy panels rendered conditionally (→ `patterns-frontend.md` § Performance Rules)
+- No duplicate `queryKey` across sibling components (lift or share `queryOptions` factory) (→ `patterns-frontend.md` § TanStack Query v5 / `queryOptions()` Factory)
+- Zero-value stat containers hidden when all values are 0
+- Relative time displays ("5s ago") have `setInterval` tick (10–30s)
+- No array `index` as sole React key for reorderable lists (→ `patterns-frontend.md` § Performance Rules)
+- `refetchOnWindowFocus: false` respected — no per-query override without comment (→ `patterns-frontend.md` § TanStack Query v5 / Query Timing Constants)
 
 **Step 8 — which doc to update:**
 

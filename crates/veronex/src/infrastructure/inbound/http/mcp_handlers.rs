@@ -7,7 +7,7 @@ use fred::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::{RequireProviderManage, RequireSettingsManage};
 use crate::infrastructure::outbound::valkey_keys;
 
 use super::audit_helpers::emit_audit;
@@ -41,27 +41,33 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
 
     if tools.is_empty() { return; }
 
-    // Persist snapshot to DB (upsert)
-    for tool in &tools {
-        let schema = serde_json::to_value(&tool.input_schema).unwrap_or_default();
-        let _ = sqlx::query(
-            "INSERT INTO mcp_server_tools (server_id, tool_name, namespaced_name, description, input_schema, discovered_at)
-             VALUES ($1, $2, $3, $4, $5, now())
-             ON CONFLICT (server_id, tool_name) DO UPDATE
-               SET namespaced_name = EXCLUDED.namespaced_name,
-                   description     = EXCLUDED.description,
-                   input_schema    = EXCLUDED.input_schema,
-                   discovered_at   = EXCLUDED.discovered_at"
-        )
-        .bind(server_id)
-        .bind(&tool.name)
-        .bind(tool.namespaced_name())
-        .bind(&tool.description)
-        .bind(schema)
-        .execute(&state.pg_pool)
-        .await
-        .map_err(|e| tracing::warn!(%server_id, tool = %tool.name, error = %e, "MCP: tool persist failed"));
-    }
+    // Persist snapshot to DB — single batch upsert (avoids N sequential round-trips)
+    let tool_names:       Vec<&str>            = tools.iter().map(|t| t.name.as_str()).collect();
+    let namespaced_names: Vec<String>          = tools.iter().map(|t| t.namespaced_name()).collect();
+    let descriptions:     Vec<&str>            = tools.iter().map(|t| t.description.as_str()).collect();
+    let schemas:          Vec<serde_json::Value> = tools.iter()
+        .map(|t| serde_json::to_value(&t.input_schema).unwrap_or_default())
+        .collect();
+    let server_ids: Vec<Uuid> = vec![server_id; tools.len()];
+
+    let _ = sqlx::query(
+        "INSERT INTO mcp_server_tools (server_id, tool_name, namespaced_name, description, input_schema, discovered_at)
+         SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::jsonb[], array_fill(now()::timestamptz, ARRAY[$6::int]))
+         ON CONFLICT (server_id, tool_name) DO UPDATE
+           SET namespaced_name = EXCLUDED.namespaced_name,
+               description     = EXCLUDED.description,
+               input_schema    = EXCLUDED.input_schema,
+               discovered_at   = EXCLUDED.discovered_at"
+    )
+    .bind(&server_ids as &[Uuid])
+    .bind(&tool_names as &[&str])
+    .bind(&namespaced_names as &[String])
+    .bind(&descriptions as &[&str])
+    .bind(&schemas as &[serde_json::Value])
+    .bind(tools.len() as i32)
+    .execute(&state.pg_pool)
+    .await
+    .map_err(|e| tracing::warn!(%server_id, count = tools.len(), error = %e, "MCP: batch tool persist failed"));
 
     // Warm the tool cache from the already-fetched data — avoids a second HTTP call.
     bridge.tool_cache.cache_fetched_tools(server_id, tools.clone()).await;
@@ -147,10 +153,11 @@ impl sqlx::FromRow<'_, sqlx::postgres::PgRow> for ToolCountRow {
 
 /// `GET /v1/mcp/servers`
 pub async fn list_mcp_servers(
+    RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
 ) -> HandlerResult<Json<Vec<McpServerResponse>>> {
     let rows: Vec<McpServerRow> = sqlx::query_as(
-        "SELECT id, name, slug, url, is_enabled, timeout_secs, created_at FROM mcp_servers ORDER BY created_at ASC"
+        "SELECT id, name, slug, url, is_enabled, timeout_secs, created_at FROM mcp_servers ORDER BY created_at ASC LIMIT 500"
     )
     .fetch_all(&state.pg_pool)
     .await
@@ -166,7 +173,13 @@ pub async fn list_mcp_servers(
     let online_set: std::collections::HashSet<Uuid> = if let Some(ref pool) = state.valkey_pool {
         let conn: fred::clients::Client = pool.next().clone();
         let hb_keys: Vec<String> = ids.iter().map(|id| valkey_keys::mcp_heartbeat(*id)).collect();
-        let liveness: Vec<Option<String>> = conn.mget(hb_keys).await.unwrap_or_default();
+        let liveness: Vec<Option<String>> = match conn.mget(hb_keys).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "MCP: failed to fetch server heartbeats from Valkey");
+                vec![]
+            }
+        };
         ids.iter()
             .zip(liveness.into_iter())
             .filter_map(|(id, v)| if v.is_some() { Some(*id) } else { None })
@@ -295,6 +308,13 @@ pub async fn patch_mcp_server(
     let new_name = req.name.as_deref().unwrap_or(&row.name);
     let url_changed = req.url.as_deref().is_some_and(|u| u != row.url);
 
+    if req.name.is_some() && new_name.len() > 128 {
+        return Err(AppError::BadRequest("name must be 128 characters or fewer".into()));
+    }
+    if req.url.is_some() {
+        validate_provider_url(new_url)?;
+    }
+
     sqlx::query(
         "UPDATE mcp_servers SET is_enabled = $1, url = $2, name = $3, updated_at = now() WHERE id = $4"
     )
@@ -333,7 +353,13 @@ pub async fn patch_mcp_server(
     let online = if let Some(ref pool) = state.valkey_pool {
         let conn: fred::clients::Client = pool.next().clone();
         let key = valkey_keys::mcp_heartbeat(id);
-        let v: Option<String> = conn.get(key).await.unwrap_or(None);
+        let v: Option<String> = match conn.get(key).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(%id, error = %e, "MCP: failed to fetch server heartbeat from Valkey");
+                None
+            }
+        };
         v.is_some()
     } else {
         false
@@ -408,7 +434,7 @@ pub async fn list_mcp_targets(State(state): State<AppState>) -> HandlerResult<Js
     struct Row { id: Uuid, url: String }
 
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, url FROM mcp_servers WHERE is_enabled = true ORDER BY created_at"
+        "SELECT id, url FROM mcp_servers WHERE is_enabled = true ORDER BY created_at LIMIT 500"
     )
     .fetch_all(&state.pg_pool)
     .await

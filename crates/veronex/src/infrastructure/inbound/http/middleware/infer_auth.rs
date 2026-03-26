@@ -145,7 +145,13 @@ pub async fn infer_auth(
         use crate::infrastructure::outbound::valkey_keys;
         use fred::interfaces::KeysInterface as _;
         let revoked_key = valkey_keys::revoked_jti(claims.jti);
-        let is_revoked: bool = pool.next().exists(revoked_key).await.unwrap_or(false);
+        let is_revoked: bool = match pool.next().exists(revoked_key).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(error = %e, "JWT revocation check: Valkey unavailable — treating token as unrevoked");
+                false
+            }
+        };
         if is_revoked {
             return Err(AppError::Unauthorized("session has been revoked".into()));
         }

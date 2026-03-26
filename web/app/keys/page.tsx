@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useOptimistic } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { keysQuery, resourceAuditQuery } from '@/lib/queries'
+import { keysQuery, resourceAuditQuery, keyMcpAccessQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, CreateKeyResponse, McpServerAccess } from '@/lib/types'
 import { Plus, Trash2, BarChart2, RefreshCw, History, Key, ChevronLeft, ChevronRight, Server } from 'lucide-react'
@@ -73,6 +73,7 @@ function CreateKeyModal({
   onCreated: (resp: CreateKeyResponse) => void
 }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [tenantId, setTenantId] = useState('default')
   const [rpm, setRpm] = useState('')
@@ -89,6 +90,7 @@ function CreateKeyModal({
         tier,
       }),
     onSuccess: (data) => onCreated(data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
   })
 
   return (
@@ -245,19 +247,16 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
-  const { data: servers, isLoading, error } = useQuery({
-    queryKey: ['key-mcp-access', apiKey.id],
-    queryFn: () => api.keyMcpAccess(apiKey.id),
-  })
+  const { data: servers, isLoading, error } = useQuery(keyMcpAccessQuery(apiKey.id))
 
   const grantMutation = useMutation({
     mutationFn: (serverId: string) => api.grantKeyMcpAccess(apiKey.id, serverId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['key-mcp-access', apiKey.id] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['key-mcp-access', apiKey.id] }),
   })
 
   const revokeMutation = useMutation({
     mutationFn: (serverId: string) => api.revokeKeyMcpAccess(apiKey.id, serverId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['key-mcp-access', apiKey.id] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['key-mcp-access', apiKey.id] }),
   })
 
   const isPending = grantMutation.isPending || revokeMutation.isPending
@@ -316,6 +315,22 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
   )
 }
 
+function KeyActiveSwitch({ keyId, isActive }: { keyId: string; isActive: boolean }) {
+  const { t } = useTranslation()
+  const [optimistic, setOptimistic] = useOptimistic(isActive, (_, v: boolean) => v)
+  const mutation = useApiMutation(
+    (vars: { id: string; is_active: boolean }) => api.toggleKeyActive(vars.id, vars.is_active),
+    { invalidateKey: ['keys'] },
+  )
+  return (
+    <Switch
+      checked={optimistic}
+      onCheckedChange={(checked) => { setOptimistic(checked); mutation.mutate({ id: keyId, is_active: checked }) }}
+      aria-label={optimistic ? t('common.deactivate') : t('common.activate')}
+    />
+  )
+}
+
 export default function KeysPage() {
   const { t } = useTranslation()
   const { tz } = useTimezone()
@@ -341,11 +356,6 @@ export default function KeysPage() {
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteKey(id),
     { invalidateKey: ['keys'], onSuccess: () => setDeleteTarget(null) },
-  )
-
-  const toggleMutation = useApiMutation(
-    (vars: { id: string; is_active: boolean }) => api.toggleKeyActive(vars.id, vars.is_active),
-    { invalidateKey: ['keys'] },
   )
 
   const tierMutation = useApiMutation(
@@ -456,14 +466,7 @@ export default function KeysPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Switch
-                        checked={key.is_active}
-                        onCheckedChange={(checked) =>
-                          toggleMutation.mutate({ id: key.id, is_active: checked })
-                        }
-                        disabled={toggleMutation.isPending}
-                        aria-label={key.is_active ? t('common.deactivate') : t('common.activate')}
-                      />
+                      <KeyActiveSwitch keyId={key.id} isActive={key.is_active} />
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs tabular-nums">
                       {key.rate_limit_rpm === 0 ? '∞' : key.rate_limit_rpm} /{' '}

@@ -302,18 +302,23 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
 
     use fred::prelude::*;
 
-    let (paid, api, test): (i64, i64, i64) = tokio::time::timeout(
+    let (paid, api, test): (i64, i64, i64) = match tokio::time::timeout(
         std::time::Duration::from_secs(3),
         async {
             tokio::join!(
-                async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or(0) },
-                async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or(0) },
-                async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or(0) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen paid failed"); 0 }) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen api failed"); 0 }) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen test failed"); 0 }) },
             )
         },
     )
-    .await
-    .unwrap_or((0, 0, 0));
+    .await {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::warn!("queue depth: Valkey timeout after 3s");
+            (0, 0, 0)
+        }
+    };
 
     QueueDepth {
         api_paid: paid,
@@ -778,8 +783,6 @@ pub async fn get_mcp_stats(
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    use crate::application::ports::outbound::analytics_repository::AnalyticsRepository;
-
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
 
@@ -797,7 +800,7 @@ pub async fn get_mcp_stats(
     #[derive(sqlx::FromRow)]
     struct McpRow { id: uuid::Uuid, name: String, slug: String }
 
-    let pg_rows: Vec<McpRow> = sqlx::query_as("SELECT id, name, slug FROM mcp_servers ORDER BY name")
+    let pg_rows: Vec<McpRow> = sqlx::query_as("SELECT id, name, slug FROM mcp_servers ORDER BY name LIMIT 500")
         .fetch_all(&state.pg_pool)
         .await?;
 

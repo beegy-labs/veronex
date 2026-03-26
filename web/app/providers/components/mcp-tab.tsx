@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useOptimistic } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { mcpServersQuery } from '@/lib/queries/mcp'
+import { mcpServersQuery, mcpStatsQuery, labSettingsQuery } from '@/lib/queries/mcp'
+import { syncSettingsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { McpServer, McpServerStat, RegisterMcpServerRequest } from '@/lib/types'
 import { Plus, Trash2, Plug, Bot, BarChart2 } from 'lucide-react'
@@ -34,6 +35,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTable } from '@/components/data-table'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import { fmtPct1, fmtMs, fmtCompact } from '@/lib/chart-theme'
 import { useTranslation } from '@/i18n'
 import { useNav404 } from '@/components/nav-404-context'
 
@@ -75,18 +78,18 @@ function RegisterMcpModal({ onClose }: { onClose: () => void }) {
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="mcp-name">{t('mcp.name')} <span className="text-destructive">*</span></Label>
-            <Input id="mcp-name" value={name} onChange={(e) => handleNameChange(e.target.value)} placeholder="My MCP Server" />
+            <Input id="mcp-name" value={name} onChange={(e) => handleNameChange(e.target.value)} placeholder={t('mcp.namePlaceholder')} />
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="mcp-slug">{t('mcp.slug')} <span className="text-destructive">*</span></Label>
-            <Input id="mcp-slug" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="my_mcp_server" />
+            <Input id="mcp-slug" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder={t('mcp.slugPlaceholder')} />
             <p className="text-xs text-muted-foreground">{t('mcp.slugHint')}</p>
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="mcp-url">{t('mcp.url')} <span className="text-destructive">*</span></Label>
-            <Input id="mcp-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com" />
+            <Input id="mcp-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t('mcp.urlPlaceholder')} />
           </div>
 
           <div className="space-y-1.5">
@@ -119,15 +122,9 @@ function OrchestratorModelSelector() {
   const queryClient = useQueryClient()
   const [saved, setSaved] = useState(false)
 
-  const { data: lab } = useQuery({
-    queryKey: ['lab-settings'],
-    queryFn: () => api.labSettings(),
-  })
+  const { data: lab } = useQuery(labSettingsQuery)
 
-  const { data: syncSettings } = useQuery({
-    queryKey: ['capacity-settings'],
-    queryFn: () => api.syncSettings(),
-  })
+  const { data: syncSettings } = useQuery(syncSettingsQuery)
 
   const ollamaModels: string[] = syncSettings?.available_models?.ollama ?? []
 
@@ -135,10 +132,10 @@ function OrchestratorModelSelector() {
     mutationFn: (model: string | null) =>
       api.patchLabSettings({ mcp_orchestrator_model: model }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['lab-settings'] })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['lab-settings'] }),
   })
 
   const current = lab?.mcp_orchestrator_model ?? null
@@ -186,18 +183,11 @@ const HOURS_OPTIONS = [
   { value: 720, label: '30d' },
 ]
 
-function fmt_pct(v: number) { return `${(v * 100).toFixed(1)}%` }
-function fmt_ms(v: number) { return v < 1 ? '<1 ms' : `${Math.round(v)} ms` }
-
 function McpStatsCard() {
   const { t } = useTranslation()
   const [hours, setHours] = useState(24)
 
-  const { data: stats, isLoading, error } = useQuery({
-    queryKey: ['mcp-stats', hours],
-    queryFn: () => api.mcpStats(hours),
-    staleTime: 30_000,
-  })
+  const { data: stats, isLoading, error } = useQuery(mcpStatsQuery(hours))
 
   return (
     <Card>
@@ -246,7 +236,7 @@ function McpStatsCard() {
                       <span className="font-mono text-xs text-muted-foreground bg-surface-code px-1.5 py-0.5 rounded">{s.server_slug}</span>
                     </div>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{s.total_calls.toLocaleString()}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtCompact(s.total_calls)}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     <Badge
                       variant="outline"
@@ -256,14 +246,14 @@ function McpStatsCard() {
                           ? 'bg-status-warning/15 text-status-warning-fg border-status-warning/30'
                           : 'bg-status-error/15 text-status-error-fg border-status-error/30'}
                     >
-                      {fmt_pct(s.success_rate)}
+                      {fmtPct1(s.success_rate * 100)}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
-                    {s.cache_hit_count > 0 ? fmt_pct(s.cache_hit_count / s.total_calls) : '—'}
+                    {s.cache_hit_count > 0 ? fmtPct1((s.cache_hit_count / s.total_calls) * 100) : '—'}
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
-                    {fmt_ms(s.avg_latency_ms)}
+                    {fmtMs(s.avg_latency_ms)}
                   </TableCell>
                 </TableRow>
               ))}
@@ -275,10 +265,27 @@ function McpStatsCard() {
   )
 }
 
+function McpToggleSwitch({ serverId, isEnabled }: { serverId: string; isEnabled: boolean }) {
+  const queryClient = useQueryClient()
+  const [optimisticEnabled, setOptimistic] = useOptimistic(isEnabled, (_, v: boolean) => v)
+  const mutation = useMutation({
+    mutationFn: (is_enabled: boolean) => api.patchMcpServer(serverId, { is_enabled }),
+    onError: () => setOptimistic(isEnabled),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['mcp-servers'] }),
+  })
+  return (
+    <Switch
+      checked={optimisticEnabled}
+      onCheckedChange={(checked) => { setOptimistic(checked); mutation.mutate(checked) }}
+    />
+  )
+}
+
 export function McpTab() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showRegister, setShowRegister] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<McpServer | null>(null)
   const { hideSection } = useNav404()
 
   const { data: servers, isLoading, error } = useQuery(mcpServersQuery())
@@ -290,22 +297,14 @@ export function McpTab() {
     }
   }, [error, hideSection])
 
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, is_enabled }: { id: string; is_enabled: boolean }) =>
-      api.patchMcpServer(id, { is_enabled }),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['mcp-servers'] }),
-  })
-
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteMcpServer(id),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['mcp-servers'] }),
   })
 
   const handleDelete = useCallback((server: McpServer) => {
-    if (confirm(t('mcp.deleteConfirm', { name: server.name }))) {
-      deleteMutation.mutate(server.id)
-    }
-  }, [t, deleteMutation])
+    setDeleteTarget(server)
+  }, [])
 
   return (
     <div className="space-y-4">
@@ -340,7 +339,7 @@ export function McpTab() {
               <TableHead className="whitespace-nowrap">{t('mcp.name')}</TableHead>
               <TableHead className="whitespace-nowrap">{t('mcp.slug')}</TableHead>
               <TableHead className="whitespace-nowrap">{t('mcp.url')}</TableHead>
-              <TableHead className="whitespace-nowrap">Status</TableHead>
+              <TableHead className="whitespace-nowrap">{t('mcp.status')}</TableHead>
               <TableHead className="whitespace-nowrap">{t('mcp.tools')}</TableHead>
               <TableHead className="whitespace-nowrap">{t('mcp.enabled')}</TableHead>
               <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
@@ -366,11 +365,7 @@ export function McpTab() {
                   {s.tool_count} {t('mcp.tools')}
                 </TableCell>
                 <TableCell>
-                  <Switch
-                    checked={s.is_enabled}
-                    disabled={toggleMutation.isPending}
-                    onCheckedChange={(checked) => toggleMutation.mutate({ id: s.id, is_enabled: checked })}
-                  />
+                  <McpToggleSwitch serverId={s.id} isEnabled={s.is_enabled} />
                 </TableCell>
                 <TableCell className="text-right">
                   <Button
@@ -393,6 +388,18 @@ export function McpTab() {
       <McpStatsCard />
 
       {showRegister && <RegisterMcpModal onClose={() => setShowRegister(false)} />}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          open
+          title={t('mcp.deleteTitle')}
+          description={t('mcp.deleteConfirm', { name: deleteTarget.name })}
+          confirmLabel={deleteMutation.isPending ? t('common.deleting') : t('common.delete')}
+          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
+          onClose={() => setDeleteTarget(null)}
+          isLoading={deleteMutation.isPending}
+        />
+      )}
     </div>
   )
 }

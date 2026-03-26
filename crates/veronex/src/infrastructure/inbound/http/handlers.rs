@@ -206,7 +206,7 @@ pub async fn submit_inference(
 
 /// GET /v1/inference/:job_id/stream - SSE token streaming.
 pub async fn stream_inference(
-    Path(job_id): Path<String>,
+    Path(job_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Response {
     let guard = match try_acquire_sse(&state.sse_connections) {
@@ -214,42 +214,34 @@ pub async fn stream_inference(
         Err(resp) => return resp,
     };
 
-    let sse_stream: SseStream = match Uuid::parse_str(&job_id) {
-        Ok(uuid) => {
-            let jid = JobId(uuid);
-            let token_stream = state.use_case.stream(&jid);
+    let jid = JobId(job_id);
+    let token_stream = state.use_case.stream(&jid);
 
-            Box::pin(token_stream.map(move |result| {
-                let _ = &guard; // hold guard alive for stream lifetime
-                match result {
-                    Ok(token) => {
-                        if token.is_final {
-                            Ok::<_, Infallible>(Event::default().event("done").data(""))
-                        } else {
-                            Ok::<_, Infallible>(Event::default().event("token").data(token.value))
-                        }
-                    }
-                    Err(e) => {
-                        Ok::<_, Infallible>(Event::default().event("error").data(sanitize_sse_error(&e)))
-                    }
+    let sse_stream: SseStream = Box::pin(token_stream.map(move |result| {
+        let _ = &guard; // hold guard alive for stream lifetime
+        match result {
+            Ok(token) => {
+                if token.is_final {
+                    Ok::<_, Infallible>(Event::default().event("done").data(""))
+                } else {
+                    Ok::<_, Infallible>(Event::default().event("token").data(token.value))
                 }
-            }))
+            }
+            Err(e) => {
+                Ok::<_, Infallible>(Event::default().event("error").data(sanitize_sse_error(&e)))
+            }
         }
-        Err(_) => Box::pin(futures::stream::once(async {
-            Ok::<_, Infallible>(Event::default().event("error").data("invalid job_id format"))
-        })),
-    };
+    }));
 
     sse_response(sse_stream)
 }
 
 /// GET /v1/inference/:job_id/status - Get job status.
 pub async fn get_status(
-    Path(job_id): Path<String>,
+    Path(job_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<StatusResponse>, AppError> {
-    let uuid = parse_uuid(&job_id)?;
-    let jid = JobId(uuid);
+    let jid = JobId(job_id);
 
     let status = state
         .use_case
@@ -312,11 +304,10 @@ pub async fn stream_job_openai(
 
 /// DELETE /v1/inference/:job_id - Cancel a job.
 pub async fn cancel_inference(
-    Path(job_id): Path<String>,
+    Path(job_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = parse_uuid(&job_id)?;
-    let jid = JobId(uuid);
+    let jid = JobId(job_id);
 
     state
         .use_case
