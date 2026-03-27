@@ -79,9 +79,9 @@ impl McpResultCache {
 
         let key = cache_key(&tool.name, args);
         let conn: fred::clients::Client = self.valkey.next().clone();
-        let raw: Option<String> = conn.get(&key).await.unwrap_or(None)?;
+        let raw: String = conn.get::<Option<String>, _>(&key).await.ok().flatten()?;
 
-        let content: Vec<McpContent> = serde_json::from_str(&raw?).ok()?;
+        let content: Vec<McpContent> = serde_json::from_str(&raw).ok()?;
         debug!(key = %key, "McpResultCache: hit");
         Some(McpToolResult::cached(content))
     }

@@ -277,7 +277,8 @@ impl JobRepository for PostgresJobRepository {
                  completion_tokens = $9,
                  cached_tokens     = $10,
                  has_tool_calls    = $11
-             WHERE id = $1",
+             WHERE id = $1
+               AND status NOT IN ('cancelled', 'failed')",
         )
         .bind(job_id.0)
         .bind(started_at)

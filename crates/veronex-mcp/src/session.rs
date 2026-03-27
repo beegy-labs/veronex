@@ -97,7 +97,8 @@ impl McpSessionManager {
         let entry = self
             .sessions
             .get(&server_id)
-            .map(|e| e.clone())
+            .as_deref()
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("No session for server {server_id}"))?;
 
         let client = Arc::clone(&self.client);
@@ -117,16 +118,23 @@ impl McpSessionManager {
                 let _guard = lock.lock().await;
 
                 // Check if another task already re-initialized while we waited.
-                let fresh = if let Some(e) = self.sessions.get(&server_id) {
-                    e.session.clone()
-                } else {
-                    // We hold the lock and no session exists — do the re-init.
+                // Detect by comparing session_id: if it changed, re-init already happened.
+                // For stateless servers (session_id = None), always re-init — 404 means
+                // the server restarted and the handshake must be replayed.
+                let session_changed = self.sessions
+                    .get(&server_id)
+                    .map(|e| e.session.session_id != entry.session.session_id)
+                    .unwrap_or(false);
+
+                if !session_changed {
+                    self.sessions.remove(&server_id);
                     self.connect(server_id, &entry.session.server_name, &entry.session.url, entry.session.timeout_secs).await?;
-                    self.sessions
-                        .get(&server_id)
-                        .map(|e| e.session.clone())
-                        .ok_or_else(|| anyhow::anyhow!("Re-init succeeded but session missing"))?
-                };
+                }
+
+                let fresh = self.sessions
+                    .get(&server_id)
+                    .map(|e| e.session.clone())
+                    .ok_or_else(|| anyhow::anyhow!("Re-init succeeded but session missing"))?;
 
                 f(client, fresh).await
             }

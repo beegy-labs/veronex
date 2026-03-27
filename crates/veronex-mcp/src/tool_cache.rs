@@ -181,7 +181,7 @@ impl McpToolCache {
 
     /// Resolve a namespaced tool name to its server_id.
     pub fn server_id_of(&self, namespaced_name: &str) -> Option<Uuid> {
-        self.name_to_server.get(namespaced_name).map(|v| *v)
+        self.name_to_server.get(namespaced_name).as_deref().copied()
     }
 
     /// Returns all currently known namespaced tool names (from the reverse map).
@@ -345,7 +345,7 @@ impl McpToolCache {
 
         // Restore server_name from the in-process slug cache.
         // McpTool.server_name is #[serde(skip)] so it's absent from the Valkey JSON.
-        let slug = self.server_slugs.get(&server_id).map(|v| v.clone()).unwrap_or_default();
+        let slug = self.server_slugs.get(&server_id).as_deref().cloned().unwrap_or_default();
         for tool in &mut tools {
             tool.server_id = server_id;
             tool.server_name = slug.clone();

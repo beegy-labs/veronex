@@ -349,29 +349,27 @@ pub async fn patch_mcp_server(
     emit_audit(&state, &claims, "update", "mcp_server", &id.to_string(), new_name,
         &format!("MCP server '{}' ({}) updated", new_name, id)).await;
 
-    // Liveness check for single server
-    let online = if let Some(ref pool) = state.valkey_pool {
-        let conn: fred::clients::Client = pool.next().clone();
-        let key = valkey_keys::mcp_heartbeat(id);
-        let v: Option<String> = match conn.get(key).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(%id, error = %e, "MCP: failed to fetch server heartbeat from Valkey");
-                None
+    // Liveness + tool count: independent reads, run concurrently.
+    let (online, tool_count) = tokio::join!(
+        async {
+            let Some(ref pool) = state.valkey_pool else { return false };
+            let conn: fred::clients::Client = pool.next().clone();
+            let key = valkey_keys::mcp_heartbeat(id);
+            match conn.get::<Option<String>, _>(key).await {
+                Ok(v) => v.is_some(),
+                Err(e) => { tracing::warn!(%id, error = %e, "MCP: failed to fetch server heartbeat from Valkey"); false }
             }
-        };
-        v.is_some()
-    } else {
-        false
-    };
-
-    let tool_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM mcp_server_tools WHERE server_id = $1"
-    )
-    .bind(id)
-    .fetch_one(&state.pg_pool)
-    .await
-    .map_err(db_error)?;
+        },
+        async {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)::bigint FROM mcp_server_tools WHERE server_id = $1"
+            )
+            .bind(id)
+            .fetch_one(&state.pg_pool)
+            .await
+            .unwrap_or(0)
+        }
+    );
 
     Ok(Json(McpServerResponse {
         id: row.id,
