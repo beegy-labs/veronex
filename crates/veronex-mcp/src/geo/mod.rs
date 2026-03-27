@@ -6,7 +6,7 @@
 //! # Usage
 //!
 //! ```rust
-//! use veronex_geo::search;
+//! use veronex_mcp::geo::search;
 //!
 //! let result = search("서울 강남").unwrap();
 //! println!("{}, {} → ({}, {})", result.name, result.admin1, result.latitude, result.longitude);
