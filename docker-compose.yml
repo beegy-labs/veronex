@@ -123,6 +123,8 @@ services:
       GEMINI_ENCRYPTION_KEY: ${GEMINI_ENCRYPTION_KEY:-22551e8092edc3243163385e0dc6157ead33f14f14b1dbc794f0a00bb51886ae}
       CORS_ALLOWED_ORIGINS: http://localhost:3002
       RUST_LOG: info
+      # Login rate limit per IP per 5-min window. Set to 0 to disable (e.g. E2E tests).
+      LOGIN_RATE_LIMIT: "${LOGIN_RATE_LIMIT:-10}"
       # OTel distributed tracing — optional, uncomment to enable.
       # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       # Capacity analyzer Ollama URL — defaults to OLLAMA_URL when unset.
@@ -210,6 +212,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  weather-mcp:
+    build:
+      context: .
+      dockerfile: crates/veronex-mcp/Dockerfile
+    environment:
+      PORT: "3100"
+      RUST_LOG: info
+      # DB index /1 — separate from veronex's queue/rate-limit keys (index /0)
+      VALKEY_URL: redis://valkey:6379/1
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3100/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   veronex-agent:
     build:
       context: .
@@ -223,12 +243,15 @@ services:
       RUST_LOG: info
       VALKEY_URL: redis://valkey:6379/0
       DATABASE_URL: postgres://${POSTGRES_USER:-veronex}:${POSTGRES_PASSWORD:-veronex}@postgres:5432/veronex
+      # MCP server list is fetched dynamically from /v1/mcp/targets each scrape cycle.
     ports:
       - "9091:9091"
     depends_on:
       veronex:
         condition: service_started
       otel-collector:
+        condition: service_healthy
+      weather-mcp:
         condition: service_healthy
     restart: unless-stopped
 

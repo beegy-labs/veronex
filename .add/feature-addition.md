@@ -21,15 +21,16 @@ User requests new feature or SDD spec moves to active.
 | ---- | ------ |
 | 1 | Verify SDD spec exists; if not, create before coding |
 | 2 | Read CDD constraints for target domain |
-| 3 | Implement following hexagonal architecture |
+| 3 | Implement — hexagonal for `veronex`; flat module for `veronex-mcp` (see `infra/crate-structure.md`) |
 | 4 | Write tests (unit + integration) |
-| 5 | Update CDD docs with new patterns/constraints |
+| 5 | CDD feedback — run `.add/cdd-feedback.md` |
 
 ## Rules
 
 | Rule | Detail |
 | ---- | ------ |
 | Spec-first | No code without SDD spec |
-| Hexagonal | domain -> application (ports) -> infrastructure (adapters) |
+| veronex: hexagonal | domain -> application (ports) -> infrastructure (adapters) |
+| veronex-mcp: flat module | Tool trait + tools/{name}.rs — no hexagonal layers |
 | Test before commit | All new code must have tests |
-| CDD feedback | Update docs after completion |
+| CDD feedback | Always run after completion |

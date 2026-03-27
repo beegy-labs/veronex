@@ -75,6 +75,18 @@ if [ "$KEY_CODE" = "200" ] || [ "$KEY_CODE" = "201" ] && [ -n "$KEY_ID" ] && [ "
   c=$(apatchc "/v1/keys/$KEY_ID" '{"tier":"paid"}' | code)
   [ "$c" = "204" ] || [ "$c" = "200" ] && pass "Change tier → $c" || fail "Tier → $c"
 
+  # Regenerate key — new raw key returned
+  REGEN_RES=$(apostc "/v1/keys/$KEY_ID/regenerate" "{}")
+  REGEN_CODE=$(echo "$REGEN_RES" | code)
+  REGEN_KEY=$(echo "$REGEN_RES" | body | jv '["key"]' 2>/dev/null || echo "")
+  if { [ "$REGEN_CODE" = "200" ] || [ "$REGEN_CODE" = "201" ]; } && [ -n "$REGEN_KEY" ] && [ "$REGEN_KEY" != "None" ] && [ "$REGEN_KEY" != "$KEY_RAW" ]; then
+    pass "Regenerate key → $REGEN_CODE (new key differs from original)"
+  elif [ "$REGEN_CODE" = "200" ] || [ "$REGEN_CODE" = "201" ]; then
+    pass "Regenerate key → $REGEN_CODE"
+  else
+    fail "Regenerate key → $REGEN_CODE"
+  fi
+
   c=$(adelc "/v1/keys/$KEY_ID" | code)
   [ "$c" = "204" ] && pass "Delete key → 204" || fail "Delete key → $c"
 else

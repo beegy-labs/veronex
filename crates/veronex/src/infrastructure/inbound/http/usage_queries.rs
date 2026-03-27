@@ -114,7 +114,8 @@ pub(super) async fn pg_key_usage_hourly(
          WHERE api_key_id = $1
            AND created_at >= NOW() - make_interval(hours => $2)
          GROUP BY DATE_TRUNC('hour', created_at)
-         ORDER BY hour"
+         ORDER BY hour
+         LIMIT 8760"
     )
     .bind(key_id)
     .bind(hours as i32)
@@ -196,7 +197,8 @@ pub(super) async fn pg_analytics_summary(pool: &sqlx::PgPool, hours: u32) -> Res
          FROM inference_jobs
          WHERE created_at >= NOW() - make_interval(hours => $1)
          GROUP BY status
-         ORDER BY count DESC"
+         ORDER BY count DESC
+         LIMIT 10"
     )
     .bind(hours as i32)
     .fetch_all(pool)
@@ -362,7 +364,8 @@ pub(super) async fn pg_usage_breakdown(
          ) pricing ON true
          WHERE j.created_at >= now() - make_interval(hours => $1)
          GROUP BY j.provider_type, pricing.input_per_1m, pricing.output_per_1m
-         ORDER BY request_count DESC",
+         ORDER BY request_count DESC
+         LIMIT 50",
     )
     .bind(hours as i32)
     .fetch_all(pool)
@@ -412,7 +415,8 @@ pub(super) async fn pg_usage_breakdown(
          {PRICING_LATERAL}
          WHERE j.created_at >= now() - make_interval(hours => $1)
          GROUP BY k.id, k.name, k.key_prefix
-         ORDER BY request_count DESC",
+         ORDER BY request_count DESC
+         LIMIT 500",
     ))
     .bind(hours as i32)
     .fetch_all(pool)
@@ -463,7 +467,8 @@ pub(super) async fn pg_usage_breakdown(
          {PRICING_LATERAL}
          WHERE j.created_at >= now() - make_interval(hours => $1)
          GROUP BY j.model_name, j.provider_type
-         ORDER BY request_count DESC",
+         ORDER BY request_count DESC
+         LIMIT 200",
     ))
     .bind(hours as i32)
     .fetch_all(pool)

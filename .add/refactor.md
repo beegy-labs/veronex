@@ -22,7 +22,7 @@ User requests refactoring, or code review identifies structural issues.
 | 1 | Capture current behavior with tests |
 | 2 | Refactor in small rounds (fix -> verify -> repeat) |
 | 3 | Run full test suite after each round |
-| 4 | Update CDD docs if patterns changed |
+| 4 | CDD feedback — run `.add/cdd-feedback.md` if new patterns confirmed |
 
 ## Rules
 
@@ -31,4 +31,4 @@ User requests refactoring, or code review identifies structural issues.
 | Behavior-preserving | No logic changes during refactor |
 | Round-based | Small steps, verify after each |
 | Tests must pass | Every round ends with green tests |
-| Doc update | Update patterns.md if new patterns emerge |
+| CDD feedback | Only if new stable pattern confirmed — not for every refactor |

@@ -1,0 +1,75 @@
+[package]
+name = "veronex-mcp"
+version = "0.0.1"
+edition = "2024"
+description = "MCP protocol client library + example servers for Veronex"
+
+[lib]
+name = "veronex_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "veronex-mcp"
+path = "src/bin/veronex-mcp.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-stream = "0.1"
+
+# HTTP client (MCP calls)
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
+
+# HTTP server (weather binary)
+axum = { version = "0.8", features = ["macros"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# IDs & hashing
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+hex = "0.4"
+
+# Concurrency
+dashmap = "6"
+futures = "0.3"
+async-trait = "0.1"
+
+# Bounded concurrent cache (W-TinyLFU — better hot-spot detection than LRU)
+moka = { version = "0.12", features = ["sync"] }
+
+# Valkey (result cache, tool cache L2)
+fred = { version = "10", features = ["serde-json", "enable-rustls-ring"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+urlencoding = "2"
+
+# Geo module runtime deps
+postcard = { version = "1", features = ["alloc"] }
+zstd = "0.13"
+unicode-normalization = "0.1"
+
+workspace-hack = { path = "../../workspace-hack" }
+
+[build-dependencies]
+ureq = "2"
+zip = "2"
+postcard = { version = "1", features = ["use-std"] }
+zstd = "0.13"
+serde = { version = "1", features = ["derive"] }
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+proptest = "1"

@@ -1,6 +1,6 @@
 # Testing Strategy
 
-> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational
+> SSOT | **Last Updated**: 2026-03-25 | Classification: Operational
 
 ## Methodology: Testing Trophy + Contract Testing
 
@@ -50,14 +50,72 @@ If E2E breaks on internal function change → **test design flaw** (layer violat
 | `cargo nextest` | Parallel test execution | Always |
 | `proptest` | Property-based testing (pure functions) | When writing units |
 | `cargo-mutants` | Dead test detection | Once before release |
+| `wiremock` | HTTP mock server for async client tests | When testing HTTP clients (e.g. MCP, provider adapters) |
 
 ### TypeScript (Web)
 
 | Tool | Purpose | Config |
 |------|---------|--------|
-| vitest | Unit + Integration | `pool: threads`, `fileParallelism: true` |
+| vitest | Unit + Integration | `maxWorkers: N`, `fileParallelism: true` (v4+) |
 | Playwright | E2E | `fullyParallel: true`, CI workers=4 |
 | vitest-openapi | API schema validation | OpenAPI spec based |
+
+### vitest v4 Config Changes
+
+**Pool options moved to top level** (`poolOptions` removed):
+
+```ts
+// BEFORE (v3)
+poolOptions: {
+  threads: { maxThreads: 4, singleThread: true }
+}
+
+// AFTER (v4)
+maxWorkers: 4,
+isolate: false,   // replaces singleThread
+```
+
+**Environment assignment via `projects`** (`environmentMatchGlobs` removed):
+
+```ts
+// BEFORE (v3)
+environmentMatchGlobs: [['**/*.spec.ts', 'jsdom']]
+
+// AFTER (v4)
+projects: [
+  { test: { include: ['**/*.spec.ts'], environment: 'jsdom' } }
+]
+```
+
+**Test options argument position changed**:
+
+```ts
+// BEFORE (v3)
+test('name', () => {}, { retry: 2 })
+
+// AFTER (v4)
+test('name', { retry: 2 }, () => {})
+```
+
+**`done` callback removed** — use `async`/`await`:
+
+```ts
+// BEFORE
+test('async', (done) => { done() })
+
+// AFTER
+test('async', async () => { await something() })
+```
+
+**Mock behavior changes**:
+- `vi.restoreAllMocks()` no longer resets `vi.fn()` — add `vi.clearAllMocks()` explicitly if needed
+- Mock default name changed from `'spy'` → `'vi.fn()'` — update any snapshots asserting on mock names
+- Module factory must return an export object: `vi.mock('./x', () => ({ default: 'val' }))` (not bare value)
+
+**Reporter changes**:
+- `basic` reporter removed → use `{ reporter: 'default', summary: false }`
+
+**Minimum requirements**: Node.js >= 20, Vite >= 6
 
 ### Bash E2E
 
@@ -81,6 +139,33 @@ If E2E breaks on internal function change → **test design flaw** (layer violat
 | **1** | OpenAPI schema validation → remove E2E duplication | High |
 | **2** | proptest → pure functions (normalize, parse) | Medium |
 | **3** | cargo-mutants one-time audit | Low (one-time) |
+
+---
+
+## Persistent Sample Data Policy
+
+E2E test 실행 후 일부 데이터는 **수동 확인이 가능하도록 남겨둔다**.
+
+### 원칙
+
+| 구분 | 처리 |
+|------|------|
+| 임시 테스트 리소스 (CRUD lifecycle용) | 테스트 종료 즉시 삭제 |
+| **대표 샘플 데이터** | **테스트 후에도 유지** — UI/API 직접 접근 가능 |
+
+### 구현 방식
+
+- 각 E2E 스크립트의 마지막 섹션에 **"Persistent Sample Data"** 블록을 작성한다.
+- 블록은 동일 항목 중복 방지를 위해 **stale 데이터 정리 → 재등록** 순서로 실행한다.
+- 샘플 데이터는 서비스 재시작 또는 DB 초기화 전까지 유지된다.
+- 수동 확인 방법은 `pass` 메시지에 접근 경로를 명시한다 (예: `accessible at UI /mcp`).
+
+### 적용 대상
+
+| 리소스 | 샘플 데이터 | 유지 항목 |
+|--------|------------|---------|
+| MCP Servers | 날씨 MCP, 미세먼지 MCP 등록 후 미세먼지 삭제 | 날씨 MCP 1개 |
+| (추후 확장) | 기타 핵심 리소스 | TBD |
 
 ---
 

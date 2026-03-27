@@ -79,8 +79,8 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
       }
       return api.updateProvider(provider.id, body)
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['providers'] }); onClose() },
-    onError: () => { queryClient.invalidateQueries({ queryKey: ['providers'] }) },
+    onSuccess: () => onClose(),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
   })
 
   return (

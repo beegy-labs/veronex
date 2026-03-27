@@ -28,15 +28,17 @@ TMPDIR_MF=$(mktemp -d)
   -d "{\"name\":\"$MODEL\"}" > "$TMPDIR_MF/show" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/show") &
 (curl -s -w "\n%{http_code}" "$API/v1beta/models" -H "X-API-Key: $API_KEY" \
   > "$TMPDIR_MF/gemini" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/gemini") &
-(curl -s -w "\n%{http_code}" "$API/v1/test/completions" \
+(curl -s -w "\n%{http_code}" "$API/v1/chat/completions" \
   -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4,\"stream\":false}" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4,\"stream\":false,\"provider_type\":\"ollama\"}" \
   > "$TMPDIR_MF/test_completions" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/test_completions") &
-(apostc "/v1/test/api/chat" \
-  "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"stream\":false}" \
+(curl -s -w "\n%{http_code}" "$API/api/chat" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"stream\":false}" \
   > "$TMPDIR_MF/test_chat" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/test_chat") &
-(apostc "/v1/test/api/generate" \
-  "{\"model\":\"$MODEL\",\"prompt\":\"ping\",\"stream\":false}" \
+(curl -s -w "\n%{http_code}" "$API/api/generate" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"ping\",\"stream\":false}" \
   > "$TMPDIR_MF/test_generate" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/test_generate") &
 wait
 
@@ -139,6 +141,8 @@ assert_get "/v1/dashboard/lab" 200 "Lab settings"
 assert_get "/v1/dashboard/analytics?hours=24" 200 "Dashboard analytics"
 assert_get "/v1/dashboard/queue/depth" 200 "Queue depth"
 assert_get "/v1/dashboard/overview" 200 "Dashboard overview"
+assert_get "/v1/dashboard/capacity/cluster" 200 "Dashboard capacity/cluster"
+assert_get "/v1/mcp/stats" 200 "MCP stats"
 
 c=$(curl -s -w "\n%{http_code}" "$API/docs/openapi.json" | code)
 [ "$c" = "200" ] && pass "OpenAPI spec → 200" || fail "OpenAPI → $c"
@@ -177,6 +181,30 @@ if [ -n "${SERVER_ID_LOCAL:-}" ] && [ "$SERVER_ID_LOCAL" != "None" ]; then
   [ "$c" = "200" ] && pass "Local server metrics → 200" || info "Local server metrics → $c"
   assert_get "/v1/servers/$SERVER_ID_LOCAL/metrics/history?hours=1" 200 "Local metrics history"
 fi
+
+# /v1/servers/metrics/batch — expects JSON array body with server IDs
+BATCH_IDS="[]"
+if [ -n "${SERVER_ID_LOCAL:-}" ] && [ "$SERVER_ID_LOCAL" != "None" ]; then
+  BATCH_IDS="[\"$SERVER_ID_LOCAL\"]"
+fi
+BATCH_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/servers/metrics/batch" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "$BATCH_IDS" 2>/dev/null || echo "000")
+[ "$BATCH_CODE" = "200" ] \
+  && pass "GET /v1/servers/metrics/batch → 200" \
+  || fail "GET /v1/servers/metrics/batch → $BATCH_CODE (expected 200)"
+
+# /v1/models/{model_id} — single model lookup
+if [ -n "${MODEL:-}" ]; then
+  MENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$MODEL'))" 2>/dev/null || echo "$MODEL")
+  MODEL_ID_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/models/$MENC" \
+    -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+  case "$MODEL_ID_CODE" in
+    200) pass "GET /v1/models/:model_id → 200" ;;
+    404) pass "GET /v1/models/:model_id → 404 (model not in OpenAI list — acceptable)" ;;
+    *) fail "GET /v1/models/:model_id → $MODEL_ID_CODE" ;;
+  esac
+fi
 if [ -n "${SERVER_ID_REMOTE:-}" ] && [ "$SERVER_ID_REMOTE" != "None" ]; then
   c=$(agetc "/v1/servers/$SERVER_ID_REMOTE/metrics" | code)
   [ "$c" = "200" ] && pass "Remote server metrics → 200" || info "Remote server metrics → $c"
@@ -206,26 +234,33 @@ for ep in startup ready health; do
   esac
 done
 
-# ── Lab Settings (image limits) ──────────────────────────────────────────────
+# ── Lab Settings ─────────────────────────────────────────────────────────────
 
-hdr "Lab Settings (image limits)"
+hdr "Lab Settings"
 
 LAB_FULL=$(aget "/v1/dashboard/lab" 2>/dev/null || echo "{}")
+
+# Verify all expected fields present
 LAB_CHECK=$(echo "$LAB_FULL" | python3 -c "
 import sys, json
 try:
     d = json.loads(sys.stdin.read())
-    has_images = 'max_images_per_request' in d and 'max_image_b64_bytes' in d
-    print(f'ok|{d.get(\"max_images_per_request\",\"?\")}|{d.get(\"max_image_b64_bytes\",\"?\")}' if has_images else 'missing')
-except: print('error')
+    required = ['gemini_function_calling', 'max_images_per_request', 'max_image_b64_bytes', 'mcp_orchestrator_model', 'updated_at']
+    missing = [k for k in required if k not in d]
+    if missing:
+        print('missing:' + ','.join(missing))
+    else:
+        print(f'ok|{d[\"max_images_per_request\"]}|{d[\"max_image_b64_bytes\"]}|{d[\"mcp_orchestrator_model\"]}')
+except Exception as e: print(f'error:{e}')
 " 2>/dev/null || echo "error")
 
 if [[ "$LAB_CHECK" == ok* ]]; then
   MAX_IMG=$(echo "$LAB_CHECK" | cut -d'|' -f2)
   MAX_BYTES=$(echo "$LAB_CHECK" | cut -d'|' -f3)
-  pass "Lab settings has image limits (max_images=$MAX_IMG, max_bytes=$MAX_BYTES)"
+  MCP_MODEL=$(echo "$LAB_CHECK" | cut -d'|' -f4)
+  pass "Lab settings: all fields present (max_images=$MAX_IMG, max_bytes=$MAX_BYTES, mcp_orchestrator_model=$MCP_MODEL)"
 else
-  fail "Lab settings missing image limit fields"
+  fail "Lab settings: $LAB_CHECK"
 fi
 
 # Dynamic image limit: set max_images=2, verify 3 images → 400, then revert
@@ -241,23 +276,55 @@ if [ "$PATCH_CODE" = "200" ]; then
   [ "$DYN_CODE" = "400" ] \
     && pass "Dynamic image limit: max_images=2, 3 images → 400" \
     || fail "Dynamic image limit: max_images=2, 3 images → $DYN_CODE (expected 400)"
-  # Revert to default
   apatch "/v1/dashboard/lab" '{"max_images_per_request":4}' > /dev/null 2>&1
 else
   info "Lab settings PATCH failed ($PATCH_CODE), skipping dynamic image test"
 fi
 
-# Lab toggle + revert
-LAB=$(echo "$LAB_FULL" | jv '["gemini_function_calling"]' 2>/dev/null || echo "")
-if [ -n "$LAB" ] && [ "$LAB" != "None" ]; then
-  if [ "$LAB" = "True" ]; then
+# gemini_function_calling toggle + revert
+LAB_GEMINI=$(echo "$LAB_FULL" | jv '["gemini_function_calling"]' 2>/dev/null || echo "")
+if [ -n "$LAB_GEMINI" ] && [ "$LAB_GEMINI" != "None" ]; then
+  if [ "$LAB_GEMINI" = "True" ]; then
     apatch "/v1/dashboard/lab" '{"gemini_function_calling":false}' > /dev/null 2>&1
     apatch "/v1/dashboard/lab" '{"gemini_function_calling":true}' > /dev/null 2>&1
   else
     apatch "/v1/dashboard/lab" '{"gemini_function_calling":true}' > /dev/null 2>&1
     apatch "/v1/dashboard/lab" '{"gemini_function_calling":false}' > /dev/null 2>&1
   fi
-  pass "Lab toggle + revert OK"
+  pass "Lab toggle gemini_function_calling + revert OK"
+fi
+
+# mcp_orchestrator_model: set → verify → absent key = no change → null clear
+MCP_TEST_MODEL="${MODEL:-qwen3:8b}"
+
+# 1. PATCH set model
+SET_RES=$(apatchc "/v1/dashboard/lab" "{\"mcp_orchestrator_model\":\"$MCP_TEST_MODEL\"}")
+SET_CODE=$(echo "$SET_RES" | code)
+SET_VAL=$(echo "$SET_RES" | body | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('mcp_orchestrator_model','?'))" 2>/dev/null || echo "?")
+if [ "$SET_CODE" = "200" ] && [ "$SET_VAL" = "$MCP_TEST_MODEL" ]; then
+  pass "Lab mcp_orchestrator_model: PATCH set → '$MCP_TEST_MODEL'"
+else
+  fail "Lab mcp_orchestrator_model: PATCH set → code=$SET_CODE val=$SET_VAL"
+fi
+
+# 2. Absent key → field must be unchanged
+NO_KEY_RES=$(apatchc "/v1/dashboard/lab" '{"max_images_per_request":4}')
+NO_KEY_CODE=$(echo "$NO_KEY_RES" | code)
+NO_KEY_VAL=$(echo "$NO_KEY_RES" | body | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('mcp_orchestrator_model','?'))" 2>/dev/null || echo "?")
+if [ "$NO_KEY_CODE" = "200" ] && [ "$NO_KEY_VAL" = "$MCP_TEST_MODEL" ]; then
+  pass "Lab mcp_orchestrator_model: absent key → value unchanged ('$NO_KEY_VAL')"
+else
+  fail "Lab mcp_orchestrator_model: absent key → code=$NO_KEY_CODE val=$NO_KEY_VAL (expected '$MCP_TEST_MODEL')"
+fi
+
+# 3. PATCH null → clear
+CLR_RES=$(apatchc "/v1/dashboard/lab" '{"mcp_orchestrator_model":null}')
+CLR_CODE=$(echo "$CLR_RES" | code)
+CLR_VAL=$(echo "$CLR_RES" | body | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); v=d.get('mcp_orchestrator_model',False); print('null' if v is None else str(v))" 2>/dev/null || echo "?")
+if [ "$CLR_CODE" = "200" ] && [ "$CLR_VAL" = "null" ]; then
+  pass "Lab mcp_orchestrator_model: PATCH null → cleared"
+else
+  fail "Lab mcp_orchestrator_model: PATCH null → code=$CLR_CODE val=$CLR_VAL (expected null)"
 fi
 
 # Per-key usage
@@ -446,17 +513,17 @@ except Exception as e:
       && pass "Image count limit (max_images=4): 5 images → 400" \
       || fail "Image count limit: 5 images → $IMG_LIMIT_CODE (expected 400)"
 
-    # /v1/test/completions with bee image (test endpoint)
-    IMG_TEST_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/v1/test/completions" \
+    # /v1/chat/completions with bee image (session auth)
+    IMG_TEST_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/v1/chat/completions" \
       -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
-      -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think What insect is in this image? One word.\"}],\"images\":[\"$BEE_IMG\"],\"stream\":false}" \
+      -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think What insect is in this image? One word.\"}],\"images\":[\"$BEE_IMG\"],\"stream\":false,\"provider_type\":\"ollama\"}" \
       2>/dev/null || printf "\n000")
     IMG_TEST_CODE=$(echo "$IMG_TEST_RES" | tail -1)
     case "$IMG_TEST_CODE" in
-      200) pass "Image inference /v1/test/completions → 200" ;;
-      503) info "Image inference test endpoint → 503 (vision model not synced)" ;;
-      400) info "Image inference test endpoint → 400 (pending implementation)" ;;
-      *)   info "Image inference test endpoint → $IMG_TEST_CODE" ;;
+      200) pass "Image inference /v1/chat/completions (session) → 200" ;;
+      503) info "Image inference session → 503 (vision model not synced)" ;;
+      400) info "Image inference session → 400 (pending implementation)" ;;
+      *)   info "Image inference session → $IMG_TEST_CODE" ;;
     esac
 
     # Image storage verification is in 10-image-storage.sh (runs after parallel phases
@@ -465,5 +532,35 @@ except Exception as e:
 else
   info "SKIP: No vision model (llava/vl/minicpm/moondream) on local Ollama"
 fi
+
+# ── OpenAI Media & Completions Stubs ─────────────────────────────────────────
+
+hdr "OpenAI Media Stubs (501)"
+
+# These endpoints exist but return 501 Not Implemented (planned features)
+for stub_ep in "audio/transcriptions" "audio/speech" "images/generations" "moderations"; do
+  STUB_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/v1/$stub_ep" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d '{"model":"test"}' 2>/dev/null || echo "000")
+  case "$STUB_CODE" in
+    501) pass "POST /v1/$stub_ep → 501 (stub registered)" ;;
+    400) pass "POST /v1/$stub_ep → 400 (validation before 501 — acceptable)" ;;
+    404) fail "POST /v1/$stub_ep → 404 (route not registered)" ;;
+    *)   info "POST /v1/$stub_ep → $STUB_CODE" ;;
+  esac
+done
+
+# /v1/completions — text completion (legacy, not chat)
+COMPLETIONS_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/v1/completions" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"Say hello.\",\"max_tokens\":8,\"stream\":false}" \
+  2>/dev/null || printf "\n000")
+COMPLETIONS_CODE=$(echo "$COMPLETIONS_RES" | tail -1)
+case "$COMPLETIONS_CODE" in
+  200) pass "POST /v1/completions → 200" ;;
+  501) pass "POST /v1/completions → 501 (stub — not yet implemented)" ;;
+  503) info "POST /v1/completions → 503 (no providers)" ;;
+  *) fail "POST /v1/completions → $COMPLETIONS_CODE" ;;
+esac
 
 save_counts

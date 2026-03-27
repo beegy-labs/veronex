@@ -7,6 +7,7 @@
 | Skill | Stack | Key Files |
 | ----- | ----- | --------- |
 | rust-backend | Axum, sqlx, tokio, fred | `crates/veronex/` |
+| rust-mcp | Axum, moka, fred, reqwest (flat module, Tool trait) | `crates/veronex-mcp/` |
 | rust-agent | reqwest, OTLP, scraper | `crates/veronex-agent/` |
 | rust-analytics | Axum, clickhouse-rs | `crates/veronex-analytics/` |
 | react-frontend | Next.js 16, React 19, TanStack Query v5 | `web/` |

@@ -29,6 +29,8 @@ use veronex::infrastructure::outbound::capacity::vram_pool::VramPool;
 use veronex::infrastructure::outbound::observability::{HttpAuditAdapter, HttpObservabilityAdapter};
 use veronex::infrastructure::outbound::persistence::account_repository::PostgresAccountRepository;
 use veronex::infrastructure::outbound::persistence::api_key_repository::PostgresApiKeyRepository;
+use veronex::infrastructure::outbound::persistence::caching_api_key_repo::CachingApiKeyRepo;
+use veronex::infrastructure::outbound::persistence::caching_lab_settings_repo::CachingLabSettingsRepo;
 use veronex::infrastructure::outbound::persistence::caching_model_selection::CachingModelSelection;
 use veronex::infrastructure::outbound::persistence::caching_ollama_model_repo::CachingOllamaModelRepo;
 use veronex::infrastructure::outbound::persistence::caching_provider_registry::CachingProviderRegistry;
@@ -59,7 +61,7 @@ use super::config::AppConfig;
 pub struct Repositories {
     pub account_repo: Arc<dyn AccountRepository>,
     pub api_key_repo: Arc<dyn ApiKeyRepository>,
-    pub job_repo: Arc<PostgresJobRepository>,
+    pub job_repo: Arc<dyn veronex::application::ports::outbound::job_repository::JobRepository>,
     pub provider_registry: Arc<dyn LlmProviderRegistry>,
     pub gpu_server_registry: Arc<dyn GpuServerRegistry>,
     pub gemini_policy_repo: Arc<dyn GeminiPolicyRepository>,
@@ -234,8 +236,11 @@ pub async fn wire_repositories(
     let account_repo: Arc<dyn AccountRepository> =
         Arc::new(PostgresAccountRepository::new(pg_pool.clone()));
     let api_key_repo: Arc<dyn ApiKeyRepository> =
-        Arc::new(PostgresApiKeyRepository::new(pg_pool.clone()));
-    let job_repo = Arc::new(PostgresJobRepository::new(pg_pool.clone()));
+        Arc::new(CachingApiKeyRepo::new(Arc::new(
+            PostgresApiKeyRepository::new(pg_pool.clone()),
+        )));
+    let job_repo: Arc<dyn veronex::application::ports::outbound::job_repository::JobRepository> =
+        Arc::new(PostgresJobRepository::new(pg_pool.clone()));
     let provider_registry: Arc<dyn LlmProviderRegistry> = Arc::new(CachingProviderRegistry::new(
         Arc::new(PostgresProviderRegistry::new(pg_pool.clone(), config.gemini_encryption_key)),
         veronex::domain::constants::PROVIDER_REGISTRY_CACHE_TTL,
@@ -265,7 +270,9 @@ pub async fn wire_repositories(
     let session_repo: Arc<dyn SessionRepository> =
         Arc::new(PostgresSessionRepository::new(pg_pool.clone()));
     let lab_settings_repo: Arc<dyn LabSettingsRepository> =
-        Arc::new(PostgresLabSettingsRepository::new(pg_pool.clone()));
+        Arc::new(CachingLabSettingsRepo::new(Arc::new(
+            PostgresLabSettingsRepository::new(pg_pool.clone()),
+        )));
 
     // ── Capacity infrastructure ────────────────────────────────────
     let capacity_repo: Arc<dyn ModelCapacityRepository> =

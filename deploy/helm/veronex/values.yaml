@@ -124,6 +124,53 @@ veronexWeb:
 
   env: {}
 
+weatherMcp:
+  enabled: false
+  image:
+    repository: gitea.girok.dev/beegy-labs/veronex-mcp
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # Open-Meteo API call limit per hour (across all instances, enforced via Valkey)
+  apiRateLimit: 200
+
+  # Moka L1 cache max entries per instance
+  l1MaxEntries: 10000
+
+  # Valkey connection pool size per instance
+  valkeyPool: 4
+
+  logLevel: "info"
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    # Set keda=true to use KEDA ScaledObject instead of HPA.
+    # Requires KEDA operator installed in the cluster.
+    keda: false
+    kedaPrometheus:
+      enabled: false
+      serverAddress: "http://prometheus:9090"
+      # Scale up when requests/sec exceeds this threshold per replica
+      threshold: "100"
+
+  env: {}
+
 # ── Subcharts — enable/disable each independently ──────────────────────────────
 # When a subchart is disabled, set the corresponding external* values.
 

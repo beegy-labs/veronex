@@ -5,8 +5,8 @@ export const API_BASE_URL =
   process.env.PLAYWRIGHT_API_URL ?? 'http://localhost:3001'
 
 /** Default test credentials. */
-export const TEST_USERNAME = process.env.E2E_USERNAME ?? 'admin'
-export const TEST_PASSWORD = process.env.E2E_PASSWORD ?? 'changeme'
+export const TEST_USERNAME = process.env.E2E_USERNAME ?? 'test'
+export const TEST_PASSWORD = process.env.E2E_PASSWORD ?? 'test1234!'
 
 /** Generate a short unique suffix for test resource names. */
 export function testId(): string {

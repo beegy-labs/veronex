@@ -38,3 +38,10 @@ web/tsconfig.tsbuildinfo
 
 # Helm dependency charts (downloaded by helm dependency build)
 deploy/helm/*/charts/*.tgz
+
+# MinIO local mount (runtime storage, not source)
+minio-prod/
+
+# cargo-mutants output
+mutants.out/
+mutants.out.old/

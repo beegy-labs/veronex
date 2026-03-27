@@ -175,6 +175,42 @@ pub fn vram_leases(provider_id: Uuid) -> String {
     format!("veronex:vram_leases:{provider_id}")
 }
 
+// ── MCP tool cache ───────────────────────────────────────────────────────────
+
+/// Cached tool schema for a single MCP server (JSON-serialized `Vec<McpTool>`).
+/// TTL = 35 s. Written by: veronex (SET NX leader). Read by: all veronex replicas.
+pub fn mcp_tool(server_id: Uuid) -> String {
+    format!("veronex:mcp:tools:{server_id}")
+}
+
+/// Refresh lock for a single MCP server — prevents thundering herd.
+/// TTL = 33 s. Held by the replica that won the SET NX race.
+pub fn mcp_tool_lock(server_id: Uuid) -> String {
+    format!("veronex:mcp:tools:lock:{server_id}")
+}
+
+/// MCP server liveness heartbeat set by veronex-agent.
+/// TTL = 3× scrape interval (default 180 s). Missing key = server offline.
+/// Written by: veronex-agent. Read by: McpToolCache::is_online().
+pub fn mcp_heartbeat(server_id: Uuid) -> String {
+    format!("veronex:mcp:heartbeat:{server_id}")
+}
+
+/// Per-API-key MCP server allowlist cache.
+/// Value: JSON array of allowed server UUIDs, e.g. `["uuid1","uuid2"]` or `[]`.
+/// Empty array = no MCP access (default deny). TTL = 60s.
+/// Invalidated on grant/revoke in key_mcp_access_handlers.
+pub fn mcp_key_acl(api_key_id: Uuid) -> String {
+    format!("veronex:mcp:acl:{api_key_id}")
+}
+
+/// Cached MCP tool result keyed by (tool_name, args_hash).
+/// TTL is tool-specific (readOnlyHint + idempotentHint condition).
+/// Written + read by: veronex McpResultCache.
+pub fn mcp_result(tool_name: &str, args_hash: &str) -> String {
+    format!("veronex:mcp:result:{tool_name}:{args_hash}")
+}
+
 // ── Placement planner (SSOT in domain::constants) ───────────────────────────
 
 pub use crate::domain::constants::{preload_lock_key as preload_lock};
@@ -201,5 +237,45 @@ mod tests {
     #[test]
     fn instances_set_value_matches_agent_convention() {
         assert_eq!(INSTANCES_SET, "veronex:instances");
+    }
+
+    // ── MCP cross-boundary key format guards ──────────────────────────────────
+    // veronex-mcp and veronex-agent cannot import from this module, so they
+    // construct the same key strings independently.  These tests pin the format
+    // so any drift is caught at compile time on either side.
+
+    #[test]
+    fn mcp_tool_format() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap();
+        assert_eq!(mcp_tool(id), "veronex:mcp:tools:550e8400-e29b-41d4-a716-446655440001");
+    }
+
+    #[test]
+    fn mcp_tool_lock_format() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap();
+        assert_eq!(
+            mcp_tool_lock(id),
+            "veronex:mcp:tools:lock:550e8400-e29b-41d4-a716-446655440002"
+        );
+    }
+
+    /// mcp_heartbeat() must match what veronex-agent's scraper writes:
+    ///   `format!("veronex:mcp:heartbeat:{server_id}")`
+    /// and what veronex-mcp's McpToolCache::is_online() reads.
+    #[test]
+    fn mcp_heartbeat_format_matches_agent_and_tool_cache() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440003").unwrap();
+        assert_eq!(
+            mcp_heartbeat(id),
+            "veronex:mcp:heartbeat:550e8400-e29b-41d4-a716-446655440003"
+        );
+    }
+
+    #[test]
+    fn mcp_result_format() {
+        assert_eq!(
+            mcp_result("mcp_weather_get_weather", "ab12cd34"),
+            "veronex:mcp:result:mcp_weather_get_weather:ab12cd34"
+        );
     }
 }

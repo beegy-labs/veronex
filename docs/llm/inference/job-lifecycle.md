@@ -1,6 +1,6 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-03-16
+> SSOT | **Last Updated**: 2026-03-26
 
 ## Task Guide
 
@@ -98,7 +98,7 @@ Client → inference route → submit(prompt, model, ...) → Pending → ZADD q
 
 queue_dispatcher_loop (ZRANGE peek → Rust scoring → Lua ZREM claim → processing list):
   → thermal + slot check → run_job() → stream_tokens()
-  → Completed: latency_ms, ttft_ms, tokens, result_text, tool_calls_json saved
+  → Completed: finalize() writes metrics to Postgres + ConversationRecord to S3
   → ObservabilityPort → veronex-analytics → OTel → Redpanda → ClickHouse
 ```
 
@@ -113,18 +113,29 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `provider_type` | `ProviderType` | Ollama / Gemini |
 | `status` | `JobStatus` | Pending / Running / Completed / Failed / Cancelled |
 | `source` | `JobSource` | Api / Test (immutable) |
-| `prompt` | `String` | display prompt (last user message, short) |
-| `messages` | `Option<Value>` | full LLM input context (→ `messages_json` JSONB in DB, 100-500 KB for agentic sessions). Note: `messages_json` in the DB may be NULL for new jobs. S3 is the authoritative message store; the DB column is used as a fallback for older jobs. |
+| `prompt_preview` | `Option<String>` | ≤200 chars of prompt, CJK-safe truncation with `…` — DB only, full prompt in S3 |
+| `messages` | `Option<Value>` | in-memory during dispatch; **not persisted to DB** — stored in S3 `ConversationRecord` |
 | `tools` | `Option<Value>` | in-memory only during dispatch, not persisted |
+| `has_tool_calls` | `bool` | `TRUE` when model emitted tool/function calls — lightweight flag for list view |
 | `api_key_id` | `Option<Uuid>` | FK → api_keys (ON DELETE SET NULL) |
 | `provider_id` | `Option<Uuid>` | FK → llm_providers, set at dispatch time |
 | `conversation_id` | `Option<String>` | X-Conversation-ID header; see `session-grouping.md` |
-| `tool_calls_json` | `Option<Value>` | model-returned tool calls JSONB |
 | `latency_ms` | `Option<i32>` | `started_at` → `completed_at` (excludes queue wait) |
 | `ttft_ms` | `Option<i32>` | Time To First Token |
 | `queue_time_ms` | `Option<i32>` | `created_at` → `started_at` (queue wait) |
 | `cancelled_at` | `Option<DateTime>` | set by cancel(); NULL for non-cancelled jobs |
 | `image_keys` | `Option<Vec<String>>` | S3 object keys for attached images (WebP); stored as `TEXT[]` in DB |
+
+**S3 ConversationRecord** (`conversations/{owner_id}/{YYYY-MM-DD}/{job_id}.json.zst`):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `prompt` | `String` | full original prompt |
+| `messages` | `Option<Value>` | full LLM input context (100-500 KB for agentic sessions) |
+| `tool_calls` | `Option<Value>` | all tool/function calls emitted (MCP + OpenAI function calls) |
+| `result` | `Option<String>` | final text output |
+
+Written once at `finalize_job()` using zstd-3 compression (~1.2 KB / record). Read on-demand by the admin detail view (one S3 GET per click). `owner_id = account_id ?? api_key_id ?? job_id`.
 
 > `tps` = `completion_tokens / (latency_ms - ttft_ms) * 1000` (computed in API, not stored)
 
@@ -134,11 +145,15 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 
 ```rust
 // infrastructure/outbound/persistence/job_repository.rs (PostgresJobRepository)
-save()        // UPSERT ON CONFLICT(id) DO UPDATE (status, result_text, error, timestamps, metrics)
-              // source + messages_json: COALESCE — immutable once set
-get_status()  // in-memory map first, DB fallback
-stream()      // token buffer + tokio::Notify (no polling, no broadcast channel)
+save()            // INSERT ON CONFLICT DO NOTHING — initial Pending row, metadata + prompt_preview only
+finalize()        // Single terminal UPDATE: status=completed, metrics, has_tool_calls
+                  // Replaces the former mark_running + mark_completed two-step
+cancel_job()      // UPDATE status=cancelled (early-exit path)
+fail_with_reason()// UPDATE status=failed + failure_reason (queue-full / stream error)
+get_status()      // in-memory DashMap first, DB fallback
 ```
+
+**Write discipline**: Postgres sees exactly two writes per completed job — `save()` at submission and `finalize()` at stream end. No intermediate state is persisted.
 
 ### In-Memory Job Store (`InferenceUseCaseImpl`)
 

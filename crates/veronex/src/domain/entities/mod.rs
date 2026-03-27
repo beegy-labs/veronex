@@ -25,6 +25,10 @@ use super::value_objects::{JobId, ModelName, Prompt};
 pub struct InferenceJob {
     pub id: JobId,
     pub prompt: Prompt,
+    /// First ≤200 characters of the prompt (char boundary, CJK-safe).
+    /// The only part of the prompt persisted to Postgres. Full prompt lives in S3.
+    #[serde(default)]
+    pub prompt_preview: Option<String>,
     pub model_name: ModelName,
     pub status: JobStatus,
     pub provider_type: ProviderType,
@@ -78,8 +82,8 @@ pub struct InferenceJob {
     /// Contains: system prompt + prior turns (user/assistant/tool) + current user message.
     /// When Some, the OllamaAdapter routes to `/api/chat`; when None, to `/api/generate`.
     ///
-    /// Persisted to DB as `messages_json JSONB` (migration 000045).
-    /// Serves as ground-truth training input: input=messages_json, output=result_text+tool_calls_json.
+    /// Stored in S3 `ConversationRecord.messages` (not persisted to Postgres).
+    /// Serves as ground-truth training input: input=messages, output=result+tool_calls.
     /// Can reach 100–500 KB for agentic sessions with large file contents.
     #[serde(default)]
     pub messages: Option<serde_json::Value>,
@@ -155,6 +159,10 @@ pub struct InferenceJob {
     #[serde(default)]
     #[ts(skip)]
     pub presence_penalty: Option<f64>,
+    /// Groups all inference_jobs belonging to one MCP agentic loop run.
+    /// NULL for non-MCP requests (single-turn, no tool calls).
+    #[serde(default)]
+    pub mcp_loop_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +257,7 @@ mod tests {
         InferenceJob {
             id: JobId::new(),
             prompt: Prompt::new("What is Rust?").unwrap(),
+            prompt_preview: None,
             model_name: ModelName::new("llama3.2").unwrap(),
             status: JobStatus::Pending,
             provider_type: ProviderType::Ollama,
@@ -284,6 +293,7 @@ mod tests {
             response_format: None,
             frequency_penalty: None,
             presence_penalty: None,
+            mcp_loop_id: None,
         }
     }
 
@@ -336,6 +346,7 @@ mod tests {
         let job = InferenceJob {
             id: JobId::new(),
             prompt: Prompt::new("Explain quantum computing").unwrap(),
+            prompt_preview: None,
             model_name: ModelName::new("gemini-pro").unwrap(),
             status: JobStatus::Failed,
             provider_type: ProviderType::Gemini,
@@ -371,6 +382,7 @@ mod tests {
             response_format: None,
             frequency_penalty: None,
             presence_penalty: None,
+            mcp_loop_id: None,
         };
         assert_eq!(job.status, JobStatus::Failed);
         assert!(job.started_at.is_some());

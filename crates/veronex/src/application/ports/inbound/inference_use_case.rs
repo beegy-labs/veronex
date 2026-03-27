@@ -37,6 +37,9 @@ pub struct SubmitJobRequest {
     pub response_format: Option<serde_json::Value>,
     pub frequency_penalty: Option<f64>,
     pub presence_penalty: Option<f64>,
+    /// MCP agentic loop group ID — same UUID for all jobs in one run_loop() execution.
+    /// None for non-MCP (single-turn) requests.
+    pub mcp_loop_id: Option<uuid::Uuid>,
 }
 
 /// Snapshot of in-flight job counts — derived from the in-memory DashMap.

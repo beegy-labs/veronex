@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
-use crate::domain::entities::ApiKey;
+use crate::infrastructure::inbound::http::middleware::infer_auth::InferCaller;
 use crate::infrastructure::inbound::http::state::AppState;
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -25,11 +25,10 @@ pub async fn rate_limiter(
     req: Request,
     next: Next,
 ) -> Response {
-    let api_key = req.extensions().get::<ApiKey>().cloned();
-
-    // No key in extensions = health endpoint or pre-auth path → pass through.
-    let Some(api_key) = api_key else {
-        return next.run(req).await;
+    // Session callers (api_test JWT) bypass rate limiting.
+    let api_key = match req.extensions().get::<InferCaller>().cloned() {
+        Some(InferCaller::ApiKey(k)) => k,
+        Some(InferCaller::Session(_)) | None => return next.run(req).await,
     };
 
     // Valkey unavailable → fail-closed (503).
@@ -224,6 +223,7 @@ async fn check_tpm(
 mod tests {
     use super::*;
 
+    use crate::domain::entities::ApiKey;
     use crate::domain::enums::{KeyTier, KeyType};
 
     #[test]

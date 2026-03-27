@@ -9,6 +9,7 @@ use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPor
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
+use crate::application::ports::outbound::message_store::MessageStore;
 use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::ObservabilityPort;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
@@ -234,6 +235,7 @@ async fn fail_job_no_provider(
 pub(super) fn spawn_job_direct(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
     job_repo: Arc<dyn JobRepository>,
+    message_store: Option<Arc<dyn MessageStore>>,
     valkey: Option<Arc<dyn ValkeyPort>>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
@@ -279,7 +281,7 @@ pub(super) fn spawn_job_direct(
         };
 
         match run_job(
-            jobs, adapter, job_repo, valkey, observability, model_manager,
+            jobs, adapter, job_repo, message_store, valkey, observability, model_manager,
             provider_dispatch, uuid, job, Some(provider_id), is_free,
             event_tx, instance_id, cancel_notifiers,
         ).await {
@@ -304,6 +306,7 @@ pub(super) async fn queue_dispatcher_loop(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
     registry: Arc<dyn LlmProviderRegistry>,
     job_repo: Arc<dyn JobRepository>,
+    message_store: Option<Arc<dyn MessageStore>>,
     valkey: Arc<dyn ValkeyPort>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
@@ -464,9 +467,9 @@ pub(super) async fn queue_dispatcher_loop(
             let owner_key = crate::domain::constants::job_owner_key(uuid);
             let _ = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await;
 
-            let (jobs_c, repo_c, vk_c, obs_c, mm_c) = (
-                jobs.clone(), job_repo.clone(), valkey.clone(),
-                observability.clone(), model_manager.clone(),
+            let (jobs_c, repo_c, ms_c, vk_c, obs_c, mm_c) = (
+                jobs.clone(), job_repo.clone(), message_store.clone(),
+                valkey.clone(), observability.clone(), model_manager.clone(),
             );
             let (ev_c, cb_c, pd_c, iid_c, cn_c) = (
                 event_tx.clone(), circuit_breaker.clone(), provider_dispatch.clone(),
@@ -476,7 +479,7 @@ pub(super) async fn queue_dispatcher_loop(
             tokio::spawn(async move {
                 let _permit = permit;
                 match run_job(
-                    jobs_c, adapter, repo_c, Some(vk_c.clone()), obs_c, mm_c,
+                    jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,
                     pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
                 ).await {
                     Ok(Some(latency_ms)) => {

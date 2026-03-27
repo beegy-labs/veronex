@@ -37,7 +37,6 @@ use crate::domain::constants::{
 use super::JobEntry;
 use super::dispatcher::{queue_dispatcher_loop, spawn_job_direct};
 use super::helpers::{broadcast_event, decr_pending, incr_pending, schedule_cleanup};
-use super::runner::run_job;
 
 type Result<T> = std::result::Result<T, DomainError>;
 
@@ -177,10 +176,11 @@ impl InferenceUseCaseImpl {
             self.cancel_notifiers.clone(), self.ollama_model_repo.clone(),
             self.model_selection_repo.clone(), self.global_model_settings_repo.clone(),
         );
+        let msg_store = self.message_store.clone();
         tracing::info!("multi-provider queue dispatcher started");
         async move {
             queue_dispatcher_loop(
-                jobs, registry, job_repo, valkey, obs, mm, vram, thermal,
+                jobs, registry, job_repo, msg_store, valkey, obs, mm, vram, thermal,
                 cb, pd, ev, iid, cn, omr, msr, gmsr, shutdown,
             ).await;
         }.boxed()
@@ -262,13 +262,31 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             prompt, model_name, provider_type, gemini_tier, api_key_id,
             account_id, source, api_format, messages, tools, request_path,
             conversation_id, key_tier, images, stop, seed, response_format,
-            frequency_penalty, presence_penalty,
+            frequency_penalty, presence_penalty, mcp_loop_id,
         } = req;
 
         let job_id = JobId::new();
+
+        // Generate prompt_preview: first ≤200 chars (char boundary, CJK-safe).
+        let prompt_preview = {
+            const LIMIT: usize = 200;
+            if prompt.chars().count() <= LIMIT {
+                prompt.clone()
+            } else {
+                let mut end = 0;
+                for (i, _) in prompt.char_indices().take(LIMIT - 1) {
+                    end = i;
+                }
+                // advance past last included char
+                end += prompt[end..].chars().next().map_or(0, |c| c.len_utf8());
+                format!("{}…", &prompt[..end])
+            }
+        };
+
         let job = InferenceJob {
             id: job_id.clone(),
             prompt: Prompt::new(&prompt)?,
+            prompt_preview: Some(prompt_preview),
             model_name: ModelName::new(&model_name)?,
             status: JobStatus::Pending, provider_type,
             created_at: chrono::Utc::now(),
@@ -282,13 +300,10 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             messages_hash: None, messages_prefix_hash: None, failure_reason: None,
             images, image_keys: None,
             stop, seed, response_format, frequency_penalty, presence_penalty,
+            mcp_loop_id,
         };
 
-        // Upload messages to S3
-        if let (Some(msgs), Some(store)) = (&job.messages, &self.message_store)
-            && let Err(e) = store.put(job_id.0, msgs).await {
-                tracing::warn!(job_id = %job_id.0, "S3 upload failed (non-fatal): {e}");
-            }
+        // Persist metadata-only row to Postgres. Large content is written to S3 at finalize.
         let job_for_db = InferenceJob {
             messages: None,
             stop: None, seed: None, response_format: None,
@@ -298,8 +313,6 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         self.job_repo.save(&job_for_db).await?;
 
         // Spawn async image upload (WebP conversion + S3) — non-blocking.
-        // Conversion+upload is delegated to ImageStore::put_base64() to keep infrastructure
-        // concerns (image codec) out of the application layer.
         if let (Some(images), Some(store)) = (&job.images, &self.image_store) {
             let images = images.clone();
             let store = store.clone();
@@ -314,12 +327,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     }
                 }
                 if !keys.is_empty() {
-                    let update_job = InferenceJob {
-                        id: jid, image_keys: Some(keys),
-                        ..job_for_db
-                    };
-                    if let Err(e) = repo.save(&update_job).await {
-                        tracing::warn!("failed to save image_keys: {e}");
+                    if let Err(e) = repo.update_image_keys(&jid, keys).await {
+                        tracing::warn!(job_id = %jid.0, "failed to update image_keys: {e}");
                     }
                 }
             });
@@ -327,6 +336,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
         let cancel_notify = Arc::new(Notify::new());
         self.cancel_notifiers.insert(job_id.0, cancel_notify.clone());
+        // Keep messages in DashMap so the provider can use them at dispatch time.
+        // (No mark_running DB write, so messages no longer need to be stripped here.)
         self.jobs.insert(job_id.0, JobEntry {
             job: job.clone(), status: JobStatus::Pending,
             tokens: Vec::with_capacity(INITIAL_TOKEN_CAPACITY),
@@ -376,8 +387,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 Err(e) => {
                     tracing::warn!(%uuid, "Valkey ZSET enqueue failed, direct spawn: {e}");
                     spawn_job_direct(
-                        self.jobs.clone(), self.job_repo.clone(), self.valkey.clone(),
-                        self.observability.clone(), self.model_manager.clone(),
+                        self.jobs.clone(), self.job_repo.clone(), self.message_store.clone(),
+                        self.valkey.clone(), self.observability.clone(), self.model_manager.clone(),
                         self.vram_pool.clone(), self.thermal.clone(),
                         self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                         uuid, job, gemini_tier, self.event_tx.clone(),
@@ -387,8 +398,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             }
         } else {
             spawn_job_direct(
-                self.jobs.clone(), self.job_repo.clone(), None,
-                self.observability.clone(), self.model_manager.clone(),
+                self.jobs.clone(), self.job_repo.clone(), self.message_store.clone(),
+                None, self.observability.clone(), self.model_manager.clone(),
                 self.vram_pool.clone(), self.thermal.clone(),
                 self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                 uuid, job, gemini_tier, self.event_tx.clone(),
@@ -414,9 +425,9 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             .pick_and_build(&job.provider_type, job.model_name.as_str(), gemini_tier.as_deref())
             .await?;
 
-        run_job(
-            self.jobs.clone(), adapter, self.job_repo.clone(), self.valkey.clone(),
-            self.observability.clone(), self.model_manager.clone(),
+        super::runner::run_job(
+            self.jobs.clone(), adapter, self.job_repo.clone(), self.message_store.clone(),
+            self.valkey.clone(), self.observability.clone(), self.model_manager.clone(),
             self.provider_dispatch.clone(), uuid, job, Some(pid), is_free,
             self.event_tx.clone(), self.instance_id.clone(), self.cancel_notifiers.clone(),
         ).await?;

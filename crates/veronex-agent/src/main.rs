@@ -145,6 +145,36 @@ async fn discover_targets(client: &reqwest::Client, api_url: &str) -> Vec<SdTarg
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct McpTargetEntry {
+    id: String,
+    url: String,
+}
+
+/// Fetch enabled MCP servers from `/v1/mcp/targets` (no auth required).
+async fn fetch_mcp_targets(client: &reqwest::Client, api_url: &str) -> Vec<(String, String)> {
+    let url = format!("{}/v1/mcp/targets", api_url.trim_end_matches('/'));
+    match client.get(&url).timeout(DISCOVERY_TIMEOUT).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<Vec<McpTargetEntry>>().await {
+                Ok(entries) => entries.into_iter().map(|e| (e.id, e.url)).collect(),
+                Err(e) => {
+                    tracing::warn!(url = %url, error = %e, "MCP target discovery JSON parse failed");
+                    vec![]
+                }
+            }
+        }
+        Ok(resp) => {
+            tracing::debug!(url = %url, status = %resp.status(), "MCP target discovery returned non-success");
+            vec![]
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "MCP target discovery failed");
+            vec![]
+        }
+    }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -342,6 +372,19 @@ mod tests {
         state.alive.store(false, Ordering::Relaxed);
         assert!(!state.alive.load(Ordering::Relaxed));
     }
+
+    // ── MCP heartbeat key format ──────────────────────────────────────────────
+
+    const SAMPLE_UUID: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+    /// Heartbeat key format must match veronex-mcp's McpToolCache::is_online():
+    ///   `format!("veronex:mcp:heartbeat:{server_id}")`
+    /// and veronex's valkey_keys::mcp_heartbeat().
+    #[test]
+    fn mcp_heartbeat_key_format_matches_tool_cache() {
+        let key = format!("veronex:mcp:heartbeat:{SAMPLE_UUID}");
+        assert_eq!(key, "veronex:mcp:heartbeat:550e8400-e29b-41d4-a716-446655440000");
+    }
 }
 
 async fn scrape_cycle(
@@ -351,6 +394,31 @@ async fn scrape_cycle(
     valkey: Option<&fred::clients::Pool>,
 ) -> CycleResult {
     let start = Instant::now();
+
+    // ── MCP server health checks ─────────────────────────────────────────────
+    // Fetches enabled MCP servers from /v1/mcp/targets on every cycle (dynamic).
+    // Pings run concurrently — idempotent Valkey SET EX, no sharding needed.
+    if let Some(pool) = valkey {
+        let mcp_targets = fetch_mcp_targets(client, &config.veronex_api_url).await;
+        if !mcp_targets.is_empty() {
+            let ping_futs: Vec<_> = mcp_targets
+                .into_iter()
+                .map(|(server_id, base_url)| async move {
+                    let alive = scraper::ping_mcp_server(client, &server_id, &base_url).await;
+                    (server_id, alive)
+                })
+                .collect();
+
+            let ping_results = futures::future::join_all(ping_futs).await;
+            for (server_id, alive) in ping_results {
+                if alive {
+                    scraper::set_mcp_heartbeat(pool, &server_id, HEARTBEAT_TTL_SECS).await;
+                } else {
+                    tracing::debug!(server_id, "MCP server offline — heartbeat not renewed");
+                }
+            }
+        }
+    }
 
     let targets = discover_targets(client, &config.veronex_api_url).await;
     if targets.is_empty() {

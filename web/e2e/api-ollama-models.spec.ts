@@ -28,6 +28,18 @@ test.describe('API: Ollama Models', () => {
     }
   })
 
+  test('list model providers returns paginated result', async () => {
+    const res = await api.get('/v1/ollama/models')
+    const body = await res.json()
+    if (body.models.length === 0) return
+
+    const modelName = body.models[0].model_name
+    const provRes = await api.get(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers`)
+    expect(provRes.ok()).toBeTruthy()
+    const provBody = await provRes.json()
+    expect(Array.isArray(provBody.providers ?? provBody)).toBeTruthy()
+  })
+
   test('sync status returns status or 404 when no sync has run', async () => {
     const res = await api.get('/v1/ollama/sync/status')
     // 200 if a sync job exists, 404 if no sync has ever run

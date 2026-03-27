@@ -260,26 +260,19 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     const jobIdRef = { current: null as string | null }
 
     try {
-      const isStreaming = p.endpoint === '/v1/chat/completions'
+      const isStreaming = p.endpoint === '/v1/chat/completions' || p.endpoint === '/api/chat' || p.endpoint === '/api/generate'
       let url: string
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
+      url = `${BASE}${p.endpoint}`
       if (p.useApiKey && apiKeyValue.trim()) {
-        url = `${BASE}${p.endpoint}`
         if (p.endpoint === '/v1/chat/completions' || p.endpoint === '/v1beta/models') {
           headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
         } else {
           headers['X-API-Key'] = apiKeyValue.trim()
         }
-      } else {
-        const testEndpointMap: Record<Endpoint, string> = {
-          '/v1/chat/completions': '/v1/test/completions',
-          '/api/chat': '/v1/test/api/chat',
-          '/api/generate': '/v1/test/api/generate',
-          '/v1beta/models': '/v1/test/completions',
-        }
-        url = `${BASE}${testEndpointMap[p.endpoint]}`
       }
+      // Session auth (JWT cookie) is sent automatically by the browser.
 
       let body: Record<string, unknown>
       if (p.endpoint === '/v1beta/models') {

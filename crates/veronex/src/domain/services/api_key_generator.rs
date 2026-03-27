@@ -18,7 +18,7 @@ pub fn generate_api_key() -> (Uuid, String, String, String) {
     let id = Uuid::now_v7();
     // Independent random bytes — prevents timestamp-based key prediction.
     let mut random_bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut random_bytes);
+    rand::rng().fill_bytes(&mut random_bytes);
     let random_u128 = u128::from_be_bytes(random_bytes);
     let encoded = base62::encode(random_u128);
     let plaintext = format!("{API_KEY_PREFIX}{encoded}");

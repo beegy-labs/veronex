@@ -87,6 +87,41 @@ async fn main() -> Result<()> {
 
     // ── Build app state ────────────────────────────────────────────
     let bootstrap::InfraContext { valkey_pool, pg_pool, http_client, .. } = infra;
+
+    // ── Wire MCP bridge (requires Valkey) ──────────────────────────
+    let mcp_bridge = if let Some(ref valkey) = valkey_pool {
+        use std::sync::Arc;
+        use veronex_mcp::{McpCircuitBreaker, McpHttpClient, McpResultCache, McpSessionManager, McpToolCache};
+        use veronex::infrastructure::outbound::mcp::McpBridgeAdapter;
+        let valkey_arc = Arc::new(valkey.clone());
+        let session_mgr = Arc::new(McpSessionManager::new(McpHttpClient::new()));
+        let tool_cache = Arc::new(McpToolCache::new(valkey_arc.clone(), veronex::infrastructure::outbound::mcp::bridge::MAX_TOOLS_PER_REQUEST));
+        let result_cache = Arc::new(McpResultCache::new(valkey_arc));
+        let circuit_breaker = Arc::new(McpCircuitBreaker::new());
+        let bridge = McpBridgeAdapter {
+            session_manager: session_mgr.clone(),
+            tool_cache,
+            result_cache,
+            circuit_breaker,
+        };
+        #[derive(sqlx::FromRow)]
+        struct McpServerStartup { id: uuid::Uuid, slug: String, url: String, timeout_secs: i16 }
+        let servers: Vec<McpServerStartup> = sqlx::query_as(
+            "SELECT id, slug, url, timeout_secs FROM mcp_servers WHERE is_enabled = true"
+        )
+        .fetch_all(&pg_pool)
+        .await
+        .unwrap_or_default();
+        for s in servers {
+            if let Err(e) = session_mgr.connect(s.id, &s.slug, &s.url, s.timeout_secs as u16).await {
+                tracing::warn!(id = %s.id, error = %e, "MCP startup connect failed");
+            }
+        }
+        Some(Arc::new(bridge))
+    } else {
+        None
+    };
+
     let state = AppState {
         http_client,
         use_case: handles.use_case,
@@ -126,7 +161,42 @@ async fn main() -> Result<()> {
         sync_lock: handles.sync_lock,
         sse_connections: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         vram_budget_repo: repos.vram_budget_repo,
+        mcp_bridge,
+        login_rate_limit: std::env::var("LOGIN_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10),
     };
+
+    // ── MCP tool refresh loop ──────────────────────────────────────
+    // Periodically refresh tool cache for all connected MCP servers.
+    // Interval (25s) keeps L2 Valkey entry alive before its 35s TTL.
+    if state.mcp_bridge.is_some() {
+        let state_clone = state.clone();
+        let cancel_clone = shutdown.clone();
+        tokio::spawn(async move {
+            use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
+            // Initial discovery on startup
+            for server_id in state_clone.mcp_bridge.as_ref().map(|b| b.session_manager.server_ids()).unwrap_or_default() {
+                discover_tools_startup(&state_clone, server_id).await;
+            }
+            // Periodic refresh every 25s
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(25));
+            interval.tick().await; // skip the immediate tick
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Some(ref b) = state_clone.mcp_bridge {
+                            for server_id in b.session_manager.server_ids() {
+                                b.tool_cache.refresh(server_id, &b.session_manager).await;
+                            }
+                        }
+                    }
+                    _ = cancel_clone.cancelled() => break,
+                }
+            }
+        });
+    }
 
     let app = build_app(state, config.cors_origins);
 
@@ -246,18 +316,18 @@ fn mask_database_url(url: &str) -> String {
     url.to_string()
 }
 
-fn build_otlp_tracer(endpoint: &str) -> anyhow::Result<opentelemetry_sdk::trace::Tracer> {
+fn build_otlp_tracer(endpoint: &str) -> anyhow::Result<opentelemetry_sdk::trace::SdkTracer> {
     use opentelemetry_otlp::{SpanExporter, WithExportConfig as _};
-    use opentelemetry_sdk::runtime;
-    use opentelemetry_sdk::trace::TracerProvider;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
 
     let exporter = SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
         .build()?;
 
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+    // runtime::Tokio argument removed in 0.31 — BatchSpanProcessor now uses its own background thread.
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .build();
 
     use opentelemetry::trace::TracerProvider as _;

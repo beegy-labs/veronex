@@ -16,7 +16,8 @@
     "gemini": "Gemini",
     "accounts": "Accounts",
     "audit": "Audit Log",
-    "capacity": "Concurrency"
+    "capacity": "Concurrency",
+    "mcp": "MCP Servers"
   },
   "common": {
     "all": "All",
@@ -307,7 +308,16 @@
     "regenerating": "Regenerating…",
     "keySavedAck": "I have saved the key",
     "viewHistory": "View change history",
-    "historyTitle": "Change History — {{name}}"
+    "historyTitle": "Change History — {{name}}",
+    "mcpAccess": "MCP Access",
+    "mcpAccessTitle": "MCP Server Access — {{name}}",
+    "mcpAccessDesc": "Select which MCP servers this key is allowed to use. Keys with no grants are denied all MCP access.",
+    "mcpGranted": "Granted",
+    "mcpNotGranted": "Not granted",
+    "mcpGrant": "Grant",
+    "mcpRevoke": "Revoke",
+    "mcpNoServers": "No MCP servers registered.",
+    "mcpLoadError": "Failed to load MCP access"
   },
   "providers": {
     "title": "Providers",
@@ -852,5 +862,38 @@
     "utilization": "Utilization",
     "noMetrics": "No metrics available.",
     "scrapeError": "Failed to scrape node-exporter."
+  },
+  "mcp": {
+    "title": "MCP Servers",
+    "description": "Manage Model Context Protocol servers",
+    "register": "Register Server",
+    "name": "Name",
+    "slug": "Slug",
+    "url": "Server URL",
+    "timeout": "Timeout (sec)",
+    "online": "Online",
+    "offline": "Offline",
+    "tools": "tools",
+    "enabled": "Enabled",
+    "deleteConfirm": "Delete MCP server \"{{name}}\"? This will disconnect all active sessions.",
+    "slugHint": "Auto-generated from name. Letters, numbers, underscores only.",
+    "namePlaceholder": "My MCP Server",
+    "slugPlaceholder": "my_mcp_server",
+    "urlPlaceholder": "https://mcp.example.com",
+    "orchestratorModel": "Orchestrator Model",
+    "orchestratorModelDesc": "Ollama model used for MCP tool-call loops. Overrides the model field in each request.",
+    "orchestratorModelNone": "Use request model (default)",
+    "orchestratorModelSaved": "Orchestrator model saved.",
+    "stats": "Call Statistics",
+    "statsDesc": "MCP tool call activity over the selected time window.",
+    "statsHours": "Time window",
+    "statsTotalCalls": "Calls",
+    "statsSuccessRate": "Success",
+    "statsCacheHit": "Cache",
+    "statsAvgLatency": "Avg Latency",
+    "statsNoData": "No MCP calls recorded yet.",
+    "statsLoadError": "Failed to load MCP statistics.",
+    "status": "Status",
+    "deleteTitle": "Delete MCP Server"
   }
 }

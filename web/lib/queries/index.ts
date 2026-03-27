@@ -8,6 +8,7 @@
 export * from './dashboard'
 export * from './usage'
 export * from './keys'
+export * from './mcp'
 export * from './servers'
 export * from './providers'
 export * from './accounts'

@@ -7,7 +7,7 @@ import {
   LayoutDashboard, List, Key, Server,
   BarChart2, Gauge, Sun, Moon, ChevronLeft,
   BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
-  Users, Shield, LogOut, Settings2,
+  Users, Shield, LogOut, Settings2, Plug,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
@@ -18,6 +18,7 @@ import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone } from '@/components/timezone-provider'
 import { NavSettingsDialog } from '@/components/nav-settings-dialog'
 import { HexLogo, OllamaIcon } from '@/components/nav-icons'
+import { useNav404 } from '@/components/nav-404-context'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,8 @@ type NavLink = {
   icon: React.ComponentType<{ className?: string }>
   /** Menu ID for role-based visibility filtering. */
   menuId?: string
+  /** Section ID for 404-based hiding. */
+  section?: string
 }
 
 type NavGroupChild = {
@@ -89,6 +92,7 @@ const navItems: NavItem[] = [
       { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini', menuId: 'providers' },
     ],
   },
+  { type: 'link', href: '/mcp', labelKey: 'nav.mcp', icon: Plug, menuId: 'providers', section: 'mcp' },
 ]
 
 // ── Inner nav (needs useSearchParams — wrapped in Suspense by parent) ───────────
@@ -99,6 +103,7 @@ function NavContent() {
   const { theme, toggleTheme } = useTheme()
   const { t } = useTranslation()
   const { resetToLocaleDefault } = useTimezone()
+  const { hidden: nav404 } = useNav404()
 
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -263,14 +268,16 @@ function NavContent() {
       {/* ── Nav links ──────────────────────────────────────────────── */}
       <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
         {navItems
-          // Filter by role-based menu access
+          // Filter by role-based menu access + 404-hidden sections
           .filter(item => !item.menuId || hasMenu(item.menuId))
+          .filter(item => !('section' in item) || !item.section || !nav404.has(item.section))
           .map(item => {
             if (item.type === 'group') {
               return {
                 ...item,
                 children: item.children
                   .filter(c => !c.menuId || hasMenu(c.menuId))
+                  .filter(c => !c.section || !nav404.has(c.section))
                   .filter(c =>
                     item.id !== 'providers' || c.section !== 'gemini' || (labSettings?.gemini_function_calling ?? false)
                   ),
