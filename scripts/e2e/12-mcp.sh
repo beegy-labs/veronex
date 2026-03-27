@@ -277,7 +277,7 @@ if [ "$INIT_CODE" = "200" ]; then
     || fail "weather-mcp protocolVersion = '$PROTO' (expected 2025-03-26)"
 fi
 
-# 4. tools/list — expect exactly 1 tool: get_weather (geocoding is internal, not exposed)
+# 4. tools/list — expect get_weather and web_search (geocoding is internal, not exposed)
 TOOLS_LIST=$(curl -s --max-time 10 "$MCP_TEST_URL/mcp" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
@@ -288,9 +288,9 @@ tools=json.loads(sys.stdin.read()).get('result',{}).get('tools',[])
 print(','.join(t.get('name','') for t in tools))
 " 2>/dev/null || echo "")
 TOOL_COUNT=$(echo "$TOOLS_LIST" | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read()).get('result',{}).get('tools',[])))" 2>/dev/null || echo "0")
-[ "$TOOL_COUNT" -eq 1 ] && echo "$TOOL_NAMES" | grep -q "get_weather" \
-  && pass "weather-mcp tools/list → 1 tool [get_weather] (geocoding internal via embedded GeoNames)" \
-  || fail "weather-mcp tools/list → [$TOOL_NAMES] count=$TOOL_COUNT (expected exactly: get_weather)"
+echo "$TOOL_NAMES" | grep -q "get_weather" && echo "$TOOL_NAMES" | grep -q "web_search" \
+  && pass "weather-mcp tools/list → [get_weather,web_search] (geocoding internal via embedded GeoNames)" \
+  || fail "weather-mcp tools/list → [$TOOL_NAMES] count=$TOOL_COUNT (expected: get_weather,web_search)"
 echo "$TOOL_NAMES" | grep -qv "get_coordinates" \
   && pass "weather-mcp tools/list → get_coordinates not exposed (internal implementation)" \
   || fail "weather-mcp tools/list → get_coordinates still exposed (should be internal)"

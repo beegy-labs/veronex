@@ -1,0 +1,2 @@
+ALTER TABLE inference_jobs ALTER COLUMN prompt DROP DEFAULT;
+ALTER TABLE inference_jobs ALTER COLUMN prompt SET NOT NULL;

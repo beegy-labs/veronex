@@ -363,11 +363,15 @@ pub(super) async fn run_job(
         .map(|e| e.cancel_notify.clone())
         .unwrap_or_else(|| Arc::new(Notify::new()));
 
-    // Capture prompt and messages before clearing — needed for S3 ConversationRecord at finalize.
+    // Capture prompt for S3 ConversationRecord at finalize.
     let original_prompt = job.prompt.as_str().to_owned();
-    let original_messages = job.messages.take(); // frees memory, value moved to local
 
+    // stream_tokens must be called BEFORE taking messages — the adapter reads
+    // job.messages to decide whether to call stream_chat (with tools) or stream_generate.
     let mut stream = provider.stream_tokens(&job);
+
+    // Take messages after stream is started (adapter cloned them into the stream already).
+    let original_messages = job.messages.take(); // frees memory, value moved to local
     let mut ts = TokenStreamState::default();
 
     loop {
