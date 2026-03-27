@@ -257,6 +257,7 @@ mod tests {
         InferenceJob {
             id: JobId::new(),
             prompt: Prompt::new("What is Rust?").unwrap(),
+            prompt_preview: None,
             model_name: ModelName::new("llama3.2").unwrap(),
             status: JobStatus::Pending,
             provider_type: ProviderType::Ollama,
@@ -345,6 +346,7 @@ mod tests {
         let job = InferenceJob {
             id: JobId::new(),
             prompt: Prompt::new("Explain quantum computing").unwrap(),
+            prompt_preview: None,
             model_name: ModelName::new("gemini-pro").unwrap(),
             status: JobStatus::Failed,
             provider_type: ProviderType::Gemini,
