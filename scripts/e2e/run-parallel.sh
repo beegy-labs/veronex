@@ -3,13 +3,15 @@
 #
 # Execution model:
 #   Phase 0  (sequential) : 01-setup — DB reset + auth + providers + API keys
-#   Wave  1  (parallel)   : 05-security  09-metrics  11-liveness  13-frontend  14-vespa-load-test
+#   Wave  1  (parallel)   : 05-security  09-metrics  11-liveness  13-frontend
 #   Wave  2  (parallel)   : 04-crud  06-api-surface  10-image-storage  12-mcp
-#   Wave  3  (sequential) : 02-scheduler  03-inference  07-lifecycle  08-sdd-advanced
+#   Wave  3  (sequential) : 02-scheduler  03-inference  07-lifecycle  08-sdd-advanced  14-vespa-load-test
 #
 # Wave 1: read-heavy / fully isolated — safe to run in parallel.
 # Wave 2: create their own resources; 12-mcp uses unique slug via E2E_RUN_ID.
 # Wave 3: share AIMD + provider state → must run sequentially.
+#         14-vespa-load-test is write-heavy (100K docs) — moved here so it runs
+#         after veronex-agent's post-restart re-index settles.
 #
 # Env vars:
 #   SKIP_SETUP=1    skip Phase 0 (01-setup) — use when state already exists
@@ -36,7 +38,7 @@ _print_result() {
   f=$(echo "$out" | _count '[FAIL]')
   if [ "$f" -gt 0 ] || [ "$failed" = "1" ]; then
     echo -e "  ${RED}[FAIL]${NC} $label  pass=$p fail=$f"
-    echo "$out" | grep '\[FAIL\]' | head -10 | sed 's/^/         /'
+    echo "$out" | grep '\[FAIL\]' | head -10 | sed 's/^/         /' || true
   else
     echo -e "  ${GREEN}[PASS]${NC} $label  pass=$p"
   fi
@@ -84,16 +86,17 @@ if [ "${SKIP_SETUP:-0}" = "0" ]; then
 fi
 
 # ── Wave 1: Read-only / independent (parallel) ───────────────────────────────
-echo -e "\n${CYAN}${BOLD}── Wave 1 (parallel): security · metrics · liveness · frontend · vespa ──${NC}"
-_run_wave 05-security 09-metrics-pipeline 11-verify-liveness 13-frontend 14-vespa-load-test
+echo -e "\n${CYAN}${BOLD}── Wave 1 (parallel): security · metrics · liveness · frontend ──${NC}"
+_run_wave 05-security 09-metrics-pipeline 11-verify-liveness 13-frontend
 
 # ── Wave 2: Feature tests with isolated resources (parallel) ─────────────────
 echo -e "\n${CYAN}${BOLD}── Wave 2 (parallel): crud · api-surface · image-storage · mcp ──${NC}"
 _run_wave 04-crud 06-api-surface 10-image-storage 12-mcp
 
-# ── Wave 3: Inference pipeline (sequential — shared AIMD / provider state) ───
-echo -e "\n${CYAN}${BOLD}── Wave 3 (sequential): scheduler · inference · lifecycle · sdd-advanced ──${NC}"
-for s in 02-scheduler 03-inference 07-lifecycle 08-sdd-advanced; do
+# ── Wave 3: Inference pipeline + Vespa load test (sequential) ────────────────
+# 14-vespa-load-test is write-heavy (100K docs) — runs after agent re-index settles.
+echo -e "\n${CYAN}${BOLD}── Wave 3 (sequential): scheduler · inference · lifecycle · sdd-advanced · vespa-load-test ──${NC}"
+for s in 02-scheduler 03-inference 07-lifecycle 08-sdd-advanced 14-vespa-load-test; do
   _run_one "$s" "$SCRIPT_DIR/$s.sh"
 done
 
