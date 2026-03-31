@@ -13,7 +13,7 @@ use super::selector::EmbedClient;
 #[tokio::test]
 async fn vespa_feed_ok() {
     let server = MockServer::start().await;
-    Mock::given(method("PUT"))
+    Mock::given(method("POST"))
         .and(path_regex(r"/document/v1/mcp_tools/mcp_tools/docid/.*"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "id": "id:mcp_tools:mcp_tools::svc:srv:tool",
@@ -39,7 +39,7 @@ async fn vespa_feed_ok() {
 #[tokio::test]
 async fn vespa_feed_server_error_returns_err() {
     let server = MockServer::start().await;
-    Mock::given(method("PUT"))
+    Mock::given(method("POST"))
         .and(path_regex(r"/document/v1/.*"))
         .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
         .mount(&server)
