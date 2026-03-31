@@ -33,6 +33,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTable } from '@/components/data-table'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
@@ -185,8 +186,8 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
       }
       return api.updateServer(server.id, body)
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }); onClose() },
-    onError: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }) },
+    onSuccess: () => onClose(),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['servers'] }),
   })
 
   const canVerify = !!nodeExporterUrl.trim() && verifyState !== 'checking'
@@ -430,6 +431,7 @@ export default function ServersPage() {
   const [showRegister, setShowRegister] = useState(false)
   const [editingServer, setEditingServer] = useState<GpuServer | null>(null)
   const [historyServer, setHistoryServer] = useState<GpuServer | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
 
   const { data: serversData, isLoading } = useQuery(serversQuery())
   const servers = serversData?.servers
@@ -443,8 +445,8 @@ export default function ServersPage() {
   const handleEdit = useCallback((s: GpuServer) => setEditingServer(s), [])
   const handleHistory = useCallback((s: GpuServer) => setHistoryServer(s), [])
   const handleDelete = useCallback((id: string, name: string) => {
-    if (confirm(t('providers.deleteServerConfirm', { name }))) deleteMutation.mutate(id)
-  }, [t, deleteMutation.mutate])
+    setDeleteTarget({ id, name })
+  }, [])
 
   return (
     <div className="space-y-6">
@@ -468,6 +470,17 @@ export default function ServersPage() {
       {showRegister && <RegisterServerModal onClose={() => setShowRegister(false)} />}
       {editingServer && <EditServerModal server={editingServer} onClose={() => setEditingServer(null)} />}
       {historyServer && <ServerHistoryModal server={historyServer} onClose={() => setHistoryServer(null)} />}
+      {deleteTarget && (
+        <ConfirmDialog
+          open
+          title={t('providers.removeProvider')}
+          description={t('providers.deleteServerConfirm', { name: deleteTarget.name })}
+          confirmLabel={deleteMutation.isPending ? t('common.deleting') : t('common.delete')}
+          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
+          onClose={() => setDeleteTarget(null)}
+          isLoading={deleteMutation.isPending}
+        />
+      )}
     </div>
   )
 }

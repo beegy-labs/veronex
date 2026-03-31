@@ -1,6 +1,6 @@
 # Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-22 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-03-26 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Rust Edition 2024 · Axum 0.8 · sqlx 0.8
 > Frontend patterns -> `policies/patterns-frontend.md`
 
@@ -28,6 +28,12 @@ pub async fn delete_thing(
   Ok(StatusCode::NO_CONTENT)
 }
 ```
+
+| Rule | Detail |
+|------|--------|
+| `Path<Uuid>` | Always typed for UUID path segments — never `Path<String>` + `Uuid::parse_str` |
+| POST create → 201 | Return `(StatusCode::CREATED, Json(...))` — not implicit 200 |
+| RequireXxx first | Sensitive handlers must declare a `RequireXxx` extractor before `State` |
 
 ## AppError (thiserror v2)
 
@@ -137,6 +143,28 @@ Never hold `Ref`/`RefMut` across `.await` -- it locks the shard.
 
 All `veronex:*` key patterns MUST be defined in `infrastructure/outbound/valkey_keys.rs`.
 This is the single source of truth — never hardcode key strings elsewhere.
+
+## Valkey Error Observability
+
+All Valkey I/O results MUST be handled — never silently discard errors.
+
+```rust
+// CORRECT — match with tracing
+match pool.mget::<Vec<Option<String>>, _>(keys).await {
+    Ok(vals) => vals,
+    Err(e) => { tracing::warn!(error = %e, "mcp: failed to fetch heartbeats from Valkey"); vec![] }
+}
+
+// CORRECT — unwrap_or_else with tracing
+pool.set(key, value, Some(Expiration::EX(ttl)), None, false).await
+    .unwrap_or_else(|e| tracing::warn!(error = %e, key, "Valkey SET failed"));
+
+// WRONG
+let _ = pool.set(...).await;          // ✗ silent discard
+pool.get(key).await.unwrap_or(None)   // ✗ no error logging
+```
+
+Security-critical paths (refresh token claims, JTI revocation) must fail-closed: Valkey error → `AppError::ServiceUnavailable`, not silent success.
 
 ## Valkey Lua Eval
 
@@ -311,6 +339,64 @@ pub async fn list_roles(RequireRoleManage(_claims): RequireRoleManage, ...) { ..
 | `RequireSettingsManage` | `settings_manage` | System settings |
 | `RequireApiTest` | `api_test` | Test inference |
 | `RequireDashboardView` | `dashboard_view` | Dashboard data |
+
+## Audit Trail (`emit_audit`)
+
+All mutating handlers (POST/PATCH/DELETE) MUST call `emit_audit()` after the DB write succeeds:
+
+```rust
+emit_audit(
+    &state, &claims,
+    "action_verb",            // e.g. "create", "update", "delete", "grant", "revoke"
+    "resource_type",          // e.g. "api_key", "account", "mcp_server", "role"
+    &resource_id.to_string(),
+    &resource_name,
+    "Human-readable description of what changed",
+).await;
+```
+
+Location: `infrastructure/inbound/http/super::emit_audit` (imported as `super::emit_audit`).
+Call after the DB mutation succeeds, before returning the response. Non-blocking — fire-and-forget via `.await` is fine.
+
+## Batch DB Writes (N+1 Prevention)
+
+Never execute N sequential queries in a loop. Use UNNEST for inserts, `ANY($1)` for filters and aggregates.
+
+```rust
+// CORRECT — UNNEST batch insert/upsert
+sqlx::query(
+    "INSERT INTO mcp_server_tools (server_id, name, description)
+     SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[])
+     ON CONFLICT (server_id, name) DO UPDATE SET description = EXCLUDED.description"
+)
+.bind(&server_ids as &[Uuid])
+.bind(&names as &[String])
+.bind(&descriptions as &[String])
+.execute(&pool).await?;
+
+// CORRECT — ANY($1) batch aggregate
+let count_rows: Vec<(Uuid, i64)> = sqlx::query_as(
+    "SELECT role_id, COUNT(*)::bigint FROM account_roles
+     WHERE role_id = ANY($1) GROUP BY role_id"
+)
+.bind(&role_ids as &[Uuid])
+.fetch_all(&pool).await?;
+let count_map: HashMap<Uuid, i64> = count_rows.into_iter().collect();
+
+// WRONG — O(N) round-trips
+for id in &ids {
+    let n = sqlx::query_scalar("SELECT COUNT(*) FROM account_roles WHERE role_id = $1")
+        .bind(id).fetch_one(&pool).await?; // one DB call per row
+}
+```
+
+**SQL LIMIT**: all `fetch_all` list queries must have an explicit `LIMIT` clause — unbounded SELECT is prohibited at 10K+ provider scale.
+
+| Scope | Minimum LIMIT |
+|-------|--------------|
+| Admin list queries (servers, keys, accounts) | 500 |
+| Role membership counts | 200 |
+| Aggregate / GROUP BY | Commensurate with distinct count (e.g. 8760 for hourly, 10 for statuses) |
 
 ## Domain Enum Patterns
 
@@ -573,6 +659,35 @@ Network blips (< 2 min) do not trigger cleanup. The suspect marker auto-expires 
 
 All agents down then restart: `tokio::time::interval` fires immediately on first tick, triggering an immediate scan and cleanup of any dead instances found.
 
+## Cross-Module Error Sentinel Constants
+
+Use a `const &str` to share error markers across module boundaries instead of duplicating string literals.
+
+```rust
+// session.rs — define once
+pub(crate) const SESSION_EXPIRED_MARKER: &str = "session expired";
+
+// client.rs — use in error construction
+return Err(anyhow!("MCP {SESSION_EXPIRED_MARKER} (404) for {}", session.url));
+
+// bridge.rs — use in match guard
+Err(e) if e.to_string().contains(SESSION_EXPIRED_MARKER) => { ... }
+```
+
+Prevents silent drift when one side is renamed. `pub(crate)` keeps the sentinel internal.
+
+## Docker Build Cache — `sharing=locked`
+
+All `--mount=type=cache` directives for the Cargo registry and target directory must use `sharing=locked`:
+
+```dockerfile
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release -p my-crate --recipe-path recipe.json
+```
+
+Without `sharing=locked`, parallel `docker compose build` services extracting the same crates simultaneously cause `EEXIST (os error 17)` failures. Apply to both `cargo chef cook` and `cargo build` steps in every service Dockerfile.
+
 ## Test Code Conventions
 
 | Rule | Rationale |
@@ -598,4 +713,168 @@ fn no_duplicates() {  // uniqueness check (implies determinism)
 fn deterministic_assignment() {  // determinism is trivial once uniqueness is proven
     assert!(owns("a", owner, 3));
 }
+```
+
+## UTF-8 Safe Truncation
+
+All string truncation must respect UTF-8 char boundaries. Use the shared utility in `veronex_mcp::truncate_at_char_boundary` instead of calling `String::truncate(n)` directly.
+
+```rust
+// CORRECT — via shared utility (veronex-mcp crate)
+use veronex_mcp::truncate_at_char_boundary;
+truncate_at_char_boundary(&mut s, MAX_BYTES);
+
+// CORRECT — inline (when veronex_mcp not in scope)
+let boundary = (0..=max_len).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+s.truncate(boundary);
+
+// WRONG — panics on multi-byte char boundaries
+s.truncate(MAX_BYTES);
+```
+
+The audit grep:
+```bash
+grep -rn "\.truncate(" crates/ --include="*.rs"
+```
+Expected: all calls preceded by `is_char_boundary()` reverse-scan or delegated to `truncate_at_char_boundary()`.
+
+## MCP Integration Patterns
+
+### Two-Level Tool Cache (L1 DashMap + L2 Valkey)
+
+```
+L1: DashMap<Uuid, CachedTools>  TTL 30s  — per-replica in-process
+L2: Valkey SET                  TTL 35s  — cross-replica shared
+Lock: Valkey SET NX             TTL 33s  — prevents thundering herd
+```
+
+Refresh sequence:
+1. Check L1 TTL — if valid, return immediately (zero network)
+2. Attempt `SET NX lock` — only one replica fetches at a time
+3. Fetch from MCP server via `McpSessionManager`
+4. Write to L1 + L2 atomically
+5. Release lock
+
+```rust
+// SET NX prevents multiple replicas hitting the MCP server simultaneously
+let locked: bool = conn.set(&lock_key, "1", Some(Expiration::EX(LOCK_TTL_SECS)), Some(SetOptions::NX), false).await.unwrap_or(false);
+if !locked { return; }
+```
+
+### MCP Valkey Key Convention (Cross-Crate)
+
+`veronex-mcp` defines its own key strings locally (cross-crate OK, unlike `veronex` which must use `valkey_keys.rs`).
+All `veronex-mcp` keys use the `veronex:mcp:` namespace:
+
+| Key | TTL | Purpose |
+|-----|-----|---------|
+| `veronex:mcp:tools:{server_id}` | 35s | L2 tool list |
+| `veronex:mcp:tools:lock:{server_id}` | 33s | Refresh NX lock |
+| `veronex:mcp:heartbeat:{server_id}` | set by agent | Server liveness |
+| `veronex:mcp:result:{tool}:{args_hash}` | 300s | Result cache |
+
+Rule: cross-crate local key definitions are allowed, but must be guarded with format tests.
+
+### Input Size Guards (OOM/DoS Prevention)
+
+Every entry point that accepts external data must have `MAX_*` constants bounding input size.
+
+Current MCP guards:
+
+| Constant | Value | Location | Purpose |
+|----------|-------|----------|---------|
+| `MAX_TOOLS_PER_SERVER` | 1,024 | `client.rs` | tools/list response |
+| `MAX_TOOL_DESCRIPTION_BYTES` | 4,096 | `client.rs` | Tool description field |
+| `MAX_TOOL_SCHEMA_BYTES` | 16,384 | `client.rs` | inputSchema serialized size |
+| `MAX_TOOL_RESULT_BYTES` | 32,768 | `bridge.rs` | LLM injection size |
+| `MAX_ARGS_FOR_HASH_BYTES` | 4,096 | `bridge.rs` | Loop-detect hashing input |
+| `MAX_CANONICAL_DEPTH` | 16 | `result_cache.rs` | JSON recursion depth |
+| `MAX_TOOLS_PER_REQUEST` | 32 | `bridge.rs` | Context window protection |
+
+Rule: always pair a `MAX_*` const with a test verifying the boundary does not panic.
+
+### Agentic Loop Duplicate Detection
+
+Prevents infinite loops where the model repeatedly calls the same tool with identical arguments.
+
+```rust
+// (tool_name, args_hash) → call count
+let mut call_sig_counts: HashMap<(String, String), u8> = HashMap::new();
+// ...
+let args_hash = quick_args_hash(args_str);
+let count = call_sig_counts.entry((name.clone(), args_hash)).or_insert(0);
+*count += 1;
+if *count >= LOOP_DETECT_THRESHOLD { break; }
+```
+
+Bounds: `MAX_ROUNDS(5) × MAX_TOOLS(32) = 160` — the HashMap is fully bounded, not unbounded.
+
+### Canonical JSON for Cache Keys
+
+Args hash for result cache must be order-independent (same args regardless of key ordering).
+
+```rust
+fn canonical_json(v: &serde_json::Value, depth: u8) -> String {
+    if depth >= MAX_CANONICAL_DEPTH { return "\"...\"".to_owned(); }  // stack overflow guard
+    match v {
+        serde_json::Value::Object(map) => {
+            let mut pairs: Vec<_> = map.iter().collect();
+            pairs.sort_by_key(|(k, _)| *k);  // deterministic key order
+            // ...
+        }
+    }
+}
+// key: SHA-256(tool_name + ":" + canonical_json(args)), first 8 bytes hex-encoded
+```
+
+---
+
+## Quarterly Audit Commands
+
+Run these greps to surface violations. Expected results noted per check.
+
+```bash
+# P1 — SSRF: validate_provider_url called for URL inputs
+grep -rn "url.*String\|String.*url" crates/veronex/src/infrastructure/inbound/ --include="*.rs" -l
+# → check each file for validate_provider_url call
+
+# P1 — SQL Interval: must use make_interval(), never format!()
+grep -rn "INTERVAL.*format!\|format!.*INTERVAL" crates/ --include="*.rs"
+# → expected: 0 results
+
+# P1 — UTF-8 truncation: must use is_char_boundary() or truncate_at_char_boundary()
+grep -rn "\.truncate(" crates/ --include="*.rs"
+# → all calls must be preceded by is_char_boundary() scan or delegated to truncate_at_char_boundary()
+
+# P1 — Valkey: no silent error discard on I/O
+grep -rn "\.await\.unwrap_or\b\|let _.*\.await\|\.await\.ok()" crates/veronex/src/infrastructure/inbound/ --include="*.rs"
+# → each result must be checked: Valkey I/O must log at tracing::warn! on error
+
+# P2 — Valkey key hardcoding: all veronex:* keys via valkey_keys.rs only
+grep -rn '"veronex:' crates/veronex/src/ | grep -v valkey_keys
+# → expected: 0 results
+
+# P2 — Magic Duration: all timeouts via named const
+grep -rn "Duration::from_secs([0-9]" crates/ --include="*.rs" | grep -v "const "
+# → expected: 0 results
+
+# P2 — O(N) DB scan: COUNT(*) in dashboard hot paths
+grep -rn "COUNT(\*)" crates/veronex/src/ --include="*.rs"
+# → dashboard_queries.rs must use pg_class.reltuples instead
+
+# P2 — Unbounded SELECT: all fetch_all must have LIMIT
+grep -rn "fetch_all" crates/veronex/src/infrastructure/inbound/ --include="*.rs" -B5 | grep -v "LIMIT\|ANY\|UNNEST\|--"
+# → each result must have a LIMIT clause in the SQL string above it
+
+# P2 — N+1: fetch_all/fetch_one inside for loop
+grep -rn "for.*in.*{" crates/veronex/src/ --include="*.rs" -A6 | grep "fetch_all\|fetch_one\|\.execute("
+# → expected: 0 results (use UNNEST or ANY($1) instead)
+
+# P2 — Docker cache: sharing=locked on all cache mounts
+grep -rn "mount=type=cache" Dockerfile* **/Dockerfile* 2>/dev/null
+# → all --mount=type=cache entries must have sharing=locked
+
+# P3 — Cross-module error sentinel: no duplicated string literals
+grep -rn '"session expired"' crates/ --include="*.rs"
+# → expected: 1 definition (pub(crate) const), matched via .contains() elsewhere
 ```

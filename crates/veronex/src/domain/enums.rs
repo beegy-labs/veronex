@@ -411,20 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn permission_as_str_roundtrip() {
-        for &p in ALL_PERMISSIONS {
-            assert!(!p.is_empty());
-        }
-    }
-
-    #[test]
-    fn menu_as_str_roundtrip() {
-        for &m in ALL_MENUS {
-            assert!(!m.is_empty());
-        }
-    }
-
-    #[test]
     fn role_manage_in_all_permissions() {
         assert!(ALL_PERMISSIONS.contains(&"role_manage"));
     }

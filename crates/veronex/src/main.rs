@@ -86,7 +86,70 @@ async fn main() -> Result<()> {
     .await;
 
     // ── Build app state ────────────────────────────────────────────
-    let bootstrap::InfraContext { valkey_pool, pg_pool, http_client, .. } = infra;
+    let bootstrap::InfraContext { valkey_pool, pg_pool, http_client, instance_id } = infra;
+
+    // ── Wire MCP vector selector (requires VESPA_URL + EMBED_URL) ─────
+    let (mcp_vector_selector, mcp_tool_indexer) = {
+        use veronex_mcp::vector::{EmbedClient, McpToolIndexer, McpVectorSelector, VespaClient};
+        match (std::env::var("VESPA_URL").ok(), std::env::var("EMBED_URL").ok()) {
+            (Some(vespa_url), Some(embed_url)) => {
+                let vespa = VespaClient::new(&vespa_url);
+                let embed = EmbedClient::new(&embed_url);
+                let top_k = std::env::var("MCP_VECTOR_TOP_K")
+                    .ok().and_then(|v| v.parse().ok()).unwrap_or(16usize);
+                let valkey_arc = valkey_pool.as_ref()
+                    .map(|v| std::sync::Arc::new(v.clone()));
+                if let Some(valkey_arc) = valkey_arc {
+                    let selector = McpVectorSelector::new(vespa.clone(), embed.clone(), valkey_arc, top_k);
+                    let indexer = McpToolIndexer::new(vespa, embed);
+                    tracing::info!(vespa_url, top_k, "MCP vector selector enabled");
+                    (Some(std::sync::Arc::new(selector)), Some(std::sync::Arc::new(indexer)))
+                } else {
+                    tracing::warn!("MCP vector selector requires Valkey — disabled");
+                    (None, None)
+                }
+            }
+            _ => {
+                tracing::info!("VESPA_URL/EMBED_URL not set — MCP vector selection disabled (fallback: get_all)");
+                (None, None)
+            }
+        }
+    };
+
+    // ── Wire MCP bridge (requires Valkey) ──────────────────────────
+    let mcp_bridge = if let Some(ref valkey) = valkey_pool {
+        use std::sync::Arc;
+        use veronex_mcp::{McpCircuitBreaker, McpHttpClient, McpResultCache, McpSessionManager, McpToolCache};
+        use veronex::infrastructure::outbound::mcp::McpBridgeAdapter;
+        let valkey_arc = Arc::new(valkey.clone());
+        let session_mgr = Arc::new(McpSessionManager::new(McpHttpClient::new()));
+        let tool_cache = Arc::new(McpToolCache::new(valkey_arc.clone(), veronex::infrastructure::outbound::mcp::bridge::MAX_TOOLS_PER_REQUEST));
+        let result_cache = Arc::new(McpResultCache::new(valkey_arc));
+        let circuit_breaker = Arc::new(McpCircuitBreaker::new());
+        let bridge = McpBridgeAdapter {
+            session_manager: session_mgr.clone(),
+            tool_cache,
+            result_cache,
+            circuit_breaker,
+        };
+        #[derive(sqlx::FromRow)]
+        struct McpServerStartup { id: uuid::Uuid, slug: String, url: String, timeout_secs: i16 }
+        let servers: Vec<McpServerStartup> = sqlx::query_as(
+            "SELECT id, slug, url, timeout_secs FROM mcp_servers WHERE is_enabled = true"
+        )
+        .fetch_all(&pg_pool)
+        .await
+        .unwrap_or_default();
+        for s in servers {
+            if let Err(e) = session_mgr.connect(s.id, &s.slug, &s.url, s.timeout_secs as u16).await {
+                tracing::warn!(id = %s.id, error = %e, "MCP startup connect failed");
+            }
+        }
+        Some(Arc::new(bridge))
+    } else {
+        None
+    };
+
     let state = AppState {
         http_client,
         use_case: handles.use_case,
@@ -126,7 +189,56 @@ async fn main() -> Result<()> {
         sync_lock: handles.sync_lock,
         sse_connections: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         vram_budget_repo: repos.vram_budget_repo,
+        mcp_bridge,
+        mcp_vector_selector,
+        mcp_tool_indexer,
+        login_rate_limit: std::env::var("LOGIN_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10),
+        instance_id,
     };
+
+    // ── MCP tool refresh loop ──────────────────────────────────────
+    // Periodically refresh tool cache for all connected MCP servers.
+    // Interval (25s) keeps L2 Valkey entry alive before its 35s TTL.
+    if state.mcp_bridge.is_some() {
+        let state_clone = state.clone();
+        let cancel_clone = shutdown.clone();
+        tokio::spawn(async move {
+            use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
+            // Initial discovery on startup
+            for server_id in state_clone.mcp_bridge.as_ref().map(|b| b.session_manager.server_ids()).unwrap_or_default() {
+                discover_tools_startup(&state_clone, server_id).await;
+            }
+            // Periodic refresh every 25s
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(25));
+            interval.tick().await; // skip the immediate tick
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Some(ref b) = state_clone.mcp_bridge {
+                            for server_id in b.session_manager.server_ids() {
+                                if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await {
+                                    if let Some(ref indexer) = state_clone.mcp_tool_indexer {
+                                        let indexer = indexer.clone();
+                                        tokio::spawn(async move {
+                                            indexer.index_server_tools("global", server_id, &tools).await;
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ = cancel_clone.cancelled() => break,
+                }
+            }
+        });
+    }
+
+    // Capture for shutdown deregister (state is moved into build_app).
+    let shutdown_valkey = state.valkey_pool.clone();
+    let shutdown_instance_id = state.instance_id.clone();
 
     let app = build_app(state, config.cors_origins);
 
@@ -149,6 +261,19 @@ async fn main() -> Result<()> {
 
     // ── Graceful shutdown ──────────────────────────────────────────
     tracing::info!("shutting down background tasks...");
+
+    // Deregister this instance from Valkey before draining tasks.
+    // Prevents ghost entries when pods restart (HPA, rolling deploy).
+    if let Some(ref vk) = shutdown_valkey {
+        use fred::prelude::*;
+        use veronex::infrastructure::outbound::valkey_keys;
+        let iid = shutdown_instance_id.as_ref();
+        let _: Result<(), _> = vk.srem(valkey_keys::INSTANCES_SET, iid).await;
+        let _: Result<(), _> = vk.del(valkey_keys::heartbeat(iid)).await;
+        let _: Result<(), _> = vk.del(valkey_keys::service_health(iid)).await;
+        tracing::info!("instance deregistered from Valkey");
+    }
+
     shutdown.cancel();
     let drain = async {
         while let Some(res) = tasks.join_next().await {
@@ -246,18 +371,18 @@ fn mask_database_url(url: &str) -> String {
     url.to_string()
 }
 
-fn build_otlp_tracer(endpoint: &str) -> anyhow::Result<opentelemetry_sdk::trace::Tracer> {
+fn build_otlp_tracer(endpoint: &str) -> anyhow::Result<opentelemetry_sdk::trace::SdkTracer> {
     use opentelemetry_otlp::{SpanExporter, WithExportConfig as _};
-    use opentelemetry_sdk::runtime;
-    use opentelemetry_sdk::trace::TracerProvider;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
 
     let exporter = SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
         .build()?;
 
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+    // runtime::Tokio argument removed in 0.31 — BatchSpanProcessor now uses its own background thread.
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .build();
 
     use opentelemetry::trace::TracerProvider as _;

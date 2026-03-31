@@ -78,6 +78,7 @@ pub async fn run_placement_planner_loop(
     http_client: reqwest::Client,
     instance_id: Arc<str>,
     thermal_drain: Arc<dyn ThermalDrainPort>,
+    ollama_model_repo: Option<Arc<dyn crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository>>,
     shutdown: CancellationToken,
 ) {
     tracing::info!("placement planner started (interval=5s)");
@@ -97,6 +98,7 @@ pub async fn run_placement_planner_loop(
             &vram_pool,
             &thermal,
             &circuit_breaker,
+            &ollama_model_repo,
             &valkey,
             &http_client,
             &instance_id,
@@ -117,6 +119,7 @@ async fn planner_tick(
     vram_pool: &Arc<dyn VramPoolPort>,
     thermal: &Arc<dyn ThermalPort>,
     circuit_breaker: &Arc<dyn CircuitBreakerPort>,
+    ollama_model_repo: &Option<Arc<dyn crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository>>,
     valkey: &Arc<dyn ValkeyPort>,
     http_client: &reqwest::Client,
     instance_id: &str,
@@ -314,11 +317,19 @@ async fn planner_tick(
             continue;
         }
 
-        // Find best server: most free VRAM, not already loaded, not preload-excluded,
+        // Find best server: must have the model in ollama_models (sync'd),
+        // most free VRAM, not already loaded, not preload-excluded,
         // not in transition (STANDBY recovery guard from Step ④ — prevents conflict).
+        let model_providers: std::collections::HashSet<Uuid> = if let Some(repo) = ollama_model_repo {
+            repo.providers_for_model(model).await.unwrap_or_default().into_iter().collect()
+        } else {
+            // No repo — allow all (fallback)
+            scale_out_candidates.iter().map(|p| p.id).collect()
+        };
         let best_server = scale_out_candidates.iter()
             .filter(|p| {
-                !vram_pool.loaded_model_names(p.id).contains(&model.to_string())
+                model_providers.contains(&p.id)
+                    && !vram_pool.loaded_model_names(p.id).contains(&model.to_string())
                     && !vram_pool.is_preloading(p.id, model)
                     && !vram_pool.is_pulling(p.id, model)
                     && !vram_pool.is_preload_excluded(p.id, model)
@@ -402,7 +413,17 @@ async fn planner_tick(
             continue; // already handled in ①
         }
 
+        // Only preload to providers that have the model in ollama_models
+        let preload_eligible: std::collections::HashSet<Uuid> = if let Some(repo) = ollama_model_repo {
+            repo.providers_for_model(model).await.unwrap_or_default().into_iter().collect()
+        } else {
+            ollama_providers.iter().map(|p| p.id).collect()
+        };
+
         for p in &ollama_providers {
+            if !preload_eligible.contains(&p.id) {
+                continue; // model not available on this provider
+            }
             // Skip thermally throttled providers (Soft/Hard/Cooldown).
             if matches!(thermal.get_level(p.id), ThrottleLevel::Soft | ThrottleLevel::Hard | ThrottleLevel::Cooldown) {
                 continue;

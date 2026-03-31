@@ -1,6 +1,6 @@
 # Observability (OTel) — 2026 Research
 
-> **Last Researched**: 2026-03-01 | **Source**: OTel docs + verified in production
+> **Last Researched**: 2026-03-28 | **Source**: OTel docs + verified in production
 > **Status**: Verified — used in docker-compose + `crates/veronex-analytics/`
 
 ---
@@ -120,4 +120,4 @@ Unified event store. Discriminated by `LogAttributes['event.name']`.
 
 - OTel Collector docs: https://opentelemetry.io/docs/collector/
 - ClickHouse Kafka Engine: https://clickhouse.com/docs/engines/table-engines/integrations/kafka
-- Verified: `docker/otel/config.yaml`, `docker/clickhouse/init.sql`, `crates/veronex-analytics/`
+- Verified: `docker/otel/config.yaml`, `docker/clickhouse/schema.sql`, `crates/veronex-analytics/`

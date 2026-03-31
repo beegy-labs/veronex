@@ -67,13 +67,33 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
   refetchIntervalInBackground: false,
 })
 
+// ── Active jobs live feed (2 s poll for near-real-time) ──────────────────────
+
+export const activeJobsQuery = queryOptions({
+  queryKey: ['active-jobs'] as const,
+  queryFn: () => api.jobs('status=pending,running&limit=50'),
+  staleTime: STALE_TIME_LIVE,
+  refetchInterval: () => withJitter(2_000, 200), // minimal jitter — 2s live feed
+  refetchIntervalInBackground: false,
+})
+
 // ── Queue depth (live — 3 s poll) ─────────────────────────────────────────────
 
 export const queueDepthQuery = queryOptions({
   queryKey: ['queue-depth'] as const,
   queryFn: () => api.queueDepth(),
   staleTime: STALE_TIME_LIVE,
-  refetchInterval: REFETCH_INTERVAL_LIVE,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_LIVE, 500),
+  refetchIntervalInBackground: false,
+})
+
+// ── Service health ───────────────────────────────────────────────────────────
+
+export const serviceHealthQuery = queryOptions({
+  queryKey: ['service-health'] as const,
+  queryFn: () => api.serviceHealth(),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
 })
 

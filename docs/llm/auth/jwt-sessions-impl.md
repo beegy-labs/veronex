@@ -1,6 +1,6 @@
 # Auth -- Implementation Details
 
-> SSOT | **Last Updated**: 2026-03-08 | Parent: [jwt-sessions.md](jwt-sessions.md)
+> SSOT | **Last Updated**: 2026-03-28 | Parent: [jwt-sessions.md](jwt-sessions.md)
 
 ## Test Run Endpoint Details
 
@@ -30,7 +30,7 @@ Response: SSE stream (OpenAI chunk format)
 ALTER TABLE inference_jobs ADD COLUMN account_id UUID REFERENCES accounts(id);
 ```
 
-Migration: `20260301000037_job_account_id.sql`
+Migration: consolidated in `000001_init.up.sql`
 
 | Column | API Key Job | Test Run |
 |--------|------------|----------|
@@ -45,8 +45,8 @@ Dashboard jobs list (`GET /v1/dashboard/jobs`) JOINs `accounts` to return `accou
 ### POST /v1/accounts -- Create Account
 
 ```
-Request:  { "username", "password", "name", "email?", "role": "admin", "department?", "position?" }
-Response: { "id", "username", "role", "test_api_key": "iq_...", "created_at" }
+Request:  { "username", "password", "name", "email?", "role_ids?": [UUID], "department?", "position?" }
+Response: { "id", "username", "roles", "test_api_key": "vnx_...", "created_at" }
 ```
 
 Test API key auto-created: `key_type="test"`, `tenant_id=username`, `name="{username}-test"`.
@@ -154,7 +154,7 @@ Query params: `limit` (default 100, max 1000), `offset` (default 0), `action`, `
 | `veronex_access_token` | JWT access token | 1h |
 | `veronex_refresh_token` | Raw refresh token | 7 days (rolling) |
 | `veronex_username` | Display name | 7 days |
-| `veronex_role` | `super` / `admin` | 7 days |
+| `veronex_role` | `super` / `admin` (legacy fallback for viewer) | 7 days |
 | `veronex_account_id` | Account UUID | 7 days |
 
 All cookies: `SameSite=Strict`.

@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { providersQuery } from '@/lib/queries'
 import { useTranslation } from '@/i18n'
-import { NetworkFlowTab } from '@/app/overview/components/network-flow-tab'
+import { NetworkFlowTab } from '@/components/network-flow-tab'
 
 export default function FlowPage() {
   const { t } = useTranslation()

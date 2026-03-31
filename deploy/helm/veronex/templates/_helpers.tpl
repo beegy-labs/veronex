@@ -44,6 +44,15 @@ app.kubernetes.io/component: agent
 {{- end }}
 
 {{/*
+Selector labels — weather-mcp
+*/}}
+{{- define "veronex.weatherMcp.selectorLabels" -}}
+app.kubernetes.io/name: weather-mcp
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: weather-mcp
+{{- end }}
+
+{{/*
 Selector labels — otel-collector
 */}}
 {{- define "veronex.otel.selectorLabels" -}}
@@ -79,6 +88,17 @@ redis://:{{ .Values.externalValkey.password }}@{{ .Values.externalValkey.host }}
 {{- else -}}
 redis://{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}/{{ .Values.externalValkey.db | default 0 }}
 {{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Valkey host:port for KEDA redis scaler (no protocol prefix).
+*/}}
+{{- define "veronex.valkeyAddress" -}}
+{{- if .Values.valkey.enabled -}}
+{{ .Release.Name }}-valkey-master:6379
+{{- else -}}
+{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}
 {{- end -}}
 {{- end }}
 

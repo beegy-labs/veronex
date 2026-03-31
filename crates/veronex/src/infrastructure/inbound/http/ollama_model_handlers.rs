@@ -63,7 +63,7 @@ pub async fn list_models(
 ) -> Result<Json<serde_json::Value>, super::error::AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(DEFAULT_MODEL_LIMIT).clamp(1, MAX_MODEL_LIMIT);
-    let page = params.page.unwrap_or(1).max(1);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
     let offset = (page - 1) * limit;
 
     let page_result = state.ollama_model_repo.list_with_counts_page(&search, limit, offset).await
@@ -88,7 +88,7 @@ pub async fn list_model_providers(
 ) -> Result<Json<serde_json::Value>, super::error::AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(DEFAULT_PROVIDER_LIMIT).clamp(1, MAX_PROVIDER_LIMIT);
-    let page = params.page.unwrap_or(1).max(1);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
     let offset = (page - 1) * limit;
 
     let page_result = state.ollama_model_repo.providers_info_for_model_page(&model_name, &search, limit, offset).await
@@ -236,7 +236,7 @@ pub async fn sync_all_providers(
                         "provider_id": provider.id,
                         "name": provider.name,
                         "models": [],
-                        "error": e.to_string()
+                        "error": "sync failed"
                     })
                 }
             };

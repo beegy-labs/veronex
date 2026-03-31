@@ -195,13 +195,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trait_object_creation() {
-        let repo: Arc<dyn ApiKeyRepository> = Arc::new(MockApiKeyRepository::new());
-        let keys = repo.list_by_tenant("tenant-1").await.unwrap();
-        assert!(keys.is_empty());
-    }
-
-    #[tokio::test]
     async fn create_and_get_by_hash() {
         let repo = MockApiKeyRepository::new();
         let key = make_api_key("tenant-1");

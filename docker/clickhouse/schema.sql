@@ -1,7 +1,10 @@
 -- ============================================================
 -- Veronex ClickHouse schema (consolidated init)
--- Generated from migrations 000001–000002
--- Last updated: 2026-03-16
+-- Generated from migrations 000001–000004
+-- Last updated: 2026-03-31
+--
+-- Ingest path: OTel Collector → Redpanda → Redpanda Connect
+--              → ClickHouse HTTP INSERT (otel_logs / otel_metrics_gauge / otel_traces_raw)
 -- ============================================================
 
 -- ── MergeTree target tables ────────────────────────────────────────────────────
@@ -145,159 +148,55 @@ PARTITION BY toYYYYMM(received_at)
 ORDER BY received_at
 TTL toDate(received_at) + INTERVAL __RETENTION_TRACES_DAYS__ DAY;
 
--- ── Kafka Engine tables + Materialized Views ───────────────────────────────────
+-- ── MCP tool call analytics ────────────────────────────────────────────────────
 
--- otel-logs → otel_logs
-CREATE TABLE IF NOT EXISTS kafka_otel_logs (
-    raw String
-) ENGINE = Kafka
-SETTINGS
-    kafka_broker_list          = '__KAFKA_BROKER__',
-    kafka_topic_list           = 'otel-logs',
-    kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-logs',
-    kafka_format               = 'JSONAsString',
-    kafka_num_consumers        = 1,
-    kafka_skip_broken_messages = 10,
-    kafka_security_protocol    = '__KAFKA_SECURITY_PROTOCOL__',
-    kafka_sasl_mechanism       = '__KAFKA_SASL_MECHANISM__',
-    kafka_sasl_username        = '__KAFKA_USERNAME__',
-    kafka_sasl_password        = '__KAFKA_PASSWORD__';
+CREATE TABLE IF NOT EXISTS mcp_tool_calls (
+    event_time       DateTime64(3),
+    request_id       UUID,
+    api_key_id       UUID,
+    tenant_id        LowCardinality(String),
+    server_id        UUID,
+    server_slug      LowCardinality(String),
+    tool_name        LowCardinality(String),
+    namespaced_name  LowCardinality(String),
+    outcome          LowCardinality(String),
+    cache_hit        UInt8,
+    latency_ms       UInt32,
+    result_bytes     UInt32,
+    cap_charged      UInt8,
+    loop_round       UInt8
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(event_time)
+ORDER BY (api_key_id, event_time)
+TTL toDate(event_time) + INTERVAL __RETENTION_MCP_DAYS__ DAY;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_logs_mv
-TO otel_logs AS
+CREATE TABLE IF NOT EXISTS mcp_tool_calls_hourly (
+    hour             DateTime,
+    server_slug      LowCardinality(String),
+    tool_name        LowCardinality(String),
+    call_count       UInt64,
+    success_count    UInt64,
+    error_count      UInt64,
+    cache_hit_count  UInt64,
+    timeout_count    UInt64,
+    avg_latency_ms   Float32,
+    total_cap_charged UInt64
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (server_slug, tool_name, hour);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS mcp_tool_calls_hourly_mv
+TO mcp_tool_calls_hourly AS
 SELECT
-    fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(lr, 'timeUnixNano'))) AS Timestamp,
-    JSONExtractString(lr, 'traceId')                                               AS TraceId,
-    JSONExtractString(lr, 'spanId')                                                AS SpanId,
-    JSONExtractString(lr, 'severityText')                                          AS SeverityText,
-    JSONExtractInt(lr, 'severityNumber')                                           AS SeverityNumber,
-    ResourceAttributes['service.name']                                             AS ServiceName,
-    JSONExtractString(JSONExtractRaw(lr, 'body'), 'stringValue')                   AS Body,
-    ResourceAttributes,
-    LogAttributes
-FROM (
-    SELECT
-        lr,
-        CAST(
-            arrayMap(
-                x -> (
-                    JSONExtractString(x, 'key'),
-                    COALESCE(
-                        nullIf(JSONExtractString(JSONExtractRaw(x, 'value'), 'stringValue'), ''),
-                        nullIf(JSONExtractString(JSONExtractRaw(x, 'value'), 'intValue'),    ''),
-                        toString(JSONExtractFloat(JSONExtractRaw(x, 'value'), 'doubleValue'))
-                    )
-                ),
-                JSONExtractArrayRaw(JSONExtractRaw(rm, 'resource'), 'attributes')
-            ),
-            'Map(LowCardinality(String), String)'
-        ) AS ResourceAttributes,
-        CAST(
-            arrayMap(
-                x -> (
-                    JSONExtractString(x, 'key'),
-                    COALESCE(
-                        nullIf(JSONExtractString(JSONExtractRaw(x, 'value'), 'stringValue'), ''),
-                        nullIf(JSONExtractString(JSONExtractRaw(x, 'value'), 'intValue'),    ''),
-                        toString(JSONExtractFloat(JSONExtractRaw(x, 'value'), 'doubleValue'))
-                    )
-                ),
-                JSONExtractArrayRaw(lr, 'attributes')
-            ),
-            'Map(LowCardinality(String), String)'
-        ) AS LogAttributes
-    FROM (
-        SELECT
-            arrayJoin(JSONExtractArrayRaw(raw, 'resourceLogs'))     AS rm,
-            arrayJoin(JSONExtractArrayRaw(rm, 'scopeLogs'))         AS sl,
-            arrayJoin(JSONExtractArrayRaw(sl, 'logRecords'))        AS lr
-        FROM kafka_otel_logs
-    )
-);
-
--- otel-metrics → otel_metrics_gauge
--- Supports both Gauge and Sum (counter) metric types.
-CREATE TABLE IF NOT EXISTS kafka_otel_metrics (
-    raw String
-) ENGINE = Kafka
-SETTINGS
-    kafka_broker_list          = '__KAFKA_BROKER__',
-    kafka_topic_list           = 'otel-metrics',
-    kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-metrics',
-    kafka_format               = 'JSONAsString',
-    kafka_num_consumers        = 1,
-    kafka_skip_broken_messages = 10,
-    kafka_security_protocol    = '__KAFKA_SECURITY_PROTOCOL__',
-    kafka_sasl_mechanism       = '__KAFKA_SASL_MECHANISM__',
-    kafka_sasl_username        = '__KAFKA_USERNAME__',
-    kafka_sasl_password        = '__KAFKA_PASSWORD__';
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_metrics_mv
-TO otel_metrics_gauge AS
-SELECT
-    fromUnixTimestamp64Nano(
-        toInt64OrZero(JSONExtractString(dp, 'timeUnixNano'))
-    ) AS ts,
-    ResAttrs['server_id'] AS server_id,
-    JSONExtractString(metric, 'name') AS metric_name,
-    JSONExtractFloat(dp, 'asDouble') AS value,
-    CAST(
-        arrayMap(
-            x -> (
-                JSONExtractString(x, 'key'),
-                JSONExtractString(JSONExtractRaw(x, 'value'), 'stringValue')
-            ),
-            JSONExtractArrayRaw(dp, 'attributes')
-        ),
-        'Map(LowCardinality(String), String)'
-    ) AS attributes
-FROM (
-    SELECT
-        rm, metric, dp,
-        CAST(
-            arrayMap(
-                x -> (
-                    JSONExtractString(x, 'key'),
-                    JSONExtractString(JSONExtractRaw(x, 'value'), 'stringValue')
-                ),
-                JSONExtractArrayRaw(JSONExtractRaw(rm, 'resource'), 'attributes')
-            ),
-            'Map(LowCardinality(String), String)'
-        ) AS ResAttrs
-    FROM (
-        SELECT
-            arrayJoin(JSONExtractArrayRaw(raw, 'resourceMetrics'))              AS rm,
-            arrayJoin(JSONExtractArrayRaw(rm, 'scopeMetrics'))                  AS sm,
-            arrayJoin(JSONExtractArrayRaw(sm, 'metrics'))                       AS metric,
-            -- Extract dataPoints from gauge OR sum (counters like node_cpu_seconds_total)
-            arrayJoin(
-                if(JSONHas(metric, 'gauge'),
-                    JSONExtractArrayRaw(JSONExtractRaw(metric, 'gauge'), 'dataPoints'),
-                    JSONExtractArrayRaw(JSONExtractRaw(metric, 'sum'), 'dataPoints')
-                )
-            ) AS dp
-        FROM kafka_otel_metrics
-        WHERE JSONHas(metric, 'gauge') OR JSONHas(metric, 'sum')
-    )
-);
-
--- otel-traces → otel_traces_raw
-CREATE TABLE IF NOT EXISTS kafka_otel_traces (
-    raw String
-) ENGINE = Kafka
-SETTINGS
-    kafka_broker_list          = '__KAFKA_BROKER__',
-    kafka_topic_list           = 'otel-traces',
-    kafka_group_name           = 'clickhouse-__CLICKHOUSE_DB__-otel-traces',
-    kafka_format               = 'JSONAsString',
-    kafka_num_consumers        = 1,
-    kafka_skip_broken_messages = 10,
-    kafka_security_protocol    = '__KAFKA_SECURITY_PROTOCOL__',
-    kafka_sasl_mechanism       = '__KAFKA_SASL_MECHANISM__',
-    kafka_sasl_username        = '__KAFKA_USERNAME__',
-    kafka_sasl_password        = '__KAFKA_PASSWORD__';
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS kafka_otel_traces_mv
-TO otel_traces_raw AS
-SELECT now64(3) AS received_at, raw AS payload
-FROM kafka_otel_traces;
+    toStartOfHour(event_time)                   AS hour,
+    server_slug,
+    tool_name,
+    count()                                     AS call_count,
+    countIf(outcome = 'success')                AS success_count,
+    countIf(outcome = 'error')                  AS error_count,
+    countIf(cache_hit = 1)                      AS cache_hit_count,
+    countIf(outcome = 'timeout')                AS timeout_count,
+    avg(latency_ms)                             AS avg_latency_ms,
+    sum(cap_charged)                            AS total_cap_charged
+FROM mcp_tool_calls
+GROUP BY hour, server_slug, tool_name;

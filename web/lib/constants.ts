@@ -164,6 +164,20 @@ export const PROVIDER_STATUS_I18N: Record<string, string> = {
   offline:  'common.offline',
 }
 
+/** Service health status → dot indicator class. */
+export const SERVICE_STATUS_DOT: Record<string, string> = {
+  ok:          'h-2 w-2 rounded-full bg-status-success shrink-0',
+  degraded:    'h-2 w-2 rounded-full bg-status-warning shrink-0',
+  unavailable: 'h-2 w-2 rounded-full bg-status-error shrink-0',
+}
+
+/** Service health status → text colour class. */
+export const SERVICE_STATUS_TEXT: Record<string, string> = {
+  ok:          'text-status-success-fg',
+  degraded:    'text-status-warning-fg',
+  unavailable: 'text-status-error-fg',
+}
+
 /** Job status → Tailwind class mapping. SSOT for all status badges. */
 export const STATUS_STYLES: Record<string, string> = {
   completed: 'bg-status-success/15 text-status-success-fg border-status-success/30',

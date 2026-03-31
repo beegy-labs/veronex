@@ -11,7 +11,8 @@ hdr "Phase 1: Infrastructure Setup"
 if [ "$SKIP_DB_RESET" = "0" ]; then
   docker compose exec -T postgres psql -U veronex -d veronex -c \
     "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
-  docker compose run --rm migrate-postgres > /dev/null 2>&1
+  docker compose --profile migrate run --rm migrate-postgres > /dev/null 2>&1
+  docker compose --profile migrate run --rm migrate-clickhouse > /dev/null 2>&1
   # Clear all Valkey keys (ZSET queue, demand counters, caches, etc.)
   docker compose exec -T valkey valkey-cli EVAL \
     "local count=0; for _,k in ipairs(redis.call('keys','veronex:*')) do count=count+redis.call('del',k) end; return count" 0 \
@@ -37,6 +38,17 @@ docker compose exec -T valkey valkey-cli EVAL \
 H=$(curl -sf "$API/health" 2>/dev/null || echo "")
 R=$(curl -sf "$API/readyz" 2>/dev/null || echo "")
 [ "$H" = "ok" ] && [ "$R" = "ok" ] && pass "health=ok, readyz=ok" || fail "health=$H readyz=$R"
+
+# Verify all infrastructure services are running
+INFRA_OK=true
+for svc in postgres valkey clickhouse redpanda minio otel-collector weather-mcp veronex-embed; do
+  STATUS=$(docker compose ps "$svc" --format "{{.Status}}" 2>/dev/null | head -1)
+  case "$STATUS" in
+    *healthy*|*Up*) ;;
+    *) INFRA_OK=false; fail "Service $svc not running: $STATUS" ;;
+  esac
+done
+$INFRA_OK && pass "All infrastructure services running"
 
 # ── Phase 2: Authentication ───────────────────────────────────────────────────
 

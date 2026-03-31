@@ -8,7 +8,8 @@
 #   4. Thermal state machine deep validation
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
 
 # Helper: extract max_concurrent for a provider pattern + model from capacity JSON
 mc_for() {

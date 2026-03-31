@@ -1,18 +1,36 @@
 # Veronex E2E Test Suite
 
-> **Last Updated**: 2026-03-21
+> **Last Updated**: 2026-03-23
 
 ---
 
 ## How to Run
 
 ```bash
+# Full run — already-passed phases are skipped automatically
 ./scripts/test-e2e.sh
+
+# Run a single phase (by number or name)
+./scripts/test-e2e.sh 05
+./scripts/test-e2e.sh 05-security
+
+# Re-run from phase 05 onwards (clears checkpoints 05+)
+./scripts/test-e2e.sh --from 05
+
+# Clear all checkpoints and run everything fresh
+./scripts/test-e2e.sh --reset
+
+# Ignore checkpoints for this run (still writes new ones on pass)
+./scripts/test-e2e.sh --no-cache
 
 # Override environment variables
 MODEL=qwen3:8b CONCURRENT=8 ./scripts/test-e2e.sh
 SKIP_DB_RESET=1 ./scripts/test-e2e.sh
 ```
+
+**Checkpoints** persist in `~/.cache/veronex-e2e/` (override with `E2E_CHECKPOINT_DIR`).
+A phase is skipped when its `.ok` file exists. A checkpoint is written only when exit=0 and FAIL_COUNT=0.
+Auth state (tokens, API keys) is also persisted there — reused across runs until `--reset`.
 
 **Prerequisites**: `docker compose up` (Veronex stack running), at least one reachable Ollama provider
 
@@ -42,9 +60,13 @@ flowchart TD
         P08["08-sdd-advanced.sh"]
     end
 
-    S01 --> S03 & P04 & P05 & P09 & P10 & P11
+    subgraph "Phase 2 (parallel)"
+        P12["12-mcp.sh"]
+    end
+
+    S01 --> S03 & P04 & P05 & P09 & P10 & P11 & P12
     S03 --> P02 & P06 & P07 & P08
-    P02 & P04 & P05 & P06 & P07 & P08 & P09 & P10 & P11 --> Result["Aggregate Results"]
+    P02 & P04 & P05 & P06 & P07 & P08 & P09 & P10 & P11 & P12 --> Result["Aggregate Results"]
 ```
 
 ---
@@ -404,6 +426,7 @@ sequenceDiagram
 | /v1/dashboard/analytics | 200 |
 | /v1/dashboard/queue/depth | 200 |
 | /v1/dashboard/overview | 200 |
+| /v1/dashboard/services | 200, response structure (infrastructure, api_pods, agent_pods) |
 | OpenAPI spec | /docs/openapi.json → 200 |
 | Swagger UI | /docs/swagger → 200 |
 | Redoc UI | /docs/redoc → 200 |
@@ -417,7 +440,11 @@ sequenceDiagram
 | Remote server metrics | 200 |
 | Provider key | /v1/providers/{id}/key → 200 or 404 |
 | Session grouping | POST /v1/dashboard/session-grouping/trigger → 200/202 |
+| Lab: all fields present | GET /v1/dashboard/lab includes gemini_function_calling, max_images_*, mcp_orchestrator_model, updated_at |
 | Lab toggle + revert | PATCH /v1/dashboard/lab gemini_function_calling toggle and restore |
+| Lab mcp_orchestrator_model set | PATCH `{"mcp_orchestrator_model":"<model>"}` → response reflects new value |
+| Lab mcp_orchestrator_model absent key | PATCH without key → value unchanged |
+| Lab mcp_orchestrator_model null clear | PATCH `{"mcp_orchestrator_model":null}` → value becomes null |
 | Per-key usage | /v1/usage/{key_id}?hours=24 → 200 |
 | Per-key jobs | /v1/usage/{key_id}/jobs → 200 |
 | Per-key models | /v1/usage/{key_id}/models → 200 |
@@ -677,6 +704,7 @@ Execution strategy (optimized for speed):
 | `09-metrics-pipeline.sh` | 2 (parallel) | Metrics pipeline: agent → OTel → Redpanda → ClickHouse → API |
 | `10-image-storage.sh` | 2 (parallel) | Image inference, S3 WebP storage, thumbnails, provider_name |
 | `11-verify-liveness.sh` | 2 (parallel) | Server/provider verify endpoints, registration validation, liveness |
+| `12-mcp.sh` | 2 (parallel) | MCP CRUD, orchestrator model set/clear/persist, API surface, Valkey namespace, weather-mcp protocol, full integration |
 | `02-scheduler.sh` | 3 (parallel) | Core scheduler validation (needs AIMD state) |
 | `06-api-surface.sh` | 3 (parallel) | Multi-format inference + endpoints + Pull Drain |
 | `07-lifecycle.sh` | 3 (parallel) | Cancel + SSE + password reset + crash recovery |
@@ -694,12 +722,13 @@ Core Scheduler                02               20
 Inference + AIMD Learning     03               16
 CRUD                          04               19
 Security + RBAC + Roles        05               30
-Multi-Format + Endpoints      06               30
+Multi-Format + Endpoints      06               37
 Lifecycle + Cancel            07               23
 Advanced Validation           08               17
 Metrics Pipeline              09               10
 Image Storage                 10                6
 Verify + Liveness             11               18
+MCP Integration               12               15
 ──────────────────────────────────────────────────────
-Total                                          ~204
+Total                                          ~226
 ```

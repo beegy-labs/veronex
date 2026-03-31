@@ -79,4 +79,10 @@ test.describe('API: Gemini Policies & Models', () => {
       expect(res.status()).toBe(400)
     }
   })
+
+  test('sync status without prior sync returns 400 or 200', async () => {
+    const res = await api.post('/v1/gemini/sync-status')
+    // 400 if no config, 200 if config exists
+    expect([200, 400]).toContain(res.status())
+  })
 })

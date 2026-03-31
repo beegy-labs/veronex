@@ -1,5 +1,6 @@
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -75,7 +76,7 @@ pub async fn create_key(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(req): Json<CreateKeyRequest>,
-) -> Result<Json<CreateKeyResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     if req.rate_limit_rpm < 0 {
         return Err(AppError::BadRequest("rate_limit_rpm must be non-negative".into()));
     }
@@ -113,13 +114,13 @@ pub async fn create_key(
             api_key.name, api_key.tenant_id, api_key.tier,
             api_key.rate_limit_rpm, api_key.rate_limit_tpm)).await;
 
-    Ok(Json(CreateKeyResponse {
+    Ok((StatusCode::CREATED, Json(CreateKeyResponse {
         id,
         key: plaintext,
         key_prefix,
         tenant_id: req.tenant_id,
         created_at: now,
-    }))
+    })))
 }
 
 /// Resolve the tenant_id (username) for the authenticated user.
@@ -144,7 +145,7 @@ pub async fn list_keys(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(50).clamp(1, 1000);
-    let page = params.page.unwrap_or(1).max(1);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
     let offset = (page - 1) * limit;
 
     let (keys, total) = if claims.role == crate::domain::enums::AccountRole::Super {
@@ -196,12 +197,10 @@ pub async fn list_keys(
 /// DELETE /v1/keys/{id} — Soft-delete an API key (hidden from list, blocked from auth).
 pub async fn delete_key(
     Extension(claims): Extension<Claims>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
-    let key = state.api_key_repo.get_by_id(&uuid).await?
+    let key = state.api_key_repo.get_by_id(&id).await?
         .ok_or_else(|| AppError::NotFound("key not found".into()))?;
     if claims.role != crate::domain::enums::AccountRole::Super {
         let tenant_id = resolve_tenant_id(&state, &claims).await?;
@@ -212,10 +211,10 @@ pub async fn delete_key(
 
     state
         .api_key_repo
-        .soft_delete(&uuid)
+        .soft_delete(&id)
         .await?;
 
-    emit_audit(&state, &claims, "delete", "api_key", &id, &id,
+    emit_audit(&state, &claims, "delete", "api_key", &id.to_string(), &id.to_string(),
         &format!("API key {id} soft-deleted (access permanently revoked)")).await;
 
     Ok(StatusCode::NO_CONTENT)
@@ -224,13 +223,11 @@ pub async fn delete_key(
 /// PATCH /v1/keys/{id} — Update mutable fields: `is_active` and/or `tier`.
 pub async fn toggle_key(
     Extension(claims): Extension<Claims>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     State(state): State<AppState>,
     Json(req): Json<PatchKeyRequest>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
-    let key = state.api_key_repo.get_by_id(&uuid).await?
+    let key = state.api_key_repo.get_by_id(&id).await?
         .ok_or_else(|| AppError::NotFound("key not found".into()))?;
     if claims.role != crate::domain::enums::AccountRole::Super {
         let tenant_id = resolve_tenant_id(&state, &claims).await?;
@@ -255,9 +252,9 @@ pub async fn toggle_key(
         None => None,
     };
 
-    state.api_key_repo.update_fields(&uuid, req.is_active, tier.as_ref()).await?;
+    state.api_key_repo.update_fields(&id, req.is_active, tier.as_ref()).await?;
 
-    emit_audit(&state, &claims, "update", "api_key", &id, &id, &details).await;
+    emit_audit(&state, &claims, "update", "api_key", &id.to_string(), &id.to_string(), &details).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -267,12 +264,10 @@ pub async fn toggle_key(
 /// The old key is immediately invalidated. Returns the new plaintext key once.
 pub async fn regenerate_key(
     Extension(claims): Extension<Claims>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<CreateKeyResponse>, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
-    let key = state.api_key_repo.get_by_id(&uuid).await?
+    let key = state.api_key_repo.get_by_id(&id).await?
         .ok_or_else(|| AppError::NotFound("key not found".into()))?;
     if claims.role != crate::domain::enums::AccountRole::Super {
         let tenant_id = resolve_tenant_id(&state, &claims).await?;
@@ -282,13 +277,13 @@ pub async fn regenerate_key(
     }
 
     let (_new_id, plaintext, new_hash, new_prefix) = generate_api_key();
-    state.api_key_repo.regenerate(&uuid, &new_hash, &new_prefix).await?;
+    state.api_key_repo.regenerate(&id, &new_hash, &new_prefix).await?;
 
-    emit_audit(&state, &claims, "regenerate", "api_key", &id, &key.name,
+    emit_audit(&state, &claims, "regenerate", "api_key", &id.to_string(), &key.name,
         &format!("API key '{}' regenerated (old key invalidated)", key.name)).await;
 
     Ok(Json(CreateKeyResponse {
-        id: uuid,
+        id,
         key: plaintext,
         key_prefix: new_prefix,
         tenant_id: key.tenant_id,
