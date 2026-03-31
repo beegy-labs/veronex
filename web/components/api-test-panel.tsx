@@ -11,10 +11,11 @@ import { BASE } from '@/lib/api'
 import { compressImage } from '@/lib/compress-image'
 import { PROVIDER_OLLAMA, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import type { OpenAIChunk, Run, ProviderOption, Endpoint } from '@/components/api-test-types'
+import type { OpenAIChunk, Run, ProviderOption, Endpoint, ConversationMessage, TestMode } from '@/components/api-test-types'
 import { runsReducer, MAX_RUNS } from '@/components/api-test-types'
 import { ApiTestForm } from '@/components/api-test-form'
 import { ApiTestRuns } from '@/components/api-test-runs'
+import { ApiTestConversation } from '@/components/api-test-conversation'
 
 // ── ApiTestPanel ───────────────────────────────────────────────────────────────
 
@@ -39,13 +40,23 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const [useApiKey, setUseApiKey] = useState(false)
   const [apiKeyValue, setApiKeyValue] = useState('')
 
-  // ── Run state ─────────────────────────────────────────────────────────────────
+  // ── Mode ─────────────────────────────────────────────────────────────────────
+  const [mode, setMode] = useState<TestMode>('single')
+
+  // ── Run state (single mode) ───────────────────────────────────────────────────
   const [runs, dispatch] = useReducer(runsReducer, [])
   const [activeRunId, setActiveRunId] = useState<number | null>(null)
   const nextIdRef = useRef(1)
 
   // Map from run id → active reader (for cancellation)
   const readersRef = useRef<Map<number, ReadableStreamDefaultReader<Uint8Array>>>(new Map())
+
+  // ── Conversation state ────────────────────────────────────────────────────────
+  const [conversationMessages, setConversationMessages] = useState<ConversationMessage[]>([])
+  const [convStreamingText, setConvStreamingText] = useState('')
+  const [convStatus, setConvStatus] = useState<'idle' | 'streaming' | 'error'>('idle')
+  const [convErrorMsg, setConvErrorMsg] = useState('')
+  const convReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null)
 
   // ── Providers ─────────────────────────────────────────────────────────────────
   const { data: providersData } = useQuery(providersQuery())
@@ -87,6 +98,16 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
       setEndpoint('/v1/chat/completions')
     }
   }, [isGeminiProvider, endpoint])
+
+  // Conversation mode: force messages-capable endpoint
+  useEffect(() => {
+    if (mode === 'conversation' && endpoint === '/api/generate') {
+      setEndpoint('/v1/chat/completions')
+    }
+    if (mode === 'conversation' && endpoint === '/v1beta/models') {
+      setEndpoint('/v1/chat/completions')
+    }
+  }, [mode, endpoint])
 
   // ── Models ────────────────────────────────────────────────────────────────────
   const { data: ollamaModelsData } = useQuery({
@@ -135,9 +156,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   // ── Cleanup on unmount ────────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      for (const reader of readersRef.current.values()) {
-        reader.cancel()
-      }
+      for (const reader of readersRef.current.values()) reader.cancel()
+      convReaderRef.current?.cancel()
     }
   }, [])
 
@@ -222,6 +242,111 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const handleImageRemove = useCallback((index: number) => {
     setImages((prev) => prev.filter((_, i) => i !== index))
   }, [])
+
+  // ── Conversation handler ──────────────────────────────────────────────────────
+  async function executeConversationTurn() {
+    if (!prompt.trim() || !model || convStatus === 'streaming') return
+    if (!isLoggedIn()) return
+
+    const userContent = prompt.trim()
+    const userImages = images.length > 0 ? [...images] : undefined
+    const userMsg: ConversationMessage = { role: 'user', content: userContent, images: userImages }
+    const updatedMessages = [...conversationMessages, userMsg]
+
+    setConversationMessages(updatedMessages)
+    setPrompt('')
+    setImages([])
+    setConvStreamingText('')
+    setConvStatus('streaming')
+    setConvErrorMsg('')
+
+    const ep = (endpoint === '/api/generate' || endpoint === '/v1beta/models')
+      ? '/v1/chat/completions'
+      : endpoint
+
+    const apiMessages = updatedMessages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      ...(m.images && m.images.length > 0 && { images: m.images }),
+    }))
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (useApiKey && apiKeyValue.trim()) {
+      headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
+    }
+
+    const body: Record<string, unknown> = {
+      model,
+      messages: apiMessages,
+      provider_type: providerType,
+      stream: true,
+    }
+
+    let fullText = ''
+    try {
+      const resp = await fetch(`${BASE}${ep}`, {
+        method: 'POST',
+        headers,
+        ...(!useApiKey && { credentials: 'include' as RequestCredentials }),
+        body: JSON.stringify(body),
+      })
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
+
+      if (resp.body) {
+        const reader = resp.body.getReader()
+        convReaderRef.current = reader
+        const decoder = new TextDecoder()
+        let buf = ''
+        try {
+          outer: while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += decoder.decode(value, { stream: true })
+            const lines = buf.split('\n')
+            buf = lines.pop() ?? ''
+            for (const line of lines) {
+              const trimmed = line.trimEnd()
+              if (!trimmed.startsWith('data:')) continue
+              const raw = trimmed.slice(5)
+              const data = raw.startsWith(' ') ? raw.slice(1) : raw
+              if (data === '[DONE]') break outer
+              try {
+                const chunk: OpenAIChunk = JSON.parse(data)
+                if (chunk.error?.message) throw new Error(chunk.error.message)
+                const content = chunk.choices?.[0]?.delta?.content
+                if (content) { fullText += content; setConvStreamingText(fullText) }
+              } catch (err) {
+                if (err instanceof SyntaxError) continue
+                throw err
+              }
+            }
+          }
+        } finally {
+          convReaderRef.current = null
+        }
+      }
+
+      setConversationMessages((prev) => [...prev, { role: 'assistant', content: fullText }])
+      setConvStreamingText('')
+      setConvStatus('idle')
+    } catch (err) {
+      setConversationMessages((prev) => [...prev, { role: 'assistant', content: fullText }])
+      setConvStreamingText('')
+      setConvStatus('error')
+      setConvErrorMsg(err instanceof Error ? err.message : t('common.unknownError'))
+    }
+  }
+
+  function handleConversationStop() {
+    convReaderRef.current?.cancel()
+    convReaderRef.current = null
+    setConversationMessages((prev) => [
+      ...prev,
+      { role: 'assistant', content: convStreamingText },
+    ])
+    setConvStreamingText('')
+    setConvStatus('idle')
+  }
 
   // ── Run handler ───────────────────────────────────────────────────────────────
   interface RunParams {
@@ -333,6 +458,10 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   }
 
   function handleRun() {
+    if (mode === 'conversation') {
+      executeConversationTurn()
+      return
+    }
     executeRun({
       prompt, model, providerType, endpoint, useApiKey,
       images: images.length > 0 ? [...images] : undefined,
@@ -371,13 +500,15 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     })
   }
 
-  const canRun = isLoggedIn() && !!prompt.trim() && !!model
+  const canRun = isLoggedIn() && !!prompt.trim() && !!model &&
+    (mode === 'single' || convStatus !== 'streaming')
   const isAnyStreaming = runs.some((r) => r.status === 'streaming')
 
   return (
     <Card>
       <CardContent className="p-5 space-y-0">
         <ApiTestForm
+          mode={mode}
           providerType={providerType}
           model={model}
           prompt={prompt}
@@ -392,6 +523,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           endpoint={endpoint}
           useApiKey={useApiKey}
           apiKeyValue={apiKeyValue}
+          onModeChange={setMode}
           onProviderChange={setProviderType}
           onModelChange={setModel}
           onPromptChange={setPrompt}
@@ -403,15 +535,31 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           onRun={handleRun}
         />
 
-        <ApiTestRuns
-          runs={runs}
-          activeRunId={activeRunId}
-          isAnyStreaming={isAnyStreaming}
-          onSelectRun={setActiveRunId}
-          onCloseRun={handleCloseRun}
-          onStop={handleStop}
-          onRerun={handleRerun}
-        />
+        {mode === 'conversation' ? (
+          <ApiTestConversation
+            messages={conversationMessages}
+            streamingText={convStreamingText}
+            status={convStatus}
+            errorMsg={convErrorMsg}
+            onClear={() => {
+              setConversationMessages([])
+              setConvStreamingText('')
+              setConvStatus('idle')
+              setConvErrorMsg('')
+            }}
+            onStop={handleConversationStop}
+          />
+        ) : (
+          <ApiTestRuns
+            runs={runs}
+            activeRunId={activeRunId}
+            isAnyStreaming={isAnyStreaming}
+            onSelectRun={setActiveRunId}
+            onCloseRun={handleCloseRun}
+            onStop={handleStop}
+            onRerun={handleRerun}
+          />
+        )}
       </CardContent>
     </Card>
   )
