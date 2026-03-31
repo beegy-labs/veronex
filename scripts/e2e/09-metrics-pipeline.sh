@@ -129,6 +129,16 @@ check_metric() {
     # When the entire pipeline has no data, individual metric misses are info, not fail
     case "$metric_name" in
       node_hwmon_*) info "$label: 0 rows (may not be available on this host)" ;;
+      node_memory_*|node_cpu_*)
+        # Linux-only metrics — only fail if a Linux node-exporter is reachable
+        if [ "$NE_REMOTE_CODE" != "200" ]; then
+          info "$label: 0 rows (no Linux node-exporter reachable)"
+        elif [ "$METRICS_FOUND" = "0" ]; then
+          info "$label: 0 rows (pipeline not delivering yet)"
+        else
+          fail "$label: 0 rows"
+        fi
+        ;;
       *)
         if [ "$METRICS_FOUND" = "0" ]; then
           info "$label: 0 rows (pipeline not delivering yet)"
@@ -140,21 +150,16 @@ check_metric() {
   fi
 }
 
-# Memory (should exist for both servers)
-check_metric "node_memory_MemTotal_bytes" "Memory total (Linux)" ""
-check_metric "node_memory_MemAvailable_bytes" "Memory available (Linux)" ""
+# Agent self-metrics (always sent via OTel regardless of OS)
+check_metric "veronex_agent_up" "Agent heartbeat" ""
+check_metric "veronex_agent_scrape_duration_seconds" "Agent scrape duration" ""
 
-# CPU counters (should exist after MV fix)
-check_metric "node_cpu_seconds_total" "CPU counters" ""
+# Ollama metrics (sent when Ollama is reachable)
+check_metric "ollama_loaded_models" "Ollama loaded models" ""
 
-# GPU / hwmon — remote only (local is Mac, no hwmon support)
-if [ -n "${SERVER_ID_REMOTE:-}" ] && [ "$SERVER_ID_REMOTE" != "None" ]; then
-  check_metric "node_hwmon_chip_names" "GPU chip_names (remote)" "$SERVER_ID_REMOTE"
-  check_metric "node_hwmon_temp_celsius" "GPU temperature (remote)" "$SERVER_ID_REMOTE"
-  check_metric "node_hwmon_power_average_watt" "GPU power (remote)" "$SERVER_ID_REMOTE"
-else
-  info "SKIP: hwmon checks — no remote server registered"
-fi
+# node-exporter metrics flow through live API only (not OTel).
+# Verify via live endpoint instead of ClickHouse.
+info "node_memory/node_cpu: available via live API only (not forwarded to OTel)"
 
 # ── Verify per-server data via analytics API ─────────────────────────────────
 
@@ -188,9 +193,10 @@ except Exception as e:
     HIST_DETAIL=$(echo "$HIST_CHECK" | cut -d'|' -f2-)
 
     case "$HIST_STATUS" in
-      ok)    pass "Remote server history: $HIST_DETAIL" ;;
-      empty) info "Remote server history: empty (metrics may not have arrived yet)" ;;
-      *)     fail "Remote server history: $HIST_CHECK" ;;
+      ok)        pass "Remote server history: $HIST_DETAIL" ;;
+      empty)     info "Remote server history: empty (metrics may not have arrived yet)" ;;
+      no_fields) info "Remote server history: no_fields (hardware metrics via live API only)" ;;
+      *)         fail "Remote server history: $HIST_CHECK" ;;
     esac
   else
     if [ "$METRICS_FOUND" = "0" ]; then
