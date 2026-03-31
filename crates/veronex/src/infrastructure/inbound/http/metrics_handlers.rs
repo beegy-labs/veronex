@@ -30,9 +30,8 @@ struct SdTarget {
 /// Strip a URL down to `host[:port]` — removes scheme, path, query, fragment.
 fn normalize_host_port(url: &str) -> String {
     let without_scheme = url
-        .trim_start_matches("http://")
-        .trim_start_matches("https://");
-    // Strip path/query/fragment: take everything up to first '/' or '?'
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
     let host_port = without_scheme
         .split_once('/')
         .map(|(h, _)| h)

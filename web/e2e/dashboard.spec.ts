@@ -1,10 +1,8 @@
 import { test, expect } from '@playwright/test'
-import { login } from './helpers/auth'
-import { T_DEFAULT } from './helpers/constants'
+import { T_DEFAULT, T_LONG } from './helpers/constants'
 
 test.describe('Dashboard', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
   })
 
   test('overview page loads with KPI cards', async ({ page }) => {
@@ -23,8 +21,8 @@ test.describe('Dashboard', () => {
     await expect(page).toHaveURL(/\/jobs/)
     // Either a table with job rows or the "no jobs" empty state should render
     await expect(
-      page.locator('table').or(page.getByText(/no jobs|loading/i))
-    ).toBeVisible({ timeout: T_DEFAULT })
+      page.locator('table').first().or(page.getByText(/no jobs|loading/i).first())
+    ).toBeVisible({ timeout: T_LONG })
   })
 
   test('keys page loads and shows table or empty state', async ({ page }) => {

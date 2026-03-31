@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useOptimistic } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { keysQuery, resourceAuditQuery } from '@/lib/queries'
+import { keysQuery, resourceAuditQuery, keyMcpAccessQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
-import type { ApiKey, CreateKeyResponse } from '@/lib/types'
-import { Plus, Trash2, BarChart2, RefreshCw, History, Key, ChevronLeft, ChevronRight } from 'lucide-react'
+import type { ApiKey, CreateKeyResponse, McpServerAccess } from '@/lib/types'
+import { Plus, Trash2, BarChart2, RefreshCw, History, Key, ChevronLeft, ChevronRight, Server } from 'lucide-react'
 import { CopyButton } from '@/components/copy-button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -73,6 +73,7 @@ function CreateKeyModal({
   onCreated: (resp: CreateKeyResponse) => void
 }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [tenantId, setTenantId] = useState('default')
   const [rpm, setRpm] = useState('')
@@ -89,6 +90,7 @@ function CreateKeyModal({
         tier,
       }),
     onSuccess: (data) => onCreated(data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
   })
 
   return (
@@ -241,6 +243,94 @@ function KeyHistoryModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => v
   )
 }
 
+function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => void }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+
+  const { data: servers, isLoading, error } = useQuery(keyMcpAccessQuery(apiKey.id))
+
+  const grantMutation = useMutation({
+    mutationFn: (serverId: string) => api.grantKeyMcpAccess(apiKey.id, serverId),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['key-mcp-access', apiKey.id] }),
+  })
+
+  const revokeMutation = useMutation({
+    mutationFn: (serverId: string) => api.revokeKeyMcpAccess(apiKey.id, serverId),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['key-mcp-access', apiKey.id] }),
+  })
+
+  const isPending = grantMutation.isPending || revokeMutation.isPending
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-w-lg max-h-[70vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>{t('keys.mcpAccessTitle', { name: apiKey.name })}</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">{t('keys.mcpAccessDesc')}</p>
+        <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
+          {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
+          {error && <p className="text-sm text-destructive">{t('keys.mcpLoadError')}</p>}
+          {servers && servers.length === 0 && (
+            <p className="text-sm text-muted-foreground">{t('keys.mcpNoServers')}</p>
+          )}
+          {servers?.map((s: McpServerAccess) => (
+            <div key={s.server_id} className="flex items-center justify-between rounded-lg border px-3 py-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{s.server_name}</p>
+                  <p className="text-xs text-muted-foreground font-mono">{s.slug}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Badge
+                  variant="outline"
+                  className={s.is_allowed
+                    ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
+                    : 'bg-muted text-muted-foreground'}
+                >
+                  {s.is_allowed ? t('keys.mcpGranted') : t('keys.mcpNotGranted')}
+                </Badge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={isPending}
+                  onClick={() => s.is_allowed
+                    ? revokeMutation.mutate(s.server_id)
+                    : grantMutation.mutate(s.server_id)
+                  }
+                >
+                  {s.is_allowed ? t('keys.mcpRevoke') : t('keys.mcpGrant')}
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>{t('common.close')}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function KeyActiveSwitch({ keyId, isActive }: { keyId: string; isActive: boolean }) {
+  const { t } = useTranslation()
+  const [optimistic, setOptimistic] = useOptimistic(isActive, (_, v: boolean) => v)
+  const mutation = useApiMutation(
+    (vars: { id: string; is_active: boolean }) => api.toggleKeyActive(vars.id, vars.is_active),
+    { invalidateKey: ['keys'] },
+  )
+  return (
+    <Switch
+      checked={optimistic}
+      onCheckedChange={(checked) => { setOptimistic(checked); mutation.mutate({ id: keyId, is_active: checked }) }}
+      aria-label={optimistic ? t('common.deactivate') : t('common.activate')}
+    />
+  )
+}
+
 export default function KeysPage() {
   const { t } = useTranslation()
   const { tz } = useTimezone()
@@ -251,6 +341,7 @@ export default function KeysPage() {
   const [regenerateTarget, setRegenerateTarget] = useState<ApiKey | null>(null)
   const [usageKey, setUsageKey] = useState<ApiKey | null>(null)
   const [historyKey, setHistoryKey] = useState<ApiKey | null>(null)
+  const [mcpAccessKey, setMcpAccessKey] = useState<ApiKey | null>(null)
 
   const { data: keysData, isLoading, error } = useQuery(keysQuery())
   const keys = keysData?.keys
@@ -265,11 +356,6 @@ export default function KeysPage() {
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteKey(id),
     { invalidateKey: ['keys'], onSuccess: () => setDeleteTarget(null) },
-  )
-
-  const toggleMutation = useApiMutation(
-    (vars: { id: string; is_active: boolean }) => api.toggleKeyActive(vars.id, vars.is_active),
-    { invalidateKey: ['keys'] },
   )
 
   const tierMutation = useApiMutation(
@@ -380,14 +466,7 @@ export default function KeysPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Switch
-                        checked={key.is_active}
-                        onCheckedChange={(checked) =>
-                          toggleMutation.mutate({ id: key.id, is_active: checked })
-                        }
-                        disabled={toggleMutation.isPending}
-                        aria-label={key.is_active ? t('common.deactivate') : t('common.activate')}
-                      />
+                      <KeyActiveSwitch keyId={key.id} isActive={key.is_active} />
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs tabular-nums">
                       {key.rate_limit_rpm === 0 ? '∞' : key.rate_limit_rpm} /{' '}
@@ -422,6 +501,16 @@ export default function KeysPage() {
                           className="text-muted-foreground hover:text-primary"
                         >
                           <History className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={t('keys.mcpAccess')}
+                          onClick={() => setMcpAccessKey(key)}
+                          title={t('keys.mcpAccess')}
+                          className="text-muted-foreground hover:text-primary"
+                        >
+                          <Server className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -509,6 +598,10 @@ export default function KeysPage() {
 
       {historyKey && (
         <KeyHistoryModal apiKey={historyKey} onClose={() => setHistoryKey(null)} />
+      )}
+
+      {mcpAccessKey && (
+        <KeyMcpAccessModal apiKey={mcpAccessKey} onClose={() => setMcpAccessKey(null)} />
       )}
     </div>
   )

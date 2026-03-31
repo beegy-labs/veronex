@@ -54,7 +54,7 @@ State: `const [showCreate, setShowCreate] = useState(false)`
 Clicking any row opens a full-screen dialog with per-key usage analytics.
 
 ```
-Dialog: "{name}" usage | iq_abc123... [Tier badge] [24h/7d/30d]
+Dialog: "{name}" usage | vnx_abc123... [Tier badge] [24h/7d/30d]
 KPI row: [Requests] [Tokens] [Success %] [Errors]
 Model Breakdown table (when models.length > 0)
 Tokens Per Hour (AreaChart) | Requests Per Hour (BarChart)

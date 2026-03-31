@@ -1,6 +1,7 @@
 use axum::extract::{Extension, Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::application::ports::outbound::analytics_repository::{
     AnalyticsSummary, HourlyUsage, UsageAggregate, UsageJob,
@@ -112,20 +113,19 @@ pub async fn aggregate_usage(
 /// ClickHouse primary, PostgreSQL fallback.
 pub async fn key_usage(
     Extension(claims): Extension<Claims>,
-    Path(key_id): Path<String>,
+    Path(key_id): Path<Uuid>,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<HourlyUsage>>, AppError> {
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
-    let uuid = super::handlers::parse_uuid(&key_id)?;
-    verify_key_ownership(&state, &claims, &uuid).await?;
+    verify_key_ownership(&state, &claims, &key_id).await?;
     if let Some(repo) = state.analytics_repo.as_ref()
-        && let Ok(rows) = repo.key_usage_hourly(&uuid, hours).await
+        && let Ok(rows) = repo.key_usage_hourly(&key_id, hours).await
             && !rows.is_empty() {
                 return Ok(Json(rows));
             }
-    Ok(Json(usage_queries::pg_key_usage_hourly(&state.pg_pool, &uuid, hours).await?))
+    Ok(Json(usage_queries::pg_key_usage_hourly(&state.pg_pool, &key_id, hours).await?))
 }
 
 /// GET /v1/dashboard/analytics — Model distribution, finish reasons, TPS and avg tokens (super admin only).
@@ -149,36 +149,34 @@ pub async fn get_analytics(
 /// ClickHouse primary, PostgreSQL fallback.
 pub async fn key_usage_jobs(
     Extension(claims): Extension<Claims>,
-    Path(key_id): Path<String>,
+    Path(key_id): Path<Uuid>,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<UsageJob>>, AppError> {
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
-    let uuid = super::handlers::parse_uuid(&key_id)?;
-    verify_key_ownership(&state, &claims, &uuid).await?;
+    verify_key_ownership(&state, &claims, &key_id).await?;
     if let Some(repo) = state.analytics_repo.as_ref()
-        && let Ok(jobs) = repo.key_usage_jobs(&uuid, hours).await
+        && let Ok(jobs) = repo.key_usage_jobs(&key_id, hours).await
             && !jobs.is_empty() {
                 return Ok(Json(jobs));
             }
-    Ok(Json(usage_queries::pg_key_usage_jobs(&state.pg_pool, &uuid, hours).await?))
+    Ok(Json(usage_queries::pg_key_usage_jobs(&state.pg_pool, &key_id, hours).await?))
 }
 
 /// GET /v1/usage/{key_id}/models — Per-key model breakdown from PostgreSQL.
 /// Returns which models the key has used, with request counts and token stats.
 pub async fn key_model_breakdown(
     Extension(claims): Extension<Claims>,
-    Path(key_id): Path<String>,
+    Path(key_id): Path<Uuid>,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<ModelBreakdown>>, AppError> {
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
-    let uuid = super::handlers::parse_uuid(&key_id)?;
-    verify_key_ownership(&state, &claims, &uuid).await?;
+    verify_key_ownership(&state, &claims, &key_id).await?;
 
-    Ok(Json(usage_queries::pg_key_model_breakdown(&state.pg_pool, &uuid, hours).await?))
+    Ok(Json(usage_queries::pg_key_model_breakdown(&state.pg_pool, &key_id, hours).await?))
 }
 
 /// GET /v1/usage/breakdown — Provider, API key, and model breakdown from PostgreSQL (super admin only).

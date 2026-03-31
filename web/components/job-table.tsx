@@ -62,6 +62,7 @@ export default function JobTable({
             <TableHead className="whitespace-nowrap">{t('jobs.providerName')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.apiKey')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.endpoint')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.source')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.status')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.createdAt')}</TableHead>
             <TableHead className="text-right whitespace-nowrap">{t('jobs.ttft')}</TableHead>
@@ -92,6 +93,13 @@ export default function JobTable({
               </TableCell>
               <TableCell className="font-mono text-xs text-muted-foreground max-w-[160px] truncate" title={job.request_path ?? undefined}>
                 {job.request_path ?? <span className="opacity-40">—</span>}
+              </TableCell>
+              <TableCell>
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
+                  job.source === 'test' ? 'bg-status-warning/15 text-status-warning-fg' :
+                  job.source === 'analyzer' ? 'bg-accent/15 text-accent-foreground' :
+                  'bg-primary/10 text-primary'
+                }`}>{job.source}</span>
               </TableCell>
               <TableCell>
                 <div className="flex items-center gap-1.5">

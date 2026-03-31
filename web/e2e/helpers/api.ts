@@ -1,4 +1,6 @@
 import { APIRequestContext } from '@playwright/test'
+import * as fs from 'fs'
+import * as path from 'path'
 import { API_BASE_URL, TEST_USERNAME, TEST_PASSWORD } from './constants'
 
 export interface AuthTokens {
@@ -7,15 +9,19 @@ export interface AuthTokens {
   accountId: string
 }
 
+const API_TOKEN_FILE = path.join(__dirname, '../.api-token.json')
+
 /**
- * Authenticate via the REST API and return JWT tokens.
+ * Return cached API tokens from global setup.
+ * Falls back to a real login if the cache file is missing (e.g. solo spec run).
  */
 export async function apiLogin(request: APIRequestContext): Promise<AuthTokens> {
+  if (fs.existsSync(API_TOKEN_FILE)) {
+    return JSON.parse(fs.readFileSync(API_TOKEN_FILE, 'utf-8')) as AuthTokens
+  }
+  // Fallback: real login (may hit rate limit if called many times)
   const res = await request.post(`${API_BASE_URL}/v1/auth/login`, {
-    data: {
-      username: TEST_USERNAME,
-      password: TEST_PASSWORD,
-    },
+    data: { username: TEST_USERNAME, password: TEST_PASSWORD },
   })
   if (!res.ok()) throw new Error(`Login failed: ${res.status()}`)
   const body = await res.json()

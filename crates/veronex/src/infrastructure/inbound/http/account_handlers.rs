@@ -1,5 +1,6 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -92,7 +93,8 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
         "SELECT r.id, r.name, r.permissions, r.menus, r.is_system
          FROM roles r
          JOIN account_roles ar ON ar.role_id = r.id
-         WHERE ar.account_id = $1"
+         WHERE ar.account_id = $1
+         LIMIT 50"
     )
     .bind(a.id)
     .fetch_all(pg)
@@ -150,7 +152,7 @@ pub async fn list_accounts(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(100).clamp(1, 1000);
-    let page = params.page.unwrap_or(1).max(1);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
     let offset = (page - 1) * limit;
 
     let (accounts, total) = state
@@ -177,7 +179,7 @@ pub async fn create_account(
     RequireAccountManage(claims): RequireAccountManage,
     State(state): State<AppState>,
     Json(req): Json<CreateAccountRequest>,
-) -> Result<Json<CreateAccountResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     super::handlers::validate_username(&req.username)?;
 
     // Resolve role_ids: explicit role_ids > legacy role_id > default "viewer"
@@ -270,27 +272,25 @@ pub async fn create_account(
         &format!("Account '{}' created with {} role(s) and auto-generated test API key",
             req.username, role_ids.len())).await;
 
-    Ok(Json(CreateAccountResponse {
+    Ok((StatusCode::CREATED, Json(CreateAccountResponse {
         id: account.id,
         username: req.username,
         test_api_key: plaintext,
         created_at: now,
-    }))
+    })))
 }
 
 // ── PATCH /v1/accounts/{id} ───────────────────────────────────────────────────
 
 pub async fn update_account(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     State(state): State<AppState>,
     Json(req): Json<UpdateAccountRequest>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
     let mut account = state
         .account_repo
-        .get_by_id(&uuid)
+        .get_by_id(&id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("account {id} not found")))?;
 
@@ -322,10 +322,10 @@ pub async fn update_account(
                 return Err(AppError::BadRequest(format!("invalid role_id: {rid}")));
             }
         }
-        state.account_repo.set_roles(&uuid, role_ids).await?;
+        state.account_repo.set_roles(&id, role_ids).await?;
     }
 
-    emit_audit(&state, &claims, "update", "account", &id, &account.username,
+    emit_audit(&state, &claims, "update", "account", &id.to_string(), &account.username,
         &format!("Account '{}' ({}) updated", account.username, id)).await;
 
     Ok(StatusCode::NO_CONTENT)
@@ -335,24 +335,22 @@ pub async fn update_account(
 
 pub async fn delete_account(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
     let account = state
         .account_repo
-        .get_by_id(&uuid)
+        .get_by_id(&id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("account {id} not found")))?;
 
     // Cascade: soft-delete account + all its API keys in a single transaction
     let keys_deleted = state
         .account_repo
-        .soft_delete_cascade(&uuid, &account.username)
+        .soft_delete_cascade(&id, &account.username)
         .await?;
 
-    emit_audit(&state, &claims, "delete", "account", &id, &account.username,
+    emit_audit(&state, &claims, "delete", "account", &id.to_string(), &account.username,
         &format!("Account '{}' ({}) soft-deleted (login disabled, data retained, {} API key(s) revoked)",
             account.username, id, keys_deleted)).await;
 
@@ -363,18 +361,16 @@ pub async fn delete_account(
 
 pub async fn set_account_active(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     State(state): State<AppState>,
     Json(req): Json<SetActiveRequest>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
     state
         .account_repo
-        .set_active(&uuid, req.is_active)
+        .set_active(&id, req.is_active)
         .await?;
 
-    emit_audit(&state, &claims, "update", "account", &id, &id,
+    emit_audit(&state, &claims, "update", "account", &id.to_string(), &id.to_string(),
         &format!("Account {} is_active set to {} (login {})",
             id, req.is_active, if req.is_active { "enabled" } else { "disabled" })).await;
 
@@ -394,14 +390,12 @@ pub struct SessionSummary {
 
 pub async fn list_account_sessions(
     RequireAccountManage(_claims): RequireAccountManage,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SessionSummary>>, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
     let sessions = state
         .session_repo
-        .list_active(&uuid)
+        .list_active(&id)
         .await?;
 
     let summaries = sessions
@@ -422,23 +416,22 @@ pub async fn list_account_sessions(
 
 pub async fn revoke_session(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(session_id): Path<String>,
+    Path(session_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&session_id)?;
     // Fetch the session first to get jti + expires_at for Valkey blocklist.
     let session = state
         .session_repo
-        .get_by_id(&uuid)
+        .get_by_id(&session_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("session {session_id} not found")))?;
     state
         .session_repo
-        .revoke(&uuid)
+        .revoke(&session_id)
         .await?;
     // Add JTI to Valkey blocklist so the JWT is rejected immediately.
     super::auth_handlers::revoke_jti(&state, session.jti, session.expires_at).await;
-    emit_audit(&state, &claims, "delete", "session", &session_id, &session_id,
+    emit_audit(&state, &claims, "delete", "session", &session_id.to_string(), &session_id.to_string(),
         &format!("Session {} manually revoked by admin", session_id)).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -447,24 +440,23 @@ pub async fn revoke_session(
 
 pub async fn revoke_all_account_sessions(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
     // Fetch active sessions before revoking so we can blocklist each JTI.
     let sessions = state
         .session_repo
-        .list_active(&uuid)
+        .list_active(&id)
         .await?;
     state
         .session_repo
-        .revoke_all_for_account(&uuid)
+        .revoke_all_for_account(&id)
         .await?;
     // Add each JTI to the Valkey blocklist so JWTs are rejected immediately.
     for session in &sessions {
         super::auth_handlers::revoke_jti(&state, session.jti, session.expires_at).await;
     }
-    emit_audit(&state, &claims, "delete", "session", &id, &format!("all_sessions:{id}"),
+    emit_audit(&state, &claims, "delete", "session", &id.to_string(), &format!("all_sessions:{id}"),
         &format!("All active sessions for account {} force-revoked by admin ({} session(s) blocklisted)", id, sessions.len())).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -473,15 +465,13 @@ pub async fn revoke_all_account_sessions(
 
 pub async fn create_reset_link(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<ResetLinkResponse>, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
     // Ensure account exists
     let account = state
         .account_repo
-        .get_by_id(&uuid)
+        .get_by_id(&id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("account {id} not found")))?;
 
@@ -490,12 +480,12 @@ pub async fn create_reset_link(
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
         let key = valkey_keys::password_reset(&token);
-        let _: Result<(), _> = pool
-            .set(key, uuid.to_string(), Some(fred::types::Expiration::EX(24 * 3600)), None, false)
-            .await;
+        pool.set(key, id.to_string(), Some(fred::types::Expiration::EX(24 * 3600)), None, false)
+            .await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, account_id = %id, "create_reset_link: Valkey SET failed"));
     }
 
-    emit_audit(&state, &claims, "reset_password", "account", &id, &account.username,
+    emit_audit(&state, &claims, "reset_password", "account", &id.to_string(), &account.username,
         &format!("Password reset link generated for account '{}' ({}); token valid 24h",
             account.username, id)).await;
 

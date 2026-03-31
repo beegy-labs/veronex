@@ -20,6 +20,9 @@ use crate::domain::constants::{
     THERMAL_THROTTLE_KEY_TTL_SECS,
 };
 
+/// TTL for per-instance service health HASH (2× health check interval).
+const SERVICE_HEALTH_TTL_SECS: i64 = 60;
+
 // ── Health check ───────────────────────────────────────────────────────────────
 
 /// Check whether a single provider is reachable.
@@ -150,6 +153,115 @@ async fn poll_node_exporter_metrics(
     }
 }
 
+// ── Service health probes ──────────────────────────────────────────────────────
+
+/// Compact JSON stored per service in the health HASH.
+#[derive(serde::Serialize)]
+struct SvcProbe {
+    /// Status: "ok" or "error".
+    s: &'static str,
+    /// Probe latency in milliseconds.
+    ms: u32,
+    /// Unix timestamp in milliseconds when the probe ran.
+    t: i64,
+}
+
+/// Probe core infrastructure services and store results in Valkey.
+///
+/// Each API pod writes to its own HASH (`veronex:svc:health:{instance_id}`)
+/// so there are no concurrent-write conflicts across HPA replicas.
+async fn check_and_store_services(
+    pg_pool: &sqlx::PgPool,
+    valkey_pool: &fred::clients::Pool,
+    client: &reqwest::Client,
+    instance_id: &str,
+    analytics_url: Option<&str>,
+    s3_endpoint: Option<&str>,
+) {
+    use fred::prelude::*;
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut fields: Vec<(String, String)> = Vec::with_capacity(4);
+
+    // PostgreSQL: SELECT 1
+    let pg_probe = {
+        let start = std::time::Instant::now();
+        let res = tokio::time::timeout(
+            Duration::from_secs(3),
+            sqlx::query("SELECT 1").execute(pg_pool),
+        ).await;
+        let ms = start.elapsed().as_millis() as u32;
+        let s = match res {
+            Ok(Ok(_)) => "ok",
+            _ => "error",
+        };
+        SvcProbe { s, ms, t: now_ms }
+    };
+    if let Ok(json) = serde_json::to_string(&pg_probe) {
+        fields.push(("postgresql".into(), json));
+    }
+
+    // Valkey: PING
+    let valkey_probe = {
+        let start = std::time::Instant::now();
+        let res: Result<String, _> = valkey_pool.ping(None).await;
+        let ms = start.elapsed().as_millis() as u32;
+        let s = if res.is_ok() { "ok" } else { "error" };
+        SvcProbe { s, ms, t: now_ms }
+    };
+    if let Ok(json) = serde_json::to_string(&valkey_probe) {
+        fields.push(("valkey".into(), json));
+    }
+
+    // ClickHouse (via analytics service): GET {url}/health
+    if let Some(url) = analytics_url {
+        let probe = {
+            let start = std::time::Instant::now();
+            let res = client.get(format!("{url}/health"))
+                .timeout(Duration::from_secs(3))
+                .send().await;
+            let ms = start.elapsed().as_millis() as u32;
+            let s = match res {
+                Ok(r) if r.status().is_success() => "ok",
+                _ => "error",
+            };
+            SvcProbe { s, ms, t: now_ms }
+        };
+        if let Ok(json) = serde_json::to_string(&probe) {
+            fields.push(("clickhouse".into(), json));
+        }
+    }
+
+    // S3/MinIO: GET {endpoint}/minio/health/live
+    if let Some(endpoint) = s3_endpoint {
+        let probe = {
+            let start = std::time::Instant::now();
+            let res = client.get(format!("{}/minio/health/live", endpoint.trim_end_matches('/')))
+                .timeout(Duration::from_secs(3))
+                .send().await;
+            let ms = start.elapsed().as_millis() as u32;
+            let s = match res {
+                Ok(r) if r.status().is_success() => "ok",
+                _ => "error",
+            };
+            SvcProbe { s, ms, t: now_ms }
+        };
+        if let Ok(json) = serde_json::to_string(&probe) {
+            fields.push(("s3".into(), json));
+        }
+    }
+
+    if fields.is_empty() { return; }
+
+    let key = valkey_keys::service_health(instance_id);
+    let res: Result<(), _> = valkey_pool.hset(&key, fields).await;
+    if let Err(e) = res {
+        tracing::warn!(error = %e, "failed to store service health");
+        return;
+    }
+    let _: Result<(), _> = valkey_pool.expire(&key, SERVICE_HEALTH_TTL_SECS, None).await;
+}
+
 // ── Background task ────────────────────────────────────────────────────────────
 
 /// Concurrently probe providers via HTTP with bounded parallelism.
@@ -205,6 +317,10 @@ pub async fn run_health_checker_loop(
     shutdown:           CancellationToken,
     client:             reqwest::Client,
     vram_pool:          Arc<dyn VramPoolPort>,
+    pg_pool:            sqlx::PgPool,
+    instance_id:        Arc<str>,
+    analytics_url:      Option<String>,
+    s3_endpoint:        Option<String>,
 ) {
     let interval = Duration::from_secs(interval_secs);
 
@@ -428,6 +544,18 @@ pub async fn run_health_checker_loop(
             if let Err(e) = res {
                 tracing::warn!(error = %e, "health checker apply task panicked");
             }
+        }
+
+        // ── Service health probes (per-pod, stored in Valkey HASH) ────────
+        if let Some(ref pool) = valkey_pool {
+            check_and_store_services(
+                &pg_pool,
+                pool,
+                &client,
+                &instance_id,
+                analytics_url.as_deref(),
+                s3_endpoint.as_deref(),
+            ).await;
         }
     }
 

@@ -76,19 +76,21 @@ pub async fn get_job_detail(
         return Err(AppError::Forbidden("access denied".into()));
     }
 
-    // Resolve messages: S3 first (authoritative for new jobs), DB fallback for old jobs
-    let db_messages = row.db_messages.clone();
-    let messages_json = if let Some(ref store) = state.message_store {
-        match store.get(id).await {
-            Ok(Some(v)) => Some(v),
-            Ok(None) => db_messages, // not in S3 → use DB value (old job)
+    // Fetch full conversation from S3 (prompt, messages, tool_calls, result)
+    // S3 key uses conversation_id UUID if available, otherwise job_id
+    let conversation = if let Some(ref store) = state.message_store {
+        let owner_id = row.account_id.or(row.api_key_id).unwrap_or(id);
+        let date = row.common.created_at.date_naive();
+        let s3_key_id = row.conversation_id.unwrap_or(id);
+        match store.get_conversation(owner_id, date, s3_key_id).await {
+            Ok(v) => v,
             Err(e) => {
-                tracing::warn!(job_id = %id, "S3 message fetch failed (using DB fallback): {e}");
-                db_messages
+                tracing::warn!(job_id = %id, "S3 conversation fetch failed (non-fatal): {e}");
+                None
             }
         }
     } else {
-        db_messages
+        None
     };
 
     // Resolve image_keys → URLs
@@ -98,7 +100,7 @@ pub async fn get_job_detail(
         })
     });
 
-    Ok(Json(dashboard_queries::build_job_detail(row, messages_json, image_urls)))
+    Ok(Json(dashboard_queries::build_job_detail(row, conversation, image_urls)))
 }
 
 /// GET /v1/dashboard/jobs — Paginated job list.
@@ -302,18 +304,23 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
 
     use fred::prelude::*;
 
-    let (paid, api, test): (i64, i64, i64) = tokio::time::timeout(
+    let (paid, api, test): (i64, i64, i64) = match tokio::time::timeout(
         std::time::Duration::from_secs(3),
         async {
             tokio::join!(
-                async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or(0) },
-                async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or(0) },
-                async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or(0) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen paid failed"); 0 }) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen api failed"); 0 }) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen test failed"); 0 }) },
             )
         },
     )
-    .await
-    .unwrap_or((0, 0, 0));
+    .await {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::warn!("queue depth: Valkey timeout after 3s");
+            (0, 0, 0)
+        }
+    };
 
     QueueDepth {
         api_paid: paid,
@@ -397,7 +404,7 @@ pub async fn get_capacity(
     State(state): State<AppState>,
     Query(params): Query<ListPageParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let page = params.page.unwrap_or(1).max(1);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
     let limit = params.limit.unwrap_or(20).clamp(1, 200);
     let offset = (page - 1) * limit;
     let search = params.search.as_deref().unwrap_or("").to_string();
@@ -672,7 +679,7 @@ pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::respo
         Err(e) => {
             tracing::warn!("get_lab_settings: {e}");
             (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-             Json(serde_json::json!({"error": e.to_string()}))).into_response()
+             Json(serde_json::json!({"error": "internal error"}))).into_response()
         }
     }
 }
@@ -710,11 +717,72 @@ pub async fn patch_lab_settings(
             tracing::warn!("patch_lab_settings: {e}");
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
+                Json(serde_json::json!({"error": "internal error"})),
             )
                 .into_response()
         }
     }
+}
+
+// ── MCP server call stats ────────────────────────────────────────────────────
+
+/// GET /v1/mcp/stats?hours=N — Per-server MCP call statistics.
+///
+/// Queries ClickHouse via the analytics service and joins with Postgres
+/// to attach server_id and server_name. Returns an empty list when
+/// analytics is unavailable or no data exists.
+pub async fn get_mcp_stats(
+    State(state): State<AppState>,
+    Query(params): Query<UsageQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let hours = params.effective_hours()?;
+    validate_hours(hours)?;
+
+    let slug_stats = if let Some(repo) = state.analytics_repo.as_ref() {
+        repo.mcp_server_stats(hours).await.unwrap_or_default()
+    } else {
+        return Ok(Json(vec![]));
+    };
+
+    if slug_stats.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    // Join with Postgres for server_id and server_name.
+    #[derive(sqlx::FromRow)]
+    struct McpRow { id: uuid::Uuid, name: String, slug: String }
+
+    let pg_rows: Vec<McpRow> = sqlx::query_as("SELECT id, name, slug FROM mcp_servers ORDER BY name LIMIT 500")
+        .fetch_all(&state.pg_pool)
+        .await?;
+
+    let pg_map: std::collections::HashMap<&str, &McpRow> =
+        pg_rows.iter().map(|r| (r.slug.as_str(), r)).collect();
+
+    let result = slug_stats.into_iter().map(|s| {
+        let (server_id, server_name) = pg_map.get(s.server_slug.as_str())
+            .map(|r| (r.id.to_string(), r.name.clone()))
+            .unwrap_or_else(|| (String::new(), s.server_slug.clone()));
+
+        let success_rate = if s.total_calls > 0 {
+            s.success_count as f64 / s.total_calls as f64
+        } else { 0.0 };
+
+        serde_json::json!({
+            "server_id": server_id,
+            "server_name": server_name,
+            "server_slug": s.server_slug,
+            "total_calls": s.total_calls,
+            "success_count": s.success_count,
+            "error_count": s.error_count,
+            "cache_hit_count": s.cache_hit_count,
+            "timeout_count": s.timeout_count,
+            "success_rate": success_rate,
+            "avg_latency_ms": s.avg_latency_ms,
+        })
+    }).collect();
+
+    Ok(Json(result))
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -804,4 +872,148 @@ pub async fn trigger_session_grouping(
         Json(serde_json::json!({ "message": "session grouping triggered" })),
     )
         .into_response()
+}
+
+// ── Service health (infrastructure + pods) ────────────────────────
+
+#[derive(Serialize)]
+pub struct ServiceHealthResponse {
+    pub infrastructure: Vec<ServiceStatus>,
+    pub api_pods: Vec<PodStatus>,
+    pub agent_pods: Vec<PodStatus>,
+}
+
+#[derive(Serialize)]
+pub struct ServiceStatus {
+    pub name: String,
+    /// "ok" | "degraded" | "unavailable"
+    pub status: String,
+    pub latency_ms: Option<u32>,
+    pub checked_at: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct PodStatus {
+    pub id: String,
+    /// "online" | "offline"
+    pub status: String,
+    pub last_heartbeat_ms: Option<i64>,
+}
+
+/// Compact JSON stored by health_checker in per-instance HASH.
+#[derive(serde::Deserialize)]
+struct SvcProbeEntry {
+    s: String,
+    ms: u32,
+    t: i64,
+}
+
+/// GET /v1/dashboard/services — Infrastructure services + HPA pod status.
+pub async fn get_service_health(
+    State(state): State<AppState>,
+) -> Result<Json<ServiceHealthResponse>, AppError> {
+    use crate::infrastructure::outbound::valkey_keys;
+    use fred::prelude::*;
+
+    let pool = state.valkey_pool.as_ref()
+        .ok_or_else(|| AppError::ServiceUnavailable("Valkey not configured".into()))?;
+
+    // ── 1. Infrastructure: merge service probes from all pods ──────
+    let instance_ids: Vec<String> = pool.smembers(valkey_keys::INSTANCES_SET).await
+        .unwrap_or_default();
+
+    // Pipeline HGETALL for each instance's service health HASH
+    let mut all_probes: HashMap<String, Vec<SvcProbeEntry>> = HashMap::new();
+    for iid in &instance_ids {
+        let entries: HashMap<String, String> = pool
+            .hgetall(valkey_keys::service_health(iid))
+            .await
+            .unwrap_or_default();
+        for (svc_name, json) in entries {
+            if let Ok(probe) = serde_json::from_str::<SvcProbeEntry>(&json) {
+                all_probes.entry(svc_name).or_default().push(probe);
+            }
+        }
+    }
+
+    // Merge: any "ok" → ok, mixed → degraded, all error → unavailable
+    let svc_names = ["postgresql", "valkey", "clickhouse", "s3"];
+    let infrastructure: Vec<ServiceStatus> = svc_names.iter().filter_map(|name| {
+        let probes = all_probes.get(*name)?;
+        let ok_count = probes.iter().filter(|p| p.s == "ok").count();
+        let status = if ok_count == probes.len() {
+            "ok"
+        } else if ok_count > 0 {
+            "degraded"
+        } else {
+            "unavailable"
+        };
+        // Use the most recent probe for latency/timestamp
+        let latest = probes.iter().max_by_key(|p| p.t)?;
+        Some(ServiceStatus {
+            name: name.to_string(),
+            status: status.to_string(),
+            latency_ms: Some(latest.ms),
+            checked_at: Some(latest.t),
+        })
+    }).collect();
+
+    // ── 2. API pods: check heartbeat TTL ──────────────────────────
+    // Self-healing: remove stale instances (no heartbeat) from the SET
+    // so restarted pods don't leave ghost entries.
+    let api_pods: Vec<PodStatus> = {
+        let mut pods = Vec::with_capacity(instance_ids.len());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for iid in &instance_ids {
+            let ttl: i64 = pool.ttl(valkey_keys::heartbeat(iid)).await.unwrap_or(-2);
+            if ttl <= 0 {
+                // Heartbeat expired — stale instance, remove from SET
+                let _: Result<(), _> = pool
+                    .srem(valkey_keys::INSTANCES_SET, iid.as_str())
+                    .await;
+                continue;
+            }
+            // Estimate last heartbeat: heartbeat TTL is 30s, refreshed every 10s
+            let elapsed_ms = (30 - ttl) * 1000;
+            pods.push(PodStatus {
+                id: iid.clone(),
+                status: "online".into(),
+                last_heartbeat_ms: Some(now_ms - elapsed_ms),
+            });
+        }
+        pods
+    };
+
+    // ── 3. Agent pods: read from veronex:agent:instances SET ────────
+    // Each agent pod registers itself via SADD + heartbeat key with TTL.
+    // Stale entries (heartbeat expired) are auto-removed.
+    let agent_ids: Vec<String> = pool
+        .smembers("veronex:agent:instances")
+        .await
+        .unwrap_or_default();
+
+    let agent_pods: Vec<PodStatus> = {
+        let mut pods = Vec::with_capacity(agent_ids.len());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for hostname in &agent_ids {
+            let hb_key = format!("veronex:agent:hb:{hostname}");
+            let ttl: i64 = pool.ttl(&hb_key).await.unwrap_or(-2);
+            if ttl <= 0 {
+                // Heartbeat expired — stale agent, remove from SET
+                let _: Result<(), _> = pool
+                    .srem("veronex:agent:instances", hostname.as_str())
+                    .await;
+                continue;
+            }
+            let elapsed_ms = (180 - ttl) * 1000; // agent heartbeat TTL = 180s
+            pods.push(PodStatus {
+                id: hostname.clone(),
+                status: "online".into(),
+                last_heartbeat_ms: Some(now_ms - elapsed_ms),
+            });
+        }
+        pods
+    };
+
+    Ok(Json(ServiceHealthResponse { infrastructure, api_pods, agent_pods }))
 }

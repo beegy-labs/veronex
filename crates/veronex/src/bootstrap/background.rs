@@ -74,6 +74,10 @@ pub async fn spawn_background_tasks(
         shutdown.child_token(),
         infra.http_client.clone(),
         repos.vram_pool.clone(),
+        infra.pg_pool.clone(),
+        infra.instance_id.clone(),
+        config.analytics_url.clone(),
+        std::env::var("S3_ENDPOINT").ok(),
     ));
 
     // ── Sync loop (unified: health + models + VRAM) ────────────────
@@ -481,6 +485,7 @@ pub async fn spawn_background_tasks(
                 infra.http_client.clone(),
                 infra.instance_id.clone(),
                 use_case_impl.as_thermal_drain(),
+                Some(repos.ollama_model_repo.clone()),
                 shutdown.child_token(),
             ));
             tracing::info!("placement planner started (interval=5s)");

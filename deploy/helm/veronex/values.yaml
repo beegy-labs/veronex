@@ -124,6 +124,53 @@ veronexWeb:
 
   env: {}
 
+weatherMcp:
+  enabled: false
+  image:
+    repository: gitea.girok.dev/beegy-labs/veronex-mcp
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # Open-Meteo API call limit per hour (across all instances, enforced via Valkey)
+  apiRateLimit: 200
+
+  # Moka L1 cache max entries per instance
+  l1MaxEntries: 10000
+
+  # Valkey connection pool size per instance
+  valkeyPool: 4
+
+  logLevel: "info"
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    # Set keda=true to use KEDA ScaledObject instead of HPA.
+    # Requires KEDA operator installed in the cluster.
+    keda: false
+    kedaPrometheus:
+      enabled: false
+      serverAddress: "http://prometheus:9090"
+      # Scale up when requests/sec exceeds this threshold per replica
+      threshold: "100"
+
+  env: {}
+
 # ── Subcharts — enable/disable each independently ──────────────────────────────
 # When a subchart is disabled, set the corresponding external* values.
 
@@ -215,6 +262,63 @@ otelCollector:
   service:
     type: ClusterIP
 
+# ── Redpanda Connect (OTel → ClickHouse external consumer) ───────────────────
+# Replaces ClickHouse Kafka Engine with an isolated external consumer.
+# Consumes otel-logs / otel-metrics / otel-traces from Redpanda and bulk-inserts
+# into ClickHouse via HTTP JSONEachRow — ingest load is fully external to the
+# ClickHouse cluster, preventing background thread exhaustion across services.
+
+redpandaConnect:
+  enabled: true
+  replicas: 1
+  image:
+    repository: docker.redpanda.com/redpandadata/connect
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  clickhouse:
+    httpUrl: ""      # REQUIRED — e.g. http://clickhouse:8123
+    database: veronex
+    secretName: ""   # REQUIRED — Secret with keys: username, password
+
+  kafka:
+    securityProtocol: PLAINTEXT   # PLAINTEXT | SASL_PLAINTEXT | SASL_SSL
+    saslMechanism: ""
+    saslUsername: ""
+    secretName: ""   # Secret with key: password (used when not PLAINTEXT)
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ── Vespa (Vector SSOT) ──────────────────────────────────────────────────────
+# Single-node Vespa for MCP tool vector selection (ANN search).
+# Scale: content node 추가로 수평 확장 가능.
+
+vespa:
+  enabled: false
+  image:
+    repository: vespaengine/vespa
+    tag: "8"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  persistence:
+    size: 10Gi
+    storageClass: ""   # "" = cluster default (Longhorn 권장)
+  # Internal service URL — used by veronex pods
+  # Override if deploying Vespa outside this chart.
+  url: ""   # default: http://<release>-vespa:8080
+
 # ── Database Migrations ──────────────────────────────────────────────────────
 # Runs as pre-install,pre-upgrade Helm hook.
 # helm install/upgrade triggers migrations automatically.
@@ -288,6 +392,15 @@ autoscaling:
   minReplicas: 1
   maxReplicas: 5
   targetCPUUtilizationPercentage: 75
+
+  # KEDA-based autoscaling (overrides HPA when enabled).
+  # Scales on Valkey queue depth instead of CPU — reacts to actual workload.
+  keda:
+    enabled: false
+    pollingInterval: 15     # seconds between metric checks
+    cooldownPeriod: 120     # seconds to wait before scale-down
+    # Valkey key: veronex:stats:jobs:pending (atomic counter)
+    pendingJobsThreshold: "5"   # scale up when pending > this value
 
 # ── PodDisruptionBudget ──────────────────────────────────────────────────────
 

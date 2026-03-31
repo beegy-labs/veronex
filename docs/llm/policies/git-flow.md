@@ -51,6 +51,10 @@ gh pr merge --merge
 | `test` | Adding or fixing tests |
 | `chore` | Build, CI, dependency updates |
 | `perf` | Performance improvement |
+| `ci` | CI/CD workflow changes |
+| `build` | Build system changes |
+| `revert` | Revert a previous commit |
+| `style` | Formatting, whitespace (no logic change) |
 
 ### Scopes
 
@@ -63,6 +67,8 @@ gh pr merge --merge
 | `api` | HTTP API adapter |
 | `ci` | CI/CD workflows |
 | `policy` | Submodule / protocol updates |
+
+> Scope is **required**. Format: `[a-z0-9-]+` (lowercase, digits, hyphens only — no underscores).
 
 ### Examples
 
@@ -79,11 +85,13 @@ test(queue): add unit tests for RedisQueueAdapter
 
 | Rule | Detail |
 | ---- | ------ |
+| Scope required | Every commit must have `(scope)` |
+| Scope chars | `[a-z0-9-]` only — no underscores, no uppercase |
 | Subject case | lowercase |
 | Subject tense | imperative ("add", not "added") |
 | Max subject length | 72 characters |
 | No period at end | `feat: add X` not `feat: add X.` |
-| No AI mention | Never reference Claude, GPT, AI in commits |
+| No AI mention | Never reference Claude, GPT, AI in subject or body |
 | Language | English only |
 
 ## Feature Branch Workflow

@@ -93,6 +93,10 @@ spec:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ include "veronex.otelEndpoint" . | quote }}
             {{- end }}
+            {{- if .Values.vespa.enabled }}
+            - name: VESPA_URL
+              value: {{ .Values.vespa.url | default (printf "http://%s-vespa:8080" .Release.Name) | quote }}
+            {{- end }}
             {{- range $k, $v := .Values.veronex.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

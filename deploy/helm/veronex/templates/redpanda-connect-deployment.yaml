@@ -1,0 +1,82 @@
+{{- if .Values.redpandaConnect.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-redpanda-connect
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redpanda-connect
+spec:
+  replicas: {{ .Values.redpandaConnect.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}-redpanda-connect
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        app.kubernetes.io/name: {{ .Release.Name }}-redpanda-connect
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
+      containers:
+        - name: redpanda-connect
+          image: "{{ .Values.redpandaConnect.image.repository }}:{{ .Values.redpandaConnect.image.tag }}"
+          imagePullPolicy: {{ .Values.redpandaConnect.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - run
+            - /etc/redpanda-connect/config.yaml
+          ports:
+            - name: http
+              containerPort: 4195
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          env:
+            - name: CLICKHOUSE_HTTP_URL
+              value: {{ .Values.redpandaConnect.clickhouse.httpUrl | quote }}
+            - name: CLICKHOUSE_DB
+              value: {{ .Values.redpandaConnect.clickhouse.database | quote }}
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redpandaConnect.clickhouse.secretName }}
+                  key: username
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redpandaConnect.clickhouse.secretName }}
+                  key: password
+            {{- if ne (.Values.redpandaConnect.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
+            - name: KAFKA_SASL_MECHANISM
+              value: {{ .Values.redpandaConnect.kafka.saslMechanism | quote }}
+            - name: KAFKA_USERNAME
+              value: {{ .Values.redpandaConnect.kafka.saslUsername | quote }}
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redpandaConnect.kafka.secretName }}
+                  key: password
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/redpanda-connect
+              readOnly: true
+          resources:
+            {{- toYaml .Values.redpandaConnect.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Release.Name }}-redpanda-connect-config
+{{- end }}

@@ -1,0 +1,18 @@
+{{- if .Values.weatherMcp.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-weather-mcp
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.weatherMcp.selectorLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.weatherMcp.service.type }}
+  selector:
+    {{- include "veronex.weatherMcp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.weatherMcp.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}
