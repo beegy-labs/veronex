@@ -262,13 +262,13 @@ otelCollector:
   service:
     type: ClusterIP
 
-# ── Redpanda Connect (OTel → ClickHouse external consumer) ───────────────────
+# ── Kafka Connect (OTel → ClickHouse external consumer) ──────────────────────
 # Replaces ClickHouse Kafka Engine with an isolated external consumer.
 # Consumes otel-logs / otel-metrics / otel-traces from Redpanda and bulk-inserts
 # into ClickHouse via HTTP JSONEachRow — ingest load is fully external to the
 # ClickHouse cluster, preventing background thread exhaustion across services.
 
-redpandaConnect:
+kafkaConnect:
   enabled: true
   replicas: 1
   image:

@@ -1,32 +1,32 @@
-{{- if .Values.redpandaConnect.enabled }}
+{{- if .Values.kafkaConnect.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}-redpanda-connect
+  name: {{ .Release.Name }}-kafka-connect
   labels:
     {{- include "veronex.labels" . | nindent 4 }}
-    app.kubernetes.io/component: redpanda-connect
+    app.kubernetes.io/component: kafka-connect
 spec:
-  replicas: {{ .Values.redpandaConnect.replicas | default 1 }}
+  replicas: {{ .Values.kafkaConnect.replicas | default 1 }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ .Release.Name }}-redpanda-connect
+      app.kubernetes.io/name: {{ .Release.Name }}-kafka-connect
   template:
     metadata:
       labels:
         {{- include "veronex.labels" . | nindent 8 }}
-        app.kubernetes.io/name: {{ .Release.Name }}-redpanda-connect
+        app.kubernetes.io/name: {{ .Release.Name }}-kafka-connect
     spec:
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
       {{- end }}
       containers:
-        - name: redpanda-connect
-          image: "{{ .Values.redpandaConnect.image.repository }}:{{ .Values.redpandaConnect.image.tag }}"
-          imagePullPolicy: {{ .Values.redpandaConnect.image.pullPolicy | default "IfNotPresent" }}
+        - name: kafka-connect
+          image: "{{ .Values.kafkaConnect.image.repository }}:{{ .Values.kafkaConnect.image.tag }}"
+          imagePullPolicy: {{ .Values.kafkaConnect.image.pullPolicy | default "IfNotPresent" }}
           args:
             - run
-            - /etc/redpanda-connect/config.yaml
+            - /etc/kafka-connect/config.yaml
           ports:
             - name: http
               containerPort: 4195
@@ -45,38 +45,38 @@ spec:
             periodSeconds: 10
           env:
             - name: CLICKHOUSE_HTTP_URL
-              value: {{ .Values.redpandaConnect.clickhouse.httpUrl | quote }}
+              value: {{ .Values.kafkaConnect.clickhouse.httpUrl | quote }}
             - name: CLICKHOUSE_DB
-              value: {{ .Values.redpandaConnect.clickhouse.database | quote }}
+              value: {{ .Values.kafkaConnect.clickhouse.database | quote }}
             - name: CLICKHOUSE_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.redpandaConnect.clickhouse.secretName }}
+                  name: {{ .Values.kafkaConnect.clickhouse.secretName }}
                   key: username
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.redpandaConnect.clickhouse.secretName }}
+                  name: {{ .Values.kafkaConnect.clickhouse.secretName }}
                   key: password
-            {{- if ne (.Values.redpandaConnect.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
+            {{- if ne (.Values.kafkaConnect.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
             - name: KAFKA_SASL_MECHANISM
-              value: {{ .Values.redpandaConnect.kafka.saslMechanism | quote }}
+              value: {{ .Values.kafkaConnect.kafka.saslMechanism | quote }}
             - name: KAFKA_USERNAME
-              value: {{ .Values.redpandaConnect.kafka.saslUsername | quote }}
+              value: {{ .Values.kafkaConnect.kafka.saslUsername | quote }}
             - name: KAFKA_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.redpandaConnect.kafka.secretName }}
+                  name: {{ .Values.kafkaConnect.kafka.secretName }}
                   key: password
             {{- end }}
           volumeMounts:
             - name: config
-              mountPath: /etc/redpanda-connect
+              mountPath: /etc/kafka-connect
               readOnly: true
           resources:
-            {{- toYaml .Values.redpandaConnect.resources | nindent 12 }}
+            {{- toYaml .Values.kafkaConnect.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:
-            name: {{ .Release.Name }}-redpanda-connect-config
+            name: {{ .Release.Name }}-kafka-connect-config
 {{- end }}

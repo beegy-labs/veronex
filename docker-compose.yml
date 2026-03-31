@@ -181,6 +181,8 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_healthy
+      kafka-connect:
+        condition: service_healthy
     restart: unless-stopped
 
   redpanda:
@@ -364,11 +366,11 @@ services:
       clickhouse:
         condition: service_healthy
 
-  redpanda-connect:
+  kafka-connect:
     image: docker.redpanda.com/redpandadata/connect:latest
-    command: run /etc/redpanda-connect/config.yaml
+    command: run /etc/kafka-connect/config.yaml
     volumes:
-      - ./docker/redpanda-connect/config.yaml:/etc/redpanda-connect/config.yaml:ro
+      - ./docker/kafka-connect/config.yaml:/etc/kafka-connect/config.yaml:ro
     environment:
       KAFKA_BROKER: redpanda:9092
       CLICKHOUSE_HTTP_URL: http://clickhouse:8123

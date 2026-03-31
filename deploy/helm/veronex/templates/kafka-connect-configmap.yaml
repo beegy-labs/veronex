@@ -1,8 +1,8 @@
-{{- if .Values.redpandaConnect.enabled }}
+{{- if .Values.kafkaConnect.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}-redpanda-connect-config
+  name: {{ .Release.Name }}-kafka-connect-config
   labels:
     {{- include "veronex.labels" . | nindent 4 }}
 data:
@@ -10,13 +10,13 @@ data:
     input:
       kafka_franz:
         seed_brokers:
-          - {{ required "redpanda-connect requires a Redpanda/Kafka broker" (include "veronex.redpandaBroker" .) }}
+          - {{ required "kafka-connect requires a Kafka broker" (include "veronex.redpandaBroker" .) }}
         topics:
           - otel-logs
           - otel-metrics
           - otel-traces
-        consumer_group: redpanda-connect-clickhouse
-        {{- if ne (.Values.redpandaConnect.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
+        consumer_group: kafka-connect-clickhouse
+        {{- if ne (.Values.kafkaConnect.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
         tls:
           enabled: true
         sasl:

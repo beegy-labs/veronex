@@ -1,9 +1,11 @@
-# Redpanda Connect — OTel → ClickHouse consumer
+# Kafka Connect (Redpanda) — OTel → ClickHouse consumer
 #
-# Consumes OTLP JSON batches from Redpanda topics produced by OTel Collector
+# Consumes OTLP JSON batches from Kafka topics produced by OTel Collector
 # (gzip-compressed, decompressed automatically by the kafka_franz input).
 # Transforms each batch into flat rows and bulk-inserts into ClickHouse via
 # the HTTP interface (JSONEachRow format).
+#
+# Broker: Redpanda (Kafka-compatible) — no Redpanda-specific APIs used.
 #
 # Topics handled:
 #   otel-logs     → otel_logs   (then otel_inference_logs_mv / otel_audit_events_mv
@@ -12,7 +14,7 @@
 #   otel-traces   → otel_traces_raw
 #
 # Env vars:
-#   KAFKA_BROKER          (default: redpanda:9092)
+#   KAFKA_BROKER          (default: kafka:9092)
 #   CLICKHOUSE_HTTP_URL   (default: http://clickhouse:8123)
 #   CLICKHOUSE_DB         (default: veronex)
 #   CLICKHOUSE_USER       (default: default)
@@ -21,12 +23,12 @@
 input:
   kafka_franz:
     seed_brokers:
-      - "${KAFKA_BROKER:redpanda:9092}"
+      - "${KAFKA_BROKER:kafka:9092}"
     topics:
       - otel-logs
       - otel-metrics
       - otel-traces
-    consumer_group: redpanda-connect-clickhouse
+    consumer_group: kafka-connect-clickhouse
     # Compression (gzip from OTel Collector) is handled transparently by the
     # Kafka client — no explicit decompression config needed.
 
