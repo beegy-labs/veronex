@@ -716,7 +716,11 @@
     "endpoint": "Endpoint",
     "apiKeyToggle": "Use API Key",
     "apiKeyPlaceholder": "Paste your API key…",
-    "noApiKey": "Session Auth (Test)"
+    "noApiKey": "Session Auth (Test)",
+    "modeSingle": "Single",
+    "modeConversation": "Conversation",
+    "clearConversation": "Clear",
+    "turns": "turns"
   },
   "apiDocs": {
     "title": "API Documentation",

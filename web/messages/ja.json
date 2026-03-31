@@ -716,7 +716,11 @@
     "endpoint": "エンドポイント",
     "apiKeyToggle": "APIキーを使用",
     "apiKeyPlaceholder": "APIキーを貼り付けてください…",
-    "noApiKey": "セッション認証 (テスト)"
+    "noApiKey": "セッション認証 (テスト)",
+    "modeSingle": "シングル",
+    "modeConversation": "会話",
+    "clearConversation": "クリア",
+    "turns": "ターン"
   },
   "apiDocs": {
     "title": "APIドキュメント",
