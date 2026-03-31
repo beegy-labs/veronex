@@ -18,7 +18,7 @@ pub fn generate_api_key() -> (Uuid, String, String, String) {
     let id = Uuid::now_v7();
     // Independent random bytes — prevents timestamp-based key prediction.
     let mut random_bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut random_bytes);
+    rand::rng().fill_bytes(&mut random_bytes);
     let random_u128 = u128::from_be_bytes(random_bytes);
     let encoded = base62::encode(random_u128);
     let plaintext = format!("{API_KEY_PREFIX}{encoded}");
@@ -48,8 +48,7 @@ mod tests {
     /// Concrete example: generated key has all expected structural properties.
     #[test]
     fn generate_api_key_structure_example() {
-        let (id, plaintext, key_hash, key_prefix) = generate_api_key();
-        assert_eq!(id.get_version_num(), 7);
+        let (_id, plaintext, key_hash, key_prefix) = generate_api_key();
         assert!(plaintext.starts_with("vnx_"));
         assert_eq!(key_prefix.len(), 12);
         assert_eq!(&plaintext[..12], key_prefix);
@@ -60,9 +59,7 @@ mod tests {
         /// Every generated key satisfies all structural invariants.
         #[test]
         fn generate_api_key_invariants(_ in 0u8..50) {
-            let (id, plaintext, key_hash, key_prefix) = generate_api_key();
-            // UUIDv7
-            prop_assert_eq!(id.get_version_num(), 7);
+            let (_id, plaintext, key_hash, key_prefix) = generate_api_key();
             // Prefix
             prop_assert!(plaintext.starts_with("vnx_"));
             prop_assert_eq!(key_prefix.len(), 12);

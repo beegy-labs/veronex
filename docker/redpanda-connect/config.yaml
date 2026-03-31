@@ -1,0 +1,178 @@
+# Redpanda Connect — OTel → ClickHouse consumer
+#
+# Consumes OTLP JSON batches from Redpanda topics produced by OTel Collector
+# (gzip-compressed, decompressed automatically by the kafka_franz input).
+# Transforms each batch into flat rows and bulk-inserts into ClickHouse via
+# the HTTP interface (JSONEachRow format).
+#
+# Topics handled:
+#   otel-logs     → otel_logs   (then otel_inference_logs_mv / otel_audit_events_mv
+#                                fan out automatically via ClickHouse MVs)
+#   otel-metrics  → otel_metrics_gauge
+#   otel-traces   → otel_traces_raw
+#
+# Env vars:
+#   KAFKA_BROKER          (default: redpanda:9092)
+#   CLICKHOUSE_HTTP_URL   (default: http://clickhouse:8123)
+#   CLICKHOUSE_DB         (default: veronex)
+#   CLICKHOUSE_USER       (default: default)
+#   CLICKHOUSE_PASSWORD   (default: "")
+
+input:
+  kafka_franz:
+    seed_brokers:
+      - "${KAFKA_BROKER:redpanda:9092}"
+    topics:
+      - otel-logs
+      - otel-metrics
+      - otel-traces
+    consumer_group: redpanda-connect-clickhouse
+    # Compression (gzip from OTel Collector) is handled transparently by the
+    # Kafka client — no explicit decompression config needed.
+
+pipeline:
+  processors:
+    - switch:
+        # ── otel-logs ───────────────────────────────────────────────────────────
+        - check: 'meta("kafka_topic") == "otel-logs"'
+          processors:
+            - bloblang: |
+                # Explode one OTLP ExportLogsServiceRequest batch into an array
+                # of flat otel_logs rows.
+                #
+                # OTLP attribute values follow proto-JSON encoding:
+                #   string  → { "stringValue": "..." }
+                #   int64   → { "intValue": "42" }   (encoded as string)
+                #   float64 → { "doubleValue": 1.0 }
+                #
+                # DateTime64(9) accepts a Unix float (seconds + fractional ns).
+                # timeUnixNano is a string int64; dividing by 1e9 gives seconds
+                # with sub-second precision (float64 is sufficient for analytics).
+                root = (this.resourceLogs | []).flatmap(rm ->
+                  let res_attrs = (rm.resource.attributes | []).fold({}, (acc, x) ->
+                    acc.assign({(x.key): (x.value.stringValue | x.value.intValue | x.value.asDouble.string() | "")})
+                  )
+                  let svc = $res_attrs.get("service.name") | ""
+                  (rm.scopeLogs | []).flatmap(sl ->
+                    (sl.logRecords | []).map(lr ->
+                      let log_attrs = (lr.attributes | []).fold({}, (acc, x) ->
+                        acc.assign({(x.key): (x.value.stringValue | x.value.intValue | x.value.asDouble.string() | "")})
+                      )
+                      {
+                        "Timestamp":          (lr.timeUnixNano | "0").number() / 1000000000,
+                        "TraceId":            lr.traceId | "",
+                        "SpanId":             lr.spanId | "",
+                        "SeverityText":       lr.severityText | "INFO",
+                        "SeverityNumber":     (lr.severityNumber | 9),
+                        "ServiceName":        $svc,
+                        "Body":               lr.body.stringValue | "",
+                        "ResourceAttributes": $res_attrs,
+                        "LogAttributes":      $log_attrs,
+                      }
+                    )
+                  )
+                )
+            - unarchive:
+                format: json_array
+
+        # ── otel-metrics ────────────────────────────────────────────────────────
+        - check: 'meta("kafka_topic") == "otel-metrics"'
+          processors:
+            - bloblang: |
+                # Explode one OTLP ExportMetricsServiceRequest batch.
+                # Handles both Gauge and Sum (counter) metric types.
+                root = (this.resourceMetrics | []).flatmap(rm ->
+                  let res_attrs = (rm.resource.attributes | []).fold({}, (acc, x) ->
+                    acc.assign({(x.key): (x.value.stringValue | "")})
+                  )
+                  let server_id = $res_attrs.get("server_id") | ""
+                  (rm.scopeMetrics | []).flatmap(sm ->
+                    (sm.metrics | []).flatmap(metric ->
+                      let dps = if metric.exists("gauge") {
+                        metric.gauge.dataPoints | []
+                      } else {
+                        metric.sum.dataPoints | []
+                      }
+                      $dps.map(dp ->
+                        let dp_attrs = (dp.attributes | []).fold({}, (acc, x) ->
+                          acc.assign({(x.key): (x.value.stringValue | "")})
+                        )
+                        {
+                          "ts":          (dp.timeUnixNano | "0").number() / 1000000000,
+                          "server_id":   $server_id,
+                          "metric_name": metric.name | "",
+                          "value":       dp.asDouble | 0.0,
+                          "attributes":  $dp_attrs,
+                        }
+                      )
+                    )
+                  )
+                )
+            - unarchive:
+                format: json_array
+
+        # ── otel-traces ─────────────────────────────────────────────────────────
+        - check: 'meta("kafka_topic") == "otel-traces"'
+          processors:
+            - bloblang: |
+                # Store the raw OTLP trace batch as-is.
+                # received_at uses the ClickHouse DEFAULT now64(3) — only payload needed.
+                root = {"payload": content().string()}
+
+output:
+  switch:
+    retry_until_success: true
+    cases:
+      - check: 'meta("kafka_topic") == "otel-logs"'
+        output:
+          http_client:
+            url: >-
+              ${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}
+              &query=INSERT%20INTO%20otel_logs%20FORMAT%20JSONEachRow
+              &user=${CLICKHOUSE_USER:default}
+              &password=${CLICKHOUSE_PASSWORD:}
+            verb: POST
+            headers:
+              Content-Type: application/octet-stream
+            batching:
+              count: 500
+              period: 5s
+              processors:
+                - archive:
+                    format: lines
+
+      - check: 'meta("kafka_topic") == "otel-metrics"'
+        output:
+          http_client:
+            url: >-
+              ${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}
+              &query=INSERT%20INTO%20otel_metrics_gauge%20FORMAT%20JSONEachRow
+              &user=${CLICKHOUSE_USER:default}
+              &password=${CLICKHOUSE_PASSWORD:}
+            verb: POST
+            headers:
+              Content-Type: application/octet-stream
+            batching:
+              count: 500
+              period: 5s
+              processors:
+                - archive:
+                    format: lines
+
+      - check: 'meta("kafka_topic") == "otel-traces"'
+        output:
+          http_client:
+            url: >-
+              ${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}
+              &query=INSERT%20INTO%20otel_traces_raw%20(payload)%20FORMAT%20JSONEachRow
+              &user=${CLICKHOUSE_USER:default}
+              &password=${CLICKHOUSE_PASSWORD:}
+            verb: POST
+            headers:
+              Content-Type: application/octet-stream
+            batching:
+              count: 100
+              period: 5s
+              processors:
+                - archive:
+                    format: lines

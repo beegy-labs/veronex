@@ -1,4 +1,4 @@
-import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, KeyPage, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, ConversationSummary, ConversationDetail, KeyPage, McpServer, McpServerAccess, McpServerStat, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterMcpServerRequest, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
@@ -57,6 +57,9 @@ export const api = {
 
   performance: (hours = 24) =>
     apiClient.get<PerformanceStats>(`/v1/dashboard/performance?hours=${hours}`),
+
+  serviceHealth: () =>
+    apiClient.get<import('./types').ServiceHealthResponse>('/v1/dashboard/services'),
 
   analytics: (hours = 24) =>
     apiClient.get<AnalyticsStats>(`/v1/dashboard/analytics?hours=${hours}`),
@@ -218,6 +221,14 @@ export const api = {
   setKeyProviderAccess: (keyId: string, providerId: string, isAllowed: boolean) =>
     apiClient.patch<{ provider_id: string; is_allowed: boolean }>(`/v1/keys/${keyId}/providers/${providerId}`, { is_allowed: isAllowed }),
 
+  // ── API key → MCP server access (JWT-protected) ───────────────────────────
+  keyMcpAccess: (keyId: string) =>
+    apiClient.get<McpServerAccess[]>(`/v1/keys/${keyId}/mcp`),
+  grantKeyMcpAccess: (keyId: string, serverId: string) =>
+    apiClient.post<McpServerAccess>(`/v1/keys/${keyId}/mcp`, { server_id: serverId }),
+  revokeKeyMcpAccess: (keyId: string, serverId: string) =>
+    apiClient.delete<void>(`/v1/keys/${keyId}/mcp/${serverId}`),
+
   // ── Gemini (JWT-protected) ────────────────────────────────────────────────
   geminiPolicies: () =>
     apiClient.get<GeminiRateLimitPolicy[]>('/v1/gemini/policies'),
@@ -336,6 +347,31 @@ export const api = {
 
   deleteRole: (id: string) =>
     apiClient.delete<void>(`/v1/roles/${id}`),
+
+  // ── MCP servers (JWT-protected) ───────────────────────────────────────────
+  mcpServers: () =>
+    apiClient.get<McpServer[]>('/v1/mcp/servers'),
+
+  registerMcpServer: (body: RegisterMcpServerRequest) =>
+    apiClient.post<{ id: string }>('/v1/mcp/servers', body),
+
+  patchMcpServer: (id: string, body: { is_enabled: boolean }) =>
+    apiClient.patch<McpServer>(`/v1/mcp/servers/${id}`, body),
+
+  deleteMcpServer: (id: string) =>
+    apiClient.delete<void>(`/v1/mcp/servers/${id}`),
+
+  mcpStats: (hours = 24) =>
+    apiClient.get<McpServerStat[]>(`/v1/mcp/stats?hours=${hours}`),
+
+  // ── Conversations (JWT-protected) ─────────────────────────────────────────
+
+  conversations: (params?: string) =>
+    apiClient.get<{ conversations: ConversationSummary[]; total: number }>(
+      `/v1/conversations${params ? '?' + params : ''}`),
+
+  conversation: (id: string) =>
+    apiClient.get<ConversationDetail>(`/v1/conversations/${id}`),
 
   // ── Audit (JWT-protected) ─────────────────────────────────────────────────
   auditEvents: (params?: { limit?: number; offset?: number; action?: string; resource_type?: string; resource_id?: string }) => {

@@ -1,0 +1,42 @@
+{{- if .Values.vespa.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "veronex.fullname" . }}-vespa
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vespa
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "veronex.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: vespa
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: config
+      port: 19071
+      targetPort: config
+---
+# Headless service required by StatefulSet
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "veronex.fullname" . }}-vespa-headless
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vespa
+spec:
+  clusterIP: None
+  selector:
+    {{- include "veronex.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: vespa
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: config
+      port: 19071
+      targetPort: config
+{{- end }}

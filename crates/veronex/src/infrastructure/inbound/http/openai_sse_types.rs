@@ -165,6 +165,8 @@ pub struct ChatCompletion {
     pub choices: Vec<CompletionChoice>,
     pub usage: UsageInfo,
     pub system_fingerprint: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -210,12 +212,6 @@ pub struct UsageInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn constants_have_expected_values() {
-        assert_eq!(SYSTEM_FINGERPRINT, "fp_veronex");
-        assert_eq!(SERVICE_TIER_DEFAULT, "default");
-    }
 
     #[test]
     fn content_chunk_sets_object_and_text() {

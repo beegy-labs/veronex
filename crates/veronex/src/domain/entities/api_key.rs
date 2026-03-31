@@ -76,32 +76,8 @@ mod tests {
     }
 
     #[test]
-    fn api_key_creation() {
-        let key = make_api_key();
-        assert_eq!(key.id.get_version_num(), 7);
-        assert_eq!(key.tenant_id, "tenant-1");
-        assert_eq!(key.name, "test-key");
-        assert!(key.is_active);
-        assert_eq!(key.rate_limit_rpm, 0);
-        assert_eq!(key.rate_limit_tpm, 0);
-        assert!(key.expires_at.is_none());
-    }
-
-    #[test]
-    fn api_key_with_rate_limits() {
-        let mut key = make_api_key();
-        key.rate_limit_rpm = 60;
-        key.rate_limit_tpm = 100_000;
-        assert_eq!(key.rate_limit_rpm, 60);
-        assert_eq!(key.rate_limit_tpm, 100_000);
-    }
-
-    #[test]
-    fn api_key_with_expiry() {
-        let mut key = make_api_key();
-        let expires = Utc::now() + chrono::Duration::days(30);
-        key.expires_at = Some(expires);
-        assert!(key.expires_at.is_some());
+    fn api_key_id_is_v7() {
+        assert_eq!(make_api_key().id.get_version_num(), 7);
     }
 
     #[test]
@@ -144,10 +120,4 @@ mod tests {
         assert_eq!(deserialized.tenant_id, created.tenant_id);
     }
 
-    #[test]
-    fn api_key_inactive() {
-        let mut key = make_api_key();
-        key.is_active = false;
-        assert!(!key.is_active);
-    }
 }

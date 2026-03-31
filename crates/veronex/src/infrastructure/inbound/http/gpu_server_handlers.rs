@@ -184,7 +184,7 @@ pub async fn list_gpu_servers(
 ) -> HandlerResult<axum::Json<serde_json::Value>> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(100).clamp(1, 1000);
-    let page = params.page.unwrap_or(1).max(1);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
     let offset = (page - 1) * limit;
 
     let (servers, total) = state.gpu_server_registry.list_page(&search, limit, offset).await.map_err(db_error)?;
@@ -335,7 +335,7 @@ pub async fn get_server_metrics_history(
 
     let points = repo.server_metrics_history(&id, hours).await.map_err(|e| {
         tracing::error!(%id, error = %e, "metrics history failed");
-        AppError::Internal(anyhow::anyhow!("query failed"))
+        AppError::ServiceUnavailable("analytics query failed".into())
     })?;
 
     Ok(Json(points))

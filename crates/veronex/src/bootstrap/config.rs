@@ -5,6 +5,10 @@ pub struct AppConfig {
     pub valkey_url: Option<String>,
     pub analytics_url: Option<String>,
     pub analytics_secret: Option<String>,
+    /// OTLP HTTP endpoint for the OTel Collector (e.g. `http://otel-collector:4318`).
+    /// When set, inference and audit events are emitted directly via OTLP,
+    /// bypassing the veronex-analytics HTTP write path.
+    pub otel_http_endpoint: Option<String>,
     pub ollama_url: String,
     pub jwt_secret: String,
     pub bootstrap_super_user: Option<String>,
@@ -25,6 +29,7 @@ impl AppConfig {
 
         let analytics_url = std::env::var("ANALYTICS_URL").ok();
         let analytics_secret = std::env::var("ANALYTICS_SECRET").ok();
+        let otel_http_endpoint = std::env::var("OTEL_HTTP_ENDPOINT").ok();
 
         let ollama_url = std::env::var("OLLAMA_URL")
             .unwrap_or_else(|_| "http://localhost:11434".to_string());
@@ -82,6 +87,7 @@ impl AppConfig {
             valkey_url,
             analytics_url,
             analytics_secret,
+            otel_http_endpoint,
             ollama_url,
             jwt_secret,
             bootstrap_super_user,

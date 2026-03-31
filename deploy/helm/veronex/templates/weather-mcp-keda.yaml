@@ -1,0 +1,34 @@
+{{- if and .Values.weatherMcp.enabled .Values.weatherMcp.autoscaling.enabled .Values.weatherMcp.autoscaling.keda }}
+{{- /* KEDA ScaledObject — requires KEDA operator installed in the cluster.
+     Scales weather-mcp based on HTTP request rate (via KEDA HTTP add-on)
+     or Prometheus metrics. Set weatherMcp.autoscaling.keda=true to enable.
+     Mutually exclusive with HPA (weather-mcp-hpa.yaml). */}}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .Release.Name }}-weather-mcp
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ .Release.Name }}-weather-mcp
+  minReplicaCount: {{ .Values.weatherMcp.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.weatherMcp.autoscaling.maxReplicas }}
+  pollingInterval: 15
+  cooldownPeriod: 60
+  triggers:
+    {{- if .Values.weatherMcp.autoscaling.kedaPrometheus.enabled }}
+    - type: prometheus
+      metadata:
+        serverAddress: {{ .Values.weatherMcp.autoscaling.kedaPrometheus.serverAddress | quote }}
+        metricName: weather_mcp_requests_total
+        query: |
+          sum(rate(weather_mcp_requests_total[1m]))
+        threshold: {{ .Values.weatherMcp.autoscaling.kedaPrometheus.threshold | default "100" | quote }}
+    {{- else }}
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: {{ .Values.weatherMcp.autoscaling.targetCPUUtilizationPercentage | quote }}
+    {{- end }}
+{{- end }}

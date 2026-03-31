@@ -102,6 +102,7 @@ impl InferenceProviderPort for OllamaAdapter {
         if let Some(fp) = job.frequency_penalty { options["frequency_penalty"] = serde_json::json!(fp); }
         if let Some(pp) = job.presence_penalty { options["presence_penalty"] = serde_json::json!(pp); }
         if let Some(ref st) = job.stop { options["stop"] = st.clone(); }
+        if let Some(mt) = job.max_tokens { options["num_predict"] = serde_json::json!(mt); }
 
         let resp: GenerateResponse = self
             .client
@@ -149,12 +150,12 @@ impl InferenceProviderPort for OllamaAdapter {
                 job.model_name.as_str(), messages.clone(), job.tools.clone(),
                 job.images.clone(),
                 job.stop.clone(), job.seed, job.response_format.clone(),
-                job.frequency_penalty, job.presence_penalty,
+                job.frequency_penalty, job.presence_penalty, job.max_tokens,
             );
         }
         self.stream_generate(
             job.model_name.as_str(), job.prompt.as_str(), job.images.clone(),
-            job.stop.clone(), job.seed, job.frequency_penalty, job.presence_penalty,
+            job.stop.clone(), job.seed, job.frequency_penalty, job.presence_penalty, job.max_tokens,
         )
     }
 }
@@ -170,6 +171,7 @@ impl OllamaAdapter {
         seed: Option<u32>,
         frequency_penalty: Option<f64>,
         presence_penalty: Option<f64>,
+        max_tokens: Option<u32>,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
         let url = format!("{}/api/generate", self.base_url);
         let client = self.client.clone();
@@ -184,6 +186,7 @@ impl OllamaAdapter {
             if let Some(fp) = frequency_penalty { options["frequency_penalty"] = serde_json::json!(fp); }
             if let Some(pp) = presence_penalty { options["presence_penalty"] = serde_json::json!(pp); }
             if let Some(ref st) = stop { options["stop"] = st.clone(); }
+            if let Some(mt) = max_tokens { options["num_predict"] = serde_json::json!(mt); }
 
             let mut body = serde_json::json!({
                 "model":   model,
@@ -287,6 +290,7 @@ impl OllamaAdapter {
         response_format: Option<serde_json::Value>,
         frequency_penalty: Option<f64>,
         presence_penalty: Option<f64>,
+        max_tokens: Option<u32>,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
         let url = format!("{}/api/chat", self.base_url);
         let client = self.client.clone();
@@ -299,6 +303,41 @@ impl OllamaAdapter {
             if let Some(fp) = frequency_penalty { options["frequency_penalty"] = serde_json::json!(fp); }
             if let Some(pp) = presence_penalty { options["presence_penalty"] = serde_json::json!(pp); }
             if let Some(ref st) = stop { options["stop"] = st.clone(); }
+            if let Some(mt) = max_tokens { options["num_predict"] = serde_json::json!(mt); }
+
+            // ── Normalize messages for Ollama's /api/chat format ─────────────
+            // Ollama /api/chat differs from OpenAI format in two ways:
+            //   1. assistant tool_calls: `arguments` must be a JSON object, not string.
+            //   2. tool result messages: must not contain `tool_call_id` or `name`.
+            let messages = {
+                let mut msgs = messages;
+                if let Some(arr) = msgs.as_array_mut() {
+                    for msg in arr.iter_mut() {
+                        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                        if role == "assistant" {
+                            // Parse arguments strings back to objects.
+                            if let Some(tcs) = msg.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                                for tc in tcs.iter_mut() {
+                                    if let Some(args) = tc.pointer_mut("/function/arguments") {
+                                        if let Some(s) = args.as_str() {
+                                            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(s) {
+                                                *args = obj;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else if role == "tool" {
+                            // Strip OpenAI-only fields that Ollama doesn't accept.
+                            if let Some(obj) = msg.as_object_mut() {
+                                obj.remove("tool_call_id");
+                                obj.remove("name");
+                            }
+                        }
+                    }
+                }
+                msgs
+            };
 
             // Inject images into the last user message (Ollama expects per-message images).
             let messages = if let Some(imgs) = images {

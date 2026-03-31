@@ -8,7 +8,12 @@ import type { ModelName } from "./ModelName";
 import type { Prompt } from "./Prompt";
 import type { ProviderType } from "./ProviderType";
 
-export type InferenceJob = { id: JobId, prompt: Prompt, model_name: ModelName, status: JobStatus, provider_type: ProviderType, created_at: string, started_at: string | null, completed_at: string | null, error: string | null, 
+export type InferenceJob = { id: JobId, prompt: Prompt, 
+/**
+ * First ≤200 characters of the prompt (char boundary, CJK-safe).
+ * The only part of the prompt persisted to Postgres. Full prompt lives in S3.
+ */
+prompt_preview: string | null, model_name: ModelName, status: JobStatus, provider_type: ProviderType, created_at: string, started_at: string | null, completed_at: string | null, error: string | null, 
 /**
  * Full concatenated output of the inference. Populated on completion so the
  * result can be replayed after a server restart (since the token buffer is
@@ -67,8 +72,8 @@ api_format: ApiFormat,
  * Contains: system prompt + prior turns (user/assistant/tool) + current user message.
  * When Some, the OllamaAdapter routes to `/api/chat`; when None, to `/api/generate`.
  *
- * Persisted to DB as `messages_json JSONB` (migration 000045).
- * Serves as ground-truth training input: input=messages_json, output=result_text+tool_calls_json.
+ * Stored in S3 `ConversationRecord.messages` (not persisted to Postgres).
+ * Serves as ground-truth training input: input=messages, output=result+tool_calls.
  * Can reach 100–500 KB for agentic sessions with large file contents.
  */
 messages: JsonValue | null, 
@@ -128,4 +133,9 @@ failure_reason: string | null,
  * S3 keys for stored WebP images (full + thumbnail pairs).
  * Populated after async image upload completes. Persisted in DB.
  */
-image_keys: Array<string> | null, };
+image_keys: Array<string> | null, 
+/**
+ * Groups all inference_jobs belonging to one MCP agentic loop run.
+ * NULL for non-MCP requests (single-turn, no tool calls).
+ */
+mcp_loop_id: string | null, };

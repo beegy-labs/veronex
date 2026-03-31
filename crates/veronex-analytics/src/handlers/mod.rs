@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod ingest;
+pub mod mcp;
 pub mod metrics;
 pub mod performance;
 pub mod usage;

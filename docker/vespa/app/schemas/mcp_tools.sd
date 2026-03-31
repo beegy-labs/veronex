@@ -1,0 +1,64 @@
+schema mcp_tools {
+    document mcp_tools {
+        # Unique tool identifier: "{service_id}:{server_id}:{tool_name}"
+        field tool_id type string {
+            indexing: attribute | summary
+        }
+        # Multi-tenant isolation key
+        field service_id type string {
+            indexing: attribute | summary
+        }
+        field server_id type string {
+            indexing: attribute | summary
+        }
+        # Server slug — matches McpTool.server_name for namespaced tool name lookup
+        field server_name type string {
+            indexing: attribute | summary
+        }
+        field tool_name type string {
+            indexing: attribute | summary
+        }
+        # BM25 index for hybrid search fallback
+        field description type string {
+            indexing: index | summary
+            index: enable-bm25
+        }
+        # JSON-encoded input schema
+        field input_schema type string {
+            indexing: summary
+        }
+        # 1024-dim vectors from multilingual-e5-large (veronex-embed)
+        field embedding type tensor<float>(x[1024]) {
+            indexing: attribute | index
+            attribute {
+                distance-metric: angular
+            }
+            index {
+                hnsw {
+                    max-links-per-node: 16
+                    neighbors-to-explore-at-insert: 200
+                }
+            }
+        }
+    }
+
+    # Pure ANN semantic search
+    rank-profile semantic inherits default {
+        inputs {
+            query(qe) tensor<float>(x[1024])
+        }
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+    }
+
+    # Hybrid: ANN + BM25 (for future use)
+    rank-profile hybrid inherits default {
+        inputs {
+            query(qe) tensor<float>(x[1024])
+        }
+        first-phase {
+            expression: closeness(field, embedding) + bm25(description)
+        }
+    }
+}

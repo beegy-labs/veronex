@@ -20,13 +20,30 @@ use super::state::AppState;
 
 /// Extract the `x-conversation-id` header value, if present and valid.
 ///
-/// Returns `None` when the header is absent, not valid UTF-8, or exceeds 256 bytes.
-pub fn extract_conversation_id(headers: &axum::http::HeaderMap) -> Option<String> {
+/// Decodes the base62-encoded string from the header into a UUID.
+/// Returns `None` when the header is absent, not valid UTF-8, exceeds 256 bytes,
+/// or fails to decode.
+pub fn extract_conversation_id(headers: &axum::http::HeaderMap) -> Option<uuid::Uuid> {
     headers
         .get("x-conversation-id")
         .and_then(|v| v.to_str().ok())
         .filter(|s| s.len() <= 256)
-        .map(str::to_string)
+        .and_then(|s| decode_conversation_id(s))
+}
+
+/// Generate a new conversation ID as UUIDv7.
+pub fn new_conversation_id() -> uuid::Uuid {
+    uuid::Uuid::now_v7()
+}
+
+/// Encode a UUID as a base62 string for API responses (~22 chars).
+pub fn to_public_id(uuid: &uuid::Uuid) -> String {
+    base62::encode(uuid.as_u128())
+}
+
+/// Decode a base62 conversation ID back to UUID (for S3 lookup).
+pub fn decode_conversation_id(id: &str) -> Option<uuid::Uuid> {
+    base62::decode(id).ok().map(|n| uuid::Uuid::from_u128(n as u128))
 }
 
 // ── Input validation ────────────────────────────────────────────────────────

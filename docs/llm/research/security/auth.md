@@ -1,6 +1,6 @@
 # Authentication & Sessions — 2026 Research
 
-> **Last Researched**: 2026-03-01 | **Source**: JWT best practices + verified in production
+> **Last Researched**: 2026-03-28 | **Source**: JWT best practices + verified in production
 > **Status**: Verified — used in `crates/veronex/src/infrastructure/inbound/http/middleware/`
 
 ---
@@ -10,10 +10,13 @@
 ```rust
 #[derive(Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,   // account_id (UUIDv7)
-    pub role: String,  // "super" | "admin" | "viewer"
-    pub jti: String,   // UUIDv7 — unique per session (for revocation)
-    pub exp: usize,    // Unix timestamp
+    pub sub: String,              // account_id (UUIDv7)
+    pub role: AccountRole,        // Super / Admin / Viewer
+    pub jti: String,              // UUIDv7 — unique per session (for revocation)
+    pub exp: usize,               // Unix timestamp
+    pub permissions: Vec<String>, // merged from all assigned roles
+    pub menus: Vec<String>,       // merged menu IDs from all assigned roles
+    pub role_name: String,        // primary role name
 }
 ```
 

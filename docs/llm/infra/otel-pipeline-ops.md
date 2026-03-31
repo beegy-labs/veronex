@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline Operations
 
-> SSOT | **Last Updated**: 2026-03-15 (rev: MV sum+gauge support, migration 000002_metrics_sum_support)
+> SSOT | **Last Updated**: 2026-03-28 (rev: MV sum+gauge support, migration 000002_metrics_sum_support)
 
 See `infra/otel-pipeline.md` for pipeline overview, OTel Collector config, and Chain 1 (otel-logs).
 
@@ -75,7 +75,7 @@ All MergeTree targets (`otel_logs`, `otel_metrics_gauge`, `otel_traces_raw`) mus
 ```bash
 docker compose exec clickhouse clickhouse-client \
   --user veronex --password veronex --database veronex \
-  --multiquery < docker/clickhouse/init.sql
+  --multiquery < docker/clickhouse/schema.sql
 # Or: docker compose down -v && docker compose up -d  (loses all data)
 ```
 

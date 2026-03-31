@@ -258,6 +258,25 @@ export interface RegisterGpuServerRequest {
   node_exporter_url?: string
 }
 
+export interface McpServer {
+  id: string
+  name: string
+  slug: string
+  url: string
+  is_enabled: boolean
+  timeout_secs: number
+  online: boolean
+  tool_count: number
+  created_at: string
+}
+
+export interface RegisterMcpServerRequest {
+  name: string
+  slug: string
+  url: string
+  timeout_secs?: number
+}
+
 export interface UpdateGpuServerRequest {
   name?: string
   node_exporter_url?: string
@@ -643,6 +662,26 @@ export interface DashboardOverview {
   lab: LabSettings
 }
 
+export interface McpServerStat {
+  server_id: string
+  server_name: string
+  server_slug: string
+  total_calls: number
+  success_count: number
+  error_count: number
+  cache_hit_count: number
+  timeout_count: number
+  success_rate: number
+  avg_latency_ms: number
+}
+
+export interface McpServerAccess {
+  server_id: string
+  server_name: string
+  slug: string
+  is_allowed: boolean
+}
+
 export interface AuditEvent {
   event_time: string
   account_id: string
@@ -653,4 +692,51 @@ export interface AuditEvent {
   resource_name: string
   ip_address: string
   details: string
+}
+
+// ── Conversations ────────────────────────────────────────────────────────────
+
+export interface ConversationSummary {
+  id: string
+  public_id: string
+  title: string | null
+  model_name: string | null
+  turn_count: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ConversationTurn {
+  job_id: string
+  prompt: string
+  result: string | null
+  tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> | null
+  created_at: string
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  turns: ConversationTurn[]
+}
+
+// ── Service health ──────────────────────────────────────────────────────────
+
+export interface ServiceStatus {
+  name: string
+  status: 'ok' | 'degraded' | 'unavailable'
+  latency_ms: number | null
+  checked_at: number | null
+}
+
+export interface PodStatus {
+  id: string
+  status: 'online' | 'offline'
+  last_heartbeat_ms: number | null
+}
+
+export interface ServiceHealthResponse {
+  infrastructure: ServiceStatus[]
+  api_pods: PodStatus[]
+  agent_pods: PodStatus[]
 }

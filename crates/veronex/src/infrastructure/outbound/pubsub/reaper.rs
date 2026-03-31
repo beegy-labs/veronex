@@ -358,7 +358,7 @@ async fn reenqueue_reaped_jobs_batch(
             }
         };
 
-        let demand_key = format!("veronex:demand:{model}");
+        let demand_key = valkey_keys::demand_counter(&model);
 
         let result: Result<(), _> = pool
             .eval(

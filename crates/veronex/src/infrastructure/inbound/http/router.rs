@@ -1,18 +1,22 @@
+use axum::error_handling::HandleErrorLayer;
 use axum::extract::DefaultBodyLimit;
-use axum::http::{HeaderValue, Method};
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
+use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use super::account_handlers;
+use super::conversation_handlers;
 use super::audit_handlers;
 use super::auth_handlers;
 use super::role_handlers;
 use super::model_selection_handlers;
 use super::global_model_handlers;
 use super::key_provider_access_handlers;
+use super::key_mcp_access_handlers;
 use super::provider_handlers;
 use super::dashboard_handlers;
 use super::docs_handlers;
@@ -20,10 +24,11 @@ use super::gemini_compat_handlers;
 use super::gemini_model_handlers;
 use super::gemini_policy_handlers;
 use super::gpu_server_handlers;
+use super::mcp_handlers;
 use super::handlers;
 use super::key_handlers;
 use super::metrics_handlers;
-use super::middleware::api_key_auth::api_key_auth;
+use super::middleware::infer_auth::infer_auth;
 use super::middleware::jwt_auth::jwt_auth;
 use super::middleware::rate_limiter::rate_limiter;
 use super::ollama_compat_handlers;
@@ -33,7 +38,6 @@ use super::openai_models_handlers;
 use super::openai_embeddings_handlers;
 use super::openai_completions_handlers;
 use super::openai_media_handlers;
-use super::test_handlers;
 use super::state::AppState;
 use super::usage_handlers;
 
@@ -96,25 +100,6 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/v1/jobs/{id}/stream", get(handlers::stream_job_openai))
 }
 
-/// Build the JWT-protected test run router (no API key, no rate limit).
-///
-/// Each API format has a dedicated test path that returns its native response format:
-/// - `/v1/test/completions`           → OpenAI SSE (web test panel)
-/// - `/v1/test/api/chat`              → Ollama NDJSON
-/// - `/v1/test/api/generate`          → Ollama NDJSON
-/// - `/v1/test/v1beta/models/{*path}` → Gemini SSE
-fn build_test_router() -> Router<AppState> {
-    Router::new()
-        // OpenAI-compat (web test panel)
-        .route("/v1/test/completions", post(test_handlers::test_completions)
-            .layer(DefaultBodyLimit::max(super::constants::IMAGE_BODY_LIMIT)))
-        .route("/v1/test/jobs/{job_id}/stream", get(test_handlers::stream_test_job))
-        // Ollama native test endpoints
-        .route("/v1/test/api/chat", post(test_handlers::test_ollama_chat))
-        .route("/v1/test/api/generate", post(test_handlers::test_ollama_generate))
-        // Gemini native test endpoints
-        .route("/v1/test/v1beta/models/{*path}", post(test_handlers::test_gemini_request))
-}
 
 /// Build the JWT-protected admin router.
 fn build_jwt_router() -> Router<AppState> {
@@ -154,6 +139,7 @@ fn build_jwt_router() -> Router<AppState> {
             get(dashboard_handlers::get_job_detail).delete(dashboard_handlers::cancel_job),
         )
         .route("/v1/dashboard/performance", get(dashboard_handlers::get_performance))
+        .route("/v1/dashboard/services", get(dashboard_handlers::get_service_health))
         // Provider management
         .route("/v1/providers", get(provider_handlers::list_providers).post(provider_handlers::register_provider))
         .route("/v1/providers/verify", post(provider_handlers::verify_provider))
@@ -171,6 +157,17 @@ fn build_jwt_router() -> Router<AppState> {
         // API key → provider access
         .route("/v1/keys/{key_id}/providers", get(key_provider_access_handlers::list_key_provider_access))
         .route("/v1/keys/{key_id}/providers/{provider_id}", patch(key_provider_access_handlers::set_key_provider_access))
+        // API key → MCP server access
+        .route("/v1/keys/{key_id}/mcp", get(key_mcp_access_handlers::list_key_mcp_access).post(key_mcp_access_handlers::grant_key_mcp_access))
+        .route("/v1/keys/{key_id}/mcp/{server_id}", delete(key_mcp_access_handlers::revoke_key_mcp_access))
+        // MCP server management
+        .route("/v1/mcp/servers", get(mcp_handlers::list_mcp_servers).post(mcp_handlers::register_mcp_server))
+        .route("/v1/mcp/servers/{id}", patch(mcp_handlers::patch_mcp_server).delete(mcp_handlers::delete_mcp_server))
+        // MCP call statistics
+        .route("/v1/mcp/stats", get(dashboard_handlers::get_mcp_stats))
+        // Conversations
+        .route("/v1/conversations", get(conversation_handlers::list_conversations))
+        .route("/v1/conversations/{id}", get(conversation_handlers::get_conversation))
         // GPU server management
         .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers).post(gpu_server_handlers::register_gpu_server))
         .route("/v1/servers/verify", post(gpu_server_handlers::verify_gpu_server))
@@ -328,6 +325,11 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
             "/v1/metrics/targets",
             get(metrics_handlers::list_metrics_targets),
         )
+        // MCP agent discovery — consumed by veronex-agent, no auth required.
+        .route(
+            "/v1/mcp/targets",
+            get(mcp_handlers::list_mcp_targets),
+        )
         // First-run setup (no auth — only usable before any account exists)
         .route("/v1/setup/status", get(auth_handlers::setup_status))
         .route("/v1/setup", post(auth_handlers::setup))
@@ -336,23 +338,21 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
         .route("/v1/auth/logout", post(auth_handlers::logout))
         .route("/v1/auth/refresh", post(auth_handlers::refresh))
         .route("/v1/auth/reset-password", post(auth_handlers::reset_password))
-        // JWT-protected admin routes
+        // JWT-protected admin routes — 30 s timeout (SSE-free CRUD only)
         .merge(
             build_jwt_router()
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
                     jwt_auth,
-                )),
+                ))
+                .layer(
+                    ServiceBuilder::new()
+                        .layer(HandleErrorLayer::new(|_| async { StatusCode::REQUEST_TIMEOUT }))
+                        .layer(tower::timeout::TimeoutLayer::new(std::time::Duration::from_secs(30)))
+                ),
         )
-        // JWT-protected test run routes (no API key, no rate limit)
-        .merge(
-            build_test_router()
-                .route_layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    jwt_auth,
-                )),
-        )
-        // API key-authenticated routes (existing, unchanged)
+        // Inference routes — accept API key OR JWT session with api_test permission.
+        // Rate limiting is applied only for API key callers (skipped for session callers).
         .merge(
             build_api_router()
                 .route_layer(middleware::from_fn_with_state(
@@ -361,11 +361,11 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                 ))
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
-                    api_key_auth,
+                    infer_auth,
                 ))
                 .layer(middleware::map_response(openai_compat_headers)),
         )
-        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB — reject oversized bodies before deserialization
+        .layer(DefaultBodyLimit::max(super::constants::JSON_BODY_LIMIT))
         .layer(cors)
         .layer(middleware::map_response(security_headers))
         .layer(TraceLayer::new_for_http())

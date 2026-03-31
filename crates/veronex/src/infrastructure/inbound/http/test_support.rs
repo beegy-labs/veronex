@@ -11,11 +11,12 @@ use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyR
 use crate::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
 use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
-use crate::application::ports::outbound::ollama_model_repository::{ModelPage, OllamaProviderForModel, OllamaModelRepository, OllamaModelWithCount, ProviderPage};
+use crate::application::ports::outbound::ollama_model_repository::{ModelPage, OllamaModelRepository, OllamaModelWithCount, ProviderPage};
 use crate::application::ports::outbound::ollama_sync_job_repository::{OllamaSyncJob, OllamaSyncJobRepository};
 use crate::application::ports::outbound::provider_vram_budget_repository::{ProviderVramBudget, ProviderVramBudgetRepository};
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::domain::entities::{Account, ApiKey, GeminiRateLimitPolicy, GpuServer, LlmProvider, Session};
+use crate::infrastructure::inbound::http::middleware::infer_auth::InferCaller;
 use crate::domain::enums::{JobStatus, KeyTier, KeyType, LlmProviderStatus};
 use crate::domain::errors::DomainError;
 use crate::domain::value_objects::{JobId, StreamToken};
@@ -375,9 +376,14 @@ pub(crate) fn make_app() -> axum::Router {
         lab_settings_repo: Arc::new(MockLabSettingsRepo),
         sse_connections: Arc::new(AtomicU32::new(0)),
         vram_budget_repo: Arc::new(MockVramBudgetRepo),
+        mcp_bridge: None,
+        mcp_vector_selector: None,
+        mcp_tool_indexer: None,
+        instance_id: Arc::from("test-instance"),
+        login_rate_limit: 0,
     };
-    // Inject a fake ApiKey extension so handlers that extract it work in tests.
+    // Inject a fake InferCaller extension so handlers that extract it work in tests.
     router::build_api_router()
-        .layer(axum::Extension(fake_key))
+        .layer(axum::Extension(InferCaller::ApiKey(fake_key)))
         .with_state(state)
 }

@@ -1,8 +1,41 @@
-target
-web/node_modules
-web/.next
+# Rust build artifacts
+target/
+crates/*/target/
+
+# Node / Next.js
+web/node_modules/
+web/.next/
+web/playwright-report/
+web/test-results/
 *.tsbuildinfo
-.git
-docs
-.specs
-.ai
+
+# Git & CI
+.git/
+.github/
+
+# Docs & specs (not needed for build)
+docs/
+.specs/
+.ai/
+.add/
+README.md
+AGENTS.md
+CLAUDE.md
+
+# Local dev / test artifacts
+mutants.out/
+minio-prod/
+*.log
+*.out
+coverage/
+
+# Playwright e2e tests (not needed for build)
+web/e2e/
+web/playwright.config.ts
+web/vitest.config.ts
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp

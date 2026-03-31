@@ -115,6 +115,109 @@ valkey_zcard() { docker compose exec -T valkey valkey-cli ZCARD "$1" 2>/dev/null
 valkey_get()   { docker compose exec -T valkey valkey-cli GET "$1" 2>/dev/null | tr -d ' \r\n' || echo ""; }
 valkey_hlen()  { docker compose exec -T valkey valkey-cli HLEN "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
 
+# ── Queue drain helper ────────────────────────────────────────────────────────
+# Wait up to MAX_WAIT seconds for the inference queue and active jobs to drain.
+# Prevents test-ordering failures caused by prior tests leaving running/queued jobs.
+wait_queue_empty() {
+  local max_wait="${1:-30}" waited=0
+  while [ "$waited" -lt "$max_wait" ]; do
+    local depth
+    depth=$(curl -sf "$API/v1/dashboard/queue" -H "Authorization: Bearer $TK" \
+      2>/dev/null | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('depth',0))" \
+      2>/dev/null || echo "0")
+    [ "${depth:-0}" -le 0 ] && return 0
+    sleep 2; waited=$((waited + 2))
+  done
+  return 0  # non-fatal: proceed even if queue is still busy
+}
+
+# ── Self-sufficient auth bootstrap ───────────────────────────────────────────
+# Replace bare `load_state` in script headers.
+# Loads state first; if TK or API_KEY is absent, self-authenticates so every
+# script can run standalone without 01-setup.sh having run first.
+ensure_auth() {
+  load_state
+
+  # Bootstrap JWT if missing or expired (validate with a cheap API call)
+  local _need_login=0
+  if [ -z "${TK:-}" ]; then
+    _need_login=1
+  else
+    local _probe_code
+    _probe_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+      "$API/v1/accounts" -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+    [ "$_probe_code" = "401" ] && _need_login=1
+  fi
+  if [ "$_need_login" = "1" ]; then
+    TK=""
+    curl -s "$API/v1/setup" -H 'Content-Type: application/json' \
+      -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" > /dev/null 2>&1 || true
+    local _login_raw
+    _login_raw=$(curl -si "$API/v1/auth/login" \
+      -H 'Content-Type: application/json' \
+      -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" 2>&1)
+    TK=$(echo "$_login_raw" | sed -n 's/.*veronex_access_token=\([^;]*\).*/\1/p')
+    [ -z "$TK" ] && { echo "[ERROR] ensure_auth: login failed"; exit 1; }
+  fi
+
+  # Bootstrap API key if missing
+  if [ -z "${API_KEY:-}" ]; then
+    local _acct_id
+    _acct_id=$(curl -sf "$API/v1/accounts" -H "Authorization: Bearer $TK" 2>/dev/null \
+      | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('accounts',[{}])[0].get('id',''))" 2>/dev/null || echo "")
+    if [ -n "$_acct_id" ]; then
+      local _key_res
+      _key_res=$(curl -sf "$API/v1/keys" -H "Authorization: Bearer $TK" \
+        -H 'Content-Type: application/json' \
+        -d "{\"tenant_id\":\"$_acct_id\",\"name\":\"e2e-auto-$$\",\"tier\":\"paid\"}" 2>/dev/null || echo "{}")
+      API_KEY=$(echo "$_key_res" \
+        | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('key',''))" 2>/dev/null || echo "")
+    fi
+    [ -z "$API_KEY" ] && { echo "[ERROR] ensure_auth: API key creation failed"; exit 1; }
+  fi
+}
+
+# ── Dynamic provider/server ID lookup ────────────────────────────────────────
+# Called by scripts that use PROVIDER_ID_LOCAL/REMOTE or SERVER_ID_LOCAL/REMOTE.
+# Fast-path: skips API calls when IDs are already loaded from state (after 01-setup).
+ensure_provider_ids() {
+  local _providers _servers
+  if [ -z "${PROVIDER_ID_LOCAL:-}" ] || [ "${PROVIDER_ID_LOCAL}" = "None" ]; then
+    _providers=$(curl -sf "$API/v1/providers" -H "Authorization: Bearer $TK" 2>/dev/null || echo '{"providers":[]}')
+    PROVIDER_ID_LOCAL=$(echo "$_providers" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+for p in d.get('providers',[]):
+    if p.get('provider_type')=='ollama' and 'local' in p.get('name','').lower():
+        print(p['id']); break
+" 2>/dev/null || echo "")
+    PROVIDER_ID_REMOTE=$(echo "$_providers" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+for p in d.get('providers',[]):
+    if p.get('provider_type')=='ollama' and 'local' not in p.get('name','').lower():
+        print(p['id']); break
+" 2>/dev/null || echo "")
+  fi
+  if [ -z "${SERVER_ID_LOCAL:-}" ] || [ "${SERVER_ID_LOCAL}" = "None" ]; then
+    _servers=$(curl -sf "$API/v1/servers" -H "Authorization: Bearer $TK" 2>/dev/null || echo '{"servers":[]}')
+    SERVER_ID_LOCAL=$(echo "$_servers" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+for s in d.get('servers',[]):
+    if 'local' in s.get('name','').lower():
+        print(s['id']); break
+" 2>/dev/null || echo "")
+    SERVER_ID_REMOTE=$(echo "$_servers" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+for s in d.get('servers',[]):
+    if 'local' not in s.get('name','').lower():
+        print(s['id']); break
+" 2>/dev/null || echo "")
+  fi
+}
+
 # ── State management ──────────────────────────────────────────────────────────
 E2E_STATE="${E2E_STATE:-/tmp/veronex-e2e-state.env}"
 

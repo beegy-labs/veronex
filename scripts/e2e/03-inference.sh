@@ -2,7 +2,7 @@
 # Phase 03: Concurrent Inference + AIMD Learning + DB Verification
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 
 # ── Auto-detect available models for multi-model testing ─────────────────────
 MODELS_ALL=$(aget "/v1/ollama/models" 2>/dev/null | python3 -c "
@@ -40,12 +40,17 @@ apostc "/v1/providers/sync" "{}" > /dev/null 2>&1 || true
 info "Manual sync triggered, waiting for VRAM probing..."
 
 get_aimd_limit() {
+  # Returns "max_concurrent num_parallel" for the provider+model pair with highest max_concurrent
   aget "/v1/dashboard/capacity" 2>/dev/null | python3 -c "
 import sys, json; d=json.loads(sys.stdin.read())
-limits=[m['max_concurrent'] for p in d.get('providers',[]) for m in p.get('loaded_models',[])
-        if m['model_name']=='$MODEL' and m['max_concurrent']>0]
-print(max(limits) if limits else '0')
-" 2>/dev/null || echo "0"
+best=(0,4)
+for p in d.get('providers',[]):
+  np=p.get('num_parallel',4)
+  for m in p.get('loaded_models',[]):
+    if m['model_name']=='$MODEL' and m['max_concurrent']>best[0]:
+      best=(m['max_concurrent'],np)
+print(best[0], best[1])
+" 2>/dev/null || echo "0 4"
 }
 
 for i in $(seq 1 10); do
@@ -66,7 +71,9 @@ wait 2>/dev/null
 
 print_capacity "$CAP"
 
-AIMD_LIMIT=$(get_aimd_limit)
+AIMD_RAW=$(get_aimd_limit)
+AIMD_LIMIT=$(echo "$AIMD_RAW" | awk '{print $1}')
+AIMD_NP=$(echo "$AIMD_RAW" | awk '{print $2}')
 if [ "$AIMD_LIMIT" = "0" ]; then
   info "AIMD not set — running extra sync cycles..."
   for attempt in 1 2 3; do
@@ -79,7 +86,9 @@ if [ "$AIMD_LIMIT" = "0" ]; then
     wait 2>/dev/null
     apostc "/v1/providers/sync" "{}" > /dev/null 2>&1 || true
     sleep 5
-    AIMD_LIMIT=$(get_aimd_limit)
+    AIMD_RAW=$(get_aimd_limit)
+    AIMD_LIMIT=$(echo "$AIMD_RAW" | awk '{print $1}')
+    AIMD_NP=$(echo "$AIMD_RAW" | awk '{print $2}')
     [ "$AIMD_LIMIT" != "0" ] && break
     info "  attempt $attempt: limit still 0"
   done
@@ -90,18 +99,11 @@ fi
   || fail "AIMD limit not set after sync cycles"
 save_var AIMD_LIMIT "$AIMD_LIMIT"
 
-# SDD: AIMD cold start = num_parallel; after learning, max_concurrent ≤ num_parallel
-PROVIDERS_JSON=$(aget "/v1/providers" 2>/dev/null || echo '{"providers":[]}')
-NP_CHECK=$(echo "$PROVIDERS_JSON" | python3 -c "
-import sys, json
-providers = json.loads(sys.stdin.read()).get('providers', [])
-nps = [p.get('num_parallel', 4) for p in providers if p.get('provider_type') == 'ollama' and p.get('is_active')]
-print(max(nps) if nps else 4)
-" 2>/dev/null || echo "4")
+# SDD: max_concurrent must not exceed the provider's own num_parallel
 if [ -n "$AIMD_LIMIT" ] && [ "$AIMD_LIMIT" != "0" ]; then
-  [ "$AIMD_LIMIT" -le "$NP_CHECK" ] \
-    && pass "AIMD max_concurrent ($AIMD_LIMIT) ≤ num_parallel ($NP_CHECK) — SDD constraint satisfied" \
-    || fail "AIMD max_concurrent ($AIMD_LIMIT) > num_parallel ($NP_CHECK) — SDD violation"
+  [ "$AIMD_LIMIT" -le "$AIMD_NP" ] \
+    && pass "AIMD max_concurrent ($AIMD_LIMIT) ≤ num_parallel ($AIMD_NP) — SDD constraint satisfied" \
+    || fail "AIMD max_concurrent ($AIMD_LIMIT) > num_parallel ($AIMD_NP) — SDD violation"
 fi
 
 # ── DB Verification ────────────────────────────────────────────────────────────

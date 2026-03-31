@@ -11,10 +11,10 @@ use std::time::Duration;
 // to keep working without changing every import site.
 pub use crate::domain::constants::{
     GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
-    KEY_TIER_PAID, NO_PROVIDER_BACKOFF, OLLAMA_HEALTH_CHECK_TIMEOUT,
-    OWNERSHIP_LOST_CLEANUP_DELAY, OWNER_REFRESH_INTERVAL, PENDING_JOB_SWEEP_INTERVAL,
-    PROVIDER_REGISTRY_CACHE_TTL, QUEUE_ERROR_BACKOFF, QUEUE_POLL_INTERVAL,
-    SYNC_LOOP_BASE_TICK, TPM_ESTIMATED_TOKENS,
+    KEY_TIER_PAID, MAX_CHAT_MESSAGES, MAX_TOKENS_CEILING, NO_PROVIDER_BACKOFF,
+    OLLAMA_HEALTH_CHECK_TIMEOUT, OWNERSHIP_LOST_CLEANUP_DELAY, OWNER_REFRESH_INTERVAL,
+    PENDING_JOB_SWEEP_INTERVAL, PROVIDER_REGISTRY_CACHE_TTL, QUEUE_ERROR_BACKOFF,
+    QUEUE_POLL_INTERVAL, SYNC_LOOP_BASE_TICK, TPM_ESTIMATED_TOKENS,
 };
 
 // ── SSE ──────────────────────────────────────────────────────────────────────
@@ -88,8 +88,23 @@ pub const MODELS_CACHE_TTL: i64 = 3600;
 
 // ── Body limits ─────────────────────────────────────────────────────────────
 
+/// Default JSON body limit applied at the global router level (1 MB).
+///
+/// Rejects oversized bodies before deserialization.  Image-capable endpoints
+/// override this per-route with `IMAGE_BODY_LIMIT`.
+pub const JSON_BODY_LIMIT: usize = 1024 * 1024;
+
 /// Body limit for image-capable endpoints (20 MB).
 pub const IMAGE_BODY_LIMIT: usize = 20 * 1024 * 1024;
+
+// ── Pagination ──────────────────────────────────────────────────────────────
+
+/// Hard upper bound on page numbers accepted from clients.
+///
+/// Prevents (page - 1) * limit from overflowing i64 at extreme values and
+/// protects against slow-deep-offset queries (`OFFSET 10_000_000` scans every
+/// row up to that point even with an index).
+pub const MAX_PAGE: i64 = 10_000;
 
 // ── Error messages ──────────────────────────────────────────────────────────
 

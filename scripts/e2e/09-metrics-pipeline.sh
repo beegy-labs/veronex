@@ -10,7 +10,8 @@
 #   - k8s-worker-ai-01 (Ubuntu, Ryzen AI 395+) : CPU + memory + GPU temp/power
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
 
 hdr "Metrics Pipeline: Agent → OTel → ClickHouse"
 

@@ -89,7 +89,7 @@ pub async fn sync_models(
         .await
         .map_err(|e| {
             tracing::error!("sync_models: gemini api error: {e}");
-            AppError::BadGateway(e.to_string())
+            AppError::BadGateway("Gemini API request failed".into())
         })?;
 
     state.gemini_model_repo.sync_models(&models).await.map_err(db_error)?;

@@ -19,6 +19,8 @@ where
 }
 
 pub mod account_repository;
+pub mod caching_api_key_repo;
+pub mod caching_lab_settings_repo;
 pub mod caching_model_selection;
 pub mod caching_ollama_model_repo;
 pub mod caching_provider_registry;
