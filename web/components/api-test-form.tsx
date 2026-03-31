@@ -10,9 +10,10 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
-import type { ProviderOption, Endpoint } from '@/components/api-test-types'
+import type { ProviderOption, Endpoint, TestMode } from '@/components/api-test-types'
 
 interface ApiTestFormProps {
+  mode: TestMode
   providerType: string
   model: string
   prompt: string
@@ -27,6 +28,7 @@ interface ApiTestFormProps {
   endpoint: Endpoint
   useApiKey: boolean
   apiKeyValue: string
+  onModeChange: (v: TestMode) => void
   onProviderChange: (v: string) => void
   onModelChange: (v: string) => void
   onPromptChange: (v: string) => void
@@ -39,12 +41,12 @@ interface ApiTestFormProps {
 }
 
 export function ApiTestForm({
-  providerType, model, prompt,
+  mode, providerType, model, prompt,
   images, maxImages, isCompressing,
   availableOptions, availableModels, isGeminiProvider,
   canRun, authUsername,
   endpoint, useApiKey, apiKeyValue,
-  onProviderChange, onModelChange, onPromptChange,
+  onModeChange, onProviderChange, onModelChange, onPromptChange,
   onImageAdd, onImageRemove,
   onEndpointChange, onUseApiKeyChange, onApiKeyValueChange,
   onRun,
@@ -96,6 +98,24 @@ export function ApiTestForm({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Mode toggle */}
+      <div className="flex items-center gap-1 p-0.5 rounded-md bg-muted w-fit">
+        {(['single', 'conversation'] as TestMode[]).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => onModeChange(m)}
+            className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+              mode === m
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t(m === 'single' ? 'test.modeSingle' : 'test.modeConversation')}
+          </button>
+        ))}
+      </div>
+
       {/* Provider + Model */}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
