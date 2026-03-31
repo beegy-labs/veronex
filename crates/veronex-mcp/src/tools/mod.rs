@@ -5,6 +5,7 @@
 //! 2. Add `pub mod {name};` here
 //! 3. Register in `bin/veronex-mcp.rs` main()
 
+pub mod analyze_image;
 pub mod weather;
 pub mod web_search;
 
