@@ -324,16 +324,19 @@ pub async fn chat_completions(
             // If an MCP bridge is configured and has active server sessions,
             // run the agentic MCP loop instead of the plain Ollama proxy.
             // API key callers must have at least one MCP grant — if not, bypass to plain proxy.
-            if let Some(ref bridge) = state.mcp_bridge {
-                if bridge.should_intercept() {
-                    let has_access = match caller.api_key_id() {
-                        None => true, // JWT session — bypass ACL
-                        Some(key_id) => !crate::infrastructure::outbound::mcp::bridge::fetch_mcp_acl(
-                            &state, key_id,
-                        ).await.is_empty(),
-                    };
-                    if has_access {
-                        return mcp_ollama_chat(state, caller, req, conversation_id, stream).await;
+            let has_images = req.images.as_ref().is_some_and(|i| !i.is_empty());
+            if !has_images {
+                if let Some(ref bridge) = state.mcp_bridge {
+                    if bridge.should_intercept() {
+                        let has_access = match caller.api_key_id() {
+                            None => true, // JWT session — bypass ACL
+                            Some(key_id) => !crate::infrastructure::outbound::mcp::bridge::fetch_mcp_acl(
+                                &state, key_id,
+                            ).await.is_empty(),
+                        };
+                        if has_access {
+                            return mcp_ollama_chat(state, caller, req, conversation_id, stream).await;
+                        }
                     }
                 }
             }
