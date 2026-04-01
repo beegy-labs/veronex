@@ -240,6 +240,9 @@ services:
       # DB index /1 — separate from veronex's queue/rate-limit keys (index /0)
       VALKEY_URL: redis://valkey:6379/1
       SEARXNG_URL: ${SEARXNG_URL:-https://ai-search.girok.dev}
+      # analyze_image tool — route through Veronex gateway instead of calling Ollama directly
+      VERONEX_URL: http://veronex:3000
+      VERONEX_API_KEY: ${VERONEX_API_KEY:-}
     ports:
       - "3100:3100"
     restart: unless-stopped
@@ -313,7 +316,7 @@ services:
       NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
       NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${NEXT_PUBLIC_VERONEX_ADMIN_KEY:-veronex-bootstrap-admin-key}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
