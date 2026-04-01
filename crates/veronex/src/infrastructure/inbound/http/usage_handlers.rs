@@ -1,11 +1,11 @@
 use axum::extract::{Extension, Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
-use uuid::Uuid;
 
 use crate::application::ports::outbound::analytics_repository::{
     AnalyticsSummary, HourlyUsage, UsageAggregate, UsageJob,
 };
+use crate::domain::value_objects::ApiKeyId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireDashboardView};
 
 use super::error::AppError;
@@ -113,10 +113,11 @@ pub async fn aggregate_usage(
 /// ClickHouse primary, PostgreSQL fallback.
 pub async fn key_usage(
     Extension(claims): Extension<Claims>,
-    Path(key_id): Path<Uuid>,
+    Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<HourlyUsage>>, AppError> {
+    let key_id = kid.0;
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
     verify_key_ownership(&state, &claims, &key_id).await?;
@@ -149,10 +150,11 @@ pub async fn get_analytics(
 /// ClickHouse primary, PostgreSQL fallback.
 pub async fn key_usage_jobs(
     Extension(claims): Extension<Claims>,
-    Path(key_id): Path<Uuid>,
+    Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<UsageJob>>, AppError> {
+    let key_id = kid.0;
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
     verify_key_ownership(&state, &claims, &key_id).await?;
@@ -168,10 +170,11 @@ pub async fn key_usage_jobs(
 /// Returns which models the key has used, with request counts and token stats.
 pub async fn key_model_breakdown(
     Extension(claims): Extension<Claims>,
-    Path(key_id): Path<Uuid>,
+    Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<ModelBreakdown>>, AppError> {
+    let key_id = kid.0;
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
     verify_key_ownership(&state, &claims, &key_id).await?;

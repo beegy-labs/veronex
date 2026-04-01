@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 
-use axum::extract::{Extension, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::Event;
 use axum::response::IntoResponse;
@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
 use crate::domain::enums::AccountRole;
+use crate::domain::value_objects::JobId;
 use crate::infrastructure::outbound::valkey_keys::{QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID, QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_TEST as QUEUE_KEY_TEST};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSettingsManage};
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
@@ -63,8 +64,9 @@ pub async fn get_stats(
 pub async fn get_job_detail(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Path(jid): Path<JobId>,
 ) -> Result<Json<JobDetail>, AppError> {
+    let id = jid.0;
     let row = dashboard_queries::fetch_job_detail(&state.pg_pool, id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("job {id} not found")))?;
@@ -140,10 +142,8 @@ pub async fn list_jobs(
 /// DELETE /v1/dashboard/jobs/{id} — Admin cancel a job (JWT-protected).
 pub async fn cancel_job(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Path(jid): Path<JobId>,
 ) -> Result<StatusCode, AppError> {
-    use crate::domain::value_objects::JobId;
-    let jid = JobId(id);
     state
         .use_case
         .cancel(&jid)

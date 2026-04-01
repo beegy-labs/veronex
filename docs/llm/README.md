@@ -12,7 +12,7 @@
 | ADD Policy | `policies/add.md` | work type, policy selection, autonomous execution |
 | Architecture | `policies/architecture.md` | hexagonal, ports, adapters, layers, AppState, dependency rule |
 | Code Patterns (Rust) | `policies/patterns.md` | AppError, thiserror, sqlx query_as!, async-trait, tracing, DashMap, Valkey Lua |
-| ID & API Key Policy | `policies/id-policy.md` | base62 public IDs, prefix registry, API key hash flow, vnx_live/test |
+| ID & API Key Policy | `policies/id-encoding.md` | UUIDv7 DB, base62 public IDs, prefix registry, BLAKE2b-256 API key hash |
 | Code Patterns (Frontend) | `policies/patterns-frontend.md` | TanStack Query v5, useOptimistic, Zod, Tailwind v4 |
 | Git Flow | `policies/git-flow.md` | branch, commit, squash, merge, conventional |
 | Testing Strategy | `policies/testing-strategy.md` | testing trophy, purity, proptest, cargo-mutants, OpenAPI schema, layer responsibility |
