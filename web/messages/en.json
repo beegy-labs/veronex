@@ -234,6 +234,8 @@
     "noJobsFound": "No jobs found.",
     "noError": "(no error message)",
     "noResult": "(no result stored)",
+    "continue": "Continue",
+    "continueInTest": "Continue in Test",
     "processing": "(processing…)",
     "toolCalls": "Tool Calls",
     "agentToolCall": "The model responded with a tool call — no text output was generated.",
@@ -720,7 +722,10 @@
     "modeSingle": "Single",
     "modeConversation": "Conversation",
     "clearConversation": "Clear",
-    "turns": "turns"
+    "turns": "turns",
+    "conversationHint": "⌘↵ or Ctrl+↵ to send",
+    "newSession": "New Session",
+    "noSessions": "No sessions"
   },
   "apiDocs": {
     "title": "API Documentation",

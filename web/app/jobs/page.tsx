@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useCallback, useMemo, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { dashboardJobsQuery, providersQuery } from '@/lib/queries'
 import { ConversationList } from '@/components/conversation-list'
-import type { RetryParams } from '@/lib/types'
+import type { RetryParams, ConversationDetail } from '@/lib/types'
 import JobTable from '@/components/job-table'
 import { ApiTestPanel } from '@/components/api-test-panel'
 import { NetworkFlowTab } from '@/components/network-flow-tab'
@@ -231,6 +231,12 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 export default function JobsPage() {
   const { t } = useTranslation()
   const testPanelRef = useRef<HTMLDivElement>(null)
+  const queryClient = useQueryClient()
+
+  const handleTurnComplete = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['dashboard-jobs'] })
+    queryClient.invalidateQueries({ queryKey: ['conversations'] })
+  }, [queryClient])
 
   // Persist active tab across page refreshes via URL hash
   const [activeTab, setActiveTab] = useState<'tasks' | 'conversations' | 'flow'>(() => {
@@ -246,12 +252,20 @@ export default function JobsPage() {
     window.history.replaceState(null, '', `#${tab}`)
   }, [])
   const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
+  const [continueConversation, setContinueConversation] = useState<ConversationDetail | null>(null)
 
   const { data: providersData } = useQuery(providersQuery())
   const providers = providersData?.providers
 
   const handleRetry = useCallback((params: RetryParams) => {
     setRetryParams(params)
+    setTimeout(() => {
+      testPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 50)
+  }, [])
+
+  const handleContinueConversation = useCallback((detail: ConversationDetail) => {
+    setContinueConversation(detail)
     setTimeout(() => {
       testPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 50)
@@ -270,6 +284,9 @@ export default function JobsPage() {
         <ApiTestPanel
           retryParams={retryParams}
           onRetryConsumed={() => setRetryParams(null)}
+          onTurnComplete={handleTurnComplete}
+          continueConversation={continueConversation}
+          onContinueConsumed={() => setContinueConversation(null)}
         />
       </div>
 
@@ -288,7 +305,7 @@ export default function JobsPage() {
 
         {/* ── Conversations tab ────────────────────────────────────────────── */}
         <TabsContent value="conversations" className="mt-6">
-          <ConversationList />
+          <ConversationList onContinue={handleContinueConversation} />
         </TabsContent>
 
         {/* ── Network Flow tab ──────────────────────────────────────────────── */}

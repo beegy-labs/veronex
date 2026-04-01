@@ -99,6 +99,20 @@ pub(super) fn sse_response(stream: SseStream) -> Response {
     ).into_response()
 }
 
+/// Attach `X-Conversation-Id` header to a response (no-op if `cid` is None).
+pub(super) fn with_conversation_id(mut resp: Response, cid: Option<&uuid::Uuid>) -> Response {
+    if let Some(id) = cid {
+        use super::inference_helpers::to_public_id;
+        if let Ok(val) = axum::http::HeaderValue::from_str(&to_public_id(id)) {
+            resp.headers_mut().insert(
+                axum::http::header::HeaderName::from_static("x-conversation-id"),
+                val,
+            );
+        }
+    }
+    resp
+}
+
 /// Parse a UUID string, returning `AppError::BadRequest` on failure.
 pub(super) fn parse_uuid(s: &str) -> Result<Uuid, AppError> {
     Uuid::parse_str(s).map_err(|_| AppError::BadRequest(format!("invalid UUID: {s}")))

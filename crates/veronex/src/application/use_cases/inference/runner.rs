@@ -211,6 +211,7 @@ async fn finalize_job(
                 messages: original_messages,
                 tool_calls: tool_calls_json.clone(),
                 result: result_text.clone(),
+                model_name: Some(job.model_name.as_str().to_string()),
                 created_at: job.created_at.to_rfc3339(),
             });
 
