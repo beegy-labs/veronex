@@ -68,13 +68,13 @@ export function ConversationList({ onContinue }: ConversationListProps) {
                 <tr
                   key={c.id}
                   className="border-b border-border last:border-0 hover:bg-muted/20 cursor-pointer transition-colors"
-                  onClick={() => setSelectedId(c.public_id)}
+                  onClick={() => setSelectedId(c.id)}
                 >
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <MessageSquare className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       <span className="font-medium truncate max-w-[300px]">
-                        {c.title || c.public_id}
+                        {c.title || c.id}
                       </span>
                     </div>
                   </td>
@@ -100,7 +100,7 @@ export function ConversationList({ onContinue }: ConversationListProps) {
                         variant="ghost"
                         size="sm"
                         className="h-7 text-xs"
-                        onClick={(e) => { e.stopPropagation(); setSelectedId(c.public_id) }}
+                        onClick={(e) => { e.stopPropagation(); setSelectedId(c.id) }}
                       >
                         <Play className="h-3 w-3 mr-1" />
                         {t('jobs.continue')}
