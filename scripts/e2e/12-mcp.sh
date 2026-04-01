@@ -311,7 +311,7 @@ if [ "$INIT_CODE" = "200" ]; then
     || fail "weather-mcp protocolVersion = '$PROTO' (expected 2025-03-26)"
 fi
 
-# 4. tools/list — expect get_weather and web_search (geocoding is internal, not exposed)
+# 4. tools/list — expect analyze_image, get_weather and web_search (geocoding is internal, not exposed)
 TOOLS_LIST=$(curl -s --max-time 10 "$MCP_TEST_URL" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
@@ -322,9 +322,9 @@ tools=json.loads(sys.stdin.read()).get('result',{}).get('tools',[])
 print(','.join(t.get('name','') for t in tools))
 " 2>/dev/null || echo "")
 TOOL_COUNT=$(echo "$TOOLS_LIST" | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read()).get('result',{}).get('tools',[])))" 2>/dev/null || echo "0")
-echo "$TOOL_NAMES" | grep -q "get_weather" && echo "$TOOL_NAMES" | grep -q "web_search" \
-  && pass "weather-mcp tools/list → [get_weather,web_search] (geocoding internal via embedded GeoNames)" \
-  || fail "weather-mcp tools/list → [$TOOL_NAMES] count=$TOOL_COUNT (expected: get_weather,web_search)"
+echo "$TOOL_NAMES" | grep -q "get_weather" && echo "$TOOL_NAMES" | grep -q "web_search" && echo "$TOOL_NAMES" | grep -q "analyze_image" \
+  && pass "weather-mcp tools/list → [analyze_image,get_weather,web_search] (geocoding internal via embedded GeoNames)" \
+  || fail "weather-mcp tools/list → [$TOOL_NAMES] count=$TOOL_COUNT (expected: analyze_image,get_weather,web_search)"
 echo "$TOOL_NAMES" | grep -qv "get_coordinates" \
   && pass "weather-mcp tools/list → get_coordinates not exposed (internal implementation)" \
   || fail "weather-mcp tools/list → get_coordinates still exposed (should be internal)"
@@ -423,6 +423,34 @@ except Exception as e:
 [ "$SEARCH_KO_CHECK" = "ok" ] \
   && pass "weather-mcp web_search(Korean) → returned results (multilingual)" \
   || info "weather-mcp web_search(Korean) → $SEARCH_KO_CHECK (SearXNG may be unavailable)"
+
+# 7.8. tools/call analyze_image — routes through Veronex gateway (requires VERONEX_API_KEY + qwen3-vl:8b)
+# A 1x1 white PNG in base64 (minimal valid image)
+TEST_IMG_B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+ANALYZE_RES=$(curl -s --max-time 130 "$MCP_TEST_URL" \
+  -H "Content-Type: application/json" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_image\",\"arguments\":{\"image\":\"$TEST_IMG_B64\",\"prompt\":\"What color is this image?\"}}}" \
+  2>/dev/null || echo "{}")
+ANALYZE_CHECK=$(echo "$ANALYZE_RES" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+r=d.get('result',{})
+is_err=r.get('isError',True)
+text=(r.get('content',[{}])[0] if r.get('content') else {}).get('text','')
+if is_err:
+    print(f'err:{text[:100]}')
+else:
+    try:
+        data=json.loads(text)
+        desc=data.get('description','')
+        model=data.get('model','')
+        print('ok' if desc and model == 'qwen3-vl:8b' else f'missing_fields:desc={bool(desc)},model={model}')
+    except Exception as e:
+        print(f'parse_err:{e}:{text[:60]}')
+" 2>/dev/null || echo "parse_error")
+[ "$ANALYZE_CHECK" = "ok" ] \
+  && pass "weather-mcp analyze_image → description returned via Veronex gateway (qwen3-vl:8b)" \
+  || info "weather-mcp analyze_image → $ANALYZE_CHECK (requires VERONEX_API_KEY + qwen3-vl:8b loaded)"
 
 # 8. tools/call get_weather — unknown city returns isError=true (no network needed)
 ERR_RES=$(curl -s --max-time 10 "$MCP_TEST_URL" \
@@ -808,33 +836,89 @@ CONV_ID=$(echo "$CONV_R1" | python3 -c "import sys,json; print(json.loads(sys.st
   || fail "Conversation creation failed"
 
 if [ -n "$CONV_ID" ]; then
+  # Turn 2: continue same conversation
   curl -s --max-time 60 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
     -d "{\"model\":\"$MODEL\",\"conversation_id\":\"$CONV_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think 내 이름 기억해?\"}],\"stream\":false,\"max_tokens\":16}" > /dev/null 2>&1
 
-  CONV_LIST_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/conversations" \
-    -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+  sleep 1  # let S3 write complete
+
+  # ── List: source field ────────────────────────────────────────────────────
+  CONV_LIST=$(curl -s "$API/v1/conversations" -H "Authorization: Bearer $TK" 2>/dev/null || echo "{}")
+  CONV_LIST_CODE=$(echo "$CONV_LIST" | python3 -c "import sys; d=sys.stdin.read(); print('200' if '\"conversations\"' in d else '000')" 2>/dev/null || echo "000")
   [ "$CONV_LIST_CODE" = "200" ] \
     && pass "GET /v1/conversations → 200" \
     || fail "GET /v1/conversations → $CONV_LIST_CODE"
 
-  CONV_DETAIL_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/conversations/$CONV_ID" \
-    -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+  CONV_LIST_SOURCE=$(echo "$CONV_LIST" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    convs = d.get('conversations', [])
+    sources = set(c.get('source','MISSING') for c in convs)
+    if 'MISSING' in sources: print('missing')
+    else: print('ok:' + ','.join(sorted(sources)))
+except Exception as e: print(f'error:{e}')
+" 2>/dev/null || echo "error")
+  case "$CONV_LIST_SOURCE" in
+    ok:*) pass "Conversation list source field present ($CONV_LIST_SOURCE)" ;;
+    *) fail "Conversation list source field: $CONV_LIST_SOURCE" ;;
+  esac
+
+  # ── Detail: source + turn model_name ─────────────────────────────────────
+  CONV_DETAIL=$(curl -s "$API/v1/conversations/$CONV_ID" -H "Authorization: Bearer $TK" 2>/dev/null || echo "{}")
+  CONV_DETAIL_CODE=$(echo "$CONV_DETAIL" | python3 -c "import sys; print('200' if '\"turns\"' in sys.stdin.read() else '000')" 2>/dev/null || echo "000")
   [ "$CONV_DETAIL_CODE" = "200" ] \
     && pass "GET /v1/conversations/{id} → 200" \
     || fail "GET /v1/conversations/{id} → $CONV_DETAIL_CODE"
 
-  CONV_DETAIL_TURNS=$(curl -s "$API/v1/conversations/$CONV_ID" -H "Authorization: Bearer $TK" 2>/dev/null \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('turns',[])))" 2>/dev/null || echo "0")
-  [ "$CONV_DETAIL_TURNS" -gt 0 ] 2>/dev/null \
-    && pass "Conversation detail: $CONV_DETAIL_TURNS turns" \
-    || fail "Conversation detail: 0 turns"
+  CONV_CHECKS=$(echo "$CONV_DETAIL" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    issues = []
+    # source field
+    src = d.get('source')
+    if not src: issues.append('no source')
+    elif src not in ('api','test','analyzer'): issues.append(f'bad source={src}')
+    # turns
+    turns = d.get('turns', [])
+    if not turns: issues.append('no turns')
+    else:
+        for i, t in enumerate(turns):
+            if 'model_name' not in t: issues.append(f'turn[{i}] missing model_name')
+    # auto-title
+    title = d.get('title')
+    if not title: issues.append('no title')
+    if issues: print('FAIL:' + ', '.join(issues))
+    else: print(f'ok|source={src}|turns={len(turns)}|title={title[:20]}')
+except Exception as e: print(f'error:{e}')
+" 2>/dev/null || echo "error")
 
-  CONV_TITLE=$(curl -s "$API/v1/conversations/$CONV_ID" -H "Authorization: Bearer $TK" 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('title','') or 'NULL')" 2>/dev/null || echo "NULL")
-  [ "$CONV_TITLE" != "NULL" ] \
-    && pass "Auto-title: $CONV_TITLE" \
-    || fail "Auto-title missing"
+  case "$CONV_CHECKS" in
+    ok:*|ok\|*) pass "Conversation detail structure: $CONV_CHECKS" ;;
+    FAIL:*) fail "Conversation detail: $CONV_CHECKS" ;;
+    *) fail "Conversation detail parse error: $CONV_CHECKS" ;;
+  esac
+
+  # ── source = 'api' for API key requests ─────────────────────────────────
+  CONV_SOURCE=$(echo "$CONV_DETAIL" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('source','?'))" 2>/dev/null || echo "?")
+  [ "$CONV_SOURCE" = "api" ] \
+    && pass "Conversation source='api' for API key request" \
+    || fail "Expected source=api, got source=$CONV_SOURCE"
+
+  # ── DB: source column check ───────────────────────────────────────────────
+  DB_SOURCE=$(docker compose exec -T postgres psql -U veronex -d veronex -tAc \
+    "SELECT source FROM conversations ORDER BY created_at DESC LIMIT 1;" 2>/dev/null | tr -d ' \r')
+  [ "$DB_SOURCE" = "api" ] \
+    && pass "DB conversations.source='api'" \
+    || fail "DB conversations.source='$DB_SOURCE' (expected 'api')"
+
+  # ── turn count: 2 turns (not split into separate conversations) ──────────
+  CONV_TURNS=$(echo "$CONV_DETAIL" | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read()).get('turns',[])))" 2>/dev/null || echo "0")
+  [ "$CONV_TURNS" -ge 2 ] 2>/dev/null \
+    && pass "Conversation has $CONV_TURNS turns (multi-turn linked correctly)" \
+    || fail "Expected ≥2 turns (conversation linking), got $CONV_TURNS"
 fi
 
 # ── Vespa Vector Selection ────────────────────────────────────────────────────

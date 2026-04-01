@@ -1,4 +1,4 @@
--- Migration: add source column to conversations table
+-- Add source column to conversations (api / test / analyzer)
 ALTER TABLE conversations
     ADD COLUMN IF NOT EXISTS source VARCHAR(8) NOT NULL DEFAULT 'api';
 
