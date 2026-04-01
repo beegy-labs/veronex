@@ -82,22 +82,22 @@ test.describe('API: Providers', () => {
   })
 
   test('healthcheck on non-existent provider returns 404', async () => {
-    const res = await api.post('/v1/providers/00000000-0000-0000-0000-000000000000/healthcheck')
+    const res = await api.post('/v1/providers/prov_0000000000000000000000/healthcheck')
     expect(res.status()).toBe(404)
   })
 
   test('get provider models on non-existent provider returns 404', async () => {
-    const res = await api.get('/v1/providers/00000000-0000-0000-0000-000000000000/models')
+    const res = await api.get('/v1/providers/prov_0000000000000000000000/models')
     expect(res.status()).toBe(404)
   })
 
   test('get selected models on non-existent provider returns 404', async () => {
-    const res = await api.get('/v1/providers/00000000-0000-0000-0000-000000000000/selected-models')
+    const res = await api.get('/v1/providers/prov_0000000000000000000000/selected-models')
     expect(res.status()).toBe(404)
   })
 
   test('reveal provider key on non-existent provider returns 404', async () => {
-    const res = await api.get('/v1/providers/00000000-0000-0000-0000-000000000000/key')
+    const res = await api.get('/v1/providers/prov_0000000000000000000000/key')
     expect(res.status()).toBe(404)
   })
 
