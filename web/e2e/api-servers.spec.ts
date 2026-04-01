@@ -52,7 +52,7 @@ test.describe('API: GPU Servers', () => {
   })
 
   test('delete non-existent server is idempotent', async () => {
-    const res = await api.delete('/v1/servers/00000000-0000-0000-0000-000000000000')
+    const res = await api.delete('/v1/servers/gpu_0000000000000000000000')
     // Delete is idempotent — returns 204 even for non-existent servers
     expect([204, 404]).toContain(res.status())
   })
@@ -73,7 +73,7 @@ test.describe('API: GPU Servers', () => {
     const { servers } = await listRes.json()
     const ids = servers.length > 0
       ? servers.slice(0, 3).map((s: { id: string }) => s.id).join(',')
-      : '00000000-0000-0000-0000-000000000000'
+      : 'gpu_0000000000000000000000'
     const res = await api.get(`/v1/servers/metrics/batch?ids=${ids}`)
     expect(res.ok()).toBeTruthy()
     expect(typeof (await res.json())).toBe('object')

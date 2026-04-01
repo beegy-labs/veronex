@@ -173,8 +173,8 @@ else
   fail "Create temp provider failed ($TMP_CODE)"
 fi
 
-# Non-existent provider → 404
-c=$(agetc "/v1/providers/00000000-0000-0000-0000-000000000000/models" | code)
+# Non-existent provider → 404 (use typed prov_xxx format — raw UUID returns 400)
+c=$(agetc "/v1/providers/prov_0000000000000000000000/models" | code)
 [ "$c" = "404" ] && pass "Non-existent provider → 404" || fail "Expected 404, got $c"
 
 # Registered providers model/selection endpoints

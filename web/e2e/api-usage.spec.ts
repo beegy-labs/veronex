@@ -98,7 +98,7 @@ test.describe('API: Usage', () => {
   })
 
   test('usage for non-existent key returns 404', async () => {
-    const fakeId = '00000000-0000-0000-0000-000000000000'
+    const fakeId = 'key_0000000000000000000000'
     const res = await api.get(`/v1/usage/${fakeId}?hours=24`)
     expect(res.status()).toBe(404)
   })
