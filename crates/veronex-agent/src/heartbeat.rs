@@ -59,10 +59,26 @@ pub async fn deregister_agent(pool: &Pool, hostname: &str) {
 }
 
 /// Get dynamic replica count from the agent instance set.
+/// Validates each member against its heartbeat key — removes stale members
+/// whose HB key has expired and returns only the live count.
 /// Falls back to `fallback` when Valkey is unavailable.
 pub async fn dynamic_replicas(pool: &Pool, fallback: u32) -> u32 {
-    let count: Result<u32, _> = pool.scard(AGENT_INSTANCES_SET).await;
-    count.unwrap_or(fallback).max(1)
+    let members: Result<Vec<String>, _> = pool.smembers(AGENT_INSTANCES_SET).await;
+    let Ok(members) = members else {
+        return fallback.max(1);
+    };
+    let mut live = 0u32;
+    for member in &members {
+        let hb_key = format!("{AGENT_HB_PREFIX}{member}");
+        let exists: Result<bool, _> = pool.exists(&hb_key).await;
+        if exists.unwrap_or(false) {
+            live += 1;
+        } else {
+            // HB key expired — remove stale member from the set.
+            let _: Result<(), _> = pool.srem(AGENT_INSTANCES_SET, member.as_str()).await;
+        }
+    }
+    live.max(1)
 }
 
 /// Connect to Valkey and return a connection pool.
