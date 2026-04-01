@@ -86,9 +86,9 @@ if [ -n "$MCP_ID" ]; then
     || fail "DELETE /v1/mcp/servers/:id → $DEL_CODE (expected 204)"
 fi
 
-# 404 for non-existent id
+# 404 for non-existent id (use typed mcp_xxx format — raw UUID returns 400)
 NF_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-  "$API/v1/mcp/servers/00000000-0000-0000-0000-000000000000" \
+  "$API/v1/mcp/servers/mcp_0000000000000000000000" \
   -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
 [ "$NF_CODE" = "404" ] \
   && pass "DELETE /v1/mcp/servers non-existent → 404" \

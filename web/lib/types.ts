@@ -697,8 +697,7 @@ export interface AuditEvent {
 // ── Conversations ────────────────────────────────────────────────────────────
 
 export interface ConversationSummary {
-  id: string
-  public_id: string
+  id: string        // conv_xxx (prefix_base62)
   title: string | null
   model_name: string | null
   source: string
