@@ -12,8 +12,8 @@ use uuid::Uuid;
 use super::error::AppError;
 use super::middleware::jwt_auth::RequireDashboardView;
 use super::state::AppState;
-use super::inference_helpers::to_public_id;
 use crate::application::ports::outbound::message_store::ConversationRecord;
+use crate::domain::value_objects::{ConvId, JobId};
 
 const CONV_CACHE_TTL_SECS: i64 = 300; // 5 min
 
@@ -74,8 +74,7 @@ fn default_limit() -> i64 { 50 }
 
 #[derive(Serialize)]
 pub struct ConversationSummary {
-    id: Uuid,
-    public_id: String,
+    id: ConvId,
     title: Option<String>,
     model_name: Option<String>,
     source: String,
@@ -94,7 +93,7 @@ pub struct ConversationListResponse {
 
 #[derive(Serialize)]
 pub struct ConversationTurn {
-    pub job_id: Uuid,
+    pub job_id: JobId,
     pub prompt: String,
     pub result: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,8 +105,7 @@ pub struct ConversationTurn {
 
 #[derive(Serialize)]
 pub struct ConversationDetailResponse {
-    id: Uuid,
-    public_id: String,
+    id: ConvId,
     title: Option<String>,
     model_name: Option<String>,
     source: String,
@@ -150,10 +148,9 @@ pub async fn list_conversations(
     .map_err(|e| AppError::Internal(anyhow::anyhow!("list failed: {e}")))?;
 
     let conversations = rows.iter().map(|r| {
-        let id: Uuid = r.get("id");
+        let uuid: Uuid = r.get("id");
         ConversationSummary {
-            id,
-            public_id: to_public_id(&id),
+            id: ConvId::from_uuid(uuid),
             title: r.get("title"),
             model_name: r.get("model_name"),
             source: r.get::<Option<String>, _>("source").unwrap_or_else(|| "api".to_string()),
@@ -170,19 +167,18 @@ pub async fn list_conversations(
 
 /// `GET /v1/conversations/{id}`
 ///
-/// Accepts base62 public_id (e.g. "32q9vHjvNhJXxVqI4WIuJ") or raw UUID.
+/// Accepts `conv_{base62}` public ID (e.g. "conv_3X4aB...").
 pub async fn get_conversation(
     RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,
     Path(id_str): Path<String>,
 ) -> HandlerResult<Json<ConversationDetailResponse>> {
     use sqlx::Row;
-    use super::inference_helpers::decode_conversation_id;
 
-    // Accept both base62 and raw UUID
-    let conv_id = decode_conversation_id(&id_str)
-        .or_else(|| Uuid::parse_str(&id_str).ok())
-        .ok_or_else(|| AppError::BadRequest("invalid conversation id".into()))?;
+    let conv_id = id_str
+        .parse::<ConvId>()
+        .map(|c| c.0)
+        .map_err(|_| AppError::BadRequest("invalid conversation id".into()))?;
 
     // Fetch conversation metadata
     let conv_row = sqlx::query(
@@ -205,7 +201,7 @@ pub async fn get_conversation(
 
     let turns: Vec<ConversationTurn> = s3_record
         .map(|rec| rec.turns.into_iter().map(|t| ConversationTurn {
-            job_id: t.job_id,
+            job_id: JobId::from_uuid(t.job_id),
             prompt: t.prompt,
             result: t.result,
             tool_calls: t.tool_calls,
@@ -214,10 +210,9 @@ pub async fn get_conversation(
         }).collect())
         .unwrap_or_default();
 
-    let id: Uuid = conv_row.get("id");
+    let uuid: Uuid = conv_row.get("id");
     Ok(Json(ConversationDetailResponse {
-        id,
-        public_id: to_public_id(&id),
+        id: ConvId::from_uuid(uuid),
         title: conv_row.get("title"),
         model_name: conv_row.get("model_name"),
         source: conv_row.get::<Option<String>, _>("source").unwrap_or_else(|| "api".to_string()),

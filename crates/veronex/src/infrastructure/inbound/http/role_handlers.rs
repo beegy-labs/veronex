@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::enums::{ALL_MENUS, ALL_PERMISSIONS};
+use crate::domain::value_objects::RoleId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireRoleManage;
 use crate::infrastructure::inbound::http::state::AppState;
 
@@ -16,7 +17,7 @@ use super::error::AppError;
 
 #[derive(Serialize)]
 pub struct RoleSummary {
-    pub id: Uuid,
+    pub id: RoleId,
     pub name: String,
     pub permissions: Vec<String>,
     pub menus: Vec<String>,
@@ -89,7 +90,8 @@ pub async fn list_roles(
     let count_map: std::collections::HashMap<Uuid, i64> = count_rows.into_iter().collect();
 
     let result = rows.into_iter().map(|(id, name, permissions, menus, is_system, created_at)| {
-        RoleSummary { id, name, permissions, menus, is_system, account_count: count_map.get(&id).copied().unwrap_or(0), created_at }
+        let account_count = count_map.get(&id).copied().unwrap_or(0);
+        RoleSummary { id: RoleId::from_uuid(id), name, permissions, menus, is_system, account_count, created_at }
     }).collect();
 
     Ok(Json(result))
@@ -135,7 +137,7 @@ pub async fn create_role(
         &format!("Role '{}' created with permissions: {:?}", name, req.permissions)).await;
 
     Ok((StatusCode::CREATED, Json(RoleSummary {
-        id, name, permissions: req.permissions, menus: req.menus,
+        id: RoleId::from_uuid(id), name, permissions: req.permissions, menus: req.menus,
         is_system: false, account_count: 0, created_at: now,
     })))
 }
@@ -144,18 +146,18 @@ pub async fn create_role(
 
 pub async fn update_role(
     RequireRoleManage(claims): RequireRoleManage,
-    Path(id): Path<Uuid>,
+    Path(rid): Path<RoleId>,
     State(state): State<AppState>,
     Json(req): Json<UpdateRoleRequest>,
 ) -> Result<StatusCode, AppError> {
     let row = sqlx::query_as::<_, (String, bool)>(
         "SELECT name, is_system FROM roles WHERE id = $1"
     )
-    .bind(id)
+    .bind(rid.0)
     .fetch_optional(&state.pg_pool)
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("get role: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("role {id} not found")))?;
+    .ok_or_else(|| AppError::NotFound(format!("role {rid} not found")))?;
 
     if row.1 {
         return Err(AppError::Forbidden("system roles cannot be modified".into()));
@@ -190,7 +192,7 @@ pub async fn update_role(
              menus       = COALESCE($4, menus) \
          WHERE id = $1",
     )
-    .bind(id)
+    .bind(rid.0)
     .bind(name.as_deref())
     .bind(req.permissions.as_deref())
     .bind(req.menus.as_deref())
@@ -205,7 +207,7 @@ pub async fn update_role(
             }
         })?;
 
-    emit_audit(&state, &claims, "update", "role", &id.to_string(), &row.0,
+    emit_audit(&state, &claims, "update", "role", &rid.to_string(), &row.0,
         &format!("Role '{}' updated", row.0)).await;
 
     Ok(StatusCode::NO_CONTENT)
@@ -215,17 +217,17 @@ pub async fn update_role(
 
 pub async fn delete_role(
     RequireRoleManage(claims): RequireRoleManage,
-    Path(id): Path<Uuid>,
+    Path(rid): Path<RoleId>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
     let row = sqlx::query_as::<_, (String, bool)>(
         "SELECT name, is_system FROM roles WHERE id = $1"
     )
-    .bind(id)
+    .bind(rid.0)
     .fetch_optional(&state.pg_pool)
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("get role: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("role {id} not found")))?;
+    .ok_or_else(|| AppError::NotFound(format!("role {rid} not found")))?;
 
     if row.1 {
         return Err(AppError::Forbidden("system roles cannot be deleted".into()));
@@ -234,7 +236,7 @@ pub async fn delete_role(
     let count: (i64,) = sqlx::query_as(
         "SELECT count(*) FROM account_roles ar JOIN accounts a ON a.id = ar.account_id WHERE ar.role_id = $1 AND a.deleted_at IS NULL"
     )
-        .bind(id)
+        .bind(rid.0)
         .fetch_one(&state.pg_pool)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("count accounts: {e}")))?;
@@ -246,12 +248,12 @@ pub async fn delete_role(
     }
 
     sqlx::query("DELETE FROM roles WHERE id = $1")
-        .bind(id)
+        .bind(rid.0)
         .execute(&state.pg_pool)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("delete role: {e}")))?;
 
-    emit_audit(&state, &claims, "delete", "role", &id.to_string(), &row.0,
+    emit_audit(&state, &claims, "delete", "role", &rid.to_string(), &row.0,
         &format!("Role '{}' deleted", row.0)).await;
 
     Ok(StatusCode::NO_CONTENT)

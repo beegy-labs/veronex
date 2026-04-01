@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::enums::ProviderType;
+use crate::domain::value_objects::{JobId, ProviderId};
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 
@@ -19,13 +20,13 @@ use super::state::AppState;
 
 #[derive(Debug, Serialize)]
 pub struct SyncJobResponse {
-    pub job_id: Uuid,
+    pub job_id: JobId,
     pub status: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct OllamaSyncJobDto {
-    pub id: Uuid,
+    pub id: JobId,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub status: String,
@@ -42,7 +43,7 @@ pub struct OllamaModelDto {
 
 #[derive(Debug, Serialize)]
 pub struct OllamaProviderDto {
-    pub provider_id: Uuid,
+    pub provider_id: ProviderId,
     pub name: String,
     pub url: String,
     pub status: String,
@@ -96,7 +97,7 @@ pub async fn list_model_providers(
     let dtos: Vec<OllamaProviderDto> = page_result.items
         .into_iter()
         .map(|p| OllamaProviderDto {
-            provider_id: p.provider_id,
+            provider_id: ProviderId::from_uuid(p.provider_id),
             name: p.name,
             url: p.url,
             status: p.status,
@@ -115,9 +116,9 @@ pub async fn list_model_providers(
 /// — list model names synced for a specific Ollama provider.
 pub async fn list_provider_models(
     State(state): State<AppState>,
-    Path(provider_id): Path<Uuid>,
+    Path(pid): Path<ProviderId>,
 ) -> impl IntoResponse {
-    match state.ollama_model_repo.models_for_provider(provider_id).await {
+    match state.ollama_model_repo.models_for_provider(pid.0).await {
         Ok(models) => {
             (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response()
         }
@@ -259,7 +260,7 @@ pub async fn sync_all_providers(
     (
         StatusCode::ACCEPTED,
         Json(SyncJobResponse {
-            job_id,
+            job_id: JobId::from_uuid(job_id),
             status: "running".to_string(),
         }),
     )
@@ -274,7 +275,7 @@ pub async fn get_sync_status(
     match state.ollama_sync_job_repo.get_latest().await {
         Ok(Some(job)) => {
             let dto = OllamaSyncJobDto {
-                id: job.id,
+                id: JobId::from_uuid(job.id),
                 started_at: job.started_at,
                 completed_at: job.completed_at,
                 status: job.status,
@@ -301,7 +302,7 @@ pub async fn get_sync_status(
 #[derive(Debug, Deserialize)]
 pub struct PullModelRequest {
     pub model: String,
-    pub provider_id: Uuid,
+    pub provider_id: ProviderId,
 }
 
 /// `POST /v1/ollama/models/pull` — Pull drain sequence (SDD §5).
@@ -314,7 +315,7 @@ pub async fn pull_model(
     State(state): State<AppState>,
     Json(req): Json<PullModelRequest>,
 ) -> impl IntoResponse {
-    let provider_id = req.provider_id;
+    let provider_id = req.provider_id.0;
     let model = req.model.clone();
 
     // Verify provider exists and is Ollama

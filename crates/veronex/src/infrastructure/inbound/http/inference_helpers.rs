@@ -10,7 +10,7 @@ use axum::response::sse::Event;
 use axum::response::Response;
 use futures::StreamExt;
 
-use crate::domain::value_objects::{JobId, StreamToken};
+use crate::domain::value_objects::{ConvId, JobId, StreamToken};
 use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_MODEL_NAME_BYTES, MAX_PROMPT_BYTES};
 use super::handlers::{SseStream, try_acquire_sse, sse_response};
@@ -20,7 +20,7 @@ use super::state::AppState;
 
 /// Extract the `x-conversation-id` header value, if present and valid.
 ///
-/// Decodes the base62-encoded string from the header into a UUID.
+/// Decodes the `conv_{base62}` string from the header into a UUID.
 /// Returns `None` when the header is absent, not valid UTF-8, exceeds 256 bytes,
 /// or fails to decode.
 pub fn extract_conversation_id(headers: &axum::http::HeaderMap) -> Option<uuid::Uuid> {
@@ -36,14 +36,14 @@ pub fn new_conversation_id() -> uuid::Uuid {
     uuid::Uuid::now_v7()
 }
 
-/// Encode a UUID as a base62 string for API responses (~22 chars).
+/// Encode a UUID as a prefixed base62 conversation ID (e.g. `"conv_3X4aB..."`).
 pub fn to_public_id(uuid: &uuid::Uuid) -> String {
-    base62::encode(uuid.as_u128())
+    ConvId::from_uuid(*uuid).to_string()
 }
 
-/// Decode a base62 conversation ID back to UUID (for S3 lookup).
+/// Decode a `conv_{base62}` conversation ID back to UUID.
 pub fn decode_conversation_id(id: &str) -> Option<uuid::Uuid> {
-    base62::decode(id).ok().map(|n| uuid::Uuid::from_u128(n as u128))
+    id.parse::<ConvId>().ok().map(|c| c.0)
 }
 
 // ── Input validation ────────────────────────────────────────────────────────

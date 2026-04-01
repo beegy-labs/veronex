@@ -7,6 +7,7 @@ use fred::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::value_objects::McpId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::{RequireProviderManage, RequireSettingsManage};
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -132,7 +133,7 @@ pub struct PatchMcpServerRequest {
 
 #[derive(Debug, Serialize)]
 pub struct McpServerResponse {
-    id: Uuid,
+    id: McpId,
     name: String,
     slug: String,
     url: String,
@@ -237,7 +238,7 @@ pub async fn list_mcp_servers(
                 online: online_set.contains(&r.id),
                 tool_count: r.tool_count as i64,
                 tools,
-                id: r.id,
+                id: McpId::from_uuid(r.id),
                 name: r.name,
                 slug: r.slug,
                 url: r.url,
@@ -311,20 +312,22 @@ pub async fn register_mcp_server(
         }
     }
 
-    emit_audit(&state, &claims, "create", "mcp_server", &id.to_string(), &name,
-        &format!("MCP server '{name}' registered (id: {id})")).await;
+    let pub_id = McpId::from_uuid(id);
+    emit_audit(&state, &claims, "create", "mcp_server", &pub_id.to_string(), &name,
+        &format!("MCP server '{name}' registered (id: {pub_id})")).await;
     tracing::info!(%id, %name, "mcp server registered");
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({"id": id}))))
+    Ok((StatusCode::CREATED, Json(serde_json::json!({"id": pub_id.to_string()}))))
 }
 
 /// `PATCH /v1/mcp/servers/:id`
 pub async fn patch_mcp_server(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(mid): Path<McpId>,
     Json(req): Json<PatchMcpServerRequest>,
 ) -> HandlerResult<Json<McpServerResponse>> {
+    let id = mid.0;
     let row: McpServerRow = sqlx::query_as(
         "SELECT id, name, slug, url, is_enabled, timeout_secs, tool_count, tools_summary, created_at FROM mcp_servers WHERE id = $1"
     )
@@ -377,8 +380,8 @@ pub async fn patch_mcp_server(
         }
     }
 
-    emit_audit(&state, &claims, "update", "mcp_server", &id.to_string(), new_name,
-        &format!("MCP server '{}' ({}) updated", new_name, id)).await;
+    emit_audit(&state, &claims, "update", "mcp_server", &mid.to_string(), new_name,
+        &format!("MCP server '{}' ({}) updated", new_name, mid)).await;
 
     // Liveness + tools: independent reads, run concurrently.
     let (online, tools) = tokio::join!(
@@ -408,7 +411,7 @@ pub async fn patch_mcp_server(
     );
 
     Ok(Json(McpServerResponse {
-        id: row.id,
+        id: McpId::from_uuid(row.id),
         name: new_name.to_string(),
         slug: row.slug,
         url: new_url.to_string(),
@@ -425,8 +428,9 @@ pub async fn patch_mcp_server(
 pub async fn delete_mcp_server(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(mid): Path<McpId>,
 ) -> HandlerResult<StatusCode> {
+    let id = mid.0;
     let row: Option<(String,)> = sqlx::query_as("SELECT name FROM mcp_servers WHERE id = $1")
         .bind(id)
         .fetch_optional(&state.pg_pool)
@@ -453,8 +457,8 @@ pub async fn delete_mcp_server(
         });
     }
 
-    emit_audit(&state, &claims, "delete", "mcp_server", &id.to_string(), &name,
-        &format!("MCP server '{name}' ({id}) deleted")).await;
+    emit_audit(&state, &claims, "delete", "mcp_server", &mid.to_string(), &name,
+        &format!("MCP server '{name}' ({mid}) deleted")).await;
     tracing::info!(%id, %name, "mcp server deleted");
 
     Ok(StatusCode::NO_CONTENT)
@@ -464,7 +468,7 @@ pub async fn delete_mcp_server(
 
 #[derive(Debug, Serialize)]
 pub struct McpTargetEntry {
-    pub id: Uuid,
+    pub id: McpId,
     pub url: String,
 }
 
@@ -483,5 +487,5 @@ pub async fn list_mcp_targets(State(state): State<AppState>) -> HandlerResult<Js
     .await
     .map_err(db_error)?;
 
-    Ok(Json(rows.into_iter().map(|r| McpTargetEntry { id: r.id, url: r.url }).collect()))
+    Ok(Json(rows.into_iter().map(|r| McpTargetEntry { id: McpId::from_uuid(r.id), url: r.url }).collect()))
 }

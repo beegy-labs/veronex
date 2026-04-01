@@ -24,6 +24,7 @@ Three Rust crates:
 | Architecture | `.ai/architecture.md` |
 | Security | `.ai/security.md` |
 | Code patterns (2026) | `docs/llm/policies/patterns.md` |
+| **ID encoding policy** | **`docs/llm/policies/id-encoding.md`** |
 | Testing strategy | `docs/llm/policies/testing-strategy.md` |
 | Git & commits | `.ai/git-flow.md` |
 | Full docs index | `docs/llm/README.md` |

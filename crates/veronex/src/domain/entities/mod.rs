@@ -23,6 +23,7 @@ use super::value_objects::{JobId, ModelName, Prompt};
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct InferenceJob {
+    #[ts(type = "string")]
     pub id: JobId,
     pub prompt: Prompt,
     /// First ≤200 characters of the prompt (char boundary, CJK-safe).

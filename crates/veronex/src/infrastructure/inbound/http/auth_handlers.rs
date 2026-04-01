@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::domain::entities::{Account, Session};
 use crate::domain::enums::AccountRole;
 use crate::domain::services::password_hashing;
+use crate::domain::value_objects::AccountId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 use crate::infrastructure::inbound::http::state::AppState;
 use crate::infrastructure::outbound::valkey_keys;
@@ -35,7 +36,7 @@ pub struct LoginRequest {
 #[derive(Serialize)]
 pub struct LoginResponse {
     pub ok: bool,
-    pub account_id: Uuid,
+    pub account_id: AccountId,
     pub username: String,
     pub role: String,
     pub permissions: Vec<String>,
@@ -378,7 +379,7 @@ pub async fn login(
 
     Ok((headers, Json(LoginResponse {
         ok: true,
-        account_id: account.id,
+        account_id: AccountId::from_uuid(account.id),
         username: account.username,
         role: resolved.name.clone(),
         permissions: resolved.permissions.clone(),
@@ -649,7 +650,7 @@ pub async fn setup(
 
     Ok((headers, Json(LoginResponse {
         ok: true,
-        account_id: account.id,
+        account_id: AccountId::from_uuid(account.id),
         username: account.username,
         role: resolved.name.clone(),
         permissions: resolved.permissions.clone(),

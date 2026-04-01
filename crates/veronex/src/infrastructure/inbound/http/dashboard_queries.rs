@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::application::ports::outbound::analytics_repository::{HourlyThroughput, PerformanceMetrics};
 use crate::application::ports::outbound::message_store::ConversationRecord;
+use crate::domain::value_objects::JobId;
 
 use super::error::AppError;
 use super::query_helpers::{JobRowCommon, JobSummary, job_summary_from_common};
@@ -235,7 +236,7 @@ pub(super) fn build_job_detail(
         .map(|r| r.turns.len() as i64);
 
     JobDetail {
-        id: c.id.to_string(),
+        id: JobId::from_uuid(c.id).to_string(),
         model_name: c.model_name,
         provider_type: c.provider_type,
         status: c.status,

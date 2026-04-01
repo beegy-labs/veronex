@@ -1,6 +1,7 @@
 //! Shared SQL helpers used by both dashboard and usage query modules.
 
 use serde::Serialize;
+use crate::domain::value_objects::JobId;
 
 /// LATERAL JOIN for per-model pricing lookup.
 /// Used by usage breakdown, key model breakdown, and dashboard job queries.
@@ -132,7 +133,7 @@ pub struct JobSummary {
 pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, provider_name: Option<String>) -> JobSummary {
     let tps = c.tps();
     JobSummary {
-        id: c.id.to_string(),
+        id: JobId::from_uuid(c.id).to_string(),
         model_name: c.model_name,
         provider_type: c.provider_type,
         status: c.status,
