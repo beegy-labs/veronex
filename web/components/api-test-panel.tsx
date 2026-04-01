@@ -172,7 +172,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       streamingText: '',
       status: 'idle',
       errorMsg: '',
-      conversationId: continueConversation.public_id,
+      conversationId: continueConversation.id,
     }
     setConversationSessions((prev) => [...prev, newSess])
     setActiveConvSessionId(id)
