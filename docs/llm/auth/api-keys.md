@@ -126,9 +126,9 @@ pub struct CreateKeyRequest {
 // Note: key_type is NOT accepted from client — always "standard" for user-created keys
 
 pub struct CreateKeyResponse {
-    pub id: Uuid,
-    pub key: String,                         // Full plaintext — shown ONCE
-    pub key_prefix: String,                  // "vnx_01ARZ3NDEK…"
+    pub id: ApiKeyId,                        // "key_3X4aB..." — entity ID (reversible)
+    pub key: String,                         // "vnx_..." — secret, shown ONCE (BLAKE2b hash stored)
+    pub key_prefix: String,                  // "vnx_01ARZ3NDEK…" — display prefix
     pub tenant_id: String,
     pub created_at: DateTime<Utc>,
 }
@@ -139,7 +139,7 @@ pub struct PatchKeyRequest {
 }
 
 pub struct KeySummary {
-    pub id: Uuid,
+    pub id: ApiKeyId,                        // "key_3X4aB..." — entity ID (reversible)
     pub key_prefix: String,
     pub tenant_id: String,
     pub name: String,
@@ -152,6 +152,15 @@ pub struct KeySummary {
     pub created_at: DateTime<Utc>,
 }
 ```
+
+**`id` vs `key` — Two Different Concepts**
+
+| Field | Format | Policy |
+|-------|--------|--------|
+| `id` (`ApiKeyId`) | `"key_3X4aB..."` | Entity row identifier — base62(UUIDv7), reversible server-side |
+| `key` | `"vnx_..."` | Auth secret — BLAKE2b-256 hash stored, **1-time plaintext exposure only** |
+
+→ Full ID encoding policy: `policies/id-encoding.md`
 
 ### Key Regeneration
 

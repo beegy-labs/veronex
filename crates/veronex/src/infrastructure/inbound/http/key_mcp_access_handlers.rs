@@ -5,6 +5,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::value_objects::{ApiKeyId, McpId};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSettingsManage;
 use crate::infrastructure::outbound::valkey_keys;
 use super::error::AppError;
@@ -21,7 +22,7 @@ async fn invalidate_mcp_acl_cache(state: &AppState, key_id: Uuid) {
 
 #[derive(Serialize)]
 pub struct McpAccessEntry {
-    pub server_id: Uuid,
+    pub server_id: McpId,
     pub server_name: String,
     pub slug: String,
     pub is_allowed: bool,
@@ -29,7 +30,7 @@ pub struct McpAccessEntry {
 
 #[derive(Deserialize)]
 pub struct GrantMcpAccessBody {
-    pub server_id: Uuid,
+    pub server_id: McpId,
 }
 
 #[derive(sqlx::FromRow)]
@@ -52,9 +53,9 @@ struct McpServerRow {
 pub async fn list_key_mcp_access(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
-    Path(key_id): Path<Uuid>,
+    Path(kid): Path<ApiKeyId>,
 ) -> Result<Json<Vec<McpAccessEntry>>, AppError> {
-    let key_uuid = key_id;
+    let key_uuid = kid.0;
 
     let rows: Vec<McpAccessRow> = sqlx::query_as(
         r#"
@@ -72,7 +73,7 @@ pub async fn list_key_mcp_access(
     .await?;
 
     Ok(Json(rows.into_iter().map(|r| McpAccessEntry {
-        server_id: r.id,
+        server_id: McpId::from_uuid(r.id),
         server_name: r.name,
         slug: r.slug,
         is_allowed: r.is_allowed,
@@ -83,11 +84,11 @@ pub async fn list_key_mcp_access(
 pub async fn grant_key_mcp_access(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
-    Path(key_id): Path<Uuid>,
+    Path(kid): Path<ApiKeyId>,
     Json(body): Json<GrantMcpAccessBody>,
 ) -> Result<impl IntoResponse, AppError> {
-    let key_uuid = key_id;
-    let server_uuid = body.server_id;
+    let key_uuid = kid.0;
+    let server_uuid = body.server_id.0;
 
     let server: Option<McpServerRow> = sqlx::query_as(
         "SELECT id, name, slug FROM mcp_servers WHERE id = $1"
@@ -113,7 +114,7 @@ pub async fn grant_key_mcp_access(
     invalidate_mcp_acl_cache(&state, key_uuid).await;
 
     Ok((StatusCode::CREATED, Json(McpAccessEntry {
-        server_id: server.id,
+        server_id: McpId::from_uuid(server.id),
         server_name: server.name,
         slug: server.slug,
         is_allowed: true,
@@ -124,10 +125,10 @@ pub async fn grant_key_mcp_access(
 pub async fn revoke_key_mcp_access(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
-    Path((key_id, server_id)): Path<(Uuid, Uuid)>,
+    Path((kid, mid)): Path<(ApiKeyId, McpId)>,
 ) -> Result<StatusCode, AppError> {
-    let key_uuid = key_id;
-    let server_uuid = server_id;
+    let key_uuid = kid.0;
+    let server_uuid = mid.0;
 
     sqlx::query("DELETE FROM mcp_key_access WHERE api_key_id = $1 AND server_id = $2")
         .bind(key_uuid)

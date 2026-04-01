@@ -4,9 +4,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::domain::enums::ProviderType;
+use crate::domain::value_objects::ProviderId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::outbound::health_checker::check_provider;
 
@@ -105,7 +105,7 @@ pub async fn sync_models(
 
 #[derive(Debug, Serialize)]
 pub struct GeminiStatusResult {
-    pub id: Uuid,
+    pub id: ProviderId,
     pub name: String,
     pub status: String,
     pub error: Option<String>,
@@ -140,7 +140,7 @@ pub async fn sync_status(RequireProviderManage(_claims): RequireProviderManage, 
         }
 
         results.push(GeminiStatusResult {
-            id: provider.id,
+            id: ProviderId::from_uuid(provider.id),
             name: provider.name,
             status: status_str,
             error: None,

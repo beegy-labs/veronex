@@ -7,33 +7,38 @@
 ## Axum 0.8 Handler Signature
 
 ```rust
-// Read
+// Read — path param decoded from "job_3X4aB..." → JobId automatically
 pub async fn get_thing(
-  State(state): State<AppState>, Path(id): Path<Uuid>,
+  State(state): State<AppState>, Path(jid): Path<JobId>,
 ) -> Result<Json<ThingSummary>, AppError> {
-  let thing = state.thing_repo.get(id).await?.ok_or(AppError::NotFound)?;
+  let thing = state.thing_repo.get(&jid.0).await?.ok_or(AppError::NotFound)?;
   Ok(Json(to_summary(&thing)))
 }
-// Create -- returns 201
+// Create -- returns 201; response id encoded as "job_3X4aB..."
 pub async fn create_thing(
   State(state): State<AppState>, Json(req): Json<CreateThingRequest>,
 ) -> Result<(StatusCode, Json<ThingSummary>), AppError> {
-  Ok((StatusCode::CREATED, Json(to_summary(&state.thing_repo.create(req.into()).await?))))
+  let row = state.thing_repo.create(req.into()).await?;
+  Ok((StatusCode::CREATED, Json(ThingSummary { id: JobId::from_uuid(row.id), .. })))
 }
 // Delete -- returns 204
 pub async fn delete_thing(
-  State(state): State<AppState>, Path(id): Path<Uuid>,
+  State(state): State<AppState>, Path(jid): Path<JobId>,
 ) -> Result<StatusCode, AppError> {
-  state.thing_repo.delete(id).await?;
+  state.thing_repo.delete(&jid.0).await?;   // .0 extracts inner Uuid for DB
   Ok(StatusCode::NO_CONTENT)
 }
 ```
 
 | Rule | Detail |
 |------|--------|
-| `Path<Uuid>` | Always typed for UUID path segments — never `Path<String>` + `Uuid::parse_str` |
+| `Path<EntityId>` | Use typed entity ID — never `Path<Uuid>` or `Path<String>` + manual parse |
+| Response `id` field | Always typed ID (e.g. `id: JobId`) — never raw `Uuid` or `String` |
+| `.0` for DB calls | Extract inner UUID with `.0` for `sqlx` binds and repo calls |
 | POST create → 201 | Return `(StatusCode::CREATED, Json(...))` — not implicit 200 |
 | RequireXxx first | Sensitive handlers must declare a `RequireXxx` extractor before `State` |
+
+→ Full ID encoding policy: `policies/id-encoding.md`
 
 ## AppError (thiserror v2)
 

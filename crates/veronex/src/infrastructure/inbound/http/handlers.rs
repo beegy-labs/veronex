@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::enums::{ApiFormat, ProviderType};
-use crate::domain::value_objects::JobId;
+use crate::domain::value_objects::{JobId, pub_id_encode};
 
 use super::constants::{GEMINI_TIER_FREE, PROVIDER_GEMINI, PROVIDER_OLLAMA, SSE_KEEP_ALIVE, SSE_MAX_CONNECTIONS, SSE_TIMEOUT};
 use super::middleware::infer_auth::InferCaller;
@@ -161,12 +161,12 @@ fn default_provider_type() -> String {
 
 #[derive(Serialize, Deserialize)]
 pub struct SubmitResponse {
-    pub job_id: String,
+    pub job_id: JobId,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
-    pub job_id: String,
+    pub job_id: JobId,
     pub status: String,
 }
 
@@ -213,22 +213,18 @@ pub async fn submit_inference(
         })
         .await?;
 
-    Ok(Json(SubmitResponse {
-        job_id: job_id.to_string(),
-    }))
+    Ok(Json(SubmitResponse { job_id }))
 }
 
 /// GET /v1/inference/:job_id/stream - SSE token streaming.
 pub async fn stream_inference(
-    Path(job_id): Path<Uuid>,
+    Path(jid): Path<JobId>,
     State(state): State<AppState>,
 ) -> Response {
     let guard = match try_acquire_sse(&state.sse_connections) {
         Ok(g) => g,
         Err(resp) => return resp,
     };
-
-    let jid = JobId(job_id);
     let token_stream = state.use_case.stream(&jid);
 
     let sse_stream: SseStream = Box::pin(token_stream.map(move |result| {
@@ -252,21 +248,17 @@ pub async fn stream_inference(
 
 /// GET /v1/inference/:job_id/status - Get job status.
 pub async fn get_status(
-    Path(job_id): Path<Uuid>,
+    Path(jid): Path<JobId>,
     State(state): State<AppState>,
 ) -> Result<Json<StatusResponse>, AppError> {
-    let jid = JobId(job_id);
-
     let status = state
         .use_case
         .get_status(&jid)
         .await?;
 
-    let status_str = status.as_str().to_string();
-
     Ok(Json(StatusResponse {
-        job_id: job_id.to_string(),
-        status: status_str,
+        job_id: jid,
+        status: status.as_str().to_string(),
     }))
 }
 
@@ -275,7 +267,7 @@ pub async fn get_status(
 /// Streams a job's tokens in the same OpenAI chunk format as `/v1/chat/completions`.
 /// Completed jobs are replayed from the DB; in-progress jobs stream live tokens.
 pub async fn stream_job_openai(
-    Path(job_id): Path<Uuid>,
+    Path(jid): Path<JobId>,
     State(state): State<AppState>,
     axum::extract::Extension(_caller): axum::extract::Extension<InferCaller>,
 ) -> Response {
@@ -284,8 +276,7 @@ pub async fn stream_job_openai(
         Err(resp) => return resp,
     };
 
-    let jid = JobId(job_id);
-    let chunk_id = format!("chatcmpl-{}", job_id);
+    let chunk_id = format!("chatcmpl-{}", pub_id_encode("job", jid.0));
     let created = chrono::Utc::now().timestamp();
     let token_stream = state.use_case.stream(&jid);
 
@@ -301,7 +292,7 @@ pub async fn stream_job_openai(
                 Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()))
             }
             Err(e) => {
-                tracing::error!(job_id = %job_id, "SSE stream error: {e:?}");
+                tracing::error!(job_id = %jid, "SSE stream error: {e:?}");
                 let err = serde_json::json!({"error": {"message": "inference failed"}});
                 Ok(Event::default().data(serde_json::to_string(&err).unwrap_or_default()))
             }
@@ -318,16 +309,10 @@ pub async fn stream_job_openai(
 
 /// DELETE /v1/inference/:job_id - Cancel a job.
 pub async fn cancel_inference(
-    Path(job_id): Path<Uuid>,
+    Path(jid): Path<JobId>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
-    let jid = JobId(job_id);
-
-    state
-        .use_case
-        .cancel(&jid)
-        .await?;
-
+    state.use_case.cancel(&jid).await?;
     Ok(StatusCode::OK)
 }
 
@@ -336,10 +321,10 @@ pub async fn cancel_inference(
 mod tests {
     use super::*;
     use super::super::test_support::make_app;
+    use crate::domain::value_objects::JobId;
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
-    use uuid::Uuid;
 
     // ── submit_inference tests ─────────────────────────────────────
 
@@ -365,10 +350,10 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let resp: SubmitResponse = serde_json::from_slice(&body).unwrap();
-        assert!(!resp.job_id.is_empty());
-        // Verify it's a valid UUID
-        assert!(Uuid::parse_str(&resp.job_id).is_ok());
+        let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let job_id = resp["job_id"].as_str().unwrap();
+        // Verify it's a prefixed base62 job ID
+        assert!(job_id.starts_with("job_"), "expected job_ prefix, got: {job_id}");
     }
 
     #[tokio::test]
@@ -414,11 +399,11 @@ mod tests {
     #[tokio::test]
     async fn get_status_valid_job_id_returns_status() {
         let app = make_app();
-        let job_id = Uuid::now_v7();
+        let jid = JobId::new();
 
         let request = Request::builder()
             .method("GET")
-            .uri(format!("/v1/inference/{}/status", job_id))
+            .uri(format!("/v1/inference/{}/status", jid))
             .body(Body::empty())
             .unwrap();
 
@@ -430,7 +415,7 @@ mod tests {
             .unwrap();
         let resp: StatusResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(resp.status, "running");
-        assert_eq!(resp.job_id, job_id.to_string());
+        assert_eq!(resp.job_id, jid);
     }
 
     #[tokio::test]
@@ -439,11 +424,12 @@ mod tests {
 
         let request = Request::builder()
             .method("GET")
-            .uri("/v1/inference/not-a-uuid/status")
+            .uri("/v1/inference/not-a-valid-id/status")
             .body(Body::empty())
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
+        // Path deserialization failure returns 422 BAD_REQUEST
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -452,11 +438,11 @@ mod tests {
     #[tokio::test]
     async fn cancel_valid_job_id_returns_200() {
         let app = make_app();
-        let job_id = Uuid::now_v7();
+        let jid = JobId::new();
 
         let request = Request::builder()
             .method("DELETE")
-            .uri(format!("/v1/inference/{}", job_id))
+            .uri(format!("/v1/inference/{}", jid))
             .body(Body::empty())
             .unwrap();
 
@@ -470,7 +456,7 @@ mod tests {
 
         let request = Request::builder()
             .method("DELETE")
-            .uri("/v1/inference/not-a-uuid")
+            .uri("/v1/inference/not-a-valid-id")
             .body(Body::empty())
             .unwrap();
 
@@ -483,11 +469,11 @@ mod tests {
     #[tokio::test]
     async fn stream_returns_sse_content_type() {
         let app = make_app();
-        let job_id = Uuid::now_v7();
+        let jid = JobId::new();
 
         let request = Request::builder()
             .method("GET")
-            .uri(format!("/v1/inference/{}/stream", job_id))
+            .uri(format!("/v1/inference/{}/stream", jid))
             .body(Body::empty())
             .unwrap();
 
@@ -510,11 +496,11 @@ mod tests {
     #[tokio::test]
     async fn stream_has_no_buffering_header() {
         let app = make_app();
-        let job_id = Uuid::now_v7();
+        let jid = JobId::new();
 
         let request = Request::builder()
             .method("GET")
-            .uri(format!("/v1/inference/{}/stream", job_id))
+            .uri(format!("/v1/inference/{}/stream", jid))
             .body(Body::empty())
             .unwrap();
 
@@ -532,11 +518,11 @@ mod tests {
     #[tokio::test]
     async fn stream_contains_token_and_done_events() {
         let app = make_app();
-        let job_id = Uuid::now_v7();
+        let jid = JobId::new();
 
         let request = Request::builder()
             .method("GET")
-            .uri(format!("/v1/inference/{}/stream", job_id))
+            .uri(format!("/v1/inference/{}/stream", jid))
             .body(Body::empty())
             .unwrap();
 

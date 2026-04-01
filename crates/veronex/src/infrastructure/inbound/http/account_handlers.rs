@@ -10,6 +10,7 @@ use crate::domain::entities::{Account, ApiKey};
 use crate::domain::enums::{KeyTier, KeyType};
 use crate::domain::services::api_key_generator::generate_api_key;
 use crate::domain::services::password_hashing;
+use crate::domain::value_objects::{AccountId, RoleId, SessionId};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireAccountManage;
 use crate::infrastructure::inbound::http::state::AppState;
 use crate::infrastructure::outbound::valkey_keys;
@@ -25,11 +26,11 @@ pub struct CreateAccountRequest {
     pub password: String,
     pub name: String,
     pub email: Option<String>,
-    /// Role UUIDs to assign. If empty/missing, defaults to "viewer".
+    /// Role IDs to assign (base62 format, e.g. "role_3X4aB..."). Defaults to "viewer".
     #[serde(default)]
-    pub role_ids: Vec<Uuid>,
+    pub role_ids: Vec<RoleId>,
     /// Legacy single role_id — used as fallback when role_ids is empty.
-    pub role_id: Option<Uuid>,
+    pub role_id: Option<RoleId>,
     pub department: Option<String>,
     pub position: Option<String>,
 }
@@ -40,8 +41,8 @@ pub struct UpdateAccountRequest {
     pub email: Option<String>,
     pub department: Option<String>,
     pub position: Option<String>,
-    /// When provided, replaces all role assignments.
-    pub role_ids: Option<Vec<Uuid>>,
+    /// When provided, replaces all role assignments (base62 format).
+    pub role_ids: Option<Vec<RoleId>>,
 }
 
 #[derive(Deserialize)]
@@ -51,13 +52,13 @@ pub struct SetActiveRequest {
 
 #[derive(Serialize)]
 pub struct RoleInfo {
-    pub id: Uuid,
+    pub id: RoleId,
     pub name: String,
 }
 
 #[derive(Serialize)]
 pub struct AccountSummary {
-    pub id: Uuid,
+    pub id: AccountId,
     pub username: String,
     pub name: String,
     pub email: Option<String>,
@@ -74,7 +75,7 @@ pub struct AccountSummary {
 
 #[derive(Serialize)]
 pub struct CreateAccountResponse {
-    pub id: Uuid,
+    pub id: AccountId,
     pub username: String,
     /// Plaintext test API key (shown once).
     pub test_api_key: String,
@@ -108,7 +109,7 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
 
     for (id, name, perms, menus, is_system) in &role_rows {
         if *is_system && name == "super" { is_super = true; }
-        roles.push(RoleInfo { id: *id, name: name.clone() });
+        roles.push(RoleInfo { id: RoleId::from_uuid(*id), name: name.clone() });
         for p in perms { all_perms.insert(p.clone()); }
         for m in menus { all_menus.insert(m.clone()); }
     }
@@ -125,7 +126,7 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
     };
 
     Ok(AccountSummary {
-        id: a.id,
+        id: AccountId::from_uuid(a.id),
         username: a.username,
         name: a.name,
         email: a.email,
@@ -183,11 +184,11 @@ pub async fn create_account(
     super::handlers::validate_username(&req.username)?;
 
     // Resolve role_ids: explicit role_ids > legacy role_id > default "viewer"
-    let role_ids = if !req.role_ids.is_empty() {
+    let role_ids: Vec<Uuid> = if !req.role_ids.is_empty() {
         // Validate all role_ids exist
         for rid in &req.role_ids {
             let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
-                .bind(rid)
+                .bind(rid.0)
                 .fetch_one(&state.pg_pool)
                 .await
                 .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
@@ -195,17 +196,17 @@ pub async fn create_account(
                 return Err(AppError::BadRequest(format!("invalid role_id: {rid}")));
             }
         }
-        req.role_ids.clone()
+        req.role_ids.iter().map(|r| r.0).collect()
     } else if let Some(rid) = req.role_id {
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
-            .bind(rid)
+            .bind(rid.0)
             .fetch_one(&state.pg_pool)
             .await
             .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
         if !exists {
             return Err(AppError::BadRequest("invalid role_id".into()));
         }
-        vec![rid]
+        vec![rid.0]
     } else {
         // Default to "viewer" role
         let row: (Uuid,) = sqlx::query_as("SELECT id FROM roles WHERE name = 'viewer'")
@@ -273,7 +274,7 @@ pub async fn create_account(
             req.username, role_ids.len())).await;
 
     Ok((StatusCode::CREATED, Json(CreateAccountResponse {
-        id: account.id,
+        id: AccountId::from_uuid(account.id),
         username: req.username,
         test_api_key: plaintext,
         created_at: now,
@@ -284,15 +285,15 @@ pub async fn create_account(
 
 pub async fn update_account(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<Uuid>,
+    Path(aid): Path<AccountId>,
     State(state): State<AppState>,
     Json(req): Json<UpdateAccountRequest>,
 ) -> Result<StatusCode, AppError> {
     let mut account = state
         .account_repo
-        .get_by_id(&id)
+        .get_by_id(&aid.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("account {id} not found")))?;
+        .ok_or_else(|| AppError::NotFound(format!("account {aid} not found")))?;
 
     if let Some(name) = req.name {
         account.name = name;
@@ -311,22 +312,27 @@ pub async fn update_account(
         if role_ids.is_empty() {
             return Err(AppError::BadRequest("at least one role is required".into()));
         }
-        // Validate all role_ids exist
-        for rid in role_ids {
-            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
-                .bind(rid)
-                .fetch_one(&state.pg_pool)
-                .await
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
-            if !exists {
-                return Err(AppError::BadRequest(format!("invalid role_id: {rid}")));
+        // Validate all role_ids exist and collect UUIDs
+        let uuid_role_ids: Vec<Uuid> = {
+            let mut uuids = Vec::with_capacity(role_ids.len());
+            for rid in role_ids {
+                let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
+                    .bind(rid.0)
+                    .fetch_one(&state.pg_pool)
+                    .await
+                    .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
+                if !exists {
+                    return Err(AppError::BadRequest(format!("invalid role_id: {rid}")));
+                }
+                uuids.push(rid.0);
             }
-        }
-        state.account_repo.set_roles(&id, role_ids).await?;
+            uuids
+        };
+        state.account_repo.set_roles(&aid.0, &uuid_role_ids).await?;
     }
 
-    emit_audit(&state, &claims, "update", "account", &id.to_string(), &account.username,
-        &format!("Account '{}' ({}) updated", account.username, id)).await;
+    emit_audit(&state, &claims, "update", "account", &aid.to_string(), &account.username,
+        &format!("Account '{}' ({}) updated", account.username, aid)).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -335,24 +341,24 @@ pub async fn update_account(
 
 pub async fn delete_account(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<Uuid>,
+    Path(aid): Path<AccountId>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
     let account = state
         .account_repo
-        .get_by_id(&id)
+        .get_by_id(&aid.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("account {id} not found")))?;
+        .ok_or_else(|| AppError::NotFound(format!("account {aid} not found")))?;
 
     // Cascade: soft-delete account + all its API keys in a single transaction
     let keys_deleted = state
         .account_repo
-        .soft_delete_cascade(&id, &account.username)
+        .soft_delete_cascade(&aid.0, &account.username)
         .await?;
 
-    emit_audit(&state, &claims, "delete", "account", &id.to_string(), &account.username,
+    emit_audit(&state, &claims, "delete", "account", &aid.to_string(), &account.username,
         &format!("Account '{}' ({}) soft-deleted (login disabled, data retained, {} API key(s) revoked)",
-            account.username, id, keys_deleted)).await;
+            account.username, aid, keys_deleted)).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -361,18 +367,18 @@ pub async fn delete_account(
 
 pub async fn set_account_active(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<Uuid>,
+    Path(aid): Path<AccountId>,
     State(state): State<AppState>,
     Json(req): Json<SetActiveRequest>,
 ) -> Result<StatusCode, AppError> {
     state
         .account_repo
-        .set_active(&id, req.is_active)
+        .set_active(&aid.0, req.is_active)
         .await?;
 
-    emit_audit(&state, &claims, "update", "account", &id.to_string(), &id.to_string(),
+    emit_audit(&state, &claims, "update", "account", &aid.to_string(), &aid.to_string(),
         &format!("Account {} is_active set to {} (login {})",
-            id, req.is_active, if req.is_active { "enabled" } else { "disabled" })).await;
+            aid, req.is_active, if req.is_active { "enabled" } else { "disabled" })).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -381,7 +387,7 @@ pub async fn set_account_active(
 
 #[derive(Serialize)]
 pub struct SessionSummary {
-    pub id: Uuid,
+    pub id: SessionId,
     pub ip_address: Option<String>,
     pub created_at: chrono::DateTime<Utc>,
     pub last_used_at: Option<chrono::DateTime<Utc>>,
@@ -390,18 +396,18 @@ pub struct SessionSummary {
 
 pub async fn list_account_sessions(
     RequireAccountManage(_claims): RequireAccountManage,
-    Path(id): Path<Uuid>,
+    Path(aid): Path<AccountId>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SessionSummary>>, AppError> {
     let sessions = state
         .session_repo
-        .list_active(&id)
+        .list_active(&aid.0)
         .await?;
 
     let summaries = sessions
         .into_iter()
         .map(|s| SessionSummary {
-            id: s.id,
+            id: SessionId::from_uuid(s.id),
             ip_address: s.ip_address,
             created_at: s.created_at,
             last_used_at: s.last_used_at,
@@ -416,23 +422,20 @@ pub async fn list_account_sessions(
 
 pub async fn revoke_session(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(session_id): Path<Uuid>,
+    Path(sid): Path<SessionId>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
     // Fetch the session first to get jti + expires_at for Valkey blocklist.
     let session = state
         .session_repo
-        .get_by_id(&session_id)
+        .get_by_id(&sid.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("session {session_id} not found")))?;
-    state
-        .session_repo
-        .revoke(&session_id)
-        .await?;
+        .ok_or_else(|| AppError::NotFound(format!("session {sid} not found")))?;
+    state.session_repo.revoke(&sid.0).await?;
     // Add JTI to Valkey blocklist so the JWT is rejected immediately.
     super::auth_handlers::revoke_jti(&state, session.jti, session.expires_at).await;
-    emit_audit(&state, &claims, "delete", "session", &session_id.to_string(), &session_id.to_string(),
-        &format!("Session {} manually revoked by admin", session_id)).await;
+    emit_audit(&state, &claims, "delete", "session", &sid.to_string(), &sid.to_string(),
+        &format!("Session {} manually revoked by admin", sid)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -440,24 +443,21 @@ pub async fn revoke_session(
 
 pub async fn revoke_all_account_sessions(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<Uuid>,
+    Path(aid): Path<AccountId>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
     // Fetch active sessions before revoking so we can blocklist each JTI.
     let sessions = state
         .session_repo
-        .list_active(&id)
+        .list_active(&aid.0)
         .await?;
-    state
-        .session_repo
-        .revoke_all_for_account(&id)
-        .await?;
+    state.session_repo.revoke_all_for_account(&aid.0).await?;
     // Add each JTI to the Valkey blocklist so JWTs are rejected immediately.
     for session in &sessions {
         super::auth_handlers::revoke_jti(&state, session.jti, session.expires_at).await;
     }
-    emit_audit(&state, &claims, "delete", "session", &id.to_string(), &format!("all_sessions:{id}"),
-        &format!("All active sessions for account {} force-revoked by admin ({} session(s) blocklisted)", id, sessions.len())).await;
+    emit_audit(&state, &claims, "delete", "session", &aid.to_string(), &format!("all_sessions:{aid}"),
+        &format!("All active sessions for account {} force-revoked by admin ({} session(s) blocklisted)", aid, sessions.len())).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -465,29 +465,29 @@ pub async fn revoke_all_account_sessions(
 
 pub async fn create_reset_link(
     RequireAccountManage(claims): RequireAccountManage,
-    Path(id): Path<Uuid>,
+    Path(aid): Path<AccountId>,
     State(state): State<AppState>,
 ) -> Result<Json<ResetLinkResponse>, AppError> {
     // Ensure account exists
     let account = state
         .account_repo
-        .get_by_id(&id)
+        .get_by_id(&aid.0)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("account {id} not found")))?;
+        .ok_or_else(|| AppError::NotFound(format!("account {aid} not found")))?;
 
     let token = Uuid::new_v4().to_string();
 
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
         let key = valkey_keys::password_reset(&token);
-        pool.set(key, id.to_string(), Some(fred::types::Expiration::EX(24 * 3600)), None, false)
+        pool.set(key, aid.0.to_string(), Some(fred::types::Expiration::EX(24 * 3600)), None, false)
             .await
-            .unwrap_or_else(|e| tracing::warn!(error = %e, account_id = %id, "create_reset_link: Valkey SET failed"));
+            .unwrap_or_else(|e| tracing::warn!(error = %e, account_id = %aid, "create_reset_link: Valkey SET failed"));
     }
 
-    emit_audit(&state, &claims, "reset_password", "account", &id.to_string(), &account.username,
+    emit_audit(&state, &claims, "reset_password", "account", &aid.to_string(), &account.username,
         &format!("Password reset link generated for account '{}' ({}); token valid 24h",
-            account.username, id)).await;
+            account.username, aid)).await;
 
     Ok(Json(ResetLinkResponse { token }))
 }
