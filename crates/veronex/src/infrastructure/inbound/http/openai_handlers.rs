@@ -11,7 +11,7 @@ use tracing::instrument;
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::enums::{ApiFormat, FinishReason, ProviderType};
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_CHAT_MESSAGES, MAX_TOKENS_CEILING, PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
-use super::handlers::sanitize_sse_error;
+use super::handlers::{sanitize_sse_error, sse_response, with_conversation_id, SseStream};
 use super::inference_helpers::{build_sse_response, validate_model_name, validate_content_length, extract_last_user_prompt, validate_tool_call, extract_conversation_id};
 use super::openai_sse_types::{
     ChatCompletion, CompletionChoice, CompletionChunk, CompletionMessage, CompletionTokensDetails,
@@ -443,7 +443,7 @@ async fn ollama_chat_proxy(
     }
 
     let mut saw_tool_calls = false;
-    build_sse_response(&state, job_id, true, move |result| {
+    let sse = build_sse_response(&state, job_id, true, move |result| {
         match result {
             Ok(token) if token.tool_calls.is_some() => {
                 saw_tool_calls = true;
@@ -503,7 +503,8 @@ async fn ollama_chat_proxy(
                 vec![Event::default().data(serde_json::to_string(&err).unwrap_or_default())]
             }
         }
-    })
+    });
+    with_conversation_id(sse, conversation_id.as_ref())
 }
 
 /// Convert an Ollama tool call JSON value to OpenAI format.
@@ -681,7 +682,7 @@ async fn mcp_ollama_chat(
         let created = chrono::Utc::now().timestamp();
         let mut saw_tool_calls = false;
 
-        return build_sse_response(&state, final_job_id, true, move |result| {
+        let sse = build_sse_response(&state, final_job_id, true, move |result| {
             match result {
                 Ok(token) if token.tool_calls.is_some() => {
                     saw_tool_calls = true;
@@ -727,9 +728,47 @@ async fn mcp_ollama_chat(
                 }
             }
         });
+        return with_conversation_id(sse, conversation_id.as_ref());
     }
 
-    // ── Non-streaming (or tool-call-only) response ────────────────────────────
+    // ── Stream=true but MCP collected: wrap content in SSE ───────────────────
+    // MCP bridge always collects round 0; if no tool calls were made the loop
+    // exits without a final_job_id. When the caller requested streaming we must
+    // still return an SSE response, otherwise the client receives raw JSON that
+    // it cannot parse as SSE events.
+    if stream {
+        use std::convert::Infallible;
+        let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple()).into();
+        let model_s: Arc<str> = model.clone().into();
+        let created = chrono::Utc::now().timestamp();
+        let mut events: Vec<Event> = Vec::new();
+
+        if !loop_result.content.is_empty() {
+            let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model_s.to_string()), loop_result.content.clone());
+            events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+        }
+        if !loop_result.tool_calls.is_empty() {
+            let openai_calls: Vec<serde_json::Value> = loop_result.tool_calls.iter().enumerate()
+                .filter(|(_, c)| validate_tool_call(c))
+                .map(|(i, c)| convert_tool_call(i, c))
+                .collect();
+            if !openai_calls.is_empty() {
+                let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model_s.to_string()), openai_calls);
+                events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+            }
+        }
+        let reason = loop_result.finish_reason.as_str();
+        let finish = CompletionChunk::finish(chunk_id.to_string(), created, Some(model_s.to_string()), reason);
+        events.push(Event::default().data(serde_json::to_string(&finish).unwrap_or_default()));
+
+        let sse: SseStream = Box::pin(
+            futures::stream::iter(events.into_iter().map(Ok::<_, Infallible>))
+                .chain(futures::stream::once(async { Ok(Event::default().data("[DONE]")) }))
+        );
+        return with_conversation_id(sse_response(sse), conversation_id.as_ref());
+    }
+
+    // ── Non-streaming response ─────────────────────────────────────────────────
     let chunk_id = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple());
     let created = chrono::Utc::now().timestamp();
     let total_tokens = loop_result.prompt_tokens + loop_result.completion_tokens;
@@ -826,13 +865,14 @@ async fn load_conversation_context(
 
     // Ensure conversation exists in DB (INSERT ON CONFLICT DO NOTHING)
     let _ = sqlx::query(
-        "INSERT INTO conversations (id, account_id, api_key_id, title, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, now(), now()) ON CONFLICT (id) DO NOTHING"
+        "INSERT INTO conversations (id, account_id, api_key_id, title, source, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now(), now()) ON CONFLICT (id) DO NOTHING"
     )
     .bind(cid)
     .bind(caller.account_id())
     .bind(caller.api_key_id())
     .bind(&title)
+    .bind(caller.source().as_str())
     .execute(&state.pg_pool)
     .await;
 

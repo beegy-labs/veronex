@@ -234,6 +234,8 @@
     "noJobsFound": "작업이 없습니다.",
     "noError": "(오류 메시지 없음)",
     "noResult": "(저장된 결과 없음)",
+    "continue": "이어서",
+    "continueInTest": "테스트에서 이어서",
     "processing": "(처리 중…)",
     "toolCalls": "도구 호출",
     "agentToolCall": "모델이 도구 호출로 응답했습니다 — 텍스트 출력이 생성되지 않았습니다.",
@@ -720,7 +722,10 @@
     "modeSingle": "단일",
     "modeConversation": "대화",
     "clearConversation": "대화 초기화",
-    "turns": "턴"
+    "turns": "턴",
+    "conversationHint": "⌘↵ 또는 Ctrl+↵ 로 전송",
+    "newSession": "새 세션",
+    "noSessions": "세션이 없습니다"
   },
   "apiDocs": {
     "title": "API 문서",

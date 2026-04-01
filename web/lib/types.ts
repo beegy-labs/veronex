@@ -701,6 +701,7 @@ export interface ConversationSummary {
   public_id: string
   title: string | null
   model_name: string | null
+  source: string
   turn_count: number
   total_prompt_tokens: number
   total_completion_tokens: number
@@ -713,6 +714,7 @@ export interface ConversationTurn {
   prompt: string
   result: string | null
   tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> | null
+  model_name?: string | null
   created_at: string
 }
 

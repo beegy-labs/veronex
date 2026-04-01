@@ -234,6 +234,8 @@
     "noJobsFound": "ジョブが見つかりません。",
     "noError": "(エラーメッセージなし)",
     "noResult": "(結果が保存されていません)",
+    "continue": "続ける",
+    "continueInTest": "テストで続ける",
     "processing": "(処理中…)",
     "toolCalls": "ツール呼び出し",
     "agentToolCall": "モデルがツール呼び出しで応答しました — テキスト出力は生成されていません。",
@@ -720,7 +722,10 @@
     "modeSingle": "シングル",
     "modeConversation": "会話",
     "clearConversation": "クリア",
-    "turns": "ターン"
+    "turns": "ターン",
+    "conversationHint": "⌘↵ または Ctrl+↵ で送信",
+    "newSession": "新しいセッション",
+    "noSessions": "セッションなし"
   },
   "apiDocs": {
     "title": "APIドキュメント",
