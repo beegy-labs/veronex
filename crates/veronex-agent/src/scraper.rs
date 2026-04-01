@@ -169,7 +169,12 @@ pub fn enrich_hwmon_labels(
 /// Enriches hwmon metrics with `hw_type`, `hw_vendor`, `hw_role` labels
 /// based on chip_name classification (agent-side only — pipeline is raw).
 pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
-    let url = format!("{}/metrics", base_url.trim_end_matches('/'));
+    let base = if base_url.starts_with("http://") || base_url.starts_with("https://") {
+        base_url.to_string()
+    } else {
+        format!("http://{}", base_url)
+    };
+    let url = format!("{}/metrics", base.trim_end_matches('/'));
     match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
         Ok(resp) => {
             let content_len = resp.content_length().unwrap_or(0) as usize;
@@ -424,7 +429,12 @@ pub struct OllamaPsModel {
 /// Scrape Ollama /api/ps — returns raw model list (capped at MAX_OLLAMA_MODELS).
 /// Returns empty vec on any error.
 pub async fn scrape_ollama_raw(client: &reqwest::Client, base_url: &str) -> Vec<OllamaPsModel> {
-    let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
+    let base = if base_url.starts_with("http://") || base_url.starts_with("https://") {
+        base_url.to_string()
+    } else {
+        format!("http://{}", base_url)
+    };
+    let url = format!("{}/api/ps", base.trim_end_matches('/'));
     let resp: OllamaPsResponse = match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
         Ok(r) => {
             let content_len = r.content_length().unwrap_or(0) as usize;
