@@ -78,6 +78,7 @@ pub struct ConversationSummary {
     public_id: String,
     title: Option<String>,
     model_name: Option<String>,
+    source: String,
     turn_count: i32,
     total_prompt_tokens: i32,
     total_completion_tokens: i32,
@@ -98,6 +99,8 @@ pub struct ConversationTurn {
     pub result: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
     pub created_at: String,
 }
 
@@ -107,6 +110,7 @@ pub struct ConversationDetailResponse {
     public_id: String,
     title: Option<String>,
     model_name: Option<String>,
+    source: String,
     turn_count: i32,
     total_prompt_tokens: i32,
     total_completion_tokens: i32,
@@ -134,7 +138,7 @@ pub async fn list_conversations(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("count failed: {e}")))?;
 
     let rows = sqlx::query(
-        "SELECT id, title, model_name, turn_count, total_prompt_tokens, total_completion_tokens, created_at, updated_at
+        "SELECT id, title, model_name, source, turn_count, total_prompt_tokens, total_completion_tokens, created_at, updated_at
          FROM conversations
          ORDER BY updated_at DESC
          LIMIT $1 OFFSET $2"
@@ -152,6 +156,7 @@ pub async fn list_conversations(
             public_id: to_public_id(&id),
             title: r.get("title"),
             model_name: r.get("model_name"),
+            source: r.get::<Option<String>, _>("source").unwrap_or_else(|| "api".to_string()),
             turn_count: r.get("turn_count"),
             total_prompt_tokens: r.get("total_prompt_tokens"),
             total_completion_tokens: r.get("total_completion_tokens"),
@@ -181,7 +186,7 @@ pub async fn get_conversation(
 
     // Fetch conversation metadata
     let conv_row = sqlx::query(
-        "SELECT id, title, model_name, turn_count, total_prompt_tokens, total_completion_tokens, created_at, updated_at, account_id, api_key_id
+        "SELECT id, title, model_name, source, turn_count, total_prompt_tokens, total_completion_tokens, created_at, updated_at, account_id, api_key_id
          FROM conversations WHERE id = $1"
     )
     .bind(conv_id)
@@ -204,6 +209,7 @@ pub async fn get_conversation(
             prompt: t.prompt,
             result: t.result,
             tool_calls: t.tool_calls,
+            model_name: t.model_name,
             created_at: t.created_at,
         }).collect())
         .unwrap_or_default();
@@ -214,6 +220,7 @@ pub async fn get_conversation(
         public_id: to_public_id(&id),
         title: conv_row.get("title"),
         model_name: conv_row.get("model_name"),
+        source: conv_row.get::<Option<String>, _>("source").unwrap_or_else(|| "api".to_string()),
         turn_count: conv_row.get("turn_count"),
         total_prompt_tokens: conv_row.get("total_prompt_tokens"),
         total_completion_tokens: conv_row.get("total_completion_tokens"),

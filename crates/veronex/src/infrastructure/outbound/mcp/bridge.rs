@@ -376,6 +376,7 @@ impl McpBridgeAdapter {
                         messages: Some(serde_json::Value::Array(messages.clone())),
                         tool_calls: tool_calls_val,
                         result: Some(content.clone()),
+                        model_name: Some(model.clone()),
                         created_at: chrono::Utc::now().to_rfc3339(),
                     });
 

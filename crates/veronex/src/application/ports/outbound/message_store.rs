@@ -14,6 +14,8 @@ pub struct TurnRecord {
     pub tool_calls: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
     pub created_at: String,
 }
 

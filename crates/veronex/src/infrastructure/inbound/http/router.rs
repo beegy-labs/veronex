@@ -298,7 +298,10 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                 axum::http::header::HeaderName::from_static("x-stainless-runtime"),
                 axum::http::header::HeaderName::from_static("x-stainless-runtime-version"),
             ])
-            .allow_credentials(true);
+            .allow_credentials(true)
+            .expose_headers([
+                axum::http::header::HeaderName::from_static("x-conversation-id"),
+            ]);
         if cors_origins.is_empty() {
             // credentials:true requires an explicit origin — wildcard (*) is
             // forbidden by the CORS spec when credentials are included.

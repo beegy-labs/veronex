@@ -201,88 +201,90 @@ export function ApiTestForm({
         )}
       </div>
 
-      {/* Prompt + Image button + Run button */}
-      <div className="flex gap-3 items-end">
-        <div className="flex-1 space-y-1.5">
-          <Label htmlFor="test-prompt">{t('test.prompt')}</Label>
-          <textarea
-            id="test-prompt"
-            value={prompt}
-            onChange={(e) => onPromptChange(e.target.value)}
-            rows={3}
-            placeholder={t('test.promptPlaceholder')}
-            className="flex min-h-[72px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-y"
-          />
-        </div>
-
-        <div className="flex flex-col gap-2 mb-0.5">
-          {/* Image attach button — Ollama only, hidden for Gemini */}
-          {!isGeminiProvider && (
-            <>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={handleFileChange}
+      {/* Prompt + Image button + Run button — hidden in conversation mode (input moves to chat area) */}
+      {mode !== 'conversation' && (
+        <>
+          <div className="flex gap-3 items-end">
+            <div className="flex-1 space-y-1.5">
+              <Label htmlFor="test-prompt">{t('test.prompt')}</Label>
+              <textarea
+                id="test-prompt"
+                value={prompt}
+                onChange={(e) => onPromptChange(e.target.value)}
+                rows={3}
+                placeholder={t('test.promptPlaceholder')}
+                className="flex min-h-[72px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-y"
               />
+            </div>
+
+            <div className="flex flex-col gap-2 mb-0.5">
+              {!isGeminiProvider && (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileChange}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    disabled={!canAddMore || isCompressing}
+                    aria-label={t('test.imageAttach')}
+                    title={t('test.imageAttach')}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {isCompressing
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <ImagePlus className="h-4 w-4" />
+                    }
+                  </Button>
+                </>
+              )}
+
               <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                disabled={!canAddMore || isCompressing}
-                aria-label={t('test.imageAttach')}
-                title={t('test.imageAttach')}
-                onClick={() => fileInputRef.current?.click()}
+                type="submit"
+                disabled={!canRun}
+                className="shrink-0"
+                aria-label={t('test.run')}
               >
-                {isCompressing
-                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : <ImagePlus className="h-4 w-4" />
-                }
+                <Send className="h-4 w-4" />
               </Button>
-            </>
-          )}
-
-          <Button
-            type="submit"
-            disabled={!canRun}
-            className="shrink-0"
-            aria-label={t('test.run')}
-          >
-            <Send className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Image thumbnails */}
-      {images.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {images.map((b64, i) => (
-            <div key={b64.slice(0, 16)} className="relative group">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`data:image/jpeg;base64,${b64}`}
-                alt={`image-${i + 1}`}
-                className="h-12 w-12 sm:h-16 sm:w-16 rounded-md object-cover border border-border"
-              />
-              <button
-                type="button"
-                onClick={() => onImageRemove(i)}
-                aria-label={t('test.imageRemove')}
-                className="absolute -top-1.5 -right-1.5 hidden group-hover:flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground"
-                title={t('test.imageRemove')}
-              >
-                <X className="h-2.5 w-2.5" />
-              </button>
             </div>
-          ))}
-          {isCompressing && (
-            <div className="flex h-12 w-12 sm:h-16 sm:w-16 items-center justify-center rounded-md border border-dashed border-border">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label={t('test.imageCompressing')} />
+          </div>
+
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {images.map((b64, i) => (
+                <div key={b64.slice(0, 16)} className="relative group">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/jpeg;base64,${b64}`}
+                    alt={`image-${i + 1}`}
+                    className="h-12 w-12 sm:h-16 sm:w-16 rounded-md object-cover border border-border"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onImageRemove(i)}
+                    aria-label={t('test.imageRemove')}
+                    className="absolute -top-1.5 -right-1.5 hidden group-hover:flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground"
+                    title={t('test.imageRemove')}
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              ))}
+              {isCompressing && (
+                <div className="flex h-12 w-12 sm:h-16 sm:w-16 items-center justify-center rounded-md border border-dashed border-border">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label={t('test.imageCompressing')} />
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </>
       )}
 
       {/* Auth indicator */}
