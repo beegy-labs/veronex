@@ -39,17 +39,6 @@ pipeline:
         - check: 'meta("kafka_topic") == "otel-logs"'
           processors:
             - bloblang: |
-                # Explode one OTLP ExportLogsServiceRequest batch into an array
-                # of flat otel_logs rows.
-                #
-                # OTLP attribute values follow proto-JSON encoding:
-                #   string  → { "stringValue": "..." }
-                #   int64   → { "intValue": "42" }   (encoded as string)
-                #   float64 → { "doubleValue": 1.0 }
-                #
-                # DateTime64(9) accepts a Unix float (seconds + fractional ns).
-                # timeUnixNano is a string int64; dividing by 1e9 gives seconds
-                # with sub-second precision (float64 is sufficient for analytics).
                 root = (this.resourceLogs | []).flatmap(rm ->
                   let res_attrs = (rm.resource.attributes | []).fold({}, (acc, x) ->
                     acc.assign({(x.key): (x.value.stringValue | x.value.intValue | x.value.asDouble.string() | "")})
@@ -81,8 +70,6 @@ pipeline:
         - check: 'meta("kafka_topic") == "otel-metrics"'
           processors:
             - bloblang: |
-                # Explode one OTLP ExportMetricsServiceRequest batch.
-                # Handles both Gauge and Sum (counter) metric types.
                 root = (this.resourceMetrics | []).flatmap(rm ->
                   let res_attrs = (rm.resource.attributes | []).fold({}, (acc, x) ->
                     acc.assign({(x.key): (x.value.stringValue | "")})

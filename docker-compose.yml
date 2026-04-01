@@ -181,8 +181,6 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_healthy
-      kafka-connect:
-        condition: service_healthy
     restart: unless-stopped
 
   redpanda:
@@ -245,6 +243,9 @@ services:
       VERONEX_API_KEY: ${VERONEX_API_KEY:-}
     ports:
       - "3100:3100"
+    depends_on:
+      valkey:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3100/health || exit 1"]
@@ -286,7 +287,7 @@ services:
     ports:
       - "9091:9091"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9091/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -370,8 +371,9 @@ services:
         condition: service_healthy
 
   kafka-connect:
-    image: docker.redpanda.com/redpandadata/connect:latest
-    command: run /etc/kafka-connect/config.yaml
+    profiles: [legacy]  # ClickHouse consumes Kafka directly — this service is not needed
+    image: docker.redpanda.com/redpandadata/connect:4.43.1
+    command: run --chilled /etc/kafka-connect/config.yaml
     volumes:
       - ./docker/kafka-connect/config.yaml:/etc/kafka-connect/config.yaml:ro
     environment:
