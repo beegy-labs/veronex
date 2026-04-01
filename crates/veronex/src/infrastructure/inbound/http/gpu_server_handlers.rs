@@ -302,7 +302,12 @@ pub async fn get_server_metrics_batch(
         .ids
         .split(',')
         .take(100)
-        .filter_map(|s| Uuid::parse_str(s.trim()).ok())
+        .filter_map(|s| {
+            let s = s.trim();
+            s.parse::<GpuServerId>().map(|id| id.0)
+                .or_else(|_| Uuid::parse_str(s))
+                .ok()
+        })
         .collect();
 
     let mut result = std::collections::HashMap::with_capacity(ids.len());
@@ -310,7 +315,7 @@ pub async fn get_server_metrics_batch(
         let metrics = hw_metrics::load_node_metrics(pool, id)
             .await
             .unwrap_or_default();
-        result.insert(id.to_string(), metrics);
+        result.insert(GpuServerId::from_uuid(id).to_string(), metrics);
     }
 
     Ok(Json(result))
