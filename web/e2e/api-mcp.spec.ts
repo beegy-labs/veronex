@@ -84,14 +84,14 @@ test.describe('API: MCP Servers', () => {
   })
 
   test('patch non-existent server returns 404', async () => {
-    const res = await api.patch('/v1/mcp/servers/00000000-0000-0000-0000-000000000000', {
+    const res = await api.patch('/v1/mcp/servers/mcp_0000000000000000000000', {
       is_enabled: true,
     })
     expect(res.status()).toBe(404)
   })
 
   test('delete non-existent server returns 404', async () => {
-    const res = await api.delete('/v1/mcp/servers/00000000-0000-0000-0000-000000000000')
+    const res = await api.delete('/v1/mcp/servers/mcp_0000000000000000000000')
     expect(res.status()).toBe(404)
   })
 })
