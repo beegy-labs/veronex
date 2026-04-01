@@ -386,10 +386,10 @@ if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
   # Inference for pulling model+provider should either:
   #   - Route to remote provider (200) if available
   #   - Return 503 if no other provider can serve the model
-  PULL_INF_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 15 "$API/v1/chat/completions" \
+  PULL_INF_CODE=$({ curl -s -w "\n%{http_code}" -o /dev/null --max-time 15 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
     -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"pull block test\"}],\"max_tokens\":3,\"stream\":false}" \
-    2>/dev/null | tail -1)
+    2>/dev/null || printf "\n000"; } | tail -1)
   case "$PULL_INF_CODE" in
     200) pass "Pull dispatch block: request rerouted to non-pulling provider (200)" ;;
     503) pass "Pull dispatch block: no eligible provider during pull (503)" ;;
