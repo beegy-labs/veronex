@@ -112,6 +112,7 @@ CREATE TABLE conversations (
     api_key_id      UUID        REFERENCES api_keys(id) ON DELETE SET NULL,
     title           TEXT,
     model_name      VARCHAR(255),
+    source          VARCHAR(8)  NOT NULL DEFAULT 'api',
     turn_count      INT         NOT NULL DEFAULT 0,
     total_prompt_tokens   INT   NOT NULL DEFAULT 0,
     total_completion_tokens INT NOT NULL DEFAULT 0,
@@ -122,6 +123,7 @@ CREATE TABLE conversations (
 CREATE INDEX idx_conversations_account  ON conversations(account_id, updated_at DESC);
 CREATE INDEX idx_conversations_api_key  ON conversations(api_key_id, updated_at DESC);
 CREATE INDEX idx_conversations_updated  ON conversations(updated_at DESC);
+CREATE INDEX idx_conversations_source   ON conversations(source);
 
 -- ── Inference Jobs ────────────────────────────────────────────────────────────
 
