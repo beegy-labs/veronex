@@ -259,6 +259,7 @@
     "testRuns": "테스트 실행",
     "analyzerJobs": "분석기",
     "networkFlow": "네트워크 흐름",
+    "testPanel": "추론 테스트",
     "groupSessions": "세션 묶기",
     "groupSessionsDesc": "선택한 날짜 이전에 완료된 작업에 대화 ID를 할당합니다.",
     "groupBeforeDate": "이 날짜 이전 작업 묶기",

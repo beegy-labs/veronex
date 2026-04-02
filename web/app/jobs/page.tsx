@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useMemo, useRef } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { dashboardJobsQuery, providersQuery } from '@/lib/queries'
 import { ConversationList } from '@/components/conversation-list'
@@ -8,7 +8,7 @@ import type { RetryParams, ConversationDetail } from '@/lib/types'
 import JobTable from '@/components/job-table'
 import { ApiTestPanel } from '@/components/api-test-panel'
 import { NetworkFlowTab } from '@/components/network-flow-tab'
-import { ChevronLeft, ChevronRight, Search, X, ListOrdered, SlidersHorizontal } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, X, ListOrdered, SlidersHorizontal, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -230,15 +230,16 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 
 export default function JobsPage() {
   const { t } = useTranslation()
-  const testPanelRef = useRef<HTMLDivElement>(null)
   const queryClient = useQueryClient()
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
+  const [continueConversation, setContinueConversation] = useState<ConversationDetail | null>(null)
 
   const handleTurnComplete = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['dashboard-jobs'] })
     queryClient.invalidateQueries({ queryKey: ['conversations'] })
   }, [queryClient])
 
-  // Persist active tab across page refreshes via URL hash
   const [activeTab, setActiveTab] = useState<'tasks' | 'conversations' | 'flow'>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.slice(1)
@@ -251,68 +252,75 @@ export default function JobsPage() {
     setActiveTab(tab)
     window.history.replaceState(null, '', `#${tab}`)
   }, [])
-  const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
-  const [continueConversation, setContinueConversation] = useState<ConversationDetail | null>(null)
 
   const { data: providersData } = useQuery(providersQuery())
   const providers = providersData?.providers
 
   const handleRetry = useCallback((params: RetryParams) => {
     setRetryParams(params)
-    setTimeout(() => {
-      testPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 50)
+    setPanelOpen(true)
   }, [])
 
   const handleContinueConversation = useCallback((detail: ConversationDetail) => {
     setContinueConversation(detail)
-    setTimeout(() => {
-      testPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 50)
+    setPanelOpen(true)
   }, [])
 
   return (
-    <div className="space-y-6">
-      {/* ── Page header ───────────────────────────────────────────────────────── */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t('jobs.title')}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{t('jobs.description')}</p>
+    <>
+      {/* ── Page content ────────────────────────────────────────────────────── */}
+      <div className="space-y-6 pb-20">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">{t('jobs.title')}</h1>
+          <p className="text-muted-foreground mt-1 text-sm">{t('jobs.description')}</p>
+        </div>
+
+        <Tabs value={activeTab} onValueChange={handleTabChange}>
+          <TabsList>
+            <TabsTrigger value="tasks">{t('jobs.tasks')}</TabsTrigger>
+            <TabsTrigger value="conversations">{t('jobs.conversations')}</TabsTrigger>
+            <TabsTrigger value="flow">{t('jobs.networkFlow')}</TabsTrigger>
+          </TabsList>
+          <TabsContent value="tasks" className="mt-6">
+            <JobsSection onRetry={handleRetry} />
+          </TabsContent>
+          <TabsContent value="conversations" className="mt-6">
+            <ConversationList onContinue={handleContinueConversation} />
+          </TabsContent>
+          <TabsContent value="flow" className="mt-6">
+            <NetworkFlowTab providers={providers ?? []} />
+          </TabsContent>
+        </Tabs>
       </div>
 
-      {/* ── Test Panel (always visible, collapsible) ─────────────────────────── */}
-      <div ref={testPanelRef}>
-        <ApiTestPanel
-          retryParams={retryParams}
-          onRetryConsumed={() => setRetryParams(null)}
-          onTurnComplete={handleTurnComplete}
-          continueConversation={continueConversation}
-          onContinueConsumed={() => setContinueConversation(null)}
-        />
+      {/* ── Floating bottom panel (Gmail-style) ─────────────────────────────── */}
+      <div className="fixed bottom-0 right-6 z-50 w-[560px] shadow-2xl rounded-t-xl overflow-hidden border border-border bg-card">
+        {/* Panel header — always visible */}
+        <button
+          type="button"
+          className="w-full flex items-center gap-2 px-4 py-2.5 bg-muted/80 hover:bg-muted transition-colors"
+          onClick={() => setPanelOpen((v) => !v)}
+        >
+          <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
+          <span className="text-sm font-medium flex-1 text-left">{t('jobs.testPanel') || '추론 테스트'}</span>
+          {panelOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+        </button>
+
+        {/* Panel body — slides open */}
+        {panelOpen && (
+          <div className="max-h-[80vh] overflow-y-auto">
+            <div className="p-4">
+              <ApiTestPanel
+                retryParams={retryParams}
+                onRetryConsumed={() => setRetryParams(null)}
+                onTurnComplete={handleTurnComplete}
+                continueConversation={continueConversation}
+                onContinueConsumed={() => setContinueConversation(null)}
+              />
+            </div>
+          </div>
+        )}
       </div>
-
-      {/* ── Tabs ──────────────────────────────────────────────────────────────── */}
-      <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList>
-          <TabsTrigger value="tasks">{t('jobs.tasks')}</TabsTrigger>
-          <TabsTrigger value="conversations">{t('jobs.conversations')}</TabsTrigger>
-          <TabsTrigger value="flow">{t('jobs.networkFlow')}</TabsTrigger>
-        </TabsList>
-
-        {/* ── Tasks tab (all sources unified) ──────────────────────────────── */}
-        <TabsContent value="tasks" className="mt-6">
-          <JobsSection onRetry={handleRetry} />
-        </TabsContent>
-
-        {/* ── Conversations tab ────────────────────────────────────────────── */}
-        <TabsContent value="conversations" className="mt-6">
-          <ConversationList onContinue={handleContinueConversation} />
-        </TabsContent>
-
-        {/* ── Network Flow tab ──────────────────────────────────────────────── */}
-        <TabsContent value="flow" className="mt-6">
-          <NetworkFlowTab providers={providers ?? []} />
-        </TabsContent>
-      </Tabs>
-    </div>
+    </>
   )
 }
