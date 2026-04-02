@@ -12,6 +12,7 @@ use crate::domain::constants::{MAX_LINE_BUFFER, PROVIDER_REQUEST_TIMEOUT};
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
 use crate::domain::value_objects::StreamToken;
+use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;
 
 pub struct OllamaAdapter {
     base_url: String,
@@ -196,7 +197,9 @@ impl OllamaAdapter {
                 "options": options,
             });
             if let Some(imgs) = images {
-                body["images"] = serde_json::json!(imgs);
+                if is_vision_model(&model) {
+                    body["images"] = serde_json::json!(imgs);
+                }
             }
 
             let response = client
@@ -339,8 +342,9 @@ impl OllamaAdapter {
                 msgs
             };
 
-            // Inject images into the last user message (Ollama expects per-message images).
-            let messages = if let Some(imgs) = images {
+            // Inject images into the last user message only for vision-capable models.
+            // Non-vision models receive images as text via analyze_images_for_context().
+            let messages = if let Some(imgs) = images.filter(|_| is_vision_model(&model)) {
                 let mut msgs = messages;
                 if let Some(arr) = msgs.as_array_mut() {
                     if let Some(last_user) = arr.iter_mut().rev()
