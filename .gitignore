@@ -45,3 +45,9 @@ minio-prod/
 # cargo-mutants output
 mutants.out/
 mutants.out.old/
+
+
+# E2E test fixture images — generated on first run, not committed (repo size)
+scripts/e2e/*.jpg
+scripts/e2e/*.jpeg
+scripts/e2e/*.png
