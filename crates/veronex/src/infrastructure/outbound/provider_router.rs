@@ -131,7 +131,7 @@ impl DynamicProviderRouter {
 impl InferenceProviderPort for DynamicProviderRouter {
     async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
         let cfg = pick_best_provider(&*self.registry, None, self.model_selection_repo.as_deref(), self.ollama_model_repo.as_deref(), &job.provider_type, job.model_name.as_str(), None, None).await?;
-        make_adapter(&cfg).as_ref().infer(job).await
+        make_adapter(&cfg, None).as_ref().infer(job).await
     }
 
     fn stream_tokens(
@@ -149,7 +149,7 @@ impl InferenceProviderPort for DynamicProviderRouter {
                 Err(e) => { yield Err(e); return; }
             };
 
-            let adapter = make_adapter(&cfg);
+            let adapter = make_adapter(&cfg, None);
             let mut s = adapter.stream_tokens(&job);
             while let Some(item) = s.next().await {
                 yield item;
@@ -572,7 +572,7 @@ fn validate_provider_url(url_str: &str) -> Result<()> {
 /// Validates the provider URL against SSRF-dangerous targets before constructing
 /// the adapter. Providers with blocked URLs are logged and return an error adapter
 /// that yields a descriptive failure on every call.
-pub fn make_adapter(cfg: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
+pub fn make_adapter(cfg: &LlmProvider, valkey: Option<&fred::clients::Pool>) -> Arc<dyn InferenceProviderPort> {
     match cfg.provider_type {
         ProviderType::Ollama => {
             if let Err(e) = validate_provider_url(&cfg.url) {
@@ -584,7 +584,10 @@ pub fn make_adapter(cfg: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
                 );
                 return Arc::new(BlockedAdapter(e.to_string()));
             }
-            Arc::new(OllamaAdapter::new(&cfg.url))
+            match valkey {
+                Some(pool) => Arc::new(OllamaAdapter::with_ctx_cache(&cfg.url, pool.clone(), cfg.id)),
+                None => Arc::new(OllamaAdapter::new(&cfg.url)),
+            }
         }
         ProviderType::Gemini => {
             // Gemini uses a fixed Google API host; URL validation is N/A.

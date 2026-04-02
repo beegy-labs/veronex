@@ -175,6 +175,15 @@ pub fn vram_leases(provider_id: Uuid) -> String {
     format!("veronex:vram_leases:{provider_id}")
 }
 
+// ── Ollama model context cache ───────────────────────────────────────────────
+
+/// Cached Ollama model context window profile.
+/// Value: JSON `{"configured_ctx": 4096, "max_ctx": 8192}`. TTL = 600s.
+/// Written by: capacity analyzer after DB upsert. Read by: OllamaAdapter inference hot-path.
+pub fn ollama_model_ctx(provider_id: Uuid, model_name: &str) -> String {
+    format!("veronex:ollama:ctx:{provider_id}:{model_name}")
+}
+
 // ── MCP tool cache ───────────────────────────────────────────────────────────
 
 /// Cached tool schema for a single MCP server (JSON-serialized `Vec<McpTool>`).

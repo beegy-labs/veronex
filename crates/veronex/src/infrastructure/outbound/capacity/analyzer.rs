@@ -1090,6 +1090,17 @@ pub async fn sync_provider(
             })
             .await?;
 
+        // Cache ctx profile in Valkey for OllamaAdapter hot-path reads.
+        if let Some(pool) = valkey_pool {
+            use fred::prelude::*;
+            let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(provider_id, &model.name);
+            let ctx_json = serde_json::json!({
+                "configured_ctx": arch.configured_ctx,
+                "max_ctx": arch.max_ctx,
+            }).to_string();
+            let _: Result<(), _> = pool.set(&ctx_key, ctx_json, Some(Expiration::EX(600)), None, false).await;
+        }
+
         // Collect snapshot for batch LLM analysis
         model_snapshots.push(ModelSnapshot {
             name:           model.name.clone(),
