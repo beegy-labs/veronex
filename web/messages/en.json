@@ -259,6 +259,7 @@
     "testRuns": "Test Runs",
     "analyzerJobs": "Analyzer",
     "networkFlow": "Network Flow",
+    "testPanel": "Inference Test",
     "groupSessions": "Group Sessions",
     "groupSessionsDesc": "Assign conversation IDs to completed jobs before the selected date.",
     "groupBeforeDate": "Group jobs before",
