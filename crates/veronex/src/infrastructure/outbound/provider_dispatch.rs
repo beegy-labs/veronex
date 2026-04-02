@@ -47,7 +47,7 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
     }
 
     fn build_adapter(&self, provider: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
-        make_adapter(provider)
+        make_adapter(provider, self.valkey_pool.as_ref())
     }
 
     async fn pick_and_build(
@@ -69,7 +69,7 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
         .await?;
         let provider_id = cfg.id;
         let is_free_tier = cfg.is_free_tier;
-        Ok((make_adapter(&cfg), provider_id, is_free_tier))
+        Ok((make_adapter(&cfg, self.valkey_pool.as_ref()), provider_id, is_free_tier))
     }
 
     async fn increment_gemini_counters(&self, provider_id: Uuid, model: &str) -> Result<()> {
