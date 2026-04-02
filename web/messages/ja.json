@@ -259,6 +259,7 @@
     "testRuns": "テスト実行",
     "analyzerJobs": "アナライザー",
     "networkFlow": "ネットワークフロー",
+    "testPanel": "推論テスト",
     "groupSessions": "セッションをまとめる",
     "groupSessionsDesc": "選択した日付より前に完了したジョブに会話IDを割り当てます。",
     "groupBeforeDate": "この日付以前のジョブをまとめる",

@@ -43,12 +43,14 @@ export function ApiTestConversation({
   onClear, onStop,
 }: ApiTestConversationProps) {
   const { t } = useTranslation()
-  const endRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
   }, [messages.length, streamingText])
 
   const canAddMore = images.length < maxImages && !isGeminiProvider && maxImages > 0
@@ -106,7 +108,7 @@ export function ApiTestConversation({
 
   return (
     <div
-      className={`border border-border rounded-md overflow-hidden${isDragging ? ' ring-2 ring-ring ring-offset-2' : ''}`}
+      className={`border border-border rounded-md overflow-hidden flex flex-col h-[520px]${isDragging ? ' ring-2 ring-ring ring-offset-2' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -184,7 +186,7 @@ export function ApiTestConversation({
 
       {/* Empty state */}
       {isEmpty && (
-        <div className="flex flex-col items-center justify-center py-8 text-muted-foreground text-sm gap-2">
+        <div className="flex-1 flex flex-col items-center justify-center py-8 text-muted-foreground text-sm gap-2">
           <p>{t('test.noSessions')}</p>
           <Button type="button" variant="outline" size="sm" onClick={onNewSession}>
             <Plus className="h-3.5 w-3.5 mr-1" />
@@ -194,8 +196,8 @@ export function ApiTestConversation({
       )}
 
       {/* Message thread */}
-      {!isEmpty && hasContent && (
-        <div className="max-h-96 overflow-y-auto p-3 space-y-3">
+      {!isEmpty && (
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
           {messages.map((msg, i) =>
             msg.role === 'user' ? (
               <div key={i} className="flex justify-end">
@@ -251,13 +253,12 @@ export function ApiTestConversation({
             </div>
           )}
 
-          <div ref={endRef} />
         </div>
       )}
 
       {/* Input area — hidden when no sessions */}
       {!isEmpty && (
-        <div className={`p-3${hasContent ? ' border-t border-border' : ''}`}>
+        <div className="px-4 pt-3 pb-3 border-t border-border shrink-0">
           {/* Image thumbnails above input */}
           {images.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2">
@@ -287,57 +288,56 @@ export function ApiTestConversation({
             </div>
           )}
 
-          <div className="flex gap-2 items-end">
-            <textarea
-              value={prompt}
-              onChange={(e) => onPromptChange(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={2}
-              placeholder={t('test.promptPlaceholder')}
-              disabled={status === 'streaming'}
-              className="flex-1 min-h-[52px] rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-none"
-            />
-            <div className="flex flex-col gap-1.5 mb-0.5">
-              {!isGeminiProvider && (
-                <>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={handleFileChange}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    disabled={!canAddMore || isCompressing}
-                    aria-label={t('test.imageAttach')}
-                    title={t('test.imageAttach')}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    {isCompressing
-                      ? <Loader2 className="h-4 w-4 animate-spin" />
-                      : <ImagePlus className="h-4 w-4" />
-                    }
-                  </Button>
-                </>
-              )}
-              <Button
-                type="button"
-                onClick={onRun}
-                disabled={!canRun}
-                size="icon"
-                aria-label={t('test.run')}
-              >
-                <Send className="h-4 w-4" />
-              </Button>
-            </div>
+          <textarea
+            value={prompt}
+            onChange={(e) => onPromptChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={3}
+            placeholder={t('test.promptPlaceholder')}
+            disabled={status === 'streaming'}
+            className="w-full rounded-md border-0 bg-transparent px-0 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 resize-none"
+          />
+          {/* Gmail-style bottom toolbar */}
+          <div className="flex items-center gap-2 pt-2 border-t border-border/50">
+            <Button
+              type="button"
+              onClick={onRun}
+              disabled={!canRun}
+              className="rounded-full px-5 h-8 text-sm font-medium"
+              aria-label={t('test.run')}
+            >
+              <Send className="h-3.5 w-3.5 mr-1.5" />
+              {t('test.run')}
+            </Button>
+            {!isGeminiProvider && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={!canAddMore || isCompressing}
+                  aria-label={t('test.imageAttach')}
+                  title={t('test.imageAttach')}
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {isCompressing
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <ImagePlus className="h-4 w-4" />
+                  }
+                </Button>
+              </>
+            )}
+            <span className="ml-auto text-xs text-muted-foreground/50">⌘↵</span>
           </div>
-          {!hasContent && (
-            <p className="mt-1.5 text-xs text-muted-foreground">{t('test.conversationHint')}</p>
-          )}
         </div>
       )}
     </div>
