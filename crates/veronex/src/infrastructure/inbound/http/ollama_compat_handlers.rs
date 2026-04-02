@@ -28,7 +28,7 @@ use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
 use super::handlers::sanitize_sse_error;
 use super::inference_helpers::{validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
-use super::inference_helpers::validate_and_compress_images;
+use super::inference_helpers::{validate_and_compress_images, analyze_images_for_context};
 use super::middleware::infer_auth::InferCaller;
 use super::state::AppState;
 
@@ -212,6 +212,21 @@ pub async fn generate(
         }
     }
 
+    // For non-vision models with images: analyze via vision fallback model and inject description.
+    // Images are kept in req.images for S3 upload and conversation history.
+    // The Ollama adapter will skip sending them to non-vision Ollama endpoints.
+    if let Some(imgs) = req.images.as_deref().filter(|i| !i.is_empty()) {
+        if let Some(desc) = analyze_images_for_context(
+            &state.http_client,
+            state.provider_registry.as_ref(),
+            &req.model,
+            imgs,
+            &req.prompt,
+        ).await {
+            req.prompt = format!("[Image Analysis]\n{desc}\n\n{}", req.prompt);
+        }
+    }
+
     let model = req.model.clone();
 
     let job_id = match state
@@ -309,7 +324,7 @@ pub async fn chat(
     State(state): State<AppState>,
     axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     headers: axum::http::HeaderMap,
-    Json(req): Json<OllamaChatBody>,
+    Json(mut req): Json<OllamaChatBody>,
 ) -> Response {
     let conversation_id = extract_conversation_id(&headers);
     if validate_model_name(&req.model).is_err() {
@@ -359,6 +374,26 @@ pub async fn chat(
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
         if let Some(msg) = validate_and_compress_images(&mut images, &lab).await {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response();
+        }
+    }
+
+    // For non-vision models with images: analyze via vision fallback model and inject description
+    // into the last user message content. Images remain in the job for S3 upload and history.
+    // The Ollama adapter will skip sending images to non-vision model endpoints.
+    if let Some(imgs) = images.as_deref().filter(|i| !i.is_empty()) {
+        if let Some(desc) = analyze_images_for_context(
+            &state.http_client,
+            state.provider_registry.as_ref(),
+            &req.model,
+            imgs,
+            &prompt,
+        ).await {
+            if let Some(last_user) = req.messages.iter_mut().rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            {
+                let existing = last_user["content"].as_str().unwrap_or("").to_string();
+                last_user["content"] = serde_json::json!(format!("[Image Analysis]\n{desc}\n\n{existing}"));
+            }
         }
     }
 

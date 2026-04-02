@@ -113,6 +113,105 @@ pub async fn validate_and_compress_images(images: &mut Option<Vec<String>>, lab:
     None
 }
 
+// ── Vision fallback — analyze images for non-vision models ──────────────────
+
+/// Returns true if the model is known to support vision (multimodal) input.
+/// Uses a name-based heuristic — Ollama vision models consistently carry "vl",
+/// "llava", "vision", "moondream", "cogvlm", "bakllava", or "minicpm-v" in
+/// their names.
+pub fn is_vision_model(model_name: &str) -> bool {
+    let lower = model_name.to_lowercase();
+    lower.contains("-vl") || lower.contains(":vl")
+        || lower.contains("llava") || lower.contains("moondream")
+        || lower.contains("cogvlm") || lower.contains("bakllava")
+        || lower.contains("minicpm-v") || lower.contains("vision")
+}
+
+/// For non-vision models that receive images, analyze each image via the
+/// configured vision fallback model (env `VISION_FALLBACK_MODEL`, default
+/// `qwen3-vl:8b`) and return a text description.
+///
+/// Returns `None` when:
+/// - No images are present
+/// - The model already supports vision (`is_vision_model`)
+/// - All providers fail or the vision model is unavailable
+///
+/// On success the caller should prepend the returned description to the
+/// user prompt and clear `images`.
+pub async fn analyze_images_for_context(
+    http: &reqwest::Client,
+    provider_registry: &dyn crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry,
+    model_name: &str,
+    images: &[String],
+    user_prompt: &str,
+) -> Option<String> {
+    if images.is_empty() || is_vision_model(model_name) {
+        return None;
+    }
+
+    let vision_model = std::env::var("VISION_FALLBACK_MODEL")
+        .unwrap_or_else(|_| "qwen3-vl:8b".to_string());
+
+    let providers = provider_registry.list_all().await.ok()?;
+    let ollama_urls: Vec<String> = providers
+        .into_iter()
+        .filter(|p| p.is_active && p.provider_type == crate::domain::enums::ProviderType::Ollama)
+        .map(|p| p.url)
+        .collect();
+
+    if ollama_urls.is_empty() {
+        return None;
+    }
+
+    // Describe each image, collecting results from the first responding provider.
+    let prompt = if user_prompt.trim().is_empty() { "Describe this image in detail." } else { user_prompt };
+    let mut descriptions: Vec<String> = Vec::new();
+    for image in images {
+        'provider: for url in &ollama_urls {
+            let endpoint = format!("{}/api/generate", url.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model":  vision_model,
+                "prompt": prompt,
+                "images": [image],
+                "stream": false,
+                "options": { "temperature": 0.0 }
+            });
+            let resp = match http
+                .post(&endpoint)
+                .json(&body)
+                .timeout(std::time::Duration::from_secs(120))
+                .send()
+                .await
+            {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    tracing::debug!("vision fallback: {} returned {}", url, r.status());
+                    continue 'provider;
+                }
+                Err(e) => {
+                    tracing::debug!("vision fallback: {} error: {}", url, e);
+                    continue 'provider;
+                }
+            };
+            let json: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(_) => continue 'provider,
+            };
+            let text = json["response"].as_str().unwrap_or("").trim().to_string();
+            if !text.is_empty() {
+                descriptions.push(text);
+                break 'provider; // got result for this image, move to next
+            }
+        }
+    }
+
+    if descriptions.is_empty() {
+        None
+    } else {
+        Some(descriptions.join("\n\n"))
+    }
+}
+
 // ── Tool call validation (security) ─────────────────────────────────────────
 
 /// Validate a single tool call from a provider response.
