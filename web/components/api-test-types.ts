@@ -49,3 +49,23 @@ export function runsReducer(state: Run[], action: RunAction): Run[] {
 }
 
 export const MAX_RUNS = 10
+
+export interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+  images?: string[] // base64, user messages only
+  model?: string    // model used for this turn (assistant messages only)
+}
+
+export interface ConversationSession {
+  id: number
+  messages: ConversationMessage[]
+  streamingText: string
+  status: 'idle' | 'streaming' | 'error'
+  errorMsg: string
+  conversationId?: string  // server-assigned conversation ID (base62 UUID)
+}
+
+export const MAX_CONV_SESSIONS = 10
+
+export type TestMode = 'single' | 'conversation'

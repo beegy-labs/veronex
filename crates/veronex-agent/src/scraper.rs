@@ -169,7 +169,12 @@ pub fn enrich_hwmon_labels(
 /// Enriches hwmon metrics with `hw_type`, `hw_vendor`, `hw_role` labels
 /// based on chip_name classification (agent-side only — pipeline is raw).
 pub async fn scrape_node_exporter(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
-    let url = format!("{}/metrics", base_url.trim_end_matches('/'));
+    let base = if base_url.starts_with("http://") || base_url.starts_with("https://") {
+        base_url.to_string()
+    } else {
+        format!("http://{}", base_url)
+    };
+    let url = format!("{}/metrics", base.trim_end_matches('/'));
     match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
         Ok(resp) => {
             let content_len = resp.content_length().unwrap_or(0) as usize;
@@ -315,6 +320,98 @@ fn parse_labels(metric_part: &str) -> Vec<(String, String)> {
     labels
 }
 
+// ── MCP health ───────────────────────────────────────────────────────────────
+
+/// Ping an MCP server for liveness.
+///
+/// Two-stage check (both must pass):
+///   1. HTTP GET `{base_url}/health` — ensures the process is up.
+///   2. JSON-RPC `ping` POST to `{base_url}` — ensures the MCP stack responds.
+///      A live HTTP endpoint does not guarantee the JSON-RPC layer is healthy.
+///
+/// Returns `true` only when both checks succeed within `SCRAPE_TIMEOUT`.
+///
+/// Key format mirrors `McpToolCache::is_online()` in veronex-mcp:
+///   `veronex:mcp:heartbeat:{server_id}`  EX {ttl_secs}
+pub async fn ping_mcp_server(
+    client: &reqwest::Client,
+    server_id: &str,
+    base_url: &str,
+) -> bool {
+    let base = base_url.trim_end_matches('/');
+
+    // Stage 1: HTTP health endpoint — always at {scheme}://{host}:{port}/health.
+    // Strips any path (e.g. "/mcp") so "http://weather-mcp:3100/mcp" → "http://weather-mcp:3100/health".
+    let health_url = {
+        // Find end of authority (scheme://host:port) by looking for 3rd '/' or end of string.
+        let after_scheme = base.find("://").map(|i| i + 3).unwrap_or(0);
+        let authority_end = base[after_scheme..].find('/').map(|i| i + after_scheme).unwrap_or(base.len());
+        format!("{}/health", &base[..authority_end])
+    };
+    match client.get(&health_url).timeout(SCRAPE_TIMEOUT).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::debug!(server_id, "MCP HTTP health ok");
+        }
+        Ok(resp) => {
+            tracing::debug!(server_id, status = %resp.status(), "MCP server unhealthy");
+            return false;
+        }
+        Err(e) => {
+            tracing::debug!(server_id, error = %e, "MCP server unreachable");
+            return false;
+        }
+    }
+
+    // Stage 2: JSON-RPC ping (application-level liveness)
+    let ping_body = serde_json::json!({ "jsonrpc": "2.0", "id": 99, "method": "ping" });
+    match client
+        .post(base)
+        .timeout(SCRAPE_TIMEOUT)
+        .json(&ping_body)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            // Verify we got a valid ping response (result: {})
+            match resp.json::<serde_json::Value>().await {
+                Ok(v) if v.get("error").is_none() => {
+                    tracing::debug!(server_id, "MCP JSON-RPC ping ok");
+                    true
+                }
+                Ok(v) => {
+                    tracing::debug!(server_id, error = ?v["error"], "MCP ping returned error");
+                    false
+                }
+                Err(e) => {
+                    tracing::debug!(server_id, error = %e, "MCP ping response not JSON");
+                    false
+                }
+            }
+        }
+        Ok(resp) => {
+            tracing::debug!(server_id, status = %resp.status(), "MCP ping HTTP error");
+            false
+        }
+        Err(e) => {
+            tracing::debug!(server_id, error = %e, "MCP ping timeout/unreachable");
+            false
+        }
+    }
+}
+
+/// Write the MCP heartbeat key to Valkey.
+/// Key: `veronex:mcp:heartbeat:{server_id}` — consumed by McpToolCache::is_online().
+pub async fn set_mcp_heartbeat(pool: &fred::clients::Pool, server_id: &str, ttl_secs: i64) {
+    use fred::prelude::*;
+    let key = format!("veronex:mcp:heartbeat:{server_id}");
+    let result: Result<(), _> = pool
+        .set(&key, "1", Some(Expiration::EX(ttl_secs)), None, false)
+        .await;
+    if let Err(e) = result {
+        tracing::warn!(server_id, error = %e, "MCP heartbeat set failed");
+    }
+}
+
 // ── Ollama ───────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -332,7 +429,12 @@ pub struct OllamaPsModel {
 /// Scrape Ollama /api/ps — returns raw model list (capped at MAX_OLLAMA_MODELS).
 /// Returns empty vec on any error.
 pub async fn scrape_ollama_raw(client: &reqwest::Client, base_url: &str) -> Vec<OllamaPsModel> {
-    let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
+    let base = if base_url.starts_with("http://") || base_url.starts_with("https://") {
+        base_url.to_string()
+    } else {
+        format!("http://{}", base_url)
+    };
+    let url = format!("{}/api/ps", base.trim_end_matches('/'));
     let resp: OllamaPsResponse = match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
         Ok(r) => {
             let content_len = r.content_length().unwrap_or(0) as usize;
@@ -407,6 +509,7 @@ pub fn ollama_gauges_from_raw(models: &[OllamaPsModel]) -> Vec<Gauge> {
 }
 
 /// Scrape Ollama /api/ps — forward raw byte values, no conversion.
+#[allow(dead_code)]
 pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
     let models = scrape_ollama_raw(client, base_url).await;
     ollama_gauges_from_raw(&models)

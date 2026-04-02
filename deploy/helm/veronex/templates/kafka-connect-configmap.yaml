@@ -1,0 +1,156 @@
+{{- if .Values.kafkaConnect.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-kafka-connect-config
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    input:
+      kafka_franz:
+        seed_brokers:
+          - {{ required "kafka-connect requires a Kafka broker" (include "veronex.redpandaBroker" .) }}
+        topics:
+          - otel-logs
+          - otel-metrics
+          - otel-traces
+        consumer_group: kafka-connect-clickhouse
+        {{- if ne (.Values.kafkaConnect.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
+        tls:
+          enabled: true
+        sasl:
+          - mechanism: ${KAFKA_SASL_MECHANISM}
+            username: ${KAFKA_USERNAME}
+            password: ${KAFKA_PASSWORD}
+        {{- end }}
+
+    pipeline:
+      processors:
+        - switch:
+            - check: 'meta("kafka_topic") == "otel-logs"'
+              processors:
+                - bloblang: |
+                    root = (this.resourceLogs | []).flatmap(rm ->
+                      let res_attrs = (rm.resource.attributes | []).fold({}, (acc, x) ->
+                        acc.assign({(x.key): (x.value.stringValue | x.value.intValue | x.value.asDouble.string() | "")})
+                      )
+                      let svc = $res_attrs.get("service.name") | ""
+                      (rm.scopeLogs | []).flatmap(sl ->
+                        (sl.logRecords | []).map(lr ->
+                          let log_attrs = (lr.attributes | []).fold({}, (acc, x) ->
+                            acc.assign({(x.key): (x.value.stringValue | x.value.intValue | x.value.asDouble.string() | "")})
+                          )
+                          {
+                            "Timestamp":          (lr.timeUnixNano | "0").number() / 1000000000,
+                            "TraceId":            lr.traceId | "",
+                            "SpanId":             lr.spanId | "",
+                            "SeverityText":       lr.severityText | "INFO",
+                            "SeverityNumber":     (lr.severityNumber | 9),
+                            "ServiceName":        $svc,
+                            "Body":               lr.body.stringValue | "",
+                            "ResourceAttributes": $res_attrs,
+                            "LogAttributes":      $log_attrs,
+                          }
+                        )
+                      )
+                    )
+                - unarchive:
+                    format: json_array
+
+            - check: 'meta("kafka_topic") == "otel-metrics"'
+              processors:
+                - bloblang: |
+                    root = (this.resourceMetrics | []).flatmap(rm ->
+                      let res_attrs = (rm.resource.attributes | []).fold({}, (acc, x) ->
+                        acc.assign({(x.key): (x.value.stringValue | "")})
+                      )
+                      let server_id = $res_attrs.get("server_id") | ""
+                      (rm.scopeMetrics | []).flatmap(sm ->
+                        (sm.metrics | []).flatmap(metric ->
+                          let dps = if metric.exists("gauge") {
+                            metric.gauge.dataPoints | []
+                          } else {
+                            metric.sum.dataPoints | []
+                          }
+                          $dps.map(dp ->
+                            let dp_attrs = (dp.attributes | []).fold({}, (acc, x) ->
+                              acc.assign({(x.key): (x.value.stringValue | "")})
+                            )
+                            {
+                              "ts":          (dp.timeUnixNano | "0").number() / 1000000000,
+                              "server_id":   $server_id,
+                              "metric_name": metric.name | "",
+                              "value":       dp.asDouble | 0.0,
+                              "attributes":  $dp_attrs,
+                            }
+                          )
+                        )
+                      )
+                    )
+                - unarchive:
+                    format: json_array
+
+            - check: 'meta("kafka_topic") == "otel-traces"'
+              processors:
+                - bloblang: |
+                    root = {"payload": content().string()}
+
+    output:
+      switch:
+        retry_until_success: true
+        cases:
+          - check: 'meta("kafka_topic") == "otel-logs"'
+            output:
+              http_client:
+                url: >-
+                  ${CLICKHOUSE_HTTP_URL}/?database=${CLICKHOUSE_DB}
+                  &query=INSERT%20INTO%20otel_logs%20FORMAT%20JSONEachRow
+                  &user=${CLICKHOUSE_USER}
+                  &password=${CLICKHOUSE_PASSWORD}
+                verb: POST
+                headers:
+                  Content-Type: application/octet-stream
+                batching:
+                  count: 500
+                  period: 5s
+                  processors:
+                    - archive:
+                        format: lines
+
+          - check: 'meta("kafka_topic") == "otel-metrics"'
+            output:
+              http_client:
+                url: >-
+                  ${CLICKHOUSE_HTTP_URL}/?database=${CLICKHOUSE_DB}
+                  &query=INSERT%20INTO%20otel_metrics_gauge%20FORMAT%20JSONEachRow
+                  &user=${CLICKHOUSE_USER}
+                  &password=${CLICKHOUSE_PASSWORD}
+                verb: POST
+                headers:
+                  Content-Type: application/octet-stream
+                batching:
+                  count: 500
+                  period: 5s
+                  processors:
+                    - archive:
+                        format: lines
+
+          - check: 'meta("kafka_topic") == "otel-traces"'
+            output:
+              http_client:
+                url: >-
+                  ${CLICKHOUSE_HTTP_URL}/?database=${CLICKHOUSE_DB}
+                  &query=INSERT%20INTO%20otel_traces_raw%20(payload)%20FORMAT%20JSONEachRow
+                  &user=${CLICKHOUSE_USER}
+                  &password=${CLICKHOUSE_PASSWORD}
+                verb: POST
+                headers:
+                  Content-Type: application/octet-stream
+                batching:
+                  count: 100
+                  period: 5s
+                  processors:
+                    - archive:
+                        format: lines
+{{- end }}

@@ -1,5 +1,6 @@
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ use super::error::AppError;
 use crate::domain::entities::ApiKey;
 use crate::domain::enums::{KeyTier, KeyType};
 use crate::domain::services::api_key_generator::generate_api_key;
+use crate::domain::value_objects::ApiKeyId;
 
 use super::state::AppState;
 
@@ -41,7 +43,7 @@ pub struct CreateKeyRequest {
 
 #[derive(Serialize)]
 pub struct CreateKeyResponse {
-    pub id: Uuid,
+    pub id: ApiKeyId,
     pub key: String,
     pub key_prefix: String,
     pub tenant_id: String,
@@ -50,7 +52,7 @@ pub struct CreateKeyResponse {
 
 #[derive(Serialize)]
 pub struct KeySummary {
-    pub id: Uuid,
+    pub id: ApiKeyId,
     pub key_prefix: String,
     pub tenant_id: String,
     pub name: String,
@@ -75,7 +77,7 @@ pub async fn create_key(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(req): Json<CreateKeyRequest>,
-) -> Result<Json<CreateKeyResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     if req.rate_limit_rpm < 0 {
         return Err(AppError::BadRequest("rate_limit_rpm must be non-negative".into()));
     }
@@ -113,13 +115,13 @@ pub async fn create_key(
             api_key.name, api_key.tenant_id, api_key.tier,
             api_key.rate_limit_rpm, api_key.rate_limit_tpm)).await;
 
-    Ok(Json(CreateKeyResponse {
-        id,
+    Ok((StatusCode::CREATED, Json(CreateKeyResponse {
+        id: ApiKeyId::from_uuid(id),
         key: plaintext,
         key_prefix,
         tenant_id: req.tenant_id,
         created_at: now,
-    }))
+    })))
 }
 
 /// Resolve the tenant_id (username) for the authenticated user.
@@ -144,7 +146,7 @@ pub async fn list_keys(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(50).clamp(1, 1000);
-    let page = params.page.unwrap_or(1).max(1);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
     let offset = (page - 1) * limit;
 
     let (keys, total) = if claims.role == crate::domain::enums::AccountRole::Super {
@@ -170,7 +172,7 @@ pub async fn list_keys(
         .map(|k| {
             let created_by = k.account_id.and_then(|id| username_map.get(&id).cloned());
             KeySummary {
-                id: k.id,
+                id: ApiKeyId::from_uuid(k.id),
                 key_prefix: k.key_prefix,
                 tenant_id: k.tenant_id,
                 name: k.name,
@@ -196,12 +198,10 @@ pub async fn list_keys(
 /// DELETE /v1/keys/{id} — Soft-delete an API key (hidden from list, blocked from auth).
 pub async fn delete_key(
     Extension(claims): Extension<Claims>,
-    Path(id): Path<String>,
+    Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
-    let key = state.api_key_repo.get_by_id(&uuid).await?
+    let key = state.api_key_repo.get_by_id(&kid.0).await?
         .ok_or_else(|| AppError::NotFound("key not found".into()))?;
     if claims.role != crate::domain::enums::AccountRole::Super {
         let tenant_id = resolve_tenant_id(&state, &claims).await?;
@@ -210,13 +210,10 @@ pub async fn delete_key(
         }
     }
 
-    state
-        .api_key_repo
-        .soft_delete(&uuid)
-        .await?;
+    state.api_key_repo.soft_delete(&kid.0).await?;
 
-    emit_audit(&state, &claims, "delete", "api_key", &id, &id,
-        &format!("API key {id} soft-deleted (access permanently revoked)")).await;
+    emit_audit(&state, &claims, "delete", "api_key", &kid.to_string(), &kid.to_string(),
+        &format!("API key {kid} soft-deleted (access permanently revoked)")).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -224,13 +221,11 @@ pub async fn delete_key(
 /// PATCH /v1/keys/{id} — Update mutable fields: `is_active` and/or `tier`.
 pub async fn toggle_key(
     Extension(claims): Extension<Claims>,
-    Path(id): Path<String>,
+    Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
     Json(req): Json<PatchKeyRequest>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
-    let key = state.api_key_repo.get_by_id(&uuid).await?
+    let key = state.api_key_repo.get_by_id(&kid.0).await?
         .ok_or_else(|| AppError::NotFound("key not found".into()))?;
     if claims.role != crate::domain::enums::AccountRole::Super {
         let tenant_id = resolve_tenant_id(&state, &claims).await?;
@@ -244,9 +239,9 @@ pub async fn toggle_key(
     if let Some(active) = req.is_active { changes.push(format!("is_active={active}")); }
     if let Some(ref tier) = req.tier { changes.push(format!("tier={tier}")); }
     let details = if changes.is_empty() {
-        format!("API key {id} updated (no changes)")
+        format!("API key {kid} updated (no changes)")
     } else {
-        format!("API key {id} updated — {}", changes.join(", "))
+        format!("API key {kid} updated — {}", changes.join(", "))
     };
 
     // Validate all input before any writes to avoid partial updates.
@@ -255,9 +250,9 @@ pub async fn toggle_key(
         None => None,
     };
 
-    state.api_key_repo.update_fields(&uuid, req.is_active, tier.as_ref()).await?;
+    state.api_key_repo.update_fields(&kid.0, req.is_active, tier.as_ref()).await?;
 
-    emit_audit(&state, &claims, "update", "api_key", &id, &id, &details).await;
+    emit_audit(&state, &claims, "update", "api_key", &kid.to_string(), &kid.to_string(), &details).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -267,12 +262,10 @@ pub async fn toggle_key(
 /// The old key is immediately invalidated. Returns the new plaintext key once.
 pub async fn regenerate_key(
     Extension(claims): Extension<Claims>,
-    Path(id): Path<String>,
+    Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
 ) -> Result<Json<CreateKeyResponse>, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
-    let key = state.api_key_repo.get_by_id(&uuid).await?
+    let key = state.api_key_repo.get_by_id(&kid.0).await?
         .ok_or_else(|| AppError::NotFound("key not found".into()))?;
     if claims.role != crate::domain::enums::AccountRole::Super {
         let tenant_id = resolve_tenant_id(&state, &claims).await?;
@@ -282,13 +275,13 @@ pub async fn regenerate_key(
     }
 
     let (_new_id, plaintext, new_hash, new_prefix) = generate_api_key();
-    state.api_key_repo.regenerate(&uuid, &new_hash, &new_prefix).await?;
+    state.api_key_repo.regenerate(&kid.0, &new_hash, &new_prefix).await?;
 
-    emit_audit(&state, &claims, "regenerate", "api_key", &id, &key.name,
+    emit_audit(&state, &claims, "regenerate", "api_key", &kid.to_string(), &key.name,
         &format!("API key '{}' regenerated (old key invalidated)", key.name)).await;
 
     Ok(Json(CreateKeyResponse {
-        id: uuid,
+        id: kid,
         key: plaintext,
         key_prefix: new_prefix,
         tenant_id: key.tenant_id,
@@ -331,14 +324,15 @@ mod tests {
     #[test]
     fn create_key_response_serialization() {
         let resp = CreateKeyResponse {
-            id: Uuid::now_v7(),
+            id: ApiKeyId::new(),
             key: "vnx_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
             key_prefix: "vnx_01ARZ3NDE".to_string(),
             tenant_id: "tenant-1".to_string(),
             created_at: Utc::now(),
         };
         let json = serde_json::to_value(&resp).unwrap();
-        assert!(json.get("id").is_some());
+        let id_str = json["id"].as_str().unwrap();
+        assert!(id_str.starts_with("key_"), "expected key_ prefix, got: {id_str}");
         assert!(json.get("key").is_some());
         assert!(json.get("key_prefix").is_some());
         assert!(json.get("tenant_id").is_some());
@@ -348,7 +342,7 @@ mod tests {
     #[test]
     fn key_summary_serialization() {
         let summary = KeySummary {
-            id: Uuid::now_v7(),
+            id: ApiKeyId::new(),
             key_prefix: "vnx_01ARZ3NDE".to_string(),
             tenant_id: "tenant-1".to_string(),
             name: "test-key".to_string(),

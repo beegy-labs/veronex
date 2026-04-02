@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-22 | Classification: Constitutional
+> SSOT | **Last Updated**: 2026-03-28 | Classification: Constitutional
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision
@@ -49,6 +49,9 @@ crates/veronex/src/
 │       ├── observability/      # HttpObservabilityAdapter + HttpAuditAdapter (fail-open → veronex-analytics)
 │       ├── analytics/          # HttpAnalyticsClient (GET from veronex-analytics)
 │       ├── pubsub/             # Cross-instance relay (Valkey Streams + Pub/Sub) + reaper (crash recovery)
+│       ├── s3/                 # S3ImageStore, S3MessageStore, WebP conversion
+│       ├── session_grouping.rs # Conversation session grouping (background loop)
+│       ├── queue_maintenance.rs # Queue reaper, orphan cleanup
 │       ├── valkey_keys.rs      # Valkey key patterns (infra-only helpers; queue names live in domain/constants.rs)
 │       └── capacity/           # VramPool, DistributedVramPool, ThermalThrottleMap, CapacityAnalyzer
 │

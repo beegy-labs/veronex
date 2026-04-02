@@ -1,15 +1,16 @@
 'use client'
 
-import { useState, useCallback, useMemo, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { dashboardJobsQuery, providersQuery } from '@/lib/queries'
-import type { RetryParams } from '@/lib/types'
+import { ConversationList } from '@/components/conversation-list'
+import type { RetryParams, ConversationDetail } from '@/lib/types'
 import JobTable from '@/components/job-table'
 import { ApiTestPanel } from '@/components/api-test-panel'
-import { NetworkFlowTab } from '@/app/overview/components/network-flow-tab'
-import { ChevronLeft, ChevronRight, Search, X, GitMerge, ListOrdered, SlidersHorizontal } from 'lucide-react'
+import { NetworkFlowTab } from '@/components/network-flow-tab'
+import { ChevronLeft, ChevronRight, Search, X, ListOrdered, SlidersHorizontal, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -32,75 +33,10 @@ function buildPageSlots(current: number, total: number): (number | '…')[] {
   return [first, '…', current - 1, current, current + 1, '…', last]
 }
 
-// ── Group Sessions panel ───────────────────────────────────────────────────────
-
-function GroupSessionsPanel() {
-  const { t } = useTranslation()
-  const [date, setDate] = useState(() => {
-    // default: yesterday
-    const d = new Date()
-    d.setDate(d.getDate() - 1)
-    return d.toISOString().slice(0, 10)
-  })
-  const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
-
-  async function handleGroup() {
-    setLoading(true)
-    setMessage(null)
-    try {
-      await api.triggerSessionGrouping(date)
-      setMessage({ type: 'success', text: t('jobs.groupingSuccess') })
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : ''
-      if (msg.startsWith('409')) {
-        setMessage({ type: 'error', text: t('jobs.groupingAlreadyRunning') })
-      } else {
-        setMessage({ type: 'error', text: t('jobs.groupingError') })
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <div className="flex items-center gap-2">
-          <GitMerge className="h-4 w-4 text-muted-foreground" />
-          <CardTitle className="text-base">{t('jobs.groupSessions')}</CardTitle>
-        </div>
-        <CardDescription>{t('jobs.groupSessionsDesc')}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="flex items-center gap-3 flex-wrap">
-          <label className="text-sm text-muted-foreground whitespace-nowrap">
-            {t('jobs.groupBeforeDate')}
-          </label>
-          <Input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-40 h-9 text-sm"
-          />
-          <Button size="sm" onClick={handleGroup} disabled={loading || !date}>
-            {loading ? t('jobs.grouping') : t('jobs.groupNow')}
-          </Button>
-          {message && (
-            <span className={`text-sm ${message.type === 'success' ? 'text-status-success-fg' : 'text-destructive'}`}>
-              {message.text}
-            </span>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
 // ── Reusable jobs section ──────────────────────────────────────────────────────
 
 interface JobsSectionProps {
-  source: 'api' | 'test' | 'analyzer'
+  source?: 'api' | 'test' | 'analyzer'
   onRetry?: (params: RetryParams) => void
 }
 
@@ -129,7 +65,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const offset = page * PAGE_SIZE
 
   const { data, isLoading, error } = useQuery(
-    dashboardJobsQuery({ source, page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: serverNameFilter || undefined, providerType: providerTypeFilter !== 'all' ? providerTypeFilter : undefined }),
+    dashboardJobsQuery({ source: source ?? 'api', page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: serverNameFilter || undefined, providerType: providerTypeFilter !== 'all' ? providerTypeFilter : undefined }),
   )
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
@@ -294,82 +230,97 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 
 export default function JobsPage() {
   const { t } = useTranslation()
-  const testPanelRef = useRef<HTMLDivElement>(null)
+  const queryClient = useQueryClient()
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
+  const [continueConversation, setContinueConversation] = useState<ConversationDetail | null>(null)
 
-  // Persist active tab across page refreshes via URL hash
-  const [activeTab, setActiveTab] = useState<'api' | 'test' | 'analyzer' | 'flow'>(() => {
+  const handleTurnComplete = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['dashboard-jobs'] })
+    queryClient.invalidateQueries({ queryKey: ['conversations'] })
+  }, [queryClient])
+
+  const [activeTab, setActiveTab] = useState<'tasks' | 'conversations' | 'flow'>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.slice(1)
-      if (hash === 'test' || hash === 'analyzer' || hash === 'flow') return hash as 'test' | 'analyzer' | 'flow'
+      if (hash === 'conversations' || hash === 'flow') return hash as 'conversations' | 'flow'
     }
-    return 'api'
+    return 'tasks'
   })
   const handleTabChange = useCallback((v: string) => {
-    const tab = v as 'api' | 'test' | 'flow'
+    const tab = v as 'tasks' | 'conversations' | 'flow'
     setActiveTab(tab)
     window.history.replaceState(null, '', `#${tab}`)
   }, [])
-  const [retryParams, setRetryParams] = useState<RetryParams | null>(null)
 
   const { data: providersData } = useQuery(providersQuery())
   const providers = providersData?.providers
 
   const handleRetry = useCallback((params: RetryParams) => {
     setRetryParams(params)
-    setActiveTab('test')
-    setTimeout(() => {
-      testPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 50)
+    setPanelOpen(true)
+  }, [])
+
+  const handleContinueConversation = useCallback((detail: ConversationDetail) => {
+    setContinueConversation(detail)
+    setPanelOpen(true)
   }, [])
 
   return (
-    <div className="space-y-6">
-      {/* ── Page header ───────────────────────────────────────────────────────── */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t('jobs.title')}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{t('jobs.description')}</p>
+    <>
+      {/* ── Page content ────────────────────────────────────────────────────── */}
+      <div className="space-y-6 pb-20">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">{t('jobs.title')}</h1>
+          <p className="text-muted-foreground mt-1 text-sm">{t('jobs.description')}</p>
+        </div>
+
+        <Tabs value={activeTab} onValueChange={handleTabChange}>
+          <TabsList>
+            <TabsTrigger value="tasks">{t('jobs.tasks')}</TabsTrigger>
+            <TabsTrigger value="conversations">{t('jobs.conversations')}</TabsTrigger>
+            <TabsTrigger value="flow">{t('jobs.networkFlow')}</TabsTrigger>
+          </TabsList>
+          <TabsContent value="tasks" className="mt-6">
+            <JobsSection onRetry={handleRetry} />
+          </TabsContent>
+          <TabsContent value="conversations" className="mt-6">
+            <ConversationList onContinue={handleContinueConversation} />
+          </TabsContent>
+          <TabsContent value="flow" className="mt-6">
+            <NetworkFlowTab providers={providers ?? []} />
+          </TabsContent>
+        </Tabs>
       </div>
 
-      {/* ── Group Sessions ────────────────────────────────────────────────────── */}
-      <GroupSessionsPanel />
+      {/* ── Floating bottom panel (Gmail-style) ─────────────────────────────── */}
+      <div className="fixed bottom-0 right-6 z-50 w-[560px] shadow-2xl rounded-t-xl overflow-hidden border border-border bg-card">
+        {/* Panel header — always visible */}
+        <button
+          type="button"
+          className="w-full flex items-center gap-2 px-4 py-2.5 bg-muted/80 hover:bg-muted transition-colors"
+          onClick={() => setPanelOpen((v) => !v)}
+        >
+          <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
+          <span className="text-sm font-medium flex-1 text-left">{t('jobs.testPanel') || '추론 테스트'}</span>
+          {panelOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+        </button>
 
-      {/* ── Tabs ──────────────────────────────────────────────────────────────── */}
-      <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList>
-          <TabsTrigger value="api">{t('jobs.apiJobs')}</TabsTrigger>
-          <TabsTrigger value="test">{t('jobs.testRuns')}</TabsTrigger>
-          <TabsTrigger value="analyzer">{t('jobs.analyzerJobs')}</TabsTrigger>
-          <TabsTrigger value="flow">{t('jobs.networkFlow')}</TabsTrigger>
-        </TabsList>
-
-        {/* ── API Jobs tab ──────────────────────────────────────────────────── */}
-        <TabsContent value="api" className="mt-6">
-          <JobsSection source="api" onRetry={handleRetry} />
-        </TabsContent>
-
-        {/* ── Test Runs tab ─────────────────────────────────────────────────── */}
-        <TabsContent value="test" className="mt-6 space-y-6">
-          <div ref={testPanelRef}>
-            <ApiTestPanel
-              retryParams={retryParams}
-              onRetryConsumed={() => setRetryParams(null)}
-            />
+        {/* Panel body — slides open */}
+        {panelOpen && (
+          <div className="max-h-[80vh] overflow-y-auto">
+            <div className="p-4">
+              <ApiTestPanel
+                retryParams={retryParams}
+                onRetryConsumed={() => setRetryParams(null)}
+                onTurnComplete={handleTurnComplete}
+                continueConversation={continueConversation}
+                onContinueConsumed={() => setContinueConversation(null)}
+              />
+            </div>
           </div>
-          <div className="border-t border-border pt-6">
-            <JobsSection source="test" onRetry={handleRetry} />
-          </div>
-        </TabsContent>
-
-        {/* ── Analyzer tab ──────────────────────────────────────────────────── */}
-        <TabsContent value="analyzer" className="mt-6">
-          <JobsSection source="analyzer" />
-        </TabsContent>
-
-        {/* ── Network Flow tab ──────────────────────────────────────────────── */}
-        <TabsContent value="flow" className="mt-6">
-          <NetworkFlowTab providers={providers ?? []} />
-        </TabsContent>
-      </Tabs>
-    </div>
+        )}
+      </div>
+    </>
   )
 }

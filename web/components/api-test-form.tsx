@@ -10,9 +10,10 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
-import type { ProviderOption, Endpoint } from '@/components/api-test-types'
+import type { ProviderOption, Endpoint, TestMode } from '@/components/api-test-types'
 
 interface ApiTestFormProps {
+  mode: TestMode
   providerType: string
   model: string
   prompt: string
@@ -27,6 +28,7 @@ interface ApiTestFormProps {
   endpoint: Endpoint
   useApiKey: boolean
   apiKeyValue: string
+  onModeChange: (v: TestMode) => void
   onProviderChange: (v: string) => void
   onModelChange: (v: string) => void
   onPromptChange: (v: string) => void
@@ -39,12 +41,12 @@ interface ApiTestFormProps {
 }
 
 export function ApiTestForm({
-  providerType, model, prompt,
+  mode, providerType, model, prompt,
   images, maxImages, isCompressing,
   availableOptions, availableModels, isGeminiProvider,
   canRun, authUsername,
   endpoint, useApiKey, apiKeyValue,
-  onProviderChange, onModelChange, onPromptChange,
+  onModeChange, onProviderChange, onModelChange, onPromptChange,
   onImageAdd, onImageRemove,
   onEndpointChange, onUseApiKeyChange, onApiKeyValueChange,
   onRun,
@@ -96,6 +98,24 @@ export function ApiTestForm({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Mode toggle */}
+      <div className="flex items-center gap-1 p-0.5 rounded-md bg-muted w-fit">
+        {(['single', 'conversation'] as TestMode[]).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => onModeChange(m)}
+            className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+              mode === m
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t(m === 'single' ? 'test.modeSingle' : 'test.modeConversation')}
+          </button>
+        ))}
+      </div>
+
       {/* Provider + Model */}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
@@ -181,88 +201,90 @@ export function ApiTestForm({
         )}
       </div>
 
-      {/* Prompt + Image button + Run button */}
-      <div className="flex gap-3 items-end">
-        <div className="flex-1 space-y-1.5">
-          <Label htmlFor="test-prompt">{t('test.prompt')}</Label>
-          <textarea
-            id="test-prompt"
-            value={prompt}
-            onChange={(e) => onPromptChange(e.target.value)}
-            rows={3}
-            placeholder={t('test.promptPlaceholder')}
-            className="flex min-h-[72px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-y"
-          />
-        </div>
-
-        <div className="flex flex-col gap-2 mb-0.5">
-          {/* Image attach button — Ollama only, hidden for Gemini */}
-          {!isGeminiProvider && (
-            <>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={handleFileChange}
+      {/* Prompt + Image button + Run button — hidden in conversation mode (input moves to chat area) */}
+      {mode !== 'conversation' && (
+        <>
+          <div className="flex gap-3 items-end">
+            <div className="flex-1 space-y-1.5">
+              <Label htmlFor="test-prompt">{t('test.prompt')}</Label>
+              <textarea
+                id="test-prompt"
+                value={prompt}
+                onChange={(e) => onPromptChange(e.target.value)}
+                rows={3}
+                placeholder={t('test.promptPlaceholder')}
+                className="flex min-h-[72px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-y"
               />
+            </div>
+
+            <div className="flex flex-col gap-2 mb-0.5">
+              {!isGeminiProvider && (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileChange}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    disabled={!canAddMore || isCompressing}
+                    aria-label={t('test.imageAttach')}
+                    title={t('test.imageAttach')}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {isCompressing
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <ImagePlus className="h-4 w-4" />
+                    }
+                  </Button>
+                </>
+              )}
+
               <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                disabled={!canAddMore || isCompressing}
-                aria-label={t('test.imageAttach')}
-                title={t('test.imageAttach')}
-                onClick={() => fileInputRef.current?.click()}
+                type="submit"
+                disabled={!canRun}
+                className="shrink-0"
+                aria-label={t('test.run')}
               >
-                {isCompressing
-                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : <ImagePlus className="h-4 w-4" />
-                }
+                <Send className="h-4 w-4" />
               </Button>
-            </>
-          )}
-
-          <Button
-            type="submit"
-            disabled={!canRun}
-            className="shrink-0"
-            aria-label={t('test.run')}
-          >
-            <Send className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Image thumbnails */}
-      {images.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {images.map((b64, i) => (
-            <div key={b64.slice(0, 16)} className="relative group">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`data:image/jpeg;base64,${b64}`}
-                alt={`image-${i + 1}`}
-                className="h-12 w-12 sm:h-16 sm:w-16 rounded-md object-cover border border-border"
-              />
-              <button
-                type="button"
-                onClick={() => onImageRemove(i)}
-                aria-label={t('test.imageRemove')}
-                className="absolute -top-1.5 -right-1.5 hidden group-hover:flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground"
-                title={t('test.imageRemove')}
-              >
-                <X className="h-2.5 w-2.5" />
-              </button>
             </div>
-          ))}
-          {isCompressing && (
-            <div className="flex h-12 w-12 sm:h-16 sm:w-16 items-center justify-center rounded-md border border-dashed border-border">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label={t('test.imageCompressing')} />
+          </div>
+
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {images.map((b64, i) => (
+                <div key={b64.slice(0, 16)} className="relative group">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/jpeg;base64,${b64}`}
+                    alt={`image-${i + 1}`}
+                    className="h-12 w-12 sm:h-16 sm:w-16 rounded-md object-cover border border-border"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onImageRemove(i)}
+                    aria-label={t('test.imageRemove')}
+                    className="absolute -top-1.5 -right-1.5 hidden group-hover:flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground"
+                    title={t('test.imageRemove')}
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              ))}
+              {isCompressing && (
+                <div className="flex h-12 w-12 sm:h-16 sm:w-16 items-center justify-center rounded-md border border-dashed border-border">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label={t('test.imageCompressing')} />
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </>
       )}
 
       {/* Auth indicator */}

@@ -2,7 +2,8 @@
 # Phase 04: Account / API Key / Provider (num_parallel) / Server CRUD
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
 
 # ── Account CRUD ──────────────────────────────────────────────────────────────
 
@@ -74,6 +75,18 @@ if [ "$KEY_CODE" = "200" ] || [ "$KEY_CODE" = "201" ] && [ -n "$KEY_ID" ] && [ "
 
   c=$(apatchc "/v1/keys/$KEY_ID" '{"tier":"paid"}' | code)
   [ "$c" = "204" ] || [ "$c" = "200" ] && pass "Change tier → $c" || fail "Tier → $c"
+
+  # Regenerate key — new raw key returned
+  REGEN_RES=$(apostc "/v1/keys/$KEY_ID/regenerate" "{}")
+  REGEN_CODE=$(echo "$REGEN_RES" | code)
+  REGEN_KEY=$(echo "$REGEN_RES" | body | jv '["key"]' 2>/dev/null || echo "")
+  if { [ "$REGEN_CODE" = "200" ] || [ "$REGEN_CODE" = "201" ]; } && [ -n "$REGEN_KEY" ] && [ "$REGEN_KEY" != "None" ] && [ "$REGEN_KEY" != "$KEY_RAW" ]; then
+    pass "Regenerate key → $REGEN_CODE (new key differs from original)"
+  elif [ "$REGEN_CODE" = "200" ] || [ "$REGEN_CODE" = "201" ]; then
+    pass "Regenerate key → $REGEN_CODE"
+  else
+    fail "Regenerate key → $REGEN_CODE"
+  fi
 
   c=$(adelc "/v1/keys/$KEY_ID" | code)
   [ "$c" = "204" ] && pass "Delete key → 204" || fail "Delete key → $c"
@@ -160,8 +173,8 @@ else
   fail "Create temp provider failed ($TMP_CODE)"
 fi
 
-# Non-existent provider → 404
-c=$(agetc "/v1/providers/00000000-0000-0000-0000-000000000000/models" | code)
+# Non-existent provider → 404 (use typed prov_xxx format — raw UUID returns 400)
+c=$(agetc "/v1/providers/prov_0000000000000000000000/models" | code)
 [ "$c" = "404" ] && pass "Non-existent provider → 404" || fail "Expected 404, got $c"
 
 # Registered providers model/selection endpoints

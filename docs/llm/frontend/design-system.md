@@ -1,6 +1,6 @@
 # Web -- Brand, Design System & Core
 
-> SSOT | **Last Updated**: 2026-03-16 | Split from monolithic design-system into 3 files
+> SSOT | **Last Updated**: 2026-03-25 | Split from monolithic design-system into 3 files
 
 Related files:
 - [design-system-i18n.md](design-system-i18n.md) -- i18n, timezone, date formatting
@@ -183,6 +183,52 @@ Base padding: `TableHead` `h-11 px-4`, `TableCell` `py-3 px-4`. First cell `pl-6
 - No global client store (no Redux/Zustand)
 - QueryClient config (`layout.tsx`): `staleTime: 30_000`, `retry: 1`, `refetchOnWindowFocus: false`
 - `refetchOnWindowFocus: false` prevents burst refetch on tab re-focus and avoids racing the token refresh mutex
+
+---
+
+## Next.js 16.2 / React 19.2 — Key Patterns
+
+### `<Activity>` — State-Preserving Hide/Show
+
+Replaces `{condition && <Component />}` when the component must retain state across hide/show:
+
+```tsx
+import { Activity } from 'react'
+
+// tab panels, collapsible sections, back-navigation preserved state
+<Activity mode={isVisible ? 'visible' : 'hidden'}>
+  <ExpensivePanel />
+</Activity>
+```
+
+When hidden: effects unmount, updates are deferred. State survives. Use instead of conditional render when remounting is expensive or state loss is unacceptable.
+
+### `unstable_retry()` in error.tsx
+
+Prefer `unstable_retry()` over `reset()` for data-fetching errors — it does `router.refresh()` + `reset()` inside a transition:
+
+```tsx
+// app/*/error.tsx
+export default function Error({ reset, retry }: { reset: () => void; retry: () => void }) {
+  return <Button onClick={retry}>{t('common.retry')}</Button>
+}
+```
+
+### `useId` Prefix (React 19.2)
+
+`useId()` now emits IDs with prefix `_r_` (was `:r:` in 19.0). Update any snapshot tests or DOM assertions that check `useId` output. The current pattern in `nav-progress.tsx` (stripping `:`) should be updated to strip `_` instead:
+
+```tsx
+const safeId = rawId.replace(/_/g, '') // React 19.2: IDs are "_r0_" format
+```
+
+### Next.js 16.2 — No mandatory code changes
+
+The 16.1.6 → 16.2.1 upgrade is a safe bump. New opt-in flags (all off by default):
+- `experimental.prefetchInlining` — reduces prefetch requests per link
+- `experimental.appNewScrollHandler` — improved post-navigation focus management
+
+RSC payload deserialization is ~350% faster in 16.2 (zero config gain).
 
 ---
 

@@ -45,6 +45,7 @@ async fn save_analyzer_job(
     let job = crate::domain::entities::InferenceJob {
         id: JobId::new(),
         prompt: Prompt::new(&prompt[..prompt.len().min(4096)]).unwrap_or_else(|_| Prompt::new("analyzer").unwrap()),
+        prompt_preview: None,
         model_name: ModelName::new(model).unwrap_or_else(|_| ModelName::new("unknown").unwrap()),
         status: JobStatus::Completed,
         provider_type: ProviderType::Ollama,
@@ -80,6 +81,8 @@ async fn save_analyzer_job(
         response_format: None,
         frequency_penalty: None,
         presence_penalty: None,
+        mcp_loop_id: None,
+        max_tokens: None,
     };
     if let Err(e) = repo.save(&job).await {
         tracing::debug!("failed to save analyzer job: {e}");
@@ -1086,6 +1089,17 @@ pub async fn sync_provider(
                 updated_at:        Utc::now(),
             })
             .await?;
+
+        // Cache ctx profile in Valkey for OllamaAdapter hot-path reads.
+        if let Some(pool) = valkey_pool {
+            use fred::prelude::*;
+            let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(provider_id, &model.name);
+            let ctx_json = serde_json::json!({
+                "configured_ctx": arch.configured_ctx,
+                "max_ctx": arch.max_ctx,
+            }).to_string();
+            let _: Result<(), _> = pool.set(&ctx_key, ctx_json, Some(Expiration::EX(600)), None, false).await;
+        }
 
         // Collect snapshot for batch LLM analysis
         model_snapshots.push(ModelSnapshot {

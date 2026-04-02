@@ -2,7 +2,8 @@
 # Phase 07: Job Lifecycle / SSE Replay / Native API / Password Reset / Edge Cases
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
 
 # ── Job Cancel During Streaming ───────────────────────────────────────────────
 

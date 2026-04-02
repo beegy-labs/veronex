@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::domain::entities::{Account, Session};
 use crate::domain::enums::AccountRole;
 use crate::domain::services::password_hashing;
+use crate::domain::value_objects::AccountId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 use crate::infrastructure::inbound::http::state::AppState;
 use crate::infrastructure::outbound::valkey_keys;
@@ -35,7 +36,7 @@ pub struct LoginRequest {
 #[derive(Serialize)]
 pub struct LoginResponse {
     pub ok: bool,
-    pub account_id: Uuid,
+    pub account_id: AccountId,
     pub username: String,
     pub role: String,
     pub permissions: Vec<String>,
@@ -72,7 +73,8 @@ pub(crate) async fn resolve_roles_for_account(pg: &sqlx::PgPool, account_id: Uui
         "SELECT r.name, r.permissions, r.menus, r.is_system
          FROM roles r
          JOIN account_roles ar ON ar.role_id = r.id
-         WHERE ar.account_id = $1"
+         WHERE ar.account_id = $1
+         LIMIT 50"
     )
     .bind(account_id)
     .fetch_all(pg)
@@ -224,14 +226,26 @@ const ACCESS_COOKIE: &str = "veronex_access_token";
 const REFRESH_COOKIE: &str = "veronex_refresh_token";
 
 /// Build `Set-Cookie` headers for both access and refresh tokens.
+///
+/// Tokens are validated to prevent header injection (CRLF / semicolons).
 #[allow(clippy::unwrap_used)]
 fn set_auth_cookies(headers: &mut HeaderMap, access_token: &str, refresh_token: &str) {
     use super::constants::{ACCESS_TOKEN_MAX_AGE, REFRESH_TOKEN_MAX_AGE};
+
+    fn sanitize_cookie_value(v: &str) -> String {
+        v.chars()
+            .filter(|c| !matches!(c, '\r' | '\n' | ';' | ','))
+            .collect()
+    }
+
+    let access = sanitize_cookie_value(access_token);
+    let refresh = sanitize_cookie_value(refresh_token);
+
     // Access token: sent on every request.
     headers.append(
         SET_COOKIE,
         format!(
-            "{ACCESS_COOKIE}={access_token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={ACCESS_TOKEN_MAX_AGE}"
+            "{ACCESS_COOKIE}={access}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={ACCESS_TOKEN_MAX_AGE}"
         )
         .parse()
         .unwrap(),
@@ -240,7 +254,7 @@ fn set_auth_cookies(headers: &mut HeaderMap, access_token: &str, refresh_token: 
     headers.append(
         SET_COOKIE,
         format!(
-            "{REFRESH_COOKIE}={refresh_token}; HttpOnly; Secure; SameSite=Strict; Path=/v1/auth; Max-Age={REFRESH_TOKEN_MAX_AGE}"
+            "{REFRESH_COOKIE}={refresh}; HttpOnly; Secure; SameSite=Strict; Path=/v1/auth; Max-Age={REFRESH_TOKEN_MAX_AGE}"
         )
         .parse()
         .unwrap(),
@@ -290,16 +304,24 @@ pub async fn login(
     Json(req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     // ── M2: IP-based login rate limiting ─────────────────────────────
-    if let Some(ref pool) = state.valkey_pool {
-        use fred::prelude::*;
-        let ip = addr.ip().to_string();
-        let key = valkey_keys::login_attempts(&ip);
-        let count: i64 = pool.incr_by(&key, 1).await.unwrap_or(1);
-        if count == 1 {
-            let _: bool = pool.expire(&key, 300, None).await.unwrap_or(false);
-        }
-        if count > 10 {
-            return Err(AppError::TooManyRequests { retry_after: 300 });
+    if state.login_rate_limit > 0 {
+        if let Some(ref pool) = state.valkey_pool {
+            use fred::prelude::*;
+            let ip = addr.ip().to_string();
+            let key = valkey_keys::login_attempts(&ip);
+            let count: i64 = pool.incr_by(&key, 1).await.unwrap_or_else(|e| {
+                tracing::warn!(ip, error = %e, "login rate-limit: incr_by failed, defaulting to 1");
+                1
+            });
+            if count == 1 {
+                let _: bool = pool.expire(&key, 300, None).await.unwrap_or_else(|e| {
+                    tracing::warn!(ip, error = %e, "login rate-limit: expire failed, key may not expire");
+                    false
+                });
+            }
+            if count > state.login_rate_limit as i64 {
+                return Err(AppError::TooManyRequests { retry_after: 300 });
+            }
         }
     }
 
@@ -357,7 +379,7 @@ pub async fn login(
 
     Ok((headers, Json(LoginResponse {
         ok: true,
-        account_id: account.id,
+        account_id: AccountId::from_uuid(account.id),
         username: account.username,
         role: resolved.name.clone(),
         permissions: resolved.permissions.clone(),
@@ -628,7 +650,7 @@ pub async fn setup(
 
     Ok((headers, Json(LoginResponse {
         ok: true,
-        account_id: account.id,
+        account_id: AccountId::from_uuid(account.id),
         username: account.username,
         role: resolved.name.clone(),
         permissions: resolved.permissions.clone(),

@@ -38,3 +38,16 @@ web/tsconfig.tsbuildinfo
 
 # Helm dependency charts (downloaded by helm dependency build)
 deploy/helm/*/charts/*.tgz
+
+# MinIO local mount (runtime storage, not source)
+minio-prod/
+
+# cargo-mutants output
+mutants.out/
+mutants.out.old/
+
+
+# E2E test fixture images — generated on first run, not committed (repo size)
+scripts/e2e/*.jpg
+scripts/e2e/*.jpeg
+scripts/e2e/*.png

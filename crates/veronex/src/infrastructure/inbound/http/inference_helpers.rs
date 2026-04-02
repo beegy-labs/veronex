@@ -10,7 +10,7 @@ use axum::response::sse::Event;
 use axum::response::Response;
 use futures::StreamExt;
 
-use crate::domain::value_objects::{JobId, StreamToken};
+use crate::domain::value_objects::{ConvId, JobId, StreamToken};
 use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_MODEL_NAME_BYTES, MAX_PROMPT_BYTES};
 use super::handlers::{SseStream, try_acquire_sse, sse_response};
@@ -20,13 +20,30 @@ use super::state::AppState;
 
 /// Extract the `x-conversation-id` header value, if present and valid.
 ///
-/// Returns `None` when the header is absent, not valid UTF-8, or exceeds 256 bytes.
-pub fn extract_conversation_id(headers: &axum::http::HeaderMap) -> Option<String> {
+/// Decodes the `conv_{base62}` string from the header into a UUID.
+/// Returns `None` when the header is absent, not valid UTF-8, exceeds 256 bytes,
+/// or fails to decode.
+pub fn extract_conversation_id(headers: &axum::http::HeaderMap) -> Option<uuid::Uuid> {
     headers
         .get("x-conversation-id")
         .and_then(|v| v.to_str().ok())
         .filter(|s| s.len() <= 256)
-        .map(str::to_string)
+        .and_then(|s| decode_conversation_id(s))
+}
+
+/// Generate a new conversation ID as UUIDv7.
+pub fn new_conversation_id() -> uuid::Uuid {
+    uuid::Uuid::now_v7()
+}
+
+/// Encode a UUID as a prefixed base62 conversation ID (e.g. `"conv_3X4aB..."`).
+pub fn to_public_id(uuid: &uuid::Uuid) -> String {
+    ConvId::from_uuid(*uuid).to_string()
+}
+
+/// Decode a `conv_{base62}` conversation ID back to UUID.
+pub fn decode_conversation_id(id: &str) -> Option<uuid::Uuid> {
+    id.parse::<ConvId>().ok().map(|c| c.0)
 }
 
 // ── Input validation ────────────────────────────────────────────────────────
@@ -94,6 +111,105 @@ pub async fn validate_and_compress_images(images: &mut Option<Vec<String>>, lab:
         }
     }
     None
+}
+
+// ── Vision fallback — analyze images for non-vision models ──────────────────
+
+/// Returns true if the model is known to support vision (multimodal) input.
+/// Uses a name-based heuristic — Ollama vision models consistently carry "vl",
+/// "llava", "vision", "moondream", "cogvlm", "bakllava", or "minicpm-v" in
+/// their names.
+pub fn is_vision_model(model_name: &str) -> bool {
+    let lower = model_name.to_lowercase();
+    lower.contains("-vl") || lower.contains(":vl")
+        || lower.contains("llava") || lower.contains("moondream")
+        || lower.contains("cogvlm") || lower.contains("bakllava")
+        || lower.contains("minicpm-v") || lower.contains("vision")
+}
+
+/// For non-vision models that receive images, analyze each image via the
+/// configured vision fallback model (env `VISION_FALLBACK_MODEL`, default
+/// `qwen3-vl:8b`) and return a text description.
+///
+/// Returns `None` when:
+/// - No images are present
+/// - The model already supports vision (`is_vision_model`)
+/// - All providers fail or the vision model is unavailable
+///
+/// On success the caller should prepend the returned description to the
+/// user prompt and clear `images`.
+pub async fn analyze_images_for_context(
+    http: &reqwest::Client,
+    provider_registry: &dyn crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry,
+    model_name: &str,
+    images: &[String],
+    user_prompt: &str,
+) -> Option<String> {
+    if images.is_empty() || is_vision_model(model_name) {
+        return None;
+    }
+
+    let vision_model = std::env::var("VISION_FALLBACK_MODEL")
+        .unwrap_or_else(|_| "qwen3-vl:8b".to_string());
+
+    let providers = provider_registry.list_all().await.ok()?;
+    let ollama_urls: Vec<String> = providers
+        .into_iter()
+        .filter(|p| p.is_active && p.provider_type == crate::domain::enums::ProviderType::Ollama)
+        .map(|p| p.url)
+        .collect();
+
+    if ollama_urls.is_empty() {
+        return None;
+    }
+
+    // Describe each image, collecting results from the first responding provider.
+    let prompt = if user_prompt.trim().is_empty() { "Describe this image in detail." } else { user_prompt };
+    let mut descriptions: Vec<String> = Vec::new();
+    for image in images {
+        'provider: for url in &ollama_urls {
+            let endpoint = format!("{}/api/generate", url.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model":  vision_model,
+                "prompt": prompt,
+                "images": [image],
+                "stream": false,
+                "options": { "temperature": 0.0 }
+            });
+            let resp = match http
+                .post(&endpoint)
+                .json(&body)
+                .timeout(std::time::Duration::from_secs(120))
+                .send()
+                .await
+            {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    tracing::debug!("vision fallback: {} returned {}", url, r.status());
+                    continue 'provider;
+                }
+                Err(e) => {
+                    tracing::debug!("vision fallback: {} error: {}", url, e);
+                    continue 'provider;
+                }
+            };
+            let json: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(_) => continue 'provider,
+            };
+            let text = json["response"].as_str().unwrap_or("").trim().to_string();
+            if !text.is_empty() {
+                descriptions.push(text);
+                break 'provider; // got result for this image, move to next
+            }
+        }
+    }
+
+    if descriptions.is_empty() {
+        None
+    } else {
+        Some(descriptions.join("\n\n"))
+    }
 }
 
 // ── Tool call validation (security) ─────────────────────────────────────────

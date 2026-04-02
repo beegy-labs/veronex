@@ -10,7 +10,8 @@
 #   - Provider heartbeat keys (if agent running)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
 
 # ── POST /v1/servers/verify ─────────────────────────────────────────────────
 
@@ -58,8 +59,12 @@ c=$(apostc "/v1/providers/verify" '{"url":"ftp://example.com:11434"}' | code)
 
 # Duplicate URL → 409 (Ollama URL already registered in 01-setup)
 OLLAMA_URL="${OLLAMA_LOCAL:-http://host.docker.internal:11434}"
-c=$(apostc "/v1/providers/verify" "{\"url\":\"$OLLAMA_URL\"}" | code)
-[ "$c" = "409" ] && pass "Verify provider: duplicate URL → 409" || fail "Verify provider: duplicate URL → $c (expected 409)"
+if [ -n "${LOCAL_PROVIDER_ID:-}" ]; then
+  c=$(apostc "/v1/providers/verify" "{\"url\":\"$OLLAMA_URL\"}" | code)
+  [ "$c" = "409" ] && pass "Verify provider: duplicate URL → 409" || fail "Verify provider: duplicate URL → $c (expected 409)"
+else
+  info "SKIP: Verify provider duplicate — local provider not registered in setup"
+fi
 
 # Unreachable URL → 502
 c=$(apostc "/v1/providers/verify" '{"url":"http://192.0.2.1:11434"}' | code)
@@ -90,9 +95,13 @@ c=$(apostc "/v1/servers" '{"name":"test-unreachable","node_exporter_url":"http:/
 hdr "Provider Registration Validation"
 
 # Duplicate Ollama URL → 409
-c=$(apostc "/v1/providers" \
-  "{\"name\":\"dup-test\",\"provider_type\":\"ollama\",\"url\":\"$OLLAMA_URL\"}" | code)
-[ "$c" = "409" ] && pass "Register provider: duplicate URL → 409" || fail "Register provider: duplicate URL → $c (expected 409)"
+if [ -n "${LOCAL_PROVIDER_ID:-}" ]; then
+  c=$(apostc "/v1/providers" \
+    "{\"name\":\"dup-test\",\"provider_type\":\"ollama\",\"url\":\"$OLLAMA_URL\"}" | code)
+  [ "$c" = "409" ] && pass "Register provider: duplicate URL → 409" || fail "Register provider: duplicate URL → $c (expected 409)"
+else
+  info "SKIP: Register provider duplicate — local provider not registered in setup"
+fi
 
 # Unreachable Ollama → 502
 c=$(apostc "/v1/providers" \

@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::domain::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
+use crate::domain::value_objects::{GpuServerId, ProviderId};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::outbound::health_checker::check_provider;
 use crate::infrastructure::outbound::valkey_keys;
@@ -94,7 +95,13 @@ async fn store_models_cache(pool: &fred::clients::Pool, key: &str, models: &[Str
 async fn load_models_cache(pool: &fred::clients::Pool, key: &str) -> Option<Vec<String>> {
     use fred::prelude::*;
 
-    let cached: Option<String> = pool.get(key).await.unwrap_or(None);
+    let cached: Option<String> = match pool.get(key).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(key, error = %e, "models cache: Valkey get failed");
+            None
+        }
+    };
     let json_str = cached?;
     serde_json::from_str::<Vec<String>>(&json_str).ok()
 }
@@ -121,7 +128,7 @@ pub struct RegisterProviderRequest {
     /// GPU index on the host (0-based). For metric correlation.
     pub gpu_index: Option<i16>,
     /// FK → gpu_servers. Optional; Gemini providers leave this null.
-    pub server_id: Option<Uuid>,
+    pub server_id: Option<GpuServerId>,
     /// true = key is on a Google free-tier project.
     /// RPM/RPD limits are managed globally via `gemini_rate_limit_policies`.
     pub is_free_tier: Option<bool>,
@@ -143,7 +150,7 @@ pub struct UpdateProviderRequest {
     pub api_key: Option<String>,
     pub total_vram_mb: Option<i64>,
     pub gpu_index: Option<i16>,
-    pub server_id: Option<Uuid>,
+    pub server_id: Option<GpuServerId>,
     pub is_free_tier: Option<bool>,
     /// Ollama num_parallel setting.
     pub num_parallel: Option<i16>,
@@ -153,14 +160,14 @@ pub struct UpdateProviderRequest {
 
 #[derive(Debug, Serialize)]
 pub struct ProviderSummary {
-    pub id: Uuid,
+    pub id: ProviderId,
     pub name: String,
     pub provider_type: String,
     pub url: String,
     pub is_active: bool,
     pub total_vram_mb: i64,
     pub gpu_index: Option<i16>,
-    pub server_id: Option<Uuid>,
+    pub server_id: Option<GpuServerId>,
     pub is_free_tier: bool,
     pub num_parallel: i16,
     pub status: String,
@@ -175,14 +182,14 @@ impl From<LlmProvider> for ProviderSummary {
         let status = b.status.as_str().to_string();
         let api_key_masked = b.api_key_encrypted.as_deref().map(gemini_helpers::mask_api_key);
         Self {
-            id: b.id,
+            id: ProviderId::from_uuid(b.id),
             name: b.name,
             provider_type,
             url: b.url,
             is_active: b.is_active,
             total_vram_mb: b.total_vram_mb,
             gpu_index: b.gpu_index,
-            server_id: b.server_id,
+            server_id: b.server_id.map(GpuServerId::from_uuid),
             is_free_tier: b.is_free_tier,
             num_parallel: b.num_parallel,
             status,
@@ -194,7 +201,7 @@ impl From<LlmProvider> for ProviderSummary {
 
 #[derive(Debug, Serialize)]
 pub struct RegisterProviderResponse {
-    pub id: Uuid,
+    pub id: ProviderId,
     pub status: String,
 }
 
@@ -334,7 +341,7 @@ pub async fn register_provider(
         is_active: true,
         total_vram_mb: req.total_vram_mb.unwrap_or(0),
         gpu_index: req.gpu_index,
-        server_id: req.server_id,
+        server_id: req.server_id.map(|s| s.0),
         is_free_tier: req.is_free_tier.unwrap_or(false),
         num_parallel: req.num_parallel.unwrap_or(4),
         status: LlmProviderStatus::Offline, // initial; overwritten by health check
@@ -379,7 +386,7 @@ pub async fn register_provider(
     (
         StatusCode::CREATED,
         Json(RegisterProviderResponse {
-            id: provider.id,
+            id: ProviderId::from_uuid(provider.id),
             status: status_str.to_string(),
         }),
     )
@@ -402,7 +409,7 @@ pub async fn list_providers(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let search = params.search.as_deref().unwrap_or("").trim().to_string();
     let limit = params.limit.unwrap_or(100).clamp(1, 1000);
-    let page = params.page.unwrap_or(1).max(1);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
     let offset = (page - 1) * limit;
     let provider_type = params.provider_type.as_deref();
 
@@ -421,8 +428,9 @@ pub async fn list_providers(
 pub async fn delete_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(pid): Path<ProviderId>,
 ) -> impl IntoResponse {
+    let id = pid.0;
     let provider = match get_provider(&state, id).await {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -432,8 +440,8 @@ pub async fn delete_provider(
 
     match &state.provider_registry.deactivate(id).await {
         Ok(()) => {
-            emit_audit(&state, &claims, "delete", resource_type, &id.to_string(), &name,
-                &format!("Provider '{}' ({}) deactivated (soft-deleted, no longer routed)", name, id)).await;
+            emit_audit(&state, &claims, "delete", resource_type, &pid.to_string(), &name,
+                &format!("Provider '{}' ({}) deactivated (soft-deleted, no longer routed)", name, pid)).await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
@@ -446,8 +454,9 @@ pub async fn delete_provider(
 /// `POST /v1/providers/{id}/healthcheck` — manually trigger a health check.
 pub async fn healthcheck_provider(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(pid): Path<ProviderId>,
 ) -> impl IntoResponse {
+    let id = pid.0;
     let provider = match get_provider(&state, id).await {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -464,7 +473,7 @@ pub async fn healthcheck_provider(
 
     (
         StatusCode::OK,
-        Json(serde_json::json!({"id": id, "status": status_str})),
+        Json(serde_json::json!({"id": pid.to_string(), "status": status_str})),
     )
         .into_response()
 }
@@ -476,9 +485,10 @@ pub async fn healthcheck_provider(
 pub async fn update_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(pid): Path<ProviderId>,
     Json(req): Json<UpdateProviderRequest>,
 ) -> impl IntoResponse {
+    let id = pid.0;
     let mut provider = match get_provider(&state, id).await {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -503,7 +513,7 @@ pub async fn update_provider(
     }
     provider.total_vram_mb = req.total_vram_mb.unwrap_or(provider.total_vram_mb);
     provider.gpu_index = req.gpu_index;   // null clears the field
-    provider.server_id = req.server_id;  // null clears the field
+    provider.server_id = req.server_id.map(|s| s.0);  // null clears the field
     if let Some(v) = req.is_free_tier { provider.is_free_tier = v; }
     if let Some(v) = req.num_parallel { provider.num_parallel = v; }
     if let Some(v) = req.is_active { provider.is_active = v; }
@@ -514,8 +524,8 @@ pub async fn update_provider(
     }
 
     let resource_type = provider.provider_type.resource_type();
-    emit_audit(&state, &claims, "update", resource_type, &id.to_string(), &provider.name,
-        &format!("Provider '{}' ({}) configuration updated", provider.name, id)).await;
+    emit_audit(&state, &claims, "update", resource_type, &pid.to_string(), &provider.name,
+        &format!("Provider '{}' ({}) configuration updated", provider.name, pid)).await;
     tracing::info!(%id, "provider updated");
     (StatusCode::OK, Json(ProviderSummary::from(provider))).into_response()
 }
@@ -527,8 +537,9 @@ pub async fn update_provider(
 /// stores the result in Valkey, and returns it.
 pub async fn list_provider_models(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(pid): Path<ProviderId>,
 ) -> impl IntoResponse {
+    let id = pid.0;
     let _provider = match get_provider(&state, id).await {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -552,8 +563,9 @@ pub async fn list_provider_models(
 pub async fn reveal_provider_key(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(pid): Path<ProviderId>,
 ) -> impl IntoResponse {
+    let id = pid.0;
     let provider = match get_provider(&state, id).await {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -573,8 +585,9 @@ pub async fn reveal_provider_key(
 /// For Gemini providers: returns 400 — use `POST /v1/gemini/models/sync` instead.
 pub async fn sync_provider_models(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(pid): Path<ProviderId>,
 ) -> impl IntoResponse {
+    let id = pid.0;
     let provider = match get_provider(&state, id).await {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -611,7 +624,7 @@ pub async fn sync_provider_models(
         }
         Err(e) => {
             tracing::error!(%id, error = %e, "model sync failed");
-            AppError::ServiceUnavailable(e.to_string()).into_response()
+            AppError::ServiceUnavailable("provider sync failed".into()).into_response()
         }
     }
 }
@@ -624,8 +637,9 @@ pub async fn sync_provider_models(
 pub async fn sync_single_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(pid): Path<ProviderId>,
 ) -> impl IntoResponse {
+    let id = pid.0;
     let provider = match get_provider(&state, id).await {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -659,7 +673,7 @@ pub async fn sync_single_provider(
     {
         Ok(()) => {
             emit_audit(
-                &state, &claims, "sync", "ollama_provider", &id.to_string(),
+                &state, &claims, "sync", "ollama_provider", &pid.to_string(),
                 &provider.name, &format!("Provider '{}' synced", provider.name),
             )
             .await;
@@ -667,7 +681,7 @@ pub async fn sync_single_provider(
         }
         Err(e) => {
             tracing::warn!(%id, error = %e, "sync_provider failed");
-            AppError::ServiceUnavailable(e.to_string()).into_response()
+            AppError::ServiceUnavailable("provider sync failed".into()).into_response()
         }
     }
 }

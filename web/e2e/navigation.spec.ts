@@ -1,10 +1,9 @@
 import { test, expect } from '@playwright/test'
-import { login } from './helpers/auth'
 import { T_DEFAULT } from './helpers/constants'
 
 test.describe('Navigation @smoke', () => {
   test.beforeEach(async ({ page }) => {
-    await login(page)
+    await page.goto('/overview')
   })
 
   test('sidebar navigation renders all main links', async ({ page }) => {
@@ -13,13 +12,15 @@ test.describe('Navigation @smoke', () => {
       /dashboard/i,
       /usage/i,
       /performance/i,
+      /health/i,
       /jobs/i,
       /keys/i,
       /servers/i,
+      /mcp/i,
     ]
     for (const name of navLinks) {
       await expect(
-        page.getByRole('link', { name }).or(page.getByText(name).first())
+        page.getByRole('link', { name }).first()
       ).toBeVisible({ timeout: T_DEFAULT })
     }
   })

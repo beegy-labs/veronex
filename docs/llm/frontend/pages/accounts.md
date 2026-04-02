@@ -88,9 +88,9 @@ All endpoints require JWT auth.
 
 ## Data Types
 
-**Account**: `id` (UUIDv7), `username`, `name`, `email?`, `role` (`super`/`admin`), `department?`, `position?`, `is_active` (bool), `last_login_at?` (ISO 8601), `created_at` (ISO 8601). Nullable fields marked with `?`.
+**Account**: `id` (UUIDv7), `username`, `name`, `email?`, `department?`, `position?`, `is_active` (bool), `last_login_at?` (ISO 8601), `created_at` (ISO 8601). Roles via `account_roles` N:N join table (`super`, `viewer`, or custom roles).
 
-**CreateAccountRequest**: `username` (req), `password` (req), `name` (req), `email`, `role` (default `admin`), `department`, `position`. All optional fields are `string`.
+**CreateAccountRequest**: `username` (req), `password` (req), `name` (req), `email`, `role_ids` (UUID array, default: viewer role), `department`, `position`.
 
 **CreateAccountResponse**: `id`, `username`, `role`, `test_api_key` (shown once, never retrievable), `created_at`.
 

@@ -1,17 +1,71 @@
 use async_trait::async_trait;
+use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Object storage port for LLM conversation contexts (`messages_json`).
+/// Single turn within a conversation stored in S3.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnRecord {
+    pub job_id: Uuid,
+    pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub messages: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    pub created_at: String,
+}
+
+/// Full conversation data stored in S3/MinIO as zstd-compressed JSON.
 ///
-/// The S3-compatible adapter stores each job's full context as
-/// `messages/{job_id}.json`. PostgreSQL is no longer the primary
-/// store for this field — `messages_json` in `inference_jobs` stays
-/// NULL for new jobs; this port is authoritative.
+/// Key pattern: `conversations/{owner_id}/{conversation_id}.json.zst`
+///
+/// One S3 object per conversation. Each turn appends to the `turns` array.
+/// Postgres stores only lightweight metadata (preview, tokens, latency).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConversationRecord {
+    /// All turns in this conversation, ordered by creation time.
+    pub turns: Vec<TurnRecord>,
+}
+
+impl ConversationRecord {
+    pub fn new() -> Self {
+        Self { turns: Vec::new() }
+    }
+
+    /// Get result for a specific job_id.
+    pub fn result_for_job(&self, job_id: Uuid) -> Option<&str> {
+        self.turns.iter()
+            .find(|t| t.job_id == job_id)
+            .and_then(|t| t.result.as_deref())
+    }
+
+    /// Get the latest turn's result.
+    pub fn latest_result(&self) -> Option<&str> {
+        self.turns.last().and_then(|t| t.result.as_deref())
+    }
+}
+
+/// Object storage port for full LLM conversation records.
 #[async_trait]
 pub trait MessageStore: Send + Sync {
-    /// Upload conversation context for a job. Overwrites any existing object.
-    async fn put(&self, job_id: Uuid, data: &serde_json::Value) -> anyhow::Result<()>;
+    /// Store the full conversation record.
+    async fn put_conversation(
+        &self,
+        owner_id: Uuid,
+        date: NaiveDate,
+        conversation_id: Uuid,
+        record: &ConversationRecord,
+    ) -> anyhow::Result<()>;
 
-    /// Fetch conversation context. Returns `None` if the object does not exist.
-    async fn get(&self, job_id: Uuid) -> anyhow::Result<Option<serde_json::Value>>;
+    /// Retrieve a conversation record. Returns `None` if the object does not exist.
+    async fn get_conversation(
+        &self,
+        owner_id: Uuid,
+        date: NaiveDate,
+        conversation_id: Uuid,
+    ) -> anyhow::Result<Option<ConversationRecord>>;
 }

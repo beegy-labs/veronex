@@ -23,12 +23,13 @@ use tracing::instrument;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::entities::LlmProvider;
-use crate::domain::enums::{ApiFormat, ProviderType, JobSource};
+use crate::domain::enums::{ApiFormat, ProviderType};
 use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
 use super::handlers::sanitize_sse_error;
 use super::inference_helpers::{validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
-use super::inference_helpers::validate_and_compress_images;
+use super::inference_helpers::{validate_and_compress_images, analyze_images_for_context};
+use super::middleware::infer_auth::InferCaller;
 use super::state::AppState;
 
 /// Collected output from a non-streaming token stream.
@@ -176,7 +177,7 @@ pub async fn list_local_models(State(state): State<AppState>) -> Response {
 #[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn generate(
     State(state): State<AppState>,
-    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     headers: axum::http::HeaderMap,
     Json(mut req): Json<OllamaGenerateBody>,
 ) -> Response {
@@ -211,6 +212,21 @@ pub async fn generate(
         }
     }
 
+    // For non-vision models with images: analyze via vision fallback model and inject description.
+    // Images are kept in req.images for S3 upload and conversation history.
+    // The Ollama adapter will skip sending them to non-vision Ollama endpoints.
+    if let Some(imgs) = req.images.as_deref().filter(|i| !i.is_empty()) {
+        if let Some(desc) = analyze_images_for_context(
+            &state.http_client,
+            state.provider_registry.as_ref(),
+            &req.model,
+            imgs,
+            &req.prompt,
+        ).await {
+            req.prompt = format!("[Image Analysis]\n{desc}\n\n{}", req.prompt);
+        }
+    }
+
     let model = req.model.clone();
 
     let job_id = match state
@@ -220,18 +236,18 @@ pub async fn generate(
             model_name: model.clone(),
             provider_type: ProviderType::Ollama,
             gemini_tier: None,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::OllamaNative,
             messages: None,
             tools: None,
             request_path: Some("/api/generate".to_string()),
             conversation_id,
-            key_tier: Some(api_key.tier),
+            key_tier: caller.key_tier(),
             images: req.images,
             stop: None, seed: None, response_format: None,
-            frequency_penalty: None, presence_penalty: None,
+            frequency_penalty: None, presence_penalty: None, mcp_loop_id: None, max_tokens: None,
         })
         .await
     {
@@ -306,9 +322,9 @@ pub async fn generate(
 #[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn chat(
     State(state): State<AppState>,
-    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     headers: axum::http::HeaderMap,
-    Json(req): Json<OllamaChatBody>,
+    Json(mut req): Json<OllamaChatBody>,
 ) -> Response {
     let conversation_id = extract_conversation_id(&headers);
     if validate_model_name(&req.model).is_err() {
@@ -361,6 +377,26 @@ pub async fn chat(
         }
     }
 
+    // For non-vision models with images: analyze via vision fallback model and inject description
+    // into the last user message content. Images remain in the job for S3 upload and history.
+    // The Ollama adapter will skip sending images to non-vision model endpoints.
+    if let Some(imgs) = images.as_deref().filter(|i| !i.is_empty()) {
+        if let Some(desc) = analyze_images_for_context(
+            &state.http_client,
+            state.provider_registry.as_ref(),
+            &req.model,
+            imgs,
+            &prompt,
+        ).await {
+            if let Some(last_user) = req.messages.iter_mut().rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            {
+                let existing = last_user["content"].as_str().unwrap_or("").to_string();
+                last_user["content"] = serde_json::json!(format!("[Image Analysis]\n{desc}\n\n{existing}"));
+            }
+        }
+    }
+
     let model = req.model.clone();
     let messages = serde_json::Value::Array(req.messages);
     let tools = req.tools.map(serde_json::Value::Array);
@@ -372,18 +408,18 @@ pub async fn chat(
             model_name: model.clone(),
             provider_type: ProviderType::Ollama,
             gemini_tier: None,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::OllamaNative,
             messages: Some(messages),
             tools,
             request_path: Some("/api/chat".to_string()),
             conversation_id,
-            key_tier: Some(api_key.tier),
+            key_tier: caller.key_tier(),
             images,
             stop: None, seed: None, response_format: None,
-            frequency_penalty: None, presence_penalty: None,
+            frequency_penalty: None, presence_penalty: None, mcp_loop_id: None, max_tokens: None,
         })
         .await
     {

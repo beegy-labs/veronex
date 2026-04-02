@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
+use crate::application::ports::outbound::message_store::{ConversationRecord, MessageStore};
 use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::ObservabilityPort;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
@@ -84,7 +85,10 @@ async fn handle_stream_error(
     job.status = JobStatus::Failed;
     job.error = Some(msg.clone());
     job.failure_reason = Some("provider_error".to_string());
-    if let Err(db_err) = job_repo.save(job).await {
+    if let Err(db_err) = job_repo
+        .fail_with_reason(&job.id, "provider_error", Some(&msg))
+        .await
+    {
         tracing::warn!(job_id = %uuid, "failed to persist failed state: {db_err}");
     }
 
@@ -112,15 +116,17 @@ async fn handle_stream_error(
 
 // ── Job finalizer ───────────────────────────────────────────────────────────
 
-/// Finalize a completed job: ownership guard, persist results, broadcast, record metrics.
+/// Finalize a completed job: write ConversationRecord to S3, persist metrics to
+/// Postgres via `finalize()`, broadcast status, record observability.
 ///
-/// Returns `Some(latency_ms)` if the job completed normally, `None` if cancelled
-/// or ownership was lost to another node.
+/// Returns `Some(latency_ms)` on normal completion, `None` if cancelled or
+/// ownership was lost to another node.
 #[allow(clippy::too_many_arguments)]
 async fn finalize_job(
     jobs: &Arc<DashMap<Uuid, JobEntry>>,
     job: &mut InferenceJob,
     job_repo: &dyn JobRepository,
+    message_store: &Option<Arc<dyn MessageStore>>,
     valkey: &Option<Arc<dyn ValkeyPort>>,
     observability: &Option<Arc<dyn ObservabilityPort>>,
     model_manager: &Option<Arc<dyn ModelManagerPort>>,
@@ -131,6 +137,8 @@ async fn finalize_job(
     uuid: Uuid,
     started_at: chrono::DateTime<chrono::Utc>,
     ts: TokenStreamState,
+    original_messages: Option<serde_json::Value>,
+    original_prompt: String,
     api_key_id: Option<Uuid>,
     tpm_minute: Option<i64>,
     provider_id: Option<Uuid>,
@@ -182,7 +190,41 @@ async fn finalize_job(
         }
     }
 
-    // Persist completed state
+    // Write turn to S3 ConversationRecord (per-conversation key, append to turns array).
+    // MCP loop jobs skip this — the bridge writes a single complete turn after all rounds.
+    if let Some(store) = message_store {
+        if job.mcp_loop_id.is_none() {
+            let owner_id = job.account_id
+                .or(job.api_key_id)
+                .unwrap_or(uuid);
+            let date = job.created_at.date_naive();
+            let s3_key = job.conversation_id.unwrap_or(uuid);
+
+            // Read existing record (if any), append this turn
+            let mut record = store.get_conversation(owner_id, date, s3_key).await
+                .ok().flatten()
+                .unwrap_or_else(ConversationRecord::new);
+
+            record.turns.push(crate::application::ports::outbound::message_store::TurnRecord {
+                job_id: uuid,
+                prompt: original_prompt,
+                messages: original_messages,
+                tool_calls: tool_calls_json.clone(),
+                result: result_text.clone(),
+                model_name: Some(job.model_name.as_str().to_string()),
+                created_at: job.created_at.to_rfc3339(),
+            });
+
+            if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
+                tracing::warn!(job_id = %uuid, "S3 conversation write failed (non-fatal): {e}");
+            } else if let (Some(conv_id), Some(vk)) = (job.conversation_id, valkey) {
+                // Invalidate cached conversation detail so next fetch reads fresh S3 data
+                let _ = vk.kv_del(&format!("conv_s3:{}", conv_id)).await;
+            }
+        }
+    }
+
+    // Single terminal Postgres write
     job.status = JobStatus::Completed;
     job.completed_at = Some(completed_at);
     job.result_text = result_text;
@@ -192,8 +234,39 @@ async fn finalize_job(
     job.prompt_tokens = ts.prompt_tokens.map(|v| v as i32);
     job.completion_tokens = stored_completion;
     job.cached_tokens = ts.cached_tokens.map(|v| v as i32);
-    if let Err(e) = job_repo.save(job).await {
-        tracing::warn!(job_id = %uuid, "failed to persist completed state: {e}");
+
+    // Result preview: first 20 chars for DB search/listing (full result in S3)
+    let result_preview: Option<String> = job.result_text.as_ref()
+        .filter(|t| !t.is_empty())
+        .map(|t| t.trim_start_matches("/no_think").trim().chars().take(20).collect());
+
+    if let Err(e) = job_repo
+        .finalize(
+            &job.id,
+            job.started_at,
+            completed_at,
+            job.provider_id,
+            job.queue_time_ms,
+            stored_latency,
+            job.ttft_ms,
+            job.prompt_tokens,
+            job.completion_tokens,
+            job.cached_tokens,
+            job.tool_calls_json.is_some(),
+            result_preview.as_deref(),
+        )
+        .await
+    {
+        tracing::warn!(job_id = %uuid, "failed to finalize job in DB: {e}");
+    }
+
+    // Update conversation counters
+    if let Some(conv_id) = &job.conversation_id {
+        let pt = job.prompt_tokens.unwrap_or(0);
+        let ct = job.completion_tokens.unwrap_or(0);
+        if let Err(e) = job_repo.update_conversation_counters(conv_id, pt, ct, job.model_name.as_str()).await {
+            tracing::warn!(conversation_id = %conv_id, "conversation counter update failed: {e}");
+        }
     }
 
     // Broadcast status event
@@ -261,6 +334,7 @@ pub(super) async fn run_job(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
     provider: Arc<dyn InferenceProviderPort>,
     job_repo: Arc<dyn JobRepository>,
+    message_store: Option<Arc<dyn MessageStore>>,
     valkey: Option<Arc<dyn ValkeyPort>>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
@@ -303,11 +377,8 @@ pub(super) async fn run_job(
     job.queue_time_ms = Some(
         started_at.signed_duration_since(job.created_at).num_milliseconds().max(0) as i32,
     );
-    if let Err(e) = job_repo.save(&job).await {
-        tracing::warn!(job_id = %uuid, "failed to persist running state: {e}");
-    }
 
-    // pending → running: DECR pending, INCR running
+    // pending → running: DECR pending, INCR running (no DB write — finalize() handles all)
     decr_pending(&valkey).await;
     incr_running(&valkey).await;
 
@@ -324,8 +395,15 @@ pub(super) async fn run_job(
         .map(|e| e.cancel_notify.clone())
         .unwrap_or_else(|| Arc::new(Notify::new()));
 
+    // Capture prompt for S3 ConversationRecord at finalize.
+    let original_prompt = job.prompt.as_str().to_owned();
+
+    // stream_tokens must be called BEFORE taking messages — the adapter reads
+    // job.messages to decide whether to call stream_chat (with tools) or stream_generate.
     let mut stream = provider.stream_tokens(&job);
-    job.messages = None; // S3 is authoritative
+
+    // Take messages after stream is started (adapter cloned them into the stream already).
+    let original_messages = job.messages.take(); // frees memory, value moved to local
     let mut ts = TokenStreamState::default();
 
     loop {
@@ -428,10 +506,10 @@ pub(super) async fn run_job(
 
     // ── Finalize ───────────────────────────────────────────────────────
     let latency_ms = finalize_job(
-        &jobs, &mut job, job_repo.as_ref(), &valkey, &observability,
+        &jobs, &mut job, job_repo.as_ref(), &message_store, &valkey, &observability,
         &model_manager, provider_dispatch.as_ref(), &event_tx, &instance_id,
-        &cancel_notifiers, uuid, started_at, ts, api_key_id, tpm_minute,
-        provider_id, provider_is_free_tier,
+        &cancel_notifiers, uuid, started_at, ts, original_messages, original_prompt,
+        api_key_id, tpm_minute, provider_id, provider_is_free_tier,
     ).await;
 
     Ok(latency_ms)

@@ -6,9 +6,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::domain::enums::ProviderType;
+use crate::domain::value_objects::ProviderId;
 use crate::infrastructure::inbound::http::provider_handlers::get_provider;
 
 use super::error::db_error;
@@ -38,8 +38,9 @@ pub struct SetModelEnabledRequest {
 ///   New models default to `is_enabled = false`.
 pub async fn list_selected_models(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(pid): Path<ProviderId>,
 ) -> impl IntoResponse {
+    let id = pid.0;
     // Resolve the provider to branch by type.
     let provider = match get_provider(&state, id).await {
         Ok(p) => p,
@@ -111,9 +112,10 @@ pub async fn list_selected_models(
 /// `PATCH /v1/providers/{id}/selected-models/{model_name}` — toggle a model's enabled state.
 pub async fn set_model_enabled(
     State(state): State<AppState>,
-    Path((id, model_name)): Path<(Uuid, String)>,
+    Path((pid, model_name)): Path<(ProviderId, String)>,
     Json(req): Json<SetModelEnabledRequest>,
 ) -> impl IntoResponse {
+    let id = pid.0;
     match state
         .model_selection_repo
         .set_enabled(id, &model_name, req.is_enabled)

@@ -1,6 +1,6 @@
 # Lab Features (Experimental)
 
-> SSOT | **Last Updated**: 2026-03-02 (rev 3 — full API endpoint specs; component file link)
+> SSOT | **Last Updated**: 2026-03-25 (rev 4 — mcp_orchestrator_model added)
 
 Lab features are experimental capabilities that are **disabled by default**.
 They must be explicitly enabled in Settings → Lab Features.
@@ -15,6 +15,7 @@ affecting production inference while development is ongoing.
 | Feature | Default | Status |
 |---------|---------|--------|
 | `gemini_function_calling` | `false` | In development |
+| `mcp_orchestrator_model` | `null` | Stable |
 
 ---
 
@@ -31,8 +32,8 @@ the Gemini-compatible API is itself experimental.
 | **API** | Requests with `tools[]` → `501 Not Implemented` |
 | **Nav** | Gemini child item hidden from the Providers nav group |
 | **Providers page** | `?s=gemini` falls back to `?s=ollama`; `GeminiTab` not rendered |
-| **Overview dashboard** | Provider Status KPI (`online/total`) counts Ollama only; "API Services" provider row hidden; Gemini legend hidden from Top Models chart; Gemini models filtered from chart data |
-| **Network Flow panel** | Gemini octagon node, Queue→Gemini path, and Gemini response arc removed from SVG |
+| **Overview dashboard** | Provider Status KPI counts Ollama only; "API Services" row hidden; Gemini legend hidden |
+| **Network Flow panel** | Gemini octagon node, Queue→Gemini path, and Gemini response arc removed |
 
 **When enabled**:
 - `tools[].functionDeclarations` are converted to Ollama format and forwarded with the job.
@@ -41,10 +42,37 @@ the Gemini-compatible API is itself experimental.
 - Tool calls are stored in `tool_calls_json` for training data.
 - All Gemini UI (nav item, providers tab, dashboard stats, flow panel) is visible.
 
-**Why it's a lab feature**:
-- Gemini `functionCall` → Ollama tool_calls format conversion is still being validated.
-- Multi-turn tool use (functionResponse → next turn) requires client-side handling.
-- Streaming `functionCall` parts via SSE is not yet tested across all client SDKs.
+---
+
+## `mcp_orchestrator_model`
+
+**Type**: `Option<String>` (DB: `TEXT`, nullable)
+
+**Scope**: Overrides the model used in `mcp_ollama_chat()` for all MCP tool-call loops.
+When set, every MCP request uses this model regardless of the `model` field in the client request.
+
+**When `null`** (default): `req.model` is used as-is — no override.
+
+**When set** (e.g. `"qwen3:8b"`): the specified model is used for all MCP orchestration.
+
+**Why it's a lab feature / configurable per deployment**:
+- Different Ollama deployments have different models available.
+- Multilingual workloads (Korean/Japanese/English) require a model with strong CJK support.
+- Recommended: `qwen3:8b` — 128K context, Hermes tool-calling format, explicit CJK support.
+- Clients should not need to know which model handles MCP; the orchestrator choice is an ops decision.
+
+**How it's applied** (`openai_handlers.rs` → `mcp_ollama_chat()`):
+
+```rust
+let orchestrator_model = state.lab_settings_repo.get().await
+    .ok()
+    .and_then(|lab| lab.mcp_orchestrator_model)
+    .unwrap_or_else(|| req.model.clone());
+// orchestrator_model is passed to bridge.run_loop()
+```
+
+**UI**: MCP page (`/mcp`) → `OrchestratorModelSelector` card at top.
+Dropdown is populated from `GET /v1/dashboard/capacity/settings` → `available_models.ollama`.
 
 ---
 
@@ -55,12 +83,17 @@ the Gemini-compatible API is itself experimental.
 CREATE TABLE lab_settings (
     id                      INT         PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     gemini_function_calling BOOLEAN     NOT NULL DEFAULT false,
+    max_images_per_request  INT         NOT NULL DEFAULT 4,
+    max_image_b64_bytes     INT         NOT NULL DEFAULT 2097152,
+    mcp_orchestrator_model  TEXT,       -- NULL = use request model
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO lab_settings DEFAULT VALUES;
 ```
 
-Migration: `20260302000044_lab_settings.sql`
+Migrations:
+- `000005_lab_settings_image.up.sql` — initial table
+- `000012_lab_mcp_orchestrator_model.up.sql` — adds `mcp_orchestrator_model TEXT`
 
 ---
 
@@ -72,6 +105,9 @@ Migration: `20260302000044_lab_settings.sql`
 #[derive(Debug, Clone)]
 pub struct LabSettings {
     pub gemini_function_calling: bool,
+    pub max_images_per_request: i32,
+    pub max_image_b64_bytes: i32,
+    pub mcp_orchestrator_model: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -81,11 +117,20 @@ pub trait LabSettingsRepository: Send + Sync {
     async fn update(
         &self,
         gemini_function_calling: Option<bool>,
+        max_images_per_request: Option<i32>,
+        max_image_b64_bytes: Option<i32>,
+        /// None = no change, Some(None) = clear, Some(Some(v)) = set
+        mcp_orchestrator_model: Option<Option<String>>,
     ) -> Result<LabSettings>;
 }
 ```
 
-Implementation: `PostgresLabSettingsRepository` in `infrastructure/outbound/persistence/lab_settings_repository.rs`
+Implementation: `CachingLabSettingsRepo(PostgresLabSettingsRepository)` — TtlCache 30s wrapper.
+`get()` hits in-memory cache (hot path: every image/MCP request). `update()` invalidates cache.
+→ See `infra/hot-path-caching.md` for full caching strategy.
+
+Raw impl: `infrastructure/outbound/persistence/lab_settings_repository.rs`
+Cache wrapper: `infrastructure/outbound/persistence/caching_lab_settings_repo.rs`
 
 AppState field: `lab_settings_repo: Arc<dyn LabSettingsRepository>`
 
@@ -99,92 +144,75 @@ Handler: `crates/veronex/src/infrastructure/inbound/http/dashboard_handlers.rs`
 
 ### `GET /v1/dashboard/lab`
 
-Returns the current lab feature flags.
-
-```
-Authorization: Bearer <JWT>
-```
-
-Response `200 OK`:
-
 ```json
 {
   "gemini_function_calling": false,
-  "updated_at": "2026-03-02T00:00:00Z"
+  "max_images_per_request": 4,
+  "max_image_b64_bytes": 2097152,
+  "mcp_orchestrator_model": "qwen3:8b",
+  "updated_at": "2026-03-25T00:00:00Z"
 }
 ```
 
 ### `PATCH /v1/dashboard/lab`
 
-Updates one or more lab feature flags. All body fields are optional; omitted fields are left unchanged.
-
-```
-Authorization: Bearer <JWT>
-Content-Type: application/json
-```
-
-Request body (`PatchLabSettingsBody`):
+All fields optional. `mcp_orchestrator_model` is a nullable string:
+- Key absent → field unchanged
+- `"mcp_orchestrator_model": null` → clears the override (use request model)
+- `"mcp_orchestrator_model": "qwen3:8b"` → sets the override
 
 ```json
-{ "gemini_function_calling": true }
+{ "mcp_orchestrator_model": "qwen3:8b" }
 ```
 
-Response `200 OK` — returns the full updated settings object (same shape as GET):
-
-```json
-{
-  "gemini_function_calling": true,
-  "updated_at": "2026-03-02T12:34:56Z"
-}
-```
-
-Error `500 Internal Server Error` — DB failure; body `{ "error": "<message>" }`.
+Returns the full updated settings object (same shape as GET).
 
 ---
 
-## Frontend — SSOT Architecture
+## Frontend
 
-Lab settings are managed through a single React context.
-Component file: `web/components/lab-settings-provider.tsx`
+### Context
 
+`LabSettingsProvider` (`web/components/lab-settings-provider.tsx`) — auto-fetches on mount, exposes `{ labSettings, refetch() }` via `useLabSettings()`. Fail-safe default includes `mcp_orchestrator_model: null`.
+
+### Types (`web/lib/types.ts`)
+
+```typescript
+export interface LabSettings {
+  gemini_function_calling: boolean
+  max_images_per_request: number
+  max_image_b64_bytes: number
+  mcp_orchestrator_model: string | null
+  updated_at: string
+}
+
+export interface PatchLabSettings {
+  gemini_function_calling?: boolean
+  max_images_per_request?: number
+  max_image_b64_bytes?: number
+  mcp_orchestrator_model?: string | null  // null = clear, string = set, absent = no change
+}
 ```
-LabSettingsProvider (web/components/lab-settings-provider.tsx)
-  └── auto-fetches GET /v1/dashboard/lab on mount
-  └── exposes { labSettings, refetch() } via useLabSettings() hook
-  └── mounted in layout.tsx inside QueryClientProvider
-```
 
-**Rule**: every component that needs to gate Gemini UI must call
-`useLabSettings()` — never read lab settings in local component state.
+### Orchestrator Model Selector (`web/app/providers/components/mcp-tab.tsx`)
 
-**Fail-safe default**: when the fetch fails (e.g. login page, 401), all
-features default to `false`, mirroring `LabSettings::default()` in Rust.
+`OrchestratorModelSelector` — card rendered at top of the MCP tab:
+- Fetches `GET /v1/dashboard/lab` for current value
+- Fetches `GET /v1/dashboard/capacity/settings` for `available_models.ollama` list
+- On change: `PATCH /v1/dashboard/lab` with `{ mcp_orchestrator_model: value | null }`
+- Shows "saved" flash on success
 
-**Settings dialog** (nav footer → Settings):
-
-- **Lab Features** section with a `FlaskConical` icon and "Lab" badge.
-- Toggle reads from `labSettings` in context; after PATCH calls `refetch()`.
-- i18n keys: `common.labFeatures`, `common.labFeaturesDesc`,
-  `common.labGeminiFunctionCalling`, `common.labGeminiFunctionCallingDesc`
-
-**Components that gate on `gemini_function_calling`**:
-
-| Component | File | Gate |
-|-----------|------|------|
-| Nav Gemini item | `web/components/nav.tsx` | Hidden from Providers group |
-| Providers page | `web/app/providers/page.tsx` | `?s=gemini` → OllamaTab fallback |
-| Dashboard tab | `web/app/overview/components/dashboard-tab.tsx` | Provider KPI counts Ollama only (`visibleBs`); API Providers row hidden; Gemini legend + model bar filtered |
-| Flow panel | `web/app/overview/components/provider-flow-panel.tsx` | Gemini node + paths hidden |
+i18n keys: `mcp.orchestratorModel`, `mcp.orchestratorModelDesc`, `mcp.orchestratorModelNone`, `mcp.orchestratorModelSaved`
 
 ---
 
 ## Adding a New Lab Feature
 
-1. Add a `BOOLEAN NOT NULL DEFAULT false` column to `lab_settings` (new migration).
-2. Add the field to `LabSettings` struct and both `get()` / `update()` trait methods.
-3. Update `PostgresLabSettingsRepository` `get()` and `update()` SQL.
+1. Add column to `lab_settings` (new migration).
+2. Add field to `LabSettings` struct and both `get()` / `update()` trait methods.
+3. Update `PostgresLabSettingsRepository` SQL.
 4. Add the API-level check in the relevant handler(s) (backend gating).
 5. Add `useLabSettings()` in every UI component that should be gated.
 6. Add i18n keys (en / ko / ja).
-7. Add a toggle in the Settings dialog (`nav.tsx`).
-8. Document here, including the table of gated components.
+7. Add toggle or control in the relevant settings UI.
+8. Document here.

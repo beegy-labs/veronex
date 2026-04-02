@@ -21,7 +21,7 @@ Schema change, data migration, or new table needed.
 | 1 | Write `up.sql` + `down.sql` migration pair |
 | 2 | Test on clean DB (`docker compose down -v && up`) |
 | 3 | Verify rollback works (apply down, re-apply up) |
-| 4 | Update CDD docs with schema changes |
+| 4 | CDD feedback — run `.add/cdd-feedback.md` (schema changes are Reference classification) |
 
 ## Rules
 

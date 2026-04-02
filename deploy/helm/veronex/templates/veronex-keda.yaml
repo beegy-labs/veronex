@@ -1,0 +1,39 @@
+{{- if and .Values.autoscaling.enabled .Values.autoscaling.keda.enabled }}
+{{- /* KEDA ScaledObject — scales veronex API pods based on Valkey queue depth.
+     Reads LLEN of veronex:queue:jobs (standard API job queue).
+     Requires KEDA operator installed in the cluster.
+     Mutually exclusive with HPA (hpa.yaml) — set autoscaling.keda.enabled=true
+     to use KEDA instead of CPU-based HPA. */}}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .Release.Name }}-veronex
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ .Release.Name }}-veronex
+  minReplicaCount: {{ .Values.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.autoscaling.maxReplicas }}
+  pollingInterval: {{ .Values.autoscaling.keda.pollingInterval | default 15 }}
+  cooldownPeriod: {{ .Values.autoscaling.keda.cooldownPeriod | default 120 }}
+  triggers:
+    # Standard API job queue depth
+    - type: redis
+      metadata:
+        address: {{ include "veronex.valkeyAddress" . }}
+        listName: veronex:queue:jobs
+        listLength: {{ .Values.autoscaling.keda.pendingJobsThreshold | default "5" | quote }}
+        activationListLength: "1"
+        enableTLS: "false"
+        databaseIndex: "0"
+    # Paid-tier job queue depth (higher priority queue)
+    - type: redis
+      metadata:
+        address: {{ include "veronex.valkeyAddress" . }}
+        listName: veronex:queue:jobs:paid
+        listLength: {{ .Values.autoscaling.keda.pendingJobsThreshold | default "5" | quote }}
+        activationListLength: "1"
+        enableTLS: "false"
+        databaseIndex: "0"
+{{- end }}

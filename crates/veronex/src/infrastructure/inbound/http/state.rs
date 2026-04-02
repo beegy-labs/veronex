@@ -34,6 +34,8 @@ use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use crate::infrastructure::outbound::hw_metrics::CpuSnapshot;
+use crate::infrastructure::outbound::mcp::McpBridgeAdapter;
+use veronex_mcp::vector::{McpToolIndexer, McpVectorSelector};
 
 /// Shared application state passed to all HTTP handlers via Axum's State extractor.
 #[derive(Clone)]
@@ -110,4 +112,20 @@ pub struct AppState {
     pub sse_connections: Arc<AtomicU32>,
     /// Persistent VRAM budget state per provider (safety_permil, source, kv_cache_type).
     pub vram_budget_repo: Arc<dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository>,
+    /// MCP bridge adapter — present when at least one MCP server is configured.
+    /// `None` disables MCP tool injection on all requests.
+    pub mcp_bridge: Option<Arc<McpBridgeAdapter>>,
+    /// Vespa-backed vector selector for MCP tool selection.
+    /// `None` when VESPA_URL is not configured — falls back to get_all().
+    pub mcp_vector_selector: Option<Arc<McpVectorSelector>>,
+    /// Tool indexer — embeds and feeds tools to Vespa on server register/delete.
+    /// `None` when VESPA_URL is not configured.
+    pub mcp_tool_indexer: Option<Arc<McpToolIndexer>>,
+    /// Instance ID of this API pod (UUID string).
+    /// Used by service health endpoint to identify pods.
+    pub instance_id: Arc<str>,
+    /// Maximum login attempts per IP per 5-minute window.
+    /// `0` disables IP-based rate limiting (e.g. for E2E test environments).
+    /// Controlled via `LOGIN_RATE_LIMIT` env var (default: 10).
+    pub login_rate_limit: u64,
 }

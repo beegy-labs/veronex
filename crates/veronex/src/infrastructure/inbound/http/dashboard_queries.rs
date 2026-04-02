@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::application::ports::outbound::analytics_repository::{HourlyThroughput, PerformanceMetrics};
+use crate::application::ports::outbound::message_store::ConversationRecord;
+use crate::domain::value_objects::JobId;
 
 use super::error::AppError;
 use super::query_helpers::{JobRowCommon, JobSummary, job_summary_from_common};
@@ -115,7 +117,8 @@ pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, A
          FROM inference_jobs
          WHERE source NOT IN ('test', 'analyzer')
            AND created_at >= now() - interval '7 days'
-         GROUP BY status",
+         GROUP BY status
+         LIMIT 10",
     )
     .fetch_all(pool)
     .await?;
@@ -140,20 +143,19 @@ pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, A
     })
 }
 
-/// Raw row returned by the job detail query. Contains all DB columns
-/// before tenant verification and S3 message resolution.
+/// Raw row returned by the job detail query.
+/// Large content columns (prompt, result_text, messages_json, tool_calls_json) were
+/// removed from Postgres — they are read from S3 ConversationRecord in the handler.
 pub(super) struct JobDetailRow {
     pub common: JobRowCommon,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub prompt: String,
-    pub result_text: Option<String>,
+    pub prompt_preview: Option<String>,
     pub error: Option<String>,
-    pub tool_calls_json: Option<serde_json::Value>,
-    pub db_messages: Option<serde_json::Value>,
-    pub message_count: Option<i32>,
     pub account_id: Option<uuid::Uuid>,
+    pub api_key_id: Option<uuid::Uuid>,
     pub provider_name: Option<String>,
     pub image_keys: Option<Vec<String>>,
+    pub conversation_id: Option<uuid::Uuid>,
 }
 
 pub(super) async fn fetch_job_detail(
@@ -166,11 +168,8 @@ pub(super) async fn fetch_job_detail(
         "SELECT j.id, j.model_name, j.provider_type, j.status, j.source,
                 j.created_at, j.started_at, j.completed_at,
                 j.latency_ms, j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
-                j.prompt, j.result_text, j.error, j.request_path,
-                j.tool_calls_json,
-                j.messages_json,
-                j.image_keys,
-                COALESCE(jsonb_array_length(j.messages_json), 0) AS message_count,
+                j.prompt_preview, j.error, j.request_path,
+                j.image_keys, j.api_key_id, j.conversation_id,
                 k.name AS api_key_name,
                 k.tenant_id AS key_tenant_id,
                 a.name AS account_name,
@@ -211,28 +210,33 @@ pub(super) async fn fetch_job_detail(
     Ok(Some(JobDetailRow {
         common,
         started_at: row.try_get("started_at").unwrap_or(None),
-        prompt: row.try_get("prompt").unwrap_or_default(),
-        result_text: row.try_get("result_text").unwrap_or(None),
+        prompt_preview: row.try_get("prompt_preview").unwrap_or(None),
         error: row.try_get("error").unwrap_or(None),
-        tool_calls_json: row.try_get("tool_calls_json").unwrap_or(None),
-        db_messages: row.try_get("messages_json").unwrap_or(None),
-        message_count: row.try_get("message_count").unwrap_or(None),
         account_id: row.try_get("account_id").unwrap_or(None),
+        api_key_id: row.try_get("api_key_id").unwrap_or(None),
         provider_name: row.try_get("provider_name").unwrap_or(None),
         image_keys: row.try_get("image_keys").unwrap_or(None),
+        conversation_id: row.try_get("conversation_id").unwrap_or(None),
     }))
 }
 
-/// Build the final `JobDetail` response from a `JobDetailRow` and resolved messages.
+/// Build the final `JobDetail` response from a `JobDetailRow` and S3 conversation.
+///
+/// `conversation` is `None` when S3 is unavailable or the object does not exist yet
+/// (e.g. job still running). In that case, `prompt_preview` is used as the prompt fallback.
 pub(super) fn build_job_detail(
     row: JobDetailRow,
-    messages_json: Option<serde_json::Value>,
+    conversation: Option<ConversationRecord>,
     image_urls: Option<Vec<String>>,
 ) -> JobDetail {
     let c = row.common;
     let tps = c.tps();
+
+    let message_count = conversation.as_ref()
+        .map(|r| r.turns.len() as i64);
+
     JobDetail {
-        id: c.id.to_string(),
+        id: JobId::from_uuid(c.id).to_string(),
         model_name: c.model_name,
         provider_type: c.provider_type,
         status: c.status,
@@ -248,13 +252,18 @@ pub(super) fn build_job_detail(
         tps,
         api_key_name: c.api_key_name,
         account_name: c.account_name,
-        prompt: row.prompt,
-        result_text: row.result_text,
+        prompt: conversation.as_ref()
+            .and_then(|r| r.turns.iter().find(|t| t.job_id == c.id).map(|t| t.prompt.clone()))
+            .unwrap_or_else(|| row.prompt_preview.unwrap_or_default()),
+        result_text: conversation.as_ref()
+            .and_then(|r| r.turns.iter().find(|t| t.job_id == c.id).and_then(|t| t.result.clone())),
         error: row.error,
         request_path: c.request_path,
-        tool_calls_json: row.tool_calls_json,
-        messages_json,
-        message_count: row.message_count.map(|v| v as i64),
+        tool_calls_json: conversation.as_ref()
+            .and_then(|r| r.turns.iter().find(|t| t.job_id == c.id).and_then(|t| t.tool_calls.clone())),
+        messages_json: conversation
+            .and_then(|r| r.turns.into_iter().find(|t| t.job_id == c.id).and_then(|t| t.messages)),
+        message_count,
         estimated_cost_usd: c.estimated_cost_usd,
         provider_name: row.provider_name,
         image_keys: row.image_keys,
@@ -284,7 +293,7 @@ pub(super) async fn fetch_jobs(
          LEFT JOIN api_keys k ON k.id = j.api_key_id
          LEFT JOIN llm_providers p ON p.id = j.provider_id
          WHERE ($1::TEXT IS NULL OR j.status = ANY(string_to_array($1, ',')))
-           AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
+           AND ($2::TEXT IS NULL OR j.prompt_preview ILIKE $2 OR k.name ILIKE $2)
            AND ($3::TEXT IS NULL OR j.source = $3)
            AND ($6::TEXT IS NULL OR j.model_name = $6)
            AND ($7::TEXT IS NULL OR p.name = $7)",
@@ -306,7 +315,7 @@ pub(super) async fn fetch_jobs(
                 j.created_at, j.completed_at, j.latency_ms,
                 j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
                 j.request_path,
-                (j.tool_calls_json IS NOT NULL) AS has_tool_calls,
+                j.has_tool_calls,
                 k.name AS api_key_name,
                 a.name AS account_name,
                 p.name AS provider_name,
@@ -332,7 +341,7 @@ pub(super) async fn fetch_jobs(
              LIMIT 1
          ) pricing ON true
          WHERE ($1::TEXT IS NULL OR j.status = ANY(string_to_array($1, ',')))
-           AND ($2::TEXT IS NULL OR j.prompt ILIKE $2 OR k.name ILIKE $2)
+           AND ($2::TEXT IS NULL OR j.prompt_preview ILIKE $2 OR k.name ILIKE $2)
            AND ($3::TEXT IS NULL OR j.source = $3)
            AND ($6::TEXT IS NULL OR j.model_name = $6)
            AND ($7::TEXT IS NULL OR p.name = $7)
@@ -409,7 +418,8 @@ pub(super) async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<Pe
          FROM inference_jobs
          WHERE created_at >= NOW() - make_interval(hours => $1)
          GROUP BY DATE_TRUNC('hour', created_at)
-         ORDER BY hour"
+         ORDER BY hour
+         LIMIT 8760"
     )
     .bind(hours_i32)
     .fetch_all(pool)

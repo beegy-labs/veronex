@@ -140,6 +140,21 @@ pub const ZSET_PEEK_K: u64 = 20;
 /// Maximum top-K window (adaptive scaling when queue is large).
 pub const ZSET_PEEK_K_MAX: u64 = 100;
 
+// ── Input safety limits (LLM gateway — GPU monopoly / context bomb prevention) ─
+
+/// Hard cap on `max_tokens` / `max_completion_tokens` accepted from clients.
+///
+/// Prevents a single request from monopolizing GPU memory for an unbounded
+/// generation window.  Must be identical across every handler that caps
+/// `max_tokens` — defined here as the single source of truth.
+pub const MAX_TOKENS_CEILING: u32 = 32_768;
+
+/// Maximum number of messages accepted in a chat request (context bomb guard).
+///
+/// Unbounded `messages` arrays inflate KV-cache linearly.  Enforced at the
+/// HTTP boundary before any token or VRAM accounting occurs.
+pub const MAX_CHAT_MESSAGES: usize = 256;
+
 // ── Streaming buffer limits ─────────────────────────────────────────────────
 
 /// Maximum bytes allowed in an SSE/NDJSON line buffer before aborting.

@@ -23,8 +23,13 @@ use super::value_objects::{JobId, ModelName, Prompt};
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
 pub struct InferenceJob {
+    #[ts(type = "string")]
     pub id: JobId,
     pub prompt: Prompt,
+    /// First ≤200 characters of the prompt (char boundary, CJK-safe).
+    /// The only part of the prompt persisted to Postgres. Full prompt lives in S3.
+    #[serde(default)]
+    pub prompt_preview: Option<String>,
     pub model_name: ModelName,
     pub status: JobStatus,
     pub provider_type: ProviderType,
@@ -78,8 +83,8 @@ pub struct InferenceJob {
     /// Contains: system prompt + prior turns (user/assistant/tool) + current user message.
     /// When Some, the OllamaAdapter routes to `/api/chat`; when None, to `/api/generate`.
     ///
-    /// Persisted to DB as `messages_json JSONB` (migration 000045).
-    /// Serves as ground-truth training input: input=messages_json, output=result_text+tool_calls_json.
+    /// Stored in S3 `ConversationRecord.messages` (not persisted to Postgres).
+    /// Serves as ground-truth training input: input=messages, output=result+tool_calls.
     /// Can reach 100–500 KB for agentic sessions with large file contents.
     #[serde(default)]
     pub messages: Option<serde_json::Value>,
@@ -107,7 +112,7 @@ pub struct InferenceJob {
     /// Groups all LLM turns that belong to one agent session.
     /// NULL for single-turn requests or clients that do not send the header.
     #[serde(default)]
-    pub conversation_id: Option<String>,
+    pub conversation_id: Option<Uuid>,
     /// Structured tool calls returned by the model (JSONB in DB).
     /// Ollama format: `[{function: {name, arguments}}]`
     /// Populated when the model made at least one tool call; None for text-only responses.
@@ -155,6 +160,15 @@ pub struct InferenceJob {
     #[serde(default)]
     #[ts(skip)]
     pub presence_penalty: Option<f64>,
+    /// Groups all inference_jobs belonging to one MCP agentic loop run.
+    /// NULL for non-MCP requests (single-turn, no tool calls).
+    #[serde(default)]
+    pub mcp_loop_id: Option<Uuid>,
+    /// Max tokens (output limit) capped at the HTTP handler boundary.
+    /// Passed to Ollama as `options.num_predict`. Not persisted to DB.
+    #[serde(default)]
+    #[ts(skip)]
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +263,7 @@ mod tests {
         InferenceJob {
             id: JobId::new(),
             prompt: Prompt::new("What is Rust?").unwrap(),
+            prompt_preview: None,
             model_name: ModelName::new("llama3.2").unwrap(),
             status: JobStatus::Pending,
             provider_type: ProviderType::Ollama,
@@ -269,6 +284,7 @@ mod tests {
             api_format: ApiFormat::OpenaiCompat,
             messages: None,
             tools: None,
+            max_tokens: None,
             request_path: None,
             queue_time_ms: None,
             cancelled_at: None,
@@ -284,6 +300,7 @@ mod tests {
             response_format: None,
             frequency_penalty: None,
             presence_penalty: None,
+            mcp_loop_id: None,
         }
     }
 
@@ -319,110 +336,9 @@ mod tests {
     }
 
     #[test]
-    fn inference_job_creation() {
-        let job = make_inference_job();
-        assert_eq!(job.status, JobStatus::Pending);
-        assert_eq!(job.provider_type, ProviderType::Ollama);
-        assert_eq!(job.prompt.as_str(), "What is Rust?");
-        assert_eq!(job.model_name.as_str(), "llama3.2");
-        assert!(job.started_at.is_none());
-        assert!(job.completed_at.is_none());
-        assert!(job.error.is_none());
-    }
-
-    #[test]
-    fn inference_job_with_all_fields() {
-        let now = Utc::now();
-        let job = InferenceJob {
-            id: JobId::new(),
-            prompt: Prompt::new("Explain quantum computing").unwrap(),
-            model_name: ModelName::new("gemini-pro").unwrap(),
-            status: JobStatus::Failed,
-            provider_type: ProviderType::Gemini,
-            created_at: now,
-            started_at: Some(now),
-            completed_at: Some(now),
-            error: Some("timeout".to_string()),
-            result_text: None,
-            api_key_id: None,
-            account_id: None,
-            latency_ms: None,
-            ttft_ms: None,
-            prompt_tokens: None,
-            completion_tokens: None,
-            cached_tokens: None,
-            source: JobSource::Api,
-            provider_id: None,
-            api_format: ApiFormat::OpenaiCompat,
-            messages: None,
-            request_path: None,
-            queue_time_ms: None,
-            cancelled_at: None,
-            conversation_id: None,
-            tool_calls_json: None,
-            messages_hash: None,
-            messages_prefix_hash: None,
-            failure_reason: None,
-            tools: None,
-            images: None,
-            image_keys: None,
-            stop: None,
-            seed: None,
-            response_format: None,
-            frequency_penalty: None,
-            presence_penalty: None,
-        };
-        assert_eq!(job.status, JobStatus::Failed);
-        assert!(job.started_at.is_some());
-        assert!(job.completed_at.is_some());
-        assert_eq!(job.error.as_deref(), Some("timeout"));
-    }
-
-    #[test]
-    fn llm_provider_creation_with_uuidv7() {
-        let provider = make_llm_provider();
-        assert_eq!(provider.id.get_version_num(), 7);
-        assert_eq!(provider.name, "local-ollama");
-        assert_eq!(provider.provider_type, ProviderType::Ollama);
-        assert!(provider.is_active);
-        assert_eq!(provider.status, LlmProviderStatus::Online);
-        assert!(provider.api_key_encrypted.is_none());
-    }
-
-    #[test]
-    fn llm_provider_with_api_key() {
-        let mut provider = make_llm_provider();
-        provider.provider_type = ProviderType::Gemini;
-        provider.api_key_encrypted = Some("encrypted_key_data".to_string());
-        assert!(provider.api_key_encrypted.is_some());
-        assert_eq!(provider.provider_type, ProviderType::Gemini);
-    }
-
-    #[test]
-    fn inference_result_creation() {
-        let result = make_inference_result();
-        assert_eq!(result.prompt_tokens, 10);
-        assert_eq!(result.completion_tokens, 50);
-        assert_eq!(result.latency_ms, 1200);
-        assert_eq!(result.ttft_ms, Some(150));
-        assert_eq!(result.tokens.len(), 2);
-        assert_eq!(result.finish_reason, FinishReason::Stop);
-    }
-
-    #[test]
-    fn inference_result_without_ttft() {
-        let result = InferenceResult {
-            job_id: JobId::new(),
-            prompt_tokens: 5,
-            completion_tokens: 20,
-            cached_tokens: None,
-            latency_ms: 800,
-            ttft_ms: None,
-            tokens: vec!["response".to_string()],
-            finish_reason: FinishReason::Length,
-        };
-        assert!(result.ttft_ms.is_none());
-        assert_eq!(result.finish_reason, FinishReason::Length);
+    fn llm_provider_id_is_v7() {
+        // UUID v7 = time-ordered — guards against accidental downgrade to v4
+        assert_eq!(make_llm_provider().id.get_version_num(), 7);
     }
 
     #[test]

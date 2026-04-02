@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::application::ports::outbound::analytics_repository::{
     AnalyticsRepository, AnalyticsSummary, AuditEventRow, AuditFilters, HourlyUsage,
-    MetricsPoint, PerformanceMetrics, UsageAggregate, UsageJob,
+    McpServerStat, MetricsPoint, PerformanceMetrics, UsageAggregate, UsageJob,
 };
 
 /// HTTP client that delegates all analytics queries to the `veronex-analytics`
@@ -138,6 +138,10 @@ impl AnalyticsRepository for HttpAnalyticsClient {
     async fn key_usage_jobs(&self, key_id: &Uuid, hours: u32) -> Result<Vec<UsageJob>> {
         self.get(&format!("/internal/usage/{key_id}/jobs?hours={hours}"))
             .await
+    }
+
+    async fn mcp_server_stats(&self, hours: u32) -> Result<Vec<McpServerStat>> {
+        self.get(&format!("/internal/mcp/stats?hours={hours}")).await
     }
 }
 

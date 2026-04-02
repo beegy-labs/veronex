@@ -2,10 +2,10 @@
 
 import { memo, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { activeJobsQuery } from '@/lib/queries'
 import { useTranslation } from '@/i18n'
 import { Loader2, Clock } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { api } from '@/lib/api'
 import { tokens } from '@/lib/design-tokens'
 
 function statusDotColor(status: string): string {
@@ -41,13 +41,7 @@ export const LiveFeed = memo(function LiveFeed() {
 
   // Fetch active jobs from DB — source of truth.
   // Refetch every 2s for near-real-time, and also on new SSE events.
-  const { data } = useQuery({
-    queryKey: ['active-jobs'] as const,
-    queryFn: () => api.jobs('status=pending,running&limit=50'),
-    staleTime: 1_000,
-    refetchInterval: 2_000,
-    refetchIntervalInBackground: false,
-  })
+  const { data } = useQuery(activeJobsQuery)
 
   const activeJobs = data?.jobs ?? []
 
