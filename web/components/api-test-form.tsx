@@ -14,7 +14,7 @@ import type { ProviderOption, Endpoint, TestMode } from '@/components/api-test-t
 import { useLabSettings } from '@/components/lab-settings-provider'
 import type { LabSettings } from '@/lib/types'
 
-function estimatedContextWindow(modelName: string): number | null {
+function heuristicContextWindow(modelName: string): number | null {
   const paramMatch = modelName.match(/[:\-_](\d+\.?\d*)b/i)
   if (!paramMatch) return null
   const b = parseFloat(paramMatch[1])
@@ -24,7 +24,12 @@ function estimatedContextWindow(modelName: string): number | null {
   return 131_072
 }
 
-function getMultiturnWarnings(modelName: string, lab: LabSettings, conversationTokens?: number): string[] {
+function getMultiturnWarnings(
+  modelName: string,
+  lab: LabSettings,
+  conversationTokens?: number,
+  modelContextWindows?: Record<string, number>,
+): string[] {
   const warnings: string[] = []
   const paramMatch = modelName.match(/[:\-_](\d+\.?\d*)b/i)
   if (paramMatch) {
@@ -37,8 +42,8 @@ function getMultiturnWarnings(modelName: string, lab: LabSettings, conversationT
     warnings.push('model_not_allowed')
   }
   if (conversationTokens && conversationTokens > 0) {
-    const ctxWindow = estimatedContextWindow(modelName)
-    if (ctxWindow !== null && conversationTokens > ctxWindow * 0.85) {
+    const ctxWindow = modelContextWindows?.[modelName] ?? heuristicContextWindow(modelName)
+    if (ctxWindow !== null && ctxWindow > 0 && conversationTokens > ctxWindow * 0.85) {
       warnings.push(`context_too_large:${conversationTokens}:${ctxWindow}`)
     }
   }
@@ -54,6 +59,7 @@ interface ApiTestFormProps {
   maxImages: number         // from lab_settings.max_images_per_request
   isCompressing: boolean
   conversationTokenEstimate?: number
+  modelContextWindows?: Record<string, number>
   availableOptions: ProviderOption[]
   availableModels: string[]
   isGeminiProvider: boolean
@@ -76,7 +82,7 @@ interface ApiTestFormProps {
 
 export function ApiTestForm({
   mode, providerType, model, prompt,
-  images, maxImages, isCompressing, conversationTokenEstimate,
+  images, maxImages, isCompressing, conversationTokenEstimate, modelContextWindows,
   availableOptions, availableModels, isGeminiProvider,
   canRun, authUsername,
   endpoint, useApiKey, apiKeyValue,
@@ -91,7 +97,7 @@ export function ApiTestForm({
   const [isDragging, setIsDragging] = useState(false)
 
   const multiturnWarnings = (mode === 'conversation' && model && labSettings)
-    ? getMultiturnWarnings(model, labSettings, conversationTokenEstimate)
+    ? getMultiturnWarnings(model, labSettings, conversationTokenEstimate, modelContextWindows)
     : []
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
