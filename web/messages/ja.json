@@ -93,6 +93,12 @@
     "multiturnWarnTooSmall": "{{params}}Bモデルは最小{{min}}B未満です — マルチターンは拒否されます。",
     "multiturnWarnCtxTooSmall": "コンテキスト{{ctx}}トークンは最小{{min}}トークン未満です — マルチターンは拒否されます。",
     "multiturnWarnNotAllowed": "許可リストにないモデルです — マルチターンリクエストは拒否されます。",
+    "labCompression": "コンテキスト圧縮",
+    "labCompressionEnabled": "圧縮を有効化",
+    "labCompressionModel": "圧縮モデル",
+    "labHandoffEnabled": "セッション引き継ぎを有効化",
+    "labHandoffThreshold": "引き継ぎ閾値 (0–1)",
+    "none": "なし",
     "maxImagesPerRequest": "リクエストあたりの最大画像数",
     "maxImagesPerRequestDesc": "推論リクエストあたりの最大画像数。0で画像入力を無効にします。",
     "menu": "メニュー",
@@ -106,6 +112,28 @@
     "activate": "有効化",
     "deactivate": "無効化",
     "deleting": "削除中…"
+  },
+  "conversations": {
+    "title": "会話",
+    "description": "ターンレベルの圧縮とVision内部データを含む会話履歴",
+    "empty": "会話はありません。",
+    "turn": "ターン",
+    "turns": "ターン",
+    "model": "モデル",
+    "source": "ソース",
+    "createdAt": "作成日時",
+    "internals": "内部データ",
+    "internalsEmpty": "このターンには圧縮またはVisionデータがありません。",
+    "compression": "圧縮",
+    "compressionModel": "モデル",
+    "originalTokens": "元のトークン",
+    "compressedTokens": "圧縮後",
+    "compressionRatio": "比率",
+    "visionAnalysis": "Vision分析",
+    "visionModel": "モデル",
+    "imageCount": "画像数",
+    "analysisTokens": "トークン",
+    "backToList": "会話一覧へ戻る"
   },
   "overview": {
     "title": "概要",
@@ -705,7 +733,8 @@
     "endpoint": "エンドポイント",
     "apiKeyToggle": "APIキーを使用",
     "apiKeyPlaceholder": "APIキーを貼り付けてください…",
-    "noApiKey": "セッション認証 (テスト)"
+    "noApiKey": "セッション認証 (テスト)",
+    "sessionRenewed": "会話コンテキストが新しいセッションに引き継がれました"
   },
   "apiDocs": {
     "title": "APIドキュメント",

@@ -379,11 +379,36 @@ async fn ollama_chat_proxy(
         .collect();
 
     // Convert messages to Ollama format (normalise content, convert tool_calls).
-    let ollama_messages: Vec<serde_json::Value> =
+    let mut ollama_messages: Vec<serde_json::Value> =
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
 
     // Extract last user content as display prompt (required by InferenceJob).
     let prompt = extract_last_user_prompt(&ollama_messages).to_string();
+
+    // Phase 5: compress long input inline if it exceeds budget (conversation turns only)
+    if conversation_id.is_some() {
+        use crate::application::use_cases::inference::{compression_router, context_compressor};
+        let lab5 = state.lab_settings_repo.get().await.unwrap_or_default();
+        if lab5.context_compression_enabled {
+            let route = compression_router::decide(state.provider_registry.as_ref(), &lab5).await;
+            if let Some(params) = route.into_params(
+                lab5.compression_model.clone().unwrap_or_else(|| "qwen2.5:3b".to_string()),
+                lab5.compression_timeout_secs as u64,
+            ) {
+                let configured_ctx = 32_768u32;
+                let input_budget = (configured_ctx as f32 * lab5.context_budget_ratio * 0.5) as u32;
+                if let Some(compressed) = context_compressor::compress_input_inline(
+                    &prompt, input_budget, &params.model, &params.provider_url, params.timeout_secs,
+                ).await {
+                    if let Some(last_user) = ollama_messages.iter_mut().rev()
+                        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    {
+                        last_user["content"] = serde_json::json!(compressed);
+                    }
+                }
+            }
+        }
+    }
 
     let model_str = req.model.clone();
     // Merge top-level images with images extracted from content array parts.

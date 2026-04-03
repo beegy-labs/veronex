@@ -93,6 +93,12 @@
     "multiturnWarnTooSmall": "{{params}}B 모델은 최소 {{min}}B 미만입니다 — 멀티턴 요청이 거절됩니다.",
     "multiturnWarnCtxTooSmall": "컨텍스트 {{ctx}} 토큰은 최소 {{min}} 토큰 미만입니다 — 멀티턴 요청이 거절됩니다.",
     "multiturnWarnNotAllowed": "허용 목록에 없는 모델입니다 — 멀티턴 요청이 거절됩니다.",
+    "labCompression": "컨텍스트 압축",
+    "labCompressionEnabled": "압축 활성화",
+    "labCompressionModel": "압축 모델",
+    "labHandoffEnabled": "세션 핸드오프 활성화",
+    "labHandoffThreshold": "핸드오프 임계값 (0–1)",
+    "none": "없음",
     "maxImagesPerRequest": "요청당 최대 이미지 수",
     "maxImagesPerRequestDesc": "추론 요청당 허용되는 최대 이미지 수. 0이면 이미지 입력이 비활성화됩니다.",
     "menu": "메뉴",
@@ -106,6 +112,28 @@
     "activate": "활성화",
     "deactivate": "비활성화",
     "deleting": "삭제 중…"
+  },
+  "conversations": {
+    "title": "대화",
+    "description": "턴별 압축 및 Vision 내부 데이터 포함 대화 기록",
+    "empty": "대화가 없습니다.",
+    "turn": "턴",
+    "turns": "턴",
+    "model": "모델",
+    "source": "소스",
+    "createdAt": "생성 일시",
+    "internals": "내부 데이터",
+    "internalsEmpty": "이 턴에는 압축 또는 Vision 데이터가 없습니다.",
+    "compression": "압축",
+    "compressionModel": "모델",
+    "originalTokens": "원본",
+    "compressedTokens": "압축 후",
+    "compressionRatio": "비율",
+    "visionAnalysis": "Vision 분석",
+    "visionModel": "모델",
+    "imageCount": "이미지 수",
+    "analysisTokens": "토큰",
+    "backToList": "대화 목록으로"
   },
   "overview": {
     "title": "개요",
@@ -705,7 +733,8 @@
     "endpoint": "엔드포인트",
     "apiKeyToggle": "API 키 사용",
     "apiKeyPlaceholder": "API 키를 붙여넣으세요…",
-    "noApiKey": "세션 인증 (테스트)"
+    "noApiKey": "세션 인증 (테스트)",
+    "sessionRenewed": "대화 컨텍스트가 새 세션으로 이어졌습니다"
   },
   "apiDocs": {
     "title": "API 문서",

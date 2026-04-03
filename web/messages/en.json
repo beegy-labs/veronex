@@ -93,6 +93,12 @@
     "multiturnWarnTooSmall": "{{params}}B model is below the {{min}}B minimum — multi-turn will be rejected.",
     "multiturnWarnCtxTooSmall": "Context window {{ctx}} is below the {{min}} token minimum — multi-turn will be rejected.",
     "multiturnWarnNotAllowed": "Model is not in the multi-turn allowlist — requests will be rejected.",
+    "labCompression": "Context Compression",
+    "labCompressionEnabled": "Enable compression",
+    "labCompressionModel": "Compression model",
+    "labHandoffEnabled": "Enable session handoff",
+    "labHandoffThreshold": "Handoff threshold (0–1)",
+    "none": "None",
     "maxImagesPerRequest": "Max images per request",
     "maxImagesPerRequestDesc": "Maximum images per inference request. 0 disables image input.",
     "menu": "Menu",
@@ -106,6 +112,28 @@
     "activate": "Activate",
     "deactivate": "Deactivate",
     "deleting": "Deleting…"
+  },
+  "conversations": {
+    "title": "Conversations",
+    "description": "Conversation history with turn-level compression and vision internals.",
+    "empty": "No conversations yet.",
+    "turn": "Turn",
+    "turns": "turns",
+    "model": "Model",
+    "source": "Source",
+    "createdAt": "Created",
+    "internals": "Internals",
+    "internalsEmpty": "No compression or vision data for this turn.",
+    "compression": "Compression",
+    "compressionModel": "Model",
+    "originalTokens": "Original",
+    "compressedTokens": "Compressed",
+    "compressionRatio": "Ratio",
+    "visionAnalysis": "Vision Analysis",
+    "visionModel": "Model",
+    "imageCount": "Images",
+    "analysisTokens": "Tokens",
+    "backToList": "Back to conversations"
   },
   "overview": {
     "title": "Overview",
@@ -705,7 +733,8 @@
     "endpoint": "Endpoint",
     "apiKeyToggle": "Use API Key",
     "apiKeyPlaceholder": "Paste your API key…",
-    "noApiKey": "Session Auth (Test)"
+    "noApiKey": "Session Auth (Test)",
+    "sessionRenewed": "Conversation context carried over to a new session"
   },
   "apiDocs": {
     "title": "API Documentation",

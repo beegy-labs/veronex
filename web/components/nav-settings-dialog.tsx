@@ -26,6 +26,8 @@ import { i18n } from '@/i18n'
 import { locales, localeLabels, localStorageKey, type Locale } from '@/i18n/config'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone, type Timezone, PRESET_TIMEZONES, isValidTimezone } from '@/components/timezone-provider'
+import { VisionModelSelector } from '@/components/vision-model-selector'
+import { CompressionModelSelector } from '@/components/compression-model-selector'
 import { api } from '@/lib/api'
 
 function AllowedModelsInput({ labSettings, labLoading, setLabLoading, refetchLabSettings }: {
@@ -294,13 +296,74 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
 
               {/* Vision model */}
               <div className="space-y-1">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium">{t('common.labVisionModel')}</p>
-                    <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{t('common.labVisionModelDesc')}</p>
+                <p className="text-xs font-medium">{t('common.labVisionModel')}</p>
+                <p className="text-[11px] text-muted-foreground leading-snug">{t('common.labVisionModelDesc')}</p>
+                <VisionModelSelector
+                  value={labSettings?.vision_model ?? null}
+                  disabled={labLoading || labSettings === null}
+                  onChange={async (v) => {
+                    setLabLoading(true)
+                    try { await api.patchLabSettings({ vision_model: v }); await refetchLabSettings() }
+                    catch { } finally { setLabLoading(false) }
+                  }}
+                />
+              </div>
+
+              {/* Compression settings */}
+              <div className="border-t border-border/50 pt-2 mt-1">
+                <p className="text-xs font-medium mb-2">{t('common.labCompression')}</p>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-muted-foreground">{t('common.labCompressionEnabled')}</p>
+                    <Switch
+                      checked={labSettings?.context_compression_enabled ?? false}
+                      disabled={labLoading || labSettings === null}
+                      onCheckedChange={async (checked) => {
+                        setLabLoading(true)
+                        try { await api.patchLabSettings({ context_compression_enabled: checked }); await refetchLabSettings() }
+                        catch { } finally { setLabLoading(false) }
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[11px] text-muted-foreground">{t('common.labCompressionModel')}</p>
+                    <CompressionModelSelector
+                      value={labSettings?.compression_model ?? null}
+                      disabled={labLoading || labSettings === null}
+                      onChange={async (v) => {
+                        setLabLoading(true)
+                        try { await api.patchLabSettings({ compression_model: v }); await refetchLabSettings() }
+                        catch { } finally { setLabLoading(false) }
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-muted-foreground">{t('common.labHandoffEnabled')}</p>
+                    <Switch
+                      checked={labSettings?.handoff_enabled ?? false}
+                      disabled={labLoading || labSettings === null}
+                      onCheckedChange={async (checked) => {
+                        setLabLoading(true)
+                        try { await api.patchLabSettings({ handoff_enabled: checked }); await refetchLabSettings() }
+                        catch { } finally { setLabLoading(false) }
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-muted-foreground">{t('common.labHandoffThreshold')}</p>
+                    <Input type="number" min={0.1} max={1} step={0.05} className="w-20 h-7 text-xs text-center"
+                      value={labSettings?.handoff_threshold ?? 0.8}
+                      disabled={labLoading || labSettings === null}
+                      onChange={async (e) => {
+                        const v = parseFloat(e.target.value)
+                        if (isNaN(v) || v < 0.1 || v > 1) return
+                        setLabLoading(true)
+                        try { await api.patchLabSettings({ handoff_threshold: v }); await refetchLabSettings() }
+                        catch { } finally { setLabLoading(false) }
+                      }}
+                    />
                   </div>
                 </div>
-                <VisionModelInput labSettings={labSettings} labLoading={labLoading} setLabLoading={setLabLoading} refetchLabSettings={refetchLabSettings} />
               </div>
 
               {/* Multi-turn requirements */}

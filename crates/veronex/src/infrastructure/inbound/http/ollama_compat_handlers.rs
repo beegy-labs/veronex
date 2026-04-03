@@ -26,7 +26,7 @@ use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{ApiFormat, ProviderType};
 use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
-use super::handlers::sanitize_sse_error;
+use super::handlers::{sanitize_sse_error, with_conversation_id};
 use super::inference_helpers::{validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
 use super::inference_helpers::{validate_and_compress_images, analyze_images_for_context};
 use super::middleware::infer_auth::InferCaller;
@@ -436,6 +436,91 @@ pub async fn chat(
         }
     }
 
+    // Phase 6: context assembly + session handoff (conversation turns only)
+    let mut effective_conversation_id: Option<uuid::Uuid> = conversation_id;
+    let mut session_renewed = false;
+    if let Some(cid) = conversation_id {
+        if let Some(ref store) = state.message_store {
+            use crate::application::use_cases::inference::{context_assembler, session_handoff};
+            let caller_owner = caller.account_id().or(caller.api_key_id()).unwrap_or(cid);
+            'conv6: for days_ago in 0..=7i64 {
+                let date = (chrono::Utc::now() - chrono::Duration::days(days_ago)).date_naive();
+                let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(cid);
+                let record_opt: Option<crate::application::ports::outbound::message_store::ConversationRecord> =
+                    if days_ago == 0 {
+                        if let Some(ref vk) = state.valkey_pool {
+                            use fred::prelude::*;
+                            vk.get::<Option<String>, _>(&cache_key).await.ok().flatten()
+                                .and_then(|j| serde_json::from_str(&j).ok())
+                        } else { None }
+                    } else { None };
+                let record = match record_opt {
+                    Some(r) => r,
+                    None => match store.get_conversation(caller_owner, date, cid).await {
+                        Ok(Some(r)) => {
+                            if let Some(ref vk) = state.valkey_pool {
+                                use fred::prelude::*;
+                                if let Ok(j) = serde_json::to_string(&r) {
+                                    let _: Result<(), _> = vk.set(&cache_key, j, Some(fred::types::Expiration::EX(300)), None, false).await;
+                                }
+                            }
+                            r
+                        }
+                        _ => continue 'conv6,
+                    },
+                };
+                let lab6 = state.lab_settings_repo.get().await.unwrap_or_default();
+                let max_ctx6: Option<u32> = if let Some(ref vk) = state.valkey_pool {
+                    use fred::prelude::*;
+                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                    let mut found = None;
+                    for p in providers.iter().filter(|p| p.provider_type == ProviderType::Ollama) {
+                        let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, &req.model);
+                        if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
+                            if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
+                                .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
+                            {
+                                found = Some(ctx as u32);
+                                break;
+                            }
+                        }
+                    }
+                    found
+                } else { None };
+                let configured_ctx6 = max_ctx6.unwrap_or(32_768);
+                // Session handoff
+                if session_handoff::should_handoff(&record, configured_ctx6, &lab6) {
+                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                    if let Some(provider) = providers.iter().find(|p| p.provider_type == ProviderType::Ollama) {
+                        let summary_model = lab6.compression_model.clone().unwrap_or_else(|| req.model.clone());
+                        if let Some((new_cid, master_summary)) = session_handoff::perform_handoff(
+                            &record, cid, caller_owner, date, &summary_model,
+                            &provider.url, lab6.compression_timeout_secs as u64, store,
+                        ).await {
+                            let current_user = req.messages.iter().rev()
+                                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                                .cloned();
+                            let summary_msg = serde_json::json!({"role": "user", "content": format!("[Context from previous session]\n{master_summary}")});
+                            req.messages = std::iter::once(summary_msg).chain(current_user).collect();
+                            effective_conversation_id = Some(new_cid);
+                            session_renewed = true;
+                            break 'conv6;
+                        }
+                    }
+                }
+                // Context assembly — replace history with compressed+verbatim window
+                let history = context_assembler::assemble(&record, configured_ctx6, &lab6);
+                let current_user: Vec<serde_json::Value> = req.messages.iter().rev()
+                    .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    .cloned()
+                    .into_iter()
+                    .collect();
+                req.messages = history.into_iter().chain(current_user).collect();
+                break 'conv6;
+            }
+        }
+    }
+
     // Extract images from user messages (Ollama chat format: message-level `images` field).
     let mut images: Option<Vec<String>> = {
         let imgs: Vec<String> = req.messages.iter()
@@ -493,7 +578,7 @@ pub async fn chat(
             messages: Some(messages),
             tools,
             request_path: Some("/api/chat".to_string()),
-            conversation_id,
+            conversation_id: effective_conversation_id,
             key_tier: caller.key_tier(),
             images,
             stop: None, seed: None, response_format: None,
@@ -520,9 +605,10 @@ pub async fn chat(
             Err(resp) => return resp,
         };
         let created_at = chrono::Utc::now().to_rfc3339();
-        return Json(build_chat_response(
+        let resp = Json(build_chat_response(
             &model, &created_at, c.content, c.tool_calls, c.prompt_tokens, c.eval_tokens,
         )).into_response();
+        return if session_renewed { with_conversation_id(resp, effective_conversation_id.as_ref()) } else { resp };
     }
 
     // ── Streaming path (default) ────────────────────────────────────────────
@@ -573,12 +659,13 @@ pub async fn chat(
     });
 
     let guarded = CancelOnDrop::new(ndjson, job_id, state.use_case.clone());
-    HttpResponse::builder()
+    let resp = HttpResponse::builder()
         .status(200)
         .header("Content-Type", "application/x-ndjson")
         .header("X-Accel-Buffering", "no")
         .body(Body::from_stream(guarded))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    with_conversation_id(resp, effective_conversation_id.as_ref())
 }
 
 // ── Non-streaming response builders ────────────────────────────────────────────
