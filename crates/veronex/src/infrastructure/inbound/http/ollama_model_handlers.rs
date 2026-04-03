@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::domain::enums::ProviderType;
 use crate::domain::value_objects::{JobId, ProviderId};
+use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 
@@ -39,6 +40,7 @@ pub struct OllamaSyncJobDto {
 pub struct OllamaModelDto {
     pub model_name: String,
     pub provider_count: i64,
+    pub is_vision: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,7 +73,7 @@ pub async fn list_models(
         .map_err(|e| { tracing::error!("ollama list_models: {e}"); super::error::AppError::Internal(e) })?;
     let dtos: Vec<OllamaModelDto> = page_result.items
         .into_iter()
-        .map(|m| OllamaModelDto { model_name: m.model_name, provider_count: m.provider_count })
+        .map(|m| OllamaModelDto { is_vision: is_vision_model(&m.model_name), model_name: m.model_name, provider_count: m.provider_count })
         .collect();
     Ok(Json(serde_json::json!({
         "models": dtos,

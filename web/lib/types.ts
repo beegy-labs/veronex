@@ -451,6 +451,7 @@ export interface OllamaSyncJob {
 export interface OllamaModelWithCount {
   model_name: string
   provider_count: number
+  is_vision?: boolean
 }
 
 /** Provider info returned by GET /v1/ollama/models/:model_name/providers. */
