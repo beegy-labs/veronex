@@ -452,6 +452,8 @@ export interface OllamaModelWithCount {
   model_name: string
   provider_count: number
   is_vision?: boolean
+  /** Maximum context window across providers (0 = not yet profiled). */
+  max_ctx?: number
 }
 
 /** Provider info returned by GET /v1/ollama/models/:model_name/providers. */

@@ -1081,6 +1081,7 @@ pub async fn sync_provider(
                 num_kv_heads:      arch.num_kv_heads as i16,
                 head_dim:          arch.head_dim as i16,
                 configured_ctx:    arch.configured_ctx as i32,
+                max_ctx:           arch.max_ctx as i32,
                 failure_count:     0,
                 llm_concern:       llm.concern,
                 llm_reason:        llm.reason,

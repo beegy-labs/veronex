@@ -127,6 +127,15 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     enabled: isGeminiProvider,
   })
 
+  const modelContextWindows = useMemo<Record<string, number>>(() => {
+    if (isGeminiProvider) return {}
+    return Object.fromEntries(
+      (ollamaModelsData?.models ?? [])
+        .filter((m) => (m.max_ctx ?? 0) > 0)
+        .map((m) => [m.model_name, m.max_ctx!])
+    )
+  }, [isGeminiProvider, ollamaModelsData?.models])
+
   const availableModels = useMemo(() => {
     if (!isGeminiProvider) return ollamaModelsData?.models.map((m) => m.model_name) ?? []
     const allModels = geminiModelsData?.models.map((m) => m.model_name) ?? []
@@ -619,6 +628,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
           maxImages={maxImages}
           isCompressing={isCompressing}
           conversationTokenEstimate={conversationTokenEstimate}
+          modelContextWindows={modelContextWindows}
           availableOptions={availableOptions}
           availableModels={availableModels}
           isGeminiProvider={isGeminiProvider}
