@@ -14,7 +14,17 @@ import type { ProviderOption, Endpoint, TestMode } from '@/components/api-test-t
 import { useLabSettings } from '@/components/lab-settings-provider'
 import type { LabSettings } from '@/lib/types'
 
-function getMultiturnWarnings(modelName: string, lab: LabSettings): string[] {
+function estimatedContextWindow(modelName: string): number | null {
+  const paramMatch = modelName.match(/[:\-_](\d+\.?\d*)b/i)
+  if (!paramMatch) return null
+  const b = parseFloat(paramMatch[1])
+  if (b <= 2) return 4_096
+  if (b <= 6) return 32_768
+  if (b <= 13) return 32_768
+  return 131_072
+}
+
+function getMultiturnWarnings(modelName: string, lab: LabSettings, conversationTokens?: number): string[] {
   const warnings: string[] = []
   const paramMatch = modelName.match(/[:\-_](\d+\.?\d*)b/i)
   if (paramMatch) {
@@ -25,6 +35,12 @@ function getMultiturnWarnings(modelName: string, lab: LabSettings): string[] {
   }
   if (lab.multiturn_allowed_models.length > 0 && !lab.multiturn_allowed_models.includes(modelName)) {
     warnings.push('model_not_allowed')
+  }
+  if (conversationTokens && conversationTokens > 0) {
+    const ctxWindow = estimatedContextWindow(modelName)
+    if (ctxWindow !== null && conversationTokens > ctxWindow * 0.85) {
+      warnings.push(`context_too_large:${conversationTokens}:${ctxWindow}`)
+    }
   }
   return warnings
 }
@@ -37,6 +53,7 @@ interface ApiTestFormProps {
   images: string[]          // raw base64 (no data URL prefix)
   maxImages: number         // from lab_settings.max_images_per_request
   isCompressing: boolean
+  conversationTokenEstimate?: number
   availableOptions: ProviderOption[]
   availableModels: string[]
   isGeminiProvider: boolean
@@ -59,7 +76,7 @@ interface ApiTestFormProps {
 
 export function ApiTestForm({
   mode, providerType, model, prompt,
-  images, maxImages, isCompressing,
+  images, maxImages, isCompressing, conversationTokenEstimate,
   availableOptions, availableModels, isGeminiProvider,
   canRun, authUsername,
   endpoint, useApiKey, apiKeyValue,
@@ -74,7 +91,7 @@ export function ApiTestForm({
   const [isDragging, setIsDragging] = useState(false)
 
   const multiturnWarnings = (mode === 'conversation' && model && labSettings)
-    ? getMultiturnWarnings(model, labSettings)
+    ? getMultiturnWarnings(model, labSettings, conversationTokenEstimate)
     : []
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -183,6 +200,9 @@ export function ApiTestForm({
                   msg = t('common.multiturnWarnTooSmall', { params, min })
                 } else if (w === 'model_not_allowed') {
                   msg = t('common.multiturnWarnNotAllowed')
+                } else if (w.startsWith('context_too_large:')) {
+                  const [, tokens, ctx] = w.split(':')
+                  msg = t('common.multiturnWarnContextTooLarge', { tokens: Number(tokens).toLocaleString(), ctx: Number(ctx).toLocaleString() })
                 } else {
                   msg = w
                 }

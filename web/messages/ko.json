@@ -93,6 +93,7 @@
     "multiturnWarnTooSmall": "{{params}}B 모델은 최소 {{min}}B 미만입니다 — 멀티턴 요청이 거절됩니다.",
     "multiturnWarnCtxTooSmall": "컨텍스트 {{ctx}} 토큰은 최소 {{min}} 토큰 미만입니다 — 멀티턴 요청이 거절됩니다.",
     "multiturnWarnNotAllowed": "허용 목록에 없는 모델입니다 — 멀티턴 요청이 거절됩니다.",
+    "multiturnWarnContextTooLarge": "대화 누적 ~{{tokens}} 토큰이 이 모델의 ~{{ctx}} 컨텍스트를 초과할 수 있습니다 — 압축을 권장합니다.",
     "labCompression": "컨텍스트 압축",
     "labCompressionEnabled": "압축 활성화",
     "labCompressionModel": "압축 모델",
