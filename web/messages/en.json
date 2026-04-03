@@ -93,6 +93,7 @@
     "multiturnWarnTooSmall": "{{params}}B model is below the {{min}}B minimum — multi-turn will be rejected.",
     "multiturnWarnCtxTooSmall": "Context window {{ctx}} is below the {{min}} token minimum — multi-turn will be rejected.",
     "multiturnWarnNotAllowed": "Model is not in the multi-turn allowlist — requests will be rejected.",
+    "multiturnWarnContextTooLarge": "~{{tokens}} tokens in conversation may exceed this model's ~{{ctx}} context window — compression recommended.",
     "labCompression": "Context Compression",
     "labCompressionEnabled": "Enable compression",
     "labCompressionModel": "Compression model",

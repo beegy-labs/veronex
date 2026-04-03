@@ -93,6 +93,7 @@
     "multiturnWarnTooSmall": "{{params}}Bモデルは最小{{min}}B未満です — マルチターンは拒否されます。",
     "multiturnWarnCtxTooSmall": "コンテキスト{{ctx}}トークンは最小{{min}}トークン未満です — マルチターンは拒否されます。",
     "multiturnWarnNotAllowed": "許可リストにないモデルです — マルチターンリクエストは拒否されます。",
+    "multiturnWarnContextTooLarge": "会話の累積~{{tokens}}トークンがこのモデルの~{{ctx}}コンテキストを超える可能性があります — 圧縮を推奨します。",
     "labCompression": "コンテキスト圧縮",
     "labCompressionEnabled": "圧縮を有効化",
     "labCompressionModel": "圧縮モデル",

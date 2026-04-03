@@ -598,6 +598,11 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   }
 
   const activeConvSession = conversationSessions.find((s) => s.id === activeConvSessionId) ?? null
+  const conversationTokenEstimate = activeConvSession
+    ? activeConvSession.messages
+        .filter((m) => m.role !== 'system')
+        .reduce((acc, m) => acc + Math.ceil(m.content.length / 3.5), 0)
+    : 0
   const canRun = isLoggedIn() && !!prompt.trim() && !!model &&
     (mode === 'single' || activeConvSession?.status !== 'streaming')
   const isAnyStreaming = runs.some((r) => r.status === 'streaming')
@@ -613,6 +618,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
           images={images}
           maxImages={maxImages}
           isCompressing={isCompressing}
+          conversationTokenEstimate={conversationTokenEstimate}
           availableOptions={availableOptions}
           availableModels={availableModels}
           isGeminiProvider={isGeminiProvider}
