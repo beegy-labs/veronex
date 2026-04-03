@@ -822,7 +822,7 @@ async fn load_conversation_context(
                 if let Ok(Some(record)) = store.get_conversation(owner_id, date, uuid).await {
                     let mut history: Vec<ChatMessage> = Vec::new();
                     // Rebuild conversation from turns
-                    for turn in &record.turns {
+                    for turn in record.regular_turns() {
                         // User message
                         history.push(ChatMessage {
                             role: "user".to_string(),

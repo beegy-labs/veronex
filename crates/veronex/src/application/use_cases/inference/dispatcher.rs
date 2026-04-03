@@ -369,6 +369,7 @@ pub(super) async fn queue_dispatcher_loop(
                             cancel_notify: Arc::new(Notify::new()),
                             gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
                             assigned_provider_id: None,
+                            vision_analysis: None,
                         });
                         (j, None, None)
                     }

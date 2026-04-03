@@ -205,7 +205,8 @@ async fn finalize_job(
                 .ok().flatten()
                 .unwrap_or_else(ConversationRecord::new);
 
-            record.turns.push(crate::application::ports::outbound::message_store::TurnRecord {
+            use crate::application::ports::outbound::message_store::{ConversationTurn, TurnRecord as TR};
+            record.turns.push(ConversationTurn::Regular(TR {
                 job_id: uuid,
                 prompt: original_prompt,
                 messages: original_messages,
@@ -213,13 +214,16 @@ async fn finalize_job(
                 result: result_text.clone(),
                 model_name: Some(job.model_name.as_str().to_string()),
                 created_at: job.created_at.to_rfc3339(),
-            });
+                compressed: None,
+                vision_analysis: None,
+            }));
 
             if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
                 tracing::warn!(job_id = %uuid, "S3 conversation write failed (non-fatal): {e}");
             } else if let (Some(conv_id), Some(vk)) = (job.conversation_id, valkey) {
-                // Invalidate cached conversation detail so next fetch reads fresh S3 data
-                let _ = vk.kv_del(&format!("conv_s3:{}", conv_id)).await;
+                use fred::prelude::*;
+                let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(conv_id);
+                let _: Result<(), _> = vk.kv_del(&cache_key).await;
             }
         }
     }

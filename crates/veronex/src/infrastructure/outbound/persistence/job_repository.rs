@@ -118,6 +118,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         presence_penalty: None,
         mcp_loop_id,
         max_tokens: None,
+        vision_analysis: None,
     })
 }
 

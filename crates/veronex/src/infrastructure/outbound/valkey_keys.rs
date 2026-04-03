@@ -175,6 +175,15 @@ pub fn vram_leases(provider_id: Uuid) -> String {
     format!("veronex:vram_leases:{provider_id}")
 }
 
+// ── Conversation record cache ────────────────────────────────────────────────
+
+/// Cached ConversationRecord for a multi-turn session (zstd-compressed JSON).
+/// TTL = 300s. Written by: runner.rs after S3 put_conversation().
+/// Invalidated (DEL) by: compress_turn() after S3 re-write.
+pub fn conversation_record(conversation_id: uuid::Uuid) -> String {
+    format!("veronex:conv:{conversation_id}")
+}
+
 // ── Ollama model context cache ───────────────────────────────────────────────
 
 /// Cached Ollama model context window profile.

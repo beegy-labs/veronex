@@ -200,13 +200,13 @@ pub async fn get_conversation(
     let s3_record = fetch_conv_s3_cached(&state, owner_id, date, conv_id).await;
 
     let turns: Vec<ConversationTurn> = s3_record
-        .map(|rec| rec.turns.into_iter().map(|t| ConversationTurn {
+        .map(|rec| rec.regular_turns().map(|t| ConversationTurn {
             job_id: JobId::from_uuid(t.job_id),
-            prompt: t.prompt,
-            result: t.result,
-            tool_calls: t.tool_calls,
-            model_name: t.model_name,
-            created_at: t.created_at,
+            prompt: t.prompt.clone(),
+            result: t.result.clone(),
+            tool_calls: t.tool_calls.clone(),
+            model_name: t.model_name.clone(),
+            created_at: t.created_at.clone(),
         }).collect())
         .unwrap_or_default();
 

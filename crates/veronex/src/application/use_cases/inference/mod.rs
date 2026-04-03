@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+use crate::application::ports::outbound::message_store::VisionAnalysis;
 use crate::domain::enums::{JobStatus, KeyTier};
 use crate::domain::entities::InferenceJob;
 use crate::domain::value_objects::StreamToken;
@@ -30,4 +31,6 @@ pub(crate) struct JobEntry {
     pub tpm_reservation_minute: Option<i64>,
     /// Provider this job was dispatched to (set at dispatch time, used for Hard drain cancel).
     pub assigned_provider_id: Option<Uuid>,
+    /// Vision pre-processing result. Set by HTTP handler, consumed by finalize_job().
+    pub vision_analysis: Option<VisionAnalysis>,
 }

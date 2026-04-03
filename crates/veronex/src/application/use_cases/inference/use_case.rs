@@ -238,6 +238,7 @@ impl InferenceUseCaseImpl {
                 cancel_notify: Arc::new(Notify::new()),
                 gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
                 assigned_provider_id: None,
+                vision_analysis: None,
             });
             // Re-enqueue to ZSET with emergency priority (recovered jobs get highest priority)
             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -303,6 +304,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             images, image_keys: None,
             stop, seed, response_format, frequency_penalty, presence_penalty,
             mcp_loop_id, max_tokens,
+            vision_analysis: None,
         };
 
         // Persist metadata-only row to Postgres. Large content is written to S3 at finalize.
@@ -348,6 +350,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             gemini_tier: gemini_tier.clone(), key_tier,
             tpm_reservation_minute: Some(chrono::Utc::now().timestamp() / 60),
             assigned_provider_id: None,
+            vision_analysis: None,
         });
 
         let uuid = job_id.0;

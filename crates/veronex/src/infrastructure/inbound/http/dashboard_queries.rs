@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::application::ports::outbound::analytics_repository::{HourlyThroughput, PerformanceMetrics};
-use crate::application::ports::outbound::message_store::ConversationRecord;
+use crate::application::ports::outbound::message_store::{ConversationRecord, ConversationTurn};
 use crate::domain::value_objects::JobId;
 
 use super::error::AppError;
@@ -253,16 +253,19 @@ pub(super) fn build_job_detail(
         api_key_name: c.api_key_name,
         account_name: c.account_name,
         prompt: conversation.as_ref()
-            .and_then(|r| r.turns.iter().find(|t| t.job_id == c.id).map(|t| t.prompt.clone()))
+            .and_then(|r| r.regular_turns().find(|t| t.job_id == c.id).map(|t| t.prompt.clone()))
             .unwrap_or_else(|| row.prompt_preview.unwrap_or_default()),
         result_text: conversation.as_ref()
-            .and_then(|r| r.turns.iter().find(|t| t.job_id == c.id).and_then(|t| t.result.clone())),
+            .and_then(|r| r.regular_turns().find(|t| t.job_id == c.id).and_then(|t| t.result.clone())),
         error: row.error,
         request_path: c.request_path,
         tool_calls_json: conversation.as_ref()
-            .and_then(|r| r.turns.iter().find(|t| t.job_id == c.id).and_then(|t| t.tool_calls.clone())),
+            .and_then(|r| r.regular_turns().find(|t| t.job_id == c.id).and_then(|t| t.tool_calls.clone())),
         messages_json: conversation
-            .and_then(|r| r.turns.into_iter().find(|t| t.job_id == c.id).and_then(|t| t.messages)),
+            .and_then(|r| r.turns.into_iter().find_map(|t| match t {
+                ConversationTurn::Regular(tr) if tr.job_id == c.id => tr.messages,
+                _ => None,
+            })),
         message_count,
         estimated_cost_usd: c.estimated_cost_usd,
         provider_name: row.provider_name,
