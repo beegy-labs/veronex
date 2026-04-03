@@ -205,6 +205,9 @@ async fn finalize_job(
                 .ok().flatten()
                 .unwrap_or_else(ConversationRecord::new);
 
+            // Read vision_analysis from in-memory JobEntry (set at submit time).
+            let vision_analysis = jobs.get(&uuid).and_then(|e| e.vision_analysis.clone());
+
             use crate::application::ports::outbound::message_store::{ConversationTurn, TurnRecord as TR};
             record.turns.push(ConversationTurn::Regular(TR {
                 job_id: uuid,
@@ -215,15 +218,20 @@ async fn finalize_job(
                 model_name: Some(job.model_name.as_str().to_string()),
                 created_at: job.created_at.to_rfc3339(),
                 compressed: None,
-                vision_analysis: None,
+                vision_analysis,
             }));
 
             if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
                 tracing::warn!(job_id = %uuid, "S3 conversation write failed (non-fatal): {e}");
             } else if let (Some(conv_id), Some(vk)) = (job.conversation_id, valkey) {
-                use fred::prelude::*;
+                // Cache the updated record in Valkey (TTL 300 s) so the next read
+                // hits cache instead of S3. Compression re-write (Phase 3) will DEL
+                // to force a fresh load after the compressed turn is written back.
+                const CONV_CACHE_TTL_SECS: i64 = 300;
                 let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(conv_id);
-                let _: Result<(), _> = vk.kv_del(&cache_key).await;
+                if let Ok(json) = serde_json::to_string(&record) {
+                    let _ = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await;
+                }
             }
         }
     }

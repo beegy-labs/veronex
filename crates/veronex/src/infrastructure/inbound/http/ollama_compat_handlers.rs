@@ -204,26 +204,27 @@ pub async fn generate(
             .into_response();
     }
 
-    // Validate + compress oversized images
+    // Validate + compress oversized images, then analyze non-vision images.
+    let mut vision_analysis = None;
     if req.images.is_some() {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
         if let Some(msg) = validate_and_compress_images(&mut req.images, &lab).await {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response();
         }
-    }
-
-    // For non-vision models with images: analyze via vision fallback model and inject description.
-    // Images are kept in req.images for S3 upload and conversation history.
-    // The Ollama adapter will skip sending them to non-vision Ollama endpoints.
-    if let Some(imgs) = req.images.as_deref().filter(|i| !i.is_empty()) {
-        if let Some(desc) = analyze_images_for_context(
-            &state.http_client,
-            state.provider_registry.as_ref(),
-            &req.model,
-            imgs,
-            &req.prompt,
-        ).await {
-            req.prompt = format!("[Image Analysis]\n{desc}\n\n{}", req.prompt);
+        // For non-vision models: analyze images via vision model, inject description into prompt.
+        // Images are kept in req.images for S3 upload and conversation history.
+        if let Some(imgs) = req.images.as_deref().filter(|i| !i.is_empty()) {
+            if let Some(va) = analyze_images_for_context(
+                &state.http_client,
+                state.provider_registry.as_ref(),
+                &req.model,
+                imgs,
+                &req.prompt,
+                lab.vision_model.as_deref(),
+            ).await {
+                req.prompt = format!("[Image Analysis]\n{}\n\n{}", va.analysis, req.prompt);
+                vision_analysis = Some(va);
+            }
         }
     }
 
@@ -248,6 +249,7 @@ pub async fn generate(
             images: req.images,
             stop: None, seed: None, response_format: None,
             frequency_penalty: None, presence_penalty: None, mcp_loop_id: None, max_tokens: None,
+            vision_analysis,
         })
         .await
     {
@@ -369,30 +371,30 @@ pub async fn chat(
         if imgs.is_empty() { None } else { Some(imgs) }
     };
 
-    // Validate + compress oversized images
+    // Validate + compress oversized images, then analyze non-vision images.
+    let mut vision_analysis_chat = None;
     if images.is_some() {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
         if let Some(msg) = validate_and_compress_images(&mut images, &lab).await {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response();
         }
-    }
-
-    // For non-vision models with images: analyze via vision fallback model and inject description
-    // into the last user message content. Images remain in the job for S3 upload and history.
-    // The Ollama adapter will skip sending images to non-vision model endpoints.
-    if let Some(imgs) = images.as_deref().filter(|i| !i.is_empty()) {
-        if let Some(desc) = analyze_images_for_context(
-            &state.http_client,
-            state.provider_registry.as_ref(),
-            &req.model,
-            imgs,
-            &prompt,
-        ).await {
-            if let Some(last_user) = req.messages.iter_mut().rev()
-                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-            {
-                let existing = last_user["content"].as_str().unwrap_or("").to_string();
-                last_user["content"] = serde_json::json!(format!("[Image Analysis]\n{desc}\n\n{existing}"));
+        // For non-vision models: analyze images, inject description into last user message.
+        if let Some(imgs) = images.as_deref().filter(|i| !i.is_empty()) {
+            if let Some(va) = analyze_images_for_context(
+                &state.http_client,
+                state.provider_registry.as_ref(),
+                &req.model,
+                imgs,
+                &prompt,
+                lab.vision_model.as_deref(),
+            ).await {
+                if let Some(last_user) = req.messages.iter_mut().rev()
+                    .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                {
+                    let existing = last_user["content"].as_str().unwrap_or("").to_string();
+                    last_user["content"] = serde_json::json!(format!("[Image Analysis]\n{}\n\n{existing}", va.analysis));
+                }
+                vision_analysis_chat = Some(va);
             }
         }
     }
@@ -420,6 +422,7 @@ pub async fn chat(
             images,
             stop: None, seed: None, response_format: None,
             frequency_penalty: None, presence_penalty: None, mcp_loop_id: None, max_tokens: None,
+            vision_analysis: vision_analysis_chat,
         })
         .await
     {

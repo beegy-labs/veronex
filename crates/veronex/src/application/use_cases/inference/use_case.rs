@@ -264,6 +264,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             account_id, source, api_format, messages, tools, request_path,
             conversation_id, key_tier, images, stop, seed, response_format,
             frequency_penalty, presence_penalty, mcp_loop_id, max_tokens,
+            vision_analysis,
         } = req;
 
         let job_id = JobId::new();
@@ -304,7 +305,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             images, image_keys: None,
             stop, seed, response_format, frequency_penalty, presence_penalty,
             mcp_loop_id, max_tokens,
-            vision_analysis: None,
+            vision_analysis: vision_analysis.clone(),
         };
 
         // Persist metadata-only row to Postgres. Large content is written to S3 at finalize.
@@ -350,7 +351,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             gemini_tier: gemini_tier.clone(), key_tier,
             tpm_reservation_minute: Some(chrono::Utc::now().timestamp() / 60),
             assigned_provider_id: None,
-            vision_analysis: None,
+            vision_analysis,
         });
 
         let uuid = job_id.0;

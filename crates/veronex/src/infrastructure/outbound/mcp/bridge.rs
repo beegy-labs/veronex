@@ -229,6 +229,7 @@ impl McpBridgeAdapter {
                 presence_penalty,
                 mcp_loop_id: Some(mcp_loop_id),
                 max_tokens: None,
+                vision_analysis: None,
             }).await {
                 Ok(id) => id,
                 Err(e) => {

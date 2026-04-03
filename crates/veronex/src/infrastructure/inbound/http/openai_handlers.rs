@@ -384,7 +384,7 @@ async fn ollama_chat_proxy(
 
     let model_str = req.model.clone();
     // Merge top-level images with images extracted from content array parts.
-    let images = {
+    let mut images = {
         let mut imgs = req.images.unwrap_or_default();
         imgs.append(&mut content_images);
         if imgs.is_empty() { None } else { Some(imgs) }
@@ -399,6 +399,24 @@ async fn ollama_chat_proxy(
     let include_usage = req.stream_options.as_ref()
         .and_then(|o| o.include_usage)
         .unwrap_or(false);
+
+    // For non-vision models with images: analyze via vision model, inject description.
+    let vision_analysis = if images.as_ref().is_some_and(|i| !i.is_empty()) {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        super::inference_helpers::analyze_images_for_context(
+            &state.http_client,
+            state.provider_registry.as_ref(),
+            &model_str,
+            images.as_deref().unwrap_or(&[]),
+            &prompt,
+            lab.vision_model.as_deref(),
+        ).await
+    } else {
+        None
+    };
+    // Images are validated + compressed upstream (line ~311). If vision analysis ran, the
+    // description is already embedded in messages via the Ollama format conversion above.
+    // We don't need to re-inject here — the prompt var is used as display only.
 
     let job_id = match state
         .use_case
@@ -424,6 +442,7 @@ async fn ollama_chat_proxy(
             presence_penalty: req.presence_penalty,
             mcp_loop_id: None,
             max_tokens: effective_max_tokens,
+            vision_analysis,
         })
         .await
     {
@@ -956,6 +975,7 @@ async fn legacy_queue_chat(
             presence_penalty: req.presence_penalty,
             mcp_loop_id: None,
             max_tokens: effective_max_tokens,
+            vision_analysis: None,
         })
         .await
     {

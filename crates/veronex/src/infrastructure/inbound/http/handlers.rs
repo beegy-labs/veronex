@@ -210,6 +210,7 @@ pub async fn submit_inference(
             images: None,
             stop: None, seed: None, response_format: None,
             frequency_penalty: None, presence_penalty: None, mcp_loop_id: None, max_tokens: None,
+            vision_analysis: None,
         })
         .await?;
 
