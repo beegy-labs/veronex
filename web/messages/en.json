@@ -88,6 +88,8 @@
     "labMultiturnReqs": "Multi-Turn Requirements",
     "labMultiturnMinParams": "Min Parameters (B)",
     "labMultiturnMinCtx": "Min Context (tokens)",
+    "labMultiturnAllowedModels": "Allowed Models",
+    "labMultiturnAllowedModelsDesc": "Comma-separated allowlist. Empty = all qualifying models allowed.",
     "maxImagesPerRequest": "Max images per request",
     "maxImagesPerRequestDesc": "Maximum images per inference request. 0 disables image input.",
     "menu": "Menu",

@@ -88,6 +88,8 @@
     "labMultiturnReqs": "멀티턴 요건",
     "labMultiturnMinParams": "최소 파라미터 (B)",
     "labMultiturnMinCtx": "최소 컨텍스트 (토큰)",
+    "labMultiturnAllowedModels": "허용 모델",
+    "labMultiturnAllowedModelsDesc": "쉼표로 구분된 허용 목록. 비어 있으면 모든 적격 모델 허용.",
     "maxImagesPerRequest": "요청당 최대 이미지 수",
     "maxImagesPerRequestDesc": "추론 요청당 허용되는 최대 이미지 수. 0이면 이미지 입력이 비활성화됩니다.",
     "menu": "메뉴",

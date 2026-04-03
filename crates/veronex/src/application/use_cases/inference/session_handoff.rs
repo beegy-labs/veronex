@@ -106,7 +106,7 @@ async fn generate_master_summary(
 // ── Perform handoff ───────────────────────────────────────────────────────────
 
 /// Perform session handoff: generate master summary, create new conversation
-/// with HandoffTurn as first turn, return new `conversation_id`.
+/// with HandoffTurn as first turn, return `(new_conversation_id, master_summary)`.
 ///
 /// Non-fatal: returns `None` on any error (caller continues with original session).
 pub async fn perform_handoff(
@@ -118,7 +118,7 @@ pub async fn perform_handoff(
     provider_url: &str,
     timeout_secs: u64,
     store: &Arc<dyn MessageStore>,
-) -> Option<Uuid> {
+) -> Option<(Uuid, String)> {
     let previous_turn_count = record.regular_turns().count() as u32;
 
     let master_summary = match generate_master_summary(record, model, provider_url, timeout_secs).await {
@@ -134,7 +134,7 @@ pub async fn perform_handoff(
 
     let new_conv_id = uuid::Uuid::now_v7();
     let handoff_turn = HandoffTurn {
-        master_summary,
+        master_summary: master_summary.clone(),
         summary_model: model.to_string(),
         previous_conversation_id,
         previous_turn_count,
@@ -160,5 +160,5 @@ pub async fn perform_handoff(
         "session_handoff: new session created"
     );
 
-    Some(new_conv_id)
+    Some((new_conv_id, master_summary))
 }

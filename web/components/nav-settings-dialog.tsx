@@ -28,6 +28,47 @@ import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone, type Timezone, PRESET_TIMEZONES, isValidTimezone } from '@/components/timezone-provider'
 import { api } from '@/lib/api'
 
+function AllowedModelsInput({ labSettings, labLoading, setLabLoading, refetchLabSettings }: {
+  labSettings: import('@/lib/types').LabSettings | null
+  labLoading: boolean
+  setLabLoading: (v: boolean) => void
+  refetchLabSettings: () => void
+}) {
+  const { t } = useTranslation()
+  const currentVal = (labSettings?.multiturn_allowed_models ?? []).join(', ')
+  const [val, setVal] = useState(currentVal)
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => { setVal((labSettings?.multiturn_allowed_models ?? []).join(', ')); setDirty(false) }, [labSettings?.multiturn_allowed_models])
+
+  async function save() {
+    setLabLoading(true)
+    try {
+      const models = val.split(',').map(s => s.trim()).filter(Boolean)
+      await api.patchLabSettings({ multiturn_allowed_models: models })
+      await refetchLabSettings()
+      setDirty(false)
+    } catch { } finally { setLabLoading(false) }
+  }
+
+  return (
+    <div className="flex gap-1.5">
+      <Input
+        className="h-7 text-xs flex-1 font-mono"
+        placeholder="qwen2.5:7b, mistral:7b"
+        value={val}
+        disabled={labLoading || labSettings === null}
+        onChange={(e) => { setVal(e.target.value); setDirty(true) }}
+        onKeyDown={(e) => { if (e.key === 'Enter' && dirty) save() }}
+      />
+      {dirty && (
+        <Button size="sm" className="h-7 text-xs px-2" onClick={save} disabled={labLoading}>
+          {t('common.save')}
+        </Button>
+      )}
+    </div>
+  )
+}
+
 function VisionModelInput({ labSettings, labLoading, setLabLoading, refetchLabSettings }: {
   labSettings: import('@/lib/types').LabSettings | null
   labLoading: boolean
@@ -291,6 +332,11 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                         try { await api.patchLabSettings({ multiturn_min_ctx: val }); await refetchLabSettings() }
                         catch { } finally { setLabLoading(false) }
                       }} />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[11px] text-muted-foreground">{t('common.labMultiturnAllowedModels')}</p>
+                    <p className="text-[10px] text-muted-foreground/70 leading-snug">{t('common.labMultiturnAllowedModelsDesc')}</p>
+                    <AllowedModelsInput labSettings={labSettings} labLoading={labLoading} setLabLoading={setLabLoading} refetchLabSettings={refetchLabSettings} />
                   </div>
                 </div>
               </div>

@@ -365,8 +365,8 @@ async fn ollama_chat_proxy(
     stream: bool,
 ) -> Response {
     // Load previous conversation + generate conversation_id
-    let conversation_id = match load_conversation_context(&state, &caller, conversation_id, &mut req.messages, &req.model).await {
-        Ok(cid) => cid,
+    let (conversation_id, session_renewed) = match load_conversation_context(&state, &caller, conversation_id, &mut req.messages, &req.model).await {
+        Ok(result) => result,
         Err(resp) => return resp,
     };
 
@@ -464,7 +464,8 @@ async fn ollama_chat_proxy(
     let created = chrono::Utc::now().timestamp();
 
     if !stream {
-        return collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created, conversation_id.clone()).await;
+        let resp = collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created, conversation_id.clone()).await;
+        return if session_renewed { with_conversation_id(resp, conversation_id.as_ref()) } else { resp };
     }
 
     let mut saw_tool_calls = false;
@@ -652,8 +653,8 @@ async fn mcp_ollama_chat(
     // Load previous conversation + generate conversation_id
     let mut req = req;
     let body_cid = req.conversation_id.as_deref().and_then(super::inference_helpers::decode_conversation_id);
-    let conversation_id = match load_conversation_context(&state, &caller, body_cid.or(conversation_id), &mut req.messages, &req.model).await {
-        Ok(cid) => cid,
+    let (conversation_id, _session_renewed) = match load_conversation_context(&state, &caller, body_cid.or(conversation_id), &mut req.messages, &req.model).await {
+        Ok(result) => result,
         Err(resp) => return resp,
     };
 
@@ -835,15 +836,19 @@ async fn mcp_ollama_chat(
 ///
 /// Checks multi-turn eligibility before loading. Returns `Err(400 Response)` when
 /// the model does not meet the gate conditions (too small, ctx too narrow, not allowlisted).
-/// Returns the conversation_id UUID (generated if absent) on success.
+/// Returns `(conversation_id, handoff_occurred)` on success. When a session handoff
+/// fires, the returned conversation_id is the NEW session id.
 async fn load_conversation_context(
     state: &AppState,
     caller: &InferCaller,
     conversation_id: Option<uuid::Uuid>,
     messages: &mut Vec<ChatMessage>,
     model_name: &str,
-) -> Result<Option<uuid::Uuid>, Response> {
-    use crate::application::use_cases::inference::context_assembler;
+) -> Result<(Option<uuid::Uuid>, bool), Response> {
+    use crate::application::use_cases::inference::{context_assembler, session_handoff};
+
+    let mut effective_cid = conversation_id;
+    let mut handoff_occurred = false;
 
     if let Some(uuid) = conversation_id {
         if let Some(ref store) = state.message_store {
@@ -855,7 +860,6 @@ async fn load_conversation_context(
                 let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(uuid);
                 let record_opt: Option<crate::application::ports::outbound::message_store::ConversationRecord> =
                     if days_ago == 0 {
-                        // Only try Valkey on day 0 (cache is always for the current record)
                         if let Some(ref vk) = state.valkey_pool {
                             use fred::prelude::*;
                             vk.get::<Option<String>, _>(&cache_key).await
@@ -874,7 +878,6 @@ async fn load_conversation_context(
                     None => {
                         match store.get_conversation(owner_id, date, uuid).await {
                             Ok(Some(r)) => {
-                                // Populate Valkey cache on S3 hit (day-0 only matters, but safe either way)
                                 if let Some(ref vk) = state.valkey_pool {
                                     use fred::prelude::*;
                                     if let Ok(json) = serde_json::to_string(&r) {
@@ -923,8 +926,39 @@ async fn load_conversation_context(
                     ).into_response());
                 }
 
-                // ── Context assembly (compressed history + verbatim window) ──
                 let configured_ctx = max_ctx.unwrap_or(32_768);
+
+                // ── Session handoff check ─────────────────────────────────────
+                if session_handoff::should_handoff(&record, configured_ctx, &lab) {
+                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                    let ollama = providers.iter().find(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama);
+                    if let Some(provider) = ollama {
+                        let summary_model = lab.compression_model.clone()
+                            .unwrap_or_else(|| model_name.to_string());
+                        let timeout = lab.compression_timeout_secs as u64;
+                        if let Some((new_conv_id, master_summary)) = session_handoff::perform_handoff(
+                            &record, uuid, owner_id, date, &summary_model, &provider.url, timeout, store,
+                        ).await {
+                            // Prepend master summary as first message; current input follows
+                            let summary_msg = ChatMessage {
+                                role: "user".to_string(),
+                                content: Some(MessageContent::Text(
+                                    format!("[Context from previous session]\n{master_summary}")
+                                )),
+                                name: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                            };
+                            let current = std::mem::take(messages);
+                            *messages = std::iter::once(summary_msg).chain(current).collect();
+                            effective_cid = Some(new_conv_id);
+                            handoff_occurred = true;
+                            break 'search;
+                        }
+                    }
+                }
+
+                // ── Context assembly (compressed history + verbatim window) ──
                 let history_msgs = context_assembler::assemble(&record, configured_ctx, &lab);
 
                 let mut history: Vec<ChatMessage> = history_msgs
@@ -947,7 +981,7 @@ async fn load_conversation_context(
             }
         }
     }
-    let cid = conversation_id.unwrap_or_else(super::inference_helpers::new_conversation_id);
+    let cid = effective_cid.unwrap_or_else(super::inference_helpers::new_conversation_id);
 
     // Auto-title from first user message (strip /no_think prefix, max 10 chars)
     let title: Option<String> = messages.iter()
@@ -976,7 +1010,7 @@ async fn load_conversation_context(
     .execute(&state.pg_pool)
     .await;
 
-    Ok(Some(cid))
+    Ok((Some(cid), handoff_occurred))
 }
 
 // ── Provider string parsing ──────────────────────────────────────────────────

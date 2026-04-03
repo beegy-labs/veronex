@@ -88,6 +88,8 @@
     "labMultiturnReqs": "マルチターン要件",
     "labMultiturnMinParams": "最小パラメータ数 (B)",
     "labMultiturnMinCtx": "最小コンテキスト (トークン)",
+    "labMultiturnAllowedModels": "許可モデル",
+    "labMultiturnAllowedModelsDesc": "カンマ区切りの許可リスト。空の場合は全ての適格モデルを許可。",
     "maxImagesPerRequest": "リクエストあたりの最大画像数",
     "maxImagesPerRequestDesc": "推論リクエストあたりの最大画像数。0で画像入力を無効にします。",
     "menu": "メニュー",
