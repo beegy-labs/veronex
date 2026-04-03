@@ -365,7 +365,10 @@ async fn ollama_chat_proxy(
     stream: bool,
 ) -> Response {
     // Load previous conversation + generate conversation_id
-    let conversation_id = load_conversation_context(&state, &caller, conversation_id, &mut req.messages).await;
+    let conversation_id = match load_conversation_context(&state, &caller, conversation_id, &mut req.messages, &req.model).await {
+        Ok(cid) => cid,
+        Err(resp) => return resp,
+    };
 
     // Extract base64 images from content arrays (OpenAI vision format) before
     // consuming messages. Only look at user messages — assistant/system won't have images.
@@ -649,7 +652,10 @@ async fn mcp_ollama_chat(
     // Load previous conversation + generate conversation_id
     let mut req = req;
     let body_cid = req.conversation_id.as_deref().and_then(super::inference_helpers::decode_conversation_id);
-    let conversation_id = load_conversation_context(&state, &caller, body_cid.or(conversation_id), &mut req.messages).await;
+    let conversation_id = match load_conversation_context(&state, &caller, body_cid.or(conversation_id), &mut req.messages, &req.model).await {
+        Ok(cid) => cid,
+        Err(resp) => return resp,
+    };
 
     let ollama_messages: Vec<serde_json::Value> =
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
@@ -825,47 +831,119 @@ async fn mcp_ollama_chat(
 
 // ── Conversation context loading ─────────────────────────────────────────────
 
-/// Load previous conversation from S3 if conversation_id is provided.
-/// Returns the conversation_id UUID (generated if absent).
+/// Load previous conversation from S3/Valkey if conversation_id is provided.
+///
+/// Checks multi-turn eligibility before loading. Returns `Err(400 Response)` when
+/// the model does not meet the gate conditions (too small, ctx too narrow, not allowlisted).
+/// Returns the conversation_id UUID (generated if absent) on success.
 async fn load_conversation_context(
     state: &AppState,
     caller: &InferCaller,
     conversation_id: Option<uuid::Uuid>,
     messages: &mut Vec<ChatMessage>,
-) -> Option<uuid::Uuid> {
+    model_name: &str,
+) -> Result<Option<uuid::Uuid>, Response> {
+    use crate::application::use_cases::inference::context_assembler;
+
     if let Some(uuid) = conversation_id {
         if let Some(ref store) = state.message_store {
             let owner_id = caller.account_id().or(caller.api_key_id()).unwrap_or(uuid);
-            for days_ago in 0..=7 {
+            'search: for days_ago in 0..=7 {
                 let date = (chrono::Utc::now() - chrono::Duration::days(days_ago)).date_naive();
-                if let Ok(Some(record)) = store.get_conversation(owner_id, date, uuid).await {
-                    let mut history: Vec<ChatMessage> = Vec::new();
-                    // Rebuild conversation from turns
-                    for turn in record.regular_turns() {
-                        // User message
-                        history.push(ChatMessage {
-                            role: "user".to_string(),
-                            content: Some(MessageContent::Text(turn.prompt.clone())),
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
-                        // Assistant response
-                        if let Some(ref result) = turn.result {
-                            history.push(ChatMessage {
-                                role: "assistant".to_string(),
-                                content: Some(MessageContent::Text(result.clone())),
-                                name: None,
-                                tool_calls: None,
-                                tool_call_id: None,
-                            });
+
+                // ── Valkey → S3 load ─────────────────────────────────────────
+                let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(uuid);
+                let record_opt: Option<crate::application::ports::outbound::message_store::ConversationRecord> =
+                    if days_ago == 0 {
+                        // Only try Valkey on day 0 (cache is always for the current record)
+                        if let Some(ref vk) = state.valkey_pool {
+                            use fred::prelude::*;
+                            vk.get::<Option<String>, _>(&cache_key).await
+                                .ok()
+                                .flatten()
+                                .and_then(|json| serde_json::from_str(&json).ok())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                let record = match record_opt {
+                    Some(r) => r,
+                    None => {
+                        match store.get_conversation(owner_id, date, uuid).await {
+                            Ok(Some(r)) => {
+                                // Populate Valkey cache on S3 hit (day-0 only matters, but safe either way)
+                                if let Some(ref vk) = state.valkey_pool {
+                                    use fred::prelude::*;
+                                    if let Ok(json) = serde_json::to_string(&r) {
+                                        let _ = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(300)), None, false).await;
+                                    }
+                                }
+                                r
+                            }
+                            _ => continue 'search,
                         }
                     }
-                    let mut current = std::mem::take(messages);
-                    history.append(&mut current);
-                    *messages = history;
-                    break;
+                };
+
+                // ── Multi-turn eligibility gate ───────────────────────────────
+                let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+                let max_ctx: Option<u32> = if let Some(ref vk) = state.valkey_pool {
+                    use fred::prelude::*;
+                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                    let mut found = None;
+                    for p in providers.iter().filter(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama) {
+                        let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, model_name);
+                        if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
+                            if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
+                                .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
+                            {
+                                found = Some(ctx as u32);
+                                break;
+                            }
+                        }
+                    }
+                    found
+                } else {
+                    None
+                };
+
+                if let Err(e) = context_assembler::check_multiturn_eligibility(model_name, max_ctx, &lab) {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": {
+                                "message": e.to_string(),
+                                "type": "invalid_request_error",
+                                "code": e.code()
+                            }
+                        })),
+                    ).into_response());
                 }
+
+                // ── Context assembly (compressed history + verbatim window) ──
+                let configured_ctx = max_ctx.unwrap_or(32_768);
+                let history_msgs = context_assembler::assemble(&record, configured_ctx, &lab);
+
+                let mut history: Vec<ChatMessage> = history_msgs
+                    .into_iter()
+                    .map(|v| ChatMessage {
+                        role: v["role"].as_str().unwrap_or("user").to_string(),
+                        content: Some(MessageContent::Text(
+                            v["content"].as_str().unwrap_or("").to_string(),
+                        )),
+                        name: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    })
+                    .collect();
+
+                let mut current = std::mem::take(messages);
+                history.append(&mut current);
+                *messages = history;
+                break 'search;
             }
         }
     }
@@ -898,7 +976,7 @@ async fn load_conversation_context(
     .execute(&state.pg_pool)
     .await;
 
-    Some(cid)
+    Ok(Some(cid))
 }
 
 // ── Provider string parsing ──────────────────────────────────────────────────

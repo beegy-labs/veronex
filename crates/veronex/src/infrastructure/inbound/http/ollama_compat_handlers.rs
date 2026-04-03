@@ -360,6 +360,50 @@ pub async fn chat(
     }
     let prompt = extract_last_user_prompt(&req.messages).to_string();
 
+    // ── Multi-turn eligibility gate ──────────────────────────────────────────
+    // Fire when the client sends a multi-message conversation (conversation_id present
+    // and more than one user message indicates a continuing session).
+    if conversation_id.is_some() {
+        let user_msg_count = req.messages.iter()
+            .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            .count();
+        if user_msg_count > 1 {
+            use crate::application::use_cases::inference::context_assembler;
+            let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+            let max_ctx: Option<u32> = if let Some(ref vk) = state.valkey_pool {
+                use fred::prelude::*;
+                let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                let mut found = None;
+                for p in providers.iter().filter(|p| p.provider_type == ProviderType::Ollama) {
+                    let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, &req.model);
+                    if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
+                        if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
+                            .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
+                        {
+                            found = Some(ctx as u32);
+                            break;
+                        }
+                    }
+                }
+                found
+            } else {
+                None
+            };
+            if let Err(e) = context_assembler::check_multiturn_eligibility(&req.model, max_ctx, &lab) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": e.to_string(),
+                            "type": "invalid_request_error",
+                            "code": e.code()
+                        }
+                    })),
+                ).into_response();
+            }
+        }
+    }
+
     // Extract images from user messages (Ollama chat format: message-level `images` field).
     let mut images: Option<Vec<String>> = {
         let imgs: Vec<String> = req.messages.iter()

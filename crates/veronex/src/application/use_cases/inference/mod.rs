@@ -1,4 +1,5 @@
 mod compression_router;
+pub mod context_assembler;
 mod context_compressor;
 mod dispatcher;
 mod helpers;
