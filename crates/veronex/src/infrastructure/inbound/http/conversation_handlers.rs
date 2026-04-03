@@ -1,16 +1,19 @@
 //! Conversation API handlers.
 //!
-//! GET /v1/conversations       — paginated conversation list
-//! GET /v1/conversations/{id}  — conversation detail with turns
+//! GET /v1/conversations                                 — paginated conversation list
+//! GET /v1/conversations/{id}                            — conversation detail with turns
+//! GET /v1/conversations/{id}/turns/{job_id}/internals   — compression + vision metadata (admin)
 
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::error::AppError;
-use super::middleware::jwt_auth::RequireDashboardView;
+use super::middleware::jwt_auth::{RequireAccountManage, RequireDashboardView};
 use super::state::AppState;
 use crate::application::ports::outbound::message_store::ConversationRecord;
 use crate::domain::value_objects::{ConvId, JobId};
@@ -117,6 +120,32 @@ pub struct ConversationDetailResponse {
     turns: Vec<ConversationTurn>,
 }
 
+// ── Internals response types (Phase 8) ───────────────────────────────────────
+
+#[derive(Serialize)]
+struct CompressedTurnDetail {
+    summary:           String,
+    original_tokens:   u32,
+    compressed_tokens: u32,
+    compression_model: String,
+    ratio:             f32,
+}
+
+#[derive(Serialize)]
+struct VisionAnalysisDetail {
+    analysis:        String,
+    vision_model:    String,
+    image_count:     u32,
+    analysis_tokens: u32,
+}
+
+#[derive(Serialize)]
+struct TurnInternalsResponse {
+    job_id:          String,
+    compressed:      Option<CompressedTurnDetail>,
+    vision_analysis: Option<VisionAnalysisDetail>,
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 /// `GET /v1/conversations`
@@ -200,13 +229,13 @@ pub async fn get_conversation(
     let s3_record = fetch_conv_s3_cached(&state, owner_id, date, conv_id).await;
 
     let turns: Vec<ConversationTurn> = s3_record
-        .map(|rec| rec.turns.into_iter().map(|t| ConversationTurn {
+        .map(|rec| rec.regular_turns().map(|t| ConversationTurn {
             job_id: JobId::from_uuid(t.job_id),
-            prompt: t.prompt,
-            result: t.result,
-            tool_calls: t.tool_calls,
-            model_name: t.model_name,
-            created_at: t.created_at,
+            prompt: t.prompt.clone(),
+            result: t.result.clone(),
+            tool_calls: t.tool_calls.clone(),
+            model_name: t.model_name.clone(),
+            created_at: t.created_at.clone(),
         }).collect())
         .unwrap_or_default();
 
@@ -223,4 +252,89 @@ pub async fn get_conversation(
         updated_at: conv_row.get("updated_at"),
         turns,
     }))
+}
+
+// ── GET /v1/conversations/{id}/turns/{job_id}/internals ───────────────────────
+
+/// `GET /v1/conversations/{id}/turns/{job_id}/internals`
+///
+/// Returns compression and vision analysis metadata for a single turn.
+/// Requires `account_manage` permission (admin-only).
+pub async fn get_turn_internals(
+    RequireAccountManage(_): RequireAccountManage,
+    State(state): State<AppState>,
+    Path((conv_id_str, job_id_str)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let conv_uuid = match Uuid::parse_str(&conv_id_str) {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid conversation id"}))).into_response(),
+    };
+
+    let job_id = match Uuid::parse_str(&job_id_str) {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid job id"}))).into_response(),
+    };
+
+    if state.message_store.is_none() {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "message store not configured"}))).into_response();
+    }
+
+    use sqlx::Row as _;
+    let row = sqlx::query(
+        "SELECT account_id, api_key_id, created_at
+         FROM inference_jobs
+         WHERE conversation_id = $1
+         ORDER BY created_at ASC
+         LIMIT 1"
+    )
+    .bind(&conv_id_str)
+    .fetch_optional(&state.pg_pool)
+    .await;
+
+    let (owner_id, date) = match row {
+        Ok(Some(r)) => {
+            let created_at: DateTime<Utc> = r.get("created_at");
+            let date = created_at.date_naive();
+            let account_id: Option<Uuid> = r.get("account_id");
+            let api_key_id: Option<Uuid> = r.get("api_key_id");
+            let owner = account_id.or(api_key_id).unwrap_or(conv_uuid);
+            (owner, date)
+        }
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "conversation not found"}))).into_response(),
+        Err(e) => {
+            tracing::error!("get_turn_internals db: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "db error"}))).into_response();
+        }
+    };
+
+    let record = match fetch_conv_s3_cached(&state, owner_id, date, conv_uuid).await {
+        Some(r) => r,
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "conversation record not found"}))).into_response(),
+    };
+
+    let turn = match record.regular_turns().find(|t| t.job_id == job_id) {
+        Some(t) => t,
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "turn not found"}))).into_response(),
+    };
+
+    let compressed = turn.compressed.as_ref().map(|c| CompressedTurnDetail {
+        summary:           c.summary.clone(),
+        original_tokens:   c.original_tokens,
+        compressed_tokens: c.compressed_tokens,
+        compression_model: c.compression_model.clone(),
+        ratio:             c.original_tokens as f32 / c.compressed_tokens.max(1) as f32,
+    });
+
+    let vision_analysis = turn.vision_analysis.as_ref().map(|v| VisionAnalysisDetail {
+        analysis:        v.analysis.clone(),
+        vision_model:    v.vision_model.clone(),
+        image_count:     v.image_count,
+        analysis_tokens: v.analysis_tokens,
+    });
+
+    (StatusCode::OK, Json(TurnInternalsResponse {
+        job_id: job_id.to_string(),
+        compressed,
+        vision_analysis,
+    })).into_response()
 }

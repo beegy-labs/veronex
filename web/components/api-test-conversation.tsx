@@ -199,7 +199,13 @@ export function ApiTestConversation({
       {!isEmpty && (
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
           {messages.map((msg, i) =>
-            msg.role === 'user' ? (
+            msg.role === 'system' ? (
+              <div key={i} className="flex items-center gap-2 py-1">
+                <div className="flex-1 h-px bg-border/60" />
+                <span className="text-[11px] text-muted-foreground/70 shrink-0">{msg.content}</span>
+                <div className="flex-1 h-px bg-border/60" />
+              </div>
+            ) : msg.role === 'user' ? (
               <div key={i} className="flex justify-end">
                 <div className="max-w-[80%] rounded-2xl rounded-tr-sm px-3 py-2 bg-primary text-primary-foreground text-sm">
                   {msg.images && msg.images.length > 0 && (

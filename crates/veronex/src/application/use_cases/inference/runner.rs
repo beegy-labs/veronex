@@ -22,6 +22,8 @@ use crate::domain::constants::{
 };
 
 use super::JobEntry;
+use super::compression_router;
+use super::context_compressor;
 use super::helpers::{broadcast_event, decr_pending, decr_running, emit_inference_event, incr_running, record_tpm, schedule_cleanup};
 
 // ── Token stream state ──────────────────────────────────────────────────────
@@ -205,7 +207,11 @@ async fn finalize_job(
                 .ok().flatten()
                 .unwrap_or_else(ConversationRecord::new);
 
-            record.turns.push(crate::application::ports::outbound::message_store::TurnRecord {
+            // Read vision_analysis from in-memory JobEntry (set at submit time).
+            let vision_analysis = jobs.get(&uuid).and_then(|e| e.vision_analysis.clone());
+
+            use crate::application::ports::outbound::message_store::{ConversationTurn, TurnRecord as TR};
+            record.turns.push(ConversationTurn::Regular(TR {
                 job_id: uuid,
                 prompt: original_prompt,
                 messages: original_messages,
@@ -213,13 +219,44 @@ async fn finalize_job(
                 result: result_text.clone(),
                 model_name: Some(job.model_name.as_str().to_string()),
                 created_at: job.created_at.to_rfc3339(),
-            });
+                compressed: None,
+                vision_analysis,
+            }));
 
             if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
                 tracing::warn!(job_id = %uuid, "S3 conversation write failed (non-fatal): {e}");
             } else if let (Some(conv_id), Some(vk)) = (job.conversation_id, valkey) {
-                // Invalidate cached conversation detail so next fetch reads fresh S3 data
-                let _ = vk.kv_del(&format!("conv_s3:{}", conv_id)).await;
+                // Cache the updated record in Valkey (TTL 300 s) so the next read
+                // hits cache instead of S3. Compression re-write (Phase 3) will DEL
+                // to force a fresh load after the compressed turn is written back.
+                const CONV_CACHE_TTL_SECS: i64 = 300;
+                let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(conv_id);
+                if let Ok(json) = serde_json::to_string(&record) {
+                    let _ = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await;
+                }
+
+                // Phase 3: spawn per-turn compression (async, non-blocking).
+                // Only runs when compression is enabled in lab settings.
+                if let Some(handle) = jobs.get(&uuid).and_then(|e| e.compression_handle.clone()) {
+                    let store_arc = store.clone();
+                    let valkey_arc = Some(vk.clone());
+                    tokio::spawn(async move {
+                        let lab = handle.lab_settings.get().await.unwrap_or_default();
+                        if !lab.context_compression_enabled {
+                            return;
+                        }
+                        let route = compression_router::decide(handle.registry.as_ref(), &lab).await;
+                        let model = lab.compression_model.clone()
+                            .unwrap_or_else(|| "qwen2.5:3b".to_string());
+                        let timeout = lab.compression_timeout_secs as u64;
+                        if let Some(params) = route.into_params(model, timeout) {
+                            context_compressor::compress_turn(
+                                &params, uuid, owner_id, date, conv_id,
+                                store_arc, valkey_arc,
+                            ).await;
+                        }
+                    });
+                }
             }
         }
     }

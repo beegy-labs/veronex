@@ -51,7 +51,7 @@ export function runsReducer(state: Run[], action: RunAction): Run[] {
 export const MAX_RUNS = 10
 
 export interface ConversationMessage {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system'
   content: string
   images?: string[] // base64, user messages only
   model?: string    // model used for this turn (assistant messages only)

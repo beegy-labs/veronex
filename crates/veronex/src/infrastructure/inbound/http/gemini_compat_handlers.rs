@@ -261,6 +261,7 @@ async fn stream_generate(
             images: None,
             stop: None, seed: None, response_format: None,
             frequency_penalty: None, presence_penalty: None, mcp_loop_id: None, max_tokens: None,
+            vision_analysis: None,
         })
         .await
     {
@@ -354,6 +355,7 @@ async fn generate_content(
             images: None,
             stop: None, seed: None, response_format: None,
             frequency_penalty: None, presence_penalty: None, mcp_loop_id: None, max_tokens: None,
+            vision_analysis: None,
         })
         .await
     {

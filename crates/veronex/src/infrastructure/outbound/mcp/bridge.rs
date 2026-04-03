@@ -229,6 +229,7 @@ impl McpBridgeAdapter {
                 presence_penalty,
                 mcp_loop_id: Some(mcp_loop_id),
                 max_tokens: None,
+                vision_analysis: None,
             }).await {
                 Ok(id) => id,
                 Err(e) => {
@@ -370,15 +371,19 @@ impl McpBridgeAdapter {
                         Some(serde_json::Value::Array(all_mcp_tool_calls))
                     };
 
-                    record.turns.push(crate::application::ports::outbound::message_store::TurnRecord {
-                        job_id: fid.0,
-                        prompt: extract_last_user_prompt(&messages),
-                        messages: Some(serde_json::Value::Array(messages.clone())),
-                        tool_calls: tool_calls_val,
-                        result: Some(content.clone()),
-                        model_name: Some(model.clone()),
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                    });
+                    record.turns.push(crate::application::ports::outbound::message_store::ConversationTurn::Regular(
+                        crate::application::ports::outbound::message_store::TurnRecord {
+                            job_id: fid.0,
+                            prompt: extract_last_user_prompt(&messages),
+                            messages: Some(serde_json::Value::Array(messages.clone())),
+                            tool_calls: tool_calls_val,
+                            result: Some(content.clone()),
+                            model_name: Some(model.clone()),
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                            compressed: None,
+                            vision_analysis: None,
+                        }
+                    ));
 
                     if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
                         warn!(job_id = %fid.0, error = %e, "MCP: S3 conversation write failed");

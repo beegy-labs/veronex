@@ -19,6 +19,7 @@ use super::enums::{
     ApiFormat, FinishReason, JobSource, JobStatus, LlmProviderStatus, ProviderType,
 };
 use super::value_objects::{JobId, ModelName, Prompt};
+use crate::application::ports::outbound::message_store::VisionAnalysis;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
@@ -169,6 +170,13 @@ pub struct InferenceJob {
     #[serde(default)]
     #[ts(skip)]
     pub max_tokens: Option<u32>,
+    /// Vision pre-processing result for image-bearing tasks.
+    /// Set in-memory by the HTTP handler after the vision call completes,
+    /// injected into `TurnRecord` by `finalize_job()` before S3 write.
+    /// Not persisted to DB.
+    #[serde(default)]
+    #[ts(skip)]
+    pub vision_analysis: Option<VisionAnalysis>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

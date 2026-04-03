@@ -12,6 +12,7 @@ use crate::application::ports::inbound::inference_use_case::{InferenceUseCase, L
 use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPort;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
+use crate::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::image_store::ImageStore;
 use crate::application::ports::outbound::message_store::MessageStore;
@@ -24,6 +25,7 @@ use crate::application::ports::outbound::global_model_settings::GlobalModelSetti
 use crate::application::ports::outbound::thermal_drain_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
+use super::compression_router::CompressionHandle;
 use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{JobSource, JobStatus, KeyTier};
 use crate::domain::errors::DomainError;
@@ -61,6 +63,9 @@ pub struct InferenceUseCaseImpl {
     global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
     instance_id: Arc<str>,
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
+    /// Compression resources injected into every JobEntry at submit time.
+    /// `None` when neither lab_settings_repo nor registry are available.
+    compression_handle: Option<Arc<CompressionHandle>>,
 }
 
 impl InferenceUseCaseImpl {
@@ -82,7 +87,14 @@ impl InferenceUseCaseImpl {
         model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
         global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
         instance_id: Arc<str>,
+        lab_settings_repo: Option<Arc<dyn LabSettingsRepository>>,
     ) -> Self {
+        let compression_handle = lab_settings_repo.map(|lab| {
+            Arc::new(CompressionHandle {
+                registry: registry.clone(),
+                lab_settings: lab,
+            })
+        });
         Self {
             registry, job_repo, valkey, observability, model_manager,
             jobs: Arc::new(DashMap::new()),
@@ -90,6 +102,7 @@ impl InferenceUseCaseImpl {
             event_tx, message_store, image_store, ollama_model_repo, model_selection_repo,
             global_model_settings_repo,
             instance_id, cancel_notifiers: Arc::new(DashMap::new()),
+            compression_handle,
         }
     }
 
@@ -238,6 +251,8 @@ impl InferenceUseCaseImpl {
                 cancel_notify: Arc::new(Notify::new()),
                 gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
                 assigned_provider_id: None,
+                vision_analysis: None,
+                compression_handle: self.compression_handle.clone(),
             });
             // Re-enqueue to ZSET with emergency priority (recovered jobs get highest priority)
             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -263,6 +278,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             account_id, source, api_format, messages, tools, request_path,
             conversation_id, key_tier, images, stop, seed, response_format,
             frequency_penalty, presence_penalty, mcp_loop_id, max_tokens,
+            vision_analysis,
         } = req;
 
         let job_id = JobId::new();
@@ -303,6 +319,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             images, image_keys: None,
             stop, seed, response_format, frequency_penalty, presence_penalty,
             mcp_loop_id, max_tokens,
+            vision_analysis: vision_analysis.clone(),
         };
 
         // Persist metadata-only row to Postgres. Large content is written to S3 at finalize.
@@ -348,6 +365,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             gemini_tier: gemini_tier.clone(), key_tier,
             tpm_reservation_minute: Some(chrono::Utc::now().timestamp() / 60),
             assigned_provider_id: None,
+            vision_analysis,
+            compression_handle: self.compression_handle.clone(),
         });
 
         let uuid = job_id.0;

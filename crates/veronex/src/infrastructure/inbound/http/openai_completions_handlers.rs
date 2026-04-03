@@ -108,6 +108,7 @@ pub async fn text_completions(
         presence_penalty: req.presence_penalty,
         mcp_loop_id: None,
         max_tokens: req.max_tokens,
+        vision_analysis: None,
     }).await.map_err(|e| {
         tracing::error!("text_completions: submit failed: {e}");
         AppError::Internal(anyhow::anyhow!("failed to submit inference job"))

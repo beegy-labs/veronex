@@ -72,6 +72,7 @@ async fn save_analyzer_job(
         conversation_id: None,
         tool_calls_json: None,
         messages_hash: None,
+        vision_analysis: None,
         messages_prefix_hash: None,
         failure_reason: None,
         images: None,

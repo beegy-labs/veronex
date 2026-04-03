@@ -366,9 +366,16 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       // Capture server conversation_id from response header and persist in session
       const serverConvId = resp.headers.get('x-conversation-id')
       if (serverConvId) {
-        setConversationSessions((prev) => prev.map((s) =>
-          s.id === sid ? { ...s, conversationId: serverConvId } : s
-        ))
+        const prevConvId = conversationSessions.find((s) => s.id === sid)?.conversationId
+          ?? (sid === activeConvSessionId ? activeConvSession?.conversationId : undefined)
+        const renewed = prevConvId !== undefined && serverConvId !== prevConvId
+        setConversationSessions((prev) => prev.map((s) => {
+          if (s.id !== sid) return s
+          const msgs = renewed
+            ? [...s.messages, { role: 'system' as const, content: t('test.sessionRenewed') }]
+            : s.messages
+          return { ...s, conversationId: serverConvId, messages: msgs }
+        }))
       }
 
       if (resp.body) {

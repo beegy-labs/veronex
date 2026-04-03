@@ -337,6 +337,17 @@ pub struct LabSettingsResponse {
     pub gemini_function_calling: bool,
     pub max_images_per_request: i32,
     pub max_image_b64_bytes: i32,
+    pub context_compression_enabled: bool,
+    pub compression_model: Option<String>,
+    pub context_budget_ratio: f32,
+    pub compression_trigger_turns: i32,
+    pub recent_verbatim_window: i32,
+    pub compression_timeout_secs: i32,
+    pub multiturn_min_params: i32,
+    pub multiturn_min_ctx: i32,
+    pub multiturn_allowed_models: Vec<String>,
+    pub vision_model: Option<String>,
+    pub handoff_enabled: bool,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -383,12 +394,7 @@ pub async fn get_dashboard_overview(
     let stats = stats_res?;
     let performance = perf_res?;
     let lab_settings = lab_res.unwrap_or_default();
-    let lab = LabSettingsResponse {
-        gemini_function_calling: lab_settings.gemini_function_calling,
-        max_images_per_request: lab_settings.max_images_per_request,
-        max_image_b64_bytes: lab_settings.max_image_b64_bytes,
-        updated_at: lab_settings.updated_at,
-    };
+    let lab = lab_settings_to_response(lab_settings);
 
     Ok(Json(DashboardOverview {
         stats,
@@ -667,15 +673,30 @@ pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Re
 
 // ── Lab feature settings ─────────────────────────────────────────────
 
+fn lab_settings_to_response(s: crate::application::ports::outbound::lab_settings_repository::LabSettings) -> LabSettingsResponse {
+    LabSettingsResponse {
+        gemini_function_calling: s.gemini_function_calling,
+        max_images_per_request: s.max_images_per_request,
+        max_image_b64_bytes: s.max_image_b64_bytes,
+        context_compression_enabled: s.context_compression_enabled,
+        compression_model: s.compression_model,
+        context_budget_ratio: s.context_budget_ratio,
+        compression_trigger_turns: s.compression_trigger_turns,
+        recent_verbatim_window: s.recent_verbatim_window,
+        compression_timeout_secs: s.compression_timeout_secs,
+        multiturn_min_params: s.multiturn_min_params,
+        multiturn_min_ctx: s.multiturn_min_ctx,
+        multiturn_allowed_models: s.multiturn_allowed_models,
+        vision_model: s.vision_model,
+        handoff_enabled: s.handoff_enabled,
+        updated_at: s.updated_at,
+    }
+}
+
 /// `GET /v1/dashboard/lab` — return current lab feature flags.
 pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     match state.lab_settings_repo.get().await {
-        Ok(s) => Json(LabSettingsResponse {
-            gemini_function_calling: s.gemini_function_calling,
-            max_images_per_request: s.max_images_per_request,
-            max_image_b64_bytes: s.max_image_b64_bytes,
-            updated_at: s.updated_at,
-        }).into_response(),
+        Ok(s) => Json(lab_settings_to_response(s)).into_response(),
         Err(e) => {
             tracing::warn!("get_lab_settings: {e}");
             (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -689,6 +710,18 @@ pub struct PatchLabSettingsBody {
     pub gemini_function_calling: Option<bool>,
     pub max_images_per_request: Option<i32>,
     pub max_image_b64_bytes: Option<i32>,
+    pub context_compression_enabled: Option<bool>,
+    pub compression_model: Option<Option<String>>,
+    pub context_budget_ratio: Option<f32>,
+    pub compression_trigger_turns: Option<i32>,
+    pub recent_verbatim_window: Option<i32>,
+    pub compression_timeout_secs: Option<i32>,
+    pub multiturn_min_params: Option<i32>,
+    pub multiturn_min_ctx: Option<i32>,
+    pub multiturn_allowed_models: Option<Vec<String>>,
+    pub vision_model: Option<Option<String>>,
+    pub handoff_enabled: Option<bool>,
+    pub handoff_threshold: Option<f32>,
 }
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
@@ -697,21 +730,30 @@ pub async fn patch_lab_settings(
     State(state): State<AppState>,
     Json(body): Json<PatchLabSettingsBody>,
 ) -> impl axum::response::IntoResponse {
-    match state.lab_settings_repo.update(
-        body.gemini_function_calling,
-        body.max_images_per_request,
-        body.max_image_b64_bytes,
-    ).await {
+    use crate::application::ports::outbound::lab_settings_repository::LabSettingsUpdate;
+    let patch = LabSettingsUpdate {
+        gemini_function_calling: body.gemini_function_calling,
+        max_images_per_request: body.max_images_per_request,
+        max_image_b64_bytes: body.max_image_b64_bytes,
+        context_compression_enabled: body.context_compression_enabled,
+        compression_model: body.compression_model,
+        context_budget_ratio: body.context_budget_ratio,
+        compression_trigger_turns: body.compression_trigger_turns,
+        recent_verbatim_window: body.recent_verbatim_window,
+        compression_timeout_secs: body.compression_timeout_secs,
+        multiturn_min_params: body.multiturn_min_params,
+        multiturn_min_ctx: body.multiturn_min_ctx,
+        multiturn_allowed_models: body.multiturn_allowed_models,
+        vision_model: body.vision_model,
+        handoff_enabled: body.handoff_enabled,
+        handoff_threshold: body.handoff_threshold,
+    };
+    match state.lab_settings_repo.update(patch).await {
         Ok(s) => {
             emit_audit(&state, &claims, "update", "lab_settings", "lab_settings", "lab_settings",
                 &format!("Lab settings updated: gemini_function_calling={:?}, max_images={:?}",
                     body.gemini_function_calling, body.max_images_per_request)).await;
-            Json(LabSettingsResponse {
-                gemini_function_calling: s.gemini_function_calling,
-                max_images_per_request: s.max_images_per_request,
-                max_image_b64_bytes: s.max_image_b64_bytes,
-                updated_at: s.updated_at,
-            }).into_response()
+            Json(lab_settings_to_response(s)).into_response()
         }
         Err(e) => {
             tracing::warn!("patch_lab_settings: {e}");

@@ -67,6 +67,13 @@ pub fn validate_content_length(total_bytes: usize) -> Result<(), &'static str> {
 // ── Image validation ────────────────────────────────────────────────────────
 
 use crate::application::ports::outbound::lab_settings_repository::LabSettings;
+use crate::application::ports::outbound::message_store::VisionAnalysis;
+
+/// Estimate token count from raw text (chars / 4).
+/// Known limitation: underestimates CJK text.
+pub fn estimate_tokens(text: &str) -> usize {
+    text.len() / 4
+}
 
 /// Validate image count and compress oversized images to WebP.
 ///
@@ -128,29 +135,33 @@ pub fn is_vision_model(model_name: &str) -> bool {
 }
 
 /// For non-vision models that receive images, analyze each image via the
-/// configured vision fallback model (env `VISION_FALLBACK_MODEL`, default
-/// `qwen3-vl:8b`) and return a text description.
+/// configured vision model and return a `VisionAnalysis` with the text description.
+///
+/// `vision_model_override`: use this model name if `Some`; otherwise falls back to
+/// the `VISION_FALLBACK_MODEL` env var (default `qwen3-vl:8b`).
 ///
 /// Returns `None` when:
 /// - No images are present
-/// - The model already supports vision (`is_vision_model`)
+/// - The inference model already supports vision (`is_vision_model`)
 /// - All providers fail or the vision model is unavailable
 ///
-/// On success the caller should prepend the returned description to the
-/// user prompt and clear `images`.
+/// On success the caller should prepend `analysis.analysis` to the user prompt.
 pub async fn analyze_images_for_context(
     http: &reqwest::Client,
     provider_registry: &dyn crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry,
     model_name: &str,
     images: &[String],
     user_prompt: &str,
-) -> Option<String> {
+    vision_model_override: Option<&str>,
+) -> Option<VisionAnalysis> {
     if images.is_empty() || is_vision_model(model_name) {
         return None;
     }
 
-    let vision_model = std::env::var("VISION_FALLBACK_MODEL")
-        .unwrap_or_else(|_| "qwen3-vl:8b".to_string());
+    let vision_model = vision_model_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| std::env::var("VISION_FALLBACK_MODEL")
+            .unwrap_or_else(|_| "qwen3-vl:8b".to_string()));
 
     let providers = provider_registry.list_all().await.ok()?;
     let ollama_urls: Vec<String> = providers
@@ -206,10 +217,17 @@ pub async fn analyze_images_for_context(
     }
 
     if descriptions.is_empty() {
-        None
-    } else {
-        Some(descriptions.join("\n\n"))
+        return None;
     }
+
+    let analysis = descriptions.join("\n\n");
+    let analysis_tokens = estimate_tokens(&analysis) as u32;
+    Some(VisionAnalysis {
+        vision_model,
+        image_count: images.len() as u32,
+        analysis_tokens,
+        analysis,
+    })
 }
 
 // ── Tool call validation (security) ─────────────────────────────────────────

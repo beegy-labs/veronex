@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState, useCallback } from 'react'
-import { Send, ImagePlus, X, Loader2 } from 'lucide-react'
+import { Send, ImagePlus, X, Loader2, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
@@ -11,6 +11,23 @@ import {
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
 import type { ProviderOption, Endpoint, TestMode } from '@/components/api-test-types'
+import { useLabSettings } from '@/components/lab-settings-provider'
+import type { LabSettings } from '@/lib/types'
+
+function getMultiturnWarnings(modelName: string, lab: LabSettings): string[] {
+  const warnings: string[] = []
+  const paramMatch = modelName.match(/[:\-_](\d+\.?\d*)b/i)
+  if (paramMatch) {
+    const params = parseFloat(paramMatch[1])
+    if (params < lab.multiturn_min_params) {
+      warnings.push(`model_too_small:${params}:${lab.multiturn_min_params}`)
+    }
+  }
+  if (lab.multiturn_allowed_models.length > 0 && !lab.multiturn_allowed_models.includes(modelName)) {
+    warnings.push('model_not_allowed')
+  }
+  return warnings
+}
 
 interface ApiTestFormProps {
   mode: TestMode
@@ -52,8 +69,13 @@ export function ApiTestForm({
   onRun,
 }: ApiTestFormProps) {
   const { t } = useTranslation()
+  const { labSettings } = useLabSettings()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
+
+  const multiturnWarnings = (mode === 'conversation' && model && labSettings)
+    ? getMultiturnWarnings(model, labSettings)
+    : []
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     if (e.target.files && e.target.files.length > 0) {
@@ -152,6 +174,27 @@ export function ApiTestForm({
               ))}
             </SelectContent>
           </Select>
+          {multiturnWarnings.length > 0 && (
+            <div className="space-y-1 pt-0.5">
+              {multiturnWarnings.map((w) => {
+                let msg: string
+                if (w.startsWith('model_too_small:')) {
+                  const [, params, min] = w.split(':')
+                  msg = t('common.multiturnWarnTooSmall', { params, min })
+                } else if (w === 'model_not_allowed') {
+                  msg = t('common.multiturnWarnNotAllowed')
+                } else {
+                  msg = w
+                }
+                return (
+                  <div key={w} className="flex items-start gap-1.5 text-[11px] text-status-warning-fg">
+                    <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+                    <span>{msg}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
 

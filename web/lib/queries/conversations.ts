@@ -27,3 +27,10 @@ export const conversationDetailQuery = (id: string) => queryOptions({
   staleTime: STALE_TIME_FAST,
   enabled: !!id,
 })
+
+export const turnInternalsQuery = (convId: string, jobId: string, enabled: boolean) => queryOptions({
+  queryKey: ['turn-internals', convId, jobId] as const,
+  queryFn: () => api.turnInternals(convId, jobId),
+  staleTime: Infinity,
+  enabled,
+})

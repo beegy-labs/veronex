@@ -258,25 +258,6 @@ export interface RegisterGpuServerRequest {
   node_exporter_url?: string
 }
 
-export interface McpServer {
-  id: string
-  name: string
-  slug: string
-  url: string
-  is_enabled: boolean
-  timeout_secs: number
-  online: boolean
-  tool_count: number
-  created_at: string
-}
-
-export interface RegisterMcpServerRequest {
-  name: string
-  slug: string
-  url: string
-  timeout_secs?: number
-}
-
 export interface UpdateGpuServerRequest {
   name?: string
   node_exporter_url?: string
@@ -470,6 +451,7 @@ export interface OllamaSyncJob {
 export interface OllamaModelWithCount {
   model_name: string
   provider_count: number
+  is_vision?: boolean
 }
 
 /** Provider info returned by GET /v1/ollama/models/:model_name/providers. */
@@ -645,6 +627,18 @@ export interface LabSettings {
   gemini_function_calling: boolean
   max_images_per_request: number
   max_image_b64_bytes: number
+  context_compression_enabled: boolean
+  compression_model: string | null
+  context_budget_ratio: number
+  compression_trigger_turns: number
+  recent_verbatim_window: number
+  compression_timeout_secs: number
+  multiturn_min_params: number
+  multiturn_min_ctx: number
+  multiturn_allowed_models: string[]
+  vision_model: string | null
+  handoff_enabled: boolean
+  handoff_threshold: number
   updated_at: string
 }
 
@@ -652,6 +646,23 @@ export interface PatchLabSettings {
   gemini_function_calling?: boolean
   max_images_per_request?: number
   max_image_b64_bytes?: number
+  context_compression_enabled?: boolean
+  compression_model?: string | null
+  context_budget_ratio?: number
+  compression_trigger_turns?: number
+  recent_verbatim_window?: number
+  compression_timeout_secs?: number
+  multiturn_min_params?: number
+  multiturn_min_ctx?: number
+  multiturn_allowed_models?: string[]
+  vision_model?: string | null
+  handoff_enabled?: boolean
+  handoff_threshold?: number
+}
+
+export interface MultiturnWarning {
+  code: 'model_too_small' | 'context_too_small' | 'model_not_allowed'
+  message: string
 }
 
 /** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/queue/lab queries. */
@@ -662,43 +673,9 @@ export interface DashboardOverview {
   lab: LabSettings
 }
 
-export interface McpServerStat {
-  server_id: string
-  server_name: string
-  server_slug: string
-  total_calls: number
-  success_count: number
-  error_count: number
-  cache_hit_count: number
-  timeout_count: number
-  success_rate: number
-  avg_latency_ms: number
-}
-
-export interface McpServerAccess {
-  server_id: string
-  server_name: string
-  slug: string
-  is_allowed: boolean
-}
-
-export interface AuditEvent {
-  event_time: string
-  account_id: string
-  account_name: string
-  action: string
-  resource_type: string
-  resource_id: string
-  resource_name: string
-  ip_address: string
-  details: string
-}
-
-// ── Conversations ────────────────────────────────────────────────────────────
-
 export interface ConversationSummary {
-  id: string        // conv_xxx (prefix_base62)
-  title: string | null
+  id: string
+  title?: string | null
   model_name: string | null
   source: string
   turn_count: number
@@ -721,23 +698,31 @@ export interface ConversationDetail extends ConversationSummary {
   turns: ConversationTurn[]
 }
 
-// ── Service health ──────────────────────────────────────────────────────────
-
-export interface ServiceStatus {
-  name: string
-  status: 'ok' | 'degraded' | 'unavailable'
-  latency_ms: number | null
-  checked_at: number | null
+export interface TurnInternals {
+  job_id: string
+  compressed?: {
+    summary: string
+    original_tokens: number
+    compressed_tokens: number
+    compression_model: string
+    ratio: number
+  } | null
+  vision_analysis?: {
+    analysis: string
+    vision_model: string
+    image_count: number
+    analysis_tokens: number
+  } | null
 }
 
-export interface PodStatus {
-  id: string
-  status: 'online' | 'offline'
-  last_heartbeat_ms: number | null
-}
-
-export interface ServiceHealthResponse {
-  infrastructure: ServiceStatus[]
-  api_pods: PodStatus[]
-  agent_pods: PodStatus[]
+export interface AuditEvent {
+  event_time: string
+  account_id: string
+  account_name: string
+  action: string
+  resource_type: string
+  resource_id: string
+  resource_name: string
+  ip_address: string
+  details: string
 }

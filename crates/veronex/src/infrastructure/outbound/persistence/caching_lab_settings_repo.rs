@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use super::ttl_cache::TtlCache;
 use crate::application::ports::outbound::lab_settings_repository::{
-    LabSettings, LabSettingsRepository,
+    LabSettings, LabSettingsRepository, LabSettingsUpdate,
 };
 
 /// TTL for the lab settings cache.
@@ -45,20 +45,8 @@ impl LabSettingsRepository for CachingLabSettingsRepo {
             .await
     }
 
-    async fn update(
-        &self,
-        gemini_function_calling: Option<bool>,
-        max_images_per_request: Option<i32>,
-        max_image_b64_bytes: Option<i32>,
-    ) -> Result<LabSettings> {
-        let result = self
-            .inner
-            .update(
-                gemini_function_calling,
-                max_images_per_request,
-                max_image_b64_bytes,
-            )
-            .await;
+    async fn update(&self, patch: LabSettingsUpdate) -> Result<LabSettings> {
+        let result = self.inner.update(patch).await;
         self.cache.invalidate_all().await;
         result
     }
