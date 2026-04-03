@@ -1,3 +1,5 @@
+mod compression_router;
+mod context_compressor;
 mod dispatcher;
 mod helpers;
 mod runner;
@@ -33,4 +35,6 @@ pub(crate) struct JobEntry {
     pub assigned_provider_id: Option<Uuid>,
     /// Vision pre-processing result. Set by HTTP handler, consumed by finalize_job().
     pub vision_analysis: Option<VisionAnalysis>,
+    /// Resources for per-turn compression. `None` when compression is not configured.
+    pub compression_handle: Option<Arc<compression_router::CompressionHandle>>,
 }

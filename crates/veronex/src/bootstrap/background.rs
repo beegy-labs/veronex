@@ -171,6 +171,7 @@ pub async fn spawn_background_tasks(
         Some(repos.model_selection_repo.clone()),
         Some(repos.global_model_settings_repo.clone()),
         infra.instance_id.clone(),
+        Some(repos.lab_settings_repo.clone()),
     ));
 
     if let Err(e) = use_case_impl.recover_pending_jobs().await {

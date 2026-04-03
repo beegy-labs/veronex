@@ -370,6 +370,7 @@ pub(super) async fn queue_dispatcher_loop(
                             gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
                             assigned_provider_id: None,
                             vision_analysis: None,
+                            compression_handle: None,
                         });
                         (j, None, None)
                     }

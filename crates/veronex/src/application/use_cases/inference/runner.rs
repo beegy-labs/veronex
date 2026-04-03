@@ -22,6 +22,8 @@ use crate::domain::constants::{
 };
 
 use super::JobEntry;
+use super::compression_router;
+use super::context_compressor;
 use super::helpers::{broadcast_event, decr_pending, decr_running, emit_inference_event, incr_running, record_tpm, schedule_cleanup};
 
 // ── Token stream state ──────────────────────────────────────────────────────
@@ -231,6 +233,29 @@ async fn finalize_job(
                 let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(conv_id);
                 if let Ok(json) = serde_json::to_string(&record) {
                     let _ = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await;
+                }
+
+                // Phase 3: spawn per-turn compression (async, non-blocking).
+                // Only runs when compression is enabled in lab settings.
+                if let Some(handle) = jobs.get(&uuid).and_then(|e| e.compression_handle.clone()) {
+                    let store_arc = store.clone();
+                    let valkey_arc = Some(vk.clone());
+                    tokio::spawn(async move {
+                        let lab = handle.lab_settings.get().await.unwrap_or_default();
+                        if !lab.context_compression_enabled {
+                            return;
+                        }
+                        let route = compression_router::decide(handle.registry.as_ref(), &lab).await;
+                        let model = lab.compression_model.clone()
+                            .unwrap_or_else(|| "qwen2.5:3b".to_string());
+                        let timeout = lab.compression_timeout_secs as u64;
+                        if let Some(params) = route.into_params(model, timeout) {
+                            context_compressor::compress_turn(
+                                &params, uuid, owner_id, date, conv_id,
+                                store_arc, valkey_arc,
+                            ).await;
+                        }
+                    });
                 }
             }
         }
