@@ -721,6 +721,7 @@ pub struct PatchLabSettingsBody {
     pub multiturn_allowed_models: Option<Vec<String>>,
     pub vision_model: Option<Option<String>>,
     pub handoff_enabled: Option<bool>,
+    pub handoff_threshold: Option<f32>,
 }
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
@@ -745,6 +746,7 @@ pub async fn patch_lab_settings(
         multiturn_allowed_models: body.multiturn_allowed_models,
         vision_model: body.vision_model,
         handoff_enabled: body.handoff_enabled,
+        handoff_threshold: body.handoff_threshold,
     };
     match state.lab_settings_repo.update(patch).await {
         Ok(s) => {

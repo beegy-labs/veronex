@@ -35,6 +35,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
             multiturn_allowed_models: Vec<String>,
             vision_model: Option<String>,
             handoff_enabled: bool,
+            handoff_threshold: f32,
             updated_at: chrono::DateTime<chrono::Utc>,
         }
 
@@ -54,6 +55,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
                 multiturn_allowed_models,
                 vision_model,
                 handoff_enabled,
+                handoff_threshold,
                 updated_at
                FROM lab_settings WHERE id = 1"#,
         )
@@ -77,6 +79,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
                 multiturn_allowed_models: r.multiturn_allowed_models,
                 vision_model: r.vision_model,
                 handoff_enabled: r.handoff_enabled,
+                handoff_threshold: r.handoff_threshold,
                 updated_at: r.updated_at,
             })
             .unwrap_or_default())
@@ -101,6 +104,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
                 multiturn_allowed_models    = COALESCE($13, multiturn_allowed_models),
                 vision_model                = CASE WHEN $14 THEN $15 ELSE vision_model END,
                 handoff_enabled             = COALESCE($16, handoff_enabled),
+                handoff_threshold           = COALESCE($17, handoff_threshold),
                 updated_at                  = now()
                WHERE id = 1"#,
         )
@@ -120,6 +124,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
         .bind(patch.vision_model.is_some())
         .bind(patch.vision_model.and_then(|v| v))
         .bind(patch.handoff_enabled)
+        .bind(patch.handoff_threshold)
         .execute(&self.pool)
         .await
         .context("failed to update lab_settings")?;

@@ -2,12 +2,12 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { conversationsQuery, conversationDetailQuery } from '@/lib/queries'
+import { conversationsQuery, conversationDetailQuery, turnInternalsQuery } from '@/lib/queries'
 import type { ConversationTurn, ConversationDetail } from '@/lib/types'
 import { useTranslation } from '@/i18n'
 import { fmtNumber, fmtDatetime } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
-import { ChevronLeft, ChevronRight, MessageSquare, Wrench, Play } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp, MessageSquare, Wrench, Play } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusPill } from '@/components/status-pill'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -143,6 +143,46 @@ export function ConversationList({ onContinue }: ConversationListProps) {
   )
 }
 
+function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }) {
+  const [open, setOpen] = useState(false)
+  const { data, isFetching } = useQuery(turnInternalsQuery(convId, jobId, open))
+
+  return (
+    <div className="mt-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+      >
+        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        Internals
+      </button>
+
+      {open && (
+        <div className="mt-1 space-y-1">
+          {isFetching && <span className="text-[10px] text-muted-foreground">Loading…</span>}
+          {data && !data.compressed && !data.vision_analysis && (
+            <span className="text-[10px] text-muted-foreground/60">No compression or vision data.</span>
+          )}
+          {data?.compressed && (
+            <span className="inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-mono text-primary">
+              Compressed {data.compressed.ratio.toFixed(1)}x
+              ({data.compressed.original_tokens}→{data.compressed.compressed_tokens} tok,{' '}
+              {data.compressed.compression_model})
+            </span>
+          )}
+          {data?.vision_analysis && (
+            <span className="inline-flex items-center gap-1 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-mono text-accent-foreground">
+              Vision: {data.vision_analysis.vision_model}
+              ({data.vision_analysis.image_count} img, {data.vision_analysis.analysis_tokens} tok)
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onClose: () => void; onContinue?: (detail: ConversationDetail) => void }) {
   const { t } = useTranslation()
   const { data, isLoading } = useQuery(conversationDetailQuery(id))
@@ -212,6 +252,7 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
                     </div>
                   )}
                   <p className="text-sm whitespace-pre-wrap">{turn.result || `(${t('jobs.noResult')})`}</p>
+                  <TurnInternalsPanel convId={id} jobId={turn.job_id} />
                 </div>
                 {i < data.turns.length - 1 && <hr className="border-border" />}
               </div>

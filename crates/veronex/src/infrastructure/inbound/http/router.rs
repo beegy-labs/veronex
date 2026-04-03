@@ -165,9 +165,10 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/mcp/servers/{id}", patch(mcp_handlers::patch_mcp_server).delete(mcp_handlers::delete_mcp_server))
         // MCP call statistics
         .route("/v1/mcp/stats", get(dashboard_handlers::get_mcp_stats))
-        // Conversations
+        // Conversations (read-only, dashboard_view; internals require account_manage)
         .route("/v1/conversations", get(conversation_handlers::list_conversations))
         .route("/v1/conversations/{id}", get(conversation_handlers::get_conversation))
+        .route("/v1/conversations/{id}/turns/{job_id}/internals", get(conversation_handlers::get_turn_internals))
         // GPU server management
         .route("/v1/servers", get(gpu_server_handlers::list_gpu_servers).post(gpu_server_handlers::register_gpu_server))
         .route("/v1/servers/verify", post(gpu_server_handlers::verify_gpu_server))

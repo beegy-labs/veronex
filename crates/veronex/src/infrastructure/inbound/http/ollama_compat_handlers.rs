@@ -404,6 +404,38 @@ pub async fn chat(
         }
     }
 
+    // Phase 5: compress long input inline if it exceeds budget
+    // Only applies when context_compression_enabled and we have a conversation
+    if conversation_id.is_some() {
+        use crate::application::use_cases::inference::{compression_router, context_compressor};
+
+        let lab5 = state.lab_settings_repo.get().await.unwrap_or_default();
+        if lab5.context_compression_enabled {
+            let route: compression_router::CompressionRoute = compression_router::decide(state.provider_registry.as_ref(), &lab5).await;
+            if let Some(params) = route.into_params(
+                lab5.compression_model.clone().unwrap_or_else(|| "qwen2.5:3b".to_string()),
+                lab5.compression_timeout_secs as u64,
+            ) {
+                let configured_ctx = 32_768u32; // fallback; real value looked up during inference
+                let input_budget = (configured_ctx as f32 * lab5.context_budget_ratio * 0.5) as u32;
+                if let Some(compressed_prompt) = context_compressor::compress_input_inline(
+                    &prompt,
+                    input_budget,
+                    &params.model,
+                    &params.provider_url,
+                    params.timeout_secs,
+                ).await {
+                    // Rewrite last user message with compressed prompt
+                    if let Some(last_user) = req.messages.iter_mut().rev()
+                        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    {
+                        last_user["content"] = serde_json::json!(compressed_prompt);
+                    }
+                }
+            }
+        }
+    }
+
     // Extract images from user messages (Ollama chat format: message-level `images` field).
     let mut images: Option<Vec<String>> = {
         let imgs: Vec<String> = req.messages.iter()

@@ -40,6 +40,8 @@ pub struct LabSettings {
 
     // ── Session handoff ──────────────────────────────────────────────────────
     pub handoff_enabled: bool,
+    /// Fraction of `configured_ctx` that triggers session handoff (default 0.85).
+    pub handoff_threshold: f32,
 
     pub updated_at: DateTime<Utc>,
 }
@@ -61,6 +63,7 @@ impl Default for LabSettings {
             multiturn_allowed_models: Vec::new(),
             vision_model: None,
             handoff_enabled: true,
+            handoff_threshold: 0.85,
             updated_at: Utc::now(),
         }
     }
@@ -85,6 +88,7 @@ pub struct LabSettingsUpdate {
     pub multiturn_allowed_models: Option<Vec<String>>,
     pub vision_model: Option<Option<String>>,
     pub handoff_enabled: Option<bool>,
+    pub handoff_threshold: Option<f32>,
 }
 
 #[async_trait]

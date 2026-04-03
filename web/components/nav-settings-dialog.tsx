@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Languages, Clock, FlaskConical, Settings2,
 } from 'lucide-react'
@@ -27,6 +27,46 @@ import { locales, localeLabels, localStorageKey, type Locale } from '@/i18n/conf
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone, type Timezone, PRESET_TIMEZONES, isValidTimezone } from '@/components/timezone-provider'
 import { api } from '@/lib/api'
+
+function VisionModelInput({ labSettings, labLoading, setLabLoading, refetchLabSettings }: {
+  labSettings: import('@/lib/types').LabSettings | null
+  labLoading: boolean
+  setLabLoading: (v: boolean) => void
+  refetchLabSettings: () => void
+}) {
+  const { t } = useTranslation()
+  const [val, setVal] = useState(labSettings?.vision_model ?? '')
+  const [dirty, setDirty] = useState(false)
+  // sync when labSettings loads
+  useEffect(() => { setVal(labSettings?.vision_model ?? ''); setDirty(false) }, [labSettings?.vision_model])
+
+  async function save() {
+    setLabLoading(true)
+    try {
+      await api.patchLabSettings({ vision_model: val.trim() || null })
+      await refetchLabSettings()
+      setDirty(false)
+    } catch { } finally { setLabLoading(false) }
+  }
+
+  return (
+    <div className="flex gap-1.5">
+      <Input
+        className="h-7 text-xs flex-1 font-mono"
+        placeholder="qwen3-vl:8b"
+        value={val}
+        disabled={labLoading || labSettings === null}
+        onChange={(e) => { setVal(e.target.value); setDirty(true) }}
+        onKeyDown={(e) => { if (e.key === 'Enter' && dirty) save() }}
+      />
+      {dirty && (
+        <Button size="sm" className="h-7 text-xs px-2" onClick={save} disabled={labLoading}>
+          {t('common.save')}
+        </Button>
+      )}
+    </div>
+  )
+}
 
 interface Props {
   open: boolean
@@ -208,6 +248,50 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                       }
                     }}
                   />
+                </div>
+              </div>
+
+              {/* Vision model */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium">{t('common.labVisionModel')}</p>
+                    <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{t('common.labVisionModelDesc')}</p>
+                  </div>
+                </div>
+                <VisionModelInput labSettings={labSettings} labLoading={labLoading} setLabLoading={setLabLoading} refetchLabSettings={refetchLabSettings} />
+              </div>
+
+              {/* Multi-turn requirements */}
+              <div className="border-t border-border/50 pt-2 mt-1">
+                <p className="text-xs font-medium mb-2">{t('common.labMultiturnReqs')}</p>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-muted-foreground">{t('common.labMultiturnMinParams')}</p>
+                    <Input type="number" min={0} max={1000} className="w-20 h-7 text-xs text-center"
+                      value={labSettings?.multiturn_min_params ?? 7}
+                      disabled={labLoading || labSettings === null}
+                      onChange={async (e) => {
+                        const val = parseInt(e.target.value, 10)
+                        if (isNaN(val) || val < 0) return
+                        setLabLoading(true)
+                        try { await api.patchLabSettings({ multiturn_min_params: val }); await refetchLabSettings() }
+                        catch { } finally { setLabLoading(false) }
+                      }} />
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-muted-foreground">{t('common.labMultiturnMinCtx')}</p>
+                    <Input type="number" min={0} className="w-24 h-7 text-xs text-center"
+                      value={labSettings?.multiturn_min_ctx ?? 16384}
+                      disabled={labLoading || labSettings === null}
+                      onChange={async (e) => {
+                        const val = parseInt(e.target.value, 10)
+                        if (isNaN(val) || val < 0) return
+                        setLabLoading(true)
+                        try { await api.patchLabSettings({ multiturn_min_ctx: val }); await refetchLabSettings() }
+                        catch { } finally { setLabLoading(false) }
+                      }} />
+                  </div>
                 </div>
               </div>
             </div>

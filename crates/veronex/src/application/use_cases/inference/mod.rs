@@ -1,6 +1,7 @@
-mod compression_router;
+pub(crate) mod compression_router;
 pub mod context_assembler;
-mod context_compressor;
+pub(crate) mod context_compressor;
+pub mod session_handoff;
 mod dispatcher;
 mod helpers;
 mod runner;

@@ -169,6 +169,81 @@ async fn try_compress(
 
 /// Rough token estimate: chars / 4.
 /// Known limitation: underestimates CJK content.
-fn estimate_tokens(text: &str) -> usize {
+pub fn estimate_tokens(text: &str) -> usize {
     text.len() / 4
+}
+
+// ── Phase 5: Inline input compression ────────────────────────────────────────
+
+const INPUT_COMPRESS_PROMPT: &str = "You are a lossless prompt compressor. Condense the user input \
+below into a shorter version that preserves all requirements, constraints, and intent. \
+Output ONLY the condensed text. No preamble. Target: under 150 words.";
+
+/// Compress a long user prompt inline when it exceeds `budget_tokens`.
+///
+/// Returns `Some(compressed)` only when the prompt exceeds the budget AND
+/// compression succeeds. Returns `None` if no compression is needed or fails
+/// (caller continues with original prompt — fail open).
+pub async fn compress_input_inline(
+    prompt: &str,
+    budget_tokens: u32,
+    model: &str,
+    provider_url: &str,
+    timeout_secs: u64,
+) -> Option<String> {
+    let prompt_tokens = estimate_tokens(prompt) as u32;
+    if prompt_tokens <= budget_tokens {
+        return None; // No compression needed
+    }
+
+    tracing::debug!(
+        prompt_tokens,
+        budget_tokens,
+        model,
+        "compress_input_inline: prompt exceeds budget, compressing"
+    );
+
+    let http = reqwest::Client::new();
+    let endpoint = format!("{}/api/chat", provider_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": INPUT_COMPRESS_PROMPT },
+            { "role": "user",   "content": prompt }
+        ],
+        "stream": false,
+        "options": { "temperature": 0.0, "num_predict": 300 }
+    });
+
+    let resp = http
+        .post(&endpoint)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        tracing::warn!(status = %resp.status(), "compress_input_inline: Ollama returned error");
+        return None;
+    }
+
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let compressed = json["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if compressed.is_empty() {
+        return None;
+    }
+
+    tracing::debug!(
+        original_tokens = prompt_tokens,
+        compressed_tokens = estimate_tokens(&compressed),
+        "compress_input_inline: done"
+    );
+
+    Some(compressed)
 }
