@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Eye, Zap, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useTranslation } from '@/i18n'
+import { STALE_TIME_SLOW } from '@/lib/constants'
 
 interface TurnInternalsProps {
   convId: string
@@ -19,7 +20,7 @@ export function TurnInternals({ convId, jobId }: TurnInternalsProps) {
     queryKey: ['turn-internals', convId, jobId],
     queryFn: () => api.turnInternals(convId, jobId),
     enabled: open,
-    staleTime: 60_000,
+    staleTime: STALE_TIME_SLOW,
   })
 
   const hasData = data && (data.compressed || data.vision_analysis)
@@ -74,7 +75,7 @@ export function TurnInternals({ convId, jobId }: TurnInternalsProps) {
           {data?.vision_analysis && (
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 text-xs font-medium">
-                <Eye className="h-3 w-3 text-blue-500" />
+                <Eye className="h-3 w-3 text-status-info-fg" />
                 {t('conversations.visionAnalysis')}
               </div>
               <div className="pl-4 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground font-mono">

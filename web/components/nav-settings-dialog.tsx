@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useOptimistic, startTransition } from 'react'
 import {
   Languages, Clock, FlaskConical, Settings2,
 } from 'lucide-react'
@@ -132,6 +132,12 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
   const [customTzInput, setCustomTzInput] = useState('')
   const [customTzError, setCustomTzError] = useState(false)
   const [labLoading, setLabLoading] = useState(false)
+  const [optCompressionEnabled, setOptCompressionEnabled] = useOptimistic(
+    labSettings?.context_compression_enabled ?? false
+  )
+  const [optHandoffEnabled, setOptHandoffEnabled] = useOptimistic(
+    labSettings?.handoff_enabled ?? false
+  )
 
   const isPresetTz = PRESET_TIMEZONES.includes(tz as typeof PRESET_TIMEZONES[number])
   const tzSelectValue = isPresetTz ? tz : '__custom__'
@@ -316,12 +322,15 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[11px] text-muted-foreground">{t('common.labCompressionEnabled')}</p>
                     <Switch
-                      checked={labSettings?.context_compression_enabled ?? false}
+                      checked={optCompressionEnabled}
                       disabled={labLoading || labSettings === null}
-                      onCheckedChange={async (checked) => {
-                        setLabLoading(true)
-                        try { await api.patchLabSettings({ context_compression_enabled: checked }); await refetchLabSettings() }
-                        catch { } finally { setLabLoading(false) }
+                      onCheckedChange={(checked) => {
+                        startTransition(async () => {
+                          setOptCompressionEnabled(checked)
+                          setLabLoading(true)
+                          try { await api.patchLabSettings({ context_compression_enabled: checked }); await refetchLabSettings() }
+                          catch { } finally { setLabLoading(false) }
+                        })
                       }}
                     />
                   </div>
@@ -340,12 +349,15 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[11px] text-muted-foreground">{t('common.labHandoffEnabled')}</p>
                     <Switch
-                      checked={labSettings?.handoff_enabled ?? false}
+                      checked={optHandoffEnabled}
                       disabled={labLoading || labSettings === null}
-                      onCheckedChange={async (checked) => {
-                        setLabLoading(true)
-                        try { await api.patchLabSettings({ handoff_enabled: checked }); await refetchLabSettings() }
-                        catch { } finally { setLabLoading(false) }
+                      onCheckedChange={(checked) => {
+                        startTransition(async () => {
+                          setOptHandoffEnabled(checked)
+                          setLabLoading(true)
+                          try { await api.patchLabSettings({ handoff_enabled: checked }); await refetchLabSettings() }
+                          catch { } finally { setLabLoading(false) }
+                        })
                       }}
                     />
                   </div>
