@@ -39,30 +39,19 @@ pipeline:
         - check: 'meta("kafka_topic") == "otel-logs"'
           processors:
             - bloblang: |
-                root = (this.resourceLogs | []).flatmap(rm ->
-                  let res_attrs = (rm.resource.attributes | []).fold({}, (acc, x) ->
-                    acc.assign({(x.key): (x.value.stringValue | x.value.intValue | x.value.asDouble.string() | "")})
-                  )
-                  let svc = $res_attrs.get("service.name") | ""
-                  (rm.scopeLogs | []).flatmap(sl ->
-                    (sl.logRecords | []).map(lr ->
-                      let log_attrs = (lr.attributes | []).fold({}, (acc, x) ->
-                        acc.assign({(x.key): (x.value.stringValue | x.value.intValue | x.value.asDouble.string() | "")})
-                      )
-                      {
-                        "Timestamp":          (lr.timeUnixNano | "0").number() / 1000000000,
-                        "TraceId":            lr.traceId | "",
-                        "SpanId":             lr.spanId | "",
-                        "SeverityText":       lr.severityText | "INFO",
-                        "SeverityNumber":     (lr.severityNumber | 9),
-                        "ServiceName":        $svc,
-                        "Body":               lr.body.stringValue | "",
-                        "ResourceAttributes": $res_attrs,
-                        "LogAttributes":      $log_attrs,
-                      }
-                    )
-                  )
-                )
+                # map_each(v -> expr) + flatten() replaces flatmap
+                # fold uses implicit tally/value variables (not lambda params)
+                root = (this.resourceLogs | []).map_each(rm -> (rm.scopeLogs | []).map_each(sl -> (sl.logRecords | []).map_each(lr -> {
+                  "Timestamp":          (lr.timeUnixNano | "0").number() / 1000000000,
+                  "TraceId":            lr.traceId | "",
+                  "SpanId":             lr.spanId | "",
+                  "SeverityText":       lr.severityText | "INFO",
+                  "SeverityNumber":     (lr.severityNumber | 9),
+                  "ServiceName":        (rm.resource.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | value.value.intValue | value.value.asDouble.string() | "")})).get("service.name") | "",
+                  "Body":               lr.body.stringValue | "",
+                  "ResourceAttributes": (rm.resource.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | value.value.intValue | value.value.asDouble.string() | "")})),
+                  "LogAttributes":      (lr.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | value.value.intValue | value.value.asDouble.string() | "")})),
+                })).flatten()).flatten()
             - unarchive:
                 format: json_array
 
@@ -70,33 +59,13 @@ pipeline:
         - check: 'meta("kafka_topic") == "otel-metrics"'
           processors:
             - bloblang: |
-                root = (this.resourceMetrics | []).flatmap(rm ->
-                  let res_attrs = (rm.resource.attributes | []).fold({}, (acc, x) ->
-                    acc.assign({(x.key): (x.value.stringValue | "")})
-                  )
-                  let server_id = $res_attrs.get("server_id") | ""
-                  (rm.scopeMetrics | []).flatmap(sm ->
-                    (sm.metrics | []).flatmap(metric ->
-                      let dps = if metric.exists("gauge") {
-                        metric.gauge.dataPoints | []
-                      } else {
-                        metric.sum.dataPoints | []
-                      }
-                      $dps.map(dp ->
-                        let dp_attrs = (dp.attributes | []).fold({}, (acc, x) ->
-                          acc.assign({(x.key): (x.value.stringValue | "")})
-                        )
-                        {
-                          "ts":          (dp.timeUnixNano | "0").number() / 1000000000,
-                          "server_id":   $server_id,
-                          "metric_name": metric.name | "",
-                          "value":       dp.asDouble | 0.0,
-                          "attributes":  $dp_attrs,
-                        }
-                      )
-                    )
-                  )
-                )
+                root = (this.resourceMetrics | []).map_each(rm -> (rm.scopeMetrics | []).map_each(sm -> (sm.metrics | []).map_each(metric -> (if metric.exists("gauge") { metric.gauge.dataPoints | [] } else { metric.sum.dataPoints | [] }).map_each(dp -> {
+                  "ts":          (dp.timeUnixNano | "0").number() / 1000000000,
+                  "server_id":   (rm.resource.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | "")})).get("server_id") | "",
+                  "metric_name": metric.name | "",
+                  "value":       dp.asDouble | 0.0,
+                  "attributes":  (dp.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | "")})),
+                })).flatten()).flatten()).flatten()
             - unarchive:
                 format: json_array
 
@@ -115,11 +84,7 @@ output:
       - check: 'meta("kafka_topic") == "otel-logs"'
         output:
           http_client:
-            url: >-
-              ${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}
-              &query=INSERT%20INTO%20otel_logs%20FORMAT%20JSONEachRow
-              &user=${CLICKHOUSE_USER:default}
-              &password=${CLICKHOUSE_PASSWORD:}
+            url: "${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}&query=INSERT%20INTO%20otel_logs%20FORMAT%20JSONEachRow&user=${CLICKHOUSE_USER:default}&password=${CLICKHOUSE_PASSWORD:}"
             verb: POST
             headers:
               Content-Type: application/octet-stream
@@ -133,11 +98,7 @@ output:
       - check: 'meta("kafka_topic") == "otel-metrics"'
         output:
           http_client:
-            url: >-
-              ${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}
-              &query=INSERT%20INTO%20otel_metrics_gauge%20FORMAT%20JSONEachRow
-              &user=${CLICKHOUSE_USER:default}
-              &password=${CLICKHOUSE_PASSWORD:}
+            url: "${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}&query=INSERT%20INTO%20otel_metrics_gauge%20FORMAT%20JSONEachRow&user=${CLICKHOUSE_USER:default}&password=${CLICKHOUSE_PASSWORD:}"
             verb: POST
             headers:
               Content-Type: application/octet-stream
@@ -151,11 +112,7 @@ output:
       - check: 'meta("kafka_topic") == "otel-traces"'
         output:
           http_client:
-            url: >-
-              ${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}
-              &query=INSERT%20INTO%20otel_traces_raw%20(payload)%20FORMAT%20JSONEachRow
-              &user=${CLICKHOUSE_USER:default}
-              &password=${CLICKHOUSE_PASSWORD:}
+            url: "${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}&query=INSERT%20INTO%20otel_traces_raw%20(payload)%20FORMAT%20JSONEachRow&user=${CLICKHOUSE_USER:default}&password=${CLICKHOUSE_PASSWORD:}"
             verb: POST
             headers:
               Content-Type: application/octet-stream

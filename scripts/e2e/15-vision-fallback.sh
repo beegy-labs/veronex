@@ -126,7 +126,7 @@ GEN_RES=$(curl -s -w "\n%{http_code}" --max-time 180 "$API/api/generate" \
   -d "$PAYLOAD" 2>/dev/null || printf "\n000")
 
 GEN_CODE=$(echo "$GEN_RES" | tail -1)
-GEN_BODY=$(echo "$GEN_RES" | head -n -1)
+GEN_BODY=$(echo "$GEN_RES" | sed '$d')
 
 case "$GEN_CODE" in
   200) pass "generate with image → 200" ;;
@@ -170,7 +170,7 @@ CHAT_RES=$(curl -s -w "\n%{http_code}" --max-time 180 "$API/api/chat" \
   -d "$CHAT_PAYLOAD" 2>/dev/null || printf "\n000")
 
 CHAT_CODE=$(echo "$CHAT_RES" | tail -1)
-CHAT_BODY=$(echo "$CHAT_RES" | head -n -1)
+CHAT_BODY=$(echo "$CHAT_RES" | sed '$d')
 
 case "$CHAT_CODE" in
   200) pass "chat with image → 200" ;;
