@@ -309,6 +309,7 @@ mod tests {
             frequency_penalty: None,
             presence_penalty: None,
             mcp_loop_id: None,
+            vision_analysis: None,
         }
     }
 

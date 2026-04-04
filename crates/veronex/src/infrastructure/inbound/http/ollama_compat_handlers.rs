@@ -904,6 +904,7 @@ mod tests {
             None,
             10,
             5,
+            false,
         );
         assert_eq!(resp["done"], true);
         assert_eq!(resp["done_reason"], "stop");
@@ -944,6 +945,7 @@ mod tests {
             Some(tc.clone()),
             15,
             20,
+            false,
         );
         assert_eq!(resp["done_reason"], "tool_calls");
         assert_eq!(resp["message"]["content"], "");
@@ -956,7 +958,7 @@ mod tests {
     fn response_has_timing_fields() {
         for resp in [
             build_generate_response("m", "t", String::new(), 0, 0),
-            build_chat_response("m", "t", String::new(), None, 0, 0),
+            build_chat_response("m", "t", String::new(), None, 0, 0, false),
         ] {
             assert_eq!(resp["total_duration"], 0);
             assert_eq!(resp["load_duration"], 0);
@@ -991,7 +993,7 @@ mod tests {
     #[test]
     fn response_includes_model_and_timestamp() {
         let ts = "2026-03-15T12:00:00Z";
-        let chat = build_chat_response("llava:7b", ts, String::new(), None, 0, 0);
+        let chat = build_chat_response("llava:7b", ts, String::new(), None, 0, 0, false);
         let generate = build_generate_response("llava:7b", ts, String::new(), 0, 0);
         for resp in [&chat, &generate] {
             assert_eq!(resp["model"], "llava:7b");

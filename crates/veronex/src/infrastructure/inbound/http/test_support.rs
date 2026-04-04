@@ -291,7 +291,7 @@ impl LabSettingsRepository for MockLabSettingsRepo {
     async fn get(&self) -> Result<LabSettings> {
         Ok(LabSettings::default())
     }
-    async fn update(&self, _gemini_function_calling: Option<bool>, _max_images: Option<i32>, _max_image_bytes: Option<i32>) -> Result<LabSettings> {
+    async fn update(&self, _patch: crate::application::ports::outbound::lab_settings_repository::LabSettingsUpdate) -> Result<LabSettings> {
         Ok(LabSettings::default())
     }
 }
