@@ -162,3 +162,111 @@ pub async fn perform_handoff(
 
     Some((new_conv_id, master_summary))
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::ports::outbound::message_store::{
+        CompressedTurn, ConversationRecord, ConversationTurn, TurnRecord,
+    };
+
+    fn make_turn(prompt: &str, result: &str, compressed_tokens: Option<u32>) -> TurnRecord {
+        TurnRecord {
+            job_id: Uuid::now_v7(),
+            prompt: prompt.to_string(),
+            messages: None,
+            tool_calls: None,
+            result: Some(result.to_string()),
+            model_name: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            compressed: compressed_tokens.map(|ct| CompressedTurn {
+                summary: "summary".to_string(),
+                original_tokens: ct * 3,
+                compressed_tokens: ct,
+                compression_model: "qwen2.5:3b".to_string(),
+            }),
+            vision_analysis: None,
+        }
+    }
+
+    fn make_record(turns: Vec<TurnRecord>) -> ConversationRecord {
+        ConversationRecord {
+            turns: turns.into_iter().map(ConversationTurn::Regular).collect(),
+        }
+    }
+
+    fn lab(enabled: bool, threshold: f32) -> LabSettings {
+        LabSettings {
+            handoff_enabled: enabled,
+            handoff_threshold: threshold,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn handoff_disabled_returns_false() {
+        let record = make_record(vec![make_turn("q", "a", Some(8_000))]);
+        assert!(!should_handoff(&record, 16_384, &lab(false, 0.5)));
+    }
+
+    #[test]
+    fn zero_ctx_returns_false() {
+        let record = make_record(vec![make_turn("q", "a", Some(8_000))]);
+        assert!(!should_handoff(&record, 0, &lab(true, 0.5)));
+    }
+
+    #[test]
+    fn below_threshold_returns_false() {
+        // 4 turns × 100 compressed_tokens = 400 tokens; threshold = 0.8 × 1000 = 800
+        let turns = (0..4).map(|_| make_turn("question", "answer", Some(100))).collect();
+        let record = make_record(turns);
+        assert!(!should_handoff(&record, 1_000, &lab(true, 0.8)));
+    }
+
+    #[test]
+    fn at_threshold_triggers_handoff() {
+        // 8 turns × 100 compressed_tokens = 800 tokens; threshold = 0.8 × 1000 = 800
+        let turns = (0..8).map(|_| make_turn("question", "answer", Some(100))).collect();
+        let record = make_record(turns);
+        assert!(should_handoff(&record, 1_000, &lab(true, 0.8)));
+    }
+
+    #[test]
+    fn above_threshold_triggers_handoff() {
+        // 10 turns × 100 compressed_tokens = 1000; threshold = 0.8 × 1000 = 800
+        let turns = (0..10).map(|_| make_turn("question", "answer", Some(100))).collect();
+        let record = make_record(turns);
+        assert!(should_handoff(&record, 1_000, &lab(true, 0.8)));
+    }
+
+    #[test]
+    fn uncompressed_turns_use_char_estimate() {
+        // 400-char prompt + 400-char result → (400+400)/4 = 200 tokens per turn
+        // 4 turns = 800 tokens; threshold = 0.8 × 1000 = 800
+        let prompt = "a".repeat(400);
+        let result = "b".repeat(400);
+        let turns = (0..4).map(|_| make_turn(&prompt, &result, None)).collect();
+        let record = make_record(turns);
+        assert!(should_handoff(&record, 1_000, &lab(true, 0.8)));
+    }
+
+    #[test]
+    fn handoff_turn_skipped_in_token_count() {
+        // HandoffTurn should not contribute to token count
+        let mut record = make_record(vec![make_turn("q", "a", Some(100))]);
+        record.turns.insert(
+            0,
+            ConversationTurn::Handoff(HandoffTurn {
+                master_summary: "x".repeat(10_000),
+                summary_model: "qwen2.5:3b".to_string(),
+                previous_conversation_id: Uuid::now_v7(),
+                previous_turn_count: 5,
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+            }),
+        );
+        // Only 100 tokens from the regular turn; threshold = 0.8 × 1000 = 800
+        assert!(!should_handoff(&record, 1_000, &lab(true, 0.8)));
+    }
+}
