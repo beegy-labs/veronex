@@ -16,7 +16,9 @@
     "gemini": "Gemini",
     "accounts": "계정",
     "audit": "감사 로그",
-    "capacity": "동시성 제어"
+    "capacity": "동시성 제어",
+    "health": "헬스",
+    "mcp": "MCP"
   },
   "common": {
     "all": "전체",
@@ -904,5 +906,17 @@
     "utilization": "사용률",
     "noMetrics": "메트릭을 사용할 수 없습니다.",
     "scrapeError": "node-exporter 수집에 실패했습니다."
+  },
+  "health": {
+    "title": "시스템 헬스",
+    "description": "인프라 서비스 및 API 파드의 실시간 상태입니다.",
+    "infrastructure": "인프라",
+    "apiPods": "API 파드",
+    "agentPods": "에이전트 파드",
+    "ok": "정상",
+    "error": "오류",
+    "stale": "데이터 만료",
+    "noData": "데이터 없음",
+    "noPods": "온라인 파드 없음"
   }
 }

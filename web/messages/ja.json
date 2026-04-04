@@ -16,7 +16,9 @@
     "gemini": "Gemini",
     "accounts": "アカウント",
     "audit": "監査ログ",
-    "capacity": "同時実行制御"
+    "capacity": "同時実行制御",
+    "health": "ヘルス",
+    "mcp": "MCP"
   },
   "common": {
     "all": "すべて",
@@ -904,5 +906,17 @@
     "utilization": "使用率",
     "noMetrics": "メトリクスを利用できません。",
     "scrapeError": "node-exporterの取得に失敗しました。"
+  },
+  "health": {
+    "title": "システムヘルス",
+    "description": "インフラサービスとAPIポッドのリアルタイムステータスです。",
+    "infrastructure": "インフラ",
+    "apiPods": "APIポッド",
+    "agentPods": "エージェントポッド",
+    "ok": "正常",
+    "error": "エラー",
+    "stale": "データ期限切れ",
+    "noData": "データなし",
+    "noPods": "オンラインポッドなし"
   }
 }

@@ -16,7 +16,9 @@
     "gemini": "Gemini",
     "accounts": "Accounts",
     "audit": "Audit Log",
-    "capacity": "Concurrency"
+    "capacity": "Concurrency",
+    "health": "Health",
+    "mcp": "MCP"
   },
   "common": {
     "all": "All",
@@ -904,5 +906,17 @@
     "utilization": "Utilization",
     "noMetrics": "No metrics available.",
     "scrapeError": "Failed to scrape node-exporter."
+  },
+  "health": {
+    "title": "System Health",
+    "description": "Real-time status of infrastructure services and API pods.",
+    "infrastructure": "Infrastructure",
+    "apiPods": "API Pods",
+    "agentPods": "Agent Pods",
+    "ok": "ok",
+    "error": "error",
+    "stale": "Stale data",
+    "noData": "No data",
+    "noPods": "No pods online"
   }
 }
