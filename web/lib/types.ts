@@ -292,6 +292,7 @@ export interface Provider {
   name: string
   provider_type: ProviderType
   url: string
+  timeout_secs?: number
   is_active: boolean
   total_vram_mb: number
   /** GPU index on the host (0-based). Used to filter node-exporter metrics. */
@@ -467,6 +468,7 @@ export interface OllamaProviderForModel {
   provider_id: string
   name: string
   url: string
+  timeout_secs?: number
   status: string
   is_enabled: boolean
 }
@@ -727,4 +729,58 @@ export interface AuditEvent {
   resource_name: string
   ip_address: string
   details: string
+}
+
+export interface InfraServiceItem {
+  name: string
+  status: string
+  checked_at: number | null
+  latency_ms?: number | null
+}
+
+export interface PodItem {
+  id: string
+  status: string
+  last_heartbeat_ms?: number | null
+}
+
+export interface ServiceHealthResponse {
+  infrastructure: InfraServiceItem[]
+  api_pods: PodItem[]
+  agent_pods: PodItem[]
+}
+
+export interface McpServer {
+  id: string
+  name: string
+  slug: string
+  url: string
+  timeout_secs?: number
+  is_enabled: boolean
+  tool_count: number
+  online?: boolean
+  created_at: string
+}
+
+export interface McpServerStat {
+  server_slug: string
+  server_name: string
+  total_calls: number
+  success_rate: number
+  cache_hit_count: number
+  avg_latency_ms: number
+}
+
+export interface McpServerAccess {
+  server_id: string
+  server_name: string
+  is_allowed: boolean
+  slug?: string
+}
+
+export interface RegisterMcpServerRequest {
+  name: string
+  slug: string
+  url: string
+  timeout_secs?: number
 }

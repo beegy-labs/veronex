@@ -8,7 +8,7 @@ import type { RetryParams, ConversationDetail } from '@/lib/types'
 import JobTable from '@/components/job-table'
 import { ApiTestPanel } from '@/components/api-test-panel'
 import { NetworkFlowTab } from '@/components/network-flow-tab'
-import { ChevronLeft, ChevronRight, Search, X, ListOrdered, SlidersHorizontal, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, X, ListOrdered, SlidersHorizontal, ChevronDown, ChevronUp, MessageSquare, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -64,7 +64,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 
   const offset = page * PAGE_SIZE
 
-  const { data, isLoading, error } = useQuery(
+  const { data, isLoading, isFetching, error, refetch } = useQuery(
     dashboardJobsQuery({ source: source ?? 'api', page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: serverNameFilter || undefined, providerType: providerTypeFilter !== 'all' ? providerTypeFilter : undefined }),
   )
 
@@ -120,6 +120,9 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
           >
             <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
             {activeFilterCount > 0 ? t('jobs.filtersActive', { count: activeFilterCount }) : t('jobs.filters')}
+          </Button>
+          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
           </Button>
         </div>
       </div>

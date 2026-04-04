@@ -112,7 +112,8 @@
     "tokensUnit": "トークン",
     "activate": "有効化",
     "deactivate": "無効化",
-    "deleting": "削除中…"
+    "deleting": "削除中…",
+    "model": "モデル"
   },
   "conversations": {
     "title": "会話",
@@ -298,7 +299,18 @@
     "filterProvider": "プロバイダー",
     "allProviders": "全プロバイダー",
     "filters": "フィルター",
-    "filtersActive": "フィルター ({{count}})"
+    "filtersActive": "フィルター ({{count}})",
+    "tasks": "タスク",
+    "conversations": "会話",
+    "conversationTitle": "タイトル",
+    "turnCount": "ターン",
+    "lastActivity": "最終アクティビティ",
+    "noConversations": "会話履歴がありません。",
+    "source": "ソース",
+    "continue": "続ける",
+    "continueInTest": "テストで続ける",
+    "roleUser": "ユーザー",
+    "roleAssistant": "アシスタント"
   },
   "keys": {
     "title": "APIキー",

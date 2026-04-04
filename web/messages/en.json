@@ -112,7 +112,8 @@
     "tokensUnit": "tokens",
     "activate": "Activate",
     "deactivate": "Deactivate",
-    "deleting": "Deleting…"
+    "deleting": "Deleting…",
+    "model": "Model"
   },
   "conversations": {
     "title": "Conversations",
@@ -298,7 +299,18 @@
     "filterProvider": "Provider",
     "allProviders": "All Providers",
     "filters": "Filters",
-    "filtersActive": "Filters ({{count}})"
+    "filtersActive": "Filters ({{count}})",
+    "tasks": "Tasks",
+    "conversations": "Conversations",
+    "conversationTitle": "Title",
+    "turnCount": "Turns",
+    "lastActivity": "Last Activity",
+    "noConversations": "No conversations yet.",
+    "source": "Source",
+    "continue": "Continue",
+    "continueInTest": "Continue in Test",
+    "roleUser": "User",
+    "roleAssistant": "Assistant"
   },
   "keys": {
     "title": "API Keys",

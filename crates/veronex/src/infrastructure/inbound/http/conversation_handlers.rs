@@ -71,6 +71,8 @@ pub struct ListConversationsQuery {
     limit: i64,
     #[serde(default)]
     offset: i64,
+    source: Option<String>,
+    search: Option<String>,
 }
 
 fn default_limit() -> i64 { 50 }
@@ -158,18 +160,31 @@ pub async fn list_conversations(
 
     let limit = params.limit.min(200);
     let offset = params.offset.max(0);
+    let search_pat = params.search.as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{}%", s.to_lowercase()));
 
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
-        .fetch_one(&state.pg_pool)
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("count failed: {e}")))?;
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM conversations
+         WHERE ($1::text IS NULL OR source = $1)
+           AND ($2::text IS NULL OR LOWER(title) LIKE $2)"
+    )
+    .bind(&params.source)
+    .bind(&search_pat)
+    .fetch_one(&state.pg_pool)
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("count failed: {e}")))?;
 
     let rows = sqlx::query(
         "SELECT id, title, model_name, source, turn_count, total_prompt_tokens, total_completion_tokens, created_at, updated_at
          FROM conversations
+         WHERE ($1::text IS NULL OR source = $1)
+           AND ($2::text IS NULL OR LOWER(title) LIKE $2)
          ORDER BY updated_at DESC
-         LIMIT $1 OFFSET $2"
+         LIMIT $3 OFFSET $4"
     )
+    .bind(&params.source)
+    .bind(&search_pat)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pg_pool)

@@ -112,7 +112,8 @@
     "tokensUnit": "토큰",
     "activate": "활성화",
     "deactivate": "비활성화",
-    "deleting": "삭제 중…"
+    "deleting": "삭제 중…",
+    "model": "모델"
   },
   "conversations": {
     "title": "대화",
@@ -298,7 +299,18 @@
     "filterProvider": "프로바이더",
     "allProviders": "전체 프로바이더",
     "filters": "필터",
-    "filtersActive": "필터 ({{count}})"
+    "filtersActive": "필터 ({{count}})",
+    "tasks": "작업",
+    "conversations": "대화",
+    "conversationTitle": "제목",
+    "turnCount": "턴",
+    "lastActivity": "마지막 활동",
+    "noConversations": "대화 내역이 없습니다.",
+    "source": "소스",
+    "continue": "이어서",
+    "continueInTest": "테스트에서 이어서",
+    "roleUser": "사용자",
+    "roleAssistant": "어시스턴트"
   },
   "keys": {
     "title": "API 키",

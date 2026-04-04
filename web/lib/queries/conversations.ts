@@ -5,15 +5,19 @@ import { STALE_TIME_FAST, REFETCH_INTERVAL_FAST, withJitter } from '@/lib/consta
 export interface ConversationsQueryParams {
   page: number
   pageSize: number
+  source?: string
+  search?: string
 }
 
 export const conversationsQuery = (p: ConversationsQueryParams) => queryOptions({
-  queryKey: ['conversations', p.page] as const,
+  queryKey: ['conversations', p.page, p.source, p.search] as const,
   queryFn: () => {
     const qs = new URLSearchParams({
       limit: String(p.pageSize),
       offset: String(p.page * p.pageSize),
     })
+    if (p.source) qs.set('source', p.source)
+    if (p.search) qs.set('search', p.search)
     return api.conversations(qs.toString())
   },
   staleTime: STALE_TIME_FAST,

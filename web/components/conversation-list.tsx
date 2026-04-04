@@ -1,14 +1,16 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { conversationsQuery, conversationDetailQuery, turnInternalsQuery } from '@/lib/queries'
 import type { ConversationTurn, ConversationDetail } from '@/lib/types'
 import { useTranslation } from '@/i18n'
 import { fmtNumber, fmtDatetime } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
-import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp, MessageSquare, Wrench, Play } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp, MessageSquare, Wrench, Play, RefreshCw, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { StatusPill } from '@/components/status-pill'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
@@ -23,19 +25,61 @@ export function ConversationList({ onContinue }: ConversationListProps) {
   const { tz } = useTimezone()
   const [page, setPage] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [query, setQuery] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('all')
 
-  const { data, isLoading } = useQuery(conversationsQuery({ page, pageSize: PAGE_SIZE }))
+  const { data, isLoading, isFetching, refetch } = useQuery(conversationsQuery({
+    page, pageSize: PAGE_SIZE,
+    source: sourceFilter !== 'all' ? sourceFilter : undefined,
+    search: query || undefined,
+  }))
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
+
+  const commitSearch = useCallback(() => { setQuery(search); setPage(0) }, [search])
+  const clearSearch = useCallback(() => { setSearch(''); setQuery(''); setPage(0) }, [])
 
   return (
     <div className="space-y-4">
-      {data && (
-        <StatusPill
-          icon={<MessageSquare className="h-3 w-3 shrink-0" />}
-          count={data.total}
-          label={t('jobs.conversations')}
-        />
-      )}
+      {/* Controls row — mirrors JobsSection layout */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        {data ? (
+          <StatusPill icon={<MessageSquare className="h-3 w-3 shrink-0" />} count={data.total} label={t('jobs.conversations')} />
+        ) : (
+          <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>
+        )}
+        <div className="flex items-center gap-2">
+          <div className="relative flex items-center">
+            <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              className="pl-8 pr-8 w-44 h-9 text-sm"
+              placeholder={t('jobs.searchPlaceholder')}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitSearch(); if (e.key === 'Escape') clearSearch() }}
+            />
+            {search && (
+              <button type="button" className="absolute right-2.5 text-muted-foreground hover:text-foreground" onClick={clearSearch}>
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <Select value={sourceFilter} onValueChange={(v) => { setSourceFilter(v); setPage(0) }}>
+            <SelectTrigger className="w-28 h-9 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t('jobs.allProviders')}</SelectItem>
+              <SelectItem value="api">api</SelectItem>
+              <SelectItem value="test">test</SelectItem>
+              <SelectItem value="analyzer">analyzer</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
+      </div>
 
       {isLoading && (
         <div className="flex h-48 items-center justify-center text-muted-foreground">
