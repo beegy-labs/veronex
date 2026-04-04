@@ -160,7 +160,9 @@ function PipelineSection({ topics, isLoading }: { topics: TopicPipelineStats[]; 
                       <div className="flex items-center gap-1.5">
                         <span className="font-mono text-xs">{tp.topic}</span>
                         {hasError && (
-                          <AlertTriangle className="h-3 w-3 text-status-error-fg shrink-0" title={tp.last_error ?? ''} />
+                          <span title={tp.last_error ?? ''}>
+                            <AlertTriangle className="h-3 w-3 text-status-error-fg shrink-0" />
+                          </span>
                         )}
                       </div>
                       <div className="text-[10px] text-muted-foreground/60 tabular-nums">

@@ -13,7 +13,7 @@ use crate::application::ports::outbound::analytics_repository::PerformanceMetric
 use crate::domain::enums::AccountRole;
 use crate::domain::value_objects::JobId;
 use crate::infrastructure::outbound::valkey_keys::{QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID, QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_TEST as QUEUE_KEY_TEST};
-use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSettingsManage};
+use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSettingsManage, RequireDashboardView};
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
