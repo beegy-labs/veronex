@@ -348,6 +348,7 @@ pub struct LabSettingsResponse {
     pub multiturn_allowed_models: Vec<String>,
     pub vision_model: Option<String>,
     pub handoff_enabled: bool,
+    pub handoff_threshold: f32,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -689,6 +690,7 @@ fn lab_settings_to_response(s: crate::application::ports::outbound::lab_settings
         multiturn_allowed_models: s.multiturn_allowed_models,
         vision_model: s.vision_model,
         handoff_enabled: s.handoff_enabled,
+        handoff_threshold: s.handoff_threshold,
         updated_at: s.updated_at,
     }
 }

@@ -15,14 +15,11 @@ source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 get_lab() {
-  aget "/v1/dashboard/overview" | python3 -c "
-import sys, json; d=json.loads(sys.stdin.read())
-print(json.dumps(d.get('lab', {})))
-" 2>/dev/null || echo "{}"
+  aget "/v1/dashboard/lab" 2>/dev/null || echo "{}"
 }
 
 patch_lab() {
-  apostc "/v1/dashboard/lab" "$1"
+  apatchc "/v1/dashboard/lab" "$1"
 }
 
 # Restore lab to sensible defaults on exit
@@ -69,15 +66,15 @@ LAB2=$(get_lab)
 COMP_MODEL=$(echo "$LAB2" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('compression_model') or '')" 2>/dev/null || echo "")
 [ "$COMP_MODEL" = "qwen2.5:3b" ] && \
   pass "compression_model persisted as qwen2.5:3b" || \
-  fail "compression_model wrong (got: $COMP_MODEL)"
+  fail "compression_model wrong (got: '$COMP_MODEL')"
 
-# Clear compression model
+# Clear compression model (send as JSON null via double-encoded Option<Option<String>>)
 patch_lab '{"compression_model":null}' > /dev/null
 LAB3=$(get_lab)
-COMP_MODEL3=$(echo "$LAB3" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('compression_model'))" 2>/dev/null || echo "None")
-[ "$COMP_MODEL3" = "None" ] && \
+COMP_MODEL3=$(echo "$LAB3" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); v=d.get('compression_model'); print('None' if v is None else v)" 2>/dev/null || echo "None")
+[ "$COMP_MODEL3" = "None" ] || [ -z "$COMP_MODEL3" ] && \
   pass "compression_model cleared to null" || \
-  info "compression_model null-clear: got '$COMP_MODEL3' (may be empty string)"
+  info "compression_model null-clear: got '$COMP_MODEL3'"
 
 # ── Phase 16-C: Multi-turn eligibility gate ───────────────────────────────────
 
@@ -163,7 +160,7 @@ except: pass
   else
     INTERNALS_RESP=$(curl -s -w "\n%{http_code}" --max-time 10 \
       "$API/v1/conversations/$CONV_ID/turns/$JOB_ID/internals" \
-      -H "Authorization: Bearer $JWT" 2>/dev/null || printf "\n000")
+      -H "Authorization: Bearer $TK" 2>/dev/null || printf "\n000")
     INTERNALS_CODE=$(echo "$INTERNALS_RESP" | tail -1)
     INTERNALS_BODY=$(echo "$INTERNALS_RESP" | head -1)
 
