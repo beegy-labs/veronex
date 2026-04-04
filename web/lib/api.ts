@@ -61,6 +61,9 @@ export const api = {
   serviceHealth: () =>
     apiClient.get<import('./types').ServiceHealthResponse>('/v1/dashboard/services'),
 
+  pipelineHealth: () =>
+    apiClient.get<import('./types').PipelineHealthResponse>('/v1/dashboard/pipeline'),
+
   analytics: (hours = 24) =>
     apiClient.get<AnalyticsStats>(`/v1/dashboard/analytics?hours=${hours}`),
 

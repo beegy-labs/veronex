@@ -917,6 +917,15 @@
     "error": "오류",
     "stale": "데이터 만료",
     "noData": "데이터 없음",
-    "noPods": "온라인 파드 없음"
+    "noPods": "온라인 파드 없음",
+    "podsOnline": "{{total}}개 중 {{online}}개 온라인",
+    "lastSeen": "마지막 확인",
+    "pipeline": "파이프라인",
+    "pipelineUnavailable": "파이프라인 메트릭 불가 (Redpanda 또는 ClickHouse 미설정).",
+    "topic": "토픽",
+    "lag": "적체량",
+    "tpm1m": "TPM (1분)",
+    "tpm5m": "TPM (5분 평균)",
+    "lastPoll": "마지막 폴링"
   }
 }

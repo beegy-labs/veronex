@@ -917,6 +917,15 @@
     "error": "error",
     "stale": "Stale data",
     "noData": "No data",
-    "noPods": "No pods online"
+    "noPods": "No pods online",
+    "podsOnline": "{{online}} of {{total}} online",
+    "lastSeen": "Last seen",
+    "pipeline": "Pipeline",
+    "pipelineUnavailable": "Pipeline metrics unavailable (Redpanda or ClickHouse not configured).",
+    "topic": "Topic",
+    "lag": "Lag",
+    "tpm1m": "TPM (1m)",
+    "tpm5m": "TPM (5m avg)",
+    "lastPoll": "Last Poll"
   }
 }

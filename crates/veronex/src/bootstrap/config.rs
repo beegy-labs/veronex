@@ -18,6 +18,14 @@ pub struct AppConfig {
     pub analyzer_url: String,
     pub session_grouping_interval_secs: u64,
     pub gemini_encryption_key: [u8; 32],
+    /// Redpanda/Kafka broker address (e.g. `redpanda:9092`). Used for pipeline metrics.
+    pub kafka_broker: Option<String>,
+    /// ClickHouse HTTP URL (e.g. `http://clickhouse:8123`). Used for pipeline metrics.
+    pub clickhouse_http_url: Option<String>,
+    /// ClickHouse credentials.
+    pub clickhouse_user: Option<String>,
+    pub clickhouse_password: Option<String>,
+    pub clickhouse_db: Option<String>,
 }
 
 impl AppConfig {
@@ -82,6 +90,12 @@ impl AppConfig {
             veronex::domain::services::encryption::derive_key(&raw)
         };
 
+        let kafka_broker = std::env::var("KAFKA_BROKER").ok();
+        let clickhouse_http_url = std::env::var("CLICKHOUSE_HTTP_URL").ok();
+        let clickhouse_user = std::env::var("CLICKHOUSE_USER").ok();
+        let clickhouse_password = std::env::var("CLICKHOUSE_PASSWORD").ok();
+        let clickhouse_db = std::env::var("CLICKHOUSE_DB").ok();
+
         Self {
             database_url,
             valkey_url,
@@ -97,6 +111,11 @@ impl AppConfig {
             analyzer_url,
             session_grouping_interval_secs,
             gemini_encryption_key,
+            kafka_broker,
+            clickhouse_http_url,
+            clickhouse_user,
+            clickhouse_password,
+            clickhouse_db,
         }
     }
 }

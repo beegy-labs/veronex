@@ -1061,3 +1061,226 @@ pub async fn get_service_health(
 
     Ok(Json(ServiceHealthResponse { infrastructure, api_pods, agent_pods }))
 }
+
+// ── ClickHouse HTTP query helper ─────────────────────────────────────────────
+
+/// Send a query to ClickHouse via its HTTP GET interface.
+/// Uses percent-encoding for query params to avoid `.query()` type issues.
+async fn ch_get(
+    client: &reqwest::Client,
+    base_url: &str,
+    user: &str,
+    password: &str,
+    query: &str,
+) -> Option<reqwest::Response> {
+    let url = format!(
+        "{base_url}/?user={}&password={}&query={}",
+        percent_encode(user),
+        percent_encode(password),
+        percent_encode(query),
+    );
+    client.get(&url).send().await.ok()
+        .filter(|r| r.status().is_success())
+}
+
+fn percent_encode(s: &str) -> String {
+    s.bytes().flat_map(|b| {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'-' | b'_' | b'.' | b'~' => vec![b as char],
+            _ => format!("%{b:02X}").chars().collect(),
+        }
+    }).collect()
+}
+
+// ── Pipeline health (Kafka consumer lag + TPM) ────────────────────────────────
+//
+// GET /v1/dashboard/pipeline
+//
+// Data sources:
+//   1. Redpanda Prometheus metrics (/metrics) → high_watermark per topic
+//   2. ClickHouse system.kafka_consumers      → consumer_offset, last_poll, errors
+//   3. ClickHouse otel_logs / otel_metrics    → row count in last 1 / 5 minutes (TPM)
+
+#[derive(Serialize)]
+pub struct TopicPipelineStats {
+    pub topic: String,
+    pub consumer_offset: i64,
+    pub log_end_offset: i64,
+    /// lag = log_end_offset − consumer_offset. Negative means offset data mismatch (treat as 0).
+    pub lag: i64,
+    /// Rows inserted into the destination table in the last 1 minute.
+    pub tpm_1m: i64,
+    /// Rows inserted in the last 5 minutes (÷5 = avg TPM).
+    pub tpm_5m: i64,
+    /// Seconds since ClickHouse last polled this topic (None if unknown).
+    pub last_poll_secs: Option<i64>,
+    /// Whether the consumer is currently active.
+    pub is_active: bool,
+    /// Latest exception text from ClickHouse consumer (truncated to 200 chars).
+    pub last_error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PipelineHealthResponse {
+    pub topics: Vec<TopicPipelineStats>,
+    /// True when pipeline metrics are available (Redpanda + ClickHouse reachable).
+    pub available: bool,
+}
+
+/// `GET /v1/dashboard/pipeline`
+pub async fn get_pipeline_health(
+    RequireDashboardView(_): RequireDashboardView,
+    State(state): State<super::state::AppState>,
+) -> impl IntoResponse {
+    let Some(ref redpanda_admin_url) = state.kafka_broker_admin_url else {
+        return Json(PipelineHealthResponse { topics: vec![], available: false }).into_response();
+    };
+    let Some(ref ch_url) = state.clickhouse_http_url else {
+        return Json(PipelineHealthResponse { topics: vec![], available: false }).into_response();
+    };
+
+    let ch_user = state.clickhouse_user.as_deref().unwrap_or("default");
+    let ch_pass = state.clickhouse_password.as_deref().unwrap_or("");
+    let ch_db   = state.clickhouse_db.as_deref().unwrap_or("veronex");
+
+    // ── 1. Redpanda Prometheus metrics → high-watermark per topic ──────────
+    let metrics_url = format!("{redpanda_admin_url}/metrics");
+    let metrics_text = match state.http_client.get(&metrics_url).send().await {
+        Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+        _ => String::new(),
+    };
+
+    // Parse `vectorized_cluster_partition_high_watermark{...,topic="otel-logs",...} 123`
+    let mut high_watermarks: HashMap<String, i64> = HashMap::new();
+    for line in metrics_text.lines() {
+        if !line.starts_with("vectorized_cluster_partition_high_watermark{") { continue }
+        // Extract topic="..." value
+        let topic = line
+            .split("topic=\"").nth(1)
+            .and_then(|s| s.split('"').next())
+            .map(|s| s.to_string());
+        let value = line.rsplit(' ').next()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .map(|f| f as i64);
+        if let (Some(t), Some(v)) = (topic, value) {
+            if t.starts_with("otel-") {
+                high_watermarks.insert(t, v);
+            }
+        }
+    }
+
+    // ── 2. ClickHouse → consumer offsets + last_poll + errors ──────────────
+    let consumer_query = format!(
+        "SELECT \
+            table, \
+            arrayElement(assignments.topic, 1) AS topic, \
+            arrayElement(assignments.current_offset, 1) AS consumer_offset, \
+            last_poll_time, \
+            is_currently_used, \
+            if(length(exceptions.text) > 0, \
+               substring(arrayElement(exceptions.text, length(exceptions.text)), 1, 200), \
+               '') AS last_error \
+         FROM system.kafka_consumers \
+         WHERE database='{ch_db}' \
+           AND table IN ('kafka_otel_logs', 'kafka_otel_metrics') \
+         FORMAT JSONEachRow"
+    );
+
+    let ch_consumer_resp = ch_get(&state.http_client, ch_url, ch_user, ch_pass, &consumer_query).await;
+
+    #[derive(serde::Deserialize)]
+    struct ChConsumerRow {
+        topic: String,
+        consumer_offset: i64,
+        last_poll_time: String,  // "2026-01-01 00:00:00"
+        is_currently_used: u8,
+        last_error: String,
+    }
+
+    let mut consumer_map: HashMap<String, ChConsumerRow> = HashMap::new();
+    if let Some(resp) = ch_consumer_resp {
+        if let Ok(body) = resp.text().await {
+            for line in body.lines() {
+                if let Ok(row) = serde_json::from_str::<ChConsumerRow>(line) {
+                    consumer_map.insert(row.topic.clone(), row);
+                }
+            }
+        }
+    }
+
+    // ── 3. ClickHouse → TPM (rows inserted in last 1/5 minutes) ────────────
+    // Destination tables: kafka_otel_logs → otel_logs, kafka_otel_metrics → otel_metrics
+    let tpm_query = format!(
+        "SELECT 'otel-logs' AS topic, \
+                countIf(timestamp >= now() - INTERVAL 1 MINUTE) AS t1m, \
+                countIf(timestamp >= now() - INTERVAL 5 MINUTE) AS t5m \
+         FROM {ch_db}.otel_logs \
+         UNION ALL \
+         SELECT 'otel-metrics', \
+                countIf(timestamp >= now() - INTERVAL 1 MINUTE), \
+                countIf(timestamp >= now() - INTERVAL 5 MINUTE) \
+         FROM {ch_db}.otel_metrics \
+         FORMAT JSONEachRow"
+    );
+
+    let ch_tpm_resp = ch_get(&state.http_client, ch_url, ch_user, ch_pass, &tpm_query).await;
+
+    #[derive(serde::Deserialize)]
+    struct ChTpmRow {
+        topic: String,
+        t1m: i64,
+        t5m: i64,
+    }
+
+    let mut tpm_map: HashMap<String, (i64, i64)> = HashMap::new();
+    if let Some(resp) = ch_tpm_resp {
+        if let Ok(body) = resp.text().await {
+            for line in body.lines() {
+                if let Ok(row) = serde_json::from_str::<ChTpmRow>(line) {
+                    tpm_map.insert(row.topic, (row.t1m, row.t5m));
+                }
+            }
+        }
+    }
+
+    // ── 4. Assemble response ───────────────────────────────────────────────
+    let now = chrono::Utc::now();
+    let topics_config = [
+        ("otel-logs",    "kafka_otel_logs"),
+        ("otel-metrics", "kafka_otel_metrics"),
+    ];
+
+    let topics: Vec<TopicPipelineStats> = topics_config.iter().map(|(topic, _table)| {
+        let log_end_offset = high_watermarks.get(*topic).copied().unwrap_or(0);
+
+        let (consumer_offset, last_poll_secs, is_active, last_error) = if let Some(row) = consumer_map.get(*topic) {
+            let last_poll_secs = chrono::NaiveDateTime::parse_from_str(&row.last_poll_time, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| now.signed_duration_since(dt.and_utc()).num_seconds())
+                .filter(|&s| s >= 0);
+            let err = if row.last_error.is_empty() { None } else { Some(row.last_error.clone()) };
+            (row.consumer_offset, last_poll_secs, row.is_currently_used == 1, err)
+        } else {
+            (0, None, false, None)
+        };
+
+        let lag = (log_end_offset - consumer_offset).max(0);
+        let (tpm_1m, tpm_5m) = tpm_map.get(*topic).copied().unwrap_or((0, 0));
+
+        TopicPipelineStats {
+            topic: topic.to_string(),
+            consumer_offset,
+            log_end_offset,
+            lag,
+            tpm_1m,
+            tpm_5m,
+            last_poll_secs,
+            is_active,
+            last_error,
+        }
+    }).collect();
+
+    let available = !metrics_text.is_empty() || !consumer_map.is_empty();
+    Json(PipelineHealthResponse { topics, available }).into_response()
+}

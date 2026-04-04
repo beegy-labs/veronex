@@ -97,6 +97,14 @@ export const serviceHealthQuery = queryOptions({
   refetchIntervalInBackground: false,
 })
 
+export const pipelineHealthQuery = queryOptions({
+  queryKey: ['pipeline-health'] as const,
+  queryFn: () => api.pipelineHealth(),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
+  refetchIntervalInBackground: false,
+})
+
 // ── Performance metrics ───────────────────────────────────────────────────────
 // refetchInterval scales with the window: longer windows change less frequently.
 

@@ -197,6 +197,16 @@ async fn main() -> Result<()> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(10),
         instance_id,
+        kafka_broker_admin_url: config.kafka_broker.as_ref().map(|broker| {
+            // Convert kafka broker address to Redpanda admin URL.
+            // e.g. "redpanda:9092" → "http://redpanda:9644"
+            let host = broker.split(':').next().unwrap_or("redpanda");
+            Arc::from(format!("http://{host}:9644").as_str())
+        }),
+        clickhouse_http_url: config.clickhouse_http_url.as_deref().map(Arc::from),
+        clickhouse_user: config.clickhouse_user.as_deref().map(Arc::from),
+        clickhouse_password: config.clickhouse_password.as_deref().map(Arc::from),
+        clickhouse_db: config.clickhouse_db.as_deref().map(Arc::from),
     };
 
     // ── MCP tool refresh loop ──────────────────────────────────────

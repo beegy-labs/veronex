@@ -140,6 +140,7 @@ fn build_jwt_router() -> Router<AppState> {
         )
         .route("/v1/dashboard/performance", get(dashboard_handlers::get_performance))
         .route("/v1/dashboard/services", get(dashboard_handlers::get_service_health))
+        .route("/v1/dashboard/pipeline", get(dashboard_handlers::get_pipeline_health))
         // Provider management
         .route("/v1/providers", get(provider_handlers::list_providers).post(provider_handlers::register_provider))
         .route("/v1/providers/verify", post(provider_handlers::verify_provider))

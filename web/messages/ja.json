@@ -917,6 +917,15 @@
     "error": "エラー",
     "stale": "データ期限切れ",
     "noData": "データなし",
-    "noPods": "オンラインポッドなし"
+    "noPods": "オンラインポッドなし",
+    "podsOnline": "{{total}}個中{{online}}個オンライン",
+    "lastSeen": "最終確認",
+    "pipeline": "パイプライン",
+    "pipelineUnavailable": "パイプラインメトリクス不可 (RedpandaまたはClickHouse未設定)。",
+    "topic": "トピック",
+    "lag": "積滞量",
+    "tpm1m": "TPM (1分)",
+    "tpm5m": "TPM (5分平均)",
+    "lastPoll": "最終ポーリング"
   }
 }

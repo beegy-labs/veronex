@@ -139,6 +139,11 @@ services:
       S3_REGION: us-east-1
       VESPA_URL: http://vespa:8080
       EMBED_URL: http://veronex-embed:3200
+      KAFKA_BROKER: redpanda:9092
+      CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-veronex}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-veronex}
+      CLICKHOUSE_DB: veronex
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
       interval: 15s

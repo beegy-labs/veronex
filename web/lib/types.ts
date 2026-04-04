@@ -750,6 +750,23 @@ export interface ServiceHealthResponse {
   agent_pods: PodItem[]
 }
 
+export interface TopicPipelineStats {
+  topic: string
+  consumer_offset: number
+  log_end_offset: number
+  lag: number
+  tpm_1m: number
+  tpm_5m: number
+  last_poll_secs: number | null
+  is_active: boolean
+  last_error: string | null
+}
+
+export interface PipelineHealthResponse {
+  topics: TopicPipelineStats[]
+  available: boolean
+}
+
 export interface McpServer {
   id: string
   name: string

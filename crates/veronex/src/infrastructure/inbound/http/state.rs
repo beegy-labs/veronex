@@ -128,4 +128,11 @@ pub struct AppState {
     /// `0` disables IP-based rate limiting (e.g. for E2E test environments).
     /// Controlled via `LOGIN_RATE_LIMIT` env var (default: 10).
     pub login_rate_limit: u64,
+    /// Redpanda metrics URL for high-watermark scraping (e.g. `http://redpanda:9644`).
+    pub kafka_broker_admin_url: Option<Arc<str>>,
+    /// ClickHouse HTTP base URL for pipeline stats queries.
+    pub clickhouse_http_url: Option<Arc<str>>,
+    pub clickhouse_user: Option<Arc<str>>,
+    pub clickhouse_password: Option<Arc<str>>,
+    pub clickhouse_db: Option<Arc<str>>,
 }
