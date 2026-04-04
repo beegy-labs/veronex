@@ -606,7 +606,7 @@ pub async fn chat(
         };
         let created_at = chrono::Utc::now().to_rfc3339();
         let resp = Json(build_chat_response(
-            &model, &created_at, c.content, c.tool_calls, c.prompt_tokens, c.eval_tokens,
+            &model, &created_at, c.content, c.tool_calls, c.prompt_tokens, c.eval_tokens, session_renewed,
         )).into_response();
         return if session_renewed { with_conversation_id(resp, effective_conversation_id.as_ref()) } else { resp };
     }
@@ -683,6 +683,7 @@ fn build_chat_response(
     tool_calls: Option<serde_json::Value>,
     prompt_tokens: u32,
     eval_tokens: u32,
+    conversation_renewed: bool,
 ) -> serde_json::Value {
     let (done_reason, message) = if let Some(tc) = tool_calls {
         (
@@ -707,6 +708,7 @@ fn build_chat_response(
         "prompt_eval_duration":0,
         "eval_count":          eval_tokens,
         "eval_duration":       0,
+        "conversation_renewed": conversation_renewed,
     })
 }
 

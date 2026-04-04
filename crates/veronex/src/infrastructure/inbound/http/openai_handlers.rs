@@ -489,7 +489,7 @@ async fn ollama_chat_proxy(
     let created = chrono::Utc::now().timestamp();
 
     if !stream {
-        let resp = collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created, conversation_id.clone()).await;
+        let resp = collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created, conversation_id.clone(), session_renewed).await;
         return if session_renewed { with_conversation_id(resp, conversation_id.as_ref()) } else { resp };
     }
 
@@ -586,6 +586,7 @@ async fn collect_completion(
     id: String,
     created: i64,
     conversation_id: Option<uuid::Uuid>,
+    session_renewed: bool,
 ) -> Response {
     let mut token_stream = state.use_case.stream(&job_id);
     let mut content = String::new();
@@ -656,6 +657,7 @@ async fn collect_completion(
         },
         system_fingerprint: SYSTEM_FINGERPRINT,
         conversation_id: conversation_id.as_ref().map(super::inference_helpers::to_public_id),
+        conversation_renewed: session_renewed,
     })
     .into_response()
 }
@@ -852,6 +854,7 @@ async fn mcp_ollama_chat(
         },
         system_fingerprint: SYSTEM_FINGERPRINT,
         conversation_id: conversation_id.as_ref().map(super::inference_helpers::to_public_id),
+        conversation_renewed: false,
     }).into_response()
 }
 
@@ -1131,7 +1134,7 @@ async fn legacy_queue_chat(
     let created = chrono::Utc::now().timestamp();
 
     if !stream {
-        return collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created, conversation_id.clone()).await;
+        return collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created, conversation_id.clone(), false).await;
     }
 
     build_sse_response(&state, job_id, true, move |result| {

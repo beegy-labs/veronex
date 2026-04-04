@@ -167,6 +167,8 @@ pub struct ChatCompletion {
     pub system_fingerprint: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub conversation_renewed: bool,
 }
 
 #[derive(Serialize)]
