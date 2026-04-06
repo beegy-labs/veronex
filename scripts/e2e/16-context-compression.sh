@@ -181,6 +181,8 @@ except: pass
   fi
 fi
 
+save_counts
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 hdr "Phase 16 Summary"

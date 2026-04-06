@@ -88,6 +88,10 @@ if [ "$KEY_CODE" = "200" ] || [ "$KEY_CODE" = "201" ] && [ -n "$KEY_ID" ] && [ "
     fail "Regenerate key → $REGEN_CODE"
   fi
 
+  # mcp_cap_points PATCH
+  c=$(apatchc "/v1/keys/$KEY_ID" '{"mcp_cap_points":5}' | code)
+  [ "$c" = "204" ] || [ "$c" = "200" ] && pass "PATCH mcp_cap_points=5 → $c" || fail "PATCH mcp_cap_points → $c"
+
   c=$(adelc "/v1/keys/$KEY_ID" | code)
   [ "$c" = "204" ] && pass "Delete key → 204" || fail "Delete key → $c"
 else

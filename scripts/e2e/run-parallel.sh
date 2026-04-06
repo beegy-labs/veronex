@@ -4,12 +4,13 @@
 # Execution model:
 #   Phase 0  (sequential) : 01-setup — DB reset + auth + providers + API keys
 #   Wave  1  (parallel)   : 05-security  09-metrics  11-liveness  13-frontend
-#   Wave  2  (parallel)   : 04-crud  06-api-surface  10-image-storage  12-mcp
-#   Wave  3  (sequential) : 02-scheduler  03-inference  07-lifecycle  08-sdd-advanced  14-vespa-load-test
+#   Wave  2  (parallel)   : 04-crud  06-api-surface  10-image-storage  12-mcp  15-vision-fallback  17-mcp-analytics
+#   Wave  3  (sequential) : 02-scheduler  03-inference  07-lifecycle  08-sdd-advanced  16-context-compression  14-vespa-load-test
 #
 # Wave 1: read-heavy / fully isolated — safe to run in parallel.
-# Wave 2: create their own resources; 12-mcp uses unique slug via E2E_RUN_ID.
+# Wave 2: create their own resources; 12-mcp/17 use unique slug via E2E_RUN_ID.
 # Wave 3: share AIMD + provider state → must run sequentially.
+#         16-context-compression patches global lab settings — sequential to avoid conflicts.
 #         14-vespa-load-test is write-heavy (100K docs) — moved here so it runs
 #         after veronex-agent's post-restart re-index settles.
 #
@@ -90,13 +91,14 @@ echo -e "\n${CYAN}${BOLD}── Wave 1 (parallel): security · metrics · livene
 _run_wave 05-security 09-metrics-pipeline 11-verify-liveness 13-frontend
 
 # ── Wave 2: Feature tests with isolated resources (parallel) ─────────────────
-echo -e "\n${CYAN}${BOLD}── Wave 2 (parallel): crud · api-surface · image-storage · mcp ──${NC}"
-_run_wave 04-crud 06-api-surface 10-image-storage 12-mcp
+echo -e "\n${CYAN}${BOLD}── Wave 2 (parallel): crud · api-surface · image-storage · mcp · vision-fallback · mcp-analytics ──${NC}"
+_run_wave 04-crud 06-api-surface 10-image-storage 12-mcp 15-vision-fallback 17-mcp-analytics
 
 # ── Wave 3: Inference pipeline + Vespa load test (sequential) ────────────────
 # 14-vespa-load-test is write-heavy (100K docs) — runs after agent re-index settles.
-echo -e "\n${CYAN}${BOLD}── Wave 3 (sequential): scheduler · inference · lifecycle · sdd-advanced · vespa-load-test ──${NC}"
-for s in 02-scheduler 03-inference 07-lifecycle 08-sdd-advanced 14-vespa-load-test; do
+# 16-context-compression patches global lab settings — sequential to avoid conflicts.
+echo -e "\n${CYAN}${BOLD}── Wave 3 (sequential): scheduler · inference · lifecycle · sdd-advanced · context-compression · vespa-load-test ──${NC}"
+for s in 02-scheduler 03-inference 07-lifecycle 08-sdd-advanced 16-context-compression 14-vespa-load-test; do
   _run_one "$s" "$SCRIPT_DIR/$s.sh"
 done
 

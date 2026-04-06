@@ -255,4 +255,27 @@ if [ -n "${SERVER_ID_LOCAL:-}" ] && [ "$SERVER_ID_LOCAL" != "None" ]; then
     || info "Local live metrics → $LIVE_LOCAL_CODE"
 fi
 
+# ── Dashboard pipeline health endpoint ───────────────────────────────────────
+hdr "Dashboard pipeline health"
+PIPE_RES=$(agetc "/v1/dashboard/pipeline" 2>/dev/null || printf "\n000")
+PIPE_CODE=$(echo "$PIPE_RES" | tail -1)
+PIPE_BODY=$(echo "$PIPE_RES" | sed '$d')
+[ "$PIPE_CODE" = "200" ] \
+  && pass "GET /v1/dashboard/pipeline → 200" \
+  || fail "GET /v1/dashboard/pipeline → $PIPE_CODE"
+if [ "$PIPE_CODE" = "200" ]; then
+  PIPE_FIELDS=$(echo "$PIPE_BODY" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    ok = all(k in d for k in ['kafka_consumer_lag', 'tpm', 'consumers'])
+    print('ok' if ok else 'missing:' + ','.join(k for k in ['kafka_consumer_lag','tpm','consumers'] if k not in d))
+except Exception as e:
+    print(f'parse_error:{e}')
+" 2>/dev/null || echo "parse_error")
+  [ "$PIPE_FIELDS" = "ok" ] \
+    && pass "Pipeline health fields present (kafka_consumer_lag, tpm, consumers)" \
+    || info "Pipeline health fields: $PIPE_FIELDS (Kafka/ClickHouse may not be running)"
+fi
+
 save_counts

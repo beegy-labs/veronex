@@ -1,6 +1,6 @@
 # E2E Test Suite
 
-> ADD Execution | **Last Updated**: 2026-03-28
+> ADD Execution | **Last Updated**: 2026-04-07
 
 ## Trigger
 
@@ -35,6 +35,9 @@ Run scripts in order — each depends on state from prior scripts.
 | 12 | `12-mcp.sh` | MCP CRUD, tools, embed, web search, ReAct loop | 120s |
 | 13 | `13-frontend.sh` | Frontend smoke tests (Next.js page loads) | 30s |
 | 14 | `14-vespa-load-test.sh` | Vespa ANN 부하 테스트 — 100K 툴, p99 < 20ms | 300s |
+| 15 | `15-vision-fallback.sh` | Non-vision model + image → vision fallback injection | 60s |
+| 16 | `16-context-compression.sh` | Lab settings, multi-turn eligibility, session handoff | 30s |
+| 17 | `17-mcp-analytics.sh` | MCP analytics pipeline, settings CRUD, ClickHouse | 60s |
 
 ## Pass / Fail Criteria
 
@@ -50,7 +53,8 @@ Run scripts in order — each depends on state from prior scripts.
 ```bash
 for s in 01-setup 02-scheduler 03-inference 04-crud 05-security 06-api-surface \
          07-lifecycle 08-sdd-advanced 09-metrics-pipeline 10-image-storage \
-         11-verify-liveness 12-mcp 13-frontend; do
+         11-verify-liveness 12-mcp 13-frontend 15-vision-fallback \
+         16-context-compression 17-mcp-analytics; do
   echo "=== $s ==="
   RESULT=$(bash scripts/e2e/$s.sh 2>&1)
   PASS=$(echo "$RESULT" | grep -c "\[PASS\]")
@@ -69,9 +73,9 @@ bash scripts/e2e/run-parallel.sh
 | Wave | Scripts | Mode | Notes |
 |------|---------|------|-------|
 | Phase 0 | `01-setup` | sequential | DB reset + infra bootstrap |
-| Wave 1 | `05` `09` `11` `13` `14` | **parallel** | read-only / fully isolated |
-| Wave 2 | `04` `06` `10` `12` | **parallel** | own resources; MCP slug unique per run |
-| Wave 3 | `02` `03` `07` `08` | sequential | share AIMD + provider state |
+| Wave 1 | `05` `09` `11` `13` | **parallel** | read-only / fully isolated |
+| Wave 2 | `04` `06` `10` `12` `15` `17` | **parallel** | own resources; MCP slug unique per run |
+| Wave 3 | `02` `03` `07` `08` `16` `14` | sequential | share AIMD + provider state; 16 patches global lab settings |
 
 Skip setup (when state already exists):
 ```bash
@@ -102,3 +106,6 @@ bash scripts/e2e/12-mcp.sh        # creates unique slug via E2E_RUN_ID=$$
 | 12-mcp | MCP, embed, web search, ReAct |
 | 13-frontend | Frontend smoke tests |
 | 14-vespa-load-test | Vespa 벡터 부하 테스트 (수동 실행) |
+| 15-vision-fallback | Vision fallback — non-vision model + image injection |
+| 16-context-compression | Context compression lab settings + multi-turn eligibility |
+| 17-mcp-analytics | MCP analytics pipeline + settings CRUD |
