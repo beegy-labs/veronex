@@ -468,7 +468,8 @@ pub async fn delete_mcp_server(
 
 #[derive(Debug, Serialize)]
 pub struct McpTargetEntry {
-    pub id: McpId,
+    /// Raw UUID string — consumed by veronex-agent for `veronex:mcp:heartbeat:{id}` key.
+    pub id: String,
     pub url: String,
 }
 
@@ -487,5 +488,74 @@ pub async fn list_mcp_targets(State(state): State<AppState>) -> HandlerResult<Js
     .await
     .map_err(db_error)?;
 
-    Ok(Json(rows.into_iter().map(|r| McpTargetEntry { id: McpId::from_uuid(r.id), url: r.url }).collect()))
+    Ok(Json(rows.into_iter().map(|r| McpTargetEntry { id: r.id.to_string(), url: r.url }).collect()))
+}
+
+// ── MCP Settings ──────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct McpSettingsResponse {
+    pub routing_cache_ttl_secs: i32,
+    pub tool_schema_refresh_secs: i32,
+    pub embedding_model: String,
+    pub max_tools_per_request: i32,
+    pub max_routing_cache_entries: i32,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+pub struct PatchMcpSettingsRequest {
+    pub routing_cache_ttl_secs: Option<i32>,
+    pub tool_schema_refresh_secs: Option<i32>,
+    pub embedding_model: Option<String>,
+    pub max_tools_per_request: Option<i32>,
+    pub max_routing_cache_entries: Option<i32>,
+}
+
+/// `GET /v1/mcp/settings`
+pub async fn get_mcp_settings(
+    RequireSettingsManage(_): RequireSettingsManage,
+    State(state): State<AppState>,
+) -> HandlerResult<Json<McpSettingsResponse>> {
+    let s = state.mcp_settings_repo.get().await.map_err(|e| AppError::Internal(e))?;
+    Ok(Json(McpSettingsResponse {
+        routing_cache_ttl_secs: s.routing_cache_ttl_secs,
+        tool_schema_refresh_secs: s.tool_schema_refresh_secs,
+        embedding_model: s.embedding_model,
+        max_tools_per_request: s.max_tools_per_request,
+        max_routing_cache_entries: s.max_routing_cache_entries,
+        updated_at: s.updated_at,
+    }))
+}
+
+/// `PATCH /v1/mcp/settings`
+pub async fn patch_mcp_settings(
+    RequireSettingsManage(_): RequireSettingsManage,
+    State(state): State<AppState>,
+    Json(body): Json<PatchMcpSettingsRequest>,
+) -> HandlerResult<Json<McpSettingsResponse>> {
+    use crate::application::ports::outbound::mcp_settings_repository::McpSettingsUpdate;
+
+    if let Some(v) = body.max_tools_per_request {
+        if !(1..=200).contains(&v) {
+            return Err(AppError::BadRequest("max_tools_per_request must be 1–200".into()));
+        }
+    }
+
+    let patch = McpSettingsUpdate {
+        routing_cache_ttl_secs: body.routing_cache_ttl_secs,
+        tool_schema_refresh_secs: body.tool_schema_refresh_secs,
+        embedding_model: body.embedding_model,
+        max_tools_per_request: body.max_tools_per_request,
+        max_routing_cache_entries: body.max_routing_cache_entries,
+    };
+    let s = state.mcp_settings_repo.update(patch).await.map_err(|e| AppError::Internal(e))?;
+    Ok(Json(McpSettingsResponse {
+        routing_cache_ttl_secs: s.routing_cache_ttl_secs,
+        tool_schema_refresh_secs: s.tool_schema_refresh_secs,
+        embedding_model: s.embedding_model,
+        max_tools_per_request: s.max_tools_per_request,
+        max_routing_cache_entries: s.max_routing_cache_entries,
+        updated_at: s.updated_at,
+    }))
 }

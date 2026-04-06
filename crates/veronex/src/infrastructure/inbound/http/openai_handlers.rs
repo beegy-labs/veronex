@@ -412,7 +412,7 @@ async fn ollama_chat_proxy(
 
     let model_str = req.model.clone();
     // Merge top-level images with images extracted from content array parts.
-    let mut images = {
+    let images = {
         let mut imgs = req.images.unwrap_or_default();
         imgs.append(&mut content_images);
         if imgs.is_empty() { None } else { Some(imgs) }

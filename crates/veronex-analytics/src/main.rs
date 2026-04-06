@@ -84,7 +84,8 @@ async fn main() -> Result<()> {
             "/internal/metrics/history/{server_id}",
             get(handlers::metrics::get_server_metrics_history),
         )
-        // MCP stats
+        // MCP ingest + stats
+        .route("/internal/ingest/mcp", post(handlers::ingest::ingest_mcp_tool_call))
         .route("/internal/mcp/stats", get(handlers::mcp::get_mcp_stats))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
 

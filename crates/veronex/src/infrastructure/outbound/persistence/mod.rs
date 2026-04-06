@@ -26,6 +26,7 @@ pub mod caching_ollama_model_repo;
 pub mod caching_provider_registry;
 pub mod capacity_settings_repository;
 pub mod lab_settings_repository;
+pub mod mcp_settings_repository;
 pub mod model_capacity_repository;
 pub mod api_key_repository;
 pub mod provider_model_selection;

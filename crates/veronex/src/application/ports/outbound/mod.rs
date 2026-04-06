@@ -6,6 +6,7 @@ pub mod thermal_port;
 pub mod thermal_drain_port;
 pub mod message_store;
 pub mod lab_settings_repository;
+pub mod mcp_settings_repository;
 pub mod capacity_settings_repository;
 pub mod model_capacity_repository;
 pub mod analytics_repository;

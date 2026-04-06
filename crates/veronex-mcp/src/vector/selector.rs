@@ -107,14 +107,17 @@ impl McpVectorSelector {
         &self,
         query: &str,
         service_id: &str,
+        top_k_override: Option<usize>,
     ) -> Option<Vec<VespaHit>> {
+        let top_k = top_k_override.unwrap_or(self.top_k);
+
         // 1. Get query embedding (Valkey-cached)
         let embedding = self.get_embedding_cached(query).await
             .map_err(|e| warn!(error = %e, "McpVectorSelector: embed failed"))
             .ok()?;
 
         // 2. ANN search in Vespa
-        let hits = self.vespa.search(&embedding, service_id, self.top_k).await
+        let hits = self.vespa.search(&embedding, service_id, top_k).await
             .map_err(|e| warn!(error = %e, "McpVectorSelector: search failed"))
             .ok()?;
 

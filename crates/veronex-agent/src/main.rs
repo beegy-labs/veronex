@@ -30,7 +30,6 @@ use tokio_util::sync::CancellationToken;
 mod capacity_push;
 mod health;
 mod heartbeat;
-mod mcp_discover;
 mod orphan_sweeper;
 mod otlp;
 mod scraper;
@@ -62,9 +61,6 @@ struct Config {
     /// Optional DATABASE_URL for orphan job sweeper.
     /// When absent, orphan sweeper is disabled.
     database_url: Option<String>,
-    /// veronex-embed URL for MCP tool embedding.
-    /// When absent, tool embedding is skipped.
-    embed_url: Option<String>,
 }
 
 fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> T {
@@ -85,7 +81,6 @@ impl Config {
             hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "veronex-agent-0".into()),
             valkey_url: std::env::var("VALKEY_URL").ok(),
             database_url: std::env::var("DATABASE_URL").ok(),
-            embed_url: std::env::var("EMBED_URL").ok(),
         }
     }
 }
@@ -290,7 +285,7 @@ async fn main() -> Result<()> {
                 // Global timeout on the entire scrape cycle — prevents infinite hang
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(120),
-                    scrape_cycle(&client, &config, replicas, &scrape_semaphore, valkey_pool.as_ref(), config.embed_url.as_deref())
+                    scrape_cycle(&client, &config, replicas, &scrape_semaphore, valkey_pool.as_ref())
                 ).await {
                     Ok(r) => r,
                     Err(_) => {
@@ -403,7 +398,6 @@ async fn scrape_cycle(
     replicas: u32,
     semaphore: &Arc<Semaphore>,
     valkey: Option<&fred::clients::Pool>,
-    embed_url: Option<&str>,
 ) -> CycleResult {
     let start = Instant::now();
 
@@ -423,23 +417,11 @@ async fn scrape_cycle(
                 .collect();
 
             let ping_results = futures::future::join_all(ping_futs).await;
-            let mut online_targets = Vec::new();
             for (server_id, alive) in ping_results {
                 if alive {
                     scraper::set_mcp_heartbeat(pool, &server_id, HEARTBEAT_TTL_SECS).await;
-                    if let Some(url) = mcp_targets.iter().find(|(id, _)| id == &server_id).map(|(_, u)| u.clone()) {
-                        online_targets.push((server_id, url));
-                    }
                 } else {
                     tracing::debug!(server_id, "MCP server offline — heartbeat not renewed");
-                }
-            }
-
-            // Tool discovery + embedding for online servers
-            if let Some(eu) = embed_url {
-                if !online_targets.is_empty() {
-                    let targets_ref: Vec<(String, String)> = online_targets;
-                    mcp_discover::discover_and_embed(client, pool, &targets_ref, eu).await;
                 }
             }
         }

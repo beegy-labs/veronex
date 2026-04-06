@@ -10,8 +10,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::enums::{ApiFormat, ProviderType};
 use crate::domain::value_objects::{JobId, pub_id_encode};
@@ -113,10 +111,6 @@ pub(super) fn with_conversation_id(mut resp: Response, cid: Option<&uuid::Uuid>)
     resp
 }
 
-/// Parse a UUID string, returning `AppError::BadRequest` on failure.
-pub(super) fn parse_uuid(s: &str) -> Result<Uuid, AppError> {
-    Uuid::parse_str(s).map_err(|_| AppError::BadRequest(format!("invalid UUID: {s}")))
-}
 
 /// Validate a username: non-empty, ≤64 chars, ASCII alphanumeric + `_` `.` `-`.
 pub(super) fn validate_username(username: &str) -> Result<(), AppError> {

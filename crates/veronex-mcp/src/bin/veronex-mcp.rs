@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
-use veronex_mcp::tools::{Tool, analyze_image::AnalyzeImageTool, weather::WeatherTool, web_search::WebSearchTool};
+use veronex_mcp::tools::{Tool, analyze_image::AnalyzeImageTool, datetime::DateTimeTool, weather::WeatherTool, web_search::WebSearchTool};
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -189,6 +189,7 @@ async fn main() {
     // To add a tool: create tools/{name}.rs, implement Tool, add Arc::new(...) here.
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(AnalyzeImageTool::new(http.clone())),
+        Arc::new(DateTimeTool::new()),
         Arc::new(WeatherTool::new(http.clone(), valkey, l1_max)),
         Arc::new(WebSearchTool::new(http)),
     ];

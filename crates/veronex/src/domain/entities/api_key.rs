@@ -35,11 +35,17 @@ pub struct ApiKey {
     /// Billing tier: free or paid (default).
     #[serde(default)]
     pub tier: KeyTier,
+    /// MCP tool-call round limit (0 = MCP disabled for this key).
+    #[serde(default = "default_mcp_cap_points")]
+    #[ts(skip)]
+    pub mcp_cap_points: i16,
     /// Account that created this key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub account_id: Option<Uuid>,
 }
+
+fn default_mcp_cap_points() -> i16 { 3 }
 
 /// Returned once at key creation — contains the plaintext key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +77,7 @@ mod tests {
             deleted_at: None,
             key_type: KeyType::Standard,
             tier: KeyTier::Paid,
+            mcp_cap_points: 3,
             account_id: None,
         }
     }

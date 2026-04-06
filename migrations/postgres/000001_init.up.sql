@@ -63,7 +63,8 @@ CREATE TABLE api_keys (
     key_type       TEXT        NOT NULL DEFAULT 'standard',
     account_id     UUID        REFERENCES accounts(id),
     is_test_key    BOOLEAN     NOT NULL DEFAULT false,
-    tier           TEXT        NOT NULL DEFAULT 'paid'
+    tier           TEXT        NOT NULL DEFAULT 'paid',
+    mcp_cap_points SMALLINT    NOT NULL DEFAULT 3 CHECK (mcp_cap_points BETWEEN 0 AND 10)
 );
 
 CREATE INDEX idx_api_keys_tenant ON api_keys(tenant_id);
@@ -316,6 +317,20 @@ CREATE TABLE lab_settings (
 
 INSERT INTO lab_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
 
+-- ── MCP Settings ──────────────────────────────────────────────────────────────
+
+CREATE TABLE mcp_settings (
+    id                        INT          PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    routing_cache_ttl_secs    INTEGER      NOT NULL DEFAULT 300,
+    tool_schema_refresh_secs  INTEGER      NOT NULL DEFAULT 3600,
+    embedding_model           VARCHAR(128) NOT NULL DEFAULT 'nomic-embed-text',
+    max_tools_per_request     INTEGER      NOT NULL DEFAULT 20 CHECK (max_tools_per_request BETWEEN 1 AND 200),
+    max_routing_cache_entries INTEGER      NOT NULL DEFAULT 1000,
+    updated_at                TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+INSERT INTO mcp_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
+
 -- ── Provider VRAM Budget ───────────────────────────────────────────────────────
 
 CREATE TABLE provider_vram_budget (
@@ -422,6 +437,7 @@ CREATE TABLE mcp_key_access (
     server_id   UUID        NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
     is_allowed  BOOLEAN     NOT NULL DEFAULT true,
     granted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    top_k       SMALLINT    CHECK (top_k BETWEEN 1 AND 64),
     PRIMARY KEY (api_key_id, server_id)
 );
 

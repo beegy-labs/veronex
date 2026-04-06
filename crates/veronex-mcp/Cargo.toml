@@ -53,6 +53,7 @@ fred = { version = "10", features = ["serde-json", "enable-rustls-ring"] }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 
 urlencoding = "2"
 

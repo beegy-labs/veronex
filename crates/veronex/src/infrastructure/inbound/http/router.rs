@@ -166,6 +166,8 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/mcp/servers/{id}", patch(mcp_handlers::patch_mcp_server).delete(mcp_handlers::delete_mcp_server))
         // MCP call statistics
         .route("/v1/mcp/stats", get(dashboard_handlers::get_mcp_stats))
+        // MCP global settings
+        .route("/v1/mcp/settings", get(mcp_handlers::get_mcp_settings).patch(mcp_handlers::patch_mcp_settings))
         // Conversations (read-only, dashboard_view; internals require account_manage)
         .route("/v1/conversations", get(conversation_handlers::list_conversations))
         .route("/v1/conversations/{id}", get(conversation_handlers::get_conversation))

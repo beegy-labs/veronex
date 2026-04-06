@@ -9,7 +9,7 @@ use crate::domain::entities::ApiKey;
 use crate::domain::enums::KeyTier;
 
 /// Column list shared by all SELECT queries on api_keys.
-const API_KEY_COLS: &str = "id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at, key_type, tier, account_id";
+const API_KEY_COLS: &str = "id, key_hash, key_prefix, tenant_id, name, is_active, rate_limit_rpm, rate_limit_tpm, expires_at, created_at, deleted_at, key_type, tier, mcp_cap_points, account_id";
 
 /// PostgreSQL-backed implementation of `ApiKeyRepository`.
 pub struct PostgresApiKeyRepository {
@@ -55,6 +55,7 @@ fn row_to_api_key(row: &sqlx::postgres::PgRow) -> Result<ApiKey> {
             .context("missing column: deleted_at")?,
         key_type: parse_db_enum(row.try_get("key_type").unwrap_or(None), "key_type"),
         tier: parse_db_enum(row.try_get("tier").unwrap_or(None), "tier"),
+        mcp_cap_points: row.try_get("mcp_cap_points").unwrap_or(3),
         account_id: row.try_get("account_id").unwrap_or(None),
     })
 }

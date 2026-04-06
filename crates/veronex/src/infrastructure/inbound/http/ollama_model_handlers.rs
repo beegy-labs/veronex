@@ -4,8 +4,6 @@ use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 use crate::domain::enums::ProviderType;
 use crate::domain::value_objects::{JobId, ProviderId};
 use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;

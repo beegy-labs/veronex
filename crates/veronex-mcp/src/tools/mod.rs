@@ -6,6 +6,7 @@
 //! 3. Register in `bin/veronex-mcp.rs` main()
 
 pub mod analyze_image;
+pub mod datetime;
 pub mod weather;
 pub mod web_search;
 

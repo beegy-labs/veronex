@@ -21,6 +21,7 @@ use crate::application::ports::outbound::global_model_settings::GlobalModelSetti
 use crate::application::ports::outbound::api_key_provider_access::ApiKeyProviderAccessRepository;
 use crate::application::ports::outbound::capacity_settings_repository::CapacitySettingsRepository;
 use crate::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
+use crate::application::ports::outbound::mcp_settings_repository::McpSettingsRepository;
 use crate::application::ports::outbound::gemini_model_repository::GeminiModelRepository;
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
 use crate::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
@@ -93,6 +94,8 @@ pub struct AppState {
     pub stats_tx: Arc<broadcast::Sender<FlowStats>>,
     /// Lab (experimental) feature flags — singleton row in DB.
     pub lab_settings_repo: Arc<dyn LabSettingsRepository>,
+    /// MCP global settings — singleton row in DB.
+    pub mcp_settings_repo: Arc<dyn McpSettingsRepository>,
     /// Per-provider circuit breaker — isolates failing providers automatically.
     pub circuit_breaker: Arc<CircuitBreakerMap>,
     /// S3-compatible object store for conversation contexts (messages_json).
