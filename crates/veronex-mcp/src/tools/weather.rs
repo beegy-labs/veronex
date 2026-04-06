@@ -57,7 +57,7 @@ type InflightMap = DashMap<String, Arc<tokio::sync::watch::Sender<bool>>>;
 // ── Raw cache entry ────────────────────────────────────────────────────────────
 
 /// Full raw API response for one grid cell. All period slices derived from this.
-struct RawEntry {
+pub(super) struct RawEntry {
     forecast: Value,
     aq: Value,
     fetched_at: Instant,
@@ -78,7 +78,7 @@ impl RawEntry {
 #[derive(Clone)]
 pub struct WeatherState {
     pub http: reqwest::Client,
-    pub l1: Arc<moka::sync::Cache<String, Arc<RawEntry>>>,
+    pub(super) l1: Arc<moka::sync::Cache<String, Arc<RawEntry>>>,
     inflight: Arc<InflightMap>,
     pub valkey: Option<Arc<ValkeyPool>>,
     pub req_counter: Arc<AtomicU64>,
@@ -117,8 +117,10 @@ impl Tool for WeatherTool {
                 Supports current conditions and forecasts up to 6 days ahead by time-of-day. \
                 Returns temperature, feels-like, humidity, UV index, precipitation, \
                 wind speed/direction/gusts, PM2.5, PM10, and AQI. \
-                Accepts city names in any language (e.g. \"서울 강남\", \"Tokyo\") \
-                or direct GPS coordinates (lat/lng).",
+                Accepts city names in any language including sub-city districts \
+                (e.g. \"여의도\", \"강남\", \"Tokyo Shibuya\") or GPS coordinates (lat/lng). \
+                Use period='hourly' to get a rain timeline (rain_spans, rain_ends_at) \
+                when asked 'until when does it rain' or 'hourly precipitation'.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -147,8 +149,8 @@ impl Tool for WeatherTool {
                     },
                     "period": {
                         "type": "string",
-                        "enum": ["now", "morning", "afternoon", "evening", "night", "full", "week"],
-                        "description": "Time period. 'now'=current, 'morning/afternoon/evening/night'=hourly slot, 'full'=daily summary, 'week'=7-day array. Default: 'now' for day_offset=0, 'full' otherwise."
+                        "enum": ["now", "morning", "afternoon", "evening", "night", "full", "hourly", "week"],
+                        "description": "Time period. 'now'=current conditions, 'morning/afternoon/evening/night'=specific time slot, 'full'=daily summary, 'hourly'=24-hour rain timeline with rain_spans and rain_ends_at (best for 'until when does it rain?'), 'week'=7-day array. Default: 'now' for day_offset=0, 'full' otherwise."
                     },
                     "temperature_unit": {
                         "type": "string",
@@ -618,6 +620,141 @@ fn slice_weekly(entry: &RawEntry, start_offset: u8, temp_unit: &str, wind_unit: 
     Ok(json!({ "period": "week", "start_offset": start_offset, "days": days }))
 }
 
+// ── Geocoding fallback (Open-Meteo API) ───────────────────────────────────────
+
+/// Called when the offline GeoNames index can't find a location (e.g. sub-city
+/// districts like "여의도" that aren't in cities1000). Falls back to Open-Meteo's
+/// full geocoding API which indexes all GeoNames feature classes.
+async fn geocode_fallback(client: &reqwest::Client, query: &str) -> Result<geo::GeoResult, String> {
+    let url = format!(
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=ko&format=json",
+        urlencoding::encode(query)
+    );
+    let resp: Value = client.get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send().await
+        .map_err(|e| format!("geocoding request failed: {e}"))?
+        .json().await
+        .map_err(|e| format!("geocoding parse failed: {e}"))?;
+
+    let r = resp["results"].as_array()
+        .and_then(|a| a.first())
+        .ok_or_else(|| format!("not found: {query}"))?;
+
+    // Build a descriptive name from admin fields (the raw `name` may be a park/POI)
+    let admin3 = r["admin3"].as_str().unwrap_or("");
+    let admin2 = r["admin2"].as_str().unwrap_or("");
+    let admin1 = r["admin1"].as_str().unwrap_or("");
+    let display = [admin3, admin2, admin1].iter()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Ok(geo::GeoResult {
+        name: if display.is_empty() { r["name"].as_str().unwrap_or(query).to_string() } else { display },
+        admin1: admin1.to_string(),
+        country_code: r["country_code"].as_str().unwrap_or("").to_string(),
+        latitude: r["latitude"].as_f64().ok_or("no latitude")?,
+        longitude: r["longitude"].as_f64().ok_or("no longitude")?,
+        population: r["population"].as_u64().unwrap_or(0) as u32,
+        timezone: r["timezone"].as_str().unwrap_or("UTC").to_string(),
+    })
+}
+
+// ── Hourly rain timeline ───────────────────────────────────────────────────────
+
+fn is_rainy_code(code: u64) -> bool {
+    matches!(code, 51..=67 | 80..=82)
+}
+
+/// Returns today's hourly data with a condensed rain timeline.
+/// Consecutive rainy hours are merged into spans.
+fn slice_hourly_rain(entry: &RawEntry, day_offset: u8, temp_unit: &str) -> Result<Value, String> {
+    let h = &entry.forecast["hourly"];
+    let times = &h["time"];
+    let base_date = times[0].as_str().and_then(|t| t.get(..10))
+        .ok_or("Cannot parse base date")?;
+    let target_date = add_days(base_date, day_offset);
+
+    // Collect all hours for the target date
+    let mut hours: Vec<Value> = Vec::new();
+    let mut rain_spans: Vec<Value> = Vec::new();
+    let mut span_start: Option<String> = None;
+    let mut span_max_mm: f64 = 0.0;
+    let mut total_mm: f64 = 0.0;
+    let mut last_rain_hour: Option<String> = None;
+
+    for idx in 0..times.as_array().map_or(0, |a| a.len()) {
+        let ts = times[idx].as_str().unwrap_or("");
+        if !ts.starts_with(&target_date) { continue; }
+
+        let hour_label = ts.get(11..16).unwrap_or("").to_string();
+        let precip_mm = h["precipitation"][idx].as_f64().unwrap_or(0.0);
+        let prob = h["precipitation_probability"][idx].as_u64().unwrap_or(0);
+        let code = h["weather_code"][idx].as_u64().unwrap_or(0);
+        let temp_c = h["temperature_2m"][idx].as_f64().unwrap_or(0.0);
+        let (t, _) = convert_temp(temp_c, temp_unit);
+
+        let raining = is_rainy_code(code) || precip_mm > 0.1;
+        total_mm += precip_mm;
+
+        hours.push(json!({
+            "time": hour_label,
+            "weather_code": code,
+            "weather": wmo_description(code),
+            "precipitation_mm": (precip_mm * 10.0).round() / 10.0,
+            "precipitation_probability": prob,
+            "temperature": (t * 10.0).round() / 10.0,
+        }));
+
+        if raining {
+            last_rain_hour = Some(hour_label.clone());
+            span_max_mm = span_max_mm.max(precip_mm);
+            if span_start.is_none() {
+                span_start = Some(hour_label);
+            }
+        } else if let Some(start) = span_start.take() {
+            let intensity = match span_max_mm {
+                x if x >= 7.6 => "heavy",
+                x if x >= 2.5 => "moderate",
+                _ => "light",
+            };
+            rain_spans.push(json!({
+                "start": start,
+                "end": hour_label,
+                "intensity": intensity,
+                "max_mm_per_hour": (span_max_mm * 10.0).round() / 10.0,
+            }));
+            span_max_mm = 0.0;
+        }
+    }
+
+    // Close any open span
+    if let Some(start) = span_start {
+        let intensity = match span_max_mm {
+            x if x >= 7.6 => "heavy",
+            x if x >= 2.5 => "moderate",
+            _ => "light",
+        };
+        rain_spans.push(json!({
+            "start": start,
+            "end": "24:00",
+            "intensity": intensity,
+            "max_mm_per_hour": (span_max_mm * 10.0).round() / 10.0,
+        }));
+    }
+
+    Ok(json!({
+        "date": target_date,
+        "period": "hourly",
+        "rain_spans": rain_spans,
+        "rain_ends_at": last_rain_hour,
+        "total_precipitation_mm": (total_mm * 10.0).round() / 10.0,
+        "hours": hours,
+    }))
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 async fn handle_get_weather(state: &WeatherState, args: &Value) -> Result<Value, String> {
@@ -635,7 +772,11 @@ async fn handle_get_weather(state: &WeatherState, args: &Value) -> Result<Value,
         geo::GeoResult { latitude: lat, longitude: lng, ..nearest }
     } else {
         let city = args["city"].as_str().ok_or("Provide 'city' or 'lat'+'lng'")?;
-        geo::search(city).map_err(|e| e.to_string())?
+        match geo::search(city) {
+            Ok(r) => r,
+            Err(_) => geocode_fallback(&state.http, city).await
+                .map_err(|e| format!("Location not found: {city} ({e})"))?
+        }
     };
 
     let lat_s = snap(loc.latitude);
@@ -650,6 +791,7 @@ async fn handle_get_weather(state: &WeatherState, args: &Value) -> Result<Value,
         "now" if day_offset == 0      => slice_current(&entry, temp_unit, wind_unit)?,
         "morning" | "afternoon" | "evening" | "night"
                                        => slice_hourly(&entry, day_offset, period, temp_unit, wind_unit)?,
+        "hourly"                       => slice_hourly_rain(&entry, day_offset, temp_unit)?,
         "week"                         => slice_weekly(&entry, day_offset, temp_unit, wind_unit)?,
         _                              => slice_daily(&entry, day_offset, temp_unit, wind_unit)?,
     };

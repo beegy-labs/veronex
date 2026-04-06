@@ -36,7 +36,8 @@ pub struct CompressParams {
     pub model: String,
     /// Base URL of the target Ollama provider.
     pub provider_url: String,
-    /// Provider ID (for logging).
+    /// Provider ID (for logging/tests).
+    #[allow(dead_code)]
     pub provider_id: Uuid,
     /// Per-call timeout in seconds.
     pub timeout_secs: u64,

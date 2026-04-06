@@ -31,6 +31,11 @@ use super::helpers::{broadcast_event, decr_pending, decr_running, emit_inference
 struct TokenStreamState {
     token_count: u64,
     text: String,
+    /// Buffer for detecting `<think>` tags that may span token boundaries.
+    think_buf: String,
+    /// True while inside a `<think>…</think>` block — tokens are buffered but
+    /// not forwarded to the SSE stream or accumulated into `text`.
+    in_think: bool,
     last_owner_refresh: std::time::Instant,
     tool_calls: Vec<serde_json::Value>,
     prompt_tokens: Option<u32>,
@@ -39,11 +44,55 @@ struct TokenStreamState {
     ttft_ms: Option<i32>,
 }
 
+impl TokenStreamState {
+    /// Feed a raw token fragment through the think-block filter.
+    /// Returns the portion safe to emit to clients (non-think content).
+    /// Maintains `in_think` / `think_buf` state across token boundaries.
+    fn consume_text(&mut self, fragment: &str) -> String {
+        self.think_buf.push_str(fragment);
+        let mut emitted = String::new();
+        loop {
+            if self.in_think {
+                if let Some(pos) = self.think_buf.find("</think>") {
+                    self.think_buf.drain(..pos + "</think>".len());
+                    self.in_think = false;
+                } else {
+                    // Still inside <think> — keep only enough bytes to detect a split </think>
+                    let keep = self.think_buf.len().saturating_sub(8);
+                    if keep > 0 { self.think_buf.drain(..keep); }
+                    break;
+                }
+            } else {
+                if let Some(pos) = self.think_buf.find("<think>") {
+                    emitted.push_str(&self.think_buf[..pos]);
+                    self.think_buf.drain(..pos + "<think>".len());
+                    self.in_think = true;
+                } else {
+                    // No <think> — check for partial tag at end of buffer
+                    const TAG: &str = "<think>";
+                    let buf_len = self.think_buf.len();
+                    let safe_len = (1..TAG.len().min(buf_len + 1))
+                        .rev()
+                        .find(|&n| TAG.starts_with(&self.think_buf[buf_len - n..]))
+                        .map(|n| buf_len - n)
+                        .unwrap_or(buf_len);
+                    emitted.push_str(&self.think_buf[..safe_len]);
+                    self.think_buf.drain(..safe_len);
+                    break;
+                }
+            }
+        }
+        emitted
+    }
+}
+
 impl Default for TokenStreamState {
     fn default() -> Self {
         Self {
             token_count: 0,
             text: String::new(),
+            think_buf: String::new(),
+            in_think: false,
             last_owner_refresh: std::time::Instant::now(),
             tool_calls: Vec::new(),
             prompt_tokens: None,
@@ -169,7 +218,7 @@ async fn finalize_job(
     // running → completed/cancelled: DECR running
     decr_running(valkey).await;
 
-    let result_text = (!ts.text.is_empty()).then_some(ts.text);
+    let result_text = (!ts.text.is_empty()).then_some(strip_think_blocks(ts.text));
     let tool_calls_json = (!ts.tool_calls.is_empty())
         .then_some(serde_json::Value::Array(ts.tool_calls));
 
@@ -471,9 +520,18 @@ pub(super) async fn run_job(
         }
 
         match result {
-            Ok(token) => {
+            Ok(mut token) => {
                 ts.token_count += 1;
-                ts.text.push_str(&token.value);
+                // Filter <think>…</think> blocks out of the stream.
+                // emitted = the non-think portion safe to forward to clients.
+                let emitted = if token.value.is_empty() {
+                    String::new()
+                } else {
+                    ts.consume_text(&token.value)
+                };
+                ts.text.push_str(&emitted);
+                // Replace token value with filtered content for SSE forwarding.
+                token.value = emitted;
 
                 if let Some(ref tc) = token.tool_calls {
                     match tc {
@@ -550,4 +608,33 @@ pub(super) async fn run_job(
     ).await;
 
     Ok(latency_ms)
+}
+
+// ── Think-block stripper ──────────────────────────────────────────────────────
+
+/// Remove `<think>…</think>` blocks that reasoning models (Qwen3, DeepSeek-R1,
+/// QwQ, etc.) emit as part of their chain-of-thought. These tokens are internal
+/// reasoning and must not be stored as the canonical result or included in
+/// subsequent conversation context.
+///
+/// Handles:
+/// - Complete blocks: `<think>…</think>`
+/// - Unclosed blocks (model cut off mid-think): strips from `<think>` to end
+/// - Multiple blocks in one response
+/// - Whitespace-only remains are collapsed
+pub(super) fn strip_think_blocks(mut text: String) -> String {
+    loop {
+        let Some(start) = text.find("<think>") else { break };
+        if let Some(rel_end) = text[start..].find("</think>") {
+            let end = start + rel_end + "</think>".len();
+            text.drain(start..end);
+        } else {
+            // Unclosed — strip from <think> to end of string
+            text.truncate(start);
+            break;
+        }
+    }
+    // Collapse leading/trailing whitespace introduced by removal
+    let trimmed = text.trim();
+    if trimmed.len() != text.len() { trimmed.to_string() } else { text }
 }
