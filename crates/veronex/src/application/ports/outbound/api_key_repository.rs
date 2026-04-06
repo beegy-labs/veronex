@@ -190,6 +190,7 @@ mod tests {
             created_at: Utc::now(),
             key_type: KeyType::Standard,
             tier: KeyTier::Paid,
+            mcp_cap_points: 3,
             account_id: None,
         }
     }
