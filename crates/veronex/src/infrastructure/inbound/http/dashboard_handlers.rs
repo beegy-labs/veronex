@@ -981,7 +981,7 @@ pub async fn get_service_health(
     }
 
     // Merge: any "ok" → ok, mixed → degraded, all error → unavailable
-    let svc_names = ["postgresql", "valkey", "clickhouse", "s3"];
+    let svc_names = ["postgresql", "valkey", "clickhouse", "s3", "vespa"];
     let infrastructure: Vec<ServiceStatus> = svc_names.iter().filter_map(|name| {
         let probes = all_probes.get(*name)?;
         let ok_count = probes.iter().filter(|p| p.s == "ok").count();
@@ -1119,6 +1119,8 @@ pub struct TopicPipelineStats {
     pub is_active: bool,
     /// Latest exception text from ClickHouse consumer (truncated to 200 chars).
     pub last_error: Option<String>,
+    /// Number of active consumer threads for this topic.
+    pub consumer_count: u32,
 }
 
 #[derive(Serialize)]
@@ -1209,7 +1211,43 @@ pub async fn get_pipeline_health(
         }
     }
 
-    // ── 3. ClickHouse → TPM (rows inserted in last 1/5 minutes) ────────────
+    // ── 3. ClickHouse → consumer count per topic ──────────────────────────
+    let consumer_count_query = format!(
+        "SELECT table, count() AS cnt \
+         FROM system.kafka_consumers \
+         WHERE database='{ch_db}' \
+           AND table IN ('kafka_otel_logs', 'kafka_otel_metrics') \
+         GROUP BY table \
+         FORMAT JSONEachRow"
+    );
+
+    let ch_count_resp = ch_get(&state.http_client, ch_url, ch_user, ch_pass, &consumer_count_query).await;
+
+    #[derive(serde::Deserialize)]
+    struct ChCountRow {
+        table: String,
+        cnt: u32,
+    }
+
+    // Map from ClickHouse table name → consumer count
+    let table_to_topic = [
+        ("kafka_otel_logs",    "otel-logs"),
+        ("kafka_otel_metrics", "otel-metrics"),
+    ];
+    let mut consumer_count_map: HashMap<&str, u32> = HashMap::new();
+    if let Some(resp) = ch_count_resp {
+        if let Ok(body) = resp.text().await {
+            for line in body.lines() {
+                if let Ok(row) = serde_json::from_str::<ChCountRow>(line) {
+                    if let Some(&topic) = table_to_topic.iter().find(|(t, _)| *t == row.table).map(|(_, tp)| tp) {
+                        consumer_count_map.insert(topic, row.cnt);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 4. ClickHouse → TPM (rows inserted in last 1/5 minutes) ────────────
     // Destination tables: kafka_otel_logs → otel_logs, kafka_otel_metrics → otel_metrics
     let tpm_query = format!(
         "SELECT 'otel-logs' AS topic, \
@@ -1244,7 +1282,7 @@ pub async fn get_pipeline_health(
         }
     }
 
-    // ── 4. Assemble response ───────────────────────────────────────────────
+    // ── 5. Assemble response ───────────────────────────────────────────────
     let now = chrono::Utc::now();
     let topics_config = [
         ("otel-logs",    "kafka_otel_logs"),
@@ -1260,13 +1298,16 @@ pub async fn get_pipeline_health(
                 .map(|dt| now.signed_duration_since(dt.and_utc()).num_seconds())
                 .filter(|&s| s >= 0);
             let err = if row.last_error.is_empty() { None } else { Some(row.last_error.clone()) };
-            (row.consumer_offset, last_poll_secs, row.is_currently_used == 1, err)
+            let is_active = last_poll_secs.map(|s| s < 120).unwrap_or(false);
+            (row.consumer_offset, last_poll_secs, is_active, err)
         } else {
             (0, None, false, None)
         };
 
         let lag = (log_end_offset - consumer_offset).max(0);
         let (tpm_1m, tpm_5m) = tpm_map.get(*topic).copied().unwrap_or((0, 0));
+
+        let consumer_count = consumer_count_map.get(*topic).copied().unwrap_or(0);
 
         TopicPipelineStats {
             topic: topic.to_string(),
@@ -1278,6 +1319,7 @@ pub async fn get_pipeline_health(
             last_poll_secs,
             is_active,
             last_error,
+            consumer_count,
         }
     }).collect();
 

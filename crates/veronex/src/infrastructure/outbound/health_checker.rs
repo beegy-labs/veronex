@@ -177,6 +177,7 @@ async fn check_and_store_services(
     instance_id: &str,
     analytics_url: Option<&str>,
     s3_endpoint: Option<&str>,
+    vespa_url: Option<&str>,
 ) {
     use fred::prelude::*;
 
@@ -251,6 +252,25 @@ async fn check_and_store_services(
         }
     }
 
+    // Vespa: GET {url}/state/v1/health
+    if let Some(url) = vespa_url {
+        let probe = {
+            let start = std::time::Instant::now();
+            let res = client.get(format!("{}/state/v1/health", url.trim_end_matches('/')))
+                .timeout(Duration::from_secs(3))
+                .send().await;
+            let ms = start.elapsed().as_millis() as u32;
+            let s = match res {
+                Ok(r) if r.status().is_success() => "ok",
+                _ => "error",
+            };
+            SvcProbe { s, ms, t: now_ms }
+        };
+        if let Ok(json) = serde_json::to_string(&probe) {
+            fields.push(("vespa".into(), json));
+        }
+    }
+
     if fields.is_empty() { return; }
 
     let key = valkey_keys::service_health(instance_id);
@@ -321,6 +341,7 @@ pub async fn run_health_checker_loop(
     instance_id:        Arc<str>,
     analytics_url:      Option<String>,
     s3_endpoint:        Option<String>,
+    vespa_url:          Option<String>,
 ) {
     let interval = Duration::from_secs(interval_secs);
 
@@ -555,6 +576,7 @@ pub async fn run_health_checker_loop(
                 &instance_id,
                 analytics_url.as_deref(),
                 s3_endpoint.as_deref(),
+                vespa_url.as_deref(),
             ).await;
         }
     }

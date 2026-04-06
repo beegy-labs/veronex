@@ -317,7 +317,7 @@ pub(super) async fn fetch_jobs(
         "SELECT j.id, j.model_name, j.provider_type, j.status, j.source,
                 j.created_at, j.completed_at, j.latency_ms,
                 j.ttft_ms, j.prompt_tokens, j.completion_tokens, j.cached_tokens,
-                j.request_path,
+                j.request_path, j.conversation_id,
                 j.has_tool_calls,
                 k.name AS api_key_name,
                 a.name AS account_name,

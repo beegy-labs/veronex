@@ -11,6 +11,7 @@ use veronex::application::ports::outbound::gemini_policy_repository::GeminiPolic
 use veronex::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
 use veronex::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use veronex::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
+use veronex::application::ports::outbound::mcp_settings_repository::McpSettingsRepository;
 use veronex::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use veronex::application::ports::outbound::image_store::ImageStore;
 use veronex::application::ports::outbound::message_store::MessageStore;
@@ -43,6 +44,7 @@ use veronex::infrastructure::outbound::persistence::gemini_sync_config::Postgres
 use veronex::infrastructure::outbound::persistence::gpu_server_registry::PostgresGpuServerRegistry;
 use veronex::infrastructure::outbound::persistence::job_repository::PostgresJobRepository;
 use veronex::infrastructure::outbound::persistence::lab_settings_repository::PostgresLabSettingsRepository;
+use veronex::infrastructure::outbound::persistence::mcp_settings_repository::PostgresMcpSettingsRepository;
 use veronex::infrastructure::outbound::persistence::model_capacity_repository::PostgresModelCapacityRepository;
 use veronex::infrastructure::outbound::persistence::ollama_model_repository::PostgresOllamaModelRepository;
 use veronex::infrastructure::outbound::persistence::ollama_sync_job_repository::PostgresOllamaSyncJobRepository;
@@ -76,6 +78,7 @@ pub struct Repositories {
     pub ollama_sync_job_repo: Arc<dyn OllamaSyncJobRepository>,
     pub session_repo: Arc<dyn SessionRepository>,
     pub lab_settings_repo: Arc<dyn LabSettingsRepository>,
+    pub mcp_settings_repo: Arc<dyn McpSettingsRepository>,
     pub capacity_repo: Arc<dyn ModelCapacityRepository>,
     pub capacity_settings_repo: Arc<dyn CapacitySettingsRepository>,
     pub valkey_port: Option<Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>>,
@@ -287,6 +290,8 @@ pub async fn wire_repositories(
         Arc::new(CachingLabSettingsRepo::new(Arc::new(
             PostgresLabSettingsRepository::new(pg_pool.clone()),
         )));
+    let mcp_settings_repo: Arc<dyn McpSettingsRepository> =
+        Arc::new(PostgresMcpSettingsRepository::new(pg_pool.clone()));
 
     // ── Capacity infrastructure ────────────────────────────────────
     let capacity_repo: Arc<dyn ModelCapacityRepository> =
@@ -345,6 +350,7 @@ pub async fn wire_repositories(
         ollama_sync_job_repo,
         session_repo,
         lab_settings_repo,
+        mcp_settings_repo,
         capacity_repo,
         capacity_settings_repo,
         valkey_port,
