@@ -15,6 +15,8 @@ Scale target: 10K providers, 1M TPS.
 | P1 | `openai_handlers.rs:293` | `SELECT FROM lab_settings WHERE id = 1` (image) | TtlCache 30s | Done |
 | P1 | `openai_handlers.rs:604` | `SELECT FROM lab_settings WHERE id = 1` (MCP) | TtlCache 30s | Done |
 | P1 | `bridge.rs` `run_loop()` | `SELECT server_id FROM mcp_key_access` | Valkey 60s | Done |
+| P1 | `bridge.rs` `run_loop()` | `SELECT mcp_cap_points FROM api_keys` | Valkey 60s | Done |
+| P1 | `bridge.rs` `run_loop()` | `SELECT MIN(top_k) FROM mcp_key_access` | Valkey 60s | Done |
 | P1 | `openai_handlers.rs` MCP pre-check | `COUNT(*) FROM mcp_key_access` | Valkey 60s | Done |
 | -- | `inference_jobs` INSERT | Required write per request | Not cacheable (consistency required) | Kept |
 
@@ -57,6 +59,20 @@ let lab_settings_repo: Arc<dyn LabSettingsRepository> =
         PostgresLabSettingsRepository::new(pg_pool.clone()),
     )));
 ```
+
+### MCP cap_points Valkey Cache
+
+- **Location**: `infrastructure/outbound/mcp/bridge.rs` `fetch_mcp_cap_points()`
+- **Valkey key**: `veronex:mcp:cap:{api_key_id}` (TTL 60s)
+- **Value**: u8 as decimal string — max agentic loop rounds for this key. `"null"` sentinel when DB row absent or cap is NULL (use MAX_ROUNDS default).
+- **Invalidation**: Explicit `DEL` on `mcp_cap_points` update in `key_handlers.rs`
+
+### MCP top_k Valkey Cache
+
+- **Location**: `infrastructure/outbound/mcp/bridge.rs` `fetch_mcp_top_k()`
+- **Valkey key**: `veronex:mcp:topk:{api_key_id}` (TTL 60s)
+- **Value**: usize as decimal string — `MIN(top_k)` across `mcp_key_access` rows for Vespa ANN limit. `"null"` sentinel when all rows have NULL top_k.
+- **Invalidation**: Explicit `DEL` on grant/revoke in `key_mcp_access_handlers.rs`
 
 ### MCP ACL Valkey Cache
 

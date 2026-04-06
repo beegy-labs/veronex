@@ -47,17 +47,14 @@ The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Ov
 |  Group Sessions                                                       |
 |  "Assign conversation IDs to completed jobs before the selected date."|
 |  [date input: yesterday] [Group Now]  -> success/error/already-running|
-+-- [API Jobs] [Test Runs] [Network Flow]  <- shadcn/ui Tabs -----------+
++-- [API 호출별] [대화별] [Network Flow]  <- shadcn/ui Tabs -------------+
 |                                                                       |
-| Tab: "API Jobs" (default)                                             |
+| Tab: "API 호출별" / "Tasks" (default, i18n key: jobs.tasks)           |
 |   [search] [status filter]      <- queries ?source=api                |
 |   <JobTable>   pagination                                             |
 |                                                                       |
-| Tab: "Test Runs"                                                      |
-|   <ApiTestPanel> -- submits with source=test                          |
-|   -- border-t --                                                      |
-|   [search] [status filter]      <- queries ?source=test               |
-|   <JobTable>   pagination                                             |
+| Tab: "대화별" / "Conversations" (i18n key: jobs.conversations)        |
+|   <ConversationList>                                                  |
 |                                                                       |
 | Tab: "Network Flow"                                                   |
 |   <NetworkFlowTab providers={providers} />                              |
@@ -90,11 +87,13 @@ Each section maintains independent state:
 ## JobTable Columns
 
 ```
-+---------------------------------------------------------------------------------+
-| ID      Model    Provider  Provider Name  API Key  Status    Created  TTFT  Latency|
-| 3a9f..  llama3   ollama    gpu-1          dev-key  complete  Feb 25  142ms  1.2s   |
-+---------------------------------------------------------------------------------+
++----------------------------------------------------------------------------------------------------+
+| ID      Conv ID  Model    Provider  Provider Name  API Key  Status    Created  TTFT  Latency      |
+| 3a9f..  c7d2..   llama3   ollama    gpu-1          dev-key  complete  Feb 25  142ms  1.2s         |
++----------------------------------------------------------------------------------------------------+
 ```
+
+- `Conversation ID`: truncated UUID (8 chars) with full UUID in tooltip. Empty cell (muted `—`) when `conversation_id` is null.
 
 - Status filter: all | pending | running | completed | failed | cancelled
 - Model filter (`model=`): exact match on model_name
@@ -112,7 +111,7 @@ See `jobs-impl.md` for duration format, job detail modal, and extended field spe
 | Interface | Key fields | Notes |
 |-----------|-----------|-------|
 | `ToolCall` | `id`, `function.name`, `function.arguments` | Used in both `Job` and `JobDetail` |
-| `Job` | `id`, `model_name`, `provider_type`, `status`, `source`, timing fields, `has_tool_calls`, `estimated_cost_usd`, `provider_name` | List view -- `has_tool_calls` computed by backend SQL |
+| `Job` | `id`, `conversation_id`, `model_name`, `provider_type`, `status`, `source`, timing fields, `has_tool_calls`, `estimated_cost_usd`, `provider_name` | List view -- `has_tool_calls` computed by backend SQL |
 | `ChatMessage` | `role`, `content`, `tool_calls` | Roles: system/user/assistant/tool |
 | `JobDetail` | All `Job` fields + `prompt`, `result_text`, `error`, `tool_calls_json`, `message_count`, `messages_json`, `image_keys`, `image_urls` | Modal view -- `tool_calls_json` rendered when `result_text` is null; image thumbnail gallery when `image_urls` present |
 
@@ -125,9 +124,10 @@ See `jobs-impl.md` for full type definitions and extended field specs.
 ### jobs.*
 ```json
 "title", "description",
-"testRuns",              // "Test Runs"  -- tab label
-"apiJobs",               // "API Jobs"   -- tab label
+"tasks",                 // "API 호출별" / "Tasks"  -- tab label (was apiJobs)
+"conversations",         // "대화별" / "Conversations"  -- tab label (was testRuns)
 "networkFlow",           // "Network Flow"  -- tab label
+"conversationId",        // "Conversation ID"  -- table column header
 "allStatuses", "filterByStatus",
 "searchPlaceholder",     // "Search prompt or key..."
 "searchingFor", "clearSearch",

@@ -365,7 +365,17 @@
     "regenerating": "갱신 중…",
     "keySavedAck": "키를 저장했습니다",
     "viewHistory": "변경 이력 보기",
-    "historyTitle": "변경 이력 — {{name}}"
+    "historyTitle": "변경 이력 — {{name}}",
+    "mcpAccess": "MCP 접근",
+    "mcpAccessTitle": "MCP 접근 — {{name}}",
+    "mcpAccessDesc": "이 키의 MCP 서버 접근 및 캡 포인트를 설정합니다.",
+    "mcpGranted": "허용됨",
+    "mcpNotGranted": "미허용",
+    "mcpGrant": "허용",
+    "mcpRevoke": "취소",
+    "mcpLoadError": "MCP 접근 데이터 로드 실패",
+    "mcpNoServers": "MCP 서버가 없습니다",
+    "mcpCapPoints": "캡 포인트"
   },
   "providers": {
     "title": "프로바이더",

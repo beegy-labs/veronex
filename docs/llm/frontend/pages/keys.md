@@ -1,6 +1,6 @@
 # Web — API Keys Page (/keys)
 
-> SSOT | **Last Updated**: 2026-03-04 (rev2: KeyUsageModal)
+> SSOT | **Last Updated**: 2026-04-06
 
 ## Task Guide
 
@@ -18,15 +18,16 @@
 |------|---------|
 | `web/app/keys/page.tsx` | API keys management page |
 | `web/components/key-usage-modal.tsx` | Per-key usage modal (KPIs, model breakdown, hourly charts) |
-| `web/lib/api.ts` | `keys()`, `createKey()`, `deleteKey()`, `toggleKey()`, `keyModelBreakdown()` |
-| `web/lib/types.ts` | `KeySummary`, `CreateKeyResponse`, `ModelBreakdown` |
+| `web/lib/api.ts` | `keys()`, `createKey()`, `deleteKey()`, `toggleKey()`, `keyModelBreakdown()`, `keyMcpAccess()`, `updateKeyMcpAccess()` |
+| `web/lib/types.ts` | `KeySummary`, `CreateKeyResponse`, `ModelBreakdown`, `McpAccessEntry` |
 | `web/lib/queries/usage.ts` | `keyUsageQuery`, `keyModelBreakdownQuery` |
+| `web/lib/queries/mcp.ts` | `keyMcpAccessQuery` |
 
 ## Page Layout
 
 ```
 Title: "API Keys"  "N keys"                                [+ Create Key]
-| Name | Prefix | Tenant | Status | Toggle | RPM/TPM | Tier | Created | Del |
+| Name | Prefix | Tenant | Status | Toggle | RPM/TPM | Tier | Created | MCP | Del |
 ```
 
 - Single flat `DataTable`; test keys (`key_type='test'`) excluded server-side
@@ -34,6 +35,23 @@ Title: "API Keys"  "N keys"                                [+ Create Key]
 - Toggle active: Switch -> `PATCH /v1/keys/{id} { is_active }`. Inactive rows: `opacity-50`
 - Delete: `DeleteConfirmModal` -> `DELETE /v1/keys/{id}` (soft-delete)
 - Row click -> `setSelectedKey(key)` -> opens `KeyUsageModal`
+- MCP button (Server icon) -> opens `KeyMcpAccessModal`
+
+## KeyMcpAccessModal
+
+Server icon button in action column opens MCP access configuration dialog.
+
+```
+Dialog: "MCP Access — {key name}"
+MCP Cap Points: [number input 0-10, default 3]
+Per-server access table:
+| Server | Slug | Status | Top-K | Grant/Revoke |
+```
+
+- `mcp_cap_points`: max agentic loop rounds for this key. `0` = MCP disabled. Saved via `PATCH /v1/keys/{id}`.
+- Grant/Revoke: `POST /v1/keys/{id}/mcp/{server_id}` / `DELETE /v1/keys/{id}/mcp/{server_id}`
+- `top_k`: per-server Vespa ANN override (optional). Saved on grant/update.
+- Data: `keyMcpAccessQuery(keyId)` → `GET /v1/keys/{id}/mcp`
 
 ## CreateKeyModal
 
@@ -90,11 +108,13 @@ Empty state: dashed box with usage.noKeyData when chartData empty
 | `deleteKey(id)` | DELETE | `/v1/keys/{id}` |
 | `toggleKey(id, is_active)` | PATCH | `/v1/keys/{id}` |
 | `keyModelBreakdown(keyId, hours)` | GET | `/v1/usage/{keyId}/models?hours={hours}` |
+| `keyMcpAccess(keyId)` | GET | `/v1/keys/{keyId}/mcp` |
+| `updateKeyMcpAccess(keyId, serverId, body)` | POST/DELETE | `/v1/keys/{keyId}/mcp/{serverId}` |
 
 Server handler: `usage_handlers::key_model_breakdown` -- queries `inference_jobs GROUP BY model_name, provider_type` with LATERAL pricing join; computes `call_pct` as share of total reqs.
 
 ## i18n Keys
 
-`keys.*`: title, keysCount, createKey, createTitle, keyName, keyNamePlaceholder, tenantId, rateLimitRpm, rateLimitTpm, rateLimitPlaceholder, tier, tierFree, tierPaid, creating, createdTitle, createdWarning, deleteTitle, deleteConfirm, deleting, loadingKeys, failedKeys, actions, deleteKey, rpmTpm, prefix, tenant, name, status, activeToggle, createdAt, usageTitle, modelBreakdown
+`keys.*`: title, description, name, prefix, tenant, status, activeToggle, rpmTpm, createdAt, expiresAt, noKeys, createKey, createTitle, keyName, keyNamePlaceholder, tenantId, tenantIdPlaceholder, rateLimitRpm, rateLimitTpm, rateLimitPlaceholder, tier, tierFree, tierPaid, creating, createdTitle, createdWarning, deleteTitle, deleteConfirm, deleting, actions, deleteKey, loadingKeys, failedKeys, registered, keysCount, viewUsage, usageTitle, modelBreakdown, createdBy, regenerateKey, regenerateTitle, regenerateConfirm, regenerating, keySavedAck, viewHistory, historyTitle, mcpAccess, mcpAccessTitle, mcpAccessDesc, mcpGranted, mcpNotGranted, mcpGrant, mcpRevoke, mcpLoadError, mcpNoServers, mcpCapPoints
 
 `usage.*` (modal): totalRequests, totalTokens, success, errors, requests, tokensPerHour, requestsPerHour, noKeyData, provider, share, avgLatency

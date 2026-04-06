@@ -365,7 +365,17 @@
     "regenerating": "Regenerating…",
     "keySavedAck": "I have saved the key",
     "viewHistory": "View change history",
-    "historyTitle": "Change History — {{name}}"
+    "historyTitle": "Change History — {{name}}",
+    "mcpAccess": "MCP Access",
+    "mcpAccessTitle": "MCP Access — {{name}}",
+    "mcpAccessDesc": "Configure MCP server access and cap points for this key.",
+    "mcpGranted": "Granted",
+    "mcpNotGranted": "Not granted",
+    "mcpGrant": "Grant",
+    "mcpRevoke": "Revoke",
+    "mcpLoadError": "Failed to load MCP access data",
+    "mcpNoServers": "No MCP servers configured",
+    "mcpCapPoints": "Cap Points"
   },
   "providers": {
     "title": "Providers",

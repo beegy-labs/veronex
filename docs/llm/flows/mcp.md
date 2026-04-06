@@ -29,9 +29,13 @@ openai_handlers::chat_completions()
 ```
 run_loop(state, caller, model, messages, base_tools, want_stream)
   │
-  ├── 1. Per-key MCP ACL (see flows/auth.md)
-  │     API key → query mcp_key_access → Some(HashSet<server_id>)
-  │     JWT     → None (bypass)
+  ├── 1. Per-key ACL + cap_points + top_k — parallel via tokio::join!()
+  │     API key → join!(fetch_mcp_acl, fetch_mcp_cap_points, fetch_mcp_top_k)
+  │               acl       → Some(HashSet<server_id>)  (empty = deny all)
+  │               cap_points → 0 = MCP disabled → return None
+  │                            N = max rounds (min of N, MAX_ROUNDS)
+  │               top_k     → Vespa ANN limit override (None = global default)
+  │     JWT     → None / MAX_ROUNDS / None (bypass all)
   │
   ├── 2. Build tool list
   │     tool_cache.get_all(allowed_servers)
@@ -58,9 +62,15 @@ run_loop(state, caller, model, messages, base_tools, want_stream)
         ├── append assistant message { tool_calls } to messages
         │
         ├── execute_calls(mcp_calls)        ← buffered(MAX_CONCURRENT=8)
-        │     └── for each call → execute_one()
+        │     └── for each call → execute_one() → (result_text, ToolCallRecord)
+        │
+        ├── batch_insert_tool_calls()       ← single unnest INSERT for all N calls
         │
         ├── append tool result messages { role: "tool", content }
+        │
+        ├── [rounds >= 2]? prune_tool_messages(keep_last=2)
+        │     └── compress tool messages older than 2 rounds to placeholder
+        │         → bounds context window growth across deep loops
         │
         └── rounds += 1 → GOTO submit
 ```
@@ -100,7 +110,7 @@ execute_one(tool_call, api_key_id, allowed_servers)
   ├── emit OTel span (target: veronex::mcp::tool_call)
   │     → ClickHouse mcp_tool_calls_hourly (via OTel pipeline)
   │
-  └── INSERT INTO mcp_loop_tool_calls (loop_id, job_id, round, outcome, latency_ms)
+  └── return (result_text, ToolCallRecord)  ← caller does batch INSERT after all calls
 ```
 
 ---
@@ -135,7 +145,7 @@ JWT session    │  None                   │  All active servers accessible
 |-----------|-------|----------|
 | Max rounds | 5 | Hard loop limit |
 | Loop detect threshold | 3 | Same (tool, args_hash) ×3 → break |
-| Per-round timeout | 120s | `COLLECT_ROUND_TIMEOUT` |
+| Per-round timeout | 45s | `COLLECT_ROUND_TIMEOUT` |
 | Max concurrent tool calls | 8 | `buffered(8)` in execute_calls |
 | Max tool result size | 32 KB | Truncated before injection |
 | Max tools per request | 32 | Context window protection |
@@ -160,5 +170,5 @@ JWT session    │  None                   │  All active servers accessible
 | `infrastructure/inbound/http/mcp_handlers.rs` | MCP server CRUD, `discover_and_persist_tools()` |
 | `infrastructure/inbound/http/key_mcp_access_handlers.rs` | ACL management REST API |
 | `veronex-mcp/src/tools/` | MCP tools (get_weather, web_search) |
-| `veronex-agent/src/mcp_discover.rs` | Periodic tool discovery + embedding |
+| `infrastructure/inbound/http/mcp_handlers.rs` | MCP server CRUD + `discover_and_persist_tools()` |
 | `veronex-embed/src/` | Embedding service (multilingual-e5-large) |

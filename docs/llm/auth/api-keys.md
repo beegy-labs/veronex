@@ -50,6 +50,7 @@ pub struct ApiKey {
     pub deleted_at: Option<DateTime<Utc>>,   // #[ts(skip)] — internal only
     pub key_type: KeyType,                   // #[ts(skip)] — internal only (Standard | Test)
     pub tier: KeyTier,                       // Free | Paid — domain enum (migration 000038)
+    pub mcp_cap_points: i16,                 // Max MCP agentic loop rounds (0 = disabled, default 3)
     pub account_id: Option<Uuid>,            // FK → accounts(id), set on create
 }
 ```
@@ -80,6 +81,7 @@ CREATE TABLE api_keys (
     rate_limit_tpm  INTEGER      NOT NULL DEFAULT 0,
     key_type        TEXT         NOT NULL DEFAULT 'standard', -- migration 000033
     tier            TEXT         NOT NULL DEFAULT 'paid',     -- migration 000038
+    mcp_cap_points  SMALLINT     NOT NULL DEFAULT 3,          -- max MCP rounds (0 = disabled)
     account_id      UUID REFERENCES accounts(id),         -- migration 000035, tracks creator
     expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
@@ -89,9 +91,18 @@ CREATE TABLE api_keys (
 -- No unique index on name. Names are labels; uniqueness is provided by `id` (UUIDv7).
 -- (migration 000032 added uq_api_keys_tenant_name; migration 000040 dropped it)
 -- (planned) One test key per account: uq_api_keys_account_test ON (account_id) WHERE is_test_key=true AND deleted_at IS NULL
+
+CREATE TABLE mcp_key_access (
+    api_key_id  UUID        NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    server_id   UUID        NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+    is_allowed  BOOLEAN     NOT NULL DEFAULT true,
+    granted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    top_k       SMALLINT    CHECK (top_k BETWEEN 1 AND 64),  -- per-server Vespa ANN override (NULL = global default)
+    PRIMARY KEY (api_key_id, server_id)
+);
 ```
 
-- migrations: 000001 CREATE, 000021 deleted_at, 000033 key_type column, 000035 account_id, 000038 tier column, 000040 drop name unique index
+- migrations: 000001 CREATE, 000021 deleted_at, 000033 key_type column, 000035 account_id, 000038 tier column, 000040 drop name unique index, mcp_cap_points + mcp_key_access added in feat/mcp-integration
 
 ---
 
@@ -136,6 +147,7 @@ pub struct CreateKeyResponse {
 pub struct PatchKeyRequest {
     pub is_active: Option<bool>,
     pub tier: Option<String>,                // "free" | "paid"
+    pub mcp_cap_points: Option<i16>,         // 0 = MCP disabled
 }
 
 pub struct KeySummary {

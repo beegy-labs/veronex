@@ -196,12 +196,15 @@ The health checker (30s loop) also probes core infrastructure services and store
 | Valkey | `PING` | instant |
 | ClickHouse | `GET {ANALYTICS_URL}/health` | 3s |
 | S3/MinIO | `GET {S3_ENDPOINT}/minio/health/live` | 3s |
+| Vespa | `GET {VESPA_URL}/state/v1/health` | 3s |
+
+Vespa probe runs only when `VESPA_URL` env var is set. `check_and_store_services(vespa_url: Option<&str>)`.
 
 ### Storage
 
 ```
 Key:    veronex:svc:health:{instance_id}   (HASH, TTL=60s)
-Fields: postgresql, valkey, clickhouse, s3
+Fields: postgresql, valkey, clickhouse, s3, vespa (when VESPA_URL set)
 Value:  {"s":"ok","ms":3,"t":1711699200000}
 ```
 
