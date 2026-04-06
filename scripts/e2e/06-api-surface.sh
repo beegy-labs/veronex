@@ -456,7 +456,8 @@ print(base64.b64encode(buf.getvalue()).decode())
       if echo "$MODELS_JSON" | python3 -c "
 import sys, json
 try:
-    models = json.loads(sys.stdin.read())
+    d = json.loads(sys.stdin.read())
+    models = d.get('models', d) if isinstance(d, dict) else d
     if any('$VISION_MODEL' in m.get('model_name','') for m in models):
         exit(0)
 except: pass
@@ -474,7 +475,7 @@ exit(1)
     # Warm-up: ensure providers are active (parallel phases may trigger Scale-In)
     curl -s --max-time 30 "$API/api/generate" \
       -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-      -d "{\"model\":\"$MODEL\",\"prompt\":\"ok\",\"stream\":false}" > /dev/null 2>&1
+      -d "{\"model\":\"$MODEL\",\"prompt\":\"ok\",\"stream\":false}" > /dev/null 2>&1 || true
     sleep 1
 
     # /api/generate with bee image — stream:false — validate model describes the image

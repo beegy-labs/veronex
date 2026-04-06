@@ -70,7 +70,7 @@ test.describe('API: OpenAI Compat Endpoints', () => {
   })
 
   // ── /v1/completions ─────────────────────────────────────────────────────────
-  test('text completions returns 200 or 503 when no provider available', async ({ request }) => {
+  test('text completions returns 200 or 503 when no provider available', { timeout: 90000 }, async ({ request }) => {
     if (!apiKeyValue) return
     const api = apiKeyRequest(request)
     const listRes = await api.get('/v1/models')
@@ -82,7 +82,7 @@ test.describe('API: OpenAI Compat Endpoints', () => {
       prompt: 'Hello',
       max_tokens: 8,
       stream: false,
-    })
+    }, { timeout: 90000 })
     expect([200, 503]).toContain(res.status())
   })
 

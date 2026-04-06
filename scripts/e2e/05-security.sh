@@ -11,6 +11,11 @@ wait_queue_empty 30
 
 hdr "Auth Edge Cases"
 
+# Clear login-attempt counters to avoid rate-limit interference from parallel tests
+docker compose exec -T valkey valkey-cli EVAL \
+  "for _,k in ipairs(redis.call('keys','veronex:login_attempts:*')) do redis.call('del',k) end" 0 \
+  > /dev/null 2>&1 || true
+
 c=$(rawpostc "/v1/auth/login" '{"username":"nobody","password":"wrong"}' | code)
 [ "$c" = "401" ] && pass "Invalid creds → 401" || fail "Expected 401, got $c"
 
@@ -138,11 +143,13 @@ if [ -n "$TPM_KEY" ] && [ "$TPM_KEY" != "None" ]; then
   # First request: consume tokens with a large max_tokens response
   TPM_C1=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about AI\"}],\"max_tokens\":80,\"stream\":false}" || echo "000")
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about AI\"}],\"max_tokens\":80,\"stream\":false}" \
+    2>/dev/null || true)
   # Second request: should hit TPM limit
   TPM_C2=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write another long essay about ML\"}],\"max_tokens\":80,\"stream\":false}" || echo "000")
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write another long essay about ML\"}],\"max_tokens\":80,\"stream\":false}" \
+    2>/dev/null || true)
   if [ "$TPM_C2" = "429" ]; then
     pass "TPM limit enforced — req1=$TPM_C1 req2=$TPM_C2 (429)"
   elif [ "$TPM_C1" = "200" ] && [ "$TPM_C2" = "200" ]; then

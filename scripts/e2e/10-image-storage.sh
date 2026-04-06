@@ -60,7 +60,7 @@ for i in $(seq 1 10); do
   echo "$MODELS" | python3 -c "
 import sys, json
 try:
-    for m in json.loads(sys.stdin.read()):
+    for m in json.loads(sys.stdin.read()).get('models', []):
         if '$VISION_MODEL' in m.get('model_name',''): exit(0)
 except: pass
 exit(1)
@@ -73,7 +73,7 @@ done
 info "Warming up with vision model ($VISION_MODEL)..."
 curl -s --max-time 120 "$API/api/generate" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"say ok\",\"stream\":false}" > /dev/null 2>&1
+  -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"say ok\",\"stream\":false}" > /dev/null 2>&1 || true
 
 # Fire both image inference requests IMMEDIATELY (no sleep — Scale-In runs every 5s)
 info "Firing image tests immediately after warm-up..."

@@ -16,7 +16,7 @@ test.describe('MCP Servers', () => {
   test('server list displays table or empty state', async ({ page }) => {
     // Either the servers table or the empty-state dashed card should be visible
     await expect(
-      page.locator('table').or(page.locator('.border-dashed'))
+      page.locator('table').first().or(page.locator('.border-dashed'))
     ).toBeVisible({ timeout: T_DEFAULT })
   })
 

@@ -73,9 +73,11 @@ if [ -n "$INF_JOB_ID" ] && [ "$INF_JOB_ID" != "None" ]; then
     S=$(kget "/v1/inference/$INF_JOB_ID/status" 2>/dev/null | jv '["status"]' 2>/dev/null || echo "")
     case "$S" in completed|Completed|failed|Failed) break ;; esac; sleep 1
   done
-  c=$(kgetc "/v1/inference/$INF_JOB_ID/stream" | code)
+  _stf=$(mktemp); curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+    "$API/v1/inference/$INF_JOB_ID/stream" -H "Authorization: Bearer $API_KEY" \
+    2>/dev/null > "$_stf" || true; c=$(cat "$_stf" 2>/dev/null || echo "000"); rm -f "$_stf"
   [ "$c" = "200" ] && pass "Job stream → 200" || fail "Job stream → $c"
-  c=$(kdelc "/v1/inference/$INF_JOB_ID" | code)
+  c=$(kdelc "/v1/inference/$INF_JOB_ID" 2>/dev/null | code || echo "000")
   case "$c" in 200|204) pass "Cancel inference → $c" ;; *) fail "Cancel → $c" ;; esac
 fi
 
@@ -230,7 +232,8 @@ if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
   sleep 1
   c=$(curl -s -w "%{http_code}" -o /dev/null --max-time 15 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"test\"}],\"max_tokens\":4,\"stream\":false}")
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"test\"}],\"max_tokens\":4,\"stream\":false}" \
+    2>/dev/null || echo "000")
   case "$c" in
     200) info "Disabled on local: remote provider handled request" ;;
     400|404|503) pass "Model disabled on local → $c (no remote available)" ;;
