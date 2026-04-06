@@ -66,6 +66,7 @@ pub(super) struct JobRowCommon {
     pub account_name: Option<String>,
     pub request_path: Option<String>,
     pub estimated_cost_usd: Option<f64>,
+    pub conversation_id: Option<uuid::Uuid>,
 }
 
 impl JobRowCommon {
@@ -91,6 +92,7 @@ impl JobRowCommon {
             account_name:      row.try_get("account_name").unwrap_or(None),
             request_path:      row.try_get("request_path").unwrap_or(None),
             estimated_cost_usd: row.try_get("estimated_cost_usd").unwrap_or(None),
+            conversation_id:   row.try_get("conversation_id").unwrap_or(None),
         }
     }
 
@@ -127,6 +129,8 @@ pub struct JobSummary {
     pub estimated_cost_usd: Option<f64>,
     /// Name of the provider (Ollama server) that processed this job.
     pub provider_name: Option<String>,
+    /// Conversation this job belongs to (multi-turn), if any.
+    pub conversation_id: Option<String>,
 }
 
 /// Build a `JobSummary` from a `JobRowCommon` and a `has_tool_calls` flag.
@@ -152,5 +156,6 @@ pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, pro
         has_tool_calls,
         estimated_cost_usd: c.estimated_cost_usd,
         provider_name,
+        conversation_id: c.conversation_id.map(|id| id.to_string()),
     }
 }

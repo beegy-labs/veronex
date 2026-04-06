@@ -2,6 +2,12 @@ import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { STALE_TIME_FAST, STALE_TIME_SLOW, REFETCH_INTERVAL_FAST, withJitter } from '@/lib/constants'
 
+export const mcpSettingsQuery = () => queryOptions({
+  queryKey: ['mcp-settings'] as const,
+  queryFn: () => api.getMcpSettings(),
+  staleTime: STALE_TIME_SLOW,
+})
+
 export const mcpServersQuery = () => queryOptions({
   queryKey: ['mcp-servers'] as const,
   queryFn: () => api.mcpServers(),

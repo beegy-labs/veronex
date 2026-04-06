@@ -131,6 +131,7 @@ async fn main() -> Result<()> {
             tool_cache,
             result_cache,
             circuit_breaker,
+            analytics_repo: repos.analytics_repo.clone(),
         };
         #[derive(sqlx::FromRow)]
         struct McpServerStartup { id: uuid::Uuid, slug: String, url: String, timeout_secs: i16 }
@@ -182,6 +183,7 @@ async fn main() -> Result<()> {
         event_ring_buffer: handles.event_ring_buffer,
         stats_tx: handles.stats_tx,
         lab_settings_repo: repos.lab_settings_repo,
+        mcp_settings_repo: repos.mcp_settings_repo,
         circuit_breaker: handles.circuit_breaker,
         message_store: repos.message_store,
         image_store: repos.image_store,

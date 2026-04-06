@@ -1,4 +1,4 @@
-import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, ConversationSummary, ConversationDetail, TurnInternals, KeyPage, McpServer, McpServerAccess, McpServerStat, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterMcpServerRequest, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, ConversationSummary, ConversationDetail, TurnInternals, KeyPage, McpServer, McpServerAccess, McpServerStat, McpSettings, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterMcpServerRequest, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
@@ -121,6 +121,9 @@ export const api = {
   toggleKeyActive: (id: string, is_active: boolean) =>
     apiClient.patch<void>(`/v1/keys/${id}`, { is_active }),
 
+  patchKey: (id: string, body: Partial<{ name: string; is_active: boolean; rate_limit_rpm: number; rate_limit_tpm: number; mcp_cap_points: number }>) =>
+    apiClient.patch<void>(`/v1/keys/${id}`, body),
+
   updateKeyTier: (id: string, tier: 'free' | 'paid') =>
     apiClient.patch<void>(`/v1/keys/${id}`, { tier }),
 
@@ -227,8 +230,8 @@ export const api = {
   // ── API key → MCP server access (JWT-protected) ───────────────────────────
   keyMcpAccess: (keyId: string) =>
     apiClient.get<McpServerAccess[]>(`/v1/keys/${keyId}/mcp`),
-  grantKeyMcpAccess: (keyId: string, serverId: string) =>
-    apiClient.post<McpServerAccess>(`/v1/keys/${keyId}/mcp`, { server_id: serverId }),
+  grantKeyMcpAccess: (keyId: string, serverId: string, topK?: number | null) =>
+    apiClient.post<McpServerAccess>(`/v1/keys/${keyId}/mcp`, { server_id: serverId, top_k: topK ?? null }),
   revokeKeyMcpAccess: (keyId: string, serverId: string) =>
     apiClient.delete<void>(`/v1/keys/${keyId}/mcp/${serverId}`),
 
@@ -366,6 +369,12 @@ export const api = {
 
   mcpStats: (hours = 24) =>
     apiClient.get<McpServerStat[]>(`/v1/mcp/stats?hours=${hours}`),
+
+  getMcpSettings: () =>
+    apiClient.get<McpSettings>('/v1/mcp/settings'),
+
+  patchMcpSettings: (body: Partial<McpSettings>) =>
+    apiClient.patch<McpSettings>('/v1/mcp/settings', body),
 
   // ── Conversations (JWT-protected) ─────────────────────────────────────────
 

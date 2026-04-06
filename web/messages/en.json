@@ -300,10 +300,14 @@
     "filterModel": "Model",
     "filterProvider": "Provider",
     "allProviders": "All Providers",
+    "allSources": "All Sources",
+    "sourceTest": "Test",
+    "sourceAnalyzer": "Analyzer",
     "filters": "Filters",
     "filtersActive": "Filters ({{count}})",
-    "tasks": "Tasks",
-    "conversations": "Conversations",
+    "tasks": "By API Call",
+    "conversations": "By Conversation",
+    "conversationId": "Conversation",
     "conversationTitle": "Title",
     "turnCount": "Turns",
     "lastActivity": "Last Activity",
@@ -312,7 +316,8 @@
     "continue": "Continue",
     "continueInTest": "Continue in Test",
     "roleUser": "User",
-    "roleAssistant": "Assistant"
+    "roleAssistant": "Assistant",
+    "testPanel": "Inference Test"
   },
   "keys": {
     "title": "API Keys",
@@ -749,7 +754,13 @@
     "apiKeyToggle": "Use API Key",
     "apiKeyPlaceholder": "Paste your API key…",
     "noApiKey": "Session Auth (Test)",
-    "sessionRenewed": "Conversation context carried over to a new session"
+    "sessionRenewed": "Conversation context carried over to a new session",
+    "modeSingle": "Single",
+    "modeConversation": "Conversation",
+    "clearConversation": "Clear",
+    "newSession": "New Session",
+    "noSessions": "No sessions yet.",
+    "turns": "turns"
   },
   "apiDocs": {
     "title": "API Documentation",
@@ -911,6 +922,7 @@
     "title": "System Health",
     "description": "Real-time status of infrastructure services and API pods.",
     "infrastructure": "Infrastructure",
+    "pods": "Pods",
     "apiPods": "API Pods",
     "agentPods": "Agent Pods",
     "ok": "ok",
@@ -926,6 +938,34 @@
     "lag": "Lag",
     "tpm1m": "TPM (1m)",
     "tpm5m": "TPM (5m avg)",
-    "lastPoll": "Last Poll"
+    "lastPoll": "Last Poll",
+    "consumers": "Consumers"
+  },
+  "mcp": {
+    "title": "MCP Servers",
+    "description": "No MCP servers registered yet. Register a server to enable tool calls.",
+    "register": "Register",
+    "name": "Name",
+    "namePlaceholder": "My MCP Server",
+    "slug": "Slug",
+    "slugPlaceholder": "my_mcp_server",
+    "slugHint": "Lowercase letters, digits, and underscores only. Used as namespace prefix for tool names.",
+    "url": "URL",
+    "urlPlaceholder": "http://localhost:3100",
+    "timeout": "Timeout (s)",
+    "status": "Status",
+    "tools": "tools",
+    "enabled": "Enabled",
+    "online": "Online",
+    "offline": "Offline",
+    "deleteTitle": "Delete MCP Server",
+    "stats": "Tool Call Statistics",
+    "statsDesc": "Aggregated tool call metrics for all registered MCP servers.",
+    "statsNoData": "No tool call data yet.",
+    "statsLoadError": "Failed to load statistics.",
+    "statsTotalCalls": "Total Calls",
+    "statsSuccessRate": "Success Rate",
+    "statsCacheHit": "Cache Hit",
+    "statsAvgLatency": "Avg Latency"
   }
 }

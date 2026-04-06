@@ -247,10 +247,21 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
   const { t } = useTranslation()
   const queryClient = useQueryClient()
 
+  // ── MCP cap points ────────────────────────────────────────────────────────
+  const [capPoints, setCapPoints] = useState(String(apiKey.mcp_cap_points ?? 3))
+  const capMutation = useMutation({
+    mutationFn: (val: number) => api.patchKey(apiKey.id, { mcp_cap_points: val }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
+  })
+
+  // ── Per-server top-k state ────────────────────────────────────────────────
+  const [topKMap, setTopKMap] = useState<Record<string, string>>({})
+
   const { data: servers, isLoading, error } = useQuery(keyMcpAccessQuery(apiKey.id))
 
   const grantMutation = useMutation({
-    mutationFn: (serverId: string) => api.grantKeyMcpAccess(apiKey.id, serverId),
+    mutationFn: ({ serverId, topK }: { serverId: string; topK: number | null }) =>
+      api.grantKeyMcpAccess(apiKey.id, serverId, topK),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['key-mcp-access', apiKey.id] }),
   })
 
@@ -261,12 +272,46 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
 
   const isPending = grantMutation.isPending || revokeMutation.isPending
 
+  function getTopK(s: McpServerAccess): number | null {
+    const raw = topKMap[s.server_id]
+    if (raw !== undefined) return raw === '' ? null : parseInt(raw, 10) || null
+    return s.top_k
+  }
+
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-lg max-h-[70vh] flex flex-col">
+      <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{t('keys.mcpAccessTitle', { name: apiKey.name })}</DialogTitle>
         </DialogHeader>
+
+        {/* MCP Cap Points */}
+        <div className="rounded-lg border px-3 py-2.5 flex items-center gap-3">
+          <Label className="text-sm shrink-0">MCP Cap Points</Label>
+          <Input
+            type="number"
+            min={0}
+            max={10}
+            value={capPoints}
+            onChange={(e) => setCapPoints(e.target.value)}
+            className="h-7 w-20 text-xs"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            disabled={capMutation.isPending}
+            onClick={() => {
+              const val = Math.max(0, Math.min(10, parseInt(capPoints, 10) || 0))
+              setCapPoints(String(val))
+              capMutation.mutate(val)
+            }}
+          >
+            {capMutation.isPending ? '…' : t('common.save', 'Save')}
+          </Button>
+          <span className="text-xs text-muted-foreground">0–10</span>
+        </div>
+
         <p className="text-sm text-muted-foreground">{t('keys.mcpAccessDesc')}</p>
         <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
           {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
@@ -275,8 +320,8 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
             <p className="text-sm text-muted-foreground">{t('keys.mcpNoServers')}</p>
           )}
           {servers?.map((s: McpServerAccess) => (
-            <div key={s.server_id} className="flex items-center justify-between rounded-lg border px-3 py-2">
-              <div className="flex items-center gap-2 min-w-0">
+            <div key={s.server_id} className="flex items-center justify-between rounded-lg border px-3 py-2 gap-2">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
                 <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{s.server_name}</p>
@@ -284,6 +329,19 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {/* Top-K input */}
+                <div className="flex items-center gap-1">
+                  <Label className="text-xs text-muted-foreground shrink-0">Top-K</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={64}
+                    placeholder="—"
+                    value={topKMap[s.server_id] !== undefined ? topKMap[s.server_id] : (s.top_k ?? '')}
+                    onChange={(e) => setTopKMap(prev => ({ ...prev, [s.server_id]: e.target.value }))}
+                    className="h-7 w-16 text-xs"
+                  />
+                </div>
                 <Badge
                   variant="outline"
                   className={s.is_allowed
@@ -298,7 +356,7 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
                   disabled={isPending}
                   onClick={() => s.is_allowed
                     ? revokeMutation.mutate(s.server_id)
-                    : grantMutation.mutate(s.server_id)
+                    : grantMutation.mutate({ serverId: s.server_id, topK: getTopK(s) })
                   }
                 >
                   {s.is_allowed ? t('keys.mcpRevoke') : t('keys.mcpGrant')}

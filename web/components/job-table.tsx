@@ -57,6 +57,7 @@ export default function JobTable({
         <TableHeader>
           <TableRow>
             <TableHead className="whitespace-nowrap">{t('jobs.id')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.conversationId')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.model')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.provider')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.providerName')}</TableHead>
@@ -78,6 +79,11 @@ export default function JobTable({
             >
               <TableCell className="font-mono text-xs text-muted-foreground">
                 <span title={job.id}>{truncateId(job.id)}</span>
+              </TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                {job.conversation_id
+                  ? <span title={job.conversation_id}>{truncateId(job.conversation_id)}</span>
+                  : <span className="opacity-40">—</span>}
               </TableCell>
               <TableCell>{job.model_name}</TableCell>
               <TableCell className="text-muted-foreground capitalize">

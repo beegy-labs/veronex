@@ -37,7 +37,7 @@ export const recentJobsQuery = queryOptions({
 // by source/status/page works correctly.
 
 export interface JobsQueryParams {
-  source: string
+  source?: string
   page: number
   status: string
   query: string
@@ -53,8 +53,8 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
     const qs = new URLSearchParams({
       limit: String(p.pageSize),
       offset: String(p.page * p.pageSize),
-      source: p.source,
     })
+    if (p.source) qs.set('source', p.source)
     if (p.status !== 'all') qs.set('status', p.status)
     if (p.query.trim()) qs.set('q', p.query.trim())
     if (p.model) qs.set('model', p.model)

@@ -41,6 +41,8 @@ export interface ApiKey {
   expires_at: string | null
   /** Billing tier: `"free"` or `"paid"` */
   tier: 'free' | 'paid'
+  /** MCP capability points (0–10, default 3). Controls how many MCP tools this key may use per request. */
+  mcp_cap_points: number
   /** Username of the creator (super admin view) */
   created_by?: string
 }
@@ -79,6 +81,8 @@ export interface Job extends JobBase {
   has_tool_calls: boolean
   /** Name of the provider (Ollama server) that processed this job. */
   provider_name: string | null
+  /** Conversation this job belongs to (multi-turn), if any. */
+  conversation_id: string | null
 }
 
 export interface ChatMessage {
@@ -760,6 +764,7 @@ export interface TopicPipelineStats {
   last_poll_secs: number | null
   is_active: boolean
   last_error: string | null
+  consumer_count: number
 }
 
 export interface PipelineHealthResponse {
@@ -793,6 +798,16 @@ export interface McpServerAccess {
   server_name: string
   is_allowed: boolean
   slug?: string
+  /** Top-K tool limit for this key/server pair. null = no override (use server default). */
+  top_k: number | null
+}
+
+export interface McpSettings {
+  routing_cache_ttl_secs: number
+  tool_schema_refresh_secs: number
+  embedding_model: string
+  max_tools_per_request: number
+  max_routing_cache_entries: number
 }
 
 export interface RegisterMcpServerRequest {

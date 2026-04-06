@@ -2,10 +2,10 @@
 
 import { useState, useCallback, useEffect, useOptimistic } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { mcpServersQuery, mcpStatsQuery } from '@/lib/queries/mcp'
+import { mcpServersQuery, mcpStatsQuery, mcpSettingsQuery } from '@/lib/queries/mcp'
 import { api } from '@/lib/api'
 import { ApiHttpError } from '@/lib/types'
-import type { McpServer, McpServerStat, RegisterMcpServerRequest } from '@/lib/types'
+import type { McpServer, McpServerStat, McpSettings, RegisterMcpServerRequest } from '@/lib/types'
 import { Plus, Trash2, Plug, BarChart2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -222,6 +222,108 @@ function McpToggleSwitch({ serverId, isEnabled }: { serverId: string; isEnabled:
   )
 }
 
+function McpSettingsPanel() {
+  const queryClient = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<Partial<McpSettings>>({})
+
+  const { data, isLoading, error } = useQuery(mcpSettingsQuery())
+
+  const mutation = useMutation({
+    mutationFn: (body: Partial<McpSettings>) => api.patchMcpSettings(body),
+    onSuccess: () => { setEditing(false); setDraft({}) },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['mcp-settings'] }),
+  })
+
+  function startEdit() {
+    if (data) setDraft({ ...data })
+    setEditing(true)
+  }
+
+  function cancelEdit() {
+    setEditing(false)
+    setDraft({})
+  }
+
+  const current = editing ? draft : data
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-sm font-medium">MCP Settings</CardTitle>
+          {!editing && (
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={startEdit} disabled={isLoading || !!error}>
+              Edit
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading && <p className="text-sm text-muted-foreground animate-pulse">Loading…</p>}
+        {error && <p className="text-sm text-destructive">Failed to load MCP settings.</p>}
+        {current && (
+          <>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              {([
+                { key: 'routing_cache_ttl_secs', label: 'Routing Cache TTL (s)' },
+                { key: 'tool_schema_refresh_secs', label: 'Tool Schema Refresh (s)' },
+                { key: 'max_tools_per_request', label: 'Max Tools / Request' },
+                { key: 'max_routing_cache_entries', label: 'Max Cache Entries' },
+              ] as { key: keyof McpSettings; label: string }[]).map(({ key, label }) => (
+                <div key={key} className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2">
+                  <Label className="text-xs text-muted-foreground shrink-0">{label}</Label>
+                  {editing ? (
+                    <Input
+                      type="number"
+                      className="h-7 w-28 text-xs text-right"
+                      value={draft[key] as number ?? ''}
+                      onChange={(e) => setDraft(prev => ({ ...prev, [key]: parseInt(e.target.value, 10) || 0 }))}
+                    />
+                  ) : (
+                    <span className="text-sm tabular-nums font-mono">{current[key] as number}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2">
+              <Label className="text-xs text-muted-foreground shrink-0">Embedding Model</Label>
+              {editing ? (
+                <Input
+                  className="h-7 w-52 text-xs text-right font-mono"
+                  value={draft.embedding_model ?? ''}
+                  onChange={(e) => setDraft(prev => ({ ...prev, embedding_model: e.target.value }))}
+                />
+              ) : (
+                <span className="text-sm font-mono text-muted-foreground">{current.embedding_model}</span>
+              )}
+            </div>
+
+            {editing && (
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  size="sm"
+                  disabled={mutation.isPending}
+                  onClick={() => mutation.mutate(draft)}
+                >
+                  {mutation.isPending ? 'Saving…' : 'Save'}
+                </Button>
+                <Button variant="outline" size="sm" onClick={cancelEdit}>Cancel</Button>
+                {mutation.error && (
+                  <span className="text-xs text-destructive">
+                    {mutation.error instanceof Error ? mutation.error.message : 'Save failed'}
+                  </span>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function McpTab() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -326,6 +428,8 @@ export function McpTab() {
       )}
 
       <McpStatsCard />
+
+      <McpSettingsPanel />
 
       {showRegister && <RegisterMcpModal onClose={() => setShowRegister(false)} />}
 

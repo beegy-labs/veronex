@@ -51,6 +51,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const [modelFilter, setModelFilter] = useState('')
   const [providerTypeFilter, setProviderTypeFilter] = useState('all')
   const [serverNameFilter, setServerNameFilter] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('all')
   const [showFilters, setShowFilters] = useState(false)
 
   const STATUS_OPTIONS = useMemo(() => [
@@ -64,8 +65,10 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 
   const offset = page * PAGE_SIZE
 
+  const resolvedSource = source ?? (sourceFilter !== 'all' ? sourceFilter as 'api' | 'test' | 'analyzer' : undefined)
+
   const { data, isLoading, isFetching, error, refetch } = useQuery(
-    dashboardJobsQuery({ source: source ?? 'api', page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: serverNameFilter || undefined, providerType: providerTypeFilter !== 'all' ? providerTypeFilter : undefined }),
+    dashboardJobsQuery({ source: resolvedSource, page, status, query, pageSize: PAGE_SIZE, model: modelFilter || undefined, provider: serverNameFilter || undefined, providerType: providerTypeFilter !== 'all' ? providerTypeFilter : undefined }),
   )
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
@@ -75,7 +78,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const commitSearch = useCallback(() => { setQuery(search); setPage(0) }, [search])
   const clearSearch = useCallback(() => { setSearch(''); setQuery(''); setPage(0) }, [])
   const goTo = (p: number) => setPage(Math.max(0, Math.min(totalPages - 1, p)))
-  const activeFilterCount = (modelFilter ? 1 : 0) + (providerTypeFilter !== 'all' ? 1 : 0) + (serverNameFilter ? 1 : 0) + (status !== 'all' ? 1 : 0)
+  const activeFilterCount = (modelFilter ? 1 : 0) + (providerTypeFilter !== 'all' ? 1 : 0) + (serverNameFilter ? 1 : 0) + (status !== 'all' ? 1 : 0) + (sourceFilter !== 'all' ? 1 : 0)
 
   return (
     <div className="space-y-4">
@@ -130,6 +133,19 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
       {/* Filter panel */}
       {showFilters && (
         <div className="flex items-center gap-2 flex-wrap p-3 rounded-lg border border-border bg-muted/30">
+          {!source && (
+            <Select value={sourceFilter} onValueChange={(val) => { setSourceFilter(val); setPage(0) }}>
+              <SelectTrigger className="w-36 h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t('jobs.allSources')}</SelectItem>
+                <SelectItem value="api">API</SelectItem>
+                <SelectItem value="test">{t('jobs.sourceTest')}</SelectItem>
+                <SelectItem value="analyzer">{t('jobs.sourceAnalyzer')}</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           <Select value={providerTypeFilter} onValueChange={(val) => { setProviderTypeFilter(val); setPage(0) }}>
             <SelectTrigger className="w-36 h-9">
               <SelectValue />
