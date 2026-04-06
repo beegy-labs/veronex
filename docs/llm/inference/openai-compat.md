@@ -135,6 +135,19 @@ data: [DONE]
 | `system_fingerprint` | `"fp_veronex"` | Constant identifier for this server |
 | `usage` | `{prompt_tokens, completion_tokens, total_tokens}` | Only present when `stream_options.include_usage = true` — emitted on the finish chunk and a final usage-only chunk (empty `choices`) |
 
+### Non-Streaming Response with Conversation Tracking
+
+When `conversation_id` is present in the request (via `X-Conversation-ID` header), two additional fields appear in the `ChatCompletion` response body:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `conversation_id` | `string` | Active conversation UUID (omitted if no conversation context) |
+| `conversation_renewed` | `bool` | `true` when session handoff created a new conversation (omitted if `false`) |
+
+`X-Conversation-ID` response header is always set when conversation context is active. Client should persist this value and send it as the `X-Conversation-ID` request header on next turn.
+
+→ See `inference/context-compression.md` for full multi-turn / handoff flow.
+
 ### Error Response
 
 ```json

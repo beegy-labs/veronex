@@ -50,7 +50,8 @@
 | OpenAI Compat Native | `inference/openai-compat-native.md` | native endpoints, API doc endpoints, shared constants, SSE parsing, client examples |
 | Capacity | `inference/capacity.md` | VramPool, AIMD+p95, LLM Batch±2, thermal auto-detect, model stickiness, gate chain |
 | Model Pricing | `inference/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, Ollama $0.00, provider wildcard |
-| Lab Features | `inference/lab-features.md` | gemini_function_calling, mcp_orchestrator_model, LabSettingsProvider, LabSettingsRepository, feature gating |
+| Lab Features | `inference/lab-features.md` | gemini_function_calling, mcp_orchestrator_model, context_compression_enabled, multiturn gate, vision_model, handoff |
+| Context Compression | `inference/context-compression.md` | compression_router, context_assembler, session_handoff, compress_input_inline, conversation_renewed, TurnInternals |
 | MCP | `inference/mcp.md` | McpBridgeAdapter, run_loop, tool intercept, orchestrator model, mcp_servers, tool naming, concurrency |
 
 ---
@@ -184,6 +185,7 @@
 | Security (CORS, crypto) | `auth/security.md` |
 | VRAM pool / AIMD / thermal | `inference/capacity.md` + `flows/scheduler.md` + `flows/thermal.md` |
 | Lab feature flag | `inference/lab-features.md` |
+| Context compression / multi-turn / handoff | `inference/context-compression.md` + `flows/context-compression.md` |
 | MCP integration / orchestrator model | `inference/mcp.md` + `flows/mcp.md` |
 | Any subsystem logic / control flow | `flows/{subsystem}.md` |
 | veronex-mcp server / add a tool | `infra/crate-structure.md` (veronex-mcp Layout) |

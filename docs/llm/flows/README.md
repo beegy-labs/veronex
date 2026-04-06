@@ -19,4 +19,5 @@
 | [reaper.md](reaper.md) | Crash recovery & job reaping — heartbeat, Lua CAS, VRAM lease cleanup |
 | [queue-maintenance.md](queue-maintenance.md) | Queue maintenance loops — promote, resync, wait-cancel |
 | [placement-planner.md](placement-planner.md) | Model auto-scaling — placement planner, scale-out/in, preload/evict |
+| [Context Compression](context-compression.md) | Multi-turn compression — eligibility gate, assembly, handoff, failure modes |
 | — | **Service health** — infra probes + pod status → documented in `providers/hardware.md` § Service Health Monitoring |

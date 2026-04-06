@@ -1,6 +1,6 @@
 # Lab Features (Experimental)
 
-> SSOT | **Last Updated**: 2026-03-25 (rev 4 — mcp_orchestrator_model added)
+> SSOT | **Last Updated**: 2026-04-06 (rev 5 — context compression + multi-turn + vision + handoff fields)
 
 Lab features are experimental capabilities that are **disabled by default**.
 They must be explicitly enabled in Settings → Lab Features.
@@ -16,6 +16,18 @@ affecting production inference while development is ongoing.
 |---------|---------|--------|
 | `gemini_function_calling` | `false` | In development |
 | `mcp_orchestrator_model` | `null` | Stable |
+| `context_compression_enabled` | `false` | Lab |
+| `compression_model` | `null` | Lab |
+| `context_budget_ratio` | `0.75` | Lab |
+| `compression_trigger_turns` | `1` | Lab |
+| `recent_verbatim_window` | `3` | Lab |
+| `compression_timeout_secs` | `30` | Lab |
+| `multiturn_min_params` | `7` | Lab |
+| `multiturn_min_ctx` | `16384` | Lab |
+| `multiturn_allowed_models` | `[]` (all) | Lab |
+| `vision_model` | `null` | Lab |
+| `handoff_enabled` | `true` | Lab |
+| `handoff_threshold` | `0.85` | Lab |
 
 ---
 
@@ -81,19 +93,33 @@ Dropdown is populated from `GET /v1/dashboard/capacity/settings` → `available_
 ```sql
 -- lab_settings table (singleton, id=1 enforced by CHECK constraint)
 CREATE TABLE lab_settings (
-    id                      INT         PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    gemini_function_calling BOOLEAN     NOT NULL DEFAULT false,
-    max_images_per_request  INT         NOT NULL DEFAULT 4,
-    max_image_b64_bytes     INT         NOT NULL DEFAULT 2097152,
-    mcp_orchestrator_model  TEXT,       -- NULL = use request model
-    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                          INT         PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    gemini_function_calling     BOOLEAN     NOT NULL DEFAULT false,
+    max_images_per_request      INT         NOT NULL DEFAULT 4,
+    max_image_b64_bytes         INT         NOT NULL DEFAULT 2097152,
+    mcp_orchestrator_model      TEXT,
+    context_compression_enabled BOOLEAN     NOT NULL DEFAULT false,
+    compression_model           TEXT,
+    context_budget_ratio        REAL        NOT NULL DEFAULT 0.75,
+    compression_trigger_turns   INT         NOT NULL DEFAULT 1,
+    recent_verbatim_window      INT         NOT NULL DEFAULT 3,
+    compression_timeout_secs    INT         NOT NULL DEFAULT 30,
+    multiturn_min_params        INT         NOT NULL DEFAULT 7,
+    multiturn_min_ctx           INT         NOT NULL DEFAULT 16384,
+    multiturn_allowed_models    TEXT[]      NOT NULL DEFAULT '{}',
+    vision_model                TEXT,
+    handoff_enabled             BOOLEAN     NOT NULL DEFAULT true,
+    handoff_threshold           REAL        NOT NULL DEFAULT 0.85,
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO lab_settings DEFAULT VALUES;
 ```
 
 Migrations:
 - `000005_lab_settings_image.up.sql` — initial table
-- `000012_lab_mcp_orchestrator_model.up.sql` — adds `mcp_orchestrator_model TEXT`
+- `000012_lab_mcp_orchestrator_model.up.sql` — adds `mcp_orchestrator_model`
+- `000013_lab_context_compression.up.sql` — adds compression + multi-turn + vision fields
+- `000014_lab_handoff_threshold.up.sql` — adds `handoff_threshold`
 
 ---
 
@@ -108,6 +134,22 @@ pub struct LabSettings {
     pub max_images_per_request: i32,
     pub max_image_b64_bytes: i32,
     pub mcp_orchestrator_model: Option<String>,
+    // Context compression
+    pub context_compression_enabled: bool,
+    pub compression_model: Option<String>,
+    pub context_budget_ratio: f32,
+    pub compression_trigger_turns: i32,
+    pub recent_verbatim_window: i32,
+    pub compression_timeout_secs: i32,
+    // Multi-turn eligibility gate
+    pub multiturn_min_params: i32,
+    pub multiturn_min_ctx: i32,
+    pub multiturn_allowed_models: Vec<String>,
+    // Vision
+    pub vision_model: Option<String>,
+    // Session handoff
+    pub handoff_enabled: bool,
+    pub handoff_threshold: f32,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -193,6 +235,18 @@ export interface PatchLabSettings {
   mcp_orchestrator_model?: string | null  // null = clear, string = set, absent = no change
 }
 ```
+
+### Context Compression UI (`web/components/nav-settings-dialog.tsx`)
+
+Compression section in Settings → Lab Features:
+- `context_compression_enabled` toggle
+- `compression_model` dropdown (`CompressionModelSelector` — all Ollama models)
+- `handoff_enabled` toggle
+- `handoff_threshold` number input (0–1)
+- Multi-turn requirements: `multiturn_min_params`, `multiturn_min_ctx`, `multiturn_allowed_models` (comma-separated input)
+- Vision model: `vision_model` dropdown (`VisionModelSelector` — Ollama models with `is_vision=true`)
+
+Uses `useOptimistic` + `startTransition` for compression/handoff switches.
 
 ### Orchestrator Model Selector (`web/app/providers/components/mcp-tab.tsx`)
 

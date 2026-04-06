@@ -1,6 +1,6 @@
 # Web — API Test Panel
 
-> SSOT | **Last Updated**: 2026-03-21 (rev: endpoint selector, API key toggle, non-streaming Ollama, lab gate)
+> SSOT | **Last Updated**: 2026-04-06 (rev: conversation mode, context warnings, TurnInternals)
 
 ## Task Guide
 
@@ -107,6 +107,40 @@ Test jobs: `api_key_id = NULL`, excluded from usage/perf metrics (`source != 'te
 | Gemini | `"gemini"` | Full global pool |
 
 `gemini-free`: only models with explicit policy `available_on_free_tier=true` (excluding `*`). The `*` global policy is for rate limits only.
+
+### Conversation Mode (Multi-Turn)
+
+Mode toggle: `single` | `conversation`. In conversation mode:
+- New conversation session created on first send
+- `X-Conversation-ID` response header persisted per session as `conversationId`
+- Each subsequent turn sends `X-Conversation-ID: {conversationId}` header
+- If `conversation_renewed: true` in response body, a system message divider is inserted in the conversation UI: "Session renewed — context was compressed and continued in a new conversation"
+- Multiple conversation sessions supported simultaneously (tab strip in `ApiTestConversation`)
+- `ConversationSession` state: `{ id, conversationId?, messages, streamingText, status, errorMsg }`
+- Messages include `role: 'system'` for session renewal dividers
+
+### Context Window Warnings
+
+`getMultiturnWarnings()` (`api-test-form.tsx`) shows warning badges below the model selector in conversation mode:
+
+| Warning key | Condition |
+|-------------|-----------|
+| `model_too_small` | Model param count < `multiturn_min_params` |
+| `multiturn_warn_ctx_too_small` | Model `max_ctx` < `multiturn_min_ctx` |
+| `model_not_allowed` | Model not in `multiturn_allowed_models` |
+| `context_too_large` | Estimated conversation tokens > 85% of model's `max_ctx` |
+
+Token estimation: `sum(message.content.length / 3.5)` (rough, system messages excluded).
+`max_ctx` source: `modelContextWindows` map built from `GET /v1/ollama/models` response. Falls back to heuristic (param size → context window) when `max_ctx == 0`.
+
+### TurnInternals Panel
+
+`TurnInternals` component (`web/components/turn-internals.tsx`) — collapsible per-turn panel in the conversation message list.
+
+- Lazy-fetches on expand: `GET /v1/dashboard/conversations/{convId}/turns/{jobId}/internals`
+- Stale time: `STALE_TIME_SLOW` (59s)
+- Shows `CompressedTurn` stats: compression model, original tokens, compressed tokens, ratio, summary text
+- Shows `VisionAnalysis` stats: vision model, image count, analysis tokens, analysis text
 
 ### Lab Settings Gate
 

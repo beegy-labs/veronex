@@ -1,6 +1,6 @@
 # Providers -- Ollama: Global Model Sync & Model-Aware Routing
 
-> SSOT | **Last Updated**: 2026-03-22
+> SSOT | **Last Updated**: 2026-04-06
 
 ## Task Guide
 
@@ -62,7 +62,7 @@ CREATE TABLE ollama_sync_jobs (
 | Struct | Fields |
 |--------|--------|
 | `OllamaModel` | `model_name: String`, `provider_id: Uuid`, `synced_at: DateTime<Utc>` |
-| `OllamaModelWithCount` | `model_name: String`, `provider_count: i64` |
+| `OllamaModelWithCount` | `model_name: String`, `provider_count: i64`, `max_ctx: i32` |
 | `OllamaProviderForModel` | `provider_id: Uuid`, `name: String`, `url: String`, `status: String`, `is_enabled: bool` |
 | `OllamaSyncJob` | `id: Uuid`, `started_at`, `completed_at: Option`, `status: String`, `total_providers: i32`, `done_providers: i32`, `results: serde_json::Value` |
 
@@ -89,9 +89,14 @@ CREATE TABLE ollama_sync_jobs (
 
 ```
 GET /v1/ollama/models?search=&page=1&limit=20
-  -> { models: [{ model_name: "llama3", provider_count: 3 }, ...], total: N, page: 1, limit: 20 }
+  -> { models: [{ model_name: "llama3", provider_count: 3, is_vision: false, max_ctx: 131072 }, ...], total: N, page: 1, limit: 20 }
   Defaults: limit=20, max=200
 ```
+
+`is_vision` — derived from model name heuristic (`is_vision_model()` in `inference_helpers.rs`). True for known vision model name patterns.
+`max_ctx` — `MAX(model_vram_profiles.max_ctx)` across all providers. `0` = not yet profiled by capacity analyzer. Populated by capacity analyzer from Ollama `/api/show` response `context_length`. Migration: `000005_model_vram_max_ctx.up.sql`.
+
+Used by frontend context-window warnings: `getMultiturnWarnings()` in `api-test-form.tsx` uses `max_ctx` to warn when conversation token estimate exceeds 85% of model's context window.
 
 ### Global Sync (async background)
 
