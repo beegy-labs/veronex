@@ -1,4 +1,19 @@
 {{/*
+Full release name — used as prefix for resource names (e.g. Vespa StatefulSet).
+*/}}
+{{- define "veronex.fullname" -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Base selector labels — release-scoped, combined with component label for uniqueness.
+Used by Vespa service/statefulset selectors.
+*/}}
+{{- define "veronex.selectorLabels" -}}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
 Common labels applied to all resources.
 */}}
 {{- define "veronex.labels" -}}
@@ -44,12 +59,12 @@ app.kubernetes.io/component: agent
 {{- end }}
 
 {{/*
-Selector labels — weather-mcp
+Selector labels — veronex-mcp
 */}}
-{{- define "veronex.weatherMcp.selectorLabels" -}}
-app.kubernetes.io/name: weather-mcp
+{{- define "veronex.veronexMcp.selectorLabels" -}}
+app.kubernetes.io/name: veronex-mcp
 app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/component: weather-mcp
+app.kubernetes.io/component: veronex-mcp
 {{- end }}
 
 {{/*

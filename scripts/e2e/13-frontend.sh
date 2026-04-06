@@ -2,18 +2,18 @@
 # Phase 13: Frontend E2E Tests (Playwright)
 #
 # Runs Playwright tests against the running veronex-web instance.
-# Requires: veronex-web up at WEB_URL (default http://localhost:3002)
+# Requires: veronex-web up at WEB_URL (default http://localhost:3000)
 #           playwright installed: cd web && npx playwright install
 #
 # Env vars:
-#   WEB_URL          — frontend base URL (default http://localhost:3002)
+#   WEB_URL          — frontend base URL (default http://localhost:3000)
 #   PLAYWRIGHT_GREP  — filter tests by pattern (optional)
 #   PW_WORKERS       — parallelism (default 4)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 
-WEB_URL="${WEB_URL:-http://localhost:3002}"
+WEB_URL="${WEB_URL:-http://localhost:3000}"
 WEB_DIR="$(cd "$SCRIPT_DIR/../../web" && pwd)"
 PW_WORKERS="${PW_WORKERS:-4}"
 

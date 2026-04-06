@@ -9,7 +9,7 @@ export default defineConfig({
   reporter: [['html', { open: 'never' }], ['list']],
   globalSetup: './e2e/global-setup.ts',
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3002',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3000',
     storageState: 'e2e/.auth.json',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',

@@ -37,6 +37,22 @@ veronex:
   # e.g. "https://s3.example.com/veronex-images" or "http://localhost:9010/veronex-images"
   imagePublicUrl: ""
 
+  # PostgreSQL connection pool max size. Default: 10
+  pgPoolMax: ""
+
+  # Valkey connection pool size. Default: 16
+  valkeyPoolSize: ""
+
+  # Login rate limit (max attempts per IP per 5-minute window). Default: 10. 0 = disabled.
+  loginRateLimit: ""
+
+  # Fallback model for vision inference when provider does not support images.
+  # e.g. "llava:13b"
+  visionFallbackModel: ""
+
+  # MCP vector selector top-K results returned from Vespa ANN search. Default: 8
+  mcpVectorTopK: ""
+
   otel:
     # gRPC endpoint (e.g. http://otel-collector:4317)
     endpoint: ""
@@ -124,7 +140,7 @@ veronexWeb:
 
   env: {}
 
-weatherMcp:
+veronexMcp:
   enabled: false
   image:
     repository: gitea.girok.dev/beegy-labs/veronex-mcp
@@ -144,6 +160,13 @@ weatherMcp:
 
   # Valkey connection pool size per instance
   valkeyPool: 4
+
+  # analyze_image tool — veronex gateway URL + API key
+  veronexUrl: ""      # e.g. http://veronex:3000
+  veronexApiKey: ""   # API key with inference access
+
+  # web_search tool — SearXNG instance URL
+  searxngUrl: ""      # e.g. http://searxng:8080
 
   logLevel: "info"
 
@@ -318,6 +341,12 @@ vespa:
   # Internal service URL — used by veronex pods
   # Override if deploying Vespa outside this chart.
   url: ""   # default: http://<release>-vespa:8080
+
+# ── Embedding service (for MCP vector selection with Vespa) ──────────────────
+# Used alongside vespa.enabled=true. Set url to your embedding service endpoint.
+
+embed:
+  url: ""  # e.g. http://veronex-embed:8000
 
 # ── Database Migrations ──────────────────────────────────────────────────────
 # Runs as pre-install,pre-upgrade Helm hook.

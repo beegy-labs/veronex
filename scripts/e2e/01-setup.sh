@@ -41,7 +41,7 @@ R=$(curl -sf "$API/readyz" 2>/dev/null || echo "")
 
 # Verify all infrastructure services are running
 INFRA_OK=true
-for svc in postgres valkey clickhouse redpanda minio otel-collector weather-mcp veronex-embed; do
+for svc in postgres valkey clickhouse redpanda minio otel-collector veronex-mcp veronex-embed; do
   STATUS=$(docker compose ps "$svc" --format "{{.Status}}" 2>/dev/null | head -1)
   case "$STATUS" in
     *healthy*|*Up*) ;;

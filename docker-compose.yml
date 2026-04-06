@@ -121,7 +121,7 @@ services:
       BOOTSTRAP_SUPER_USER: ${BOOTSTRAP_SUPER_USER-}
       BOOTSTRAP_SUPER_PASS: ${BOOTSTRAP_SUPER_PASS-}
       GEMINI_ENCRYPTION_KEY: ${GEMINI_ENCRYPTION_KEY:-22551e8092edc3243163385e0dc6157ead33f14f14b1dbc794f0a00bb51886ae}
-      CORS_ALLOWED_ORIGINS: http://localhost:3002
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
       RUST_LOG: info
       # Login rate limit per IP per 5-min window. Set to 0 to disable (e.g. E2E tests).
       LOGIN_RATE_LIMIT: "${LOGIN_RATE_LIMIT:-10}"
@@ -176,7 +176,7 @@ services:
       ANALYTICS_SECRET: ${ANALYTICS_SECRET:-veronex-analytics-internal-secret}
       RUST_LOG: info
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3003/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3003/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -233,7 +233,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  weather-mcp:
+  veronex-mcp:
     build:
       context: .
       dockerfile: crates/veronex-mcp/Dockerfile
@@ -304,7 +304,7 @@ services:
         condition: service_healthy
       veronex-embed:
         condition: service_healthy
-      weather-mcp:
+      veronex-mcp:
         condition: service_healthy
     restart: unless-stopped
 
@@ -316,7 +316,7 @@ services:
         NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001
         NEXT_PUBLIC_VERONEX_ADMIN_KEY: ${NEXT_PUBLIC_VERONEX_ADMIN_KEY:-veronex-bootstrap-admin-key}
     ports:
-      - "3002:3000"
+      - "3000:3000"
     environment:
       HOSTNAME: "0.0.0.0"
       NEXT_PUBLIC_VERONEX_API_URL: http://localhost:3001

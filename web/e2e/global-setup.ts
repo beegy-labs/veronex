@@ -53,7 +53,7 @@ export default async function globalSetup() {
 
   fs.writeFileSync(AUTH_FILE, JSON.stringify({
     cookies: [...httpOnlyCookies, ...sessionCookies],
-    origins: [{ origin: 'http://localhost:3002', localStorage: [] }],
+    origins: [{ origin: 'http://localhost:3000', localStorage: [] }],
   }))
 
   console.log(`[global-setup] Logged in as "${TEST_USERNAME}", saved ${httpOnlyCookies.length + sessionCookies.length} cookies`)

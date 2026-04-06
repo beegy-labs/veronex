@@ -2,7 +2,7 @@
 # Phase 12: MCP Integration Tests
 #
 # Tests the MCP tool-call path through /v1/chat/completions.
-# weather-mcp is bundled in docker-compose (port 3100) and always available.
+# veronex-mcp is bundled in docker-compose (port 3100) and always available.
 # MCP_TEST_URL defaults to http://localhost:3100.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,7 +11,7 @@ source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 # MCP_TEST_URL: direct access from host (scripts run on host, not inside Docker)
 MCP_TEST_URL="${MCP_TEST_URL:-http://localhost:3100}"
 # MCP_REGISTER_URL: URL the agent uses from inside Docker
-MCP_REGISTER_URL="${MCP_REGISTER_URL:-http://weather-mcp:3100}"
+MCP_REGISTER_URL="${MCP_REGISTER_URL:-http://veronex-mcp:3100}"
 
 # ── MCP Server CRUD ──────────────────────────────────────────────────────────
 
@@ -276,20 +276,20 @@ print(len(d.get('vectors',[])))
     || fail "veronex-embed POST /embed/batch → count=$BATCH_COUNT (expected 3)"
 fi
 
-# ── weather-mcp Direct Protocol Tests ────────────────────────────────────────
+# ── veronex-mcp Direct Protocol Tests ────────────────────────────────────────
 
-hdr "weather-mcp Protocol (${MCP_TEST_URL})"
+hdr "veronex-mcp Protocol (${MCP_TEST_URL})"
 
 # 1. Health check
 MCP_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$MCP_TEST_URL/health" 2>/dev/null || echo "000")
 case "$MCP_HEALTH" in
-  200) pass "weather-mcp /health → 200" ;;
+  200) pass "veronex-mcp /health → 200" ;;
   000)
-    fail "weather-mcp unreachable at $MCP_TEST_URL (is docker compose up?)"
+    fail "veronex-mcp unreachable at $MCP_TEST_URL (is docker compose up?)"
     save_counts
     exit 0
     ;;
-  *) fail "weather-mcp /health → $MCP_HEALTH" ;;
+  *) fail "veronex-mcp /health → $MCP_HEALTH" ;;
 esac
 
 # 2. MCP initialize handshake
@@ -300,15 +300,15 @@ INIT_RES=$(curl -s -w "\n%{http_code}" --max-time 10 "$MCP_TEST_URL" \
 INIT_CODE=$(echo "$INIT_RES" | tail -1)
 INIT_BODY=$(echo "$INIT_RES" | sed '$d')
 [ "$INIT_CODE" = "200" ] \
-  && pass "weather-mcp initialize → 200" \
-  || fail "weather-mcp initialize → $INIT_CODE"
+  && pass "veronex-mcp initialize → 200" \
+  || fail "veronex-mcp initialize → $INIT_CODE"
 
 # 3. Check protocol version in response
 if [ "$INIT_CODE" = "200" ]; then
   PROTO=$(echo "$INIT_BODY" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('result',{}).get('protocolVersion',''))" 2>/dev/null || echo "")
   [ "$PROTO" = "2025-03-26" ] \
-    && pass "weather-mcp protocolVersion = 2025-03-26" \
-    || fail "weather-mcp protocolVersion = '$PROTO' (expected 2025-03-26)"
+    && pass "veronex-mcp protocolVersion = 2025-03-26" \
+    || fail "veronex-mcp protocolVersion = '$PROTO' (expected 2025-03-26)"
 fi
 
 # 4. tools/list — expect analyze_image, get_weather and web_search (geocoding is internal, not exposed)
@@ -322,12 +322,12 @@ tools=json.loads(sys.stdin.read()).get('result',{}).get('tools',[])
 print(','.join(t.get('name','') for t in tools))
 " 2>/dev/null || echo "")
 TOOL_COUNT=$(echo "$TOOLS_LIST" | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read()).get('result',{}).get('tools',[])))" 2>/dev/null || echo "0")
-echo "$TOOL_NAMES" | grep -q "get_weather" && echo "$TOOL_NAMES" | grep -q "web_search" && echo "$TOOL_NAMES" | grep -q "analyze_image" \
-  && pass "weather-mcp tools/list → [analyze_image,get_weather,web_search] (geocoding internal via embedded GeoNames)" \
-  || fail "weather-mcp tools/list → [$TOOL_NAMES] count=$TOOL_COUNT (expected: analyze_image,get_weather,web_search)"
+echo "$TOOL_NAMES" | grep -q "get_weather" && echo "$TOOL_NAMES" | grep -q "web_search" && echo "$TOOL_NAMES" | grep -q "analyze_image" && echo "$TOOL_NAMES" | grep -q "get_datetime" \
+  && pass "veronex-mcp tools/list → [analyze_image,get_weather,web_search] (geocoding internal via embedded GeoNames)" \
+  || fail "veronex-mcp tools/list → [$TOOL_NAMES] count=$TOOL_COUNT (expected: analyze_image,get_weather,web_search)"
 echo "$TOOL_NAMES" | grep -qv "get_coordinates" \
-  && pass "weather-mcp tools/list → get_coordinates not exposed (internal implementation)" \
-  || fail "weather-mcp tools/list → get_coordinates still exposed (should be internal)"
+  && pass "veronex-mcp tools/list → get_coordinates not exposed (internal implementation)" \
+  || fail "veronex-mcp tools/list → get_coordinates still exposed (should be internal)"
 
 # 5. tools/call get_weather — English city name, combined weather + air quality
 WEATHER_RES=$(curl -s --max-time 20 "$MCP_TEST_URL" \
@@ -351,8 +351,8 @@ except Exception as e:
     print(f'parse_err:{e}:{text[:60]}')
 " 2>/dev/null || echo "parse_error")
 [ "$WEATHER_CHECK" = "ok" ] \
-  && pass "weather-mcp get_weather(Seoul) → weather+air_quality combined (temp,uv,wind,pm2.5,aqi)" \
-  || info "weather-mcp get_weather(Seoul) → $WEATHER_CHECK (network may be unavailable)"
+  && pass "veronex-mcp get_weather(Seoul) → weather+air_quality combined (temp,uv,wind,pm2.5,aqi)" \
+  || info "veronex-mcp get_weather(Seoul) → $WEATHER_CHECK (network may be unavailable)"
 
 # 6. tools/call get_weather — Korean city+district (offline geocoding: embedded GeoNames)
 KO_RES=$(curl -s --max-time 20 "$MCP_TEST_URL" \
@@ -373,8 +373,8 @@ except Exception as e:
     print(f'parse_err:{e}:{text[:60]}')
 " 2>/dev/null || echo "parse_error")
 [ "$KO_CHECK" = "ok" ] \
-  && pass "weather-mcp get_weather(서울 강남) → Korean district resolved via embedded GeoNames" \
-  || info "weather-mcp get_weather(서울 강남) → $KO_CHECK (network may be unavailable)"
+  && pass "veronex-mcp get_weather(서울 강남) → Korean district resolved via embedded GeoNames" \
+  || info "veronex-mcp get_weather(서울 강남) → $KO_CHECK (network may be unavailable)"
 
 # 7. tools/call web_search — verify the new search tool works
 SEARCH_RES=$(curl -s --max-time 20 "$MCP_TEST_URL" \
@@ -397,8 +397,8 @@ except Exception as e:
     print(f'parse_err:{e}:{text[:80]}')
 " 2>/dev/null || echo "parse_error")
 [ "$SEARCH_CHECK" = "ok" ] \
-  && pass "weather-mcp web_search(Rust) → returned search results" \
-  || info "weather-mcp web_search(Rust) → $SEARCH_CHECK (DuckDuckGo may be unavailable)"
+  && pass "veronex-mcp web_search(Rust) → returned search results" \
+  || info "veronex-mcp web_search(Rust) → $SEARCH_CHECK (DuckDuckGo may be unavailable)"
 
 # 7.5. tools/call web_search — Korean query (multilingual SearXNG)
 SEARCH_KO_RES=$(curl -s --max-time 20 "$MCP_TEST_URL" \
@@ -421,8 +421,8 @@ except Exception as e:
     print(f'parse_err:{e}:{text[:80]}')
 " 2>/dev/null || echo "parse_error")
 [ "$SEARCH_KO_CHECK" = "ok" ] \
-  && pass "weather-mcp web_search(Korean) → returned results (multilingual)" \
-  || info "weather-mcp web_search(Korean) → $SEARCH_KO_CHECK (SearXNG may be unavailable)"
+  && pass "veronex-mcp web_search(Korean) → returned results (multilingual)" \
+  || info "veronex-mcp web_search(Korean) → $SEARCH_KO_CHECK (SearXNG may be unavailable)"
 
 # 7.8. tools/call analyze_image — routes through Veronex gateway (requires VERONEX_API_KEY + qwen3-vl:8b)
 # A 1x1 white PNG in base64 (minimal valid image)
@@ -449,8 +449,8 @@ else:
         print(f'parse_err:{e}:{text[:60]}')
 " 2>/dev/null || echo "parse_error")
 [ "$ANALYZE_CHECK" = "ok" ] \
-  && pass "weather-mcp analyze_image → description returned via Veronex gateway (qwen3-vl:8b)" \
-  || info "weather-mcp analyze_image → $ANALYZE_CHECK (requires VERONEX_API_KEY + qwen3-vl:8b loaded)"
+  && pass "veronex-mcp analyze_image → description returned via Veronex gateway (qwen3-vl:8b)" \
+  || info "veronex-mcp analyze_image → $ANALYZE_CHECK (requires VERONEX_API_KEY + qwen3-vl:8b loaded)"
 
 # 8. tools/call get_weather — unknown city returns isError=true (no network needed)
 ERR_RES=$(curl -s --max-time 10 "$MCP_TEST_URL" \
@@ -463,12 +463,12 @@ r=json.loads(sys.stdin.read()).get('result',{})
 print('true' if r.get('isError') else 'false')
 " 2>/dev/null || echo "?")
 [ "$ERR_IS_ERROR" = "true" ] \
-  && pass "weather-mcp get_weather(unknown city) → isError=true (GeoNames lookup failed)" \
-  || fail "weather-mcp get_weather(unknown city) → isError=$ERR_IS_ERROR (expected true)"
+  && pass "veronex-mcp get_weather(unknown city) → isError=true (GeoNames lookup failed)" \
+  || fail "veronex-mcp get_weather(unknown city) → isError=$ERR_IS_ERROR (expected true)"
 
 # ── Full MCP Integration (register → online → tool_call → disable → delete) ──
 
-hdr "MCP Full Integration (veronex → weather-mcp)"
+hdr "MCP Full Integration (veronex → veronex-mcp)"
 
 INT_SLUG="e2eweather"
 INT_NAME="e2e-weather-integration"
@@ -481,13 +481,13 @@ if [ -n "$STALE_INT_ID" ]; then
   curl -s -o /dev/null -X DELETE "$API/v1/mcp/servers/$STALE_INT_ID" -H "Authorization: Bearer $TK" 2>/dev/null || true
 fi
 
-# 1. Register weather-mcp server
+# 1. Register veronex-mcp server
 INT_REG=$(apost "/v1/mcp/servers" \
   "{\"name\":\"$INT_NAME\",\"slug\":\"$INT_SLUG\",\"url\":\"$MCP_REGISTER_URL\",\"timeout_secs\":30}" \
   2>/dev/null || echo "{}")
 INT_ID=$(echo "$INT_REG" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('id',''))" 2>/dev/null || echo "")
 [ -n "$INT_ID" ] \
-  && pass "MCP integration: registered weather-mcp server (id: $INT_ID)" \
+  && pass "MCP integration: registered veronex-mcp server (id: $INT_ID)" \
   || { fail "MCP integration: failed to register server (resp: $INT_REG)"; save_counts; exit 0; }
 
 # 2. Wait for server to become online (veronex-agent heartbeat, up to 15s)
