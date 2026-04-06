@@ -5,6 +5,7 @@ use crate::application::ports::inbound::inference_use_case::{InferenceUseCase, S
 use crate::application::ports::outbound::account_repository::AccountRepository;
 use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
 use crate::application::ports::outbound::lab_settings_repository::{LabSettings, LabSettingsRepository};
+use crate::application::ports::outbound::mcp_settings_repository::{McpSettings, McpSettingsRepository};
 use crate::application::ports::outbound::provider_model_selection::{ProviderModelSelectionRepository, ProviderSelectedModel};
 use crate::application::ports::outbound::gemini_model_repository::{GeminiModel, GeminiModelRepository};
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
@@ -284,6 +285,14 @@ impl crate::application::ports::outbound::capacity_settings_repository::Capacity
     async fn record_run(&self, _: &str) -> Result<()> { Ok(()) }
 }
 
+pub(crate) struct MockMcpSettingsRepo;
+
+#[async_trait]
+impl McpSettingsRepository for MockMcpSettingsRepo {
+    async fn get(&self) -> anyhow::Result<McpSettings> { Ok(McpSettings::default()) }
+    async fn update(&self, _patch: crate::application::ports::outbound::mcp_settings_repository::McpSettingsUpdate) -> anyhow::Result<McpSettings> { Ok(McpSettings::default()) }
+}
+
 pub(crate) struct MockLabSettingsRepo;
 
 #[async_trait]
@@ -332,6 +341,7 @@ pub(crate) fn make_app() -> axum::Router {
         created_at: chrono::Utc::now(),
         key_type: KeyType::Standard,
         tier: KeyTier::Paid,
+        mcp_cap_points: 3,
         account_id: None,
     };
     let pg_pool = sqlx::postgres::PgPoolOptions::new()
@@ -374,6 +384,7 @@ pub(crate) fn make_app() -> axum::Router {
         session_grouping_lock: Arc::new(tokio::sync::Semaphore::new(1)),
         sync_lock: Arc::new(tokio::sync::Semaphore::new(1)),
         lab_settings_repo: Arc::new(MockLabSettingsRepo),
+        mcp_settings_repo: Arc::new(MockMcpSettingsRepo),
         sse_connections: Arc::new(AtomicU32::new(0)),
         vram_budget_repo: Arc::new(MockVramBudgetRepo),
         mcp_bridge: None,
@@ -381,6 +392,11 @@ pub(crate) fn make_app() -> axum::Router {
         mcp_tool_indexer: None,
         instance_id: Arc::from("test-instance"),
         login_rate_limit: 0,
+        kafka_broker_admin_url: None,
+        clickhouse_http_url: None,
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_db: None,
     };
     // Inject a fake InferCaller extension so handlers that extract it work in tests.
     router::build_api_router()

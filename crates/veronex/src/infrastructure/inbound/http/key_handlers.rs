@@ -23,6 +23,7 @@ pub struct PatchKeyRequest {
     pub is_active: Option<bool>,
     /// Billing tier: `"paid"` | `"free"`.
     pub tier: Option<String>,
+    pub mcp_cap_points: Option<i16>,
 }
 
 // ── Request / Response types ───────────────────────────────────────
@@ -63,6 +64,7 @@ pub struct KeySummary {
     pub created_at: chrono::DateTime<Utc>,
     /// Billing tier: free or paid.
     pub tier: KeyTier,
+    pub mcp_cap_points: i16,
     /// Username of creator (populated via account_id JOIN).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
@@ -102,6 +104,7 @@ pub async fn create_key(
         deleted_at: None,
         key_type: KeyType::Standard,
         tier: req.tier,
+        mcp_cap_points: 3,
         account_id: Some(claims.sub),
     };
 
@@ -182,6 +185,7 @@ pub async fn list_keys(
                 expires_at: k.expires_at,
                 created_at: k.created_at,
                 tier: k.tier,
+                mcp_cap_points: k.mcp_cap_points,
                 created_by,
             }
         })
@@ -234,23 +238,44 @@ pub async fn toggle_key(
         }
     }
 
+    // Validate all input before any writes to avoid partial updates.
+    let tier = match req.tier {
+        Some(ref s) => Some(s.parse::<KeyTier>().map_err(AppError::BadRequest)?),
+        None => None,
+    };
+    if let Some(cap) = req.mcp_cap_points {
+        if !(0..=10).contains(&cap) {
+            return Err(AppError::BadRequest("mcp_cap_points must be between 0 and 10".into()));
+        }
+    }
+
     // Build audit description before consuming req fields.
     let mut changes = Vec::new();
     if let Some(active) = req.is_active { changes.push(format!("is_active={active}")); }
-    if let Some(ref tier) = req.tier { changes.push(format!("tier={tier}")); }
+    if let Some(ref t) = tier { changes.push(format!("tier={t}")); }
+    if let Some(cap) = req.mcp_cap_points { changes.push(format!("mcp_cap_points={cap}")); }
     let details = if changes.is_empty() {
         format!("API key {kid} updated (no changes)")
     } else {
         format!("API key {kid} updated — {}", changes.join(", "))
     };
 
-    // Validate all input before any writes to avoid partial updates.
-    let tier = match req.tier {
-        Some(ref s) => Some(s.parse::<KeyTier>().map_err(AppError::BadRequest)?),
-        None => None,
-    };
-
     state.api_key_repo.update_fields(&kid.0, req.is_active, tier.as_ref()).await?;
+
+    if let Some(cap) = req.mcp_cap_points {
+        sqlx::query("UPDATE api_keys SET mcp_cap_points = $1 WHERE id = $2")
+            .bind(cap)
+            .bind(kid.0)
+            .execute(&state.pg_pool)
+            .await
+            .map_err(super::error::db_error)?;
+        // Invalidate Valkey cap_points cache for this key.
+        if let Some(ref pool) = state.valkey_pool {
+            use fred::prelude::*;
+            use crate::infrastructure::outbound::valkey_keys;
+            let _ = pool.del::<(), _>(&valkey_keys::mcp_key_cap_points(kid.0)).await;
+        }
+    }
 
     emit_audit(&state, &claims, "update", "api_key", &kid.to_string(), &kid.to_string(), &details).await;
 
@@ -352,6 +377,7 @@ mod tests {
             expires_at: None,
             created_at: Utc::now(),
             tier: KeyTier::Paid,
+            mcp_cap_points: 3,
             created_by: None,
         };
         let json = serde_json::to_value(&summary).unwrap();

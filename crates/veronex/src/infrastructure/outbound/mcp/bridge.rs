@@ -27,10 +27,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
+use chrono;
 
 use veronex_mcp::{McpCircuitBreaker, McpResultCache, McpSessionManager, McpToolCache, truncate_at_char_boundary};
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
+use crate::application::ports::outbound::analytics_repository::{AnalyticsRepository, McpToolCallEvent};
 use crate::domain::enums::{ApiFormat, ProviderType};
 use crate::domain::value_objects::JobId;
 use crate::infrastructure::inbound::http::inference_helpers::validate_tool_call;
@@ -49,7 +51,7 @@ const LOOP_DETECT_THRESHOLD: u8 = 3;
 /// Result cache TTL (seconds).
 const RESULT_CACHE_TTL_SECS: i64 = 300;
 /// Per-round token collection timeout. Bounds worst-case hang at MAX_ROUNDS × this value.
-const COLLECT_ROUND_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(120);
+const COLLECT_ROUND_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(45);
 /// Maximum bytes of a single MCP tool result injected into the messages array.
 /// Prevents OOM from malicious/misconfigured servers at high concurrency.
 const MAX_TOOL_RESULT_BYTES: usize = 32_768;
@@ -69,6 +71,7 @@ pub struct McpBridgeAdapter {
     pub tool_cache: Arc<McpToolCache>,
     pub result_cache: Arc<McpResultCache>,
     pub circuit_breaker: Arc<McpCircuitBreaker>,
+    pub analytics_repo: Option<Arc<dyn AnalyticsRepository>>,
 }
 
 /// Outcome of a single agentic loop run.
@@ -98,7 +101,7 @@ impl McpBridgeAdapter {
         result_cache: Arc<McpResultCache>,
         circuit_breaker: Arc<McpCircuitBreaker>,
     ) -> Self {
-        Self { session_manager, tool_cache, result_cache, circuit_breaker }
+        Self { session_manager, tool_cache, result_cache, circuit_breaker, analytics_repo: None }
     }
 
     /// Returns `true` if MCP should intercept this request
@@ -122,7 +125,7 @@ impl McpBridgeAdapter {
         model: String,
         mut messages: Vec<Value>,
         base_tools: Option<Vec<Value>>,
-        want_stream: bool,
+        _want_stream: bool,
         conversation_id: Option<uuid::Uuid>,
         stop: Option<Value>,
         seed: Option<u32>,
@@ -130,17 +133,25 @@ impl McpBridgeAdapter {
         frequency_penalty: Option<f64>,
         presence_penalty: Option<f64>,
     ) -> Option<McpLoopResult> {
-        // ── Per-key MCP server ACL ─────────────────────────────────────────────
-        // Default deny: API key callers must have explicit grants in mcp_key_access.
-        // No rows = empty allowlist = no MCP access.
-        // JWT session callers (account_id only, no api_key_id) bypass ACL.
-        let allowed_servers: Option<Arc<HashSet<Uuid>>> =
+        // ── Per-key ACL + cap_points + top_k — fetched in parallel ───────────
+        // JWT session callers (no api_key_id) bypass all key-level limits.
+        let (allowed_servers, max_rounds, top_k_override) =
             if let Some(key_id) = caller.api_key_id() {
-                let ids = fetch_mcp_acl(state, key_id).await;
-                // Always wrap in Some — empty set = deny all, non-empty = allow listed servers.
-                Some(Arc::new(ids.into_iter().collect()))
+                let (acl_ids, cap, topk) = tokio::join!(
+                    fetch_mcp_acl(state, key_id),
+                    fetch_mcp_cap_points(state, key_id),
+                    fetch_mcp_top_k(state, key_id),
+                );
+                // cap_points = 0 → MCP disabled for this key
+                if cap == Some(0) {
+                    return None;
+                }
+                let max_r = cap.map(|n| n.min(MAX_ROUNDS)).unwrap_or(MAX_ROUNDS);
+                // Default deny: empty set = deny all, non-empty = allow listed servers.
+                let allowed = Some(Arc::new(acl_ids.into_iter().collect::<HashSet<Uuid>>()));
+                (allowed, max_r, topk)
             } else {
-                None
+                (None, MAX_ROUNDS, None)
             };
 
         // ── Build the tool list (vector selection or fallback get_all) ───────────
@@ -149,11 +160,11 @@ impl McpBridgeAdapter {
         // select Top-K semantically relevant tools via Vespa ANN.
         // Fallback (Vespa unavailable or not configured): get_all() + MAX_TOOLS cut.
         let last_user_query = extract_last_user_prompt(&messages);
-        // MCP servers are global — service_id = "global" (multi-tenant: override per-account later).
+        // MCP servers are registered globally — tools are indexed under service_id="global".
         let service_id = "global";
 
         let mcp_openai_tools: Vec<Value> = if let Some(ref selector) = state.mcp_vector_selector {
-            match selector.select(&last_user_query, &service_id).await {
+            match selector.select(&last_user_query, service_id, top_k_override).await {
                 Some(hits) => {
                     use veronex_mcp::vector::McpVectorSelector;
                     McpVectorSelector::hits_to_openai(&hits)
@@ -193,7 +204,7 @@ impl McpBridgeAdapter {
         let mut final_tool_calls: Vec<Value> = Vec::new();
         let mut all_mcp_tool_calls: Vec<Value> = Vec::new();
         let mut rounds: u8 = 0;
-        let mut final_job_id: Option<JobId> = None;
+        let final_job_id: Option<JobId> = None;
 
         let mut first_job_id: Option<JobId> = None;
 
@@ -202,7 +213,7 @@ impl McpBridgeAdapter {
         // Loop-detection: (tool_name, args_hash) → count
         let mut call_sig_counts: HashMap<(String, String), u8> = HashMap::new();
 
-        for round in 0..MAX_ROUNDS {
+        for round in 0..max_rounds {
             debug!(round, "MCP agentic loop round");
 
             // ── Submit job ─────────────────────────────────────────────────────
@@ -331,9 +342,16 @@ impl McpBridgeAdapter {
             }));
 
             // ── Execute MCP tools (join_all: order preserved for index mapping) ─
-            let results = self.execute_calls(state, &mcp_calls, caller.api_key_id(), round + 1, mcp_loop_id, job_id.0, allowed_servers.clone()).await;
+            let tenant_id = caller.account_id()
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            let exec_results = self.execute_calls(state, &mcp_calls, caller.api_key_id(), tenant_id, round + 1, mcp_loop_id, job_id.0, allowed_servers.clone()).await;
 
-            for (tc, result_text) in mcp_calls.iter().zip(results.into_iter()) {
+            // Batch-insert all tool call records for this round in one query.
+            let db_rows: Vec<&ToolCallRecord> = exec_results.iter().map(|(_, r)| r).collect();
+            batch_insert_tool_calls(&state.pg_pool, mcp_loop_id, job_id.0, &db_rows).await;
+
+            for (tc, (result_text, _)) in mcp_calls.iter().zip(exec_results.into_iter()) {
                 let call_id = tc["id"].as_str().unwrap_or("call_0");
                 let tool_name = tc["function"]["name"].as_str().unwrap_or("");
                 messages.push(serde_json::json!({
@@ -342,6 +360,14 @@ impl McpBridgeAdapter {
                     "name": tool_name,
                     "content": result_text
                 }));
+            }
+
+            // ── Context window pruning ─────────────────────────────────────────
+            // After the second tool round, earlier tool results are rarely needed
+            // verbatim. Compress them to a short summary to bound context growth.
+            // Keep the last 2 rounds of tool messages intact; summarise prior ones.
+            if rounds >= 2 {
+                prune_tool_messages(&mut messages, 2);
             }
 
             info!(round, mcp_calls = mcp_calls.len(), "MCP round complete");
@@ -436,27 +462,27 @@ impl McpBridgeAdapter {
 
     async fn execute_calls(
         &self,
-        state: &AppState,
+        _state: &AppState,
         calls: &[Value],
         api_key_id: Option<Uuid>,
+        tenant_id: String,
         loop_round: u8,
         mcp_loop_id: Uuid,
         triggering_job_id: Uuid,
         allowed_servers: Option<Arc<HashSet<Uuid>>>,
-    ) -> Vec<String> {
+    ) -> Vec<(String, ToolCallRecord)> {
         use futures::stream::{self, StreamExt};
 
         // `buffered`: preserves submission order (required for Ollama index-based mapping)
         // while capping in-flight calls at MAX_CONCURRENT_TOOL_CALLS.
         // Each future owns clones of the cheap Arc fields — no borrowed lifetime issues.
-        let pg_pool = state.pg_pool.clone();
         stream::iter(calls.iter().cloned())
             .map(|tc| {
                 let bridge = self.clone();
-                let pg_pool = pg_pool.clone();
                 let allowed = allowed_servers.clone();
+                let tenant_id = tenant_id.clone();
                 async move {
-                    bridge.execute_one(&tc, api_key_id, loop_round, mcp_loop_id, triggering_job_id, &pg_pool, allowed.as_deref()).await
+                    bridge.execute_one(&tc, api_key_id, tenant_id, loop_round, mcp_loop_id, triggering_job_id, allowed.as_deref()).await
                 }
             })
             .buffered(MAX_CONCURRENT_TOOL_CALLS)
@@ -468,12 +494,12 @@ impl McpBridgeAdapter {
         &self,
         tc: &Value,
         api_key_id: Option<Uuid>,
+        tenant_id: String,
         loop_round: u8,
         mcp_loop_id: Uuid,
         triggering_job_id: Uuid,
-        pg_pool: &sqlx::PgPool,
         allowed_servers: Option<&HashSet<Uuid>>,
-    ) -> String {
+    ) -> (String, ToolCallRecord) {
         let namespaced = tc["function"]["name"].as_str().unwrap_or("");
         let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
         let args: Value = serde_json::from_str(args_str)
@@ -484,7 +510,9 @@ impl McpBridgeAdapter {
             Some(id) => id,
             None => {
                 warn!(tool = %namespaced, "MCP: no server mapping");
-                return serde_json::json!({"error": "unknown tool", "tool": namespaced}).to_string();
+                let text = serde_json::json!({"error": "unknown tool", "tool": namespaced}).to_string();
+                let rec = ToolCallRecord::error(mcp_loop_id, triggering_job_id, loop_round, Uuid::nil(), "unknown", namespaced, &args, "unknown_tool");
+                return (text, rec);
             }
         };
 
@@ -492,18 +520,19 @@ impl McpBridgeAdapter {
         if let Some(allowed) = allowed_servers {
             if !allowed.contains(&server_id) {
                 warn!(tool = %namespaced, server = %server_id, "MCP ACL: access denied for this key");
-                return "{\"error\": \"MCP server access denied\"}".into();
+                let rec = ToolCallRecord::error(mcp_loop_id, triggering_job_id, loop_round, server_id, namespaced, namespaced, &args, "acl_denied");
+                return ("{\"error\": \"MCP server access denied\"}".into(), rec);
             }
         }
 
         // ── Circuit breaker ────────────────────────────────────────────────────
         if self.circuit_breaker.is_open(server_id) {
             warn!(tool = %namespaced, server = %server_id, "MCP circuit open — skipping");
-            // Slug/tool_name derived by parsing (tool_def not yet resolved).
             let slug = server_slug_from_namespaced(namespaced);
             let rname = raw_tool_name(namespaced);
-            emit_mcp_span(namespaced, slug, rname, server_id, api_key_id, "circuit_open", false, 0, 0, loop_round);
-            return "{\"error\": \"MCP server temporarily unavailable (circuit open)\"}".into();
+            self.fire_mcp_ingest(triggering_job_id, api_key_id, tenant_id.clone(), server_id, slug.to_string(), rname.to_string(), namespaced.to_string(), "circuit_open", false, 0, 0, 0, loop_round);
+            let rec = ToolCallRecord::error(mcp_loop_id, triggering_job_id, loop_round, server_id, rname, namespaced, &args, "circuit_open");
+            return ("{\"error\": \"MCP server temporarily unavailable (circuit open)\"}".into(), rec);
         }
 
         // ── Resolve tool definition + raw name ────────────────────────────────
@@ -528,26 +557,22 @@ impl McpBridgeAdapter {
             if let Some(cached) = self.result_cache.get(tool_def, &args).await {
                 let text = cached.to_llm_string();
                 let bytes = text.len() as u32;
-                emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, "cache_hit", true, 0, bytes, loop_round);
-                let _ = sqlx::query(
-                    "INSERT INTO mcp_loop_tool_calls \
-                     (mcp_loop_id, job_id, loop_round, server_id, tool_name, namespaced_name, \
-                      args_json, result_text, outcome, cache_hit, latency_ms, result_bytes) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'cache_hit', true, 0, $9)"
-                )
-                .bind(mcp_loop_id)
-                .bind(triggering_job_id)
-                .bind(loop_round as i16)
-                .bind(server_id)
-                .bind(raw_name)
-                .bind(namespaced)
-                .bind(&args)
-                .bind(&text)
-                .bind(bytes as i32)
-                .execute(pg_pool)
-                .await
-                .map_err(|e| warn!(tool = %namespaced, error = %e, "mcp_loop_tool_calls cache_hit insert failed"));
-                return text;
+                self.fire_mcp_ingest(triggering_job_id, api_key_id, tenant_id.clone(), server_id, server_slug.to_string(), raw_name.to_string(), namespaced.to_string(), "cache_hit", true, 0, bytes, 0, loop_round);
+                let rec = ToolCallRecord {
+                    mcp_loop_id,
+                    job_id: triggering_job_id,
+                    loop_round,
+                    server_id,
+                    tool_name: raw_name.to_string(),
+                    namespaced_name: namespaced.to_string(),
+                    args_json: args.clone(),
+                    result_text: Some(text.clone()),
+                    outcome: "cache_hit".to_string(),
+                    cache_hit: true,
+                    latency_ms: 0,
+                    result_bytes: bytes as i32,
+                };
+                return (text, rec);
             }
         }
 
@@ -603,35 +628,187 @@ impl McpBridgeAdapter {
         };
 
         let bytes = text.len() as u32;
-        emit_mcp_span(namespaced, server_slug, raw_name, server_id, api_key_id, outcome, false, latency_ms, bytes, loop_round);
+        self.fire_mcp_ingest(triggering_job_id, api_key_id, tenant_id, server_id, server_slug.to_string(), raw_name.to_string(), namespaced.to_string(), outcome, false, latency_ms, bytes, 1, loop_round);
 
-        // Persist tool execution to mcp_loop_tool_calls
-        let _ = sqlx::query(
-            "INSERT INTO mcp_loop_tool_calls \
-             (mcp_loop_id, job_id, loop_round, server_id, tool_name, namespaced_name, \
-              args_json, result_text, outcome, cache_hit, latency_ms, result_bytes) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10, $11)"
-        )
-        .bind(mcp_loop_id)
-        .bind(triggering_job_id)
-        .bind(loop_round as i16)
-        .bind(server_id)
-        .bind(raw_name)
-        .bind(namespaced)
-        .bind(&args)
-        .bind(&result_for_db)
-        .bind(outcome)
-        .bind(latency_ms as i32)
-        .bind(bytes as i32)
-        .execute(pg_pool)
-        .await
-        .map_err(|e| warn!(tool = %namespaced, error = %e, "mcp_loop_tool_calls insert failed"));
+        let rec = ToolCallRecord {
+            mcp_loop_id,
+            job_id: triggering_job_id,
+            loop_round,
+            server_id,
+            tool_name: raw_name.to_string(),
+            namespaced_name: namespaced.to_string(),
+            args_json: args.clone(),
+            result_text: result_for_db,
+            outcome: outcome.to_string(),
+            cache_hit: false,
+            latency_ms: latency_ms as i32,
+            result_bytes: bytes as i32,
+        };
 
-        text
+        (text, rec)
     }
 }
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
+
+/// Data for one tool call row — collected during execution, batch-inserted after the round.
+struct ToolCallRecord {
+    mcp_loop_id: Uuid,
+    job_id: Uuid,
+    loop_round: u8,
+    server_id: Uuid,
+    tool_name: String,
+    namespaced_name: String,
+    args_json: Value,
+    result_text: Option<String>,
+    outcome: String,
+    cache_hit: bool,
+    latency_ms: i32,
+    result_bytes: i32,
+}
+
+impl ToolCallRecord {
+    fn error(
+        mcp_loop_id: Uuid,
+        job_id: Uuid,
+        loop_round: u8,
+        server_id: Uuid,
+        tool_name: &str,
+        namespaced_name: &str,
+        args: &Value,
+        outcome: &str,
+    ) -> Self {
+        Self {
+            mcp_loop_id,
+            job_id,
+            loop_round,
+            server_id,
+            tool_name: tool_name.to_string(),
+            namespaced_name: namespaced_name.to_string(),
+            args_json: args.clone(),
+            result_text: None,
+            outcome: outcome.to_string(),
+            cache_hit: false,
+            latency_ms: 0,
+            result_bytes: 0,
+        }
+    }
+}
+
+/// Batch INSERT all tool call records for a round in a single multi-row statement.
+/// Falls back to a no-op on empty input. Errors are logged, not propagated.
+async fn batch_insert_tool_calls(pg_pool: &sqlx::PgPool, mcp_loop_id: Uuid, job_id: Uuid, rows: &[&ToolCallRecord]) {
+    if rows.is_empty() {
+        return;
+    }
+
+    // Build parallel arrays for unnest — avoids dynamic SQL generation and
+    // is safe against injection (all values are typed, not interpolated).
+    let mut loop_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
+    let mut job_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
+    let mut rounds: Vec<i16> = Vec::with_capacity(rows.len());
+    let mut server_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
+    let mut tool_names: Vec<&str> = Vec::with_capacity(rows.len());
+    let mut ns_names: Vec<&str> = Vec::with_capacity(rows.len());
+    let mut args_jsons: Vec<&Value> = Vec::with_capacity(rows.len());
+    let mut result_texts: Vec<Option<&str>> = Vec::with_capacity(rows.len());
+    let mut outcomes: Vec<&str> = Vec::with_capacity(rows.len());
+    let mut cache_hits: Vec<bool> = Vec::with_capacity(rows.len());
+    let mut latencies: Vec<i32> = Vec::with_capacity(rows.len());
+    let mut result_bytes: Vec<i32> = Vec::with_capacity(rows.len());
+
+    for r in rows {
+        loop_ids.push(r.mcp_loop_id);
+        job_ids.push(r.job_id);
+        rounds.push(r.loop_round as i16);
+        server_ids.push(r.server_id);
+        tool_names.push(&r.tool_name);
+        ns_names.push(&r.namespaced_name);
+        args_jsons.push(&r.args_json);
+        result_texts.push(r.result_text.as_deref());
+        outcomes.push(&r.outcome);
+        cache_hits.push(r.cache_hit);
+        latencies.push(r.latency_ms);
+        result_bytes.push(r.result_bytes);
+    }
+
+    // Unused params mcp_loop_id/job_id kept in signature for callsite clarity.
+    let _ = (mcp_loop_id, job_id);
+
+    let _ = sqlx::query(
+        "INSERT INTO mcp_loop_tool_calls \
+         (mcp_loop_id, job_id, loop_round, server_id, tool_name, namespaced_name, \
+          args_json, result_text, outcome, cache_hit, latency_ms, result_bytes) \
+         SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::smallint[], $4::uuid[], \
+          $5::text[], $6::text[], $7::jsonb[], $8::text[], $9::text[], \
+          $10::bool[], $11::int[], $12::int[])"
+    )
+    .bind(&loop_ids)
+    .bind(&job_ids)
+    .bind(&rounds)
+    .bind(&server_ids)
+    .bind(&tool_names)
+    .bind(&ns_names)
+    .bind(&args_jsons)
+    .bind(&result_texts)
+    .bind(&outcomes)
+    .bind(&cache_hits)
+    .bind(&latencies)
+    .bind(&result_bytes)
+    .execute(pg_pool)
+    .await
+    .map_err(|e| warn!(error = %e, n = rows.len(), "mcp_loop_tool_calls batch insert failed"));
+}
+
+/// Context window pruning: keep the last `keep_rounds` rounds of tool messages verbatim.
+/// Earlier tool messages are replaced with a compact summary to prevent unbounded growth.
+///
+/// Strategy: walk backwards from the end, counting assistant-with-tool_calls turns.
+/// When we find the boundary (older than `keep_rounds` turns), replace tool-role messages
+/// before the boundary with a single "tool" message summarising the truncated data.
+fn prune_tool_messages(messages: &mut Vec<Value>, keep_rounds: usize) {
+    // Find assistant+tool_calls boundaries (each marks one tool round).
+    // We walk the slice collecting (index, round_number) for assistant messages that have tool_calls.
+    let boundaries: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            if m["role"].as_str() == Some("assistant") && m["tool_calls"].is_array() {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if boundaries.len() <= keep_rounds {
+        return; // Nothing to prune yet.
+    }
+
+    // The cut point: everything before boundaries[len - keep_rounds] is "old".
+    let cut = boundaries[boundaries.len() - keep_rounds];
+
+    // Replace all tool-role messages before `cut` with a compact summary.
+    // We replace them in-place rather than splicing to avoid index shifts.
+    // Mark each old tool message with a compressed placeholder.
+    let mut replaced = 0usize;
+    for i in 0..cut {
+        if messages[i]["role"].as_str() == Some("tool") {
+            let name = messages[i]["name"].as_str().unwrap_or("tool").to_string();
+            messages[i] = serde_json::json!({
+                "role": "tool",
+                "tool_call_id": messages[i]["tool_call_id"].as_str().unwrap_or(""),
+                "name": name,
+                "content": "[result truncated — see earlier context]"
+            });
+            replaced += 1;
+        }
+    }
+
+    if replaced > 0 {
+        debug!(replaced, cut, "MCP context pruning: compressed old tool messages");
+    }
+}
 
 struct RoundResult {
     content: String,
@@ -790,46 +967,135 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
     ids
 }
 
-/// Emit an OTel tracing event for a single MCP tool call.
-/// The OTel exporter ships these to ClickHouse via the existing pipeline.
+/// Fetch mcp_cap_points for the given API key.
 ///
-/// Fields map to the `mcp_tool_calls` ClickHouse schema:
-///   namespaced_name → namespaced_name
-///   tool_name       → tool_name (raw, without mcp_{slug}_ prefix)
-///   server_slug     → server_slug (namespace prefix of the tool)
-///   server_id       → server_id
-///   api_key_id      → api_key_id
-///   outcome         → outcome ('success'|'error'|'timeout'|'circuit_open'|'cache_hit')
-///   cache_hit       → cache_hit (UInt8)
-///   latency_ms      → latency_ms
-///   result_bytes    → result_bytes
-///   loop_round      → loop_round
-fn emit_mcp_span(
-    namespaced_name: &str,
-    server_slug: &str,
-    tool_name: &str,
-    server_id: Uuid,
-    api_key_id: Option<Uuid>,
-    outcome: &str,
-    cache_hit: bool,
-    latency_ms: u32,
-    result_bytes: u32,
-    loop_round: u8,
-) {
-    tracing::info!(
-        target: "veronex::mcp::tool_call",
-        namespaced_name,
-        server_slug,
-        tool_name,
-        server_id = %server_id,
-        api_key_id = ?api_key_id,
-        outcome,
-        cache_hit,
-        latency_ms,
-        result_bytes,
-        loop_round,
-        "mcp_tool_call"
-    );
+/// L1: `veronex:mcp:cap:{key_id}` (Valkey, value as decimal string, TTL=60s).
+/// L2: DB fallback, result cached for next call.
+/// Returns `None` if key absent or cap is NULL (JWT session → use MAX_ROUNDS default).
+async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
+    let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_cap_points(key_id);
+
+    // ── L1: Valkey ─────────────────────────────────────────────────────────────
+    if let Some(ref pool) = state.valkey_pool {
+        use fred::prelude::*;
+        if let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await {
+            // "null" sentinel = key exists but cap is NULL (no limit)
+            if cached == "null" {
+                return None;
+            }
+            if let Ok(v) = cached.parse::<u8>() {
+                return Some(v);
+            }
+        }
+    }
+
+    // ── L2: DB ─────────────────────────────────────────────────────────────────
+    let result: Option<i16> = sqlx::query_scalar(
+        "SELECT mcp_cap_points FROM api_keys WHERE id = $1"
+    )
+    .bind(key_id)
+    .fetch_optional(&state.pg_pool)
+    .await
+    .ok()
+    .flatten();
+
+    // Populate cache — "null" sentinel for absent/NULL cap.
+    if let Some(ref pool) = state.valkey_pool {
+        use fred::prelude::*;
+        let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+        let _ = pool
+            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)
+            .await;
+    }
+
+    result.map(|v| v as u8)
+}
+
+/// Fetch the minimum top_k across granted MCP access rows for a key.
+///
+/// L1: `veronex:mcp:topk:{key_id}` (Valkey, value as decimal string, TTL=60s).
+/// L2: DB fallback, result cached.
+/// Returns `None` if all rows have NULL top_k (use global default).
+async fn fetch_mcp_top_k(state: &AppState, key_id: Uuid) -> Option<usize> {
+    let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_top_k(key_id);
+
+    // ── L1: Valkey ─────────────────────────────────────────────────────────────
+    if let Some(ref pool) = state.valkey_pool {
+        use fred::prelude::*;
+        if let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await {
+            if cached == "null" {
+                return None;
+            }
+            if let Ok(v) = cached.parse::<usize>() {
+                return Some(v);
+            }
+        }
+    }
+
+    // ── L2: DB ─────────────────────────────────────────────────────────────────
+    let result: Option<i16> = sqlx::query_scalar(
+        "SELECT MIN(top_k) FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true AND top_k IS NOT NULL"
+    )
+    .bind(key_id)
+    .fetch_optional(&state.pg_pool)
+    .await
+    .ok()
+    .flatten();
+
+    // Populate cache.
+    if let Some(ref pool) = state.valkey_pool {
+        use fred::prelude::*;
+        let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
+        let _ = pool
+            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)
+            .await;
+    }
+
+    result.map(|v| v as usize)
+}
+
+impl McpBridgeAdapter {
+    /// Fire-and-forget: emit one MCP tool call event into the analytics pipeline.
+    /// Spawns a background task so the tool execution path is never blocked.
+    #[allow(clippy::too_many_arguments)]
+    fn fire_mcp_ingest(
+        &self,
+        request_id: Uuid,
+        api_key_id: Option<Uuid>,
+        tenant_id: String,
+        server_id: Uuid,
+        server_slug: String,
+        tool_name: String,
+        namespaced_name: String,
+        outcome: &str,
+        cache_hit: bool,
+        latency_ms: u32,
+        result_bytes: u32,
+        cap_charged: u8,
+        loop_round: u8,
+    ) {
+        let outcome = outcome.to_string();
+        if let Some(repo) = self.analytics_repo.clone() {
+            tokio::spawn(async move {
+                repo.ingest_mcp_tool_call(McpToolCallEvent {
+                    event_time: chrono::Utc::now(),
+                    request_id,
+                    api_key_id,
+                    tenant_id,
+                    server_id,
+                    server_slug,
+                    tool_name,
+                    namespaced_name,
+                    outcome,
+                    cache_hit,
+                    latency_ms,
+                    result_bytes,
+                    cap_charged,
+                    loop_round,
+                }).await;
+            });
+        }
+    }
 }
 
 #[cfg(test)]

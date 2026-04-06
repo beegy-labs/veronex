@@ -222,6 +222,18 @@ pub fn mcp_key_acl(api_key_id: Uuid) -> String {
     format!("veronex:mcp:acl:{api_key_id}")
 }
 
+/// Cached mcp_cap_points for an API key (u8 as string). TTL = 60s.
+/// Invalidated on key update.
+pub fn mcp_key_cap_points(api_key_id: Uuid) -> String {
+    format!("veronex:mcp:cap:{api_key_id}")
+}
+
+/// Cached MIN(top_k) across mcp_key_access rows for an API key (u16 as string). TTL = 60s.
+/// Invalidated on grant/revoke in key_mcp_access_handlers.
+pub fn mcp_key_top_k(api_key_id: Uuid) -> String {
+    format!("veronex:mcp:topk:{api_key_id}")
+}
+
 /// Cached MCP tool result keyed by (tool_name, args_hash).
 /// TTL is tool-specific (readOnlyHint + idempotentHint condition).
 /// Written + read by: veronex McpResultCache.

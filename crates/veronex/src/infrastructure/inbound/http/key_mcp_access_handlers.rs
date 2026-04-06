@@ -11,12 +11,15 @@ use crate::infrastructure::outbound::valkey_keys;
 use super::error::AppError;
 use super::state::AppState;
 
-/// Invalidate the per-key MCP ACL cache entry in Valkey.
+/// Invalidate per-key MCP cache entries (ACL + top_k) in Valkey.
 /// Called on grant and revoke so the 60-second TTL does not stale-serve.
 async fn invalidate_mcp_acl_cache(state: &AppState, key_id: Uuid) {
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
-        let _ = pool.del::<(), _>(&valkey_keys::mcp_key_acl(key_id)).await;
+        let _ = pool.del::<(), _>(&[
+            valkey_keys::mcp_key_acl(key_id),
+            valkey_keys::mcp_key_top_k(key_id),
+        ]).await;
     }
 }
 
@@ -26,11 +29,14 @@ pub struct McpAccessEntry {
     pub server_name: String,
     pub slug: String,
     pub is_allowed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i16>,
 }
 
 #[derive(Deserialize)]
 pub struct GrantMcpAccessBody {
     pub server_id: McpId,
+    pub top_k: Option<i16>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -39,6 +45,7 @@ struct McpAccessRow {
     name: String,
     slug: String,
     is_allowed: bool,
+    top_k: Option<i16>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -60,7 +67,8 @@ pub async fn list_key_mcp_access(
     let rows: Vec<McpAccessRow> = sqlx::query_as(
         r#"
         SELECT ms.id, ms.name, ms.slug,
-               COALESCE(ka.is_allowed, false) AS is_allowed
+               COALESCE(ka.is_allowed, false) AS is_allowed,
+               ka.top_k
         FROM mcp_servers ms
         LEFT JOIN mcp_key_access ka
             ON ka.server_id = ms.id AND ka.api_key_id = $1
@@ -77,6 +85,7 @@ pub async fn list_key_mcp_access(
         server_name: r.name,
         slug: r.slug,
         is_allowed: r.is_allowed,
+        top_k: r.top_k,
     }).collect()))
 }
 
@@ -101,13 +110,14 @@ pub async fn grant_key_mcp_access(
 
     sqlx::query(
         r#"
-        INSERT INTO mcp_key_access (api_key_id, server_id, is_allowed)
-        VALUES ($1, $2, true)
-        ON CONFLICT (api_key_id, server_id) DO UPDATE SET is_allowed = true
+        INSERT INTO mcp_key_access (api_key_id, server_id, is_allowed, top_k)
+        VALUES ($1, $2, true, $3)
+        ON CONFLICT (api_key_id, server_id) DO UPDATE SET is_allowed = true, top_k = EXCLUDED.top_k
         "#,
     )
     .bind(key_uuid)
     .bind(server_uuid)
+    .bind(body.top_k)
     .execute(&state.pg_pool)
     .await?;
 
@@ -118,6 +128,7 @@ pub async fn grant_key_mcp_access(
         server_name: server.name,
         slug: server.slug,
         is_allowed: true,
+        top_k: body.top_k,
     })))
 }
 
