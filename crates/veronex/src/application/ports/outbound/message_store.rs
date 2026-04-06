@@ -128,24 +128,6 @@ impl ConversationRecord {
         Self { turns: Vec::new() }
     }
 
-    /// Get result for a specific job_id.
-    pub fn result_for_job(&self, job_id: Uuid) -> Option<&str> {
-        self.turns
-            .iter()
-            .filter_map(|t| t.as_regular())
-            .find(|t| t.job_id == job_id)
-            .and_then(|t| t.result.as_deref())
-    }
-
-    /// Get the latest turn's result.
-    pub fn latest_result(&self) -> Option<&str> {
-        self.turns
-            .iter()
-            .rev()
-            .find_map(|t| t.as_regular())
-            .and_then(|t| t.result.as_deref())
-    }
-
     /// Regular (non-handoff) turns only.
     pub fn regular_turns(&self) -> impl Iterator<Item = &TurnRecord> {
         self.turns.iter().filter_map(|t| t.as_regular())

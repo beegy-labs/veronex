@@ -12,6 +12,7 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-veronex} -d veronex"]
       interval: 5s
@@ -333,27 +334,7 @@ services:
 
   # ── Database migrations (run manually) ───────────────────────────────────────
   # Usage:
-  #   docker compose run --rm migrate-postgres           # apply all (up)
   #   docker compose run --rm migrate-clickhouse         # apply all (up)
-  #   docker compose run --rm migrate-postgres down 1    # roll back 1
-  migrate-postgres:
-    image: migrate/migrate
-    profiles: [migrate]
-    volumes:
-      - ./migrations/postgres:/migrations:ro
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-veronex}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-veronex}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        /migrate -path /migrations \
-          -database "postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/veronex?sslmode=disable" \
-          $${1:-up}
-    depends_on:
-      postgres:
-        condition: service_healthy
-
   migrate-clickhouse:
     build:
       context: ./docker/migrate-clickhouse

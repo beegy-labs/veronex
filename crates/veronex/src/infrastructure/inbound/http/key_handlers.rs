@@ -243,10 +243,8 @@ pub async fn toggle_key(
         Some(ref s) => Some(s.parse::<KeyTier>().map_err(AppError::BadRequest)?),
         None => None,
     };
-    if let Some(cap) = req.mcp_cap_points {
-        if !(0..=10).contains(&cap) {
-            return Err(AppError::BadRequest("mcp_cap_points must be between 0 and 10".into()));
-        }
+    if let Some(cap) = req.mcp_cap_points && !(0..=10).contains(&cap) {
+        return Err(AppError::BadRequest("mcp_cap_points must be between 0 and 10".into()));
     }
 
     // Build audit description before consuming req fields.

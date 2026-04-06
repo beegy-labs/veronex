@@ -101,14 +101,6 @@ define_entity_id!(ProviderId,   "prov");
 define_entity_id!(GpuServerId,  "gpu");
 define_entity_id!(McpId,        "mcp");
 
-/// Decode a prefixed base62 public ID back to its inner UUID.
-/// Returns None if the string does not match the expected prefix or is invalid.
-pub fn pub_id_decode(prefix: &str, s: &str) -> Option<Uuid> {
-    let encoded = s.strip_prefix(&format!("{prefix}_"))?;
-    let n = base62::decode(encoded).ok()?;
-    Some(Uuid::from_u128(n))
-}
-
 /// Encode a UUID as a prefixed base62 public ID (e.g. `"job_3X4aB..."`).
 pub fn pub_id_encode(prefix: &str, uuid: Uuid) -> String {
     format!("{}_{}", prefix, base62::encode(uuid.as_u128()))

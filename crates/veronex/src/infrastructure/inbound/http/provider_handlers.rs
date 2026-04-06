@@ -451,33 +451,6 @@ pub async fn delete_provider(
     }
 }
 
-/// `POST /v1/providers/{id}/healthcheck` — manually trigger a health check.
-pub async fn healthcheck_provider(
-    State(state): State<AppState>,
-    Path(pid): Path<ProviderId>,
-) -> impl IntoResponse {
-    let id = pid.0;
-    let provider = match get_provider(&state, id).await {
-        Ok(p) => p,
-        Err(e) => return e.into_response(),
-    };
-
-    let new_status = check_provider(&state.http_client, &provider).await;
-
-    let registry = &state.provider_registry;
-    if let Err(e) = registry.update_status(id, new_status).await {
-        tracing::warn!(%id, error = %e, "failed to persist healthcheck result");
-    }
-
-    let status_str = new_status.as_str();
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"id": pid.to_string(), "status": status_str})),
-    )
-        .into_response()
-}
-
 /// `PATCH /v1/providers/{id}` — update mutable fields of a provider.
 ///
 /// All fields are optional; only provided (non-null) fields are applied.

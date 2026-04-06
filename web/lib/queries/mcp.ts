@@ -24,10 +24,3 @@ export const mcpStatsQuery = (hours: number) => queryOptions({
   staleTime: STALE_TIME_SLOW,
 })
 
-// ── Lab settings (used by OrchestratorModelSelector) ─────────────────────────
-
-export const labSettingsQuery = queryOptions({
-  queryKey: ['lab-settings'] as const,
-  queryFn: () => api.labSettings(),
-  staleTime: STALE_TIME_SLOW,
-})

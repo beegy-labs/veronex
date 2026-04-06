@@ -42,17 +42,21 @@
 
 | Document | Path | Keywords |
 |----------|------|---------|
-| Job Lifecycle | `inference/job-lifecycle.md` | InferenceJob, queue, BLPOP, latency, TTFT, cancellation, DashMap, JobEntry |
+| Job Lifecycle | `inference/job-lifecycle.md` | InferenceJob, queue, ZSET, latency, TTFT, DashMap, JobEntry |
+| Job Lifecycle (impl) | `inference/job-lifecycle-impl.md` | JobRepository patterns, DashMap store, cancellation, CancelOnDrop |
 | Job API | `inference/job-api.md` | JobSummary, JobDetail, dashboard endpoints, queue depth, SSE stream, JobStatusEvent |
 | Session Grouping | `inference/session-grouping.md` | conversation_id, messages_hash, training data, batch auto-inference, Blake2b |
 | Job Analytics | `inference/job-analytics.md` | StreamToken, usageMetadata, ClickHouse, inference_logs, run_job |
-| OpenAI Compat | `inference/openai-compat.md` | /v1/chat/completions, SSE, provider_type field, curl, Python SDK |
+| OpenAI Compat | `inference/openai-compat.md` | /v1/chat/completions, SSE, provider_type field, two execution paths |
+| OpenAI Compat Endpoints | `inference/openai-compat-endpoints.md` | /v1/completions, /v1/embeddings, /v1/models, 501 stubs |
 | OpenAI Compat Native | `inference/openai-compat-native.md` | native endpoints, API doc endpoints, shared constants, SSE parsing, client examples |
 | Capacity | `inference/capacity.md` | VramPool, AIMD+p95, LLM Batch±2, thermal auto-detect, model stickiness, gate chain |
 | Model Pricing | `inference/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, Ollama $0.00, provider wildcard |
-| Lab Features | `inference/lab-features.md` | gemini_function_calling, mcp_orchestrator_model, context_compression_enabled, multiturn gate, vision_model, handoff |
+| Lab Features | `inference/lab-features.md` | gemini_function_calling, context_compression_enabled, multiturn gate, vision_model, handoff |
+| Lab Features (impl) | `inference/lab-features-impl.md` | Port, API, Frontend for lab_settings |
 | Context Compression | `inference/context-compression.md` | compression_router, context_assembler, session_handoff, compress_input_inline, conversation_renewed, TurnInternals |
-| MCP | `inference/mcp.md` | McpBridgeAdapter, run_loop, tool intercept, orchestrator model, mcp_servers, tool naming, concurrency |
+| MCP | `inference/mcp.md` | McpBridgeAdapter, run_loop, tool intercept, orchestrator model, tool naming, concurrency |
+| MCP Schema | `inference/mcp-schema.md` | mcp_servers, mcp_server_tools, mcp_key_access, mcp_loop_tool_calls |
 
 ---
 
@@ -66,7 +70,8 @@
 | Ollama Models | `providers/ollama-models.md` | ollama_models, ollama_sync_jobs, OllamaModelRepository, model-aware routing |
 | Gemini | `providers/gemini.md` | GeminiRateLimitPolicy, RPM, RPD, pick_gemini_provider, tier routing |
 | Gemini Models | `providers/gemini-models.md` | gemini_sync_config, gemini_models, provider_selected_models, UPSERT |
-| Hardware | `providers/hardware.md` | GpuServer, node-exporter, hw_metrics, AMD APU, gpu_vendor detection, thermal thresholds, service health monitoring |
+| Hardware | `providers/hardware.md` | GpuServer, node-exporter, hw_metrics, NodeMetrics, ServerMetricsPoint, API endpoints |
+| Hardware (impl) | `providers/hardware-impl.md` | node-exporter metrics parsed, GPU vendor detection, service health monitoring |
 | Hardware Metrics | `providers/hardware-metrics.md` | history buckets, ClickHouse history query, thermal state machine, web UI |
 
 ---
@@ -97,7 +102,9 @@
 | Design System i18n | `frontend/design-system-i18n.md` | i18n, locale config, timezone provider, date formatting, translation workflow |
 | Design System Components | `frontend/design-system-components.md` | login page, auth guard, API client, status colors, auth-cookie session |
 | Design System Component Patterns | `frontend/design-system-components-patterns.md` | provider taxonomy, network flow viz, accounts page, dialogs, hooks, 2-step registration |
-| Chart System | `frontend/charts.md` | chart-theme.ts SSOT, DonutChart, Recharts constants, tooltip fix |
+| Design System Patterns | `frontend/design-system-patterns.md` | Next.js Activity, unstable_retry, useId React 19.2, fmtMs formatter |
+| Chart System | `frontend/charts.md` | chart-theme.ts SSOT, Recharts constants, tooltip fix, bar/line/area patterns |
+| DonutChart | `frontend/charts-donut.md` | DonutChart component, props, usage, DonutSlice |
 
 ### Pages (`frontend/pages/`)
 
@@ -116,7 +123,8 @@
 | Keys | `frontend/pages/keys.md` | keys/page.tsx, CreateKeyModal, toggle, soft-delete, KeyUsageModal |
 | Accounts | `frontend/pages/accounts.md` | /accounts, user CRUD, role assignment, AccountSessionsModal |
 | Audit | `frontend/pages/audit.md` | /audit, super role, AuditTable, action filter |
-| API Test | `frontend/pages/api-test.md` | api-test, SSE parsing, /docs/swagger, /docs/redoc |
+| API Test | `frontend/pages/api-test.md` | api-test, SSE parsing, conversation mode, TurnInternals, context warnings |
+| API Docs | `frontend/pages/api-docs.md` | /api-docs, Swagger, ReDoc, OpenAPI spec, locale overlay |
 | Login | `frontend/pages/login.md` | /login, auth form, token storage, redirect |
 | Flow | `frontend/pages/flow.md` | /flow, network flow visualization, real-time inference traffic |
 | Health | `frontend/pages/health.md` | /health, service health, pod status, HPA, KEDA, staleness |
@@ -133,7 +141,8 @@
 |----------|------|---------|
 | Index | `flows/README.md` | all subsystems overview |
 | Inference Lifecycle | `flows/inference.md` | submit, queue, dispatch, VRAM reserve, stream, cleanup |
-| Job Event Pipeline | `flows/job-event-pipeline.md` | direct Postgres writes, S3 conversation store, targeted DB updates, state transitions |
+| Job Event Pipeline | `flows/job-event-pipeline.md` | overall architecture, state transitions, repo call mapping |
+| Job Event Pipeline Steps | `flows/job-event-pipeline-steps.md` | submit, cancel, stream, run_job step diagrams |
 | Authentication | `flows/auth.md` | API key BLAKE2b, JWT HS256, InferCaller dual-auth, rate limit, MCP ACL, provider ACL |
 | MCP Agentic Loop | `flows/mcp.md` | run_loop, execute_one, ACL, circuit breaker, result cache, loop detect |
 | Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, placement planner, scale-out/in, circuit breaker |

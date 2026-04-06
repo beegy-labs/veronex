@@ -51,9 +51,6 @@ impl InferCaller {
         }
     }
 
-    pub fn is_session(&self) -> bool {
-        matches!(self, InferCaller::Session(_))
-    }
 }
 
 const EXCLUDED_PATHS: &[&str] = &["/health", "/readyz"];

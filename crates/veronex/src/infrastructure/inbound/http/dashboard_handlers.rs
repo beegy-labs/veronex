@@ -522,39 +522,14 @@ pub async fn patch_capacity_settings(
     }
 }
 
-// ── POST /v1/dashboard/capacity/sync ───────────────────────────────
-
-pub async fn trigger_capacity_sync(
-    RequireSettingsManage(claims): RequireSettingsManage,
-    State(state): State<AppState>,
-) -> impl axum::response::IntoResponse {
-    if state.sync_lock.available_permits() == 0 {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "message": "sync already in progress" })),
-        )
-            .into_response();
-    }
-    state.sync_trigger.notify_one();
-    emit_audit(&state, &claims, "trigger", "capacity_settings", "capacity_settings", "provider_sync",
-        "Manual provider sync triggered by admin").await;
-    (
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "message": "provider sync triggered" })),
-    )
-        .into_response()
-}
-
 // ── Helper: fetch models from all registered providers ────────────
 
 async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<String>> {
     let mut result: HashMap<String, Vec<String>> = HashMap::new();
 
     // ── Ollama: read from already-synced ollama_model_repo (no HTTP) ───
-    if let Ok(models) = state.ollama_model_repo.list_all().await {
-        if !models.is_empty() {
-            result.insert("ollama".to_string(), models);
-        }
+    if let Ok(models) = state.ollama_model_repo.list_all().await && !models.is_empty() {
+        result.insert("ollama".to_string(), models);
     }
 
     // ── Gemini: show models only when lab feature is enabled ──
@@ -570,14 +545,11 @@ async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<Stri
             .collect();
 
         // Fallback: fetch from Gemini API if DB is empty
-        if gemini_models.is_empty() {
-            if let Ok(Some(api_key)) = state.gemini_sync_config_repo.get_api_key().await {
-                if let Ok(models) = super::gemini_helpers::fetch_gemini_models(
-                    &state.http_client, &api_key,
-                ).await {
-                    gemini_models = models;
-                }
-            }
+        if gemini_models.is_empty()
+            && let Ok(Some(api_key)) = state.gemini_sync_config_repo.get_api_key().await
+            && let Ok(models) = super::gemini_helpers::fetch_gemini_models(&state.http_client, &api_key).await
+        {
+            gemini_models = models;
         }
 
         if !gemini_models.is_empty() {
@@ -620,6 +592,7 @@ pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Re
 
     // Snapshot the replay buffer (oldest → newest) — include server timestamp.
     let buffered: Vec<String> = {
+        #[allow(clippy::expect_used)]  // RwLock poisoning = thread panic, propagate correctly
         let buf = state.event_ring_buffer.read().expect("ring buffer poisoned");
         buf.iter()
             .filter_map(|(e, ts)| {
@@ -1165,10 +1138,8 @@ pub async fn get_pipeline_health(
         let value = line.rsplit(' ').next()
             .and_then(|v| v.trim().parse::<f64>().ok())
             .map(|f| f as i64);
-        if let (Some(t), Some(v)) = (topic, value) {
-            if t.starts_with("otel-") {
-                high_watermarks.insert(t, v);
-            }
+        if let (Some(t), Some(v)) = (topic, value) && t.starts_with("otel-") {
+            high_watermarks.insert(t, v);
         }
     }
 
@@ -1179,7 +1150,6 @@ pub async fn get_pipeline_health(
             arrayElement(assignments.topic, 1) AS topic, \
             arrayElement(assignments.current_offset, 1) AS consumer_offset, \
             last_poll_time, \
-            is_currently_used, \
             if(length(exceptions.text) > 0, \
                substring(arrayElement(exceptions.text, length(exceptions.text)), 1, 200), \
                '') AS last_error \
@@ -1196,17 +1166,14 @@ pub async fn get_pipeline_health(
         topic: String,
         consumer_offset: i64,
         last_poll_time: String,  // "2026-01-01 00:00:00"
-        is_currently_used: u8,
         last_error: String,
     }
 
     let mut consumer_map: HashMap<String, ChConsumerRow> = HashMap::new();
-    if let Some(resp) = ch_consumer_resp {
-        if let Ok(body) = resp.text().await {
-            for line in body.lines() {
-                if let Ok(row) = serde_json::from_str::<ChConsumerRow>(line) {
-                    consumer_map.insert(row.topic.clone(), row);
-                }
+    if let Some(resp) = ch_consumer_resp && let Ok(body) = resp.text().await {
+        for line in body.lines() {
+            if let Ok(row) = serde_json::from_str::<ChConsumerRow>(line) {
+                consumer_map.insert(row.topic.clone(), row);
             }
         }
     }
@@ -1235,14 +1202,12 @@ pub async fn get_pipeline_health(
         ("kafka_otel_metrics", "otel-metrics"),
     ];
     let mut consumer_count_map: HashMap<&str, u32> = HashMap::new();
-    if let Some(resp) = ch_count_resp {
-        if let Ok(body) = resp.text().await {
-            for line in body.lines() {
-                if let Ok(row) = serde_json::from_str::<ChCountRow>(line) {
-                    if let Some(&topic) = table_to_topic.iter().find(|(t, _)| *t == row.table).map(|(_, tp)| tp) {
-                        consumer_count_map.insert(topic, row.cnt);
-                    }
-                }
+    if let Some(resp) = ch_count_resp && let Ok(body) = resp.text().await {
+        for line in body.lines() {
+            if let Ok(row) = serde_json::from_str::<ChCountRow>(line)
+                && let Some(&topic) = table_to_topic.iter().find(|(t, _)| *t == row.table).map(|(_, tp)| tp)
+            {
+                consumer_count_map.insert(topic, row.cnt);
             }
         }
     }
@@ -1272,12 +1237,10 @@ pub async fn get_pipeline_health(
     }
 
     let mut tpm_map: HashMap<String, (i64, i64)> = HashMap::new();
-    if let Some(resp) = ch_tpm_resp {
-        if let Ok(body) = resp.text().await {
-            for line in body.lines() {
-                if let Ok(row) = serde_json::from_str::<ChTpmRow>(line) {
-                    tpm_map.insert(row.topic, (row.t1m, row.t5m));
-                }
+    if let Some(resp) = ch_tpm_resp && let Ok(body) = resp.text().await {
+        for line in body.lines() {
+            if let Ok(row) = serde_json::from_str::<ChTpmRow>(line) {
+                tpm_map.insert(row.topic, (row.t1m, row.t5m));
             }
         }
     }

@@ -658,11 +658,6 @@ pub async fn setup(
     })))
 }
 
-// ── Helper exported for account_handlers ──────────────────────────────────────
-
-pub fn make_pwreset_valkey_key(token: &str) -> String {
-    pwreset_key(token)
-}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

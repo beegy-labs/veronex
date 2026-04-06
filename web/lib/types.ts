@@ -590,10 +590,6 @@ export interface ProviderVramInfo {
   loaded_models: LoadedModelInfo[]
 }
 
-export interface CapacityResponse {
-  providers: ProviderVramInfo[]
-}
-
 export interface CapacityPageResponse {
   providers: ProviderVramInfo[]
   total: number

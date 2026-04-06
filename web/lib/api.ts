@@ -90,11 +90,6 @@ export const api = {
   patchSyncSettings: (body: PatchSyncSettings) =>
     apiClient.patch<SyncSettings>('/v1/dashboard/capacity/settings', body),
 
-  triggerSessionGrouping: (beforeDate?: string) =>
-    apiClient.post<{ message: string }>('/v1/dashboard/session-grouping/trigger', {
-      before_date: beforeDate ?? null,
-    }),
-
   // ── Lab (experimental) features (JWT-protected) ───────────────────────────
   labSettings: () =>
     apiClient.get<LabSettings>('/v1/dashboard/lab'),
@@ -216,16 +211,8 @@ export const api = {
   // ── Global model settings (JWT-protected) ─────────────────────────────────
   globalModelSettings: () =>
     apiClient.get<{ model_name: string; is_enabled: boolean }[]>('/v1/models/global-settings'),
-  globalDisabledModels: () =>
-    apiClient.get<string[]>('/v1/models/global-disabled'),
   setGlobalModelEnabled: (modelName: string, isEnabled: boolean) =>
     apiClient.patch<{ model_name: string; is_enabled: boolean }>(`/v1/models/global-settings/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
-
-  // ── API key → provider access (JWT-protected) ─────────────────────────────
-  keyProviderAccess: (keyId: string) =>
-    apiClient.get<{ provider_id: string; is_allowed: boolean }[]>(`/v1/keys/${keyId}/providers`),
-  setKeyProviderAccess: (keyId: string, providerId: string, isAllowed: boolean) =>
-    apiClient.patch<{ provider_id: string; is_allowed: boolean }>(`/v1/keys/${keyId}/providers/${providerId}`, { is_allowed: isAllowed }),
 
   // ── API key → MCP server access (JWT-protected) ───────────────────────────
   keyMcpAccess: (keyId: string) =>
@@ -281,9 +268,6 @@ export const api = {
     const q = qs.toString()
     return apiClient.get<OllamaProviderPage>(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers${q ? '?' + q : ''}`)
   },
-
-  ollamaProviderModels: (providerId: string) =>
-    apiClient.get<{ models: string[] }>(`/v1/ollama/providers/${providerId}/models`),
 
   // ── Setup (public — no auth, first-run only) ──────────────────────────────
   setupStatus: () =>

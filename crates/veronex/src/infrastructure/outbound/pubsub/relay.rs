@@ -39,29 +39,6 @@ return 1
 /// is never called (crash, network partition), the stream key self-destructs.
 const TOKEN_STREAM_TTL_SECS: i64 = 600; // 10 minutes
 
-/// Publish a token to cross-instance subscribers via Valkey Streams (XADD).
-///
-/// Uses `MAXLEN ~ 500` to cap stream size and `EXPIRE 600s` as a safety net.
-/// Late-connecting subscribers can read from `0-0` to catch up on all buffered tokens.
-pub async fn publish_token(pool: &Pool, job_id: Uuid, token: &StreamToken) {
-    let key = valkey_keys::stream_tokens(job_id);
-
-    let result: Result<i64, _> = pool
-        .eval(
-            LUA_XADD_EXPIRE,
-            vec![key],
-            vec![
-                token.value.clone(),
-                token.is_final.to_string(),
-                TOKEN_STREAM_TTL_SECS.to_string(),
-            ],
-        )
-        .await;
-    if let Err(e) = result {
-        tracing::debug!(job_id = %job_id, "token stream XADD failed: {e}");
-    }
-}
-
 /// Clean up the token stream key after a job completes.
 ///
 /// Called from `run_job()` completion phase to free Valkey memory.

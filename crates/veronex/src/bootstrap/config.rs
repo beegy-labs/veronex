@@ -1,5 +1,4 @@
 /// Application configuration parsed from environment variables.
-#[allow(dead_code)]
 pub struct AppConfig {
     pub database_url: String,
     pub valkey_url: Option<String>,
@@ -9,7 +8,6 @@ pub struct AppConfig {
     /// When set, inference and audit events are emitted directly via OTLP,
     /// bypassing the veronex-analytics HTTP write path.
     pub otel_http_endpoint: Option<String>,
-    pub ollama_url: String,
     pub jwt_secret: String,
     pub bootstrap_super_user: Option<String>,
     pub bootstrap_super_pass: Option<String>,
@@ -102,7 +100,6 @@ impl AppConfig {
             analytics_url,
             analytics_secret,
             otel_http_endpoint,
-            ollama_url,
             jwt_secret,
             bootstrap_super_user,
             bootstrap_super_pass,

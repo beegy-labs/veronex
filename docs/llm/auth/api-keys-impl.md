@@ -86,6 +86,47 @@ Handler: `key_provider_access_handlers.rs`
 
 ---
 
+## Key Regeneration
+
+`POST /v1/keys/{id}/regenerate` generates a new BLAKE2b-256 hash and prefix for an existing key. The key ID is preserved so historical usage data remains linked. The old key is invalidated immediately. The new plaintext is returned once (same as `CreateKeyResponse`).
+
+RBAC: super admin can regenerate any key; non-super can only regenerate their own tenant's keys.
+
+```rust
+// key_handlers.rs — regenerate_key()
+let (_new_id, plaintext, new_hash, new_prefix) = generate_api_key();
+state.api_key_repo.regenerate(&uuid, &new_hash, &new_prefix).await?;
+// Returns CreateKeyResponse with new plaintext
+```
+
+---
+
+## DashboardStats — key counts (test keys excluded)
+
+```rust
+// dashboard_handlers.rs
+pub struct DashboardStats {
+    pub total_keys: i64,   // key_type != 'test' AND deleted_at IS NULL AND tenant_id = 'default'
+    pub active_keys: i64,  // key_type = 'standard' AND is_active AND deleted_at IS NULL AND tenant_id = 'default'
+    // ...
+}
+```
+
+SQL:
+```sql
+COUNT(*) FILTER (WHERE deleted_at IS NULL AND key_type != 'test' AND tenant_id = 'default')              AS total_keys,
+COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'standard' AND tenant_id = 'default') AS active_keys
+```
+
+Tenant scope: scoped to `tenant_id = 'default'` to match `GET /v1/keys` (`list_by_tenant("default")`). Without this filter, keys with other tenant IDs inflate the count.
+
+Job count queries also exclude test-source jobs:
+```sql
+WHERE source != 'test'
+```
+
+---
+
 ## Web UI
 
 → See `docs/llm/frontend/pages/keys.md`

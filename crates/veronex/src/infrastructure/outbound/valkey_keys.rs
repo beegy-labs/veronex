@@ -99,12 +99,6 @@ pub fn heartbeat(instance_id: &str) -> String {
     format!("veronex:heartbeat:{instance_id}")
 }
 
-/// HASH tracking per-instance slot counts for a (provider, model) pair.
-/// Fields: `{instance_id}` → count, `__max__` → max slots.
-pub fn distributed_slots(provider_id: Uuid, model: &str) -> String {
-    format!("veronex:slots:{provider_id}:{model}")
-}
-
 /// ZSET of slot leases for crash recovery.
 /// Members: `{instance_id}:{lease_id}`, scores: expiry timestamp.
 pub fn slot_leases(provider_id: Uuid, model: &str) -> String {

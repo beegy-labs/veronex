@@ -279,10 +279,8 @@ pub async fn register_mcp_server(
     }
     validate_provider_url(&url)?;
 
-    if let Some(t) = req.timeout_secs {
-        if !(1..=300).contains(&t) {
-            return Err(AppError::BadRequest("timeout_secs must be between 1 and 300".into()));
-        }
+    if let Some(t) = req.timeout_secs && !(1..=300).contains(&t) {
+        return Err(AppError::BadRequest("timeout_secs must be between 1 and 300".into()));
     }
 
     let id = Uuid::now_v7();
@@ -364,7 +362,7 @@ pub async fn patch_mcp_server(
         if !new_enabled && row.is_enabled {
             bridge.session_manager.disconnect(id);
             bridge.tool_cache.remove_server(id);
-        } else if (new_enabled && !row.is_enabled) || (new_enabled && url_changed) {
+        } else if new_enabled && (!row.is_enabled || url_changed) {
             if url_changed {
                 bridge.session_manager.disconnect(id);
                 bridge.tool_cache.remove_server(id);
@@ -517,7 +515,7 @@ pub async fn get_mcp_settings(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
 ) -> HandlerResult<Json<McpSettingsResponse>> {
-    let s = state.mcp_settings_repo.get().await.map_err(|e| AppError::Internal(e))?;
+    let s = state.mcp_settings_repo.get().await.map_err(AppError::Internal)?;
     Ok(Json(McpSettingsResponse {
         routing_cache_ttl_secs: s.routing_cache_ttl_secs,
         tool_schema_refresh_secs: s.tool_schema_refresh_secs,
@@ -536,10 +534,8 @@ pub async fn patch_mcp_settings(
 ) -> HandlerResult<Json<McpSettingsResponse>> {
     use crate::application::ports::outbound::mcp_settings_repository::McpSettingsUpdate;
 
-    if let Some(v) = body.max_tools_per_request {
-        if !(1..=200).contains(&v) {
-            return Err(AppError::BadRequest("max_tools_per_request must be 1–200".into()));
-        }
+    if let Some(v) = body.max_tools_per_request && !(1..=200).contains(&v) {
+        return Err(AppError::BadRequest("max_tools_per_request must be 1–200".into()));
     }
 
     let patch = McpSettingsUpdate {
@@ -549,7 +545,7 @@ pub async fn patch_mcp_settings(
         max_tools_per_request: body.max_tools_per_request,
         max_routing_cache_entries: body.max_routing_cache_entries,
     };
-    let s = state.mcp_settings_repo.update(patch).await.map_err(|e| AppError::Internal(e))?;
+    let s = state.mcp_settings_repo.update(patch).await.map_err(AppError::Internal)?;
     Ok(Json(McpSettingsResponse {
         routing_cache_ttl_secs: s.routing_cache_ttl_secs,
         tool_schema_refresh_secs: s.tool_schema_refresh_secs,

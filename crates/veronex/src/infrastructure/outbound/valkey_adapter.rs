@@ -77,11 +77,6 @@ impl ValkeyAdapter {
         Self { pool }
     }
 
-    /// Expose the inner pool for infrastructure code that still needs direct access
-    /// (e.g. `SubscriberClient` setup, reaper, health checker).
-    pub fn inner_pool(&self) -> &Pool {
-        &self.pool
-    }
 }
 
 #[async_trait::async_trait]

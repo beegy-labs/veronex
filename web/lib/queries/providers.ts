@@ -12,14 +12,6 @@ export const providersQuery = (params?: { search?: string; page?: number; limit?
   refetchIntervalInBackground: false,
 })
 
-// ── Provider-specific ──────────────────────────────────────────────────────────
-
-export const providerModelsQuery = (providerId: string) => queryOptions({
-  queryKey: ['provider-models', providerId] as const,
-  queryFn: () => api.providerModels(providerId),
-  staleTime: STALE_TIME_SLOW,
-  retry: false,
-})
 
 export const providerKeyQuery = (providerId: string) => queryOptions({
   queryKey: ['provider-key', providerId] as const,

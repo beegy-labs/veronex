@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::application::ports::outbound::lab_settings_repository::{LabSettings, LabSettingsRepository};
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
@@ -23,9 +22,9 @@ pub enum CompressionRoute {
     /// Compression is deferred to Turn N+1 context assembly (Phase 4).
     SyncInline,
     /// Two+ providers, no dedicated model set. Compress async to the given provider.
-    AsyncIdle { provider_id: Uuid, provider_url: String },
+    AsyncIdle { provider_url: String },
     /// Dedicated compression model configured. Compress async to the designated provider.
-    AsyncDedicated { provider_id: Uuid, provider_url: String },
+    AsyncDedicated { provider_url: String },
     /// All providers saturated or unavailable. Skip; retry deferred to next turn.
     Skip,
 }
@@ -36,9 +35,6 @@ pub struct CompressParams {
     pub model: String,
     /// Base URL of the target Ollama provider.
     pub provider_url: String,
-    /// Provider ID (for logging/tests).
-    #[allow(dead_code)]
-    pub provider_id: Uuid,
     /// Per-call timeout in seconds.
     pub timeout_secs: u64,
 }
@@ -47,11 +43,10 @@ impl CompressionRoute {
     /// Extract `CompressParams` for async routes; returns `None` for `SyncInline`/`Skip`.
     pub fn into_params(self, model: String, timeout_secs: u64) -> Option<CompressParams> {
         match self {
-            CompressionRoute::AsyncDedicated { provider_id, provider_url }
-            | CompressionRoute::AsyncIdle { provider_id, provider_url } => Some(CompressParams {
+            CompressionRoute::AsyncDedicated { provider_url }
+            | CompressionRoute::AsyncIdle { provider_url } => Some(CompressParams {
                 model,
                 provider_url,
-                provider_id,
                 timeout_secs,
             }),
             _ => None,
@@ -91,7 +86,6 @@ pub async fn decide(
     if lab.compression_model.is_some() {
         if let Some(p) = ollama.first() {
             return CompressionRoute::AsyncDedicated {
-                provider_id: p.id,
                 provider_url: p.url.clone(),
             };
         }
@@ -106,7 +100,6 @@ pub async fn decide(
     // is a future enhancement; skip-on-busy logic added in Phase 4)
     if let Some(p) = ollama.first() {
         return CompressionRoute::AsyncIdle {
-            provider_id: p.id,
             provider_url: p.url.clone(),
         };
     }
@@ -177,27 +170,19 @@ mod tests {
 
     #[tokio::test]
     async fn single_provider_with_dedicated_model_returns_async_dedicated() {
-        let id = Uuid::now_v7();
-        let reg = MockRegistry(vec![ollama_provider(id, "http://localhost:11434")]);
+        let reg = MockRegistry(vec![ollama_provider(Uuid::now_v7(), "http://localhost:11434")]);
         let route = decide(&reg, &lab_with_model()).await;
         assert!(matches!(route, CompressionRoute::AsyncDedicated { .. }));
-        if let CompressionRoute::AsyncDedicated { provider_id, .. } = route {
-            assert_eq!(provider_id, id);
-        }
     }
 
     #[tokio::test]
     async fn multiple_providers_no_model_returns_async_idle() {
-        let id = Uuid::now_v7();
         let reg = MockRegistry(vec![
-            ollama_provider(id, "http://host1:11434"),
+            ollama_provider(Uuid::now_v7(), "http://host1:11434"),
             ollama_provider(Uuid::now_v7(), "http://host2:11434"),
         ]);
         let route = decide(&reg, &lab_no_model()).await;
         assert!(matches!(route, CompressionRoute::AsyncIdle { .. }));
-        if let CompressionRoute::AsyncIdle { provider_id, .. } = route {
-            assert_eq!(provider_id, id);
-        }
     }
 
     #[tokio::test]

@@ -223,6 +223,7 @@ function McpToggleSwitch({ serverId, isEnabled }: { serverId: string; isEnabled:
 }
 
 function McpSettingsPanel() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Partial<McpSettings>>({})
@@ -307,12 +308,12 @@ function McpSettingsPanel() {
                   disabled={mutation.isPending}
                   onClick={() => mutation.mutate(draft)}
                 >
-                  {mutation.isPending ? 'Saving…' : 'Save'}
+                  {mutation.isPending ? `${t('common.save')}…` : t('common.save')}
                 </Button>
-                <Button variant="outline" size="sm" onClick={cancelEdit}>Cancel</Button>
+                <Button variant="outline" size="sm" onClick={cancelEdit}>{t('common.cancel')}</Button>
                 {mutation.error && (
                   <span className="text-xs text-destructive">
-                    {mutation.error instanceof Error ? mutation.error.message : 'Save failed'}
+                    {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
                   </span>
                 )}
               </div>

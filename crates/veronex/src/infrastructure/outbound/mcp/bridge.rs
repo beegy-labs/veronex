@@ -118,6 +118,7 @@ impl McpBridgeAdapter {
     /// When `want_stream = true`, the final round is NOT collected — instead
     /// `McpLoopResult.final_job_id` is returned so the caller can stream it via SSE.
     #[instrument(skip_all, fields(model = %model))]
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_loop(
         &self,
         state: &AppState,
@@ -230,7 +231,7 @@ impl McpBridgeAdapter {
                 messages: Some(Value::Array(messages.clone())),
                 tools: tools_json.clone().map(Value::Array),
                 request_path: Some("/v1/chat/completions".to_string()),
-                conversation_id: conversation_id.clone(),
+                conversation_id,
                 key_tier: caller.key_tier(),
                 images: None,
                 stop: stop.clone(),
@@ -460,6 +461,7 @@ impl McpBridgeAdapter {
 
     // ── Tool execution ─────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_calls(
         &self,
         _state: &AppState,
@@ -490,6 +492,7 @@ impl McpBridgeAdapter {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_one(
         &self,
         tc: &Value,
@@ -517,12 +520,10 @@ impl McpBridgeAdapter {
         };
 
         // ── ACL check ──────────────────────────────────────────────────────────
-        if let Some(allowed) = allowed_servers {
-            if !allowed.contains(&server_id) {
-                warn!(tool = %namespaced, server = %server_id, "MCP ACL: access denied for this key");
-                let rec = ToolCallRecord::error(mcp_loop_id, triggering_job_id, loop_round, server_id, namespaced, namespaced, &args, "acl_denied");
-                return ("{\"error\": \"MCP server access denied\"}".into(), rec);
-            }
+        if allowed_servers.is_some_and(|a| !a.contains(&server_id)) {
+            warn!(tool = %namespaced, server = %server_id, "MCP ACL: access denied for this key");
+            let rec = ToolCallRecord::error(mcp_loop_id, triggering_job_id, loop_round, server_id, namespaced, namespaced, &args, "acl_denied");
+            return ("{\"error\": \"MCP server access denied\"}".into(), rec);
         }
 
         // ── Circuit breaker ────────────────────────────────────────────────────
@@ -553,8 +554,7 @@ impl McpBridgeAdapter {
             .unwrap_or_else(|| server_slug_from_namespaced(namespaced));
 
         // ── Result cache ───────────────────────────────────────────────────────
-        if let Some(ref tool_def) = tool_def {
-            if let Some(cached) = self.result_cache.get(tool_def, &args).await {
+        if let Some(ref tool_def) = tool_def && let Some(cached) = self.result_cache.get(tool_def, &args).await {
                 let text = cached.to_llm_string();
                 let bytes = text.len() as u32;
                 self.fire_mcp_ingest(triggering_job_id, api_key_id, tenant_id.clone(), server_id, server_slug.to_string(), raw_name.to_string(), namespaced.to_string(), "cache_hit", true, 0, bytes, 0, loop_round);
@@ -573,7 +573,6 @@ impl McpBridgeAdapter {
                     result_bytes: bytes as i32,
                 };
                 return (text, rec);
-            }
         }
 
         // ── Execute ────────────────────────────────────────────────────────────
@@ -599,10 +598,8 @@ impl McpBridgeAdapter {
                     self.circuit_breaker.record_success(server_id);
                 }
 
-                if !is_err {
-                    if let Some(ref def) = tool_def {
-                        self.result_cache.set(def, &args, &tool_result, RESULT_CACHE_TTL_SECS).await;
-                    }
+                if !is_err && let Some(ref def) = tool_def {
+                    self.result_cache.set(def, &args, &tool_result, RESULT_CACHE_TTL_SECS).await;
                 }
 
                 let mut text = tool_result.to_llm_string();
@@ -668,6 +665,7 @@ struct ToolCallRecord {
 }
 
 impl ToolCallRecord {
+    #[allow(clippy::too_many_arguments)]
     fn error(
         mcp_loop_id: Uuid,
         job_id: Uuid,
@@ -766,7 +764,7 @@ async fn batch_insert_tool_calls(pg_pool: &sqlx::PgPool, mcp_loop_id: Uuid, job_
 /// Strategy: walk backwards from the end, counting assistant-with-tool_calls turns.
 /// When we find the boundary (older than `keep_rounds` turns), replace tool-role messages
 /// before the boundary with a single "tool" message summarising the truncated data.
-fn prune_tool_messages(messages: &mut Vec<Value>, keep_rounds: usize) {
+fn prune_tool_messages(messages: &mut [Value], keep_rounds: usize) {
     // Find assistant+tool_calls boundaries (each marks one tool round).
     // We walk the slice collecting (index, round_number) for assistant messages that have tool_calls.
     let boundaries: Vec<usize> = messages
@@ -792,12 +790,13 @@ fn prune_tool_messages(messages: &mut Vec<Value>, keep_rounds: usize) {
     // We replace them in-place rather than splicing to avoid index shifts.
     // Mark each old tool message with a compressed placeholder.
     let mut replaced = 0usize;
-    for i in 0..cut {
-        if messages[i]["role"].as_str() == Some("tool") {
-            let name = messages[i]["name"].as_str().unwrap_or("tool").to_string();
-            messages[i] = serde_json::json!({
+    for msg in &mut messages[..cut] {
+        if msg["role"].as_str() == Some("tool") {
+            let name = msg["name"].as_str().unwrap_or("tool").to_string();
+            let tool_call_id = msg["tool_call_id"].as_str().unwrap_or("").to_string();
+            *msg = serde_json::json!({
                 "role": "tool",
-                "tool_call_id": messages[i]["tool_call_id"].as_str().unwrap_or(""),
+                "tool_call_id": tool_call_id,
                 "name": name,
                 "content": "[result truncated — see earlier context]"
             });
@@ -839,12 +838,10 @@ async fn collect_round(state: &AppState, job_id: &JobId) -> RoundResult {
                 break;
             }
             Ok(token) if token.tool_calls.is_some() => {
-                if let Some(calls_val) = token.tool_calls.as_ref() {
-                    if let Some(calls) = calls_val.as_array() {
-                        for (i, c) in calls.iter().enumerate() {
-                            if validate_tool_call(c) {
-                                tool_calls.push(convert_ollama_tool_call(i, c));
-                            }
+                if let Some(calls) = token.tool_calls.as_ref().and_then(|v| v.as_array()) {
+                    for (i, c) in calls.iter().enumerate() {
+                        if validate_tool_call(c) {
+                            tool_calls.push(convert_ollama_tool_call(i, c));
                         }
                     }
                 }
@@ -933,16 +930,15 @@ fn quick_args_hash(args_str: &str) -> String {
 /// On cache miss, falls back to DB and populates the cache.
 /// Invalidated by `key_mcp_access_handlers` on grant/revoke.
 pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
+    use fred::prelude::*;
     let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_acl(key_id);
 
     // ── L1: Valkey ─────────────────────────────────────────────────────────────
-    if let Some(ref pool) = state.valkey_pool {
-        use fred::prelude::*;
-        if let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await {
-            if let Ok(ids) = serde_json::from_str::<Vec<Uuid>>(&cached) {
-                return ids;
-            }
-        }
+    if let Some(ref pool) = state.valkey_pool
+        && let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await
+        && let Ok(ids) = serde_json::from_str::<Vec<Uuid>>(&cached)
+    {
+        return ids;
     }
 
     // ── L2: DB (cache miss) ────────────────────────────────────────────────────
@@ -955,13 +951,10 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
     .unwrap_or_default();
 
     // Populate cache — empty array is also cached (negative cache).
-    if let Some(ref pool) = state.valkey_pool {
-        use fred::prelude::*;
-        if let Ok(json) = serde_json::to_string(&ids) {
-            let _ = pool
-                .set::<(), _, _>(&vk_key, json, Some(Expiration::EX(60)), None, false)
-                .await;
-        }
+    if let Some(ref pool) = state.valkey_pool && let Ok(json) = serde_json::to_string(&ids) {
+        let _ = pool
+            .set::<(), _, _>(&vk_key, json, Some(Expiration::EX(60)), None, false)
+            .await;
     }
 
     ids
@@ -973,19 +966,19 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
 /// L2: DB fallback, result cached for next call.
 /// Returns `None` if key absent or cap is NULL (JWT session → use MAX_ROUNDS default).
 async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
+    use fred::prelude::*;
     let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_cap_points(key_id);
 
     // ── L1: Valkey ─────────────────────────────────────────────────────────────
-    if let Some(ref pool) = state.valkey_pool {
-        use fred::prelude::*;
-        if let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await {
-            // "null" sentinel = key exists but cap is NULL (no limit)
-            if cached == "null" {
-                return None;
-            }
-            if let Ok(v) = cached.parse::<u8>() {
-                return Some(v);
-            }
+    if let Some(ref pool) = state.valkey_pool
+        && let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await
+    {
+        // "null" sentinel = key exists but cap is NULL (no limit)
+        if cached == "null" {
+            return None;
+        }
+        if let Ok(v) = cached.parse::<u8>() {
+            return Some(v);
         }
     }
 
@@ -1001,7 +994,6 @@ async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
 
     // Populate cache — "null" sentinel for absent/NULL cap.
     if let Some(ref pool) = state.valkey_pool {
-        use fred::prelude::*;
         let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
         let _ = pool
             .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)
@@ -1017,18 +1009,18 @@ async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
 /// L2: DB fallback, result cached.
 /// Returns `None` if all rows have NULL top_k (use global default).
 async fn fetch_mcp_top_k(state: &AppState, key_id: Uuid) -> Option<usize> {
+    use fred::prelude::*;
     let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_top_k(key_id);
 
     // ── L1: Valkey ─────────────────────────────────────────────────────────────
-    if let Some(ref pool) = state.valkey_pool {
-        use fred::prelude::*;
-        if let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await {
-            if cached == "null" {
-                return None;
-            }
-            if let Ok(v) = cached.parse::<usize>() {
-                return Some(v);
-            }
+    if let Some(ref pool) = state.valkey_pool
+        && let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await
+    {
+        if cached == "null" {
+            return None;
+        }
+        if let Ok(v) = cached.parse::<usize>() {
+            return Some(v);
         }
     }
 
@@ -1044,7 +1036,6 @@ async fn fetch_mcp_top_k(state: &AppState, key_id: Uuid) -> Option<usize> {
 
     // Populate cache.
     if let Some(ref pool) = state.valkey_pool {
-        use fred::prelude::*;
         let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
         let _ = pool
             .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)

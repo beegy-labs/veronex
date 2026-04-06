@@ -77,15 +77,6 @@ export const activeJobsQuery = queryOptions({
   refetchIntervalInBackground: false,
 })
 
-// ── Queue depth (live — 3 s poll) ─────────────────────────────────────────────
-
-export const queueDepthQuery = queryOptions({
-  queryKey: ['queue-depth'] as const,
-  queryFn: () => api.queueDepth(),
-  staleTime: STALE_TIME_LIVE,
-  refetchInterval: () => withJitter(REFETCH_INTERVAL_LIVE, 500),
-  refetchIntervalInBackground: false,
-})
 
 // ── Service health ───────────────────────────────────────────────────────────
 
