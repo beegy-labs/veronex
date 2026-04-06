@@ -119,14 +119,16 @@ test('async', async () => { await something() })
 
 ### Bash E2E
 
-| Pattern | Implementation |
-|---------|---------------|
-| Sequential | 01-setup → 03-inference (state creation) |
-| Multi-model | 03-inference auto-detects available models and cycles through them for Round 2 + Goodput tests (multi-model parallel throughput) |
-| Parallel 1 | 02, 04, 05, 06, 07, 11 concurrent execution (independent counts file) |
-| Sequential | 08-sdd-advanced (clean state after parallel phases) |
-| Parallel 2 | 09-metrics-pipeline, 10-image-storage |
-| Verify + Liveness | 11-verify-liveness (pre-registration verify endpoints, heartbeat keys, online counter) |
+| Wave | Scripts | Mode | Notes |
+|------|---------|------|-------|
+| Phase 0 | `01-setup` | sequential | DB reset + infra bootstrap |
+| Wave 1 | `05` `09` `11` `13` | **parallel** | read-only / fully isolated |
+| Wave 2 | `04` `06` `10` `12` `15` `17` | **parallel** | own resources; MCP/run-id isolated |
+| Wave 3 | `02` `03` `07` `08` `16` `14` | sequential | share AIMD + provider state; 16 patches global lab settings |
+
+Multi-model: `03-inference` auto-detects available models and cycles through them for Round 2 + Goodput tests (multi-model parallel throughput).
+
+Verify + Liveness: `11-verify-liveness` tests pre-registration verify endpoints, heartbeat keys, online counter.
 
 `09-metrics-pipeline.sh` tests the full metrics pipeline end-to-end: verifies agent scrapes node-exporter, pushes via OTLP, data flows through Redpanda into ClickHouse, and the analytics API returns both gauge metrics (memory, GPU temp/power) and counter-derived metrics (CPU usage %). Tests both local (Mac) and remote (Ubuntu Ryzen AI 395+) server configurations.
 
