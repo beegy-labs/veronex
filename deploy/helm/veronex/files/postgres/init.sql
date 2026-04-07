@@ -1,7 +1,6 @@
 -- ============================================================
 -- Veronex complete database schema (consolidated init)
--- Generated from migrations 000001–000006
--- Last updated: 2026-03-16
+-- Last updated: 2026-04-06
 -- ============================================================
 
 -- ── Accounts ──────────────────────────────────────────────────────────────────
@@ -12,8 +11,6 @@ CREATE TABLE accounts (
     password_hash VARCHAR(255) NOT NULL,
     name          VARCHAR(128) NOT NULL,
     email         VARCHAR(255),
-    role          VARCHAR(16)  NOT NULL DEFAULT 'admin'
-                  CHECK (role IN ('super', 'admin')),
     department    VARCHAR(128),
     position      VARCHAR(128),
     is_active     BOOLEAN     NOT NULL DEFAULT true,
@@ -66,11 +63,12 @@ CREATE TABLE api_keys (
     key_type       TEXT        NOT NULL DEFAULT 'standard',
     account_id     UUID        REFERENCES accounts(id),
     is_test_key    BOOLEAN     NOT NULL DEFAULT false,
-    tier           TEXT        NOT NULL DEFAULT 'paid'
+    tier           TEXT        NOT NULL DEFAULT 'paid',
+    mcp_cap_points SMALLINT    NOT NULL DEFAULT 3 CHECK (mcp_cap_points BETWEEN 0 AND 10)
 );
 
-CREATE INDEX ix_api_keys_tenant ON api_keys(tenant_id);
-CREATE INDEX ix_api_keys_hash   ON api_keys(key_hash);
+CREATE INDEX idx_api_keys_tenant ON api_keys(tenant_id);
+CREATE INDEX idx_api_keys_hash   ON api_keys(key_hash);
 
 CREATE UNIQUE INDEX uq_api_keys_account_test
     ON api_keys (account_id)
@@ -103,15 +101,38 @@ CREATE TABLE llm_providers (
     num_parallel      SMALLINT    NOT NULL DEFAULT 4
 );
 
-CREATE INDEX ix_llm_providers_is_active ON llm_providers(is_active);
-CREATE INDEX ix_llm_providers_status    ON llm_providers(status);
+CREATE INDEX idx_llm_providers_is_active ON llm_providers(is_active);
+CREATE INDEX idx_llm_providers_status    ON llm_providers(status);
 CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
+
+-- ── Conversations ─────────────────────────────────────────────────────────────
+-- source column included (migration 000002)
+
+CREATE TABLE conversations (
+    id                      UUID        PRIMARY KEY DEFAULT uuidv7(),
+    account_id              UUID        REFERENCES accounts(id) ON DELETE SET NULL,
+    api_key_id              UUID        REFERENCES api_keys(id) ON DELETE SET NULL,
+    title                   TEXT,
+    model_name              VARCHAR(255),
+    source                  VARCHAR(8)  NOT NULL DEFAULT 'api',
+    turn_count              INT         NOT NULL DEFAULT 0,
+    total_prompt_tokens     INT         NOT NULL DEFAULT 0,
+    total_completion_tokens INT         NOT NULL DEFAULT 0,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_conversations_account  ON conversations(account_id, updated_at DESC);
+CREATE INDEX idx_conversations_api_key  ON conversations(api_key_id, updated_at DESC);
+CREATE INDEX idx_conversations_updated  ON conversations(updated_at DESC);
+CREATE INDEX idx_conversations_source   ON conversations(source);
 
 -- ── Inference Jobs ────────────────────────────────────────────────────────────
 
 CREATE TABLE inference_jobs (
     id                   UUID        PRIMARY KEY DEFAULT uuidv7(),
-    prompt               TEXT        NOT NULL,
+    prompt               TEXT        NOT NULL DEFAULT '',
+    prompt_preview       TEXT,
     model_name           VARCHAR(255) NOT NULL,
     provider_type        VARCHAR(32) NOT NULL,
     status               VARCHAR(32) NOT NULL DEFAULT 'pending',
@@ -131,7 +152,7 @@ CREATE TABLE inference_jobs (
     provider_id          UUID        REFERENCES llm_providers(id),
     api_format           TEXT        NOT NULL DEFAULT 'openai_compat',
     request_path         TEXT,
-    conversation_id      TEXT,
+    conversation_id      UUID        REFERENCES conversations(id) ON DELETE SET NULL,
     tool_calls_json      JSONB,
     messages_json        JSONB,
     queue_time_ms        INT,
@@ -139,12 +160,17 @@ CREATE TABLE inference_jobs (
     messages_hash        TEXT,
     messages_prefix_hash TEXT,
     failure_reason       TEXT,
-    image_keys           TEXT[]
+    result_preview       TEXT,
+    has_tool_calls       BOOLEAN     NOT NULL DEFAULT false,
+    image_keys           TEXT[],
+    mcp_loop_id          UUID
 );
 
-CREATE INDEX ix_inference_jobs_status     ON inference_jobs(status);
-CREATE INDEX ix_inference_jobs_created_at ON inference_jobs(created_at DESC);
-CREATE INDEX idx_inference_jobs_source    ON inference_jobs(source);
+CREATE INDEX idx_inference_jobs_status     ON inference_jobs(status);
+CREATE INDEX idx_inference_jobs_created_at ON inference_jobs(created_at DESC);
+CREATE INDEX idx_inference_jobs_source     ON inference_jobs(source);
+CREATE INDEX idx_inference_jobs_api_key_id ON inference_jobs(api_key_id, created_at DESC);
+CREATE INDEX idx_inference_jobs_account_id ON inference_jobs(account_id, created_at DESC);
 
 CREATE INDEX idx_inference_jobs_conversation_id
     ON inference_jobs(conversation_id)
@@ -233,6 +259,7 @@ CREATE TABLE ollama_sync_jobs (
 );
 
 -- ── Model VRAM Profiles ───────────────────────────────────────────────────────
+-- max_ctx column included (migration 000005)
 
 CREATE TABLE model_vram_profiles (
     provider_id       UUID     NOT NULL REFERENCES llm_providers(id) ON DELETE CASCADE,
@@ -250,21 +277,9 @@ CREATE TABLE model_vram_profiles (
     max_concurrent    INT      NOT NULL DEFAULT 0,
     baseline_tps      INT      NOT NULL DEFAULT 0,
     baseline_p95_ms   INT      NOT NULL DEFAULT 0,
+    max_ctx           INT      NOT NULL DEFAULT 0,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (provider_id, model_name)
-);
-
--- ── Provider VRAM Budget ──────────────────────────────────────────────────────
--- Persistent VRAM management state per Ollama provider.
--- Complements llm_providers (which holds num_parallel and total_vram_mb).
--- Survives server restart so AIMD safety margins and source attribution are preserved.
-
-CREATE TABLE provider_vram_budget (
-    provider_id       UUID        PRIMARY KEY REFERENCES llm_providers(id) ON DELETE CASCADE,
-    safety_permil     INT         NOT NULL DEFAULT 100,      -- safety margin ÷1000; 100=10%, max 500
-    vram_total_source TEXT        NOT NULL DEFAULT 'probe',  -- 'probe' | 'node_exporter' | 'manual'
-    kv_cache_type     TEXT        NOT NULL DEFAULT 'q8_0',   -- 'f16' | 'q8_0' | 'q4_0'
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ── Capacity Settings ─────────────────────────────────────────────────────────
@@ -294,13 +309,193 @@ CREATE TABLE model_pricing (
 );
 
 -- ── Lab Settings ──────────────────────────────────────────────────────────────
+-- compression/multiturn/vision/handoff columns included (migrations 000003-000004)
 
 CREATE TABLE lab_settings (
-    id                      INT     PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    gemini_function_calling BOOLEAN NOT NULL DEFAULT false,
-    max_images_per_request  INTEGER NOT NULL DEFAULT 4,
-    max_image_b64_bytes     INTEGER NOT NULL DEFAULT 2097152,
-    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                              INT     PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    gemini_function_calling         BOOLEAN NOT NULL DEFAULT false,
+    max_images_per_request          INTEGER NOT NULL DEFAULT 4,
+    max_image_b64_bytes             INTEGER NOT NULL DEFAULT 2097152,
+    -- context compression (000003)
+    context_compression_enabled     BOOLEAN NOT NULL DEFAULT false,
+    compression_model               TEXT,
+    context_budget_ratio            REAL    NOT NULL DEFAULT 0.60,
+    compression_trigger_turns       INT     NOT NULL DEFAULT 1,
+    recent_verbatim_window          INT     NOT NULL DEFAULT 1,
+    compression_timeout_secs        INT     NOT NULL DEFAULT 10,
+    -- multi-turn gate (000003)
+    multiturn_min_params            INT     NOT NULL DEFAULT 7,
+    multiturn_min_ctx               INT     NOT NULL DEFAULT 16384,
+    multiturn_allowed_models        TEXT[]  NOT NULL DEFAULT '{}',
+    -- vision (000003)
+    vision_model                    TEXT,
+    -- session handoff (000003)
+    handoff_enabled                 BOOLEAN NOT NULL DEFAULT true,
+    -- handoff threshold (000004)
+    handoff_threshold               REAL    NOT NULL DEFAULT 0.85,
+    updated_at                      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 INSERT INTO lab_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+-- ── MCP Settings ──────────────────────────────────────────────────────────────
+
+CREATE TABLE mcp_settings (
+    id                        INT          PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    routing_cache_ttl_secs    INTEGER      NOT NULL DEFAULT 300,
+    tool_schema_refresh_secs  INTEGER      NOT NULL DEFAULT 3600,
+    embedding_model           VARCHAR(128) NOT NULL DEFAULT 'nomic-embed-text',
+    max_tools_per_request     INTEGER      NOT NULL DEFAULT 20 CHECK (max_tools_per_request BETWEEN 1 AND 200),
+    max_routing_cache_entries INTEGER      NOT NULL DEFAULT 1000,
+    updated_at                TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+INSERT INTO mcp_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+-- ── Provider VRAM Budget ──────────────────────────────────────────────────────
+
+CREATE TABLE provider_vram_budget (
+    provider_id       UUID        PRIMARY KEY REFERENCES llm_providers(id) ON DELETE CASCADE,
+    safety_permil     INT         NOT NULL DEFAULT 100,
+    vram_total_source TEXT        NOT NULL DEFAULT 'probe',
+    kv_cache_type     TEXT        NOT NULL DEFAULT 'q8_0',
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── Roles ─────────────────────────────────────────────────────────────────────
+
+CREATE TABLE roles (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        VARCHAR(64) NOT NULL UNIQUE,
+    permissions TEXT[]      NOT NULL DEFAULT '{}',
+    menus       TEXT[]      NOT NULL DEFAULT '{}',
+    is_system   BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO roles (name, permissions, menus, is_system) VALUES (
+    'super',
+    ARRAY['dashboard_view','api_test','provider_manage','key_manage','account_manage','audit_view','settings_manage','role_manage','model_manage'],
+    ARRAY['dashboard','flow','jobs','performance','usage','test','providers','servers','keys','accounts','audit','api_docs'],
+    TRUE
+);
+
+INSERT INTO roles (name, permissions, menus, is_system) VALUES (
+    'viewer',
+    ARRAY['dashboard_view'],
+    ARRAY['dashboard','flow','jobs','performance','usage','api_docs'],
+    TRUE
+);
+
+-- ── Account Roles ─────────────────────────────────────────────────────────────
+
+CREATE TABLE account_roles (
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    role_id    UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    PRIMARY KEY (account_id, role_id)
+);
+
+CREATE INDEX idx_account_roles_role ON account_roles(role_id);
+
+-- ── Global Model Settings ─────────────────────────────────────────────────────
+
+CREATE TABLE global_model_settings (
+    model_name  TEXT        PRIMARY KEY,
+    is_enabled  BOOLEAN     NOT NULL DEFAULT true,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ── API Key Provider Access ───────────────────────────────────────────────────
+
+CREATE TABLE api_key_provider_access (
+    api_key_id   UUID    NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    provider_id  UUID    NOT NULL REFERENCES llm_providers(id) ON DELETE CASCADE,
+    is_allowed   BOOLEAN NOT NULL DEFAULT true,
+    PRIMARY KEY (api_key_id, provider_id)
+);
+
+CREATE INDEX idx_api_key_provider_access_key ON api_key_provider_access(api_key_id) WHERE is_allowed = true;
+
+-- ── MCP Servers ───────────────────────────────────────────────────────────────
+
+CREATE TABLE mcp_servers (
+    id            UUID         PRIMARY KEY DEFAULT uuidv7(),
+    name          VARCHAR(128) NOT NULL UNIQUE,
+    slug          VARCHAR(64)  NOT NULL UNIQUE
+                  CHECK (slug ~ '^[a-z][a-z0-9_]*$'),
+    url           TEXT         NOT NULL,
+    is_enabled    BOOLEAN      NOT NULL DEFAULT true,
+    timeout_secs  SMALLINT     NOT NULL DEFAULT 30
+                  CHECK (timeout_secs BETWEEN 1 AND 300),
+    metadata      JSONB        NOT NULL DEFAULT '{}',
+    tool_count    SMALLINT     NOT NULL DEFAULT 0,
+    tools_summary JSONB        NOT NULL DEFAULT '[]',
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_mcp_servers_enabled ON mcp_servers(is_enabled) WHERE is_enabled = true;
+
+-- ── MCP Server Tools ──────────────────────────────────────────────────────────
+
+CREATE TABLE mcp_server_tools (
+    server_id       UUID        NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+    tool_name       TEXT        NOT NULL,
+    namespaced_name TEXT        NOT NULL,
+    description     TEXT,
+    input_schema    JSONB       NOT NULL DEFAULT '{}',
+    annotations     JSONB       NOT NULL DEFAULT '{}',
+    discovered_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (server_id, tool_name)
+);
+
+CREATE INDEX idx_mcp_server_tools_namespaced ON mcp_server_tools(namespaced_name);
+
+-- ── MCP Key Access ────────────────────────────────────────────────────────────
+
+CREATE TABLE mcp_key_access (
+    api_key_id  UUID        NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    server_id   UUID        NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+    is_allowed  BOOLEAN     NOT NULL DEFAULT true,
+    granted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    top_k       SMALLINT    CHECK (top_k BETWEEN 1 AND 64),
+    PRIMARY KEY (api_key_id, server_id)
+);
+
+CREATE INDEX idx_mcp_key_access_key ON mcp_key_access(api_key_id) WHERE is_allowed = true;
+
+-- ── MCP Loop Tool Calls ───────────────────────────────────────────────────────
+
+CREATE TABLE mcp_loop_tool_calls (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    mcp_loop_id     UUID        NOT NULL,
+    job_id          UUID        NOT NULL REFERENCES inference_jobs(id) ON DELETE CASCADE,
+    loop_round      SMALLINT    NOT NULL,
+    server_id       UUID        NOT NULL,
+    tool_name       TEXT        NOT NULL,
+    namespaced_name TEXT        NOT NULL,
+    args_json       JSONB       NOT NULL,
+    result_text     TEXT,
+    outcome         TEXT        NOT NULL,
+    cache_hit       BOOLEAN     NOT NULL DEFAULT false,
+    latency_ms      INT,
+    result_bytes    INT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_mcp_loop_tool_calls_loop   ON mcp_loop_tool_calls(mcp_loop_id);
+CREATE INDEX idx_mcp_loop_tool_calls_job    ON mcp_loop_tool_calls(job_id);
+CREATE INDEX idx_mcp_loop_tool_calls_server ON mcp_loop_tool_calls(server_id, created_at DESC);
+
+-- ── Trigram indexes ───────────────────────────────────────────────────────────
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX idx_ollama_models_name_trgm        ON ollama_models USING GIN (model_name gin_trgm_ops);
+CREATE INDEX idx_llm_providers_name_trgm        ON llm_providers USING GIN (name gin_trgm_ops);
+CREATE INDEX idx_llm_providers_url_trgm         ON llm_providers USING GIN (url gin_trgm_ops);
+CREATE INDEX idx_accounts_name_trgm             ON accounts USING GIN (name gin_trgm_ops);
+CREATE INDEX idx_accounts_username_trgm         ON accounts USING GIN (username gin_trgm_ops);
+CREATE INDEX idx_api_keys_name_trgm             ON api_keys USING GIN (name gin_trgm_ops);
+CREATE INDEX idx_gpu_servers_name_trgm          ON gpu_servers USING GIN (name gin_trgm_ops);
+CREATE INDEX idx_provider_selected_models_lookup ON provider_selected_models (provider_id, model_name);

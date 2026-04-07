@@ -332,30 +332,6 @@ services:
       veronex:
         condition: service_healthy
 
-  # ── Database migrations (run manually) ───────────────────────────────────────
-  # Usage:
-  #   docker compose run --rm migrate-clickhouse         # apply all (up)
-  migrate-clickhouse:
-    build:
-      context: ./docker/migrate-clickhouse
-    profiles: [migrate]
-    volumes:
-      - ./migrations/clickhouse:/migrations:ro
-    environment:
-      CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-veronex}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-veronex}
-      CLICKHOUSE_DB: veronex
-      RETENTION_METRICS_DAYS: ${CLICKHOUSE_RETENTION_METRICS_DAYS:-14}
-      RETENTION_LOGS_DAYS: ${CLICKHOUSE_RETENTION_LOGS_DAYS:-7}
-      RETENTION_INFERENCE_DAYS: ${CLICKHOUSE_RETENTION_INFERENCE_DAYS:-90}
-      RETENTION_AUDIT_DAYS: ${CLICKHOUSE_RETENTION_AUDIT_DAYS:-90}
-      RETENTION_TRACES_DAYS: ${CLICKHOUSE_RETENTION_TRACES_DAYS:-7}
-      RETENTION_MCP_DAYS: ${CLICKHOUSE_RETENTION_MCP_DAYS:-90}
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-
   kafka-connect:
     profiles: [legacy]  # ClickHouse consumes Kafka directly — this service is not needed
     image: docker.redpanda.com/redpandadata/connect:4.43.1
