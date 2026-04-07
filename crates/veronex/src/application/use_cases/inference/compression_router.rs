@@ -209,20 +209,18 @@ mod tests {
 
     #[test]
     fn into_params_async_idle_returns_some() {
-        let id = Uuid::now_v7();
-        let route = CompressionRoute::AsyncIdle { provider_id: id, provider_url: "http://x".to_string() };
+        let route = CompressionRoute::AsyncIdle { provider_url: "http://x".to_string() };
         let p = route.into_params("qwen2.5:3b".to_string(), 30).unwrap();
         assert_eq!(p.model, "qwen2.5:3b");
-        assert_eq!(p.provider_id, id);
+        assert_eq!(p.provider_url, "http://x");
         assert_eq!(p.timeout_secs, 30);
     }
 
     #[test]
     fn into_params_async_dedicated_returns_some() {
-        let id = Uuid::now_v7();
-        let route = CompressionRoute::AsyncDedicated { provider_id: id, provider_url: "http://x".to_string() };
+        let route = CompressionRoute::AsyncDedicated { provider_url: "http://x".to_string() };
         let p = route.into_params("qwen2.5:3b".to_string(), 60).unwrap();
-        assert_eq!(p.provider_id, id);
+        assert_eq!(p.provider_url, "http://x");
         assert_eq!(p.timeout_secs, 60);
     }
 }
