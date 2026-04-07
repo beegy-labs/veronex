@@ -1,6 +1,6 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-03-28
+> SSOT | **Last Updated**: 2026-04-07
 
 ## Task Guide
 
@@ -73,11 +73,30 @@ test       0            Lowest priority (Test Run / dashboard)
 ```
 
 Enqueue: Lua atomic (ZCARD guard + per-model demand guard + ZADD + INCR demand + HSET×2).
-Dispatch: ZRANGE peek top-K → Rust scoring (locality + age × perf_factor) → Lua claim (ZREM + RPUSH processing + DECR).
+Dispatch: ZRANGE peek top-K → Rust scoring (locality + age × perf_factor) → Lua claim (ZREM queue:zset + ZADD queue:active score=deadline_ms + DECR demand + HDEL side hashes).
+
+### Lease Queue (`queue:active`)
+
+Claimed jobs move from `queue:zset` into `queue:active` (ZSET, score = lease deadline unix_ms). The worker renews the lease every `LEASE_RENEW_INTERVAL_SECS` (30s) via a keepalive task. If the lease expires before renewal, the processing reaper re-enqueues the job (up to `LEASE_MAX_ATTEMPTS` times), then permanently fails it.
+
+| Constant | Value | Notes |
+|----------|-------|-------|
+| `QUEUE_ACTIVE` | `veronex:queue:active` | ZSET, score = deadline_ms |
+| `QUEUE_ACTIVE_ATTEMPTS` | `veronex:queue:active:attempts` | Hash: job_id → attempt count |
+| `LEASE_TTL_MS` | 90,000 ms | Lease lifetime; worker must renew before expiry |
+| `LEASE_RENEW_INTERVAL_SECS` | 30s | Keepalive renew cadence |
+| `PROCESSING_REAPER_SECS` | 30s | Reaper scan interval (registered in `bootstrap/background.rs`) |
+| `LEASE_MAX_ATTEMPTS` | 2 | Max re-enqueues before permanent failure (`lease_expired_max_attempts`) |
 
 Constants in `domain/constants.rs`:
 ```rust
 pub const QUEUE_ZSET: &str = "veronex:queue:zset";
+pub const QUEUE_ACTIVE: &str = "veronex:queue:active";
+pub const QUEUE_ACTIVE_ATTEMPTS: &str = "veronex:queue:active:attempts";
+pub const LEASE_TTL_MS: u64 = 90_000;
+pub const LEASE_RENEW_INTERVAL_SECS: u64 = 30;
+pub const PROCESSING_REAPER_SECS: u64 = 30;
+pub const LEASE_MAX_ATTEMPTS: u64 = 2;
 pub const TIER_BONUS_PAID: u64 = 300_000;
 pub const TIER_BONUS_STANDARD: u64 = 100_000;
 pub const TIER_BONUS_TEST: u64 = 0;
@@ -96,8 +115,8 @@ pub const MAX_QUEUE_PER_MODEL: u64 = 2_000;    // per-model cap → 429
 ```
 Client → inference route → submit(prompt, model, ...) → Pending → ZADD queue:zset (score=now_ms-tier_bonus)
 
-queue_dispatcher_loop (ZRANGE peek → Rust scoring → Lua ZREM claim → processing list):
-  → thermal + slot check → run_job() → stream_tokens()
+queue_dispatcher_loop (ZRANGE peek → Rust scoring → Lua ZREM claim → ZADD queue:active score=deadline_ms):
+  → keepalive task renews lease every 30s → run_job() → stream_tokens()
   → Completed: finalize() writes metrics to Postgres + ConversationRecord to S3
   → ObservabilityPort → veronex-analytics → OTel → Redpanda → ClickHouse
 ```

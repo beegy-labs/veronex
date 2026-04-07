@@ -63,7 +63,7 @@ Quick reference:
 | Design token / nav / DataTable | `docs/llm/frontend/design-system.md` |
 | Component pattern (ConfirmDialog, 2-Step Verify) | `docs/llm/frontend/design-system-components-patterns.md` |
 | DB schema | `docs/llm/` affected domain |
-| MCP integration / tool retrieval | `.specs/veronex/mcp-integration.md` |
+| MCP integration / tool retrieval | `docs/llm/inference/mcp-schema.md` |
 | Crate structure (embed, agent, mcp) | `docs/llm/infra/crate-structure.md` |
 | **Control flow / algorithm change** | **`docs/llm/flows/{subsystem}.md`** |
 

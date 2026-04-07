@@ -22,8 +22,8 @@ Read only docs relevant to the changed domain.
 | Capacity | `docs/llm/inference/capacity.md` |
 | Thermal | `docs/llm/providers/hardware.md` |
 | Job lifecycle | `docs/llm/inference/job-lifecycle.md` |
-| Scheduler spec | `.specs/veronex/scheduler.md` |
-| MCP integration | `.specs/veronex/mcp-integration.md` |
+| Scheduler flow | `docs/llm/flows/scheduler.md` |
+| MCP integration | `docs/llm/inference/mcp-schema.md` |
 | MCP / Embed / Agent | `docs/llm/infra/` |
 | LLM Gateway Security | `.add/best-practices.md` Part 4 |
 | Best practices update | `.add/best-practices.md` |

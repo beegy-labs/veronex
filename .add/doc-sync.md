@@ -15,7 +15,6 @@
 | Code is SSOT | Docs describe code, not the other way around |
 | No duplication | One fact in one place, reference elsewhere |
 | Token optimization | Layer 1/2 docs follow `docs/llm/policies/token-optimization.md` |
-| Layer 3/4 protected | `docs/en/`, `docs/kr/` are auto-generated — never edit directly |
 
 ## Read Before Execution
 
@@ -47,5 +46,4 @@
 | No code changes | Scope is docs only — never modify source code |
 | Layer 1 editable | `.ai/` — pointers only, max 500 tokens (~50 lines) |
 | Layer 2 editable | `docs/llm/` — SSOT, max 2,000 tokens (pages/ max 1,500) |
-| Layer 3/4 read-only | `docs/en/`, `docs/kr/` — auto-generated, not directly editable |
 | No orphan docs | Every doc must be indexed in `docs/llm/README.md` |

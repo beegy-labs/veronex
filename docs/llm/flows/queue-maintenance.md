@@ -1,26 +1,28 @@
 # Queue Maintenance Loops
 
-> **Last Updated**: 2026-03-28
+> **Last Updated**: 2026-04-07
 
 ---
 
 ## Overview
 
-Three background loops maintain ZSET priority queue integrity:
-promote overdue jobs, reconcile demand counters, and cancel stale waiters.
+Four background loops maintain ZSET priority queue integrity:
+promote overdue jobs, reconcile demand counters, cancel stale waiters,
+and reap expired active leases.
 
 ---
 
 ## Loop Summary
 
 ```
-┌──────────────────┬──────────┬─────────────────────────────────┐
-│ Loop             │ Interval │ Purpose                         │
-├──────────────────┼──────────┼─────────────────────────────────┤
-│ promote_overdue  │ 30s      │ Anti-starvation score upgrade   │
-│ demand_resync    │ 60s      │ Demand counter + GC side hashes │
-│ queue_wait_cancel│ 30s      │ Cancel jobs waiting > 300s      │
-└──────────────────┴──────────┴─────────────────────────────────┘
+┌────────────────────┬──────────┬──────────────────────────────────────────┐
+│ Loop               │ Interval │ Purpose                                  │
+├────────────────────┼──────────┼──────────────────────────────────────────┤
+│ promote_overdue    │ 30s      │ Anti-starvation score upgrade            │
+│ demand_resync      │ 60s      │ Demand counter + GC side hashes          │
+│ queue_wait_cancel  │ 30s      │ Cancel jobs waiting > 300s               │
+│ processing_reaper  │ 30s      │ Reap expired queue:active leases         │
+└────────────────────┴──────────┴──────────────────────────────────────────┘
 ```
 
 ---
@@ -91,6 +93,30 @@ queue_wait_cancel_pass():
 
 ---
 
+## processing_reaper
+
+Reclaims jobs whose active lease expired (worker died or stalled).
+Re-enqueues up to `LEASE_MAX_ATTEMPTS` times, then permanently fails the job.
+
+```
+processing_reaper_pass():
+  now_ms = now()
+  expired = ZRANGEBYSCORE queue:active 0 now_ms    // score = deadline_ms
+
+  for job_id in expired:
+    attempts = GET queue:active:attempts:{job_id} ?? 0
+    if attempts >= LEASE_MAX_ATTEMPTS:
+      job_repo.fail_with_reason("lease_expired_max_attempts")
+      ZREM queue:active job_id
+      DEL queue:active:attempts:{job_id}
+    else:
+      ZREM queue:active job_id
+      SET queue:active:attempts:{job_id} attempts+1 EX 86400
+      zset_enqueue(job_id, now_ms_score, model, ...)   // back into queue:zset
+```
+
+---
+
 ## Constants
 
 | Constant | Value | Description |
@@ -98,9 +124,13 @@ queue_wait_cancel_pass():
 | `OVERDUE_PROMOTE_SECS` | 30 | Promote loop interval |
 | `DEMAND_RESYNC_SECS` | 60 | Resync loop interval |
 | `QUEUE_WAIT_CANCEL_SECS` | 30 | Wait-cancel loop interval |
+| `PROCESSING_REAPER_SECS` | 30 | Processing reaper interval |
 | `TIER_EXPIRE_SECS` | 250 | Wait threshold for promotion |
 | `EMERGENCY_BONUS_MS` | 300,000 | Score bonus for overdue jobs |
 | `MAX_QUEUE_WAIT_SECS` | 300 | Max queue wait before cancel |
+| `LEASE_TTL_MS` | 90,000 | Active lease lifetime (ms) |
+| `LEASE_RENEW_INTERVAL_SECS` | 30 | Worker keepalive cadence |
+| `LEASE_MAX_ATTEMPTS` | 2 | Max re-enqueues before perm fail |
 | ZCARD skip threshold | 50 | Demand resync guard |
 | HSCAN page size | 200 | Cursor scan batch size |
 
