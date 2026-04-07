@@ -20,7 +20,6 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY workspace-hack/ ./workspace-hack/
 COPY crates/veronex/.sqlx ./crates/veronex/.sqlx
-COPY crates/veronex/migrations ./crates/veronex/migrations
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \

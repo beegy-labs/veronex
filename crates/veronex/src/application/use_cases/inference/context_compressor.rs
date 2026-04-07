@@ -249,3 +249,26 @@ pub async fn compress_input_inline(
 
     Some(compressed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimate_tokens_empty() {
+        assert_eq!(estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_four_chars_per_token() {
+        // "hello" = 5 chars → 1 token (integer division)
+        assert_eq!(estimate_tokens("abcd"), 1);
+        assert_eq!(estimate_tokens("abcdefgh"), 2);
+    }
+
+    #[test]
+    fn estimate_tokens_scales_with_length() {
+        let text = "a".repeat(400);
+        assert_eq!(estimate_tokens(&text), 100);
+    }
+}

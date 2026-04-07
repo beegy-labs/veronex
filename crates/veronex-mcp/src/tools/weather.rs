@@ -809,3 +809,256 @@ async fn handle_get_weather(state: &WeatherState, args: &Value) -> Result<Value,
         "conditions": conditions
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── snap ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn snap_rounds_to_0_01_grid() {
+        assert!((snap(37.5678) - 37.57).abs() < 1e-10);
+    }
+
+    #[test]
+    fn snap_already_on_grid() {
+        assert!((snap(37.50) - 37.50).abs() < 1e-10);
+    }
+
+    #[test]
+    fn snap_negative_coord() {
+        assert!((snap(-122.4567) - -122.46).abs() < 1e-10);
+    }
+
+    // ── days_in_month ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn days_in_month_31_day_months() {
+        for m in [1u32, 3, 5, 7, 8, 10, 12] {
+            assert_eq!(days_in_month(2026, m as i32), 31, "month {m}");
+        }
+    }
+
+    #[test]
+    fn days_in_month_30_day_months() {
+        for m in [4u32, 6, 9, 11] {
+            assert_eq!(days_in_month(2026, m as i32), 30, "month {m}");
+        }
+    }
+
+    #[test]
+    fn days_in_month_february_non_leap() {
+        assert_eq!(days_in_month(2026, 2), 28);
+        assert_eq!(days_in_month(1900, 2), 28); // divisible by 100, not 400
+    }
+
+    #[test]
+    fn days_in_month_february_leap() {
+        assert_eq!(days_in_month(2024, 2), 29); // divisible by 4
+        assert_eq!(days_in_month(2000, 2), 29); // divisible by 400
+    }
+
+    // ── add_days ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn add_days_zero_returns_same() {
+        assert_eq!(add_days("2026-04-07", 0), "2026-04-07");
+    }
+
+    #[test]
+    fn add_days_within_month() {
+        assert_eq!(add_days("2026-04-07", 3), "2026-04-10");
+    }
+
+    #[test]
+    fn add_days_crosses_month_boundary() {
+        assert_eq!(add_days("2026-04-30", 1), "2026-05-01");
+    }
+
+    #[test]
+    fn add_days_crosses_year_boundary() {
+        assert_eq!(add_days("2026-12-31", 1), "2027-01-01");
+    }
+
+    #[test]
+    fn add_days_february_non_leap() {
+        assert_eq!(add_days("2026-02-28", 1), "2026-03-01");
+    }
+
+    #[test]
+    fn add_days_february_leap() {
+        assert_eq!(add_days("2024-02-28", 1), "2024-02-29");
+        assert_eq!(add_days("2024-02-29", 1), "2024-03-01");
+    }
+
+    // ── period_center_hour ────────────────────────────────────────────────────
+
+    #[test]
+    fn period_center_hour_known() {
+        assert_eq!(period_center_hour("morning"), 9);
+        assert_eq!(period_center_hour("afternoon"), 15);
+        assert_eq!(period_center_hour("evening"), 20);
+        assert_eq!(period_center_hour("night"), 23);
+    }
+
+    #[test]
+    fn period_center_hour_unknown_defaults_noon() {
+        assert_eq!(period_center_hour("midday"), 12);
+        assert_eq!(period_center_hour(""), 12);
+    }
+
+    // ── convert_temp ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn convert_temp_celsius_passthrough() {
+        let (t, unit) = convert_temp(20.0, "celsius");
+        assert_eq!(unit, "°C");
+        assert!((t - 20.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn convert_temp_0c_to_fahrenheit() {
+        let (t, unit) = convert_temp(0.0, "fahrenheit");
+        assert_eq!(unit, "°F");
+        assert!((t - 32.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn convert_temp_100c_to_fahrenheit() {
+        let (t, _) = convert_temp(100.0, "fahrenheit");
+        assert!((t - 212.0).abs() < 1e-10);
+    }
+
+    // ── convert_wind ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn convert_wind_default_kmh() {
+        let (w, unit) = convert_wind(100.0, "kmh");
+        assert_eq!(unit, "km/h");
+        assert!((w - 100.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn convert_wind_to_ms() {
+        let (w, unit) = convert_wind(36.0, "ms");
+        assert_eq!(unit, "m/s");
+        assert!((w - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn convert_wind_to_mph_and_kn_have_correct_units() {
+        let (_, mph_unit) = convert_wind(100.0, "mph");
+        let (_, kn_unit) = convert_wind(100.0, "kn");
+        assert_eq!(mph_unit, "mph");
+        assert_eq!(kn_unit, "kn");
+    }
+
+    // ── wmo_description ───────────────────────────────────────────────────────
+
+    #[test]
+    fn wmo_description_known_codes() {
+        assert_eq!(wmo_description(0), "Clear sky");
+        assert_eq!(wmo_description(3), "Overcast");
+        assert_eq!(wmo_description(61), "Slight rain");
+        assert_eq!(wmo_description(95), "Thunderstorm");
+        assert_eq!(wmo_description(99), "Thunderstorm+heavy hail");
+    }
+
+    #[test]
+    fn wmo_description_unknown_code() {
+        assert_eq!(wmo_description(42), "Unknown");
+        assert_eq!(wmo_description(999), "Unknown");
+    }
+
+    // ── eu_aqi_category ───────────────────────────────────────────────────────
+
+    #[test]
+    fn eu_aqi_category_boundaries() {
+        assert_eq!(eu_aqi_category(0),   "Good");
+        assert_eq!(eu_aqi_category(20),  "Good");
+        assert_eq!(eu_aqi_category(21),  "Fair");
+        assert_eq!(eu_aqi_category(40),  "Fair");
+        assert_eq!(eu_aqi_category(41),  "Moderate");
+        assert_eq!(eu_aqi_category(60),  "Moderate");
+        assert_eq!(eu_aqi_category(61),  "Poor");
+        assert_eq!(eu_aqi_category(80),  "Poor");
+        assert_eq!(eu_aqi_category(81),  "Very Poor");
+        assert_eq!(eu_aqi_category(100), "Very Poor");
+        assert_eq!(eu_aqi_category(101), "Extremely Poor");
+    }
+
+    // ── us_aqi_category ───────────────────────────────────────────────────────
+
+    #[test]
+    fn us_aqi_category_boundaries() {
+        assert_eq!(us_aqi_category(0),   "Good");
+        assert_eq!(us_aqi_category(50),  "Good");
+        assert_eq!(us_aqi_category(51),  "Moderate");
+        assert_eq!(us_aqi_category(100), "Moderate");
+        assert_eq!(us_aqi_category(101), "Unhealthy for Sensitive Groups");
+        assert_eq!(us_aqi_category(150), "Unhealthy for Sensitive Groups");
+        assert_eq!(us_aqi_category(151), "Unhealthy");
+        assert_eq!(us_aqi_category(200), "Unhealthy");
+        assert_eq!(us_aqi_category(201), "Very Unhealthy");
+        assert_eq!(us_aqi_category(300), "Very Unhealthy");
+        assert_eq!(us_aqi_category(301), "Hazardous");
+    }
+
+    // ── is_rainy_code ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_rainy_code_drizzle_and_rain_ranges() {
+        for code in [51u64, 55, 61, 63, 65, 66, 67, 80, 81, 82] {
+            assert!(is_rainy_code(code), "code {code} should be rainy");
+        }
+    }
+
+    #[test]
+    fn is_rainy_code_non_rainy() {
+        for code in [0u64, 3, 45, 71, 73, 75, 95, 99] {
+            assert!(!is_rainy_code(code), "code {code} should not be rainy");
+        }
+    }
+
+    // ── find_time_idx ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn find_time_idx_found() {
+        let times = serde_json::json!(["2026-04-07T08:00", "2026-04-07T09:00", "2026-04-07T10:00"]);
+        assert_eq!(find_time_idx(&times, "2026-04-07T09:00"), Some(1));
+    }
+
+    #[test]
+    fn find_time_idx_not_found() {
+        let times = serde_json::json!(["2026-04-07T08:00"]);
+        assert_eq!(find_time_idx(&times, "2026-04-07T12:00"), None);
+    }
+
+    #[test]
+    fn find_time_idx_empty_array() {
+        assert_eq!(find_time_idx(&serde_json::json!([]), "2026-04-07T09:00"), None);
+    }
+
+    // ── check_api_error ───────────────────────────────────────────────────────
+
+    #[test]
+    fn check_api_error_ok_response() {
+        assert!(check_api_error(&serde_json::json!({"temperature": 25.0}), "forecast").is_ok());
+    }
+
+    #[test]
+    fn check_api_error_with_reason() {
+        let resp = serde_json::json!({"error": true, "reason": "Invalid location"});
+        let err = check_api_error(&resp, "forecast").unwrap_err();
+        assert!(err.contains("forecast"));
+        assert!(err.contains("Invalid location"));
+    }
+
+    #[test]
+    fn check_api_error_no_reason_uses_unknown() {
+        let resp = serde_json::json!({"error": true});
+        let err = check_api_error(&resp, "aq").unwrap_err();
+        assert!(err.contains("unknown"));
+    }
+}

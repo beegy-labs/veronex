@@ -11,7 +11,8 @@ hdr "Phase 1: Infrastructure Setup"
 if [ "$SKIP_DB_RESET" = "0" ]; then
   docker compose exec -T postgres psql -U veronex -d veronex -c \
     "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
-  docker compose --profile migrate run --rm migrate-postgres > /dev/null 2>&1
+  docker compose exec -T postgres psql -U veronex -d veronex \
+    < "$(dirname "$0")/../../docker/postgres/init.sql" > /dev/null 2>&1
   docker compose --profile migrate run --rm migrate-clickhouse > /dev/null 2>&1
   # Clear all Valkey keys (ZSET queue, demand counters, caches, etc.)
   docker compose exec -T valkey valkey-cli EVAL \

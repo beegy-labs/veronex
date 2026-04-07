@@ -9,6 +9,7 @@ use crate::state::AppState;
 #[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct McpServerStatRow {
     pub server_slug: String,
+    pub tool_name: String,
     pub total_calls: u64,
     pub success_count: u64,
     pub error_count: u64,
@@ -17,7 +18,7 @@ pub struct McpServerStatRow {
     pub avg_latency_ms: f64,
 }
 
-/// GET /internal/mcp/stats?hours=N — Per-server MCP call statistics.
+/// GET /internal/mcp/stats?hours=N — Per-server, per-tool MCP call statistics.
 pub async fn get_mcp_stats(
     State(state): State<AppState>,
     Query(params): Query<HoursQuery>,
@@ -30,6 +31,7 @@ pub async fn get_mcp_stats(
         .query(
             "SELECT
                 server_slug,
+                tool_name,
                 sum(call_count)      AS total_calls,
                 sum(success_count)   AS success_count,
                 sum(error_count)     AS error_count,
@@ -39,8 +41,8 @@ pub async fn get_mcp_stats(
              FROM mcp_tool_calls_hourly
              WHERE hour >= now() - INTERVAL ? HOUR
                AND call_count > 0
-             GROUP BY server_slug
-             ORDER BY total_calls DESC",
+             GROUP BY server_slug, tool_name
+             ORDER BY server_slug ASC, total_calls DESC",
         )
         .bind(hours)
         .fetch_all::<McpServerStatRow>()

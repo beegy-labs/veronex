@@ -159,3 +159,60 @@ pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, pro
         conversation_id: c.conversation_id.map(|id| id.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pct_normal_ratio() {
+        assert_eq!(pct(1, 4), 25.0);
+        assert_eq!(pct(1, 3), 33.3);
+        assert_eq!(pct(2, 3), 66.7);
+    }
+
+    #[test]
+    fn pct_zero_denominator_returns_zero() {
+        assert_eq!(pct(100, 0), 0.0);
+    }
+
+    #[test]
+    fn pct_full_coverage() {
+        assert_eq!(pct(10, 10), 100.0);
+    }
+
+    #[test]
+    fn validate_hours_rejects_zero() {
+        assert!(validate_hours(0).is_err());
+    }
+
+    #[test]
+    fn validate_hours_rejects_over_8760() {
+        assert!(validate_hours(8761).is_err());
+    }
+
+    #[test]
+    fn validate_hours_accepts_boundaries() {
+        assert!(validate_hours(1).is_ok());
+        assert!(validate_hours(8760).is_ok());
+    }
+
+    #[test]
+    fn compute_tps_normal() {
+        // 100 tokens, latency 2000ms, ttft 500ms → gen_ms=1500 → tps=66.7
+        let tps = compute_tps(Some(2000), Some(500), Some(100)).unwrap();
+        assert_eq!(tps, 66.7);
+    }
+
+    #[test]
+    fn compute_tps_none_when_missing_fields() {
+        assert!(compute_tps(None, None, Some(100)).is_none());
+        assert!(compute_tps(Some(1000), None, None).is_none());
+    }
+
+    #[test]
+    fn compute_tps_none_when_gen_ms_zero() {
+        // ttft == latency → gen_ms = 0 → no TPS
+        assert!(compute_tps(Some(500), Some(500), Some(100)).is_none());
+    }
+}

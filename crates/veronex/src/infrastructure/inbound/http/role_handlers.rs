@@ -258,3 +258,35 @@ pub async fn delete_role(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_permissions_accepts_known() {
+        let known = ALL_PERMISSIONS[0].to_string();
+        assert!(validate_permissions(&[known]).is_ok());
+    }
+
+    #[test]
+    fn validate_permissions_rejects_unknown() {
+        assert!(validate_permissions(&["not_a_real_permission".to_string()]).is_err());
+    }
+
+    #[test]
+    fn validate_permissions_empty_slice_ok() {
+        assert!(validate_permissions(&[]).is_ok());
+    }
+
+    #[test]
+    fn validate_menus_accepts_known() {
+        let known = ALL_MENUS[0].to_string();
+        assert!(validate_menus(&[known]).is_ok());
+    }
+
+    #[test]
+    fn validate_menus_rejects_unknown() {
+        assert!(validate_menus(&["nonexistent_menu".to_string()]).is_err());
+    }
+}

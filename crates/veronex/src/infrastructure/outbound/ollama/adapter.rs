@@ -527,3 +527,35 @@ impl OllamaAdapter {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_effective_num_ctx_200k() {
+        assert_eq!(model_effective_num_ctx("gemma-200k"), 204_800);
+    }
+
+    #[test]
+    fn model_effective_num_ctx_128k() {
+        assert_eq!(model_effective_num_ctx("mistral-128k"), 131_072);
+    }
+
+    #[test]
+    fn model_effective_num_ctx_1m_capped_at_128k() {
+        assert_eq!(model_effective_num_ctx("llama4-1m"), 131_072);
+    }
+
+    #[test]
+    fn model_effective_num_ctx_large_models() {
+        assert_eq!(model_effective_num_ctx("qwen-72b"), 32_768);
+        assert_eq!(model_effective_num_ctx("llama-70b"), 32_768);
+    }
+
+    #[test]
+    fn model_effective_num_ctx_default() {
+        assert_eq!(model_effective_num_ctx("qwen3:8b"), 32_768);
+        assert_eq!(model_effective_num_ctx("phi4:14b"), 32_768);
+    }
+}

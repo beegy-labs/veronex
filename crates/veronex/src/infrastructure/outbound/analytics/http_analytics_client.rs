@@ -181,3 +181,22 @@ fn urlencoding(s: &str) -> String {
         .replace('+', "%2B")
         .replace(' ', "%20")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn urlencoding_encodes_special_chars() {
+        assert_eq!(urlencoding("a b"), "a%20b");
+        assert_eq!(urlencoding("k=v"), "k%3Dv");
+        assert_eq!(urlencoding("a&b"), "a%26b");
+        assert_eq!(urlencoding("100%"), "100%25");
+        assert_eq!(urlencoding("a+b"), "a%2Bb");
+    }
+
+    #[test]
+    fn urlencoding_plain_string_unchanged() {
+        assert_eq!(urlencoding("hello"), "hello");
+    }
+}

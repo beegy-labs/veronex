@@ -1184,4 +1184,137 @@ mod tests {
         assert!(MAX_ROUNDS >= 1);
         assert!(MAX_ROUNDS <= 20);
     }
+
+    // ── convert_ollama_tool_call ──────────────────────────────────────────────
+
+    #[test]
+    fn convert_ollama_tool_call_produces_openai_format() {
+        let tc = serde_json::json!({
+            "function": { "name": "get_weather", "arguments": {"city": "Seoul"} }
+        });
+        let result = convert_ollama_tool_call(0, &tc);
+        assert_eq!(result["type"].as_str(), Some("function"));
+        assert_eq!(result["id"].as_str(), Some("call_0"));
+        assert_eq!(result["index"].as_u64(), Some(0));
+        assert_eq!(result["function"]["name"].as_str(), Some("get_weather"));
+        // arguments must be JSON string (not an object)
+        assert!(result["function"]["arguments"].is_string());
+        let args: serde_json::Value =
+            serde_json::from_str(result["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["city"].as_str(), Some("Seoul"));
+    }
+
+    #[test]
+    fn convert_ollama_tool_call_index_used_as_id() {
+        let tc = serde_json::json!({ "function": { "name": "tool", "arguments": {} } });
+        let r3 = convert_ollama_tool_call(3, &tc);
+        assert_eq!(r3["id"].as_str(), Some("call_3"));
+        assert_eq!(r3["index"].as_u64(), Some(3));
+    }
+
+    #[test]
+    fn convert_ollama_tool_call_missing_name_gives_empty_string() {
+        let tc = serde_json::json!({ "function": {} });
+        let result = convert_ollama_tool_call(0, &tc);
+        assert_eq!(result["function"]["name"].as_str(), Some(""));
+    }
+
+    // ── extract_last_user_prompt ──────────────────────────────────────────────
+
+    #[test]
+    fn extract_last_user_prompt_returns_last_user_message() {
+        let msgs = vec![
+            serde_json::json!({"role": "user", "content": "first"}),
+            serde_json::json!({"role": "assistant", "content": "reply"}),
+            serde_json::json!({"role": "user", "content": "second"}),
+        ];
+        assert_eq!(extract_last_user_prompt(&msgs), "second");
+    }
+
+    #[test]
+    fn extract_last_user_prompt_empty_when_no_user_role() {
+        let msgs = vec![serde_json::json!({"role": "assistant", "content": "hi"})];
+        assert_eq!(extract_last_user_prompt(&msgs), "");
+    }
+
+    #[test]
+    fn extract_last_user_prompt_empty_slice() {
+        assert_eq!(extract_last_user_prompt(&[]), "");
+    }
+
+    // ── prune_tool_messages ───────────────────────────────────────────────────
+
+    #[test]
+    fn prune_tool_messages_no_op_within_keep_rounds() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "user", "content": "ask"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "search", "content": "result"}),
+        ];
+        let original = msgs.clone();
+        prune_tool_messages(&mut msgs, 2); // 1 round ≤ 2 keep → no change
+        assert_eq!(msgs, original);
+    }
+
+    #[test]
+    fn prune_tool_messages_replaces_old_tool_content() {
+        // 2 rounds; keep_rounds=1 → first round's tool message is pruned
+        let mut msgs = vec![
+            serde_json::json!({"role": "user", "content": "ask"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "search", "content": "old"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c1", "name": "fetch", "content": "new"}),
+        ];
+        prune_tool_messages(&mut msgs, 1);
+        assert_eq!(
+            msgs[2]["content"].as_str(),
+            Some("[result truncated — see earlier context]")
+        );
+        // Recent round is preserved
+        assert_eq!(msgs[4]["content"].as_str(), Some("new"));
+    }
+
+    #[test]
+    fn prune_tool_messages_preserves_non_tool_roles() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "user", "content": "ask"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "s", "content": "r"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c1", "name": "f", "content": "n"}),
+        ];
+        prune_tool_messages(&mut msgs, 1);
+        // user message untouched
+        assert_eq!(msgs[0]["content"].as_str(), Some("ask"));
+        // assistant with tool_calls untouched (not a "tool" role)
+        assert!(msgs[1]["tool_calls"].is_array());
+        assert!(msgs[3]["tool_calls"].is_array());
+    }
+
+    #[test]
+    fn prune_tool_messages_no_op_when_no_rounds() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "user", "content": "hello"}),
+            serde_json::json!({"role": "assistant", "content": "world"}),
+        ];
+        let original = msgs.clone();
+        prune_tool_messages(&mut msgs, 1);
+        assert_eq!(msgs, original);
+    }
+
+    #[test]
+    fn prune_tool_messages_tool_call_id_preserved_after_prune() {
+        // Verifies the truncation stub keeps tool_call_id so Ollama can still map responses.
+        let mut msgs = vec![
+            serde_json::json!({"role": "user", "content": "q"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "abc123"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "abc123", "name": "fn", "content": "data"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "xyz"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "xyz", "name": "g", "content": "ok"}),
+        ];
+        prune_tool_messages(&mut msgs, 1);
+        assert_eq!(msgs[2]["tool_call_id"].as_str(), Some("abc123"));
+        assert_eq!(msgs[2]["name"].as_str(), Some("fn"));
+    }
 }

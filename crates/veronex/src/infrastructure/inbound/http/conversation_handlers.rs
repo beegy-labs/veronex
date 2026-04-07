@@ -353,3 +353,21 @@ pub async fn get_turn_internals(
         vision_analysis,
     })).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conv_cache_key_format() {
+        let id = uuid::Uuid::nil();
+        let key = conv_cache_key(id);
+        assert!(key.starts_with("conv_s3:"));
+        assert!(key.contains(&id.to_string()));
+    }
+
+    #[test]
+    fn default_limit_is_50() {
+        assert_eq!(default_limit(), 50);
+    }
+}

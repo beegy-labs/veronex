@@ -51,3 +51,59 @@ pub use tool_cache::McpToolCache;
 pub use result_cache::McpResultCache;
 pub use circuit_breaker::McpCircuitBreaker;
 pub use types::{McpContent, McpTool, McpToolAnnotations, McpToolCall, McpToolResult};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_no_op_within_limit() {
+        let mut s = "hello".to_string();
+        truncate_at_char_boundary(&mut s, 10);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn truncate_ascii_at_byte_boundary() {
+        let mut s = "hello world".to_string();
+        truncate_at_char_boundary(&mut s, 5);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn truncate_exactly_at_limit() {
+        let mut s = "hello".to_string();
+        truncate_at_char_boundary(&mut s, 5);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn truncate_multibyte_backs_off_to_boundary() {
+        // "가" = 3 bytes. "hello가" = 8 bytes. Limit 7 splits mid-char → back off to 5.
+        let mut s = "hello가".to_string();
+        truncate_at_char_boundary(&mut s, 7);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn truncate_multibyte_keeps_full_char_when_fits() {
+        // "AB가" = 5 bytes. Limit 5 = exactly fits.
+        let mut s = "AB가".to_string();
+        truncate_at_char_boundary(&mut s, 5);
+        assert_eq!(s, "AB가");
+    }
+
+    #[test]
+    fn truncate_limit_zero_clears_string() {
+        let mut s = "hello".to_string();
+        truncate_at_char_boundary(&mut s, 0);
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn truncate_empty_string_no_panic() {
+        let mut s = String::new();
+        truncate_at_char_boundary(&mut s, 10);
+        assert_eq!(s, "");
+    }
+}

@@ -76,6 +76,24 @@ pub const QUEUE_JOBS_TEST: &str = "veronex:queue:jobs:test";
 /// Processing list for reliable queue (BLMOVE destination).
 pub const QUEUE_PROCESSING: &str = "veronex:queue:processing";
 
+/// Active-processing ZSET — score = lease deadline (unix_ms).
+pub const QUEUE_ACTIVE: &str = "veronex:queue:active";
+
+/// Hash tracking re-enqueue attempt counts for lease-expired jobs.
+pub const QUEUE_ACTIVE_ATTEMPTS: &str = "veronex:queue:active:attempts";
+
+/// Lease TTL in ms. Workers must renew before expiry or job is reaped.
+pub const LEASE_TTL_MS: u64 = 90_000;
+
+/// How often (secs) a worker renews the active lease.
+pub const LEASE_RENEW_INTERVAL_SECS: u64 = 30;
+
+/// How often (secs) the processing reaper runs.
+pub const PROCESSING_REAPER_SECS: u64 = 30;
+
+/// Max orphan recoveries before a job is permanently failed.
+pub const LEASE_MAX_ATTEMPTS: u64 = 2;
+
 /// Scoring bonus (MB) for models already loaded in VRAM (locality preference).
 pub const MODEL_LOCALITY_BONUS_MB: i64 = 100_000;
 

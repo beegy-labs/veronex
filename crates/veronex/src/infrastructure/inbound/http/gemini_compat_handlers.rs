@@ -650,3 +650,32 @@ pub async fn get_model(State(state): State<AppState>, axum::extract::Path(model)
     }))
     .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_gemini_finish_reason_mappings() {
+        assert_eq!(to_gemini_finish_reason(Some("length")),    "MAX_TOKENS");
+        assert_eq!(to_gemini_finish_reason(Some("cancelled")), "CANCELLED");
+        assert_eq!(to_gemini_finish_reason(Some("error")),     "OTHER");
+        assert_eq!(to_gemini_finish_reason(Some("stop")),      "STOP");
+        assert_eq!(to_gemini_finish_reason(None),              "STOP");
+        assert_eq!(to_gemini_finish_reason(Some("unknown_x")), "STOP");
+    }
+
+    #[test]
+    fn extract_text_parts_joins_text_only() {
+        let parts = vec![
+            GeminiPart::Text { text: "hello ".to_string() },
+            GeminiPart::Text { text: "world".to_string() },
+        ];
+        assert_eq!(extract_text_parts(&parts), "hello world");
+    }
+
+    #[test]
+    fn extract_text_parts_empty_slice() {
+        assert_eq!(extract_text_parts(&[]), "");
+    }
+}

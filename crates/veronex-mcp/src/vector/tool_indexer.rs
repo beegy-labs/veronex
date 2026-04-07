@@ -97,3 +97,24 @@ impl McpToolIndexer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_doc_id_format() {
+        let id = tool_doc_id("svc-abc", "srv-xyz", "web_search");
+        assert_eq!(id, "svc-abc:srv-xyz:web_search");
+    }
+
+    #[test]
+    fn tool_doc_id_with_uuid_strings() {
+        let svc = "00000000-0000-0000-0000-000000000001";
+        let srv = "00000000-0000-0000-0000-000000000002";
+        let id = tool_doc_id(svc, srv, "get_weather");
+        assert!(id.starts_with(svc));
+        assert!(id.ends_with("get_weather"));
+        assert_eq!(id.matches(':').count(), 2);
+    }
+}

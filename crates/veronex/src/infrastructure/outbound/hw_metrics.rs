@@ -820,4 +820,75 @@ node_cpu_seconds_total{cpu="1",mode="user"} 9000.0
         assert_eq!(metrics.cpu_logical, 2);
         assert!(metrics.gpus.is_empty()); // no GPU on macOS node-exporter
     }
+
+    // ── HwMetrics struct methods ──────────────────────────────────────────
+
+    #[test]
+    fn vram_free_mb_subtracts_used_from_total() {
+        let m = HwMetrics { vram_total_mb: 8192, vram_used_mb: 2048, ..Default::default() };
+        assert_eq!(m.vram_free_mb(), 6144);
+    }
+
+    #[test]
+    fn vram_free_mb_zero_when_fully_used() {
+        let m = HwMetrics { vram_total_mb: 4096, vram_used_mb: 4096, ..Default::default() };
+        assert_eq!(m.vram_free_mb(), 0);
+    }
+
+    #[test]
+    fn vram_free_mb_negative_on_overcommit() {
+        // VramPool may transiently overcommit — negative result is valid.
+        let m = HwMetrics { vram_total_mb: 1000, vram_used_mb: 1200, ..Default::default() };
+        assert_eq!(m.vram_free_mb(), -200);
+    }
+
+    #[test]
+    fn max_temp_c_returns_junction_when_highest() {
+        // junction (temp2) is typically the hottest for AMD GPUs
+        let m = HwMetrics { temp_c: 58.0, temp_junction_c: 72.0, temp_mem_c: 65.0, ..Default::default() };
+        assert_eq!(m.max_temp_c(), 72.0);
+    }
+
+    #[test]
+    fn max_temp_c_returns_edge_when_highest() {
+        let m = HwMetrics { temp_c: 90.0, temp_junction_c: 72.0, temp_mem_c: 65.0, ..Default::default() };
+        assert_eq!(m.max_temp_c(), 90.0);
+    }
+
+    #[test]
+    fn max_temp_c_returns_mem_when_highest() {
+        let m = HwMetrics { temp_c: 58.0, temp_junction_c: 72.0, temp_mem_c: 80.0, ..Default::default() };
+        assert_eq!(m.max_temp_c(), 80.0);
+    }
+
+    #[test]
+    fn max_temp_c_all_zero_by_default() {
+        let m = HwMetrics::default();
+        assert_eq!(m.max_temp_c(), 0.0);
+    }
+
+    #[test]
+    fn is_overheating_false_below_threshold() {
+        // 84.9 °C is below the 85 °C threshold
+        let m = HwMetrics { temp_junction_c: 84.9, ..Default::default() };
+        assert!(!m.is_overheating());
+    }
+
+    #[test]
+    fn is_overheating_true_at_exactly_85() {
+        let m = HwMetrics { temp_junction_c: 85.0, ..Default::default() };
+        assert!(m.is_overheating());
+    }
+
+    #[test]
+    fn is_overheating_triggered_by_mem_sensor() {
+        // edge + junction below threshold, mem at 85 → still overheating
+        let m = HwMetrics { temp_c: 60.0, temp_junction_c: 72.0, temp_mem_c: 85.0, ..Default::default() };
+        assert!(m.is_overheating());
+    }
+
+    #[test]
+    fn is_overheating_false_when_all_zero() {
+        assert!(!HwMetrics::default().is_overheating());
+    }
 }

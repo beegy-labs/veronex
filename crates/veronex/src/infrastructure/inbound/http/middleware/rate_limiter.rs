@@ -265,4 +265,27 @@ mod tests {
         let secs = seconds_until_next_minute();
         assert!((1..=60).contains(&secs));
     }
+
+    #[test]
+    fn current_minute_is_non_negative() {
+        assert!(current_minute() > 0);
+    }
+
+    #[test]
+    fn current_minute_monotone() {
+        let m1 = current_minute();
+        let m2 = current_minute();
+        // Must not go backwards within the same test execution.
+        assert!(m2 >= m1);
+    }
+
+    #[test]
+    fn seconds_until_next_minute_plus_elapsed_equals_60() {
+        // elapsed = (now.timestamp() % 60); retry = 60 - elapsed
+        // Together they sum to 60 (or 120 if called on a minute boundary).
+        let now_secs = chrono::Utc::now().timestamp();
+        let elapsed = now_secs % 60;
+        let retry = seconds_until_next_minute() as i64;
+        assert_eq!(elapsed + retry, 60);
+    }
 }

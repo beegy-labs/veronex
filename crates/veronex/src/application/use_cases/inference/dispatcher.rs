@@ -24,7 +24,7 @@ use crate::domain::value_objects::JobStatusEvent;
 use crate::domain::constants::{
     GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
     MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
-    QUEUE_POLL_INTERVAL, QUEUE_PROCESSING,
+    QUEUE_POLL_INTERVAL, QUEUE_ACTIVE,
     LOCALITY_BONUS_MS, ZSET_PEEK_K, ZSET_PEEK_K_MAX,
 };
 use crate::application::ports::outbound::concurrency_port::VramPermit;
@@ -434,10 +434,10 @@ pub(super) async fn queue_dispatcher_loop(
 
             if candidates.is_empty() {
                 // No eligible provider → atomically remove from ZSET and fail
-                let claimed = valkey.zset_claim(&job_id_str, QUEUE_PROCESSING, model).await.unwrap_or(false);
+                let claimed = valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await.unwrap_or(false);
                 if claimed {
-                    valkey.list_remove(QUEUE_PROCESSING, &job_id_str).await
-                        .unwrap_or_else(|e| tracing::warn!(%uuid, error = %e, "dispatcher: list_remove failed"));
+                    valkey.active_lease_remove(&job_id_str).await
+                        .unwrap_or_else(|e| tracing::warn!(%uuid, error = %e, "dispatcher: active_lease_remove failed"));
                     let vk_opt: Option<Arc<dyn ValkeyPort>> = Some(valkey.clone());
                     fail_job_no_provider(&jobs, &job_repo, &vk_opt, uuid, "no eligible provider for this model").await;
                     dispatched = true;
@@ -456,8 +456,8 @@ pub(super) async fn queue_dispatcher_loop(
                 continue;
             };
 
-            // Atomic ZSET claim (ZREM + RPUSH processing + DECR demand)
-            match valkey.zset_claim(&job_id_str, QUEUE_PROCESSING, model).await {
+            // Atomic ZSET claim (ZREM + ZADD active + DECR demand)
+            match valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await {
                 Ok(true) => { /* claimed successfully */ }
                 Ok(false) => {
                     // Another instance already took it — release VRAM and try next
@@ -495,6 +495,32 @@ pub(super) async fn queue_dispatcher_loop(
 
             tokio::spawn(async move {
                 let _permit = permit;
+
+                // Keepalive: renew lease every LEASE_RENEW_INTERVAL_SECS
+                let (ka_stop_tx, mut ka_stop_rx) = tokio::sync::oneshot::channel::<()>();
+                let vk_ka = vk_c.clone();
+                let job_id_ka = job_id_str.clone();
+                tokio::spawn(async move {
+                    let interval = std::time::Duration::from_secs(
+                        crate::domain::constants::LEASE_RENEW_INTERVAL_SECS,
+                    );
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = &mut ka_stop_rx => break,
+                            _ = tokio::time::sleep(interval) => {
+                                let deadline = (chrono::Utc::now().timestamp_millis() as u64)
+                                    + crate::domain::constants::LEASE_TTL_MS;
+                                match vk_ka.active_lease_renew(&job_id_ka, deadline).await {
+                                    Ok(false) => break, // already removed (completed or reaped)
+                                    Ok(true) => {}
+                                    Err(e) => tracing::warn!(job_id = %job_id_ka, "lease renew failed: {e}"),
+                                }
+                            }
+                        }
+                    }
+                });
+
                 match run_job(
                     jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,
                     pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
@@ -506,9 +532,17 @@ pub(super) async fn queue_dispatcher_loop(
                     Ok(None) => {} // cancelled or ownership lost
                     Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
                 }
-                if let Err(e) = vk_c.list_remove(QUEUE_PROCESSING, &job_id_str).await {
-                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to remove job from processing queue");
+
+                let _ = ka_stop_tx.send(());
+
+                // Remove from active ZSET (replaces list_remove on QUEUE_PROCESSING)
+                if let Err(e) = vk_c.active_lease_remove(&job_id_str).await {
+                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to remove job from active queue");
                 }
+                // Clean up attempts counter
+                let attempts_key = crate::domain::constants::QUEUE_ACTIVE_ATTEMPTS;
+                let _ = vk_c.kv_del(&format!("{attempts_key}:{job_id_str}")).await;
+
                 if let Err(e) = vk_c.kv_del(&owner_key).await {
                     tracing::warn!(%uuid, error = %e, "dispatcher: failed to delete job owner key");
                 }

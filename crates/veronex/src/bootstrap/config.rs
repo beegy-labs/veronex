@@ -135,3 +135,38 @@ fn parse_cors_origins(raw: &str) -> Vec<axum::http::HeaderValue> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_cors_origins_wildcard_returns_empty() {
+        assert!(parse_cors_origins("*").is_empty());
+        assert!(parse_cors_origins("  *  ").is_empty());
+    }
+
+    #[test]
+    fn parse_cors_origins_single_origin() {
+        let result = parse_cors_origins("http://localhost:3000");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "http://localhost:3000");
+    }
+
+    #[test]
+    fn parse_cors_origins_multiple_origins() {
+        let result = parse_cors_origins("http://localhost:3000,https://app.example.com");
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn parse_cors_origins_skips_empty_segments() {
+        let result = parse_cors_origins("http://localhost:3000,,https://app.example.com");
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn parse_cors_origins_empty_string_returns_empty() {
+        assert!(parse_cors_origins("").is_empty());
+    }
+}

@@ -114,3 +114,23 @@ pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
     pub default: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_id_dims() {
+        assert_eq!(ModelId::MultilingualE5Large.dims(), 1024);
+    }
+
+    #[test]
+    fn model_id_name() {
+        assert_eq!(ModelId::MultilingualE5Large.name(), "multilingual-e5-large");
+    }
+
+    #[test]
+    fn model_id_default() {
+        assert_eq!(ModelId::default_model(), ModelId::MultilingualE5Large);
+    }
+}

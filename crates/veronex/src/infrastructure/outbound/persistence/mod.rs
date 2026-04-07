@@ -44,3 +44,26 @@ pub mod ollama_sync_job_repository;
 pub mod session_repository;
 pub mod ttl_cache;
 pub mod provider_vram_budget_repository;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_db_enum_valid_value() {
+        let result: i32 = parse_db_enum(Some("42".to_string()), "test_col");
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn parse_db_enum_none_returns_default() {
+        let result: i32 = parse_db_enum(None, "test_col");
+        assert_eq!(result, 0); // i32::default()
+    }
+
+    #[test]
+    fn parse_db_enum_invalid_falls_back_to_default() {
+        let result: i32 = parse_db_enum(Some("not_a_number".to_string()), "test_col");
+        assert_eq!(result, 0);
+    }
+}

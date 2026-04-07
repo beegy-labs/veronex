@@ -767,6 +767,12 @@ export interface PipelineHealthResponse {
   available: boolean
 }
 
+export interface McpToolSummary {
+  name: string
+  namespaced_name: string
+  description?: string
+}
+
 export interface McpServer {
   id: string
   name: string
@@ -775,6 +781,7 @@ export interface McpServer {
   timeout_secs?: number
   is_enabled: boolean
   tool_count: number
+  tools?: McpToolSummary[]
   online?: boolean
   created_at: string
 }
@@ -782,6 +789,7 @@ export interface McpServer {
 export interface McpServerStat {
   server_slug: string
   server_name: string
+  tool_name: string
   total_calls: number
   success_rate: number
   cache_hit_count: number

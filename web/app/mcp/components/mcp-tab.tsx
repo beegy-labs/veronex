@@ -5,8 +5,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { mcpServersQuery, mcpStatsQuery, mcpSettingsQuery } from '@/lib/queries/mcp'
 import { api } from '@/lib/api'
 import { ApiHttpError } from '@/lib/types'
-import type { McpServer, McpServerStat, McpSettings, RegisterMcpServerRequest } from '@/lib/types'
-import { Plus, Trash2, Plug, BarChart2 } from 'lucide-react'
+import type { McpServer, McpServerStat, McpToolSummary, McpSettings, RegisterMcpServerRequest } from '@/lib/types'
+import { Plus, Trash2, Plug, BarChart2, ChevronRight, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -116,6 +116,42 @@ function RegisterMcpModal({ onClose }: { onClose: () => void }) {
 }
 
 
+function McpToolsDialog({ server, onClose }: { server: McpServer; onClose: () => void }) {
+  const { t } = useTranslation()
+  const tools = server.tools ?? []
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Wrench className="h-4 w-4 text-muted-foreground" />
+            {server.name} — {t('mcp.toolList')}
+          </DialogTitle>
+        </DialogHeader>
+        {tools.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-2">{t('mcp.noTools')}</p>
+        ) : (
+          <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
+            {tools.map((tool) => (
+              <div key={tool.namespaced_name} className="rounded-lg border px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs bg-surface-code px-1.5 py-0.5 rounded text-text-dim">{tool.namespaced_name}</span>
+                </div>
+                {tool.description && (
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{tool.description}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>{t('common.close')}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 const HOURS_OPTIONS = [
   { value: 1,   label: '1h' },
   { value: 6,   label: '6h' },
@@ -157,50 +193,75 @@ function McpStatsCard() {
         {stats && stats.length === 0 && (
           <p className="text-sm text-muted-foreground">{t('mcp.statsNoData')}</p>
         )}
-        {stats && stats.length > 0 && (
-          <DataTable minWidth="540px">
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="whitespace-nowrap">{t('mcp.name')}</TableHead>
-                <TableHead className="whitespace-nowrap text-right">{t('mcp.statsTotalCalls')}</TableHead>
-                <TableHead className="whitespace-nowrap text-right">{t('mcp.statsSuccessRate')}</TableHead>
-                <TableHead className="whitespace-nowrap text-right">{t('mcp.statsCacheHit')}</TableHead>
-                <TableHead className="whitespace-nowrap text-right">{t('mcp.statsAvgLatency')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {stats.map((s: McpServerStat) => (
-                <TableRow key={s.server_slug}>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{s.server_name}</span>
-                      <span className="font-mono text-xs text-muted-foreground bg-surface-code px-1.5 py-0.5 rounded">{s.server_slug}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtCompact(s.total_calls)}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    <Badge
-                      variant="outline"
-                      className={s.success_rate >= 0.95
-                        ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
-                        : s.success_rate >= 0.8
-                          ? 'bg-status-warning/15 text-status-warning-fg border-status-warning/30'
-                          : 'bg-status-error/15 text-status-error-fg border-status-error/30'}
-                    >
-                      {fmtPct1(s.success_rate * 100)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
-                    {s.cache_hit_count > 0 ? fmtPct1((s.cache_hit_count / s.total_calls) * 100) : '—'}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
-                    {fmtMs(s.avg_latency_ms)}
-                  </TableCell>
+        {stats && stats.length > 0 && (() => {
+          // Group rows by server_slug preserving server order
+          const groups: { slug: string; name: string; rows: McpServerStat[] }[] = []
+          const seen = new Map<string, number>()
+          for (const s of stats) {
+            const idx = seen.get(s.server_slug)
+            if (idx === undefined) {
+              seen.set(s.server_slug, groups.length)
+              groups.push({ slug: s.server_slug, name: s.server_name, rows: [s] })
+            } else {
+              groups[idx].rows.push(s)
+            }
+          }
+          return (
+            <DataTable minWidth="600px">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="whitespace-nowrap">{t('mcp.name')}</TableHead>
+                  <TableHead className="whitespace-nowrap">{t('mcp.statsToolName')}</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">{t('mcp.statsTotalCalls')}</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">{t('mcp.statsSuccessRate')}</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">{t('mcp.statsCacheHit')}</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">{t('mcp.statsAvgLatency')}</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </DataTable>
-        )}
+              </TableHeader>
+              <TableBody>
+                {groups.map((g) => g.rows.map((s, i) => (
+                  <TableRow key={`${s.server_slug}:${s.tool_name}`}>
+                    <TableCell>
+                      {i === 0 ? (
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{g.name}</span>
+                          <span className="font-mono text-xs text-muted-foreground bg-surface-code px-1.5 py-0.5 rounded">{g.slug}</span>
+                        </div>
+                      ) : (
+                        <span className="invisible select-none">{g.slug}</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5">
+                        {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />}
+                        <span className="font-mono text-xs text-text-dim bg-surface-code px-1.5 py-0.5 rounded">{s.tool_name}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtCompact(s.total_calls)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <Badge
+                        variant="outline"
+                        className={s.success_rate >= 0.95
+                          ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
+                          : s.success_rate >= 0.8
+                            ? 'bg-status-warning/15 text-status-warning-fg border-status-warning/30'
+                            : 'bg-status-error/15 text-status-error-fg border-status-error/30'}
+                      >
+                        {fmtPct1(s.success_rate * 100)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                      {s.cache_hit_count > 0 ? fmtPct1((s.cache_hit_count / s.total_calls) * 100) : '—'}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                      {fmtMs(s.avg_latency_ms)}
+                    </TableCell>
+                  </TableRow>
+                )))}
+              </TableBody>
+            </DataTable>
+          )
+        })()}
       </CardContent>
     </Card>
   )
@@ -330,6 +391,7 @@ export function McpTab() {
   const queryClient = useQueryClient()
   const [showRegister, setShowRegister] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<McpServer | null>(null)
+  const [toolsTarget, setToolsTarget] = useState<McpServer | null>(null)
   const { hideSection } = useNav404()
 
   const { data: servers, isLoading, error } = useQuery(mcpServersQuery())
@@ -404,8 +466,14 @@ export function McpTab() {
                     {s.online ? t('mcp.online') : t('mcp.offline')}
                   </span>
                 </TableCell>
-                <TableCell className="text-muted-foreground text-sm">
-                  {s.tool_count} {t('mcp.tools')}
+                <TableCell>
+                  <button
+                    type="button"
+                    onClick={() => setToolsTarget(s)}
+                    className="text-sm text-muted-foreground hover:text-foreground hover:underline underline-offset-2 cursor-pointer transition-colors"
+                  >
+                    {s.tool_count} {t('mcp.tools')}
+                  </button>
                 </TableCell>
                 <TableCell>
                   <McpToggleSwitch serverId={s.id} isEnabled={s.is_enabled} />
@@ -433,6 +501,7 @@ export function McpTab() {
       <McpSettingsPanel />
 
       {showRegister && <RegisterMcpModal onClose={() => setShowRegister(false)} />}
+      {toolsTarget && <McpToolsDialog server={toolsTarget} onClose={() => setToolsTarget(null)} />}
 
       {deleteTarget && (
         <ConfirmDialog

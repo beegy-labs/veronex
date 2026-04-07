@@ -239,4 +239,29 @@ mod tests {
     fn test_not_found() {
         assert!(search("xyzzy_nonexistent_city_12345").is_err());
     }
+
+    #[test]
+    fn normalize_lowercases_ascii() {
+        assert_eq!(normalize("Seoul"), "seoul");
+        assert_eq!(normalize("NEW YORK"), "new york");
+    }
+
+    #[test]
+    fn normalize_collapses_whitespace() {
+        assert_eq!(normalize("  new  york  "), "new york");
+        assert_eq!(normalize("los  angeles"), "los angeles");
+    }
+
+    #[test]
+    fn normalize_strips_diacritics() {
+        // é → e, ü → u
+        assert_eq!(normalize("München"), "munchen");
+        assert_eq!(normalize("Séoul"), "seoul");
+    }
+
+    #[test]
+    fn normalize_empty_stays_empty() {
+        assert_eq!(normalize(""), "");
+        assert_eq!(normalize("   "), "");
+    }
 }

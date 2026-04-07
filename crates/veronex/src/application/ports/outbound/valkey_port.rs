@@ -64,6 +64,19 @@ pub trait ValkeyPort: Send + Sync {
     /// ZCARD — current ZSET queue length.
     async fn zset_len(&self) -> Result<u64>;
 
+    /// ZADD queue:active <deadline_ms> <job_id> — register new lease.
+    async fn active_lease_set(&self, job_id: &str, deadline_ms: u64) -> Result<()>;
+
+    /// ZADD XX queue:active <deadline_ms> <job_id> — renew existing lease.
+    /// Returns true if the job is still in the active set (score updated), false if already removed.
+    async fn active_lease_renew(&self, job_id: &str, deadline_ms: u64) -> Result<bool>;
+
+    /// ZREM queue:active <job_id> — remove lease on job completion.
+    async fn active_lease_remove(&self, job_id: &str) -> Result<()>;
+
+    /// ZRANGEBYSCORE queue:active 0 now_ms — returns expired job_ids.
+    async fn active_lease_expired(&self, now_ms: u64) -> Result<Vec<String>>;
+
     // ── Key-value operations ────────────────────────────────────────
 
     /// SET with EX (TTL in seconds). Optionally only-if-exists (XX flag).
