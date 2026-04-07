@@ -285,39 +285,6 @@ otelCollector:
   service:
     type: ClusterIP
 
-# ── Kafka Connect (OTel → ClickHouse external consumer) ──────────────────────
-# Replaces ClickHouse Kafka Engine with an isolated external consumer.
-# Consumes otel-logs / otel-metrics / otel-traces from Redpanda and bulk-inserts
-# into ClickHouse via HTTP JSONEachRow — ingest load is fully external to the
-# ClickHouse cluster, preventing background thread exhaustion across services.
-
-kafkaConnect:
-  enabled: true
-  replicas: 1
-  image:
-    repository: docker.redpanda.com/redpandadata/connect
-    tag: latest
-    pullPolicy: IfNotPresent
-
-  clickhouse:
-    httpUrl: ""      # REQUIRED — e.g. http://clickhouse:8123
-    database: veronex
-    secretName: ""   # REQUIRED — Secret with keys: username, password
-
-  kafka:
-    securityProtocol: PLAINTEXT   # PLAINTEXT | SASL_PLAINTEXT | SASL_SSL
-    saslMechanism: ""
-    saslUsername: ""
-    secretName: ""   # Secret with key: password (used when not PLAINTEXT)
-
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
-
 # ── Vespa (Vector SSOT) ──────────────────────────────────────────────────────
 # Single-node Vespa for MCP tool vector selection (ANN search).
 # Scale: content node 추가로 수평 확장 가능.
@@ -354,20 +321,13 @@ embed:
 
 migrations:
   enabled: true
-  image: migrate/migrate
   clickhouse:
-    # Wrapper image with envsubst + migrate
-    image: migrate/migrate
-    kafkaBroker: ""           # REQUIRED — e.g. redpanda:9092
-    kafkaUsername: ""
-    kafkaPassword: ""
-    kafkaSecurityProtocol: SASL_PLAINTEXT
-    kafkaSaslMechanism: SCRAM-SHA-512
     retentionMetricsDays: 14
     retentionLogsDays: 7
     retentionInferenceDays: 90
     retentionAuditDays: 90
     retentionTracesDays: 7
+    retentionMcpDays: 90
 
 # ── ServiceAccount ───────────────────────────────────────────────────────────
 

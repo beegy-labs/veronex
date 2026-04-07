@@ -65,11 +65,10 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: migrate
-          image: alpine:3.21
+          image: clickhouse/clickhouse-server:26.1
           command: ["/bin/sh", "-c"]
           args:
             - |
-              apk add --no-cache wget -q
               sed \
                 -e "s/__RETENTION_METRICS_DAYS__/{{ .Values.migrations.clickhouse.retentionMetricsDays }}/g" \
                 -e "s/__RETENTION_LOGS_DAYS__/{{ .Values.migrations.clickhouse.retentionLogsDays }}/g" \
@@ -77,10 +76,14 @@ spec:
                 -e "s/__RETENTION_AUDIT_DAYS__/{{ .Values.migrations.clickhouse.retentionAuditDays }}/g" \
                 -e "s/__RETENTION_TRACES_DAYS__/{{ .Values.migrations.clickhouse.retentionTracesDays }}/g" \
                 -e "s/__RETENTION_MCP_DAYS__/{{ .Values.migrations.clickhouse.retentionMcpDays | default 90 }}/g" \
-                /schema/schema.sql | \
-              wget -qO- \
-                --post-data="$(cat -)" \
-                "http://{{ include "veronex.clickhouseUser" . }}:{{ include "veronex.clickhousePassword" . }}@{{ $chHost }}:8123/?database={{ include "veronex.clickhouseDb" . }}&query="
+                /schema/schema.sql \
+              | clickhouse-client \
+                  --host={{ $chHost }} \
+                  --port=9000 \
+                  --user={{ include "veronex.clickhouseUser" . }} \
+                  --password={{ include "veronex.clickhousePassword" . }} \
+                  --database={{ include "veronex.clickhouseDb" . }} \
+                  --multiquery
           volumeMounts:
             - name: schema
               mountPath: /schema
