@@ -44,18 +44,18 @@ aget()     { curl -sf "$API$1" -H "Authorization: Bearer $TK"; }
 apost()    { curl -sf "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2"; }
 apatch()   { curl -sf -X PATCH "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2"; }
 adel()     { curl -sf -X DELETE "$API$1" -H "Authorization: Bearer $TK"; }
-agetc()    { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $TK"; }
-apostc()   { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2"; }
-apatchc()  { curl -s -w "\n%{http_code}" -X PATCH "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2"; }
-adelc()    { curl -s -w "\n%{http_code}" -X DELETE "$API$1" -H "Authorization: Bearer $TK"; }
-rawc()     { curl -s -w "\n%{http_code}" "$API$1"; }
-rawpostc() { curl -s -w "\n%{http_code}" "$API$1" -H 'Content-Type: application/json' -d "$2"; }
+agetc()    { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $TK" 2>/dev/null || printf "\n000"; }
+apostc()   { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || printf "\n000"; }
+apatchc()  { curl -s -w "\n%{http_code}" -X PATCH "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || printf "\n000"; }
+adelc()    { curl -s -w "\n%{http_code}" -X DELETE "$API$1" -H "Authorization: Bearer $TK" 2>/dev/null || printf "\n000"; }
+rawc()     { curl -s -w "\n%{http_code}" "$API$1" 2>/dev/null || printf "\n000"; }
+rawpostc() { curl -s -w "\n%{http_code}" "$API$1" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || printf "\n000"; }
 
 # ── Authenticated curl wrappers (API key) ─────────────────────────────────────
-kpostc()   { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' -d "$2"; }
-kgetc()    { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $API_KEY"; }
-kget()     { curl -sf "$API$1" -H "Authorization: Bearer $API_KEY"; }
-kdelc()    { curl -s -w "\n%{http_code}" -X DELETE "$API$1" -H "Authorization: Bearer $API_KEY"; }
+kpostc()   { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || printf "\n000"; }
+kgetc()    { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $API_KEY" 2>/dev/null || printf "\n000"; }
+kget()     { curl -sf "$API$1" -H "Authorization: Bearer $API_KEY" 2>/dev/null || echo "{}"; }
+kdelc()    { curl -s -w "\n%{http_code}" -X DELETE "$API$1" -H "Authorization: Bearer $API_KEY" 2>/dev/null || printf "\n000"; }
 
 # ── Assertions ───────────────────────────────────────────────────────────────
 assert_get() { local c; c=$(agetc "$1" | code); [ "$c" = "$2" ] && pass "$3 → $2" || fail "$3 → $c"; }

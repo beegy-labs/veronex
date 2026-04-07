@@ -44,7 +44,7 @@ _print_result() {
     echo -e "  ${GREEN}[PASS]${NC} $label  pass=$p"
   fi
   TOTAL_PASS=$((TOTAL_PASS + p))
-  TOTAL_FAIL=$((TOTAL_FAIL + f))
+  TOTAL_FAIL=$((TOTAL_FAIL + f + failed))
 }
 
 _run_one() {
