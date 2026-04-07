@@ -113,6 +113,7 @@ pub async fn decide(
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use uuid::Uuid;
     use crate::application::ports::outbound::lab_settings_repository::LabSettings;
     use crate::domain::entities::LlmProvider;
     use crate::domain::enums::{LlmProviderStatus, ProviderType};
