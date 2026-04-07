@@ -2,6 +2,7 @@
 
 > **Last Researched**: 2026-03-02 | **Source**: Implementation experience + web search
 > **Status**: Verified — all patterns researched and documented
+> **Companion**: `research/frontend/nextjs-breaking-changes.md` — Next.js 15/16 breaking changes
 
 ---
 
@@ -184,6 +185,6 @@ function ClientList({ dataPromise }: { dataPromise: Promise<Item[]> }) {
 
 ## Sources
 
-- Next.js 16 docs: https://nextjs.org/docs
-- Verified: `web/app/` directory structure, `web/app/layout.tsx`
-- Web search: Next.js 16 App Router 2026 patterns, PPR, Server Actions
+- [Next.js 16 Official Blog](https://nextjs.org/blog/next-16)
+- [PPR deep dive](https://dev.to/pockit_tools/nextjs-partial-prerendering-ppr-deep-dive-how-it-works-when-to-use-it-and-why-it-changes-48dk)
+- Verified: `web/app/`, `web/postcss.config.mjs`

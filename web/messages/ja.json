@@ -92,6 +92,8 @@
     "labMultiturnMinCtx": "最小コンテキスト (トークン)",
     "labMultiturnAllowedModels": "許可モデル",
     "labMultiturnAllowedModelsDesc": "カンマ区切りの許可リスト。空の場合は全ての適格モデルを許可。",
+    "labAllowedModelsPlaceholder": "qwen2.5:7b, mistral:7b",
+    "labVisionModelPlaceholder": "qwen3-vl:8b",
     "multiturnWarnTooSmall": "{{params}}Bモデルは最小{{min}}B未満です — マルチターンは拒否されます。",
     "multiturnWarnCtxTooSmall": "コンテキスト{{ctx}}トークンは最小{{min}}トークン未満です — マルチターンは拒否されます。",
     "multiturnWarnNotAllowed": "許可リストにないモデルです — マルチターンリクエストは拒否されます。",
@@ -300,6 +302,8 @@
     "filterModel": "モデル",
     "filterProvider": "プロバイダー",
     "allProviders": "全プロバイダー",
+    "providerOllama": "Ollama",
+    "providerGemini": "Gemini",
     "filters": "フィルター",
     "filtersActive": "フィルター ({{count}})",
     "tasks": "タスク",
@@ -976,6 +980,13 @@
     "statsTotalCalls": "総呼び出し数",
     "statsSuccessRate": "成功率",
     "statsCacheHit": "キャッシュヒット",
-    "statsAvgLatency": "平均レイテンシ"
+    "statsAvgLatency": "平均レイテンシ",
+    "settings": "MCP設定",
+    "settingsLoadError": "MCP設定の読み込みに失敗しました。",
+    "routingCacheTtl": "ルーティングキャッシュTTL (秒)",
+    "toolSchemaRefresh": "ツールスキーマ更新 (秒)",
+    "maxToolsPerRequest": "リクエストあたりの最大ツール数",
+    "maxRoutingCacheEntries": "最大キャッシュエントリ数",
+    "embeddingModel": "埋め込みモデル"
   }
 }

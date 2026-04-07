@@ -252,25 +252,25 @@ function McpSettingsPanel() {
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-sm font-medium">MCP Settings</CardTitle>
+          <CardTitle className="text-sm font-medium">{t('mcp.settings')}</CardTitle>
           {!editing && (
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={startEdit} disabled={isLoading || !!error}>
-              Edit
+              {t('common.edit')}
             </Button>
           )}
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {isLoading && <p className="text-sm text-muted-foreground animate-pulse">Loading…</p>}
-        {error && <p className="text-sm text-destructive">Failed to load MCP settings.</p>}
+        {isLoading && <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>}
+        {error && <p className="text-sm text-destructive">{t('mcp.settingsLoadError')}</p>}
         {current && (
           <>
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               {([
-                { key: 'routing_cache_ttl_secs', label: 'Routing Cache TTL (s)' },
-                { key: 'tool_schema_refresh_secs', label: 'Tool Schema Refresh (s)' },
-                { key: 'max_tools_per_request', label: 'Max Tools / Request' },
-                { key: 'max_routing_cache_entries', label: 'Max Cache Entries' },
+                { key: 'routing_cache_ttl_secs', label: t('mcp.routingCacheTtl') },
+                { key: 'tool_schema_refresh_secs', label: t('mcp.toolSchemaRefresh') },
+                { key: 'max_tools_per_request', label: t('mcp.maxToolsPerRequest') },
+                { key: 'max_routing_cache_entries', label: t('mcp.maxRoutingCacheEntries') },
               ] as { key: keyof McpSettings; label: string }[]).map(({ key, label }) => (
                 <div key={key} className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2">
                   <Label className="text-xs text-muted-foreground shrink-0">{label}</Label>
@@ -289,7 +289,7 @@ function McpSettingsPanel() {
             </div>
 
             <div className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2">
-              <Label className="text-xs text-muted-foreground shrink-0">Embedding Model</Label>
+              <Label className="text-xs text-muted-foreground shrink-0">{t('mcp.embeddingModel')}</Label>
               {editing ? (
                 <Input
                   className="h-7 w-52 text-xs text-right font-mono"

@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { serviceHealthQuery, pipelineHealthQuery } from '@/lib/queries'
 import { useTranslation } from '@/i18n'
 import { SERVICE_STATUS_DOT } from '@/lib/constants'
+import { fmtCompact } from '@/lib/chart-theme'
 import { Database, Server, HardDrive, Activity, Search, ChevronDown, ChevronUp, AlertTriangle, Package } from 'lucide-react'
 import type { PodItem, TopicPipelineStats } from '@/lib/types'
 
@@ -265,16 +266,16 @@ export default function HealthPage() {
                         )}
                       </div>
                       <div className="text-[10px] text-muted-foreground/50 tabular-nums">
-                        {tp.consumer_offset.toLocaleString()} / {tp.log_end_offset.toLocaleString()}
+                        {fmtCompact(tp.consumer_offset)} / {fmtCompact(tp.log_end_offset)}
                       </div>
                     </td>
                     <td className="py-2 text-right tabular-nums text-xs text-muted-foreground">{tp.consumer_count}</td>
-                    <td className={`py-2 text-right tabular-nums font-mono text-xs font-semibold ${color}`}>{tp.lag.toLocaleString()}</td>
+                    <td className={`py-2 text-right tabular-nums font-mono text-xs font-semibold ${color}`}>{fmtCompact(tp.lag)}</td>
                     <td className="py-2 text-right tabular-nums text-xs text-muted-foreground">
-                      {tp.tpm_1m === 0 ? <span className="text-muted-foreground/40">0</span> : tp.tpm_1m.toLocaleString()}
+                      {tp.tpm_1m === 0 ? <span className="text-muted-foreground/40">0</span> : fmtCompact(tp.tpm_1m)}
                     </td>
                     <td className="py-2 text-right tabular-nums text-xs text-muted-foreground">
-                      {tp.tpm_5m === 0 ? <span className="text-muted-foreground/40">0</span> : `${(tp.tpm_5m / 5).toFixed(1)}/m`}
+                      {tp.tpm_5m === 0 ? <span className="text-muted-foreground/40">0</span> : `${fmtCompact(Math.round(tp.tpm_5m / 5 * 10) / 10)}/m`}
                     </td>
                     <td className="py-2 pr-4 text-right text-xs text-muted-foreground">{lastPollLabel}</td>
                   </tr>

@@ -381,7 +381,7 @@ export function DashboardTab({
               ) : (
                 <span className="text-muted-foreground">
                   {hasHistory && historySpanD < 7
-                    ? t('overview.daysData', { n: historySpanD.toFixed(1) })
+                    ? t('overview.daysData', { n: fmtCompact(historySpanD) })
                     : t('overview.noServerPower')}
                 </span>
               )}
@@ -397,7 +397,7 @@ export function DashboardTab({
               ) : (
                 <span className="text-muted-foreground">
                   {hasHistory && historySpanD < 30
-                    ? t('overview.daysData', { n: historySpanD.toFixed(1) })
+                    ? t('overview.daysData', { n: fmtCompact(historySpanD) })
                     : t('overview.noServerPower')}
                 </span>
               )}

@@ -44,10 +44,10 @@ export default function PerformancePage() {
       errors:    Math.max(0, h.request_count - h.success_count),
       tokens:    h.total_tokens,
       errorRate: h.request_count > 0
-        ? parseFloat(((h.request_count - h.success_count) / h.request_count * 100).toFixed(1))
+        ? Math.round((h.request_count - h.success_count) / h.request_count * 1000) / 10
         : 0,
       tps: h.request_count > 0 && h.total_tokens > 0
-        ? parseFloat((h.total_tokens / (h.avg_latency_ms / 1000 * h.request_count)).toFixed(1))
+        ? Math.round(h.total_tokens / (h.avg_latency_ms / 1000 * h.request_count) * 10) / 10
         : 0,
     })),
     [data?.hourly, tz],

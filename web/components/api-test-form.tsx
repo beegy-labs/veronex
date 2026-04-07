@@ -10,6 +10,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
+import { fmtCompact } from '@/lib/chart-theme'
 import type { ProviderOption, Endpoint, TestMode } from '@/components/api-test-types'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import type { LabSettings } from '@/lib/types'
@@ -208,7 +209,7 @@ export function ApiTestForm({
                   msg = t('common.multiturnWarnNotAllowed')
                 } else if (w.startsWith('context_too_large:')) {
                   const [, tokens, ctx] = w.split(':')
-                  msg = t('common.multiturnWarnContextTooLarge', { tokens: Number(tokens).toLocaleString(), ctx: Number(ctx).toLocaleString() })
+                  msg = t('common.multiturnWarnContextTooLarge', { tokens: fmtCompact(Number(tokens)), ctx: fmtCompact(Number(ctx)) })
                 } else {
                   msg = w
                 }

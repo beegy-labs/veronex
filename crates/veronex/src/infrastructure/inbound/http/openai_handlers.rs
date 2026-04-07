@@ -942,11 +942,12 @@ async fn load_conversation_context(
                 };
 
                 if let Err(e) = context_assembler::check_multiturn_eligibility(model_name, max_ctx, &lab) {
+                    tracing::warn!(model = model_name, code = e.code(), "multi-turn eligibility check failed");
                     return Err((
                         StatusCode::BAD_REQUEST,
                         Json(serde_json::json!({
                             "error": {
-                                "message": e.to_string(),
+                                "message": "multi-turn request rejected",
                                 "type": "invalid_request_error",
                                 "code": e.code()
                             }

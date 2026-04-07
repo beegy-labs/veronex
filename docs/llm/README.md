@@ -160,15 +160,20 @@
 | React Patterns | `research/frontend/react.md` | verified |
 | Data Fetching | `research/frontend/data-fetching.md` | verified |
 | Next.js 16 | `research/frontend/nextjs.md` | verified |
+| Next.js 15/16 Breaking Changes | `research/frontend/nextjs-breaking-changes.md` | verified |
 | Tailwind v4 | `research/frontend/tailwind.md` | verified |
+| Tailwind v4 2026 Updates | `research/frontend/tailwind-2026.md` | verified |
 | TanStack Query | `research/frontend/tanstack-query.md` | verified |
+| TanStack Query Advanced | `research/frontend/tanstack-query-advanced.md` | verified |
 | Rust / Axum | `research/backend/rust-axum.md` | verified |
 | Rust / Axum Shutdown | `research/backend/rust-axum-shutdown.md` | verified |
+| Rust / Axum 2026 Updates | `research/backend/rust-axum-2026.md` | verified |
 | API Design | `research/backend/api-design.md` | verified |
 | Rust Performance | `research/backend/rust-perf-2026.md` | verified |
 | LLM Scheduling | `research/backend/llm-scheduling-2026.md` | research |
 | LLM Scheduling Demand | `research/backend/llm-scheduling-demand-2026.md` | research |
 | Observability | `research/infrastructure/observability.md` | verified |
+| Observability Production (2026) | `research/infrastructure/observability-2026.md` | verified |
 | Database | `research/infrastructure/database.md` | verified |
 | Auth Sessions | `research/security/auth.md` | verified |
 

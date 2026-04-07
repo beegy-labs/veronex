@@ -709,7 +709,6 @@ export interface TurnInternals {
     original_tokens: number
     compressed_tokens: number
     compression_model: string
-    ratio: number
   } | null
   vision_analysis?: {
     analysis: string

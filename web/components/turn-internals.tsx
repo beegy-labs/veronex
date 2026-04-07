@@ -6,6 +6,7 @@ import { ChevronDown, ChevronRight, Eye, Zap, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useTranslation } from '@/i18n'
 import { STALE_TIME_SLOW } from '@/lib/constants'
+import { fmtCompact } from '@/lib/chart-theme'
 
 interface TurnInternalsProps {
   convId: string
@@ -60,11 +61,9 @@ export function TurnInternals({ convId, jobId }: TurnInternalsProps) {
                 <span>{t('conversations.compressionModel')}</span>
                 <span className="text-foreground truncate">{data.compressed.compression_model}</span>
                 <span>{t('conversations.originalTokens')}</span>
-                <span className="text-foreground">{data.compressed.original_tokens.toLocaleString()}</span>
+                <span className="text-foreground">{fmtCompact(data.compressed.original_tokens)}</span>
                 <span>{t('conversations.compressedTokens')}</span>
-                <span className="text-foreground">{data.compressed.compressed_tokens.toLocaleString()}</span>
-                <span>{t('conversations.compressionRatio')}</span>
-                <span className="text-foreground">{data.compressed.ratio.toFixed(2)}×</span>
+                <span className="text-foreground">{fmtCompact(data.compressed.compressed_tokens)}</span>
               </div>
               <div className="pl-4 mt-1 p-2 rounded bg-muted text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
                 {data.compressed.summary}
@@ -84,7 +83,7 @@ export function TurnInternals({ convId, jobId }: TurnInternalsProps) {
                 <span>{t('conversations.imageCount')}</span>
                 <span className="text-foreground">{data.vision_analysis.image_count}</span>
                 <span>{t('conversations.analysisTokens')}</span>
-                <span className="text-foreground">{data.vision_analysis.analysis_tokens.toLocaleString()}</span>
+                <span className="text-foreground">{fmtCompact(data.vision_analysis.analysis_tokens)}</span>
               </div>
               <div className="pl-4 mt-1 p-2 rounded bg-muted text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
                 {data.vision_analysis.analysis}

@@ -189,6 +189,7 @@ export function ConversationList({ onContinue }: ConversationListProps) {
 
 function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }) {
   const [open, setOpen] = useState(false)
+  const { t } = useTranslation()
   const { data, isFetching } = useQuery(turnInternalsQuery(convId, jobId, open))
 
   return (
@@ -199,19 +200,18 @@ function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }
         className="flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
       >
         {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-        Internals
+        {t('conversations.internals')}
       </button>
 
       {open && (
         <div className="mt-1 space-y-1">
-          {isFetching && <span className="text-[10px] text-muted-foreground">Loading…</span>}
+          {isFetching && <span className="text-[10px] text-muted-foreground">{t('common.loading')}</span>}
           {data && !data.compressed && !data.vision_analysis && (
-            <span className="text-[10px] text-muted-foreground/60">No compression or vision data.</span>
+            <span className="text-[10px] text-muted-foreground/60">{t('conversations.internalsEmpty')}</span>
           )}
           {data?.compressed && (
             <span className="inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-mono text-primary">
-              Compressed {data.compressed.ratio.toFixed(1)}x
-              ({data.compressed.original_tokens}→{data.compressed.compressed_tokens} tok,{' '}
+              Compressed ({data.compressed.original_tokens}→{data.compressed.compressed_tokens} tok,{' '}
               {data.compressed.compression_model})
             </span>
           )}

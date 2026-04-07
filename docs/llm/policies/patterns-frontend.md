@@ -364,9 +364,23 @@ All display formatters live in `web/lib/chart-theme.ts` — never define local f
 | `fmtPct(n)` | 0.956 → "96%" | Success rates |
 | `fmtMbShort(mb)` | 2048 → "2.0 GB" | VRAM display |
 
+## React Compiler (v1.0, October 2025)
+
+React Compiler handles `useMemo`, `useCallback`, and `React.memo` automatically for the vast majority of components. **Do not add manual memoization unless one of these specific conditions applies:**
+
+1. Third-party library requires reference equality the compiler can't satisfy (e.g., react-dnd, some animation libs)
+2. Library uses interior mutability the compiler can't see through (e.g., react-hook-form `watch`)
+3. Profiler-measured hot path the compiler's heuristics miss (SSE-driven, ≥1 update/sec)
+
+Use `'use no memo'` directive to exclude a single component from compilation when debugging.
+
+> See: `docs/llm/research/frontend/react.md § React Compiler`
+
 ## useMemo for Derived Data
 
-Wrap filter/sort/slice/map chains with `useMemo` when the input comes from query data:
+> **2026:** React Compiler handles most derived state automatically. Write `useMemo` only for the exceptions listed in the React Compiler section above.
+
+Wrap filter/sort/slice/map chains with `useMemo` when the input comes from query data and the compiler exception conditions apply:
 
 ```typescript
 const modelBarData = useMemo(() =>
@@ -695,11 +709,11 @@ Violations: shared logic in feature dirs, or page-specific logic in `components/
 
 | Rule | Detail |
 |------|--------|
-| Derived state | Wrap filter/sort/map chains from query data in `useMemo` |
-| Handler refs | Stable references via `useCallback` when passed to child components |
+| Derived state | React Compiler handles automatically; manual `useMemo` only for compiler exceptions (see React Compiler section) |
+| Handler refs | React Compiler handles automatically; manual `useCallback` only for compiler exceptions |
 | Heavy panels | Modals/charts with conditional render → `dynamic(() => import(...), { ssr: false })` |
 | Query dedup | Same `queryKey` in sibling components → lift to parent or share `queryOptions` factory |
-| SSE-driven components | Props updated ≥1/s from SSE or `setInterval` ≤100ms → `React.memo` required |
+| SSE-driven components | Props updated ≥1/s from SSE or `setInterval` ≤100ms → `React.memo` required (compiler exception #3) |
 | Time-display staleness | Components showing relative time (e.g. "5s ago") → `setInterval` tick (10–30s) required |
 | Zero-value stat containers | Stat rows showing counts from live data → hidden when all values are 0 |
 | React key | Never use array `index` as sole key for reorderable lists |

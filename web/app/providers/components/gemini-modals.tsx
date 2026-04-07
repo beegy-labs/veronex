@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useOptimistic, startTransition } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { Provider, ProviderSelectedModel, GeminiRateLimitPolicy } from '@/lib/types'
@@ -138,39 +138,34 @@ export function ApiKeyCell({ providerId, masked }: { providerId: string; masked:
   )
 }
 
+// ── Gemini model toggle with optimistic update ─────────────────────────────────
+
+function GeminiModelToggle({ providerId, model }: { providerId: string; model: ProviderSelectedModel }) {
+  const queryClient = useQueryClient()
+  const [optimistic, setOptimistic] = useOptimistic(model.is_enabled, (_, v: boolean) => v)
+  const mutation = useMutation({
+    mutationFn: (enabled: boolean) => api.setModelEnabled(providerId, model.model_name, enabled),
+    onError: () => setOptimistic(model.is_enabled),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, providerId] })
+    },
+  })
+  return (
+    <Switch
+      checked={optimistic}
+      onCheckedChange={(checked) => startTransition(() => { setOptimistic(checked); mutation.mutate(checked) })}
+      disabled={mutation.isPending}
+      aria-label={model.model_name}
+    />
+  )
+}
+
 // ── Model selection modal ──────────────────────────────────────────────────────
 
 export function ModelSelectionModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
   const { t } = useTranslation()
-  const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery(selectedModelsQuery(provider.id))
-
-  const toggleMutation = useMutation({
-    mutationFn: ({ modelName, isEnabled }: { modelName: string; isEnabled: boolean }) =>
-      api.setModelEnabled(provider.id, modelName, isEnabled),
-    onMutate: async ({ modelName, isEnabled }) => {
-      await queryClient.cancelQueries({ queryKey: ['selected-models', provider.id] })
-      const prev = queryClient.getQueryData<{ models: ProviderSelectedModel[] }>(['selected-models', provider.id])
-      queryClient.setQueryData<{ models: ProviderSelectedModel[] }>(['selected-models', provider.id], (old) => {
-        if (!old) return old
-        return {
-          models: old.models.map((m) =>
-            m.model_name === modelName ? { ...m, is_enabled: isEnabled } : m,
-          ),
-        }
-      })
-      return { prev }
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.prev) {
-        queryClient.setQueryData(['selected-models', provider.id], context.prev)
-      }
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, provider.id] })
-    },
-  })
 
   const models = data?.models ?? []
   const enabledCount = models.filter((m) => m.is_enabled).length
@@ -208,14 +203,7 @@ export function ModelSelectionModal({ provider, onClose }: { provider: Provider;
               <div key={m.model_name}
                 className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
                 <span className="font-mono text-sm text-text-bright">{m.model_name}</span>
-                <Switch
-                  checked={m.is_enabled}
-                  onCheckedChange={(checked) =>
-                    toggleMutation.mutate({ modelName: m.model_name, isEnabled: checked })
-                  }
-                  disabled={toggleMutation.isPending}
-                  aria-label={m.model_name}
-                />
+                <GeminiModelToggle providerId={provider.id} model={m} />
               </div>
             ))}
           </div>

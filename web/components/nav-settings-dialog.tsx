@@ -56,7 +56,7 @@ function AllowedModelsInput({ labSettings, labLoading, setLabLoading, refetchLab
     <div className="flex gap-1.5">
       <Input
         className="h-7 text-xs flex-1 font-mono"
-        placeholder="qwen2.5:7b, mistral:7b"
+        placeholder={t('common.labAllowedModelsPlaceholder')}
         value={val}
         disabled={labLoading || labSettings === null}
         onChange={(e) => { setVal(e.target.value); setDirty(true) }}
@@ -96,7 +96,7 @@ function VisionModelInput({ labSettings, labLoading, setLabLoading, refetchLabSe
     <div className="flex gap-1.5">
       <Input
         className="h-7 text-xs flex-1 font-mono"
-        placeholder="qwen3-vl:8b"
+        placeholder={t('common.labVisionModelPlaceholder')}
         value={val}
         disabled={labLoading || labSettings === null}
         onChange={(e) => { setVal(e.target.value); setDirty(true) }}
@@ -132,6 +132,9 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
   const [customTzInput, setCustomTzInput] = useState('')
   const [customTzError, setCustomTzError] = useState(false)
   const [labLoading, setLabLoading] = useState(false)
+  const [optFunctionCalling, setOptFunctionCalling] = useOptimistic(
+    labSettings?.gemini_function_calling ?? false
+  )
   const [optCompressionEnabled, setOptCompressionEnabled] = useOptimistic(
     labSettings?.context_compression_enabled ?? false
   )
@@ -252,19 +255,22 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                   <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{t('common.labGeminiFunctionCallingDesc')}</p>
                 </div>
                 <Switch
-                  checked={labSettings?.gemini_function_calling ?? false}
+                  checked={optFunctionCalling}
                   disabled={labLoading || labSettings === null}
                   aria-label={t('common.labGeminiFunctionCalling')}
-                  onCheckedChange={async (checked) => {
-                    setLabLoading(true)
-                    try {
-                      await api.patchLabSettings({ gemini_function_calling: checked })
-                      await refetchLabSettings()
-                    } catch {
-                      // keep previous state on error
-                    } finally {
-                      setLabLoading(false)
-                    }
+                  onCheckedChange={(checked) => {
+                    startTransition(async () => {
+                      setOptFunctionCalling(checked)
+                      setLabLoading(true)
+                      try {
+                        await api.patchLabSettings({ gemini_function_calling: checked })
+                        await refetchLabSettings()
+                      } catch {
+                        // keep previous state on error
+                      } finally {
+                        setLabLoading(false)
+                      }
+                    })
                   }}
                 />
               </div>

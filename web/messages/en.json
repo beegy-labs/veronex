@@ -92,6 +92,8 @@
     "labMultiturnMinCtx": "Min Context (tokens)",
     "labMultiturnAllowedModels": "Allowed Models",
     "labMultiturnAllowedModelsDesc": "Comma-separated allowlist. Empty = all qualifying models allowed.",
+    "labAllowedModelsPlaceholder": "qwen2.5:7b, mistral:7b",
+    "labVisionModelPlaceholder": "qwen3-vl:8b",
     "multiturnWarnTooSmall": "{{params}}B model is below the {{min}}B minimum — multi-turn will be rejected.",
     "multiturnWarnCtxTooSmall": "Context window {{ctx}} is below the {{min}} token minimum — multi-turn will be rejected.",
     "multiturnWarnNotAllowed": "Model is not in the multi-turn allowlist — requests will be rejected.",
@@ -300,6 +302,8 @@
     "filterModel": "Model",
     "filterProvider": "Provider",
     "allProviders": "All Providers",
+    "providerOllama": "Ollama",
+    "providerGemini": "Gemini",
     "allSources": "All Sources",
     "sourceTest": "Test",
     "sourceAnalyzer": "Analyzer",
@@ -976,6 +980,13 @@
     "statsTotalCalls": "Total Calls",
     "statsSuccessRate": "Success Rate",
     "statsCacheHit": "Cache Hit",
-    "statsAvgLatency": "Avg Latency"
+    "statsAvgLatency": "Avg Latency",
+    "settings": "MCP Settings",
+    "settingsLoadError": "Failed to load MCP settings.",
+    "routingCacheTtl": "Routing Cache TTL (s)",
+    "toolSchemaRefresh": "Tool Schema Refresh (s)",
+    "maxToolsPerRequest": "Max Tools / Request",
+    "maxRoutingCacheEntries": "Max Cache Entries",
+    "embeddingModel": "Embedding Model"
   }
 }

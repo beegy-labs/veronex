@@ -92,6 +92,8 @@
     "labMultiturnMinCtx": "최소 컨텍스트 (토큰)",
     "labMultiturnAllowedModels": "허용 모델",
     "labMultiturnAllowedModelsDesc": "쉼표로 구분된 허용 목록. 비어 있으면 모든 적격 모델 허용.",
+    "labAllowedModelsPlaceholder": "qwen2.5:7b, mistral:7b",
+    "labVisionModelPlaceholder": "qwen3-vl:8b",
     "multiturnWarnTooSmall": "{{params}}B 모델은 최소 {{min}}B 미만입니다 — 멀티턴 요청이 거절됩니다.",
     "multiturnWarnCtxTooSmall": "컨텍스트 {{ctx}} 토큰은 최소 {{min}} 토큰 미만입니다 — 멀티턴 요청이 거절됩니다.",
     "multiturnWarnNotAllowed": "허용 목록에 없는 모델입니다 — 멀티턴 요청이 거절됩니다.",
@@ -300,6 +302,8 @@
     "filterModel": "모델",
     "filterProvider": "프로바이더",
     "allProviders": "전체 프로바이더",
+    "providerOllama": "Ollama",
+    "providerGemini": "Gemini",
     "allSources": "전체 출처",
     "sourceTest": "테스트",
     "sourceAnalyzer": "분석기",
@@ -976,6 +980,13 @@
     "statsTotalCalls": "총 호출 수",
     "statsSuccessRate": "성공률",
     "statsCacheHit": "캐시 히트",
-    "statsAvgLatency": "평균 레이턴시"
+    "statsAvgLatency": "평균 레이턴시",
+    "settings": "MCP 설정",
+    "settingsLoadError": "MCP 설정을 불러오지 못했습니다.",
+    "routingCacheTtl": "라우팅 캐시 TTL (초)",
+    "toolSchemaRefresh": "도구 스키마 갱신 (초)",
+    "maxToolsPerRequest": "요청당 최대 도구 수",
+    "maxRoutingCacheEntries": "최대 캐시 항목 수",
+    "embeddingModel": "임베딩 모델"
   }
 }
