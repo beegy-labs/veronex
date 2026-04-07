@@ -2,6 +2,7 @@
 
 import { useState, useOptimistic, startTransition } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/hooks/use-api-mutation'
 import { api } from '@/lib/api'
 import type { Provider, ProviderSelectedModel, GeminiRateLimitPolicy } from '@/lib/types'
 import { selectedModelsQuery, providerKeyQuery } from '@/lib/queries'
@@ -27,17 +28,14 @@ export function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPo
   const [rpm, setRpm] = useState(String(policy.rpm_limit))
   const [rpd, setRpd] = useState(String(policy.rpd_limit))
   const [availableOnFreeTier, setAvailableOnFreeTier] = useState(policy.available_on_free_tier)
-  const queryClient = useQueryClient()
-
-  const mutation = useMutation({
-    mutationFn: () =>
-      api.upsertGeminiPolicy(policy.model_name, {
-        rpm_limit: rpm ? parseInt(rpm, 10) : 0,
-        rpd_limit: rpd ? parseInt(rpd, 10) : 0,
-        available_on_free_tier: availableOnFreeTier,
-      }),
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['gemini-policies'] }); onClose() },
-  })
+  const mutation = useApiMutation(
+    () => api.upsertGeminiPolicy(policy.model_name, {
+      rpm_limit: rpm ? parseInt(rpm, 10) : 0,
+      rpd_limit: rpd ? parseInt(rpd, 10) : 0,
+      available_on_free_tier: availableOnFreeTier,
+    }),
+    { invalidateKey: ['gemini-policies'], onSuccess: () => onClose() },
+  )
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -94,7 +92,7 @@ export function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPo
         )}
         <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+          <Button onClick={() => mutation.mutate(undefined)} disabled={mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}
           </Button>
         </DialogFooter>
@@ -228,15 +226,10 @@ export function ModelSelectionModal({ provider, onClose }: { provider: Provider;
 export function SetSyncKeyModal({ current, onClose }: { current: string | null; onClose: () => void }) {
   const { t } = useTranslation()
   const [apiKey, setApiKey] = useState('')
-  const queryClient = useQueryClient()
-
-  const mutation = useMutation({
-    mutationFn: () => api.setGeminiSyncConfig(apiKey.trim()),
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.syncConfig })
-      onClose()
-    },
-  })
+  const mutation = useApiMutation(
+    () => api.setGeminiSyncConfig(apiKey.trim()),
+    { invalidateKey: GEMINI_QUERY_KEYS.syncConfig, onSuccess: () => onClose() },
+  )
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -267,7 +260,7 @@ export function SetSyncKeyModal({ current, onClose }: { current: string | null; 
         )}
         <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={() => mutation.mutate()} disabled={!apiKey.trim() || mutation.isPending}>
+          <Button onClick={() => mutation.mutate(undefined)} disabled={!apiKey.trim() || mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}
           </Button>
         </DialogFooter>

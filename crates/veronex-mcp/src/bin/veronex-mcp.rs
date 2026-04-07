@@ -10,6 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+/// HTTP client timeout for outbound tool calls and health checks.
+const HTTP_CLIENT_TIMEOUT: Duration = Duration::from_secs(15);
+
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -176,7 +179,7 @@ async fn main() {
     };
 
     let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
+        .timeout(HTTP_CLIENT_TIMEOUT)
         .user_agent("veronex-mcp/1.0")
         .build()
         .expect("Failed to build HTTP client");

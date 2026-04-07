@@ -185,18 +185,19 @@ pub async fn create_account(
 
     // Resolve role_ids: explicit role_ids > legacy role_id > default "viewer"
     let role_ids: Vec<Uuid> = if !req.role_ids.is_empty() {
-        // Validate all role_ids exist
-        for rid in &req.role_ids {
-            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
-                .bind(rid.0)
-                .fetch_one(&state.pg_pool)
-                .await
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
-            if !exists {
-                return Err(AppError::BadRequest(format!("invalid role_id: {rid}")));
-            }
+        // Batch-validate all role_ids in a single ANY($1) query — no N+1.
+        let input_ids: Vec<Uuid> = req.role_ids.iter().map(|r| r.0).collect();
+        let valid: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM roles WHERE id = ANY($1::uuid[]) LIMIT 200",
+        )
+        .bind(&input_ids as &[Uuid])
+        .fetch_all(&state.pg_pool)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
+        if valid.len() != input_ids.len() {
+            return Err(AppError::BadRequest("one or more invalid role_ids".into()));
         }
-        req.role_ids.iter().map(|r| r.0).collect()
+        input_ids
     } else if let Some(rid) = req.role_id {
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
             .bind(rid.0)
@@ -268,7 +269,9 @@ pub async fn create_account(
         })?;
 
     // Create test API key (best-effort; account already exists)
-    let _ = state.api_key_repo.create(&test_key).await;
+    if let Err(e) = state.api_key_repo.create(&test_key).await {
+        tracing::warn!(error = %e, "create_account: failed to create test key");
+    }
 
     emit_audit(&state, &claims, "create", "account", &account.id.to_string(), &req.username,
         &format!("Account '{}' created with {} role(s) and auto-generated test API key",
@@ -313,22 +316,19 @@ pub async fn update_account(
         if role_ids.is_empty() {
             return Err(AppError::BadRequest("at least one role is required".into()));
         }
-        // Validate all role_ids exist and collect UUIDs
-        let uuid_role_ids: Vec<Uuid> = {
-            let mut uuids = Vec::with_capacity(role_ids.len());
-            for rid in role_ids {
-                let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
-                    .bind(rid.0)
-                    .fetch_one(&state.pg_pool)
-                    .await
-                    .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
-                if !exists {
-                    return Err(AppError::BadRequest(format!("invalid role_id: {rid}")));
-                }
-                uuids.push(rid.0);
-            }
-            uuids
-        };
+        // Batch-validate all role_ids in a single ANY($1) query — no N+1.
+        let input_ids: Vec<Uuid> = role_ids.iter().map(|r| r.0).collect();
+        let valid: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM roles WHERE id = ANY($1::uuid[]) LIMIT 200",
+        )
+        .bind(&input_ids as &[Uuid])
+        .fetch_all(&state.pg_pool)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
+        if valid.len() != input_ids.len() {
+            return Err(AppError::BadRequest("one or more invalid role_ids".into()));
+        }
+        let uuid_role_ids = input_ids;
         state.account_repo.set_roles(&aid.0, &uuid_role_ids).await?;
     }
 

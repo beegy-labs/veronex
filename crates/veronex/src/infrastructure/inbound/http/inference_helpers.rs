@@ -12,7 +12,7 @@ use futures::StreamExt;
 
 use crate::domain::value_objects::{ConvId, JobId, StreamToken};
 use super::cancel_guard::CancelOnDrop;
-use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_MODEL_NAME_BYTES, MAX_PROMPT_BYTES};
+use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_MODEL_NAME_BYTES, MAX_PROMPT_BYTES, VISION_HTTP_TIMEOUT};
 use super::handlers::{SseStream, try_acquire_sse, sse_response};
 use super::state::AppState;
 
@@ -190,7 +190,7 @@ pub async fn analyze_images_for_context(
             let resp = match http
                 .post(&endpoint)
                 .json(&body)
-                .timeout(std::time::Duration::from_secs(120))
+                .timeout(VISION_HTTP_TIMEOUT)
                 .send()
                 .await
             {

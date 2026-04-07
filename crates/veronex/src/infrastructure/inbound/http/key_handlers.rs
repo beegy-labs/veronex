@@ -6,7 +6,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireKeyManage};
 
 use super::audit_helpers::emit_audit;
 use super::error::AppError;
@@ -76,7 +76,7 @@ pub struct KeySummary {
 ///
 /// Returns the plaintext key exactly once. It is never stored or retrievable again.
 pub async fn create_key(
-    Extension(claims): Extension<Claims>,
+    RequireKeyManage(claims): RequireKeyManage,
     State(state): State<AppState>,
     Json(req): Json<CreateKeyRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -201,7 +201,7 @@ pub async fn list_keys(
 
 /// DELETE /v1/keys/{id} — Soft-delete an API key (hidden from list, blocked from auth).
 pub async fn delete_key(
-    Extension(claims): Extension<Claims>,
+    RequireKeyManage(claims): RequireKeyManage,
     Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
@@ -224,7 +224,7 @@ pub async fn delete_key(
 
 /// PATCH /v1/keys/{id} — Update mutable fields: `is_active` and/or `tier`.
 pub async fn toggle_key(
-    Extension(claims): Extension<Claims>,
+    RequireKeyManage(claims): RequireKeyManage,
     Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
     Json(req): Json<PatchKeyRequest>,
@@ -271,7 +271,8 @@ pub async fn toggle_key(
         if let Some(ref pool) = state.valkey_pool {
             use fred::prelude::*;
             use crate::infrastructure::outbound::valkey_keys;
-            let _ = pool.del::<(), _>(&valkey_keys::mcp_key_cap_points(kid.0)).await;
+            pool.del::<(), _>(&valkey_keys::mcp_key_cap_points(kid.0)).await
+                .unwrap_or_else(|e| tracing::warn!(error = %e, "key: failed to invalidate cap_points cache"));
         }
     }
 
@@ -284,7 +285,7 @@ pub async fn toggle_key(
 ///
 /// The old key is immediately invalidated. Returns the new plaintext key once.
 pub async fn regenerate_key(
-    Extension(claims): Extension<Claims>,
+    RequireKeyManage(claims): RequireKeyManage,
     Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
 ) -> Result<Json<CreateKeyResponse>, AppError> {

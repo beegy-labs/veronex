@@ -92,8 +92,9 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
         let conn: fred::clients::Client = pool.next().clone();
-        let key = format!("veronex:mcp:tools_summary:{server_id}");
-        let _: Result<(), _> = conn.set(&key, summary_json.to_string(), Some(Expiration::EX(3600)), None, false).await;
+        let key = valkey_keys::mcp_tools_summary(server_id);
+        conn.set(&key, summary_json.to_string(), Some(Expiration::EX(3600)), None, false).await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, %key, "Valkey SET mcp_tools_summary failed"));
     }
 
     // Warm the tool cache from the already-fetched data — avoids a second HTTP call.
@@ -528,7 +529,7 @@ pub async fn get_mcp_settings(
 
 /// `PATCH /v1/mcp/settings`
 pub async fn patch_mcp_settings(
-    RequireSettingsManage(_): RequireSettingsManage,
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
     Json(body): Json<PatchMcpSettingsRequest>,
 ) -> HandlerResult<Json<McpSettingsResponse>> {
@@ -546,6 +547,10 @@ pub async fn patch_mcp_settings(
         max_routing_cache_entries: body.max_routing_cache_entries,
     };
     let s = state.mcp_settings_repo.update(patch).await.map_err(AppError::Internal)?;
+
+    emit_audit(&state, &claims, "update", "mcp_settings",
+        "mcp_settings", "mcp_settings", "MCP global settings updated").await;
+
     Ok(Json(McpSettingsResponse {
         routing_cache_ttl_secs: s.routing_cache_ttl_secs,
         tool_schema_refresh_secs: s.tool_schema_refresh_secs,

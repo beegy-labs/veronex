@@ -18,7 +18,7 @@ impl PostgresApiKeyProviderAccessRepository {
 impl ApiKeyProviderAccessRepository for PostgresApiKeyProviderAccessRepository {
     async fn list_allowed(&self, api_key_id: Uuid) -> anyhow::Result<Vec<Uuid>> {
         let rows = sqlx::query(
-            "SELECT provider_id FROM api_key_provider_access WHERE api_key_id = $1 AND is_allowed = true"
+            "SELECT provider_id FROM api_key_provider_access WHERE api_key_id = $1 AND is_allowed = true ORDER BY provider_id LIMIT 10000"
         )
         .bind(api_key_id)
         .fetch_all(&self.pool)
@@ -42,7 +42,7 @@ impl ApiKeyProviderAccessRepository for PostgresApiKeyProviderAccessRepository {
 
     async fn list(&self, api_key_id: Uuid) -> anyhow::Result<Vec<(Uuid, bool)>> {
         let rows = sqlx::query(
-            "SELECT provider_id, is_allowed FROM api_key_provider_access WHERE api_key_id = $1"
+            "SELECT provider_id, is_allowed FROM api_key_provider_access WHERE api_key_id = $1 ORDER BY provider_id LIMIT 10000"
         )
         .bind(api_key_id)
         .fetch_all(&self.pool)

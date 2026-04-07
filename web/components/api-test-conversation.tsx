@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { memo, useEffect, useRef, useCallback, useState } from 'react'
 import { Trash2, Square, Send, ImagePlus, X, Loader2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
@@ -34,7 +34,7 @@ interface ApiTestConversationProps {
   onStop: () => void
 }
 
-export function ApiTestConversation({
+export const ApiTestConversation = memo(function ApiTestConversation({
   sessions, activeSessionId,
   messages, streamingText, status, errorMsg,
   prompt, images, maxImages, isCompressing, isGeminiProvider, canRun,
@@ -200,19 +200,19 @@ export function ApiTestConversation({
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
           {messages.map((msg, i) =>
             msg.role === 'system' ? (
-              <div key={i} className="flex items-center gap-2 py-1">
+              <div key={`msg-${i}-system`} className="flex items-center gap-2 py-1">
                 <div className="flex-1 h-px bg-border/60" />
                 <span className="text-[11px] text-muted-foreground/70 shrink-0">{msg.content}</span>
                 <div className="flex-1 h-px bg-border/60" />
               </div>
             ) : msg.role === 'user' ? (
-              <div key={i} className="flex justify-end">
+              <div key={`msg-${i}-user`} className="flex justify-end">
                 <div className="max-w-[80%] rounded-2xl rounded-tr-sm px-3 py-2 bg-primary text-primary-foreground text-sm">
                   {msg.images && msg.images.length > 0 && (
                     <div className="flex gap-1 mb-2 flex-wrap">
                       {msg.images.map((b64, j) => (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img key={j} src={`data:image/jpeg;base64,${b64}`} alt="" className="h-12 w-12 rounded object-cover" />
+                        <img key={b64.slice(0, 16)} src={`data:image/jpeg;base64,${b64}`} alt="" className="h-12 w-12 rounded object-cover" />
                       ))}
                     </div>
                   )}
@@ -220,7 +220,7 @@ export function ApiTestConversation({
                 </div>
               </div>
             ) : (
-              <div key={i} className="flex justify-start">
+              <div key={`msg-${i}-assistant`} className="flex justify-start">
                 <div className="max-w-[80%] relative group/msg">
                   {msg.model && (
                     <div className="mb-1 px-1">
@@ -348,4 +348,4 @@ export function ApiTestConversation({
       )}
     </div>
   )
-}
+})

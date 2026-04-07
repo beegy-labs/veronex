@@ -34,7 +34,7 @@ impl GeminiPolicyRepository for PostgresGeminiPolicyRepository {
         let rows = sqlx::query(
             "SELECT id, model_name, rpm_limit, rpd_limit, available_on_free_tier, updated_at
              FROM gemini_rate_limit_policies
-             ORDER BY model_name ASC",
+             ORDER BY model_name ASC LIMIT 10000",
         )
         .fetch_all(&self.pool)
         .await

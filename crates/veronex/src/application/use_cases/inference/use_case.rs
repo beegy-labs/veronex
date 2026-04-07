@@ -533,7 +533,9 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 let model = self.jobs.get(&job_id.0)
                     .map(|e| e.job.model_name.as_str().to_string())
                     .unwrap_or_default();
-                let _ = vk.zset_cancel(&job_id.0.to_string(), &model).await;
+                if let Err(e) = vk.zset_cancel(&job_id.0.to_string(), &model).await {
+                    tracing::warn!(job_id = %job_id.0, error = %e, "use_case: failed to cancel job from queue");
+                }
             }
         }
         if !is_local

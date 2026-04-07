@@ -1,12 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { serviceHealthQuery, pipelineHealthQuery } from '@/lib/queries'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { SERVICE_STATUS_DOT } from '@/lib/constants'
 import { fmtCompact } from '@/lib/chart-theme'
 import { Database, Server, HardDrive, Activity, Search, ChevronDown, ChevronUp, AlertTriangle, Package } from 'lucide-react'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { PodItem, TopicPipelineStats } from '@/lib/types'
 
 const SVC_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -107,11 +109,17 @@ function PodGroup({
 }
 
 export default function HealthPage() {
+  usePageGuard('dashboard')
   const { t } = useTranslation()
   const { data, isLoading, error } = useQuery(serviceHealthQuery)
   const { data: pipeline, isLoading: pipelineLoading } = useQuery(pipelineHealthQuery)
   const [apiPodsOpen, setApiPodsOpen] = useState(false)
   const [agentPodsOpen, setAgentPodsOpen] = useState(false)
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => tick(n => n + 1), 15_000)
+    return () => clearInterval(id)
+  }, [])
 
   if (error) {
     return (
@@ -147,42 +155,42 @@ export default function HealthPage() {
         </div>
         {isLoading ? (
           <div className="p-4 space-y-2">
-            {[0,1,2,3,4].map(i => <div key={i} className="h-7 rounded bg-muted animate-pulse" />)}
+            {[0,1,2,3,4].map(i => <div key={`skel-infra-${i}`} className="h-7 rounded bg-muted animate-pulse" />)}
           </div>
         ) : (data?.infrastructure ?? []).length === 0 ? (
           <p className="px-4 py-3 text-sm text-muted-foreground">{t('health.noData')}</p>
         ) : (
-          <table className="w-full text-sm">
-            <tbody>
+          <Table className="text-sm">
+            <TableBody>
               {(data?.infrastructure ?? []).map(svc => {
                 const Icon = SVC_ICONS[svc.name] ?? Server
                 const staleRow = isStale(svc.checked_at)
                 return (
-                  <tr key={svc.name} className="border-b border-border last:border-0">
-                    <td className="py-2 pl-4 pr-2 w-4">
+                  <TableRow key={svc.name} className="border-b border-border last:border-0">
+                    <TableCell className="py-2 pl-4 pr-2 w-4">
                       <span className={SERVICE_STATUS_DOT[svc.status] ?? ''} />
-                    </td>
-                    <td className="py-2 pr-3 w-6">
+                    </TableCell>
+                    <TableCell className="py-2 pr-3 w-6">
                       <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    </td>
-                    <td className="py-2 font-medium text-sm w-36">
+                    </TableCell>
+                    <TableCell className="py-2 font-medium text-sm w-36">
                       {SVC_LABELS[svc.name] ?? svc.name}
-                    </td>
-                    <td className="py-2 text-xs text-muted-foreground w-20">
+                    </TableCell>
+                    <TableCell className="py-2 text-xs text-muted-foreground w-20">
                       {t(`health.${svc.status}`)}
-                    </td>
-                    <td className="py-2 text-xs text-muted-foreground tabular-nums w-16">
+                    </TableCell>
+                    <TableCell className="py-2 text-xs text-muted-foreground tabular-nums w-16">
                       {svc.latency_ms != null ? `${svc.latency_ms}ms` : '—'}
-                    </td>
-                    <td className="py-2 pr-4 text-right text-xs text-muted-foreground">
+                    </TableCell>
+                    <TableCell className="py-2 pr-4 text-right text-xs text-muted-foreground">
                       {timeAgo(svc.checked_at)}
                       {staleRow && <span className="ml-1 text-status-warning-fg">⚠</span>}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 )
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
       </section>
 
@@ -193,7 +201,7 @@ export default function HealthPage() {
         </div>
         {isLoading ? (
           <div className="p-4 space-y-2">
-            {[0,1].map(i => <div key={i} className="h-8 rounded bg-muted animate-pulse" />)}
+            {[0,1].map(i => <div key={`skel-pod-${i}`} className="h-8 rounded bg-muted animate-pulse" />)}
           </div>
         ) : (
           <>
@@ -222,24 +230,24 @@ export default function HealthPage() {
         </div>
         {pipelineLoading ? (
           <div className="p-4 space-y-2">
-            {[0,1].map(i => <div key={i} className="h-8 rounded bg-muted animate-pulse" />)}
+            {[0,1].map(i => <div key={`skel-pod-${i}`} className="h-8 rounded bg-muted animate-pulse" />)}
           </div>
         ) : !pipeline?.available || (pipeline?.topics ?? []).length === 0 ? (
           <p className="px-4 py-3 text-sm text-muted-foreground">{t('health.pipelineUnavailable')}</p>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border">
-                <th className="py-2 pl-4 w-4" />
-                <th className="py-2 text-left text-xs font-medium text-muted-foreground">{t('health.topic')}</th>
-                <th className="py-2 text-right text-xs font-medium text-muted-foreground">{t('health.consumers')}</th>
-                <th className="py-2 text-right text-xs font-medium text-muted-foreground">{t('health.lag')}</th>
-                <th className="py-2 text-right text-xs font-medium text-muted-foreground">{t('health.tpm1m')}</th>
-                <th className="py-2 text-right text-xs font-medium text-muted-foreground">{t('health.tpm5m')}</th>
-                <th className="py-2 pr-4 text-right text-xs font-medium text-muted-foreground">{t('health.lastPoll')}</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table className="text-sm">
+            <TableHeader>
+              <TableRow className="border-b border-border">
+                <TableHead className="py-2 pl-4 w-4" />
+                <TableHead className="py-2 text-left text-xs font-medium text-muted-foreground">{t('health.topic')}</TableHead>
+                <TableHead className="py-2 text-right text-xs font-medium text-muted-foreground">{t('health.consumers')}</TableHead>
+                <TableHead className="py-2 text-right text-xs font-medium text-muted-foreground">{t('health.lag')}</TableHead>
+                <TableHead className="py-2 text-right text-xs font-medium text-muted-foreground">{t('health.tpm1m')}</TableHead>
+                <TableHead className="py-2 text-right text-xs font-medium text-muted-foreground">{t('health.tpm5m')}</TableHead>
+                <TableHead className="py-2 pr-4 text-right text-xs font-medium text-muted-foreground">{t('health.lastPoll')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {(pipeline?.topics ?? []).map(tp => {
                 const hasError = !!tp.last_error
                 const color = lagColor(tp.lag, tp.is_active, tp.last_poll_secs, hasError)
@@ -252,11 +260,11 @@ export default function HealthPage() {
                   : tp.last_poll_secs < 60 ? `${tp.last_poll_secs}s ago`
                   : `${Math.floor(tp.last_poll_secs / 60)}m ago`
                 return (
-                  <tr key={tp.topic} className="border-b border-border last:border-0">
-                    <td className="py-2 pl-4 pr-2">
+                  <TableRow key={tp.topic} className="border-b border-border last:border-0">
+                    <TableCell className="py-2 pl-4 pr-2">
                       <span className={statusDot} />
-                    </td>
-                    <td className="py-2">
+                    </TableCell>
+                    <TableCell className="py-2">
                       <div className="flex items-center gap-1.5">
                         <span className="font-mono text-xs">{tp.topic}</span>
                         {hasError && (
@@ -268,21 +276,21 @@ export default function HealthPage() {
                       <div className="text-[10px] text-muted-foreground/50 tabular-nums">
                         {fmtCompact(tp.consumer_offset)} / {fmtCompact(tp.log_end_offset)}
                       </div>
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-xs text-muted-foreground">{tp.consumer_count}</td>
-                    <td className={`py-2 text-right tabular-nums font-mono text-xs font-semibold ${color}`}>{fmtCompact(tp.lag)}</td>
-                    <td className="py-2 text-right tabular-nums text-xs text-muted-foreground">
+                    </TableCell>
+                    <TableCell className="py-2 text-right tabular-nums text-xs text-muted-foreground">{tp.consumer_count}</TableCell>
+                    <TableCell className={`py-2 text-right tabular-nums font-mono text-xs font-semibold ${color}`}>{fmtCompact(tp.lag)}</TableCell>
+                    <TableCell className="py-2 text-right tabular-nums text-xs text-muted-foreground">
                       {tp.tpm_1m === 0 ? <span className="text-muted-foreground/40">0</span> : fmtCompact(tp.tpm_1m)}
-                    </td>
-                    <td className="py-2 text-right tabular-nums text-xs text-muted-foreground">
+                    </TableCell>
+                    <TableCell className="py-2 text-right tabular-nums text-xs text-muted-foreground">
                       {tp.tpm_5m === 0 ? <span className="text-muted-foreground/40">0</span> : `${fmtCompact(Math.round(tp.tpm_5m / 5 * 10) / 10)}/m`}
-                    </td>
-                    <td className="py-2 pr-4 text-right text-xs text-muted-foreground">{lastPollLabel}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell className="py-2 pr-4 text-right text-xs text-muted-foreground">{lastPollLabel}</TableCell>
+                  </TableRow>
                 )
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
       </section>
     </div>

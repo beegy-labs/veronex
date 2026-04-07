@@ -145,7 +145,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn list_active(&self) -> Result<Vec<LlmProvider>> {
-        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers WHERE is_active = true AND status = 'online' ORDER BY registered_at ASC");
+        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers WHERE is_active = true AND status = 'online' ORDER BY registered_at ASC LIMIT 10000");
         let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await
@@ -166,7 +166,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn list_all(&self) -> Result<Vec<LlmProvider>> {
-        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers ORDER BY registered_at ASC");
+        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers ORDER BY registered_at ASC LIMIT 10000");
         let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await

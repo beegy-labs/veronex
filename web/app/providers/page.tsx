@@ -3,10 +3,12 @@
 import { useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useApiMutation } from '@/hooks/use-api-mutation'
 import { providersQuery, serversQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { Provider } from '@/lib/types'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { PROVIDER_OLLAMA } from '@/lib/constants'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -38,20 +40,19 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   )
   const providers = providersData?.providers
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.deleteProvider(id),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
-  })
+  const deleteMutation = useApiMutation(
+    (id: string) => api.deleteProvider(id),
+    { invalidateKey: ['providers'] },
+  )
 
-  const toggleActiveMutation = useMutation({
-    mutationFn: (b: Provider) =>
-      api.updateProvider(b.id, {
-        name: b.name,
-        is_active: !b.is_active,
-        ...(b.provider_type === PROVIDER_OLLAMA && { url: b.url, total_vram_mb: b.total_vram_mb, gpu_index: b.gpu_index, server_id: b.server_id }),
-      }),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
-  })
+  const toggleActiveMutation = useApiMutation(
+    (b: Provider) => api.updateProvider(b.id, {
+      name: b.name,
+      is_active: !b.is_active,
+      ...(b.provider_type === PROVIDER_OLLAMA && { url: b.url, total_vram_mb: b.total_vram_mb, gpu_index: b.gpu_index, server_id: b.server_id }),
+    }),
+    { invalidateKey: ['providers'] },
+  )
 
   const syncProviderMutation = useMutation({
     mutationFn: (id: string) => api.syncProvider(id),
@@ -141,6 +142,7 @@ function ProvidersSectionReader() {
 }
 
 export default function ProvidersPage() {
+  usePageGuard('providers')
   const { t } = useTranslation()
   return (
     <Suspense fallback={<div className="p-2 text-sm text-muted-foreground">{t('common.loading')}</div>}>

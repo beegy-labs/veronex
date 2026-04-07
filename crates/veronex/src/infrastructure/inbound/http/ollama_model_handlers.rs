@@ -10,6 +10,7 @@ use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 
+use super::audit_helpers::emit_audit;
 use super::constants::ERR_DATABASE;
 use super::error::error_json;
 use super::handlers::ListPageParams;
@@ -136,7 +137,7 @@ pub async fn list_provider_models(
 /// Returns 202 immediately with the job ID. The sync runs in the background,
 /// processing each provider sequentially without retrying on failure.
 pub async fn sync_all_providers(
-    RequireProviderManage(_claims): RequireProviderManage,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     // List all active Ollama providers.
@@ -259,6 +260,10 @@ pub async fn sync_all_providers(
         tracing::info!(%job_id, "ollama global sync completed");
     });
 
+    emit_audit(&state, &claims, "trigger", "ollama_sync",
+        &job_id.to_string(), "global",
+        &format!("Triggered Ollama model sync for {} providers", total)).await;
+
     (
         StatusCode::ACCEPTED,
         Json(SyncJobResponse {
@@ -313,7 +318,7 @@ pub struct PullModelRequest {
 /// executes Ollama pull, then resets AIMD epoch. Requires admin auth.
 /// Returns 202 Accepted immediately; pull runs in background.
 pub async fn pull_model(
-    _: RequireProviderManage,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<PullModelRequest>,
 ) -> impl IntoResponse {
@@ -353,6 +358,10 @@ pub async fn pull_model(
             &client, &base_url, &model_c, provider_id, &vram_c,
         ).await;
     });
+
+    emit_audit(&state, &claims, "trigger", "ollama_pull",
+        &provider_id.to_string(), &model,
+        &format!("Triggered pull drain for model '{}' on provider {}", model, provider_id)).await;
 
     (
         StatusCode::ACCEPTED,

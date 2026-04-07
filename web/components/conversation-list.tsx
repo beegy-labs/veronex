@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { StatusPill } from '@/components/status-pill'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const PAGE_SIZE = 30
 
@@ -95,50 +96,50 @@ export function ConversationList({ onContinue }: ConversationListProps) {
 
       {data && data.conversations.length > 0 && (
         <div className="rounded-lg border border-border overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-muted/30">
-                <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('jobs.conversationTitle')}</th>
-                <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('common.model')}</th>
-                <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('jobs.source')}</th>
-                <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">{t('jobs.turnCount')}</th>
-                <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">{t('jobs.totalTokens')}</th>
-                <th className="px-4 py-2.5 text-right font-medium text-muted-foreground">{t('jobs.lastActivity')}</th>
-                {onContinue && <th className="px-4 py-2.5" />}
-              </tr>
-            </thead>
-            <tbody>
+          <Table className="text-sm">
+            <TableHeader>
+              <TableRow className="bg-muted/30">
+                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('jobs.conversationTitle')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('common.model')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('jobs.source')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground">{t('jobs.turnCount')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground">{t('jobs.totalTokens')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground">{t('jobs.lastActivity')}</TableHead>
+                {onContinue && <TableHead className="px-4 py-2.5" />}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {data.conversations.map((c) => (
-                <tr
+                <TableRow
                   key={c.id}
                   className="border-b border-border last:border-0 hover:bg-muted/20 cursor-pointer transition-colors"
                   onClick={() => setSelectedId(c.id)}
                 >
-                  <td className="px-4 py-3">
+                  <TableCell className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <MessageSquare className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       <span className="font-medium truncate max-w-[300px]">
                         {c.title || c.id}
                       </span>
                     </div>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{c.model_name || '—'}</td>
-                  <td className="px-4 py-3">
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-muted-foreground">{c.model_name || '—'}</TableCell>
+                  <TableCell className="px-4 py-3">
                     <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
                       c.source === 'test' ? 'bg-status-warning/15 text-status-warning-fg' :
                       c.source === 'analyzer' ? 'bg-accent/15 text-accent-foreground' :
                       'bg-primary/10 text-primary'
                     }`}>{c.source}</span>
-                  </td>
-                  <td className="px-4 py-3 text-right tabular-nums">{c.turn_count}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-right tabular-nums">{c.turn_count}</TableCell>
+                  <TableCell className="px-4 py-3 text-right tabular-nums text-muted-foreground">
                     {fmtNumber(c.total_prompt_tokens + c.total_completion_tokens)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-muted-foreground text-xs">
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-right text-muted-foreground text-xs">
                     {fmtDatetime(c.updated_at, tz)}
-                  </td>
+                  </TableCell>
                   {onContinue && (
-                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <TableCell className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                       <Button
                         type="button"
                         variant="ghost"
@@ -149,12 +150,12 @@ export function ConversationList({ onContinue }: ConversationListProps) {
                         <Play className="h-3 w-3 mr-1" />
                         {t('jobs.continue')}
                       </Button>
-                    </td>
+                    </TableCell>
                   )}
-                </tr>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
 
@@ -281,7 +282,7 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
                   {turn.tool_calls && Array.isArray(turn.tool_calls) && turn.tool_calls.length > 0 && (
                     <div className="mb-2 space-y-1">
                       {turn.tool_calls.map((tc: { function?: { name?: string; arguments?: string } }, j: number) => (
-                        <div key={j} className="rounded border border-border bg-muted/30 px-2 py-1.5">
+                        <div key={`tool-${j}-${tc.function?.name ?? ''}`} className="rounded border border-border bg-muted/30 px-2 py-1.5">
                           <div className="flex items-center gap-1.5">
                             <Wrench className="h-3 w-3 text-status-info-fg shrink-0" />
                             <code className="text-[11px] font-mono font-semibold text-status-info-fg">{tc.function?.name ?? 'unknown'}</code>

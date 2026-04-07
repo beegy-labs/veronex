@@ -50,6 +50,8 @@ pub const L1_MAX_ENTRIES_DEFAULT: u64 = 10_000;
 
 /// Open-Meteo: request 8 days so day_offset 0-6 always has data + buffer.
 const FORECAST_DAYS: u32 = 8;
+/// Timeout for geocoding fallback HTTP requests (Open-Meteo API).
+const GEOCODING_API_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type ValkeyPool = fred::clients::Pool;
 type InflightMap = DashMap<String, Arc<tokio::sync::watch::Sender<bool>>>;
@@ -631,7 +633,7 @@ async fn geocode_fallback(client: &reqwest::Client, query: &str) -> Result<geo::
         urlencoding::encode(query)
     );
     let resp: Value = client.get(&url)
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(GEOCODING_API_TIMEOUT)
         .send().await
         .map_err(|e| format!("geocoding request failed: {e}"))?
         .json().await

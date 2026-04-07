@@ -3,9 +3,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { providersQuery } from '@/lib/queries'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { NetworkFlowTab } from '@/components/network-flow-tab'
 
 export default function FlowPage() {
+  usePageGuard('flow')
   const { t } = useTranslation()
 
   const { data: providersData } = useQuery(providersQuery())

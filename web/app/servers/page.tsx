@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useMemo, useCallback, memo } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
+import { useApiMutation } from '@/hooks/use-api-mutation'
 import { serversQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { GpuServer, RegisterGpuServerRequest, UpdateGpuServerRequest } from '@/lib/types'
@@ -35,6 +36,7 @@ import {
 import { DataTable } from '@/components/data-table'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
 import { StatusPill } from '@/components/status-pill'
@@ -47,7 +49,6 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
   const [nodeExporterUrl, setNodeExporterUrl] = useState('')
-  const queryClient = useQueryClient()
 
   const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
     verifyFn: api.verifyServer,
@@ -61,16 +62,10 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
 
   const handleUrlChange = (val: string) => { setNodeExporterUrl(val); onVerifyReset() }
 
-  const registerMutation = useMutation({
-    mutationFn: () => {
-      const body: RegisterGpuServerRequest = {
-        name: name.trim(),
-        node_exporter_url: nodeExporterUrl.trim(),
-      }
-      return api.registerServer(body)
-    },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['servers'] }); onClose() },
-  })
+  const registerMutation = useApiMutation(
+    () => api.registerServer({ name: name.trim(), node_exporter_url: nodeExporterUrl.trim() }),
+    { invalidateKey: ['servers'], onSuccess: () => onClose() },
+  )
 
   const canVerify = !!nodeExporterUrl.trim() && verifyState !== 'checking'
   const isVerified = verifyState === 'ok' && nodeExporterUrl.trim() === verifiedUrl
@@ -143,7 +138,7 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
         <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button
-            onClick={() => registerMutation.mutate()}
+            onClick={() => registerMutation.mutate(undefined)}
             disabled={!canRegister}
             title={!isVerified ? t('providers.servers.verifyFirst') : undefined}
           >
@@ -161,7 +156,6 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
   const { t } = useTranslation()
   const [name, setName] = useState(server.name)
   const [nodeExporterUrl, setNodeExporterUrl] = useState(server.node_exporter_url ?? '')
-  const queryClient = useQueryClient()
 
   const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
     verifyFn: api.verifyServer,
@@ -178,17 +172,10 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
 
   const handleUrlChange = (val: string) => { setNodeExporterUrl(val); onVerifyReset() }
 
-  const mutation = useMutation({
-    mutationFn: () => {
-      const body: UpdateGpuServerRequest = {
-        name: name.trim() || undefined,
-        node_exporter_url: nodeExporterUrl.trim(),
-      }
-      return api.updateServer(server.id, body)
-    },
-    onSuccess: () => onClose(),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['servers'] }),
-  })
+  const mutation = useApiMutation(
+    () => api.updateServer(server.id, { name: name.trim() || undefined, node_exporter_url: nodeExporterUrl.trim() }),
+    { invalidateKey: ['servers'], onSuccess: () => onClose() },
+  )
 
   const canVerify = !!nodeExporterUrl.trim() && verifyState !== 'checking'
   const isVerified = !urlChanged || (verifyState === 'ok' && nodeExporterUrl.trim() === verifiedUrl)
@@ -244,7 +231,7 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
 
         <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={() => mutation.mutate()} disabled={!canSave}>
+          <Button onClick={() => mutation.mutate(undefined)} disabled={!canSave}>
             {mutation.isPending ? `${t('common.save')}…` : t('common.save')}
           </Button>
         </DialogFooter>
@@ -425,8 +412,8 @@ const ServersTable = memo(function ServersTable({
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ServersPage() {
+  usePageGuard('servers')
   const { t } = useTranslation()
-  const queryClient = useQueryClient()
 
   const [showRegister, setShowRegister] = useState(false)
   const [editingServer, setEditingServer] = useState<GpuServer | null>(null)
@@ -436,10 +423,10 @@ export default function ServersPage() {
   const { data: serversData, isLoading } = useQuery(serversQuery())
   const servers = serversData?.servers
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.deleteServer(id),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['servers'] }),
-  })
+  const deleteMutation = useApiMutation(
+    (id: string) => api.deleteServer(id),
+    { invalidateKey: ['servers'] },
+  )
 
   const handleRegister = useCallback(() => setShowRegister(true), [])
   const handleEdit = useCallback((s: GpuServer) => setEditingServer(s), [])

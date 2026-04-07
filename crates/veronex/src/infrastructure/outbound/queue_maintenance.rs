@@ -352,7 +352,9 @@ async fn gc_stale_hash(
 
             if !stale_fields.is_empty() {
                 stale_count += stale_fields.len() as u32;
-                let _: Result<i64, _> = pool.hdel(hash_key, stale_fields).await;
+                if let Err(e) = pool.hdel::<i64, _, _>(hash_key, stale_fields).await {
+                    tracing::warn!(error = %e, "Valkey HDEL stale model-map fields failed");
+                }
             }
         }
     }

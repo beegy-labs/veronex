@@ -7,6 +7,9 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// HTTP client timeout for all Vespa API requests.
+const VESPA_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Reject IDs that could break YQL string interpolation.
 /// Allows alphanumeric, underscores, hyphens, and colons (for tool_id composite keys).
 fn validate_vespa_id(s: &str) -> Result<()> {
@@ -69,7 +72,7 @@ impl VespaClient {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
+                .timeout(VESPA_HTTP_TIMEOUT)
                 .build()
                 .expect("VespaClient reqwest build"),
         }

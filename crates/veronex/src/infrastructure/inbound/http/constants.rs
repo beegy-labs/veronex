@@ -86,6 +86,37 @@ pub const REFRESH_TOKEN_MAX_AGE: u32 = 604800;
 /// After this period a cache miss triggers a live fetch from the provider.
 pub const MODELS_CACHE_TTL: i64 = 3600;
 
+// ── Timeout constants ────────────────────────────────────────────────────────
+
+/// Timeout for the JWT-authenticated admin router (30 s).
+///
+/// Applies to all non-inference, non-streaming endpoints. Inference routes
+/// use `SSE_TIMEOUT` (3 min) instead.
+pub const JWT_ROUTER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Timeout for the inference/API router (240 s).
+///
+/// Covers non-streaming inference requests (synchronous chat completions,
+/// embeddings, Ollama passthrough). Set higher than `SSE_TIMEOUT` (180 s)
+/// so SSE streams are killed by their own inner timeout first; this timeout
+/// only fires on hung non-streaming requests.
+pub const INFERENCE_ROUTER_TIMEOUT: Duration = Duration::from_secs(240);
+
+/// Timeout for the dashboard queue-depth Valkey fetch (3 s).
+///
+/// Best-effort — dashboard degrades gracefully on Valkey timeout.
+pub const DASHBOARD_QUEUE_DEPTH_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Timeout for the dashboard stats aggregate fetch (10 s).
+///
+/// Covers parallel DB + analytics queries in `/v1/dashboard/stats`.
+pub const DASHBOARD_STATS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Timeout for an outbound vision-analysis HTTP call (120 s).
+///
+/// Vision models may take longer than text models on first load.
+pub const VISION_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
+
 // ── Body limits ─────────────────────────────────────────────────────────────
 
 /// Default JSON body limit applied at the global router level (1 MB).
@@ -96,6 +127,14 @@ pub const JSON_BODY_LIMIT: usize = 1024 * 1024;
 
 /// Body limit for image-capable endpoints (20 MB).
 pub const IMAGE_BODY_LIMIT: usize = 20 * 1024 * 1024;
+
+// ── Per-key concurrency ──────────────────────────────────────────────────────
+
+/// Maximum concurrent in-flight requests per API key.
+///
+/// Prevents Slowloris-style attacks where a single key holds many long-running
+/// connections, exhausting threads/file descriptors across the cluster.
+pub const MAX_KEY_CONCURRENT: u32 = 10;
 
 // ── Pagination ──────────────────────────────────────────────────────────────
 

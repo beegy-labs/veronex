@@ -419,7 +419,9 @@ impl McpBridgeAdapter {
                         if let Some(ref pool) = state.valkey_pool {
                             use fred::prelude::*;
                             let cache_key = format!("conv_s3:{}", conv_id);
-                            let _: Result<(), _> = pool.del(cache_key).await;
+                            if let Err(e) = pool.del::<i64, _>(cache_key).await {
+                                tracing::warn!(error = %e, "Valkey DEL conversation cache failed");
+                            }
                         }
                     }
                 }
@@ -952,9 +954,12 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
 
     // Populate cache — empty array is also cached (negative cache).
     if let Some(ref pool) = state.valkey_pool && let Ok(json) = serde_json::to_string(&ids) {
-        let _ = pool
+        if let Err(e) = pool
             .set::<(), _, _>(&vk_key, json, Some(Expiration::EX(60)), None, false)
-            .await;
+            .await
+        {
+            tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate acl cache");
+        }
     }
 
     ids
@@ -995,9 +1000,12 @@ async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
     // Populate cache — "null" sentinel for absent/NULL cap.
     if let Some(ref pool) = state.valkey_pool {
         let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
-        let _ = pool
+        if let Err(e) = pool
             .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)
-            .await;
+            .await
+        {
+            tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate cap_points cache");
+        }
     }
 
     result.map(|v| v as u8)
@@ -1037,9 +1045,12 @@ async fn fetch_mcp_top_k(state: &AppState, key_id: Uuid) -> Option<usize> {
     // Populate cache.
     if let Some(ref pool) = state.valkey_pool {
         let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
-        let _ = pool
+        if let Err(e) = pool
             .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)
-            .await;
+            .await
+        {
+            tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate top_k cache");
+        }
     }
 
     result.map(|v| v as usize)

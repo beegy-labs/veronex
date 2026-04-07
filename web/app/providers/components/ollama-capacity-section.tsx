@@ -15,6 +15,8 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel,
   SelectTrigger, SelectValue,
 } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useApiMutation } from '@/hooks/use-api-mutation'
 import { useTranslation } from '@/i18n'
 import { fmtMbShort, fmtTemp } from '@/lib/chart-theme'
 import { calcPercentage } from '@/lib/utils'
@@ -68,11 +70,11 @@ const ProviderRow = memo(function ProviderRow({
   const { t } = useTranslation()
   return (
     <React.Fragment>
-      <tr
+      <TableRow
         className="border-t border-border bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors"
         onClick={() => onToggle(provider.provider_id)}
       >
-        <td colSpan={4} className="px-3 py-1.5">
+        <TableCell colSpan={4} className="px-3 py-1.5">
           <div className="flex items-center gap-2 min-w-0">
             {isCollapsed
               ? <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
@@ -98,33 +100,33 @@ const ProviderRow = memo(function ProviderRow({
               </div>
             </div>
           </div>
-        </td>
-      </tr>
+        </TableCell>
+      </TableRow>
       {!isCollapsed && (
         provider.loaded_models.length === 0 ? (
-          <tr>
-            <td colSpan={4} className="px-10 py-2 text-[11px] text-muted-foreground italic border-b border-border/30">
+          <TableRow>
+            <TableCell colSpan={4} className="px-10 py-2 text-[11px] text-muted-foreground italic border-b border-border/30">
               {t('providers.capacity.noData')}
-            </td>
-          </tr>
+            </TableCell>
+          </TableRow>
         ) : provider.loaded_models.map((m) => (
           <React.Fragment key={`${provider.provider_id}:${m.model_name}`}>
-            <tr className="hover:bg-muted/15 transition-colors border-b border-border/30">
-              <td className="px-10 py-2 font-mono font-medium text-text-bright">{m.model_name}</td>
-              <td className="px-3 py-2 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.weight_mb)}</td>
-              <td className="px-3 py-2 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.kv_per_request_mb)}</td>
-              <td className="px-3 py-2 text-center tabular-nums">
+            <TableRow className="hover:bg-muted/15 transition-colors border-b border-border/30">
+              <TableCell className="px-10 py-2 font-mono font-medium text-text-bright">{m.model_name}</TableCell>
+              <TableCell className="px-3 py-2 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.weight_mb)}</TableCell>
+              <TableCell className="px-3 py-2 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.kv_per_request_mb)}</TableCell>
+              <TableCell className="px-3 py-2 text-center tabular-nums">
                 <span className={m.active_requests > 0 ? 'font-medium text-status-success-fg' : 'text-muted-foreground'}>
                   {m.active_requests}
                 </span>
                 {m.max_concurrent > 0 && (
                   <span className="text-muted-foreground/50">/{m.max_concurrent}</span>
                 )}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
             {m.llm_concern && (
-              <tr className="bg-status-warning/5 border-b border-border/30">
-                <td colSpan={4} className="px-10 py-1.5 text-[11px]">
+              <TableRow className="bg-status-warning/5 border-b border-border/30">
+                <TableCell colSpan={4} className="px-10 py-1.5 text-[11px]">
                   <span className="font-semibold text-status-warning-fg uppercase tracking-wide mr-1.5">
                     {t('providers.capacity.concern')}
                   </span>
@@ -132,8 +134,8 @@ const ProviderRow = memo(function ProviderRow({
                   {m.llm_reason && (
                     <span className="text-muted-foreground/60 ml-1">— {m.llm_reason}</span>
                   )}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
           </React.Fragment>
         ))
@@ -185,10 +187,10 @@ export function OllamaCapacitySection() {
     }
   }, [settings])
 
-  const saveMutation = useMutation({
-    mutationFn: (body: PatchSyncSettings) => api.patchSyncSettings(body),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['sync-settings'] }),
-  })
+  const saveMutation = useApiMutation(
+    (body: PatchSyncSettings) => api.patchSyncSettings(body),
+    { invalidateKey: ['sync-settings'] },
+  )
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncAllProviders(),
@@ -383,32 +385,32 @@ export function OllamaCapacitySection() {
         <Card>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-border bg-muted/30">
-                    <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('providers.capacity.colModel')}</th>
-                    <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">{t('providers.capacity.colWeight')}</th>
-                    <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">{t('providers.capacity.colKvPerReq')}</th>
-                    <th className="px-3 py-2.5 text-right font-medium text-muted-foreground">{t('providers.capacity.colProviders')}</th>
-                    <th className="px-3 py-2.5 text-center font-medium text-muted-foreground">{t('providers.capacity.colActiveLimit')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
+              <Table className="text-xs">
+                <TableHeader>
+                  <TableRow className="border-b border-border bg-muted/30">
+                    <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('providers.capacity.colModel')}</TableHead>
+                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground">{t('providers.capacity.colWeight')}</TableHead>
+                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground">{t('providers.capacity.colKvPerReq')}</TableHead>
+                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground">{t('providers.capacity.colProviders')}</TableHead>
+                    <TableHead className="px-3 py-2.5 text-center font-medium text-muted-foreground">{t('providers.capacity.colActiveLimit')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="divide-y divide-border">
                   {(clusterData ?? []).length === 0 ? (
-                    <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground italic">{t('providers.capacity.noData')}</td></tr>
+                    <TableRow><TableCell colSpan={5} className="px-4 py-8 text-center text-muted-foreground italic">{t('providers.capacity.noData')}</TableCell></TableRow>
                   ) : (clusterData ?? []).map((m) => (
-                    <tr key={m.model_name} className="hover:bg-muted/20 transition-colors">
-                      <td className="px-4 py-2.5 font-mono font-medium text-text-bright">{m.model_name}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.weight_mb)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.kv_per_request_mb)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{m.provider_count}</td>
-                      <td className="px-3 py-2.5 text-center tabular-nums text-muted-foreground">
+                    <TableRow key={m.model_name} className="hover:bg-muted/20 transition-colors">
+                      <TableCell className="px-4 py-2.5 font-mono font-medium text-text-bright">{m.model_name}</TableCell>
+                      <TableCell className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.weight_mb)}</TableCell>
+                      <TableCell className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.kv_per_request_mb)}</TableCell>
+                      <TableCell className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{m.provider_count}</TableCell>
+                      <TableCell className="px-3 py-2.5 text-center tabular-nums text-muted-foreground">
                         {m.total_active}{m.total_limit > 0 ? `/${m.total_limit}` : ''}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           </CardContent>
         </Card>
@@ -419,16 +421,16 @@ export function OllamaCapacitySection() {
         <Card>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-border bg-muted/30">
-                    <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('providers.capacity.colModel')}</th>
-                    <th className="px-3 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('providers.capacity.colWeight')}</th>
-                    <th className="px-3 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('providers.capacity.colKvPerReq')}</th>
-                    <th className="px-3 py-2.5 text-center font-medium text-muted-foreground whitespace-nowrap">{t('providers.capacity.colActiveLimit')}</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table className="text-xs">
+                <TableHeader>
+                  <TableRow className="border-b border-border bg-muted/30">
+                    <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('providers.capacity.colModel')}</TableHead>
+                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('providers.capacity.colWeight')}</TableHead>
+                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('providers.capacity.colKvPerReq')}</TableHead>
+                    <TableHead className="px-3 py-2.5 text-center font-medium text-muted-foreground whitespace-nowrap">{t('providers.capacity.colActiveLimit')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {providers.map((provider) => (
                     <ProviderRow
                       key={provider.provider_id}
@@ -437,8 +439,8 @@ export function OllamaCapacitySection() {
                       onToggle={toggleCollapsed}
                     />
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           </CardContent>
         </Card>

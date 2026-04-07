@@ -116,7 +116,7 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
     }
 
     async fn list_by_tenant(&self, tenant_id: &str) -> Result<Vec<ApiKey>> {
-        let sql = format!("SELECT {API_KEY_COLS} FROM api_keys WHERE tenant_id = $1 AND {SOFT_DELETE} ORDER BY created_at DESC");
+        let sql = format!("SELECT {API_KEY_COLS} FROM api_keys WHERE tenant_id = $1 AND {SOFT_DELETE} ORDER BY created_at DESC LIMIT 10000");
         let rows = sqlx::query(&sql)
         .bind(tenant_id)
         .fetch_all(&self.pool)
@@ -127,7 +127,7 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<ApiKey>> {
-        let sql = format!("SELECT {API_KEY_COLS} FROM api_keys WHERE {SOFT_DELETE} ORDER BY created_at DESC");
+        let sql = format!("SELECT {API_KEY_COLS} FROM api_keys WHERE {SOFT_DELETE} ORDER BY created_at DESC LIMIT 10000");
         let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await

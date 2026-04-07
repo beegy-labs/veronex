@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
 use crate::domain::enums::AccountRole;
 use crate::domain::value_objects::JobId;
-use crate::infrastructure::outbound::valkey_keys::{QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID, QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_TEST as QUEUE_KEY_TEST};
+use crate::infrastructure::outbound::valkey_keys::{self as valkey_keys, QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID, QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_TEST as QUEUE_KEY_TEST};
+use super::constants::{DASHBOARD_QUEUE_DEPTH_TIMEOUT, DASHBOARD_STATS_TIMEOUT};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSettingsManage, RequireDashboardView};
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
@@ -141,6 +142,7 @@ pub async fn list_jobs(
 
 /// DELETE /v1/dashboard/jobs/{id} — Admin cancel a job (JWT-protected).
 pub async fn cancel_job(
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
     Path(jid): Path<JobId>,
 ) -> Result<StatusCode, AppError> {
@@ -148,6 +150,8 @@ pub async fn cancel_job(
         .use_case
         .cancel(&jid)
         .await?;
+    emit_audit(&state, &claims, "cancel", "inference_job", &jid.to_string(), &jid.to_string(),
+        &format!("job {} cancelled by admin", jid)).await;
     Ok(StatusCode::OK)
 }
 
@@ -305,7 +309,7 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
     use fred::prelude::*;
 
     let (paid, api, test): (i64, i64, i64) = match tokio::time::timeout(
-        std::time::Duration::from_secs(3),
+        DASHBOARD_QUEUE_DEPTH_TIMEOUT,
         async {
             tokio::join!(
                 async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen paid failed"); 0 }) },
@@ -370,7 +374,7 @@ pub async fn get_dashboard_overview(
     let default_hours: u32 = 24;
 
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+        DASHBOARD_STATS_TIMEOUT,
         async {
             tokio::join!(
                 dashboard_queries::fetch_stats(&state.pg_pool),
@@ -860,6 +864,7 @@ pub struct TriggerGroupingRequest {
 }
 
 pub async fn trigger_session_grouping(
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
     Json(body): Json<TriggerGroupingRequest>,
 ) -> impl IntoResponse {
@@ -884,6 +889,11 @@ pub async fn trigger_session_grouping(
             Err(e) => tracing::warn!("manual session grouping failed: {e}"),
         }
     });
+
+    emit_audit(&state, &claims, "trigger", "session_grouping",
+        "session_grouping", "session_grouping",
+        &format!("Manual session grouping triggered (before: {:?})", cutoff)).await;
+
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({ "message": "session grouping triggered" })),
@@ -929,7 +939,6 @@ struct SvcProbeEntry {
 pub async fn get_service_health(
     State(state): State<AppState>,
 ) -> Result<Json<ServiceHealthResponse>, AppError> {
-    use crate::infrastructure::outbound::valkey_keys;
     use fred::prelude::*;
 
     let pool = state.valkey_pool.as_ref()
@@ -1005,7 +1014,7 @@ pub async fn get_service_health(
     // Each agent pod registers itself via SADD + heartbeat key with TTL.
     // Stale entries (heartbeat expired) are auto-removed.
     let agent_ids: Vec<String> = pool
-        .smembers("veronex:agent:instances")
+        .smembers(valkey_keys::AGENT_INSTANCES_SET)
         .await
         .unwrap_or_default();
 
@@ -1013,12 +1022,12 @@ pub async fn get_service_health(
         let mut pods = Vec::with_capacity(agent_ids.len());
         let now_ms = chrono::Utc::now().timestamp_millis();
         for hostname in &agent_ids {
-            let hb_key = format!("veronex:agent:hb:{hostname}");
+            let hb_key = valkey_keys::agent_heartbeat(hostname);
             let ttl: i64 = pool.ttl(&hb_key).await.unwrap_or(-2);
             if ttl <= 0 {
                 // Heartbeat expired — stale agent, remove from SET
                 let _: Result<(), _> = pool
-                    .srem("veronex:agent:instances", hostname.as_str())
+                    .srem(valkey_keys::AGENT_INSTANCES_SET, hostname.as_str())
                     .await;
                 continue;
             }

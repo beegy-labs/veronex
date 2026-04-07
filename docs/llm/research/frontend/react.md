@@ -193,8 +193,89 @@ useEffect(() => {
 
 ---
 
+---
+
+## SSE Components — rAF Buffer + React.memo
+
+For components receiving high-frequency SSE/streaming updates, buffering with `requestAnimationFrame` prevents thrashing the reconciler:
+
+```tsx
+const buffer = useRef<Token[]>([])
+const rafRef = useRef<number | null>(null)
+
+// On each SSE token
+buffer.current.push(token)
+if (!rafRef.current) {
+  rafRef.current = requestAnimationFrame(() => {
+    setTokens(prev => [...prev, ...buffer.current])
+    buffer.current = []
+    rafRef.current = null
+  })
+}
+```
+
+Wrap the streaming component in `React.memo` to prevent parent re-renders from interrupting it:
+
+```tsx
+const StreamingOutput = React.memo(function StreamingOutput({ jobId }: Props) {
+  // ... SSE subscription + rAF buffer
+})
+```
+
+**Why**: Without buffering, every single SSE token triggers a React render. rAF coalesces tokens into one render per animation frame (~60fps cap), dropping reconciliation cost from O(tokens) to O(frames).
+
+---
+
+## List Key Stability
+
+```tsx
+// CORRECT — stable ID from server data
+items.map(item => <Row key={item.id} {...item} />)
+
+// CORRECT — if no server ID, generate once at creation
+const [items, setItems] = useState(() =>
+  initialItems.map(i => ({ ...i, _key: crypto.randomUUID() }))
+)
+items.map(item => <Row key={item._key} {...item} />)
+
+// WRONG — index key causes reconciliation bugs on reorder/delete
+items.map((item, i) => <Row key={i} {...item} />)
+
+// WRONG — random key every render remounts the component
+items.map(item => <Row key={Math.random()} {...item} />)
+```
+
+**Rule**: Keys must be stable across renders. Generate `crypto.randomUUID()` once at item creation, not inside `map()`.
+
+---
+
+## Relative Time Display — setInterval Cleanup
+
+For "X minutes ago" displays that auto-refresh:
+
+```tsx
+function RelativeTime({ timestamp }: { timestamp: Date }) {
+  const [label, setLabel] = useState(() => formatRelative(timestamp))
+
+  useEffect(() => {
+    const id = setInterval(() => setLabel(formatRelative(timestamp)), 30_000)
+    return () => clearInterval(id)  // REQUIRED — prevents leak on unmount
+  }, [timestamp])
+
+  return <time dateTime={timestamp.toISOString()}>{label}</time>
+}
+```
+
+**Rules**:
+- Always return `() => clearInterval(id)` from `useEffect` — without it, the interval fires after unmount
+- 30s interval is sufficient for relative labels (labels only change at 1m, 5m, 1h boundaries)
+- Use `<time dateTime={...}>` for semantic HTML + screen reader support
+
+---
+
 ## Sources
 
 - React docs: [useReducer](https://react.dev/reference/react/useReducer)
 - MDN: [ResizeObserver](https://developer.mozilla.org/en-US/docs/Web/API/ResizeObserver)
+- MDN: [crypto.randomUUID()](https://developer.mozilla.org/en-US/docs/Web/API/Crypto/randomUUID)
 - Verified: `web/hooks/use-inference-stream.ts`, `web/app/overview/components/provider-flow-panel.tsx`

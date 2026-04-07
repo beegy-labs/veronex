@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::enums::ProviderType;
 use crate::domain::value_objects::ProviderId;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::inbound::http::provider_handlers::get_provider;
 
+use super::audit_helpers::emit_audit;
 use super::error::db_error;
 use super::state::AppState;
 
@@ -111,6 +113,7 @@ pub async fn list_selected_models(
 
 /// `PATCH /v1/providers/{id}/selected-models/{model_name}` — toggle a model's enabled state.
 pub async fn set_model_enabled(
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Path((pid, model_name)): Path<(ProviderId, String)>,
     Json(req): Json<SetModelEnabledRequest>,
@@ -121,7 +124,13 @@ pub async fn set_model_enabled(
         .set_enabled(id, &model_name, req.is_enabled)
         .await
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            let action = if req.is_enabled { "enable" } else { "disable" };
+            emit_audit(&state, &claims, action, "provider_model_selection",
+                &id.to_string(), &model_name,
+                &format!("provider {id} model {model_name} set is_enabled={}", req.is_enabled)).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             tracing::error!(%id, %model_name, "set_model_enabled: {e}");
             db_error(e).into_response()

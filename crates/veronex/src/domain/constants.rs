@@ -188,6 +188,13 @@ pub const NODE_EXPORTER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Timeout for job cancellation in CancelGuard.
 pub const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Timeout for an infrastructure service probe (PostgreSQL SELECT 1, ClickHouse /ping, etc.).
+/// Used by health_checker to classify services as "ok" or "error" in the dashboard.
+pub const SERVICE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Periodic MCP tool-discovery refresh interval in the background task in main.rs.
+pub const MCP_TOOL_REFRESH_INTERVAL: Duration = Duration::from_secs(25);
+
 // ── Cache TTL ──────────────────────────────────────────────────────────────
 
 /// TTL for per-provider HwMetrics in Valkey (seconds).

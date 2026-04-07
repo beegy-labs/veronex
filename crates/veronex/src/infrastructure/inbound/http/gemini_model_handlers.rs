@@ -121,7 +121,7 @@ pub struct GeminiSyncStatusResponse {
 ///
 /// Runs synchronously (fast — just one lightweight API call per provider).
 /// Returns the updated status for each provider.
-pub async fn sync_status(RequireProviderManage(_claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<GeminiSyncStatusResponse>> {
+pub async fn sync_status(RequireProviderManage(claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<GeminiSyncStatusResponse>> {
     let providers = state.provider_registry.list_all().await.map_err(db_error)?;
 
     let gemini_active: Vec<_> = providers
@@ -148,6 +148,11 @@ pub async fn sync_status(RequireProviderManage(_claims): RequireProviderManage, 
     }
 
     tracing::info!(count = results.len(), "gemini status sync completed");
+
+    emit_audit(&state, &claims, "trigger", "gemini_sync_status",
+        "gemini", "gemini",
+        &format!("Gemini status sync ran for {} providers", results.len())).await;
+
     Ok(Json(GeminiSyncStatusResponse {
         synced_at: Utc::now(),
         results,

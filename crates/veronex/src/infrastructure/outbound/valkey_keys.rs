@@ -88,6 +88,20 @@ pub fn gemini_rpd(provider_id: Uuid, model: &str, date: &str) -> String {
     format!("veronex:gemini:rpd:{provider_id}:{model}:{date}")
 }
 
+// ── Agent pod coordination ───────────────────────────────────────────────────
+
+/// SET of all veronex-agent hostnames (SADD/SREM on heartbeat refresh).
+/// Written by: veronex-agent. Read by: dashboard GET /v1/dashboard/pods.
+/// Cross-boundary: veronex-agent cannot import this module — must maintain
+/// the same string in agent's heartbeat.rs. Format is pinned by test below.
+pub const AGENT_INSTANCES_SET: &str = "veronex:agent:instances";
+
+/// Heartbeat key for a veronex-agent pod (EX 180s, refreshed every 60s).
+/// Written by: veronex-agent. Read by: dashboard GET /v1/dashboard/pods.
+pub fn agent_heartbeat(hostname: &str) -> String {
+    format!("veronex:agent:hb:{hostname}")
+}
+
 // ── Multi-instance coordination ─────────────────────────────────────────────
 
 /// SET of all API instance IDs (SADD on heartbeat refresh).
@@ -169,6 +183,9 @@ pub fn vram_leases(provider_id: Uuid) -> String {
     format!("veronex:vram_leases:{provider_id}")
 }
 
+/// Scan pattern matching all VRAM lease ZSETs (used by reap_all_expired).
+pub const VRAM_LEASES_SCAN_PATTERN: &str = "veronex:vram_leases:*";
+
 // ── Conversation record cache ────────────────────────────────────────────────
 
 /// Cached ConversationRecord for a multi-turn session (zstd-compressed JSON).
@@ -234,6 +251,19 @@ pub fn mcp_key_top_k(api_key_id: Uuid) -> String {
 pub fn mcp_result(tool_name: &str, args_hash: &str) -> String {
     format!("veronex:mcp:result:{tool_name}:{args_hash}")
 }
+
+/// Cached MCP tool summary (condensed schema for context injection).
+/// TTL = 3600 s. Written by: mcp_handlers on tool refresh. Read by: list endpoint cache.
+pub fn mcp_tools_summary(server_id: Uuid) -> String {
+    format!("veronex:mcp:tools_summary:{server_id}")
+}
+
+// ── Pub/sub prefix helpers ───────────────────────────────────────────────────
+
+/// String prefix of all cancel pub/sub channels.
+/// Used by relay.rs to strip the prefix and extract the job_id.
+/// Must match the prefix produced by `pubsub_cancel()`.
+pub const PUBSUB_CANCEL_PREFIX: &str = "veronex:pubsub:cancel:";
 
 // ── Service health (per-instance, written by health_checker) ────────────────
 
@@ -310,5 +340,18 @@ mod tests {
             mcp_result("mcp_weather_get_weather", "ab12cd34"),
             "veronex:mcp:result:mcp_weather_get_weather:ab12cd34"
         );
+    }
+
+    /// AGENT_INSTANCES_SET must match the constant in veronex-agent's heartbeat.rs.
+    /// Guards against cross-crate key drift since agent cannot import this module.
+    #[test]
+    fn agent_instances_set_matches_agent_convention() {
+        assert_eq!(AGENT_INSTANCES_SET, "veronex:agent:instances");
+    }
+
+    /// agent_heartbeat() must match the key format in veronex-agent's heartbeat.rs.
+    #[test]
+    fn agent_heartbeat_format_matches_agent_convention() {
+        assert_eq!(agent_heartbeat("my-host"), "veronex:agent:hb:my-host");
     }
 }

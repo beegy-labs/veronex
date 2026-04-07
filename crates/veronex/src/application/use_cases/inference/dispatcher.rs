@@ -376,7 +376,9 @@ pub(super) async fn queue_dispatcher_loop(
                     }
                     Ok(None) => {
                         tracing::warn!(%uuid, "queued job not in DB — removing from ZSET");
-                        let _ = valkey.zset_cancel(job_id_str, "").await;
+                        if let Err(e) = valkey.zset_cancel(job_id_str, "").await {
+                            tracing::warn!(%uuid, error = %e, "dispatcher: zset_cancel failed");
+                        }
                         continue;
                     }
                     Err(e) => { tracing::error!(%uuid, "failed to load job: {e}"); continue; }
@@ -414,7 +416,13 @@ pub(super) async fn queue_dispatcher_loop(
         let mut dispatched = false;
 
         for (job_id_str, _final_score, job, gemini_tier, key_tier) in scored {
-            let uuid = Uuid::parse_str(&job_id_str).expect("already validated");
+            let uuid = match Uuid::parse_str(&job_id_str) {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::error!(job_id = %job_id_str, error = %e, "dispatcher: invalid UUID in queue — skipping");
+                    continue;
+                }
+            };
             let model = job.model_name.as_str();
 
             // Find provider + claim VRAM
@@ -428,7 +436,8 @@ pub(super) async fn queue_dispatcher_loop(
                 // No eligible provider → atomically remove from ZSET and fail
                 let claimed = valkey.zset_claim(&job_id_str, QUEUE_PROCESSING, model).await.unwrap_or(false);
                 if claimed {
-                    let _ = valkey.list_remove(QUEUE_PROCESSING, &job_id_str).await;
+                    valkey.list_remove(QUEUE_PROCESSING, &job_id_str).await
+                        .unwrap_or_else(|e| tracing::warn!(%uuid, error = %e, "dispatcher: list_remove failed"));
                     let vk_opt: Option<Arc<dyn ValkeyPort>> = Some(valkey.clone());
                     fail_job_no_provider(&jobs, &job_repo, &vk_opt, uuid, "no eligible provider for this model").await;
                     dispatched = true;
@@ -471,7 +480,9 @@ pub(super) async fn queue_dispatcher_loop(
             }
 
             let owner_key = crate::domain::constants::job_owner_key(uuid);
-            let _ = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await;
+            if let Err(e) = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await {
+                tracing::warn!(%uuid, key = %owner_key, error = %e, "dispatcher: failed to set job owner key");
+            }
 
             let (jobs_c, repo_c, ms_c, vk_c, obs_c, mm_c) = (
                 jobs.clone(), job_repo.clone(), message_store.clone(),
@@ -495,8 +506,12 @@ pub(super) async fn queue_dispatcher_loop(
                     Ok(None) => {} // cancelled or ownership lost
                     Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
                 }
-                let _ = vk_c.list_remove(QUEUE_PROCESSING, &job_id_str).await;
-                let _ = vk_c.kv_del(&owner_key).await;
+                if let Err(e) = vk_c.list_remove(QUEUE_PROCESSING, &job_id_str).await {
+                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to remove job from processing queue");
+                }
+                if let Err(e) = vk_c.kv_del(&owner_key).await {
+                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to delete job owner key");
+                }
             });
 
             dispatched = true;

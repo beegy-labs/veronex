@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::domain::value_objects::{ApiKeyId, McpId};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSettingsManage;
 use crate::infrastructure::outbound::valkey_keys;
+use super::audit_helpers::emit_audit;
 use super::error::AppError;
 use super::state::AppState;
 
@@ -16,10 +17,11 @@ use super::state::AppState;
 async fn invalidate_mcp_acl_cache(state: &AppState, key_id: Uuid) {
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
-        let _ = pool.del::<(), _>(&[
+        pool.del::<(), _>(&[
             valkey_keys::mcp_key_acl(key_id),
             valkey_keys::mcp_key_top_k(key_id),
-        ]).await;
+        ]).await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, "mcp_access: failed to invalidate acl/top_k cache"));
     }
 }
 
@@ -91,7 +93,7 @@ pub async fn list_key_mcp_access(
 
 /// POST /v1/keys/{key_id}/mcp — Grant a key access to an MCP server.
 pub async fn grant_key_mcp_access(
-    RequireSettingsManage(_): RequireSettingsManage,
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
     Path(kid): Path<ApiKeyId>,
     Json(body): Json<GrantMcpAccessBody>,
@@ -123,6 +125,10 @@ pub async fn grant_key_mcp_access(
 
     invalidate_mcp_acl_cache(&state, key_uuid).await;
 
+    emit_audit(&state, &claims, "grant", "mcp_key_access",
+        &server_uuid.to_string(), &server.name,
+        &format!("Granted key {} access to MCP server '{}'", kid, server.name)).await;
+
     Ok((StatusCode::CREATED, Json(McpAccessEntry {
         server_id: McpId::from_uuid(server.id),
         server_name: server.name,
@@ -134,7 +140,7 @@ pub async fn grant_key_mcp_access(
 
 /// DELETE /v1/keys/{key_id}/mcp/{server_id} — Revoke a key's access to an MCP server.
 pub async fn revoke_key_mcp_access(
-    RequireSettingsManage(_): RequireSettingsManage,
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
     Path((kid, mid)): Path<(ApiKeyId, McpId)>,
 ) -> Result<StatusCode, AppError> {
@@ -148,6 +154,10 @@ pub async fn revoke_key_mcp_access(
         .await?;
 
     invalidate_mcp_acl_cache(&state, key_uuid).await;
+
+    emit_audit(&state, &claims, "revoke", "mcp_key_access",
+        &server_uuid.to_string(), &server_uuid.to_string(),
+        &format!("Revoked key {} access to MCP server {}", kid, mid)).await;
 
     Ok(StatusCode::NO_CONTENT)
 }

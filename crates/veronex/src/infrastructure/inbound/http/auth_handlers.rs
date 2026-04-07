@@ -353,7 +353,9 @@ pub async fn login(
         .verify_password(req.password.as_bytes(), &parsed_hash)
         .map_err(|_| AppError::Unauthorized("invalid credentials".into()))?;
 
-    let _ = state.account_repo.update_last_login(&account.id).await;
+    if let Err(e) = state.account_repo.update_last_login(&account.id).await {
+        tracing::warn!(error = %e, "login: failed to update last_login");
+    }
 
     let resolved = resolve_roles_for_account(&state.pg_pool, account.id).await?;
 
@@ -401,7 +403,9 @@ pub async fn logout(
 
         // Revoke session in DB + add jti to Valkey blocklist.
         if let Ok(Some(session)) = state.session_repo.get_by_refresh_hash(&hash).await {
-            let _ = state.session_repo.revoke(&session.id).await;
+            if let Err(e) = state.session_repo.revoke(&session.id).await {
+                tracing::warn!(error = %e, "logout: failed to revoke session");
+            }
             revoke_jti(&state, session.jti, session.expires_at).await;
             // Resolve account username for audit (fallback to UUID if lookup fails).
             let account_name = state.account_repo.get_by_id(&session.account_id).await
@@ -451,7 +455,9 @@ pub async fn refresh(
     }
 
     // Rolling refresh: revoke old session, issue new one.
-    let _ = state.session_repo.revoke(&old_session.id).await;
+    if let Err(e) = state.session_repo.revoke(&old_session.id).await {
+        tracing::warn!(error = %e, "refresh: failed to revoke old session");
+    }
     revoke_jti(&state, old_session.jti, old_session.expires_at).await;
 
     let resolved = resolve_roles_for_account(&state.pg_pool, account.id).await?;
@@ -643,7 +649,9 @@ pub async fn setup(
     let refresh_hash = hash_token(&refresh_raw);
 
     let session = build_session(account.id, jti, refresh_hash, None, expires_at);
-    let _ = state.session_repo.create(&session).await;
+    if let Err(e) = state.session_repo.create(&session).await {
+        tracing::warn!(error = %e, "setup: failed to persist session");
+    }
 
     let mut headers = HeaderMap::new();
     set_auth_cookies(&mut headers, &access_token, &refresh_raw);

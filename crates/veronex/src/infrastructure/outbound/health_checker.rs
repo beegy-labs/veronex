@@ -16,6 +16,7 @@ use crate::infrastructure::outbound::valkey_keys;
 use crate::domain::constants::{
     OLLAMA_HEALTH_CHECK_TIMEOUT as OLLAMA_HEALTH_TIMEOUT,
     GEMINI_HEALTH_CHECK_TIMEOUT as GEMINI_HEALTH_TIMEOUT,
+    SERVICE_PROBE_TIMEOUT,
     THERMAL_HARD_COOLDOWN_SECS,
     THERMAL_THROTTLE_KEY_TTL_SECS,
 };
@@ -188,7 +189,7 @@ async fn check_and_store_services(
     let pg_probe = {
         let start = std::time::Instant::now();
         let res = tokio::time::timeout(
-            Duration::from_secs(3),
+            SERVICE_PROBE_TIMEOUT,
             sqlx::query("SELECT 1").execute(pg_pool),
         ).await;
         let ms = start.elapsed().as_millis() as u32;
@@ -219,7 +220,7 @@ async fn check_and_store_services(
         let probe = {
             let start = std::time::Instant::now();
             let res = client.get(format!("{url}/health"))
-                .timeout(Duration::from_secs(3))
+                .timeout(SERVICE_PROBE_TIMEOUT)
                 .send().await;
             let ms = start.elapsed().as_millis() as u32;
             let s = match res {
@@ -238,7 +239,7 @@ async fn check_and_store_services(
         let probe = {
             let start = std::time::Instant::now();
             let res = client.get(format!("{}/minio/health/live", endpoint.trim_end_matches('/')))
-                .timeout(Duration::from_secs(3))
+                .timeout(SERVICE_PROBE_TIMEOUT)
                 .send().await;
             let ms = start.elapsed().as_millis() as u32;
             let s = match res {
@@ -257,7 +258,7 @@ async fn check_and_store_services(
         let probe = {
             let start = std::time::Instant::now();
             let res = client.get(format!("{}/state/v1/health", url.trim_end_matches('/')))
-                .timeout(Duration::from_secs(3))
+                .timeout(SERVICE_PROBE_TIMEOUT)
                 .send().await;
             let ms = start.elapsed().as_millis() as u32;
             let s = match res {
@@ -279,7 +280,8 @@ async fn check_and_store_services(
         tracing::warn!(error = %e, "failed to store service health");
         return;
     }
-    let _: Result<(), _> = valkey_pool.expire(&key, SERVICE_HEALTH_TTL_SECS, None).await;
+    valkey_pool.expire(&key, SERVICE_HEALTH_TTL_SECS, None).await
+        .unwrap_or_else(|e| tracing::warn!(error = %e, %key, "Valkey EXPIRE service health failed"));
 }
 
 // ── Background task ────────────────────────────────────────────────────────────

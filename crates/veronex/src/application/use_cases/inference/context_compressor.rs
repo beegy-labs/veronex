@@ -159,7 +159,9 @@ async fn try_compress(
 
     // 6. DEL Valkey cache — next reader will load the fresh S3 record with compressed data
     if let Some(vk) = valkey {
-        let _ = vk.kv_del(&cache_key).await;
+        if let Err(e) = vk.kv_del(&cache_key).await {
+            tracing::warn!(key = %cache_key, error = %e, "context_compressor: failed to invalidate Valkey cache");
+        }
     }
 
     Ok(())

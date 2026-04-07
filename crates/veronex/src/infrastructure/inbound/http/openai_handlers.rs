@@ -909,7 +909,9 @@ async fn load_conversation_context(
                                 if let Some(ref vk) = state.valkey_pool {
                                     use fred::prelude::*;
                                     if let Ok(json) = serde_json::to_string(&r) {
-                                        let _ = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(300)), None, false).await;
+                                        if let Err(e) = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(300)), None, false).await {
+                                            tracing::warn!(key = %cache_key, error = %e, "openai: failed to warm conversation cache");
+                                        }
                                     }
                                 }
                                 r
@@ -1027,7 +1029,7 @@ async fn load_conversation_context(
         });
 
     // Ensure conversation exists in DB (INSERT ON CONFLICT DO NOTHING)
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO conversations (id, account_id, api_key_id, title, source, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, now(), now()) ON CONFLICT (id) DO NOTHING"
     )
@@ -1037,7 +1039,9 @@ async fn load_conversation_context(
     .bind(&title)
     .bind(caller.source().as_str())
     .execute(&state.pg_pool)
-    .await;
+    .await {
+        tracing::warn!(conversation_id = %cid, error = %e, "openai: failed to upsert conversation record");
+    }
 
     Ok((Some(cid), handoff_occurred))
 }

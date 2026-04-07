@@ -113,6 +113,9 @@ pub struct AppState {
     /// Global concurrent SSE connection counter.
     /// Prevents resource exhaustion from too many open SSE streams.
     pub sse_connections: Arc<AtomicU32>,
+    /// Per-API-key in-flight semaphore (Slowloris defense).
+    /// Keyed by API key UUID; `try_acquire_owned()` immediately 429s when limit hit.
+    pub key_in_flight: Arc<DashMap<Uuid, Arc<tokio::sync::Semaphore>>>,
     /// Persistent VRAM budget state per provider (safety_permil, source, kv_cache_type).
     pub vram_budget_repo: Arc<dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository>,
     /// MCP bridge adapter — present when at least one MCP server is configured.

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
@@ -8,6 +10,8 @@ use serde_json::json;
 use crate::infrastructure::inbound::http::middleware::infer_auth::InferCaller;
 use crate::infrastructure::inbound::http::state::AppState;
 use crate::infrastructure::outbound::valkey_keys;
+
+use super::super::constants::MAX_KEY_CONCURRENT;
 
 /// 1-minute sliding window for RPM.
 const RPM_WINDOW_MS: f64 = 60_000.0;
@@ -89,6 +93,26 @@ pub async fn rate_limiter(
             Ok(true) => {}
         }
     }
+
+    // ── Per-key concurrent connection limit (Slowloris defense) ──────────
+    //
+    // Counted after RPM/TPM: a request that fails rate limiting doesn't consume
+    // an in-flight slot. Permit drops automatically when the response completes.
+    let sem = state
+        .key_in_flight
+        .entry(api_key.id)
+        .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(MAX_KEY_CONCURRENT as usize)))
+        .clone();
+    let _permit = match sem.try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({"error": "concurrent request limit exceeded"})),
+            )
+                .into_response()
+        }
+    };
 
     next.run(req).await
 }

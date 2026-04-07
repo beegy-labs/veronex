@@ -1,11 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
-use futures::StreamExt as _;
 
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;

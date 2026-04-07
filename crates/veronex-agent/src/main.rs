@@ -21,6 +21,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Hard timeout on the entire scrape cycle to prevent infinite hangs.
+const SCRAPE_CYCLE_TIMEOUT: Duration = Duration::from_secs(120);
+
 use anyhow::Result;
 use serde::Deserialize;
 use tokio::signal;
@@ -284,7 +287,7 @@ async fn main() -> Result<()> {
                 tracing::info!(replicas, "scrape_cycle starting (with 120s timeout)");
                 // Global timeout on the entire scrape cycle — prevents infinite hang
                 match tokio::time::timeout(
-                    std::time::Duration::from_secs(120),
+                    SCRAPE_CYCLE_TIMEOUT,
                     scrape_cycle(&client, &config, replicas, &scrape_semaphore, valkey_pool.as_ref())
                 ).await {
                     Ok(r) => r,

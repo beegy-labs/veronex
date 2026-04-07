@@ -281,7 +281,9 @@ async fn finalize_job(
                 const CONV_CACHE_TTL_SECS: i64 = 300;
                 let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(conv_id);
                 if let Ok(json) = serde_json::to_string(&record) {
-                    let _ = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await;
+                    if let Err(e) = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await {
+                        tracing::warn!(error = %e, "runner: failed to cache conversation record");
+                    }
                 }
 
                 // Phase 3: spawn per-turn compression (async, non-blocking).
@@ -583,7 +585,9 @@ pub(super) async fn run_job(
                 if ts.last_owner_refresh.elapsed() >= OWNER_REFRESH_INTERVAL {
                     if let Some(ref vk) = valkey {
                         let key = crate::domain::constants::job_owner_key(uuid);
-                        let _ = vk.kv_set(&key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, true).await;
+                        if let Err(e) = vk.kv_set(&key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, true).await {
+                            tracing::warn!(%uuid, error = %e, "runner: failed to refresh job owner TTL");
+                        }
                     }
                     ts.last_owner_refresh = std::time::Instant::now();
                 }

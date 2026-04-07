@@ -681,7 +681,8 @@ pub async fn sync_provider(
         let cache_key = crate::infrastructure::outbound::valkey_keys::provider_models(provider_id);
         let json = serde_json::to_string(&model_names).unwrap_or_default();
         let ttl = crate::infrastructure::inbound::http::constants::MODELS_CACHE_TTL;
-        let _: Result<(), _> = pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await;
+        pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, %cache_key, "Valkey SET provider_models cache failed"));
     }
 
     // 3. VRAM probing: prefer agent capacity_state from Valkey (avoids O(N_models) HTTP calls).
@@ -1100,7 +1101,8 @@ pub async fn sync_provider(
                 "configured_ctx": arch.configured_ctx,
                 "max_ctx": arch.max_ctx,
             }).to_string();
-            let _: Result<(), _> = pool.set(&ctx_key, ctx_json, Some(Expiration::EX(600)), None, false).await;
+            pool.set(&ctx_key, ctx_json, Some(Expiration::EX(600)), None, false).await
+                .unwrap_or_else(|e| tracing::warn!(error = %e, %ctx_key, "Valkey SET ctx cache failed"));
         }
 
         // Collect snapshot for batch LLM analysis

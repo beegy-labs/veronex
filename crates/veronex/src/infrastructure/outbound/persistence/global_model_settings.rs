@@ -19,7 +19,7 @@ impl PostgresGlobalModelSettingsRepository {
 impl GlobalModelSettingsRepository for PostgresGlobalModelSettingsRepository {
     async fn list(&self) -> anyhow::Result<Vec<GlobalModelSetting>> {
         let rows = sqlx::query(
-            "SELECT model_name, is_enabled FROM global_model_settings ORDER BY model_name"
+            "SELECT model_name, is_enabled FROM global_model_settings ORDER BY model_name LIMIT 10000"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -54,7 +54,7 @@ impl GlobalModelSettingsRepository for PostgresGlobalModelSettingsRepository {
 
     async fn list_disabled(&self) -> anyhow::Result<Vec<String>> {
         let rows = sqlx::query(
-            "SELECT model_name FROM global_model_settings WHERE is_enabled = false ORDER BY model_name"
+            "SELECT model_name FROM global_model_settings WHERE is_enabled = false ORDER BY model_name LIMIT 10000"
         )
         .fetch_all(&self.pool)
         .await?;

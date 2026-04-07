@@ -360,13 +360,17 @@ async fn planner_tick(
         let preload_key = preload_lock_key(model, server.id);
         match valkey.kv_get(&preload_key).await {
             Ok(Some(_)) => {
-                let _ = valkey.kv_del(&decision_key).await;
+                if let Err(e) = valkey.kv_del(&decision_key).await {
+                    tracing::warn!(error = %e, "placement: failed to release decision lock");
+                }
                 continue;
             }
             _ => {}
         }
         if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL, false).await.is_err() {
-            let _ = valkey.kv_del(&decision_key).await;
+            if let Err(e) = valkey.kv_del(&decision_key).await {
+                tracing::warn!(error = %e, "placement: failed to release decision lock on preload conflict");
+            }
             continue;
         }
 
@@ -395,8 +399,12 @@ async fn planner_tick(
                 &http_c, &url, &model_c, provider_id, &vram_c, np,
             ).await;
             // Release locks
-            let _ = valkey_c.kv_del(&preload_key_c).await;
-            let _ = valkey_c.kv_del(&decision_key_c).await;
+            if let Err(e) = valkey_c.kv_del(&preload_key_c).await {
+                tracing::warn!(error = %e, "placement: failed to release preload lock");
+            }
+            if let Err(e) = valkey_c.kv_del(&decision_key_c).await {
+                tracing::warn!(error = %e, "placement: failed to release decision lock after preload");
+            }
 
             if success {
                 vram_c.mark_model_loaded(provider_id, &model_c, 0); // weight will be updated by sync loop
@@ -478,7 +486,9 @@ async fn planner_tick(
                 let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
                     &http_c, &url, &model_c, provider_id, &vram_c, np,
                 ).await;
-                let _ = valkey_c.kv_del(&preload_key_c).await;
+                if let Err(e) = valkey_c.kv_del(&preload_key_c).await {
+                    tracing::warn!(error = %e, "placement: failed to release preload lock");
+                }
                 if success {
                     vram_c.mark_model_loaded(provider_id, &model_c, 0);
                 }

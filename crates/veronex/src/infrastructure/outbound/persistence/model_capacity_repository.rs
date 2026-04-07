@@ -91,7 +91,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
 
     async fn list_all(&self) -> Result<Vec<ModelVramProfileEntry>> {
         let rows = sqlx::query_as::<_, VramProfileRow>(
-            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles ORDER BY provider_id, model_name"),
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles ORDER BY provider_id, model_name LIMIT 10000"),
         )
         .fetch_all(&self.pool)
         .await
@@ -102,7 +102,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
 
     async fn list_by_provider(&self, provider_id: Uuid) -> Result<Vec<ModelVramProfileEntry>> {
         let rows = sqlx::query_as::<_, VramProfileRow>(
-            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = $1 ORDER BY model_name"),
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = $1 ORDER BY model_name LIMIT 10000"),
         )
         .bind(provider_id)
         .fetch_all(&self.pool)
@@ -117,7 +117,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
             return Ok(vec![]);
         }
         let rows = sqlx::query_as::<_, VramProfileRow>(
-            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = ANY($1) ORDER BY provider_id, model_name"),
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = ANY($1) ORDER BY provider_id, model_name LIMIT 10000"),
         )
         .bind(ids)
         .fetch_all(&self.pool)

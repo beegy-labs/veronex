@@ -1,6 +1,7 @@
 # Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-26 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-04-07 | Classification: Operational | Exception: >200 lines (pattern registry)
+> Last code-review audit: 2026-04-07 — 6 rounds, confirmed clean.
 > Rust Edition 2024 · Axum 0.8 · sqlx 0.8
 > Frontend patterns -> `policies/patterns-frontend.md`
 
@@ -126,6 +127,62 @@ pub async fn get_provider(
 // Propagate span into spawned tasks
 let span = tracing::info_span!("run_job", job_id = %job_id);
 tokio::spawn(async move { run_job(state, job_id).await }.instrument(span));
+```
+
+## Mutex Rules — `std` vs `tokio`
+
+**Default: use `std::sync::Mutex`.** Only reach for `tokio::sync::Mutex` when the guard must be held across an `.await`.
+
+```rust
+// CORRECT — std Mutex for short-lived, sync-only critical sections
+let value = {
+    let g = std::sync::Mutex::lock(&state).unwrap();
+    g.counter  // clone/copy before dropping
+};  // guard dropped — no await while locked
+expensive_async_op(value).await;
+
+// CORRECT — tokio Mutex only when guard spans an await
+let g = tokio_mutex.lock().await;
+some_async_fn().await;  // guard still held — yields instead of blocking the thread
+```
+
+| Rule | Detail |
+|------|--------|
+| `std::sync::Mutex` (default) | No await-held risk; lower overhead |
+| `tokio::sync::Mutex` | Only when you must hold the guard across `.await` |
+| Never expose guard to async callers | Wrap in a struct; lock inside non-async methods only |
+| Never acquire the same `tokio::sync::Mutex` twice in one task | Deadlock — second `lock().await` parks forever |
+
+**Fetch/Apply split** — when a `tokio::Mutex` guards in-memory state that needs refreshing from an async source, separate the async fetch from the sync apply to minimize lock hold time:
+
+```rust
+// CORRECT — async I/O outside the lock, sync state update inside
+async fn refresh(&self) {
+    // 1. Lock-free async fetch — no lock held during network I/O
+    let fresh = self.fetch_from_remote().await;
+
+    // 2. Apply synchronously with lock held — no await inside
+    let mut state = self.state.lock().await;
+    if let Some(data) = fresh {
+        Self::apply_update(&mut state, &data);
+    }
+}   // guard drops here
+
+// WRONG — holds lock across HTTP await (blocks Tokio thread during I/O)
+async fn refresh_bad(&self) {
+    let mut state = self.state.lock().await;   // lock acquired
+    let fresh = self.http_client.get(...).await?;  // await while locked
+    state.data = fresh;
+}
+```
+
+**`Notify` + `std::Mutex` pattern** — preferred over `tokio::Mutex` for state-machine signaling:
+```rust
+let state = Arc::new(Mutex::new(State::default()));
+let notify = Arc::new(Notify::new());
+{ state.lock().unwrap().ready = true; }  // sync lock, no await inside
+notify.notify_one();
+notify.notified().await;                 // await is outside the lock
 ```
 
 ## DashMap (not `Mutex<HashMap>`)
@@ -264,6 +321,90 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 | `GEMINI_HEALTH_TIMEOUT` | 10s | Gemini API key validation |
 | `NODE_EXPORTER_METRICS_TIMEOUT` | 5s | node-exporter metrics scrape |
 
+## TimeoutLayer — `tower_http` over `tower`
+
+Use `tower_http::timeout::TimeoutLayer` (returns `408 Request Timeout` automatically) instead of `tower::timeout::TimeoutLayer` (requires a `HandleErrorLayer` wrapper).
+
+```rust
+// CORRECT — tower_http auto-returns 408, no extra wiring
+use tower_http::timeout::TimeoutLayer;
+.layer(TimeoutLayer::new(JWT_ROUTER_TIMEOUT))
+
+// WRONG — requires manual HandleErrorLayer to map error → HTTP response
+use tower::timeout::TimeoutLayer;
+.layer(HandleErrorLayer::new(|_| async { StatusCode::REQUEST_TIMEOUT }))
+.layer(tower::timeout::TimeoutLayer::new(JWT_ROUTER_TIMEOUT))
+```
+
+**Streaming vs. non-streaming:** Apply `TimeoutLayer` only to non-streaming routes. SSE/chunked routes must be outside the timeout layer (or use a much larger value), as `tower_http::TimeoutLayer` fires on total response duration.
+
+```rust
+// CORRECT — SSE route merged into a separate Router without TimeoutLayer
+let jwt_router = Router::new()
+    .route("/v1/something", get(handler))
+    .route_layer(/* auth */)
+    .layer(TimeoutLayer::new(JWT_ROUTER_TIMEOUT));  // fires on total duration
+
+// Merge SSE route WITHOUT the timeout layer
+let app = Router::new()
+    .merge(jwt_router)
+    .merge(
+        Router::new()
+            .route("/v1/dashboard/jobs/stream", get(job_events_sse))
+            .route_layer(middleware::from_fn_with_state(state.clone(), jwt_auth)),
+        // No TimeoutLayer — stream runs until client disconnects
+    );
+
+// WRONG — SSE inside the same .layer(TimeoutLayer) block
+// → stream will be killed after JWT_ROUTER_TIMEOUT (e.g. 30s)
+```
+
+## Per-Key Concurrent Connection Limit (LLM Gateway)
+
+Protects against Slowloris-style abuse and noisy-neighbor tenant exhaustion (OWASP API4:2023 / LLM10:2025). RPM alone cannot defend against slow-sender attacks.
+
+```rust
+// Middleware state — per-key semaphore via DashMap
+#[derive(Clone)]
+pub struct PerKeyConcurrency {
+    semaphores: Arc<DashMap<String, Arc<Semaphore>>>,
+    max: usize,
+}
+impl PerKeyConcurrency {
+    pub fn new(max: usize) -> Self { Self { semaphores: Arc::new(DashMap::new()), max } }
+    fn semaphore(&self, key: &str) -> Arc<Semaphore> {
+        self.semaphores.entry(key.to_owned())
+            .or_insert_with(|| Arc::new(Semaphore::new(self.max)))
+            .clone()
+    }
+}
+
+// In middleware: try_acquire (hard 429, no queue) — never queue under LLM load
+let sem = state.semaphore(&api_key);
+let _permit = sem.try_acquire_owned()
+    .map_err(|_| AppError::TooManyRequests { retry_after: 1 })?;
+// permit drops when response completes — slot released automatically
+```
+
+| Tier | Max concurrent | Rationale |
+|------|---------------|-----------|
+| Standard / free | 4 | Prevents budget exhaustion on expensive models |
+| Paid / team | 8 | Matches provider soft limits |
+| Internal | 16 | Full throughput, monitored |
+
+Rule: use `try_acquire` (immediate 429), not `acquire` (queue). Queued permits under flood hold tasks indefinitely.
+
+**Anti-pattern — AtomicU32 + manual RAII guard:**
+```rust
+// WRONG — race window between load and store; RAII struct needed; harder to reason about
+struct InFlightGuard { counter: Arc<AtomicU32> }
+impl Drop for InFlightGuard { fn drop(&mut self) { self.counter.fetch_sub(1, Ordering::Relaxed); } }
+let current = counter.fetch_add(1, Ordering::Relaxed);
+if current >= MAX { counter.fetch_sub(1, Ordering::Relaxed); return 429; }
+let _guard = InFlightGuard { counter: counter.clone() };
+```
+Use `Semaphore::try_acquire_owned()` — the permit is the guard; no custom RAII needed.
+
 ## Background Tasks -- JoinSet + CancellationToken
 
 ```rust
@@ -298,12 +439,21 @@ A separate task counts broadcast events (`pending` -> incoming, terminal -> comp
 
 ```rust
 PgPoolOptions::new()
-  .max_connections(10).min_connections(2)
-  .acquire_timeout(Duration::from_secs(5))
-  .idle_timeout(Duration::from_secs(600))
-  .max_lifetime(Duration::from_secs(1800))
+  .max_connections(max_conns)        // (vCPU × 2) + 1, cap at 20; read from PG_POOL_MAX env
+  .min_connections(2)                // warm floor — avoids cold-start latency on bursts
+  .acquire_timeout(Duration::from_secs(5))   // fail fast — shorter than HTTP timeout
+  .idle_timeout(Duration::from_secs(600))    // recycle idle conns that may have gone stale
+  .max_lifetime(Duration::from_secs(1800))   // force rotation to avoid long-lived state
+  .statement_cache_capacity(512)     // reduce parse/plan overhead; 0 if behind PgBouncer tx-mode
+  .test_before_acquire(false)        // skip ping on acquire — saves one round-trip per query
   .connect(url).await?
 ```
+
+| Rule | Detail |
+|------|--------|
+| `acquire_timeout` | 5s — must be shorter than HTTP timeout so callers fail fast |
+| `statement_cache_capacity` | 512 for fixed SQL queries; set to 0 if behind PgBouncer in transaction-pooling mode |
+| `test_before_acquire(false)` | Default `true` adds a ping on every acquire. Safe to disable when `max_lifetime` + `idle_timeout` handle stale connections |
 
 ## Adding a New Port + Adapter
 
@@ -363,6 +513,10 @@ emit_audit(
 Location: `infrastructure/inbound/http/super::emit_audit` (imported as `super::emit_audit`).
 Call after the DB mutation succeeds, before returning the response. Non-blocking — fire-and-forget via `.await` is fine.
 
+**Common omission:** `emit_audit` is frequently missing from handlers added without consulting this doc. A 2026-04-07 audit found it absent in 9 handlers (across `key_mcp_access_handlers`, `key_provider_access_handlers`, `ollama_model_handlers`, `mcp_handlers`, `gemini_model_handlers`, `dashboard_handlers`). Run the quarterly audit grep after adding any mutating handler.
+
+**Prerequisite:** the handler must capture `RequireXxx(claims)` — not `RequireXxx(_)` — to have `claims` available for `emit_audit`. If no `RequireXxx` extractor exists at all, the handler has a missing auth guard (P1 security issue).
+
 ## Batch DB Writes (N+1 Prevention)
 
 Never execute N sequential queries in a loop. Use UNNEST for inserts, `ANY($1)` for filters and aggregates.
@@ -400,8 +554,11 @@ for id in &ids {
 | Scope | Minimum LIMIT |
 |-------|--------------|
 | Admin list queries (servers, keys, accounts) | 500 |
+| Internal / cross-provider batch queries (model lists, capacity profiles, heartbeats) | 10000 |
 | Role membership counts | 200 |
 | Aggregate / GROUP BY | Commensurate with distinct count (e.g. 8760 for hourly, 10 for statuses) |
+
+**Recurrence:** a 2026-04-07 audit found missing LIMITs in 10+ repositories (`account_repository`, `api_key_repository`, `provider_registry`, `gemini_policy_repository`, `session_repository`, `model_capacity_repository`, `gpu_server_registry`, `global_model_settings`, `ollama_model_repository`, `provider_model_selection`). Run the quarterly audit grep after adding any `fetch_all` query.
 
 ## Domain Enum Patterns
 
@@ -867,9 +1024,15 @@ grep -rn "Duration::from_secs([0-9]" crates/ --include="*.rs" | grep -v "const "
 grep -rn "COUNT(\*)" crates/veronex/src/ --include="*.rs"
 # → dashboard_queries.rs must use pg_class.reltuples instead
 
-# P2 — Unbounded SELECT: all fetch_all must have LIMIT
-grep -rn "fetch_all" crates/veronex/src/infrastructure/inbound/ --include="*.rs" -B5 | grep -v "LIMIT\|ANY\|UNNEST\|--"
-# → each result must have a LIMIT clause in the SQL string above it
+# P2 — Unbounded SELECT: all fetch_all must have LIMIT (search persistence layer)
+grep -rn "fetch_all" crates/veronex/src/infrastructure/outbound/persistence/ --include="*.rs" -B5 | grep -v "LIMIT\|ANY\|UNNEST\|--"
+# → expected: 0 results — every fetch_all must have a LIMIT clause above it
+
+# P2 — Missing emit_audit: all POST/PATCH/DELETE handlers must call emit_audit()
+grep -rn "pub async fn " crates/veronex/src/infrastructure/inbound/http/ --include="*handlers*.rs" -A30 \
+  | grep -B20 "\.execute\|\.insert\|\.update\|\.delete\|\.upsert" \
+  | grep -v "emit_audit"
+# → manual check: each mutating handler must have emit_audit after the DB write
 
 # P2 — N+1: fetch_all/fetch_one inside for loop
 grep -rn "for.*in.*{" crates/veronex/src/ --include="*.rs" -A6 | grep "fetch_all\|fetch_one\|\.execute("

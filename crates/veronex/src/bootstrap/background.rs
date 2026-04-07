@@ -212,8 +212,10 @@ pub async fn spawn_background_tasks(
                 _ => {}
             }
         }
-        let _: Result<(), _> = vk.set(JOBS_PENDING_COUNTER, pending, None, None, false).await;
-        let _: Result<(), _> = vk.set(JOBS_RUNNING_COUNTER, running, None, None, false).await;
+        vk.set(JOBS_PENDING_COUNTER, pending, None, None, false).await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_pending_counter failed"));
+        vk.set(JOBS_RUNNING_COUNTER, running, None, None, false).await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_running_counter failed"));
         tracing::info!(pending, running, "job counters seeded from DB");
     }
 
@@ -351,11 +353,13 @@ pub async fn spawn_background_tasks(
                                 }
                                 if db_p != p {
                                     tracing::debug!(valkey = p, db = db_p, "reconciling pending counter");
-                                    let _: Result<(), _> = vk.set(JOBS_PENDING_COUNTER, db_p, None, None, false).await;
+                                    vk.set(JOBS_PENDING_COUNTER, db_p, None, None, false).await
+                                        .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_pending reconcile failed"));
                                 }
                                 if db_r != r {
                                     tracing::debug!(valkey = r, db = db_r, "reconciling running counter");
-                                    let _: Result<(), _> = vk.set(JOBS_RUNNING_COUNTER, db_r, None, None, false).await;
+                                    vk.set(JOBS_RUNNING_COUNTER, db_r, None, None, false).await
+                                        .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_running reconcile failed"));
                                 }
                                 (db_p.max(0) as u32, db_r.max(0) as u32)
                             } else {

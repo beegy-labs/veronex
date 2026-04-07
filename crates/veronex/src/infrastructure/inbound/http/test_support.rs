@@ -386,6 +386,7 @@ pub(crate) fn make_app() -> axum::Router {
         lab_settings_repo: Arc::new(MockLabSettingsRepo),
         mcp_settings_repo: Arc::new(MockMcpSettingsRepo),
         sse_connections: Arc::new(AtomicU32::new(0)),
+        key_in_flight: Arc::new(dashmap::DashMap::new()),
         vram_budget_repo: Arc::new(MockVramBudgetRepo),
         mcp_bridge: None,
         mcp_vector_selector: None,

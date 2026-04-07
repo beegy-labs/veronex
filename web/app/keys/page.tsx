@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo, useOptimistic } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { keysQuery, resourceAuditQuery, keyMcpAccessQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
 import type { ApiKey, CreateKeyResponse, McpServerAccess } from '@/lib/types'
@@ -37,6 +37,7 @@ import { StatusPill } from '@/components/status-pill'
 import { KeyUsageModal } from '@/components/key-usage-modal'
 import { useApiMutation } from '@/hooks/use-api-mutation'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
 
@@ -73,25 +74,22 @@ function CreateKeyModal({
   onCreated: (resp: CreateKeyResponse) => void
 }) {
   const { t } = useTranslation()
-  const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [tenantId, setTenantId] = useState('default')
   const [rpm, setRpm] = useState('')
   const [tpm, setTpm] = useState('')
   const [tier, setTier] = useState<'free' | 'paid'>('paid')
 
-  const mutation = useMutation({
-    mutationFn: () =>
-      api.createKey({
-        name: name.trim(),
-        tenant_id: tenantId.trim(),
-        rate_limit_rpm: rpm ? parseInt(rpm, 10) : undefined,
-        rate_limit_tpm: tpm ? parseInt(tpm, 10) : undefined,
-        tier,
-      }),
-    onSuccess: (data) => onCreated(data),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
-  })
+  const mutation = useApiMutation(
+    () => api.createKey({
+      name: name.trim(),
+      tenant_id: tenantId.trim(),
+      rate_limit_rpm: rpm ? parseInt(rpm, 10) : undefined,
+      rate_limit_tpm: tpm ? parseInt(tpm, 10) : undefined,
+      tier,
+    }),
+    { invalidateKey: ['keys'], onSuccess: (data) => onCreated(data) },
+  )
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -166,7 +164,7 @@ function CreateKeyModal({
 
         <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={() => mutation.mutate()} disabled={!name.trim() || mutation.isPending}>
+          <Button onClick={() => mutation.mutate(undefined)} disabled={!name.trim() || mutation.isPending}>
             {mutation.isPending ? t('keys.creating') : t('keys.createKey')}
           </Button>
         </DialogFooter>
@@ -245,30 +243,29 @@ function KeyHistoryModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => v
 
 function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => void }) {
   const { t } = useTranslation()
-  const queryClient = useQueryClient()
 
   // ── MCP cap points ────────────────────────────────────────────────────────
   const [capPoints, setCapPoints] = useState(String(apiKey.mcp_cap_points ?? 3))
-  const capMutation = useMutation({
-    mutationFn: (val: number) => api.patchKey(apiKey.id, { mcp_cap_points: val }),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['keys'] }),
-  })
+  const capMutation = useApiMutation(
+    (val: number) => api.patchKey(apiKey.id, { mcp_cap_points: val }),
+    { invalidateKey: ['keys'] },
+  )
 
   // ── Per-server top-k state ────────────────────────────────────────────────
   const [topKMap, setTopKMap] = useState<Record<string, string>>({})
 
   const { data: servers, isLoading, error } = useQuery(keyMcpAccessQuery(apiKey.id))
 
-  const grantMutation = useMutation({
-    mutationFn: ({ serverId, topK }: { serverId: string; topK: number | null }) =>
+  const grantMutation = useApiMutation(
+    ({ serverId, topK }: { serverId: string; topK: number | null }) =>
       api.grantKeyMcpAccess(apiKey.id, serverId, topK),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['key-mcp-access', apiKey.id] }),
-  })
+    { invalidateKey: ['key-mcp-access', apiKey.id] },
+  )
 
-  const revokeMutation = useMutation({
-    mutationFn: (serverId: string) => api.revokeKeyMcpAccess(apiKey.id, serverId),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['key-mcp-access', apiKey.id] }),
-  })
+  const revokeMutation = useApiMutation(
+    (serverId: string) => api.revokeKeyMcpAccess(apiKey.id, serverId),
+    { invalidateKey: ['key-mcp-access', apiKey.id] },
+  )
 
   const isPending = grantMutation.isPending || revokeMutation.isPending
 
@@ -390,9 +387,9 @@ function KeyActiveSwitch({ keyId, isActive }: { keyId: string; isActive: boolean
 }
 
 export default function KeysPage() {
+  usePageGuard('keys')
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const queryClient = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
   const [createdKey, setCreatedKey] = useState<CreateKeyResponse | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null)
@@ -432,7 +429,6 @@ export default function KeysPage() {
   function handleCreated(resp: CreateKeyResponse) {
     setShowCreate(false)
     setCreatedKey(resp)
-    queryClient.invalidateQueries({ queryKey: ['keys'] })
   }
 
   return (

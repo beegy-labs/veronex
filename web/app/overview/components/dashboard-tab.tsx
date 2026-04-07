@@ -19,6 +19,7 @@ import {
   fmtMs, fmtCompact, fmtTemp, fmtKwh,
 } from '@/lib/chart-theme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtHourLabel } from '@/lib/date'
@@ -200,7 +201,7 @@ export function DashboardTab({
       {/* Section 1: System KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {statsLoading ? (
-          Array.from({ length: 3 }).map((_, i) => <StatSkeleton key={i} />)
+          Array.from({ length: 3 }).map((_, i) => <StatSkeleton key={`stat-${i}`} />)
         ) : (
           <>
             <StatsCard
@@ -415,39 +416,39 @@ export function DashboardTab({
             <CardTitle className="text-base">{t('overview.workload')}</CardTitle>
           </CardHeader>
           <CardContent className="pt-0">
-            <table className="w-full text-sm">
-              <thead>
-                <tr>
-                  <th className="text-left text-xs text-muted-foreground font-medium pb-3 w-[38%]" />
-                  <th className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.daily')}</th>
-                  <th className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.weekly')}</th>
-                  <th className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.monthly')}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                <tr>
-                  <td className="py-3 text-xs text-muted-foreground">{t('overview.requests')}</td>
-                  <td className="py-3 text-right font-bold tabular-nums">{perf    ? fmtCompact(perf.total_requests)    : '—'}</td>
-                  <td className="py-3 text-right font-bold tabular-nums">{perf7d  ? fmtCompact(perf7d.total_requests)  : '—'}</td>
-                  <td className="py-3 text-right font-bold tabular-nums">{perf30d ? fmtCompact(perf30d.total_requests) : '—'}</td>
-                </tr>
-                <tr>
-                  <td className="py-3 text-xs text-muted-foreground">{t('performance.successRate')}</td>
+            <Table className="text-sm">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-left text-xs text-muted-foreground font-medium pb-3 w-[38%]" />
+                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.daily')}</TableHead>
+                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.weekly')}</TableHead>
+                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.monthly')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody className="divide-y divide-border">
+                <TableRow>
+                  <TableCell className="py-3 text-xs text-muted-foreground">{t('overview.requests')}</TableCell>
+                  <TableCell className="py-3 text-right font-bold tabular-nums">{perf    ? fmtCompact(perf.total_requests)    : '—'}</TableCell>
+                  <TableCell className="py-3 text-right font-bold tabular-nums">{perf7d  ? fmtCompact(perf7d.total_requests)  : '—'}</TableCell>
+                  <TableCell className="py-3 text-right font-bold tabular-nums">{perf30d ? fmtCompact(perf30d.total_requests) : '—'}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell className="py-3 text-xs text-muted-foreground">{t('performance.successRate')}</TableCell>
                   {(['daily', 'weekly', 'monthly'] as const).map((period) => {
                     const d = perfMap[period]
                     return (
-                      <td key={period} className="py-3 text-right">
+                      <TableCell key={period} className="py-3 text-right">
                         {d != null ? (
                           <span className={`inline-flex items-center justify-center rounded px-1.5 py-0.5 text-xs font-bold tabular-nums ${successRateCls(d.success_rate)}`}>
                             {Math.round(d.success_rate)}%
                           </span>
                         ) : '—'}
-                      </td>
+                      </TableCell>
                     )
                   })}
-                </tr>
-              </tbody>
-            </table>
+                </TableRow>
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
 
@@ -457,31 +458,31 @@ export function DashboardTab({
             <CardTitle className="text-base">{t('overview.latencyMonitor')}</CardTitle>
           </CardHeader>
           <CardContent className="pt-0">
-            <table className="w-full text-sm">
-              <thead>
-                <tr>
-                  <th className="text-left text-xs text-muted-foreground font-medium pb-3 w-[20%]" />
-                  <th className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.daily')}</th>
-                  <th className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.weekly')}</th>
-                  <th className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.monthly')}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
+            <Table className="text-sm">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-left text-xs text-muted-foreground font-medium pb-3 w-[20%]" />
+                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.daily')}</TableHead>
+                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.weekly')}</TableHead>
+                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.monthly')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody className="divide-y divide-border">
                 {LATENCY_THRESHOLDS.map(({ name, key, warnMs, errMs }) => (
-                  <tr key={name}>
-                    <td className="py-3 text-xs font-medium text-muted-foreground">{name}</td>
+                  <TableRow key={name}>
+                    <TableCell className="py-3 text-xs font-medium text-muted-foreground">{name}</TableCell>
                     {(['daily', 'weekly', 'monthly'] as const).map((period) => {
                       const d = perfMap[period]
                       return (
-                        <td key={period} className={`py-3 text-right font-bold tabular-nums ${latencyColor(d?.[key], warnMs, errMs)}`}>
+                        <TableCell key={period} className={`py-3 text-right font-bold tabular-nums ${latencyColor(d?.[key], warnMs, errMs)}`}>
                           {d?.[key] != null ? fmtMs(d[key]) : '—'}
-                        </td>
+                        </TableCell>
                       )
                     })}
-                  </tr>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
             {/* Mini 24h avg latency sparkline */}
             {perf && perf.hourly.length > 0 && (
               <div className="mt-4 pt-3 border-t border-border">

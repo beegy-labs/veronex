@@ -1,12 +1,13 @@
-use axum::error_handling::HandleErrorLayer;
 use axum::extract::DefaultBodyLimit;
-use axum::http::{HeaderValue, Method, StatusCode};
+use axum::http::{HeaderValue, Method};
 use axum::middleware;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
-use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
+
+use super::constants::{INFERENCE_ROUTER_TIMEOUT, JWT_ROUTER_TIMEOUT};
 
 use super::account_handlers;
 use super::conversation_handlers;
@@ -132,7 +133,6 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/dashboard/overview", get(dashboard_handlers::get_dashboard_overview))
         .route("/v1/dashboard/stats", get(dashboard_handlers::get_stats))
         .route("/v1/dashboard/queue/depth", get(dashboard_handlers::get_queue_depth))
-        .route("/v1/dashboard/jobs/stream", get(dashboard_handlers::job_events_sse))
         .route("/v1/dashboard/jobs", get(dashboard_handlers::list_jobs))
         .route(
             "/v1/dashboard/jobs/{id}",
@@ -236,6 +236,10 @@ async fn security_headers(mut response: axum::response::Response) -> axum::respo
     headers.insert(
         axum::http::header::REFERRER_POLICY,
         "strict-origin-when-cross-origin".parse().expect("static"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        "no-store".parse().expect("static"),
     );
     response
 }
@@ -352,11 +356,13 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                     state.clone(),
                     jwt_auth,
                 ))
-                .layer(
-                    ServiceBuilder::new()
-                        .layer(HandleErrorLayer::new(|_| async { StatusCode::REQUEST_TIMEOUT }))
-                        .layer(tower::timeout::TimeoutLayer::new(std::time::Duration::from_secs(30)))
-                ),
+                .layer(TimeoutLayer::new(JWT_ROUTER_TIMEOUT)),
+        )
+        // Dashboard SSE — JWT auth but no timeout (stream runs until client disconnects)
+        .merge(
+            Router::new()
+                .route("/v1/dashboard/jobs/stream", get(dashboard_handlers::job_events_sse))
+                .route_layer(middleware::from_fn_with_state(state.clone(), jwt_auth)),
         )
         // Inference routes — accept API key OR JWT session with api_test permission.
         // Rate limiting is applied only for API key callers (skipped for session callers).
@@ -370,6 +376,7 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                     state.clone(),
                     infer_auth,
                 ))
+                .layer(TimeoutLayer::new(INFERENCE_ROUTER_TIMEOUT))
                 .layer(middleware::map_response(openai_compat_headers)),
         )
         .layer(DefaultBodyLimit::max(super::constants::JSON_BODY_LIMIT))

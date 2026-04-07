@@ -5,11 +5,13 @@ import { FileJson, BookOpen, Layers, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { BASE_API_URL as API_URL } from '@/lib/constants'
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function ApiDocsPage() {
+  usePageGuard('api_docs')
   const { t } = useTranslation()
 
   const docs = [

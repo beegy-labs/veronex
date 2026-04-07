@@ -1,6 +1,6 @@
 # Best Practices
 
-> ADD Execution | **Last Updated**: 2026-03-25
+> ADD Execution | **Last Updated**: 2026-04-07
 > Shared constants (Scale targets, Verification commands, CDD Sync Routing) → [`.add/README.md`](README.md)
 
 ## Role

@@ -2,8 +2,10 @@
 
 import { McpTab } from '@/app/mcp/components/mcp-tab'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 
 export default function McpPage() {
+  usePageGuard('providers')
   const { t } = useTranslation()
 
   return (

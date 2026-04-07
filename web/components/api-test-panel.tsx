@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useReducer, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useReducer, useMemo, useCallback, useEffectEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { isLoggedIn, getAuthUser } from '@/lib/auth'
 import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
@@ -153,7 +153,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   }, [availableModels, model])
 
   // ── Retry params ─────────────────────────────────────────────────────────────
-  useEffect(() => {
+  const applyRetryParams = useEffectEvent(() => {
     if (!retryParams) return
     setPrompt(retryParams.prompt)
     setProviderType(retryParams.provider_type)
@@ -161,11 +161,11 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       setModel(retryParams.model)
     }
     onRetryConsumed?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [retryParams])
+  })
+  useEffect(() => { applyRetryParams() }, [retryParams])
 
   // ── Continue conversation ─────────────────────────────────────────────────────
-  useEffect(() => {
+  const applyContinueConversation = useEffectEvent(() => {
     if (!continueConversation) return
     setMode('conversation')
     if (conversationSessions.length >= MAX_CONV_SESSIONS) return
@@ -189,8 +189,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       setModel(continueConversation.model_name)
     }
     onContinueConsumed?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [continueConversation])
+  })
+  useEffect(() => { applyContinueConversation() }, [continueConversation])
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────────
   useEffect(() => {

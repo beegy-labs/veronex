@@ -17,6 +17,7 @@ import { Timer, TrendingUp, CheckCircle, AlertTriangle, Zap } from 'lucide-react
 import StatsCard from '@/components/stats-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { TIME_LABEL_MAP, TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
@@ -26,6 +27,7 @@ import { tokens } from '@/lib/design-tokens'
 
 /* ─── page ────────────────────────────────────────────────── */
 export default function PerformancePage() {
+  usePageGuard('performance')
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const [range, setRange] = useState<TimeRange>({ hours: 24 })

@@ -1,5 +1,6 @@
 'use client'
 
+import { memo } from 'react'
 import { X, Square, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -18,7 +19,7 @@ interface ApiTestRunsProps {
   onRerun: (run: Run) => void
 }
 
-export function ApiTestRuns({
+export const ApiTestRuns = memo(function ApiTestRuns({
   runs, activeRunId, isAnyStreaming,
   onSelectRun, onCloseRun, onStop, onRerun,
 }: ApiTestRunsProps) {
@@ -154,4 +155,4 @@ export function ApiTestRuns({
       )}
     </div>
   )
-}
+})

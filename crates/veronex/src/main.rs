@@ -13,6 +13,7 @@ use anyhow::Result;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use veronex::domain::constants::MCP_TOOL_REFRESH_INTERVAL;
 
 /// Maximum time to wait for background tasks during graceful shutdown.
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -190,6 +191,7 @@ async fn main() -> Result<()> {
         session_grouping_lock: handles.session_grouping_lock,
         sync_lock: handles.sync_lock,
         sse_connections: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        key_in_flight: Arc::new(dashmap::DashMap::new()),
         vram_budget_repo: repos.vram_budget_repo,
         mcp_bridge,
         mcp_vector_selector,
@@ -223,8 +225,8 @@ async fn main() -> Result<()> {
             for server_id in state_clone.mcp_bridge.as_ref().map(|b| b.session_manager.server_ids()).unwrap_or_default() {
                 discover_tools_startup(&state_clone, server_id).await;
             }
-            // Periodic refresh every 25s
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(25));
+            // Periodic refresh
+            let mut interval = tokio::time::interval(MCP_TOOL_REFRESH_INTERVAL);
             interval.tick().await; // skip the immediate tick
             loop {
                 tokio::select! {
@@ -280,9 +282,15 @@ async fn main() -> Result<()> {
         use fred::prelude::*;
         use veronex::infrastructure::outbound::valkey_keys;
         let iid = shutdown_instance_id.as_ref();
-        let _: Result<(), _> = vk.srem(valkey_keys::INSTANCES_SET, iid).await;
-        let _: Result<(), _> = vk.del(valkey_keys::heartbeat(iid)).await;
-        let _: Result<(), _> = vk.del(valkey_keys::service_health(iid)).await;
+        if let Err(e) = vk.srem::<i64, _, _>(valkey_keys::INSTANCES_SET, iid).await {
+            tracing::warn!(error = %e, "Valkey SREM instances_set on shutdown failed");
+        }
+        if let Err(e) = vk.del::<i64, _>(valkey_keys::heartbeat(iid)).await {
+            tracing::warn!(error = %e, "Valkey DEL heartbeat on shutdown failed");
+        }
+        if let Err(e) = vk.del::<i64, _>(valkey_keys::service_health(iid)).await {
+            tracing::warn!(error = %e, "Valkey DEL service_health on shutdown failed");
+        }
         tracing::info!("instance deregistered from Valkey");
     }
 

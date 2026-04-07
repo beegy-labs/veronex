@@ -462,7 +462,8 @@ pub async fn chat(
                             if let Some(ref vk) = state.valkey_pool {
                                 use fred::prelude::*;
                                 if let Ok(j) = serde_json::to_string(&r) {
-                                    let _: Result<(), _> = vk.set(&cache_key, j, Some(fred::types::Expiration::EX(300)), None, false).await;
+                                    vk.set(&cache_key, j, Some(fred::types::Expiration::EX(300)), None, false).await
+                                        .unwrap_or_else(|e| tracing::warn!(error = %e, key = %cache_key, "Valkey SET conversation cache failed"));
                                 }
                             }
                             r

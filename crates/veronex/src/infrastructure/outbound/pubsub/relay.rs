@@ -20,32 +20,19 @@ use tokio::sync::{broadcast, Notify};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::domain::value_objects::{JobStatusEvent, StreamToken};
+use crate::domain::value_objects::JobStatusEvent;
 use crate::infrastructure::outbound::valkey_keys;
 
 // ── Token streaming (Valkey Streams) ────────────────────────────────────────
 
-/// Lua: XADD with MAXLEN + EXPIRE in one atomic eval.
-///
-/// KEYS[1] = stream key
-/// ARGV[1] = value, ARGV[2] = is_final ("true"/"false"), ARGV[3] = TTL seconds
-const LUA_XADD_EXPIRE: &str = r#"
-redis.call('XADD', KEYS[1], 'MAXLEN', '~', 500, '*', 'v', ARGV[1], 'f', ARGV[2])
-redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
-return 1
-"#;
-
-/// Token stream TTL (seconds). Acts as a safety net — even if `cleanup_token_stream()`
-/// is never called (crash, network partition), the stream key self-destructs.
-const TOKEN_STREAM_TTL_SECS: i64 = 600; // 10 minutes
-
 /// Clean up the token stream key after a job completes.
 ///
 /// Called from `run_job()` completion phase to free Valkey memory.
-/// Even if this is never called, the stream self-destructs after `TOKEN_STREAM_TTL_SECS`.
 pub async fn cleanup_token_stream(pool: &Pool, job_id: Uuid) {
     let key = valkey_keys::stream_tokens(job_id);
-    let _: Result<i64, _> = pool.del(&key).await;
+    if let Err(e) = pool.del::<i64, _>(&key).await {
+        tracing::warn!(error = %e, %key, "Valkey DEL token stream cleanup failed");
+    }
 }
 
 // ── Publisher helpers (Pub/Sub) ─────────────────────────────────────────────
@@ -60,16 +47,21 @@ pub async fn publish_job_event(pool: &Pool, event: &JobStatusEvent, instance_id:
         "latency_ms": event.latency_ms,
         "instance_id": instance_id,
     });
-    let _: Result<i64, _> = pool
+    if let Err(e) = pool
         .next()
-        .publish(valkey_keys::PUBSUB_JOB_EVENTS.to_string(), payload.to_string())
-        .await;
+        .publish::<i64, _, _>(valkey_keys::PUBSUB_JOB_EVENTS.to_string(), payload.to_string())
+        .await
+    {
+        tracing::warn!(error = %e, "Valkey PUBLISH job_events failed");
+    }
 }
 
 /// Publish a cancel signal for a job.
 pub async fn publish_cancel(pool: &Pool, job_id: Uuid) {
     let channel = valkey_keys::pubsub_cancel(job_id);
-    let _: Result<i64, _> = pool.next().publish(channel, "cancel".to_string()).await;
+    if let Err(e) = pool.next().publish::<i64, _, _>(channel, "cancel".to_string()).await {
+        tracing::warn!(error = %e, "Valkey PUBLISH cancel signal failed");
+    }
 }
 
 // ── Job event subscriber ─────────────────────────────────────────────────────
@@ -179,7 +171,7 @@ pub async fn run_cancel_subscriber(
 
                 // Extract job_id from channel: veronex:pubsub:cancel:{job_id}
                 let channel = msg.channel.to_string();
-                let job_id_str = match channel.strip_prefix("veronex:pubsub:cancel:") {
+                let job_id_str = match channel.strip_prefix(valkey_keys::PUBSUB_CANCEL_PREFIX) {
                     Some(s) => s,
                     None => continue,
                 };

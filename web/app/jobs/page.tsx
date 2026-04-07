@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { StatusPill } from '@/components/status-pill'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { fmtNumber } from '@/lib/date'
@@ -248,6 +249,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function JobsPage() {
+  usePageGuard('jobs')
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [panelOpen, setPanelOpen] = useState(false)
