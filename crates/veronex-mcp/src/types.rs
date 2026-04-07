@@ -166,10 +166,6 @@ impl McpToolResult {
         !self.is_error
     }
 
-    pub fn is_cache_hit(&self) -> bool {
-        self.from_cache
-    }
-
     pub fn is_timeout(&self) -> bool {
         self.is_error
             && self
