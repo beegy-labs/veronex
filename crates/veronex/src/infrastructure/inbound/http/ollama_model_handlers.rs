@@ -115,23 +115,6 @@ pub async fn list_model_providers(
     })))
 }
 
-/// `GET /v1/ollama/providers/:provider_id/models`
-/// — list model names synced for a specific Ollama provider.
-pub async fn list_provider_models(
-    State(state): State<AppState>,
-    Path(pid): Path<ProviderId>,
-) -> impl IntoResponse {
-    match state.ollama_model_repo.models_for_provider(pid.0).await {
-        Ok(models) => {
-            (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("ollama list_provider_models: {e}");
-            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
-        }
-    }
-}
-
 /// `POST /v1/ollama/models/sync` — trigger a global background sync of all Ollama providers.
 ///
 /// Returns 202 immediately with the job ID. The sync runs in the background,

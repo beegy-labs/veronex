@@ -128,7 +128,7 @@ fn normalize_sensor_role(hw_type: &str, label: &str) -> &'static str {
 
 /// Enrich hwmon gauges with `hw_type`, `hw_vendor`, `hw_role` labels
 /// based on chip_name classification and sensor_label mapping.
-pub fn enrich_hwmon_labels(
+fn enrich_hwmon_labels(
     gauges: &mut [Gauge],
     chip_map: &std::collections::HashMap<String, String>,  // chip → chip_name
     label_map: &std::collections::HashMap<(String, String), String>, // (chip, sensor) → label
@@ -506,13 +506,6 @@ pub fn ollama_gauges_from_raw(models: &[OllamaPsModel]) -> Vec<Gauge> {
     }
 
     gauges
-}
-
-/// Scrape Ollama /api/ps — forward raw byte values, no conversion.
-#[allow(dead_code)]
-pub async fn scrape_ollama(client: &reqwest::Client, base_url: &str) -> Vec<Gauge> {
-    let models = scrape_ollama_raw(client, base_url).await;
-    ollama_gauges_from_raw(&models)
 }
 
 #[cfg(test)]

@@ -67,7 +67,7 @@ pub enum ConversationTurn {
 }
 
 impl ConversationTurn {
-    pub fn as_regular(&self) -> Option<&TurnRecord> {
+    fn as_regular(&self) -> Option<&TurnRecord> {
         match self {
             ConversationTurn::Regular(t) => Some(t),
             ConversationTurn::Handoff(_) => None,
