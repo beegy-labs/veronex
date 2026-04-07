@@ -383,7 +383,7 @@ function NavContent() {
 
       {/* ── Footer ─────────────────────────────────────────────────── */}
       <div className="border-t border-border py-3 px-2 space-y-2">
-        {/* Auth user + JWT-protected links */}
+        {/* Auth-protected nav links */}
         {authUser && !collapsed && (
           <div className="px-1 space-y-0.5">
             {hasMenu('accounts') && (
@@ -414,18 +414,6 @@ function NavContent() {
                 {t('audit.title')}
               </Link>
             )}
-            <div className="flex items-center justify-between px-3 py-1">
-              <span className="text-xs text-muted-foreground truncate">{authUser.username}</span>
-              <button
-                type="button"
-                aria-label={t('common.signOut')}
-                title={t('common.signOut')}
-                onClick={() => redirectToLogin()}
-                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-              </button>
-            </div>
           </div>
         )}
 
@@ -446,6 +434,24 @@ function NavContent() {
             {!collapsed && t('nav.apiDocs')}
           </Link>
         </div>
+
+        {/* Logged-in user + logout */}
+        {authUser && !collapsed && (
+          <div className="px-1">
+            <div className="flex items-center justify-between px-3 py-1.5 rounded-md hover:bg-accent/50 transition-colors">
+              <span className="text-xs text-muted-foreground truncate">{authUser.username}</span>
+              <button
+                type="button"
+                aria-label={t('common.signOut')}
+                title={t('common.signOut')}
+                onClick={() => redirectToLogin()}
+                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Footer: version | settings gear | theme toggle */}
         <div className={cn(
