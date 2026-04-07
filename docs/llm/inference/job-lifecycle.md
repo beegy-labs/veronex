@@ -7,7 +7,7 @@
 | Task | File | What to change |
 |------|------|----------------|
 | Change job status flow | `domain/enums.rs` → `JobStatus` + all `match` arms in `use_cases/inference/runner.rs` | |
-| Add new DB column to inference_jobs | `migrations/` + `domain/entities/mod.rs` + `persistence/job_repository.rs` `save()` | |
+| Add new DB column to inference_jobs | `docker/postgres/init.sql` + `domain/entities/mod.rs` + `persistence/job_repository.rs` `save()` | |
 | Change queue keys or scoring | `domain/constants.rs` → `QUEUE_ZSET`, `TIER_BONUS_*`, `LOCALITY_BONUS_MS` + `dispatcher.rs` → `queue_dispatcher_loop()` | |
 | Change how tokens are counted | `use_cases/inference/runner.rs` → `run_job()` token processing block (streaming loop) | |
 | Add field to job list/detail response | See `docs/llm/inference/job-api.md` | |

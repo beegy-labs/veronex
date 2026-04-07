@@ -8,7 +8,7 @@
 |------|------|----------------|
 | Add new metric to live node-exporter response | `infrastructure/outbound/hw_metrics.rs` → `fetch_node_metrics()` parsing + `NodeMetrics` struct |
 | Add new metric to history chart | `gpu_server_handlers.rs` → `metrics_history()` ClickHouse SQL + `ServerMetricsPoint` struct |
-| Add GPU server DB column | `migrations/` + `domain/entities/mod.rs` + `persistence/gpu_server_registry.rs` |
+| Add GPU server DB column | `docker/postgres/init.sql` + `domain/entities/mod.rs` + `persistence/gpu_server_registry.rs` |
 | Change Prometheus HTTP SD response format | `gpu_server_handlers.rs` → `metrics_targets()` |
 | Change history query bucket size | `gpu_server_handlers.rs` → `toStartOfInterval` SQL arg |
 | Support new GPU vendor (e.g. NVIDIA) | `hw_metrics.rs` → add metric parsing branch alongside existing AMD section |

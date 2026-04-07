@@ -12,7 +12,7 @@
 | Add new model management endpoint | `provider_handlers.rs` + `router.rs` |
 | Change VRAM pool logic | `infrastructure/outbound/capacity/vram_pool.rs` -- `VramPool` |
 | Change thermal throttle thresholds | `infrastructure/outbound/capacity/thermal.rs` -- `ThermalThrottleMap::update()` |
-| Add new LlmProvider DB column | `migrations/` new file + `domain/entities/mod.rs` + `persistence/provider_registry.rs` |
+| Add new LlmProvider DB column | `docker/postgres/init.sql` + `domain/entities/mod.rs` + `persistence/provider_registry.rs` |
 | Change provider list cache TTL | `persistence/caching_provider_registry.rs` -- `CachingProviderRegistry::new()` TTL arg in `main.rs` |
 | Toggle a model on/off per Ollama provider | `PATCH /v1/providers/{id}/selected-models/{model}` -- `set_model_enabled()` in `provider_handlers.rs` |
 | Change Ollama model selection defaults | `provider_handlers.rs` -- `list_selected_models()` Ollama branch -- default is `true` |

@@ -461,7 +461,7 @@ PgPoolOptions::new()
 |------|------|--------|
 | 1 | `domain/entities/new_entity.rs` | Pure struct, no I/O |
 | 2 | `application/ports/outbound/new_port.rs` | `#[async_trait]` trait; add to mod.rs |
-| 3 | `migrations/YYYYMMDDHHMMSS_*.sql` | DB migration |
+| 3 | `docker/postgres/init.sql` | Add column/table to consolidated schema |
 | 4 | `infrastructure/outbound/persistence/new.rs` | Impl trait; add to mod.rs |
 | 5 | `infrastructure/inbound/http/state.rs` | `Arc<dyn NewPort>` field |
 | 6 | `main.rs` | Init + inject into AppState |

@@ -26,7 +26,7 @@ Logged-in accounts run inference without an API key. Jobs tracked by `account_id
 | POST | `/v1/test/api/generate` | Ollama NDJSON stream |
 | POST | `/v1/test/v1beta/models/{*path}` | Gemini SSE stream |
 
-All test routes: `api_key_id=NULL`, `account_id=claims.sub`, queue=`veronex:queue:jobs:test` (low-priority).
+All test routes: `api_key_id=NULL`, `account_id=claims.sub`, enqueued in `veronex:queue:zset` with tier=test (lowest priority score).
 
 Full request/response specs: [jwt-sessions-impl.md](jwt-sessions-impl.md#test-run-endpoint-details)
 

@@ -14,7 +14,7 @@ Response: SSE stream (OpenAI chunk format)
 
 - No API key, no rate limiting
 - `api_key_id=NULL`, `account_id=claims.sub`, `source=Test`
-- Job placed in `veronex:queue:jobs:test` (low-priority; API queue polled first)
+- Job placed in `veronex:queue:zset` with tier=test (lowest tier bonus → lower priority)
 - First SSE chunk `id` = `job_id` for reconnect
 
 ### GET /v1/test/jobs/{job_id}/stream

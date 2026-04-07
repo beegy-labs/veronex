@@ -30,8 +30,8 @@ The `Job` and `JobDetail` types carry `source: 'api' | 'test' | 'analyzer'`. Thi
 
 | Value | Queue | Meaning |
 |-------|-------|---------|
-| `'api'` | `veronex:queue:jobs` | Submitted via the OpenAI-compatible API |
-| `'test'` | `veronex:queue:jobs:test` | Submitted via the web Test panel |
+| `'api'` | `veronex:queue:zset` (tier=standard/paid) | Submitted via the OpenAI-compatible API |
+| `'test'` | `veronex:queue:zset` (tier=test, lowest score bonus) | Submitted via the web Test panel |
 | `'analyzer'` | `veronex:queue:zset` | Submitted by the capacity analyzer (VRAM probing/batch analysis) |
 
 The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Overview page recent-jobs mini-table shows all sources without filtering.

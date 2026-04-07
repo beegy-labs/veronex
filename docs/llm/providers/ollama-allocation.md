@@ -58,10 +58,10 @@ POST /v1/chat/completions {model: "qwen3:8b", messages: [...]}
   │
   ├── 1. API Key auth → verify account_id, tier (free/paid)
   │
-  ├── 2. Enqueue in Valkey (tier-based priority)
-  │     paid → veronex:queue:jobs:paid   (highest priority)
-  │     free → veronex:queue:jobs        (standard)
-  │     test → veronex:queue:jobs:test   (lowest priority)
+  ├── 2. Enqueue in Valkey ZSET (tier-based score)
+  │     paid → veronex:queue:zset  score = now_ms - TIER_BONUS_PAID (300,000ms)
+  │     free → veronex:queue:zset  score = now_ms - TIER_BONUS_STANDARD (100,000ms)
+  │     test → veronex:queue:zset  score = now_ms (no tier bonus)
   │
   ├── 3. queue_dispatcher_loop pops via Lua priority pop
   │
