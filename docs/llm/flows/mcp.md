@@ -15,10 +15,6 @@ openai_handlers::chat_completions()
   │
   └── YES → mcp_ollama_chat()
               │
-              ├── resolve model:
-              │     lab_settings.mcp_orchestrator_model  (if set)
-              │     else req.model
-              │
               └── bridge.run_loop(...)
 ```
 

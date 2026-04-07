@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline Operations
 
-> SSOT | **Last Updated**: 2026-03-28 (rev: MV sum+gauge support, migration 000002_metrics_sum_support)
+> SSOT | **Last Updated**: 2026-04-07
 
 See `infra/otel-pipeline.md` for pipeline overview, OTel Collector config, and Chain 1 (otel-logs).
 
@@ -16,8 +16,6 @@ Handles **both** OTLP metric types:
 
 Agent classifies metric type in `scraper.rs`; the MV processes both via `UNION ALL`.
 
-> **Migration**: `000002_metrics_sum_support` recreates this MV to add sum support (was gauge-only, dropping CPU counters).
-
 ```sql
 CREATE TABLE otel_metrics_gauge (
     ts           DateTime64(9),
@@ -27,37 +25,23 @@ CREATE TABLE otel_metrics_gauge (
     attributes   Map(LowCardinality(String), String)
 ) ENGINE = MergeTree() PARTITION BY toDate(ts)
 ORDER BY (metric_name, server_id, ts)
-TTL toDate(ts) + INTERVAL 30 DAY;
-
-CREATE MATERIALIZED VIEW kafka_otel_metrics_mv TO otel_metrics_gauge AS
-SELECT ts, server_id, metric_name, value, attributes FROM (
-    -- gauge data points
-    SELECT
-        fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'timeUnixNano'))) AS ts,
-        ResAttrs['server_id'] AS server_id,
-        JSONExtractString(metric, 'name') AS metric_name,
-        JSONExtractFloat(dp, 'asDouble') AS value,
-        CAST(arrayMap(...), 'Map(LowCardinality(String), String)') AS attributes
-    FROM ( ... WHERE JSONHas(metric, 'gauge') )
-    UNION ALL
-    -- sum data points (monotonic counters like node_cpu_seconds_total)
-    SELECT
-        fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(dp,'timeUnixNano'))) AS ts,
-        ResAttrs['server_id'] AS server_id,
-        JSONExtractString(metric, 'name') AS metric_name,
-        JSONExtractFloat(dp, 'asDouble') AS value,
-        CAST(arrayMap(...), 'Map(LowCardinality(String), String)') AS attributes
-    FROM ( ... WHERE JSONHas(metric, 'sum') )
-);
+TTL toDate(ts) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
+-- No MV — Redpanda Connect HTTP INSERTs directly into this table
 ```
 
 ## Chain 3 -- otel-traces -> otel_traces_raw
 
-```sql
-CREATE TABLE kafka_otel_traces (raw String) ENGINE = Kafka SETTINGS ...;
+Redpanda Connect reads from `otel-traces` topic and HTTP INSERTs raw payloads directly:
 
-CREATE MATERIALIZED VIEW kafka_otel_traces_mv TO otel_traces_raw AS
-SELECT now64(3) AS received_at, raw AS payload FROM kafka_otel_traces;
+```sql
+-- Target table only — no Kafka Engine (Redpanda Connect → HTTP INSERT)
+CREATE TABLE otel_traces_raw (
+    received_at DateTime64(3) DEFAULT now64(3),
+    payload     String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(received_at)
+ORDER BY received_at
+TTL toDate(received_at) + INTERVAL __RETENTION_TRACES_DAYS__ DAY;
 ```
 
 ---
@@ -66,7 +50,7 @@ SELECT now64(3) AS received_at, raw AS payload FROM kafka_otel_traces;
 
 ### Target tables must exist before Materialized Views
 
-All MergeTree targets (`otel_logs`, `otel_metrics_gauge`, `otel_traces_raw`) must be declared before the Kafka Engine section in `schema.sql`.
+All MergeTree targets (`otel_logs`, `otel_metrics_gauge`, `otel_traces_raw`) must be declared before any Materialized Views in `schema.sql`.
 
 ### Init scripts run only on first volume creation
 
@@ -164,10 +148,10 @@ Env vars: `CLICKHOUSE_URL`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUS
 ## Verification
 
 ```bash
-# Check Kafka Engine + MV tables exist
+# Check MV + target tables exist
 docker compose exec clickhouse clickhouse-client \
   --user veronex --password veronex --database veronex \
-  --query "SHOW TABLES" | grep -E "kafka_otel|otel_"
+  --query "SHOW TABLES" | grep -E "otel_"
 
 # Consume raw OTel logs from Redpanda
 docker compose exec redpanda rpk topic consume otel-logs -n 1 | jq .
@@ -190,9 +174,11 @@ TTLs set via `__RETENTION_*__` placeholders in `schema.sql`, substituted by `ini
 
 | Table | Env var | Default |
 |-------|---------|---------|
-| `otel_logs` | `CLICKHOUSE_RETENTION_ANALYTICS_DAYS` | 90 days |
-| `otel_metrics_gauge` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
-| `otel_traces_raw` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 30 days |
-| `audit_events` | `CLICKHOUSE_RETENTION_AUDIT_DAYS` | 365 days |
+| `inference_logs` | `CLICKHOUSE_RETENTION_INFERENCE_DAYS` | 90 days |
+| `otel_logs` | `CLICKHOUSE_RETENTION_LOGS_DAYS` | 7 days |
+| `otel_metrics_gauge` | `CLICKHOUSE_RETENTION_METRICS_DAYS` | 14 days |
+| `otel_traces_raw` | `CLICKHOUSE_RETENTION_TRACES_DAYS` | 7 days |
+| `audit_events` | `CLICKHOUSE_RETENTION_AUDIT_DAYS` | 90 days |
+| `mcp_tool_calls` | `CLICKHOUSE_RETENTION_MCP_DAYS` | 90 days |
 
-Set in `.env` before first `docker compose up -d`. For existing volumes, use `ALTER TABLE ... MODIFY TTL toDate(Timestamp) + INTERVAL 30 DAY`.
+Set in `.env` before first `docker compose up -d`. For existing volumes, use `ALTER TABLE ... MODIFY TTL toDate(Timestamp) + INTERVAL N DAY`.

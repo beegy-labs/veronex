@@ -104,7 +104,7 @@ pub async fn list_things(
 
 Response shape: `{ <plural_name>: [...], total: i64, page: i64, limit: i64 }`
 
-Search uses ILIKE with pg_trgm GIN indexes (migration 000010). Default limits vary per endpoint (20–100); max 1000.
+Search uses ILIKE with pg_trgm GIN indexes (`docker/postgres/init.sql`). Default limits vary per endpoint (20–100); max 1000.
 
 ## async-trait (Required)
 

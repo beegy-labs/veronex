@@ -55,7 +55,7 @@
 | Lab Features | `inference/lab-features.md` | gemini_function_calling, context_compression_enabled, multiturn gate, vision_model, handoff |
 | Lab Features (impl) | `inference/lab-features-impl.md` | Port, API, Frontend for lab_settings |
 | Context Compression | `inference/context-compression.md` | compression_router, context_assembler, session_handoff, compress_input_inline, conversation_renewed, TurnInternals |
-| MCP | `inference/mcp.md` | McpBridgeAdapter, run_loop, tool intercept, orchestrator model, tool naming, concurrency |
+| MCP | `inference/mcp.md` | McpBridgeAdapter, run_loop, tool intercept, tool naming, ACL, concurrency |
 | MCP Schema | `inference/mcp-schema.md` | mcp_servers, mcp_server_tools, mcp_key_access, mcp_loop_tool_calls |
 
 ---
@@ -200,7 +200,7 @@
 | VRAM pool / AIMD / thermal | `inference/capacity.md` + `flows/scheduler.md` + `flows/thermal.md` |
 | Lab feature flag | `inference/lab-features.md` |
 | Context compression / multi-turn / handoff | `inference/context-compression.md` + `flows/context-compression.md` |
-| MCP integration / orchestrator model | `inference/mcp.md` + `flows/mcp.md` |
+| MCP integration | `inference/mcp.md` + `flows/mcp.md` |
 | Any subsystem logic / control flow | `flows/{subsystem}.md` |
 | veronex-mcp server / add a tool | `infra/crate-structure.md` (veronex-mcp Layout) |
 | OTel pipeline | `infra/otel-pipeline.md` + `infra/otel-pipeline-ops.md` + `research/infrastructure/observability.md` |

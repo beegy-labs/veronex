@@ -62,9 +62,9 @@ The reaper deducts reserved HASH on lease expiry, preventing zombie reservations
 
 **Model stickiness**: Providers with the requested model already loaded in VRAM get a +100GB bonus in the availability sort, strongly favoring consecutive requests on the same provider over model switching.
 
-**Lua scripts** (3 atomic): Enqueue (ZCARD+demand guard+ZADD+INCR+HSET×2), Claim (ZREM+RPUSH+DECR+HDEL×2), Cancel (ZREM+DECR+HDEL×2). Dispatcher sleeps 500ms on empty ZSET.
+**Lua scripts** (3 atomic): Enqueue (ZCARD+demand guard+ZADD+INCR+HSET×2), Claim (ZREM+ZADD active_lease+DECR+HDEL×2), Cancel (ZREM+DECR+HDEL×2). Dispatcher sleeps 500ms on empty ZSET.
 
-**ACK**: On job completion/failure, `LREM processing 1 {uuid}` + `DEL job:owner:{job_id}`.
+**ACK**: On job completion/failure, `active_lease_remove()` → `ZREM QUEUE_ACTIVE {uuid}` + `DEL job:owner:{job_id}`.
 
 **Fail fast on no candidates**: If zero eligible providers remain after model filtering, the job is ZSET-claimed then failed immediately.
 
@@ -122,7 +122,7 @@ Two completely separate paths:
 Queued:     Lua ZREM + DECR demand + HDEL side hashes
             ZREM returns 0 → already dispatched → fall through to processing path
 
-Processing: cancel_notify + LREM processing + VramPermit drop
+Processing: cancel_notify + active_lease_remove() (ZREM QUEUE_ACTIVE) + VramPermit drop
             Multi-instance: pub/sub cancel signal via veronex:pubsub:cancel:{job_id}
 ```
 

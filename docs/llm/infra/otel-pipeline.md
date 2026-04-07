@@ -10,8 +10,8 @@
 | Add new metric to collection | `crates/veronex-agent/src/scraper.rs` | Add prefix to `NODE_EXPORTER_ALLOWLIST` |
 | Add new OTel exporter | `docker/otel/config.yaml` | Add to `exporters:` block + add to relevant `service.pipelines` |
 | Change Kafka topic name | `docker/otel/config.yaml` kafka exporter `topic:` | Also update ClickHouse `schema.sql` Kafka Engine `kafka_topic_list` |
-| Add new OTLP metric type | `crates/veronex-agent/src/scraper.rs` + ClickHouse MV | Agent classifies in scraper; MV must handle via `UNION ALL` (see migration `000002_metrics_sum_support`) |
-| Add new ClickHouse Kafka chain | `docker/clickhouse/schema.sql` | Pattern: `kafka_* ENGINE=Kafka` -> `MV` -> target `MergeTree` (MergeTree table must be declared first) |
+| Add new OTLP metric type | `crates/veronex-agent/src/scraper.rs` + ClickHouse MV | Agent classifies in scraper; MV must handle via `UNION ALL` |
+| Add new ClickHouse chain | `docker/clickhouse/schema.sql` | Logs: Kafka Engine pattern. Metrics/traces: Redpanda Connect HTTP INSERT (no Kafka Engine) |
 | Add new target MergeTree table | `docker/clickhouse/schema.sql` | Declare before the Kafka Engine section (top of file) |
 | Change HTTP SD endpoint auth | `infrastructure/inbound/http/metrics_handlers.rs` | Move route outside/inside auth middleware in `router.rs` |
 | Migrate to managed Kafka | `docker/otel/config.yaml` `brokers:` + `docker-compose.yml` `REDPANDA_URL` | Address swap only -- no code changes |
@@ -61,7 +61,7 @@ veronex --> GET /v1/audit             --> analytics_repo (ClickHouse)
 
 **Key properties:**
 - **Redpanda = single message bus** -- all writes go through it
-- **ClickHouse = read layer only** -- Kafka Engine pulls from Redpanda, MV inserts into MergeTree
+- **ClickHouse = read layer only** -- Chain 1 (logs): Kafka Engine pulls from Redpanda; Chains 2-3 (metrics/traces): Redpanda Connect HTTP INSERT directly
 - **veronex-analytics** = internal service (port 3003, not exposed) -- owns all OTel write + ClickHouse read
 - **Timestamp semantics**: `timeUnixNano` = original event time (from veronex), `observedTimeUnixNano` = collector receipt time
 - **Ingest validation**: Event type whitelist (`inference.completed`, `audit.action`), required field checks → 400 on invalid
@@ -127,7 +127,7 @@ node_hwmon_chip_names,                                             (gauge — re
 ollama_* (loaded_models, model_size_vram_bytes, model_size_bytes)  (gauge)
 ```
 
-Counter metrics (`node_cpu_seconds_total`) are sent as OTLP `sum` with `isMonotonic: true`. All other metrics are sent as OTLP `gauge`. The ClickHouse MV (`kafka_otel_metrics_mv`) processes both types via `UNION ALL`.
+Counter metrics (`node_cpu_seconds_total`) are sent as OTLP `sum` with `isMonotonic: true`. All other metrics are sent as OTLP `gauge`. Redpanda Connect processes both types via `UNION ALL` into `otel_metrics_gauge`.
 
 → Collector config, chains, MVs: `otel-pipeline-chains.md`
 

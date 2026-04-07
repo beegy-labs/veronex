@@ -33,7 +33,7 @@ service:
     logs:    receivers:[otlp]  -> exporters:[kafka/logs]
 ```
 
-> ClickHouse exporter **removed** -- ClickHouse consumes via Kafka Engine only.
+> ClickHouse exporter **removed** -- Chain 1 (logs) uses Kafka Engine; Chains 2-3 (metrics/traces) use Redpanda Connect HTTP INSERT.
 > `otlp` receiver is shared by all three pipelines (metrics, traces, logs).
 > No `prometheus` receiver — agent handles external node-exporter scraping (supports bare-metal outside K8s).
 
@@ -42,7 +42,7 @@ service:
 ## Chain 1 -- otel-logs -> otel_logs
 
 Produced by `veronex-analytics` via OTel Logs SDK -> OTel Collector -> Redpanda `otel-logs`.
-Three active Kafka Engine chains total. Chains 2 and 3 are in `otel-pipeline-ops.md`.
+One Kafka Engine chain (Chain 1 only). Chains 2 and 3 use Redpanda Connect HTTP INSERT — see `otel-pipeline-ops.md`.
 
 **Target table** (`docker/clickhouse/schema.sql`):
 

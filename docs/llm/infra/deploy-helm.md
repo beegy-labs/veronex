@@ -78,7 +78,7 @@ helm install veronex deploy/helm/veronex/ \
 | `vespa-statefulset.yaml` | StatefulSet | Vespa vector DB (`vespa.enabled=true`) |
 | `vespa-service.yaml` | Service + headless | ClusterIP port 8080 + headless for StatefulSet |
 | `otel-collector-deployment.yaml` | Deployment | OTel Collector (optional) |
-| `clickhouse-init-job.yaml` | Job (hook) | Applies ClickHouse schema on install/upgrade |
+| `migrate-job.yaml` | Job (hook) | Applies Postgres + ClickHouse schema on install/upgrade (`clickhouse-client --multiquery`) |
 | `secret.yaml` | Secret | Chart-managed (skipped when ESO/CSI/existing) |
 | `external-secret.yaml` | ExternalSecret | ESO mode |
 | `secret-provider-class.yaml` | SecretProviderClass | CSI mode |
@@ -98,10 +98,10 @@ autoscaling:
     enabled: true              # KEDA ScaledObject (disables HPA)
     pollingInterval: 15        # seconds between Valkey checks
     cooldownPeriod: 120        # seconds before scale-down
-    pendingJobsThreshold: "5"  # scale up when queue LLEN > this
+    pendingJobsThreshold: "5"  # scale up when queue ZCARD > this
 ```
 
-KEDA reads `LLEN veronex:queue:jobs` + `veronex:queue:jobs:paid` from Valkey. Requires KEDA operator installed in cluster.
+KEDA reads `ZCARD veronex:queue:zset` from Valkey. Requires KEDA operator installed in cluster.
 
 Agent pods use dynamic replica discovery via `SCARD veronex:agent:instances` — no KEDA needed for agent (auto-adapts to any replica count).
 

@@ -79,8 +79,6 @@ Metadata only -- large columns removed:
 | `messages_json` | S3 `ConversationRecord.messages` |
 | `tool_calls_json` | S3 `ConversationRecord.tool_calls` + `has_tool_calls BOOLEAN` |
 
-Migration: `crates/veronex/migrations/0000000002_s3_conversation_store.sql`
-
 ---
 
 ## Environment Variables
@@ -103,7 +101,6 @@ Migration: `crates/veronex/migrations/0000000002_s3_conversation_store.sql`
 | `crates/veronex/src/infrastructure/outbound/persistence/job_repository.rs` | `PostgresJobRepository` implementation |
 | `crates/veronex/src/infrastructure/outbound/s3/message_store.rs` | `S3MessageStore` implementation (zstd-3) |
 | `crates/veronex/src/application/use_cases/inference/runner.rs` | `finalize_job()` -- S3 PUT + DB finalize call site |
-| `crates/veronex/migrations/0000000002_s3_conversation_store.sql` | Postgres migration |
 
 ---
 

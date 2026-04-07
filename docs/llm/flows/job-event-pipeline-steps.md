@@ -26,9 +26,9 @@ flowchart TD
     I --> J["valkey.zset_enqueue()"]
 
     J --> K{Result}
-    K -->|"Ok(true)\nenqueue success"| L(["Return JobId ✓"])
+    K -->|"Ok(true)\nenqueue success"| L(["Return JobId ok"])
     K -->|"Ok(false)\nqueue full"| M["decr_pending()\nRemove from DashMap\nfail_with_reason() → Postgres"]
-    M --> N(["DomainError::QueueFull ✗"])
+    M --> N(["DomainError::QueueFull err"])
     K -->|"Err\nValkey failure"| O["spawn_job_direct()\ndirect execution"]
     O --> L
 
@@ -49,7 +49,7 @@ flowchart TD
     B -->|No| E
     B -->|Yes| C{Current status}
 
-    C -->|"Completed\nFailed\nCancelled\n(terminal)"| Z(["No-op ✓"])
+    C -->|"Completed\nFailed\nCancelled\n(terminal)"| Z(["No-op ok"])
 
     C -->|"Pending\nor Running"| D["DashMap:\nstatus=Cancelled, done=true\nnotify_one() ← wake stream()\ncancel_notify_one() ← abort runner"]
 
@@ -66,7 +66,7 @@ flowchart TD
     G -->|Yes| I
 
     H --> I["Remove cancel_notifiers\nschedule_cleanup(delay)"]
-    I --> Z2(["Ok(()) ✓"])
+    I --> Z2(["Ok(()) ok"])
 
     style E fill:#e8f5e9,stroke:#43a047
     style H fill:#f3e5f5,stroke:#8e24aa
@@ -85,9 +85,9 @@ flowchart TD
     B -->|No| C["job_repo.get(job_id)\nPostgres SELECT"]
     C --> D{Status}
     D -->|Completed| E["result_text yield\ndone yield"]
-    D -->|Failed| F(["Return Error ✗"])
-    D -->|Other| G(["'job not in memory' error ✗"])
-    E --> END(["Stream end ✓"])
+    D -->|Failed| F(["Return Error err"])
+    D -->|Other| G(["'job not in memory' error err"])
+    E --> END(["Stream end ok"])
 
     B -->|Yes| H["idx = 0\nStart streaming loop"]
     H --> I["Read tokens[idx..]\nfrom DashMap"]
@@ -140,7 +140,7 @@ flowchart TD
     I -->|"stream.next()\n= Err(e)"| S["handle_stream_error()"]
     S --> S1["DashMap: status=Failed\njob_repo.fail_with_reason()\nPostgres UPDATE"]
     S1 --> S2["decr_running()\nemit_inference_event()\nrecord_tpm() refund"]
-    S2 --> T(["Return Err ✗"])
+    S2 --> T(["Return Err err"])
 
     L --> U["finalize_job()"]
     U --> V["DashMap: status=Completed\ndone=true, notify_one()"]
@@ -150,7 +150,7 @@ flowchart TD
     X -->|"Owned by self"| Z["S3 PUT\nConversationRecord\n(non-fatal)"]
     Z --> AA["job_repo.finalize()\nPostgres UPDATE\n(metrics + has_tool_calls)"]
     AA --> AB["broadcast_event('completed')\nrecord_tpm()\nemit_inference_event()\nschedule_cleanup()"]
-    AB --> AC(["Ok(latency_ms) ✓"])
+    AB --> AC(["Ok(latency_ms) ok"])
 
     style S1 fill:#e8f5e9,stroke:#43a047
     style Z fill:#e3f2fd,stroke:#1e88e5

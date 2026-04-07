@@ -30,7 +30,7 @@ GET /v1/dashboard/queue/depth
     → { "api_paid": N, "api": N, "test": N, "total": N }
 ```
 
-Returns current Valkey queue lengths via `LLEN` on all three queue keys. Returns zeros when Valkey is unavailable (fail-open). Used by the Network Flow panel to display a "N waiting" badge on the Queue node. Frontend polls every 3 s (`queueDepthQuery`).
+Returns queue depths via `LLEN` on legacy LIST keys (`queue:jobs:paid`, `queue:jobs`, `queue:jobs:test`) — these are always 0 in current deployments (Phase 3 uses ZSET). Returns zeros when Valkey is unavailable (fail-open). Used by the Network Flow panel. Frontend polls every 3 s (`queueDepthQuery`).
 
 ### Real-Time Job Status Stream (Network Flow)
 

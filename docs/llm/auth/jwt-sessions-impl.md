@@ -117,7 +117,7 @@ Implemented by `HttpAuditAdapter` -- forwards to veronex-analytics. Fail-open: H
   -> POST /internal/ingest/audit (veronex-analytics)
   -> OTel LogRecord (event.name="audit.action")
   -> OTLP gRPC -> OTel Collector -> Redpanda [otel-logs]
-  -> kafka_otel_logs_mv (ClickHouse MV) -> otel_logs (MergeTree)
+  -> Kafka Engine (kafka_otel_logs_mv) -> otel_logs (MergeTree)
 ```
 
 ### audit_events ClickHouse Table
@@ -192,7 +192,7 @@ Singleton `apiClient` for all JWT-protected routes:
 | Task | File | What to change |
 |------|------|----------------|
 | Add auth endpoint | `auth_handlers.rs` | Handler + `router.rs` public block |
-| Add account field | new migration + `account.rs` + `account_repository.rs` | Trait + impl |
+| Add account field | `docker/postgres/init.sql` + `account.rs` + `account_repository.rs` | Trait + impl |
 | Add auditable action | handler file | Call `emit_audit()` with action + `details` string |
 | Change JWT expiry | `auth_handlers.rs` `issue_access_token()` | Update `exp` |
 | Change refresh TTL | `auth_handlers.rs` login handler | `EXPIRE` call duration |

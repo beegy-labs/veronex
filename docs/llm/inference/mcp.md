@@ -20,8 +20,6 @@ Client → POST /v1/chat/completions
            ▼
     mcp_ollama_chat()
            │
-           ├── reads lab_settings.mcp_orchestrator_model (override or req.model)
-           │
            ▼
     McpBridgeAdapter.run_loop()
            │
@@ -66,27 +64,6 @@ The caller (`openai_handlers.rs`) additionally checks:
 
 ACL filtering happens inside `run_loop()` after interception — API-key callers with
 no granted servers receive an empty tool list (default deny).
-
----
-
-## Orchestrator Model
-
-The model used for MCP tool-call loops is determined in this order:
-
-1. `lab_settings.mcp_orchestrator_model` (if set) — global override for all MCP requests
-2. `req.model` (fallback) — the model the client specified
-
-This allows ops to pin a well-suited model (e.g. `qwen3:8b`) cluster-wide without
-requiring clients to change their requests.
-
-Recommended model for multilingual (Korean/English/Japanese) workloads: **`qwen3:8b`**
-- 128K context window
-- Hermes tool-calling format (structured, reliable)
-- Native CJK support
-- Strong tool-call restraint (does not over-call tools)
-
-Configured via: `PATCH /v1/dashboard/lab` → `mcp_orchestrator_model`
-UI: MCP page → Orchestrator Model card
 
 ---
 
@@ -145,7 +122,7 @@ ACL management requires `settings_manage` permission.
 | `POST` | `/v1/mcp/servers` | Register a new MCP server |
 | `PATCH` | `/v1/mcp/servers/{id}` | Update name / URL / enabled |
 | `DELETE` | `/v1/mcp/servers/{id}` | Remove server + cascade tools + access rows |
-| `GET` | `/v1/mcp/stats` | Per-server tool call stats (from ClickHouse) |
+| `GET` | `/v1/mcp/stats` | Per-server, per-tool call stats (ClickHouse; `?hours=N`) |
 | `GET` | `/v1/mcp/targets` | Agent discovery — enabled servers `[{id, url}]` |
 | `GET` | `/v1/keys/{key_id}/mcp` | List MCP server access for a key |
 | `POST` | `/v1/keys/{key_id}/mcp` | Grant a key access to a server |
@@ -155,10 +132,9 @@ ACL management requires `settings_manage` permission.
 
 ## Frontend
 
-Page: `/mcp` → `web/app/providers/components/mcp-tab.tsx` → renders `<McpTab />`
+Page: `/mcp` → `web/app/mcp/components/mcp-tab.tsx` → renders `<McpTab />`
 
 Sections:
-1. **Orchestrator Model** card — `OrchestratorModelSelector` (reads `GET /v1/dashboard/lab`, patched via `PATCH /v1/dashboard/lab`)
-2. **Register Server** button → `RegisterMcpModal` dialog
-3. **Server table** — name, slug, URL, online status, tool count, enabled toggle, delete
-4. **Stats card** — per-server call counts, success rate, cache hit %, avg latency
+1. **Register Server** button → `RegisterMcpModal` dialog
+2. **Server table** — name, slug, URL, online status, tool count (clickable → tool list dialog), enabled toggle, delete
+3. **Stats card** — per-server per-tool call counts, success rate, cache hit %, avg latency (grouped by MCP server)

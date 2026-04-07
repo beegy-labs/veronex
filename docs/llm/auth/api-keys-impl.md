@@ -75,7 +75,7 @@ Per-key history: `GET /v1/audit?resource_type=api_key&resource_id={key_id}` retu
 
 Per-key provider allow/deny control. When no rows exist for a key, all providers are accessible (default allow-all). When rows exist, only providers with `is_allowed = true` are routable for that key.
 
-DB: `api_key_provider_access (api_key_id UUID FK, provider_id UUID FK, is_allowed BOOL, PK(api_key_id, provider_id))` — migration 000010.
+DB: `api_key_provider_access (api_key_id UUID FK, provider_id UUID FK, is_allowed BOOL, PK(api_key_id, provider_id))` — `docker/postgres/init.sql`.
 
 | Endpoint | Auth | Body | Response |
 |----------|------|------|----------|

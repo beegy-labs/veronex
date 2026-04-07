@@ -6,7 +6,7 @@
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add new API key field | `migrations/` + `domain/entities/api_key.rs` + `persistence/api_key_repository.rs` + `key_handlers.rs` `KeySummary` |
+| Add new API key field | `docker/postgres/init.sql` + `domain/entities/api_key.rs` + `persistence/api_key_repository.rs` + `key_handlers.rs` `KeySummary` |
 | Change auth rejection logic | `persistence/api_key_repository.rs` → `get_by_hash()` WHERE clause |
 | Add new rate limit type (e.g. requests/day) | `middleware/rate_limiter.rs` → add new Valkey check before handler |
 | Change RPM window duration | `middleware/rate_limiter.rs` → `RPM_WINDOW_MS` constant + `RATE_LIMIT_SCRIPT` Lua body |

@@ -10,7 +10,7 @@ Route: `/mcp` | Nav group: standalone link (footer of Providers group) | Auth: r
 
 ```
 web/app/mcp/page.tsx                     — route entry, heading only
-web/app/providers/components/mcp-tab.tsx — all logic: list, register, toggle, delete, stats
+web/app/mcp/components/mcp-tab.tsx       — all logic: list, register, toggle, delete, stats
 web/lib/queries/mcp.ts                   — queryOptions factory for mcp-servers list
 web/lib/api.ts                           — mcpServers, registerMcpServer, patchMcpServer, deleteMcpServer, mcpStats
 web/lib/types.ts                         — McpServer, McpServerStat, RegisterMcpServerRequest
@@ -27,7 +27,7 @@ web/lib/types.ts                         — McpServer, McpServerStat, RegisterM
 Main orchestrator. Responsibilities:
 - Fetches `mcpServersQuery()` (list of registered servers)
 - 404 handling: if the endpoint doesn't exist (feature flag / old backend), calls `hideSection('mcp')` via `useNav404` to remove the MCP nav item dynamically
-- Renders `OrchestratorModelSelector`, register button, server table, `McpStatsCard`
+- Renders register button, server table, `McpStatsCard`
 - Delete: uses native `confirm()` currently — **known violation** (should use `ConfirmDialog`)
 
 ### `RegisterMcpModal`
@@ -37,13 +37,6 @@ Registration modal. Fields: `name`, `slug` (auto-derived from name), `url`, `tim
 - No 2-Step Verify Flow — MCP servers are not verified at registration (unlike GPU servers/Ollama)
 - `onSettled` used correctly for cache invalidation
 - `canSubmit` gates the register button
-
-### `OrchestratorModelSelector`
-
-Card that selects the Ollama model used for MCP orchestration (stored in `lab_settings`).
-- Queries `['lab-settings']` and `['capacity-settings']` (for available Ollama models)
-- Uses `onSuccess` for invalidation (known violation — should be `onSettled`)
-- Select value: current `mcp_orchestrator_model` or `NONE_VALUE` sentinel (`'__none__'`)
 
 ### `McpStatsCard`
 
@@ -75,8 +68,9 @@ Factory function (not plain object) because `refetchInterval` uses the callback 
 
 | Type | Fields |
 |------|--------|
-| `McpServer` | `id`, `name`, `slug`, `url`, `timeout_secs`, `is_enabled`, `online`, `tool_count` |
-| `McpServerStat` | `server_slug`, `server_name`, `total_calls`, `success_rate`, `cache_hit_count`, `avg_latency_ms` |
+| `McpServer` | `id`, `name`, `slug`, `url`, `timeout_secs`, `is_enabled`, `online`, `tool_count`, `tools?` |
+| `McpServerStat` | `server_slug`, `server_name`, `tool_name`, `total_calls`, `success_rate`, `cache_hit_count`, `avg_latency_ms` |
+| `McpToolSummary` | `name`, `namespaced_name`, `description?` |
 | `RegisterMcpServerRequest` | `name`, `slug`, `url`, `timeout_secs` |
 
 ---
@@ -109,10 +103,9 @@ Factory function (not plain object) because `refetchInterval` uses the callback 
 | `mcp.tools` | Tools count column header |
 | `mcp.online` / `mcp.offline` | Status cell text |
 | `mcp.deleteConfirm` | Native confirm message (interpolates `{{name}}`) |
-| `mcp.orchestratorModel` | OrchestratorModelSelector card title |
-| `mcp.orchestratorModelDesc` | Selector description |
-| `mcp.orchestratorModelNone` | None option label |
-| `mcp.orchestratorModelSaved` | Save confirmation inline text |
+| `mcp.statsToolName` | Tool name column header |
+| `mcp.toolList` | Tool list dialog title |
+| `mcp.noTools` | Empty tool list text |
 | `mcp.stats` | McpStatsCard title |
 | `mcp.statsDesc` | Stats card description |
 | `mcp.statsTotalCalls` | Table column |
@@ -131,6 +124,5 @@ Factory function (not plain object) because `refetchInterval` uses the callback 
 | P0 | `McpStatsCard` | `fmt_pct`/`fmt_ms` local formatters — use `fmtPct`/`fmtMs` from `chart-theme.ts` |
 | P0 | Server table | `Status` column header hardcoded English — add `mcp.status` i18n key |
 | P1 | `McpStatsCard` | `staleTime: 30_000` hardcoded — use `STALE_TIME_FAST` |
-| P1 | `OrchestratorModelSelector` | `onSuccess` for invalidation — change to `onSettled` |
 | P1 | `McpTab` toggle `Switch` | Missing `useOptimistic` |
 | P2 | `McpTab` delete | `confirm()` native dialog — replace with `ConfirmDialog` component |

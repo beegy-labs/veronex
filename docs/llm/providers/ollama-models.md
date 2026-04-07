@@ -16,7 +16,7 @@
 | Toggle a model on/off for a provider | `PATCH /v1/providers/{id}/selected-models/{model}` | `set_model_enabled()` in `provider_handlers.rs` |
 | Change model selection default on sync | `provider_handlers.rs` + `ollama_model_handlers.rs` | `upsert_models()` inserts `is_enabled = true` for new rows |
 | Change modal pagination size | `web/app/providers/page.tsx` `PROVIDERS_PAGE_SIZE` | Affects `OllamaModelProvidersModal` |
-| Add field to OllamaModel | `migrations/` + `ollama_model_repository.rs` (port + pg impl) | |
+| Add field to OllamaModel | `docker/postgres/init.sql` + `ollama_model_repository.rs` (port + pg impl) | |
 
 ## Key Files
 
@@ -94,7 +94,7 @@ GET /v1/ollama/models?search=&page=1&limit=20
 ```
 
 `is_vision` — derived from model name heuristic (`is_vision_model()` in `inference_helpers.rs`). True for known vision model name patterns.
-`max_ctx` — `MAX(model_vram_profiles.max_ctx)` across all providers. `0` = not yet profiled by capacity analyzer. Populated by capacity analyzer from Ollama `/api/show` response `context_length`. Migration: `000005_model_vram_max_ctx.up.sql`.
+`max_ctx` — `MAX(model_vram_profiles.max_ctx)` across all providers. `0` = not yet profiled by capacity analyzer. Populated by capacity analyzer from Ollama `/api/show` response `context_length`. Schema: `docker/postgres/init.sql`.
 
 Used by frontend context-window warnings: `getMultiturnWarnings()` in `api-test-form.tsx` uses `max_ctx` to warn when conversation token estimate exceeds 85% of model's context window.
 
@@ -158,7 +158,7 @@ When `is_enabled = false`, the model is blocked regardless of per-provider `sele
 | `GET /v1/models/global-disabled` | `RequireModelManage` | `Vec<String>` — model names where is_enabled = false |
 | `PATCH /v1/models/global-settings/{model_name}` | `RequireModelManage` | `{ is_enabled: bool }` → 200 |
 
-DB: `global_model_settings (model_name TEXT PK, is_enabled BOOL, updated_at TIMESTAMPTZ)` — migration 000010.
+DB: `global_model_settings (model_name TEXT PK, is_enabled BOOL, updated_at TIMESTAMPTZ)` — `docker/postgres/init.sql`.
 
 Permission: `model_manage` (9th permission in `ALL_PERMISSIONS`).
 

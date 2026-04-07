@@ -9,7 +9,7 @@
 | Add new service | `docker-compose.yml` | New service block |
 | Add new env var | `main.rs` + `docker-compose.yml` + `.env.example` | Read in `main()`, set in compose, document here |
 | Add new Valkey key pattern | This file + relevant handler | Add to Valkey Key Patterns table, use `veronex:` prefix |
-| Add new DB migration | `crates/veronex/migrations/` | Update `0000000001_init.sql` or add sequential file |
+| Modify DB schema | `docker/postgres/init.sql` | Edit consolidated init file directly |
 | Add new repo to AppState | `state.rs` + `main.rs` | Add `Arc<dyn Trait>` field, init in composition root |
 | Change host port mapping | `docker-compose.yml` `ports:` | Offset convention: +1 from standard (5432->5433, 6379->6380) |
 | Add Helm values | `deploy/helm/veronex/values.yaml` | Add under relevant service block; update deployment template |
@@ -21,7 +21,7 @@
 | `docker-compose.yml` | Local dev all-in-one |
 | `crates/veronex/src/main.rs` | Composition root (all adapters wired) |
 | `crates/veronex/src/infrastructure/inbound/http/state.rs` | `AppState` struct |
-| `crates/veronex/migrations/` | All DB migrations |
+| `docker/postgres/init.sql` | Postgres schema (consolidated, single file) |
 | `docker/clickhouse/schema.sql` | ClickHouse schema (`__RETENTION_*__` placeholders) |
 | `docker/clickhouse/init.sh` | Substitutes retention env vars, applies schema |
 
@@ -41,9 +41,9 @@
 | minio-init | minio/mc (init container) | -- | Creates `veronex-messages` + `veronex-images` buckets and sets download policy on images bucket. Runs once on startup |
 | veronex | local build | **3001**->3000 | Rust API server |
 | veronex-analytics | local build | internal 3003 | Analytics (OTel write + ClickHouse read) |
-| veronex-web | local build | 3002 | Next.js admin dashboard |
-| veronex-agent | local build | none (push-only) | OTLP push collector (node-exporter + Ollama → OTel Collector) |
-| weather-mcp | local build | **3100** | MCP tool server (multi-tool, single deployment) |
+| veronex-web | local build | **3000** | Next.js admin dashboard |
+| veronex-agent | local build | 9091 (health) | OTLP push collector (node-exporter + Ollama → OTel Collector) |
+| veronex-mcp | local build | **3100** | MCP tool server (multi-tool, single deployment) |
 | veronex-embed | local build | **3200** | Embedding server |
 | otel-collector | docker/otel/Dockerfile | 4317, 4318, 13133 | Metrics + traces + logs -> Redpanda |
 
@@ -88,9 +88,13 @@ CLICKHOUSE_PASSWORD=veronex
 CLICKHOUSE_DB=veronex
 OTEL_HTTP_ENDPOINT=http://otel-collector:4318
 ANALYTICS_SECRET=<shared-secret>
-CLICKHOUSE_RETENTION_ANALYTICS_DAYS=90   # set before first `docker compose up`
-CLICKHOUSE_RETENTION_METRICS_DAYS=30
-CLICKHOUSE_RETENTION_AUDIT_DAYS=365
+# Retention TTLs — substituted into schema.sql on first volume creation
+CLICKHOUSE_RETENTION_METRICS_DAYS=14
+CLICKHOUSE_RETENTION_LOGS_DAYS=7
+CLICKHOUSE_RETENTION_INFERENCE_DAYS=90
+CLICKHOUSE_RETENTION_AUDIT_DAYS=90
+CLICKHOUSE_RETENTION_TRACES_DAYS=7
+CLICKHOUSE_RETENTION_MCP_DAYS=90
 
 # veronex-agent (OTLP push collector — no HTTP server)
 VERONEX_API_URL=http://veronex:3000      # target discovery endpoint
@@ -113,7 +117,9 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 | `veronex:queue:enqueue_at` | Side hash: job_id → enqueue_at_ms (for promote_overdue) |
 | `veronex:queue:model` | Side hash: job_id → model (for demand_resync) |
 | `veronex:demand:{model}` | Per-model demand counter (INCR on enqueue, DECR on dispatch/cancel) |
-| `veronex:queue:processing` | Processing list (RPUSH on Lua claim for reliable queue) |
+| `veronex:queue:processing` | Processing list (legacy Phase 2; maintained for reaper crash recovery only) |
+| `veronex:queue:active` | Active-processing ZSET (score = lease deadline unix_ms; Phase 3) |
+| `veronex:queue:active:attempts` | Hash: job_id → re-enqueue attempt count |
 | `veronex:queue:jobs:paid` | (legacy, unused after Phase 3) |
 | `veronex:queue:jobs` | (legacy, unused after Phase 3) |
 | `veronex:queue:jobs:test` | (legacy, unused after Phase 3) |
@@ -141,9 +147,9 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 
 ---
 
-## DB Migrations (crates/veronex/migrations/)
+## DB Schema (`docker/postgres/init.sql`)
 
-Single init migration: `0000000001_init.sql` -- all tables in one schema file.
+Single consolidated file — no migration framework.
 
 | Table | Description |
 |-------|-------------|
