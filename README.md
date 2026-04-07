@@ -130,6 +130,10 @@ Workers hold a lease on `queue:active` (ZSET, score = deadline_ms) and renew eve
 
 ---
 
+## Security
+
+Report vulnerabilities via [GitHub Security Advisories](../../security/advisories/new) — do not open a public issue.
+
 ## License
 
 MIT
