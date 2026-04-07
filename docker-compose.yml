@@ -102,7 +102,7 @@ services:
   veronex:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: crates/veronex/Dockerfile
     ports:
       - "3001:3000"
     volumes:
@@ -215,7 +215,7 @@ services:
   otel-collector:
     build:
       context: ./docker/otel
-      dockerfile: Dockerfile
+      dockerfile: crates/veronex/Dockerfile
     command: ["--config=/etc/otel/config.yaml"]
     volumes:
       - ./docker/otel/config.yaml:/etc/otel/config.yaml:ro
@@ -262,7 +262,7 @@ services:
   veronex-embed:
     build:
       context: .
-      dockerfile: Dockerfile.veronex-embed
+      dockerfile: crates/veronex-embed/Dockerfile
     environment:
       PORT: "3200"
       RUST_LOG: info
