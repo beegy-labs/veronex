@@ -145,7 +145,7 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `cancelled_at` | `Option<DateTime>` | set by cancel(); NULL for non-cancelled jobs |
 | `image_keys` | `Option<Vec<String>>` | S3 object keys for attached images (WebP); stored as `TEXT[]` in DB |
 | `mcp_loop_id` | `Option<Uuid>` | groups jobs in one MCP agentic loop |
-| `failure_reason` | `Option<String>` | machine-readable failure cause |
+| `failure_reason` | `Option<String>` | machine-readable failure cause: `queue_full`, `no_eligible_provider`, `thermal_hard_gate`, `drain_forced`, `queue_wait_exceeded`, `provider_error`, `token_budget_exceeded`, `lease_expired_max_attempts` |
 | `account_id` | `Option<Uuid>` | account that submitted via Test Run |
 
 **S3 ConversationRecord** (`conversations/{owner_id}/{YYYY-MM-DD}/{job_id}.json.zst`):

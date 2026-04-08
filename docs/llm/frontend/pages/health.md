@@ -74,7 +74,7 @@ Hidden when `!pipeline.available || topics.length === 0` → shows "pipelineUnav
 | `web/lib/types.ts` | `ServiceHealthResponse`, `PipelineHealthResponse`, `TopicPipelineStats`, `PodItem` |
 | `web/lib/constants.ts` | `SERVICE_STATUS_DOT`, `PROVIDER_STATUS_DOT` |
 | `infrastructure/outbound/health_checker.rs` | `check_and_store_services(vespa_url)` probe loop |
-| `infrastructure/inbound/http/dashboard_handlers.rs` | `GET /v1/dashboard/services`, `GET /v1/dashboard/pipeline` |
+| `infrastructure/inbound/http/infra_health_handlers.rs` | `GET /v1/dashboard/services`, `GET /v1/dashboard/pipeline` |
 
 ## i18n Keys
 
