@@ -64,7 +64,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 | Dockerfile | Extras |
 |------------|--------|
-| `Dockerfile` | cargo-chef, mold, SQLX_OFFLINE, .sqlx/ + migrations/ |
+| `Dockerfile` | cargo-chef, mold, SQLX_OFFLINE, .sqlx/ |
 | `crates/veronex-agent/Dockerfile` | cargo-chef, mold |
 | `crates/veronex-analytics/Dockerfile` | cargo-chef, mold, protoc |
 | `web/Dockerfile` | npm cache mount + `.next/cache` mount |

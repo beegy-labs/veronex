@@ -1,6 +1,6 @@
 [package]
 name = "veronex"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 
 [dependencies]
@@ -8,7 +8,7 @@ edition = "2024"
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "net", "time", "signal", "fs"] }
 tower = { version = "0.5", features = ["timeout", "limit"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 pin-project-lite = "0.2"
 
 # Serialization
@@ -29,9 +29,9 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 blake2 = "0.10"
 base62 = "2"
 hex = "0.4"
-rand = "0.8"
+rand = "0.9"
 argon2 = "0.5"
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 aes-gcm = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
@@ -39,10 +39,10 @@ base64 = "0.22"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-opentelemetry = "0.27"
-opentelemetry-otlp = "0.27"
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
-tracing-opentelemetry = "0.28"
+opentelemetry = "0.31"
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.32"
 
 # Config
 config = "0.14"
@@ -50,6 +50,7 @@ config = "0.14"
 # S3 / object storage (MinIO-compatible)
 aws-sdk-s3 = "1"
 bytes = "1"
+zstd = "0.13"
 
 # Image processing (WebP conversion for inference job thumbnails)
 image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png"] }
@@ -71,6 +72,9 @@ futures = "0.3"
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 time = { version = "0.3.47", features = ["formatting"] }
+
+# MCP protocol client
+veronex-mcp = { path = "../veronex-mcp" }
 
 # Workspace hack for faster builds (managed by cargo-hakari)
 workspace-hack = { path = "../../workspace-hack" }

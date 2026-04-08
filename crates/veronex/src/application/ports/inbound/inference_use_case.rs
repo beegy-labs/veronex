@@ -5,6 +5,7 @@ use futures::Stream;
 
 use uuid::Uuid;
 
+use crate::application::ports::outbound::message_store::VisionAnalysis;
 use crate::domain::enums::{ApiFormat, JobSource, JobStatus, KeyTier, ProviderType};
 use crate::domain::errors::DomainError;
 use crate::domain::value_objects::{JobId, StreamToken};
@@ -26,7 +27,7 @@ pub struct SubmitJobRequest {
     pub messages: Option<serde_json::Value>,
     pub tools: Option<serde_json::Value>,
     pub request_path: Option<String>,
-    pub conversation_id: Option<String>,
+    pub conversation_id: Option<uuid::Uuid>,
     /// Billing tier of the API key: `Some(KeyTier::Paid)` routes to the high-priority queue.
     /// `None` or `Some(KeyTier::Free)` uses the standard queue.
     pub key_tier: Option<KeyTier>,
@@ -37,6 +38,15 @@ pub struct SubmitJobRequest {
     pub response_format: Option<serde_json::Value>,
     pub frequency_penalty: Option<f64>,
     pub presence_penalty: Option<f64>,
+    /// MCP agentic loop group ID — same UUID for all jobs in one run_loop() execution.
+    /// None for non-MCP (single-turn) requests.
+    pub mcp_loop_id: Option<uuid::Uuid>,
+    /// Max tokens (output limit) already capped at the HTTP handler boundary.
+    /// Passed through to `InferenceJob.max_tokens`.
+    pub max_tokens: Option<u32>,
+    /// Vision pre-processing result for image-bearing Tasks.
+    /// Set by handlers that call `analyze_images_for_context()` before submission.
+    pub vision_analysis: Option<VisionAnalysis>,
 }
 
 /// Snapshot of in-flight job counts — derived from the in-memory DashMap.

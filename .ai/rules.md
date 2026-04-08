@@ -35,6 +35,9 @@ Inbound Adapters → [Ports] → Application Core → [Ports] → Outbound Adapt
 | Edit `docs/en/` or `docs/kr/` | Edit `.ai/` or `docs/llm/` only |
 | Hardcode CSS colors | Reference `--theme-*` tokens |
 | `Uuid::new_v4()` for PKs | Use `Uuid::now_v7()` (app) / `uuidv7()` (PG18). Exception: `instance_id` uses v4 (random, non-PK) |
+| Expose raw `Uuid` in HTTP responses | Use typed entity ID (`JobId`, `AccountId`, etc.) — serializes as `{prefix}_{base62}` |
+| `Path<Uuid>` in handlers | Use `Path<JobId>`, `Path<AccountId>`, etc. |
+| Store base62/prefixed IDs in DB | DB stores UUID only; encoding is HTTP-layer only |
 
 | ALWAYS | Details |
 | ------ | ------- |
@@ -45,3 +48,5 @@ Inbound Adapters → [Ports] → Application Core → [Ports] → Outbound Adapt
 | Check docs/llm/ before coding | CDD-first: update docs then code |
 | Use `onSettled` for TQ invalidation | Runs on error too |
 | Gate lab features via `useLabSettings()` | Context SSOT, not local state |
+| Entity ID in API: `{prefix}_{base62}` | `job_xxx`, `acct_xxx`, `key_xxx`, etc. — see `docs/llm/policies/id-encoding.md` |
+| API key secret: BLAKE2b-256 hash | `vnx_...` plaintext shown once; only `key_hash` stored in DB |

@@ -16,16 +16,6 @@ pub struct ProviderVramBudget {
     pub kv_cache_type: String,
 }
 
-impl ProviderVramBudget {
-    pub fn default_for(provider_id: Uuid) -> Self {
-        Self {
-            provider_id,
-            safety_permil: 100,
-            vram_total_source: "probe".to_string(),
-            kv_cache_type: "q8_0".to_string(),
-        }
-    }
-}
 
 #[async_trait::async_trait]
 pub trait ProviderVramBudgetRepository: Send + Sync {

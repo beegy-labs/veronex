@@ -22,7 +22,6 @@ import { BASE_API_URL as BASE } from './constants'
 // Redirect-to-login is suppressed when the current pathname matches.
 
 export const PUBLIC_PATHS = ['/login', '/setup'] as const
-export type PublicPath = (typeof PUBLIC_PATHS)[number]
 
 export function isPublicPath(pathname: string): boolean {
   return (PUBLIC_PATHS as readonly string[]).includes(pathname)

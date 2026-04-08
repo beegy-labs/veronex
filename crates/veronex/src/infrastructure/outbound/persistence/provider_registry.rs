@@ -145,7 +145,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn list_active(&self) -> Result<Vec<LlmProvider>> {
-        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers WHERE is_active = true AND status = 'online' ORDER BY registered_at ASC");
+        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers WHERE is_active = true AND status = 'online' ORDER BY registered_at ASC LIMIT 10000");
         let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await
@@ -166,7 +166,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn list_all(&self) -> Result<Vec<LlmProvider>> {
-        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers ORDER BY registered_at ASC");
+        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers ORDER BY registered_at ASC LIMIT 10000");
         let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await
@@ -228,6 +228,41 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
             .context("failed to deactivate provider")?;
 
         Ok(())
+    }
+
+    async fn list_page(&self, search: &str, provider_type: Option<&str>, limit: i64, offset: i64) -> Result<(Vec<LlmProvider>, i64)> {
+        let pattern = format!("%{}%", search);
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM llm_providers WHERE (name ILIKE $1 OR url ILIKE $1) AND ($2::text IS NULL OR provider_type = $2)"
+        )
+        .bind(&pattern)
+        .bind(provider_type)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count providers")?;
+
+        let sql = format!(
+            "SELECT {PROVIDER_COLS} FROM llm_providers WHERE (name ILIKE $1 OR url ILIKE $1) AND ($2::text IS NULL OR provider_type = $2) ORDER BY registered_at ASC LIMIT $3 OFFSET $4"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(&pattern)
+            .bind(provider_type)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .context("failed to list providers page")?;
+
+        let mut providers = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let (p, needs) = row_to_provider(r, &self.master_key)?;
+            if needs && let Some(ref key) = p.api_key_encrypted {
+                tracing::warn!(id = %p.id, "legacy plaintext provider key — re-encrypting");
+                self.re_encrypt_key(p.id, key).await;
+            }
+            providers.push(p);
+        }
+        Ok((providers, total))
     }
 
     async fn update(&self, provider: &LlmProvider) -> Result<()> {

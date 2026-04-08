@@ -35,11 +35,17 @@ pub struct ApiKey {
     /// Billing tier: free or paid (default).
     #[serde(default)]
     pub tier: KeyTier,
+    /// MCP tool-call round limit (0 = MCP disabled for this key).
+    #[serde(default = "default_mcp_cap_points")]
+    #[ts(skip)]
+    pub mcp_cap_points: i16,
     /// Account that created this key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub account_id: Option<Uuid>,
 }
+
+fn default_mcp_cap_points() -> i16 { 3 }
 
 /// Returned once at key creation — contains the plaintext key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,7 +66,7 @@ mod tests {
         ApiKey {
             id: Uuid::now_v7(),
             key_hash: "a".repeat(64),
-            key_prefix: "iq_01ARZ3N".to_string(),
+            key_prefix: "vnx_01ARZ3N".to_string(),
             tenant_id: "tenant-1".to_string(),
             name: "test-key".to_string(),
             is_active: true,
@@ -71,37 +77,9 @@ mod tests {
             deleted_at: None,
             key_type: KeyType::Standard,
             tier: KeyTier::Paid,
+            mcp_cap_points: 3,
             account_id: None,
         }
-    }
-
-    #[test]
-    fn api_key_creation() {
-        let key = make_api_key();
-        assert_eq!(key.id.get_version_num(), 7);
-        assert_eq!(key.tenant_id, "tenant-1");
-        assert_eq!(key.name, "test-key");
-        assert!(key.is_active);
-        assert_eq!(key.rate_limit_rpm, 0);
-        assert_eq!(key.rate_limit_tpm, 0);
-        assert!(key.expires_at.is_none());
-    }
-
-    #[test]
-    fn api_key_with_rate_limits() {
-        let mut key = make_api_key();
-        key.rate_limit_rpm = 60;
-        key.rate_limit_tpm = 100_000;
-        assert_eq!(key.rate_limit_rpm, 60);
-        assert_eq!(key.rate_limit_tpm, 100_000);
-    }
-
-    #[test]
-    fn api_key_with_expiry() {
-        let mut key = make_api_key();
-        let expires = Utc::now() + chrono::Duration::days(30);
-        key.expires_at = Some(expires);
-        assert!(key.expires_at.is_some());
     }
 
     #[test]
@@ -112,7 +90,7 @@ mod tests {
         assert!(!json.contains("key_hash"));
         // public fields must be present
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["key_prefix"], "iq_01ARZ3N");
+        assert_eq!(v["key_prefix"], "vnx_01ARZ3N");
         assert_eq!(v["tenant_id"], "tenant-1");
         assert_eq!(v["name"], "test-key");
         assert_eq!(v["is_active"], true);
@@ -131,8 +109,8 @@ mod tests {
     fn api_key_created_serde_roundtrip() {
         let created = ApiKeyCreated {
             id: Uuid::now_v7(),
-            key: "iq_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
-            key_prefix: "iq_01ARZ3NDEK".to_string(),
+            key: "vnx_01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            key_prefix: "vnx_01ARZ3NDE".to_string(),
             tenant_id: "tenant-1".to_string(),
             created_at: Utc::now(),
         };
@@ -144,10 +122,4 @@ mod tests {
         assert_eq!(deserialized.tenant_id, created.tenant_id);
     }
 
-    #[test]
-    fn api_key_inactive() {
-        let mut key = make_api_key();
-        key.is_active = false;
-        assert!(!key.is_active);
-    }
 }

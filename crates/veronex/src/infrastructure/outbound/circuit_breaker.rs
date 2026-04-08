@@ -151,14 +151,7 @@ impl CircuitBreakerMap {
         }
     }
 
-    /// Returns a snapshot of all open circuits for diagnostics.
-    pub fn open_circuits(&self) -> Vec<Uuid> {
-        self.inner
-            .iter()
-            .filter(|r| matches!(r.state, CircuitState::Open { .. }))
-            .map(|r| *r.key())
-            .collect()
-    }
+
 }
 
 impl Default for CircuitBreakerMap {

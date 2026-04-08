@@ -22,7 +22,7 @@ import {
 import { DataTable } from '@/components/data-table'
 import StatsCard from '@/components/stats-card'
 import { useTranslation } from '@/i18n'
-import { TimeRangeSelector } from '@/components/time-range-selector'
+import { TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
 import { tokens } from '@/lib/design-tokens'
@@ -37,7 +37,8 @@ export function KeyUsageModal({
 }) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const [hours, setHours] = useState(24)
+  const [range, setRange] = useState<TimeRange>({ hours: 24 })
+  const hours = range.hours
 
   const { data: hourly, isLoading } = useQuery(keyUsageQuery(apiKey.id, hours))
   const { data: models } = useQuery(keyModelBreakdownQuery(apiKey.id, hours))
@@ -56,12 +57,15 @@ export function KeyUsageModal({
   )
 
   // Aggregate KPIs from hourly data
-  const totalRequests = chartData.reduce((s, h) => s + h.requests, 0)
-  const totalTokens   = chartData.reduce((s, h) => s + h.tokens, 0)
-  const totalSuccess  = chartData.reduce((s, h) => s + h.success, 0)
-  const totalErrors   = chartData.reduce((s, h) => s + h.errors, 0)
-  const successRate   = totalRequests > 0
-    ? calcPercentage(totalSuccess, totalRequests) : 0
+  const { totalRequests, totalTokens, totalSuccess, totalErrors, successRate } = useMemo(() => {
+    const totalRequests = chartData.reduce((s, h) => s + h.requests, 0)
+    const totalTokens   = chartData.reduce((s, h) => s + h.tokens, 0)
+    const totalSuccess  = chartData.reduce((s, h) => s + h.success, 0)
+    const totalErrors   = chartData.reduce((s, h) => s + h.errors, 0)
+    const successRate   = totalRequests > 0
+      ? calcPercentage(totalSuccess, totalRequests) : 0
+    return { totalRequests, totalTokens, totalSuccess, totalErrors, successRate }
+  }, [chartData])
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -78,8 +82,8 @@ export function KeyUsageModal({
                   variant="outline"
                   className={
                     apiKey.tier === 'free'
-                      ? 'text-muted-foreground border-border text-[10px]'
-                      : 'bg-status-info/10 text-status-info-fg border-status-info/30 text-[10px]'
+                      ? 'text-muted-foreground border-border text-[10px] whitespace-nowrap'
+                      : 'bg-status-info/10 text-status-info-fg border-status-info/30 text-[10px] whitespace-nowrap'
                   }
                 >
                   {apiKey.tier === 'free' ? t('keys.tierFree') : t('keys.tierPaid')}
@@ -87,7 +91,7 @@ export function KeyUsageModal({
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <TimeRangeSelector value={hours} onChange={setHours} />
+              <TimeRangeSelector value={range} onChange={setRange} />
             </div>
           </div>
         </DialogHeader>
@@ -133,12 +137,12 @@ export function KeyUsageModal({
                 <DataTable minWidth="480px">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{t('jobs.model')}</TableHead>
-                      <TableHead>{t('usage.provider')}</TableHead>
-                      <TableHead className="text-right">{t('usage.requests')}</TableHead>
-                      <TableHead className="text-right">{t('usage.share')}</TableHead>
-                      <TableHead className="text-right">{t('usage.totalTokens')}</TableHead>
-                      <TableHead className="text-right">{t('usage.avgLatency')}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t('jobs.model')}</TableHead>
+                      <TableHead className="whitespace-nowrap">{t('usage.provider')}</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">{t('usage.requests')}</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">{t('usage.share')}</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">{t('usage.totalTokens')}</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">{t('usage.avgLatency')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -146,7 +150,7 @@ export function KeyUsageModal({
                       <TableRow key={`${m.model_name}-${m.provider_type}`}>
                         <TableCell className="font-mono text-xs">{m.model_name}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="text-[10px] capitalize">{m.provider_type}</Badge>
+                          <Badge variant="outline" className="text-[10px] capitalize whitespace-nowrap">{m.provider_type}</Badge>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{fmtCompact(m.request_count)}</TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground">

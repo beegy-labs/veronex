@@ -1,0 +1,63 @@
+{{- if .Values.vespa.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "veronex.fullname" . }}-vespa
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vespa
+spec:
+  serviceName: {{ include "veronex.fullname" . }}-vespa-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "veronex.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: vespa
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: vespa
+    spec:
+      containers:
+        - name: vespa
+          image: "{{ .Values.vespa.image.repository }}:{{ .Values.vespa.image.tag }}"
+          imagePullPolicy: {{ .Values.vespa.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: config
+              containerPort: 19071
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ApplicationStatus
+              port: 19071
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /ApplicationStatus
+              port: 19071
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.vespa.resources | nindent 12 }}
+          volumeMounts:
+            - name: vespa-data
+              mountPath: /opt/vespa/var
+  volumeClaimTemplates:
+    - metadata:
+        name: vespa-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.vespa.persistence.storageClass }}
+        storageClassName: {{ .Values.vespa.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.vespa.persistence.size }}
+{{- end }}

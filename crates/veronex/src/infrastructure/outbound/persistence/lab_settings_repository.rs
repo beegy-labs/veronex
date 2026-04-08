@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use crate::application::ports::outbound::lab_settings_repository::{
-    LabSettings, LabSettingsRepository,
+    LabSettings, LabSettingsRepository, LabSettingsUpdate,
 };
 
 pub struct PostgresLabSettingsRepository {
@@ -24,11 +24,40 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
             gemini_function_calling: bool,
             max_images_per_request: i32,
             max_image_b64_bytes: i32,
+            context_compression_enabled: bool,
+            compression_model: Option<String>,
+            context_budget_ratio: f32,
+            compression_trigger_turns: i32,
+            recent_verbatim_window: i32,
+            compression_timeout_secs: i32,
+            multiturn_min_params: i32,
+            multiturn_min_ctx: i32,
+            multiturn_allowed_models: Vec<String>,
+            vision_model: Option<String>,
+            handoff_enabled: bool,
+            handoff_threshold: f32,
             updated_at: chrono::DateTime<chrono::Utc>,
         }
 
         let row = sqlx::query_as::<_, Row>(
-            "SELECT gemini_function_calling, max_images_per_request, max_image_b64_bytes, updated_at FROM lab_settings WHERE id = 1",
+            r#"SELECT
+                gemini_function_calling,
+                max_images_per_request,
+                max_image_b64_bytes,
+                context_compression_enabled,
+                compression_model,
+                context_budget_ratio,
+                compression_trigger_turns,
+                recent_verbatim_window,
+                compression_timeout_secs,
+                multiturn_min_params,
+                multiturn_min_ctx,
+                multiturn_allowed_models,
+                vision_model,
+                handoff_enabled,
+                handoff_threshold,
+                updated_at
+               FROM lab_settings WHERE id = 1"#,
         )
         .fetch_optional(&self.pool)
         .await
@@ -39,28 +68,63 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
                 gemini_function_calling: r.gemini_function_calling,
                 max_images_per_request: r.max_images_per_request,
                 max_image_b64_bytes: r.max_image_b64_bytes,
+                context_compression_enabled: r.context_compression_enabled,
+                compression_model: r.compression_model,
+                context_budget_ratio: r.context_budget_ratio,
+                compression_trigger_turns: r.compression_trigger_turns,
+                recent_verbatim_window: r.recent_verbatim_window,
+                compression_timeout_secs: r.compression_timeout_secs,
+                multiturn_min_params: r.multiturn_min_params,
+                multiturn_min_ctx: r.multiturn_min_ctx,
+                multiturn_allowed_models: r.multiturn_allowed_models,
+                vision_model: r.vision_model,
+                handoff_enabled: r.handoff_enabled,
+                handoff_threshold: r.handoff_threshold,
                 updated_at: r.updated_at,
             })
             .unwrap_or_default())
     }
 
-    async fn update(
-        &self,
-        gemini_function_calling: Option<bool>,
-        max_images_per_request: Option<i32>,
-        max_image_b64_bytes: Option<i32>,
-    ) -> Result<LabSettings> {
+    async fn update(&self, patch: LabSettingsUpdate) -> Result<LabSettings> {
+        // Nullable text fields (compression_model, vision_model) use a boolean flag + value
+        // pair instead of COALESCE, so that Some(None) can explicitly clear the column.
         sqlx::query(
-            "UPDATE lab_settings SET
-                 gemini_function_calling = COALESCE($1, gemini_function_calling),
-                 max_images_per_request  = COALESCE($2, max_images_per_request),
-                 max_image_b64_bytes     = COALESCE($3, max_image_b64_bytes),
-                 updated_at              = now()
-             WHERE id = 1",
+            r#"UPDATE lab_settings SET
+                gemini_function_calling     = COALESCE($1,  gemini_function_calling),
+                max_images_per_request      = COALESCE($2,  max_images_per_request),
+                max_image_b64_bytes         = COALESCE($3,  max_image_b64_bytes),
+                context_compression_enabled = COALESCE($4,  context_compression_enabled),
+                compression_model           = CASE WHEN $5  THEN $6  ELSE compression_model END,
+                context_budget_ratio        = COALESCE($7,  context_budget_ratio),
+                compression_trigger_turns   = COALESCE($8,  compression_trigger_turns),
+                recent_verbatim_window      = COALESCE($9,  recent_verbatim_window),
+                compression_timeout_secs    = COALESCE($10, compression_timeout_secs),
+                multiturn_min_params        = COALESCE($11, multiturn_min_params),
+                multiturn_min_ctx           = COALESCE($12, multiturn_min_ctx),
+                multiturn_allowed_models    = COALESCE($13, multiturn_allowed_models),
+                vision_model                = CASE WHEN $14 THEN $15 ELSE vision_model END,
+                handoff_enabled             = COALESCE($16, handoff_enabled),
+                handoff_threshold           = COALESCE($17, handoff_threshold),
+                updated_at                  = now()
+               WHERE id = 1"#,
         )
-        .bind(gemini_function_calling)
-        .bind(max_images_per_request)
-        .bind(max_image_b64_bytes)
+        .bind(patch.gemini_function_calling)
+        .bind(patch.max_images_per_request)
+        .bind(patch.max_image_b64_bytes)
+        .bind(patch.context_compression_enabled)
+        .bind(patch.compression_model.is_some())
+        .bind(patch.compression_model.and_then(|v| v))
+        .bind(patch.context_budget_ratio)
+        .bind(patch.compression_trigger_turns)
+        .bind(patch.recent_verbatim_window)
+        .bind(patch.compression_timeout_secs)
+        .bind(patch.multiturn_min_params)
+        .bind(patch.multiturn_min_ctx)
+        .bind(patch.multiturn_allowed_models)
+        .bind(patch.vision_model.is_some())
+        .bind(patch.vision_model.and_then(|v| v))
+        .bind(patch.handoff_enabled)
+        .bind(patch.handoff_threshold)
         .execute(&self.pool)
         .await
         .context("failed to update lab_settings")?;

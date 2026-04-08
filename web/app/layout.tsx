@@ -11,6 +11,7 @@ import { isLoggedIn } from '@/lib/auth'
 import { api } from '@/lib/api'
 import { TimezoneProvider } from '@/components/timezone-provider'
 import { LabSettingsProvider } from '@/components/lab-settings-provider'
+import { Nav404Provider } from '@/components/nav-404-context'
 import { NavigationProgressProvider } from '@/components/nav-progress'
 import { serversQuery } from '@/lib/queries'
 import { STALE_TIME_FAST } from '@/lib/constants'
@@ -28,7 +29,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // intentionally omitted from the dependency array (pure read, no subscription).
   useEffect(() => {
     if (!isLoginPage && !isSetupPage && isLoggedIn()) {
-      queryClient.prefetchQuery(serversQuery)
+      queryClient.prefetchQuery(serversQuery())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryClient, isLoginPage, isSetupPage])
@@ -102,7 +103,9 @@ export default function RootLayout({
             <TimezoneProvider>
               <QueryClientProvider client={queryClient}>
                 <LabSettingsProvider>
-                  <AppShell>{children}</AppShell>
+                  <Nav404Provider>
+                    <AppShell>{children}</AppShell>
+                  </Nav404Provider>
                 </LabSettingsProvider>
               </QueryClientProvider>
             </TimezoneProvider>

@@ -1,6 +1,7 @@
 # Web — API Test Panel
 
-> SSOT | **Last Updated**: 2026-03-18 (rev: endpoint selector, API key toggle, non-streaming Ollama)
+> SSOT | **Last Updated**: 2026-04-06 (rev: conversation mode, context warnings, TurnInternals)
+> API Docs page: `frontend/pages/api-docs.md`
 
 ## Task Guide
 
@@ -26,11 +27,11 @@
 
 ## Routing
 
-There is no standalone `/api-test` route. The `ApiTestPanel` component is embedded directly in the `/jobs` page. Any old `/api-test` links should redirect to `/jobs`.
+No standalone `/api-test` route. `ApiTestPanel` is embedded in `/jobs`. Old `/api-test` links redirect to `/jobs`.
 
 ## ApiTestPanel Component
 
-Embedded in `/jobs` page. Split into 3 files: `api-test-panel.tsx` (state/logic), `api-test-form.tsx` (form UI), `api-test-runs.tsx` (output display).
+Embedded in `/jobs`. Split into 3 files: `api-test-panel.tsx` (state/logic), `api-test-form.tsx` (form UI), `api-test-runs.tsx` (output display).
 
 ```
 [Provider v] [Model v]
@@ -50,18 +51,16 @@ Running as: admin
 | `/api/chat` | Ollama chat (JSON) | No |
 | `/api/generate` | Ollama generate (JSON) | No |
 
-Non-streaming response parsing: `/api/generate` reads `json.response`, `/api/chat` reads `json.message.content`.
+Non-streaming: `/api/generate` reads `json.response`, `/api/chat` reads `json.message.content`.
 
 ### API Key Toggle
-
-Switch component toggles between JWT test endpoints and real API endpoints:
 
 | Mode | Auth | Endpoints used |
 |------|------|---------------|
 | OFF (default) | JWT session cookie | `/v1/test/completions`, `/v1/test/api/chat`, `/v1/test/api/generate` |
 | ON | `Bearer` (OpenAI) or `X-API-Key` (Ollama) | `/v1/chat/completions`, `/api/chat`, `/api/generate` |
 
-When ON, OpenAI endpoint uses `Authorization: Bearer {key}`, Ollama endpoints use `X-API-Key: {key}`. Credential mode switches from `credentials: 'include'` (JWT) to header-based auth.
+When ON, OpenAI endpoint uses `Authorization: Bearer {key}`, Ollama uses `X-API-Key: {key}`.
 
 ### Run State
 
@@ -80,12 +79,12 @@ When ON, OpenAI endpoint uses `Authorization: Bearer {key}`, Ollama endpoints us
 
 ### Run Lifecycle
 
-1. Creates new `Run` with `nextIdRef++`, appends via `dispatch({ type: 'ADD', run })`
+1. Creates `Run` with `nextIdRef++`, appends via `dispatch({ type: 'ADD', run })`
 2. Sets `activeRunId` to new run
-3. For SSE endpoints (`/v1/chat/completions`): streams via `consumeStream()`, reader stored in `readersRef`
-4. For JSON endpoints (`/api/chat`, `/api/generate`): awaits response, extracts text, sets done
+3. SSE endpoints: streams via `consumeStream()`, reader in `readersRef`
+4. JSON endpoints: awaits response, extracts text, sets done
 
-Tab behaviors: dot colors (streaming=info, done=success, error=destructive). Close cancels reader if streaming, dispatches `REMOVE`. Max 10 runs.
+Dot colors: streaming=info, done=success, error=destructive. Close cancels reader. Max 10 runs.
 
 ### Auth and Endpoint
 
@@ -106,7 +105,38 @@ Test jobs: `api_key_id = NULL`, excluded from usage/perf metrics (`source != 'te
 | Gemini Free | `"gemini-free"` | Filtered by `available_on_free_tier=true` |
 | Gemini | `"gemini"` | Full global pool |
 
-`gemini-free`: only models with explicit policy `available_on_free_tier=true` (excluding `*`). The `*` global policy is for rate limits only.
+Gemini options visible only when `labSettings.gemini_function_calling` enabled. Gate uses `useLabSettings()`.
+
+### Conversation Mode (Multi-Turn)
+
+Mode toggle: `single` | `conversation`. In conversation mode:
+- New conversation session created on first send
+- `X-Conversation-ID` response header persisted per session as `conversationId`
+- Each turn sends `X-Conversation-ID: {conversationId}` header
+- If `conversation_renewed: true` → system message divider inserted: "Session renewed — context was compressed and continued in a new conversation"
+- Multiple sessions supported (tab strip in `ApiTestConversation`)
+- `ConversationSession` state: `{ id, conversationId?, messages, streamingText, status, errorMsg }`
+
+### Context Window Warnings
+
+`getMultiturnWarnings()` (`api-test-form.tsx`) shows warning badges below model selector in conversation mode:
+
+| Warning key | Condition |
+|-------------|-----------|
+| `model_too_small` | Model param count < `multiturn_min_params` |
+| `multiturn_warn_ctx_too_small` | Model `max_ctx` < `multiturn_min_ctx` |
+| `model_not_allowed` | Model not in `multiturn_allowed_models` |
+| `context_too_large` | Estimated tokens > 85% of model's `max_ctx` |
+
+Token estimation: `sum(message.content.length / 3.5)`. `max_ctx` from `GET /v1/ollama/models`.
+
+### TurnInternals Panel
+
+`TurnInternals` (`web/components/turn-internals.tsx`) — collapsible per-turn panel.
+- Lazy-fetches on expand: `GET /v1/dashboard/conversations/{convId}/turns/{jobId}/internals`
+- Stale time: `STALE_TIME_SLOW` (59s)
+- Shows `CompressedTurn`: compression model, original/compressed tokens, ratio, summary
+- Shows `VisionAnalysis`: vision model, image count, analysis tokens, analysis text
 
 ## Test Endpoints
 
@@ -119,41 +149,8 @@ Test jobs: `api_key_id = NULL`, excluded from usage/perf metrics (`source != 'te
 
 ## SSE Parsing (`consumeStream()`)
 
-Strip one leading space after `data:` (preserve internal whitespace). `[DONE]` = stream complete. Parse `chunk.choices?.[0]?.delta?.content ?? ''`. Output rendered with `whitespace-pre-wrap`. Blinking cursor while `status === 'streaming'`.
-
-## /api-docs Page
-
-Landing page links to two embedded viewers:
-
-| Route | Component | Notes |
-|-------|-----------|-------|
-| `/api-docs/swagger` | `SwaggerUiWrapper` (swagger-ui-react) | dynamic, ssr:false |
-| `/api-docs/redoc` | `RedocWrapper` (redoc) | dynamic, ssr:false |
-
-Both auto-select locale-aware spec: `${API_URL}/docs/openapi.json?lang={locale}`
-
-### Locale-Aware OpenAPI Spec
-
-| Path | Lang |
-|------|------|
-| `GET /docs/openapi.json` | English (default) |
-| `GET /docs/openapi.json?lang=ko` | Korean overlay |
-| `GET /docs/openapi.json?lang=ja` | Japanese overlay |
-
-Overlays in `crates/veronex/src/infrastructure/inbound/http/openapi.overlay.{ko,ja}.json`. Merge: recursive deep merge (objects merge key-by-key, arrays/scalars replaced). Handler: `docs_handlers.rs`. No auth required.
-
-### /api-docs Key Files
-
-| File | Purpose |
-|------|---------|
-| `web/components/swagger-ui-wrapper.tsx` | Swagger UI wrapper (CSS + theme) |
-| `web/components/redoc-wrapper.tsx` | RedocStandalone wrapper (theme + labels) |
-| `web/app/api-docs/page.tsx` | Landing page |
-| `web/app/api-docs/swagger/page.tsx` | Swagger embedded |
-| `web/app/api-docs/redoc/page.tsx` | ReDoc embedded |
+Strip one leading space after `data:`. `[DONE]` = stream complete. Parse `chunk.choices?.[0]?.delta?.content ?? ''`. Output `whitespace-pre-wrap`. Blinking cursor while `status === 'streaming'`.
 
 ## i18n Keys
 
 `test.*`: title, provider, model, prompt, send, run, stop, reset, runAgain, streaming, done, error, output, complete, errorTitle, selectProvider, selectModel, noModels, ollamaTestNoModels, runningAs, endpoint, apiKeyToggle, noApiKey, apiKeyPlaceholder, imageAttach, imageRemove, imageCompressing
-
-`apiDocs.*`: title, swagger, swaggerDesc, redoc, redocDesc, openapi, openapiDesc, viewDocs, redocEnum, redocDefault, redocExample, redocDownload, redocNoResults, redocResponses, redocRequestSamples, redocResponseSamples

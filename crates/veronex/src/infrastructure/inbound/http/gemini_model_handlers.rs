@@ -4,9 +4,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::domain::enums::ProviderType;
+use crate::domain::value_objects::ProviderId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::outbound::health_checker::check_provider;
 
@@ -89,7 +89,7 @@ pub async fn sync_models(
         .await
         .map_err(|e| {
             tracing::error!("sync_models: gemini api error: {e}");
-            AppError::BadGateway(e.to_string())
+            AppError::BadGateway("Gemini API request failed".into())
         })?;
 
     state.gemini_model_repo.sync_models(&models).await.map_err(db_error)?;
@@ -105,7 +105,7 @@ pub async fn sync_models(
 
 #[derive(Debug, Serialize)]
 pub struct GeminiStatusResult {
-    pub id: Uuid,
+    pub id: ProviderId,
     pub name: String,
     pub status: String,
     pub error: Option<String>,
@@ -121,7 +121,7 @@ pub struct GeminiSyncStatusResponse {
 ///
 /// Runs synchronously (fast — just one lightweight API call per provider).
 /// Returns the updated status for each provider.
-pub async fn sync_status(RequireProviderManage(_claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<GeminiSyncStatusResponse>> {
+pub async fn sync_status(RequireProviderManage(claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<GeminiSyncStatusResponse>> {
     let providers = state.provider_registry.list_all().await.map_err(db_error)?;
 
     let gemini_active: Vec<_> = providers
@@ -140,7 +140,7 @@ pub async fn sync_status(RequireProviderManage(_claims): RequireProviderManage, 
         }
 
         results.push(GeminiStatusResult {
-            id: provider.id,
+            id: ProviderId::from_uuid(provider.id),
             name: provider.name,
             status: status_str,
             error: None,
@@ -148,6 +148,11 @@ pub async fn sync_status(RequireProviderManage(_claims): RequireProviderManage, 
     }
 
     tracing::info!(count = results.len(), "gemini status sync completed");
+
+    emit_audit(&state, &claims, "trigger", "gemini_sync_status",
+        "gemini", "gemini",
+        &format!("Gemini status sync ran for {} providers", results.len())).await;
+
     Ok(Json(GeminiSyncStatusResponse {
         synced_at: Utc::now(),
         results,

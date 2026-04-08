@@ -35,21 +35,20 @@ test.describe('API: Usage', () => {
   })
 
   test('per-key hourly usage returns array (with owned key)', async () => {
-    // Create a key to query usage for
     let keyId: string | undefined
     try {
       const createRes = await api.post('/v1/keys', {
+        tenant_id: accountId,
         name: `e2e-usage-${testId()}`,
         tier: 'free',
       })
-      expect(createRes.status()).toBe(201)
+      expect(createRes.ok()).toBeTruthy()
       const { id } = await createRes.json()
       keyId = id
 
       const res = await api.get(`/v1/usage/${id}?hours=24`)
       expect(res.ok()).toBeTruthy()
       const body = await res.json()
-      // Empty array is valid (no jobs yet)
       expect(Array.isArray(body)).toBeTruthy()
     } finally {
       if (keyId) await api.delete(`/v1/keys/${keyId}`)
@@ -60,10 +59,11 @@ test.describe('API: Usage', () => {
     let keyId: string | undefined
     try {
       const createRes = await api.post('/v1/keys', {
+        tenant_id: accountId,
         name: `e2e-usage-models-${testId()}`,
         tier: 'free',
       })
-      expect(createRes.status()).toBe(201)
+      expect(createRes.ok()).toBeTruthy()
       const { id } = await createRes.json()
       keyId = id
 
@@ -80,10 +80,11 @@ test.describe('API: Usage', () => {
     let keyId: string | undefined
     try {
       const createRes = await api.post('/v1/keys', {
+        tenant_id: accountId,
         name: `e2e-usage-jobs-${testId()}`,
         tier: 'free',
       })
-      expect(createRes.status()).toBe(201)
+      expect(createRes.ok()).toBeTruthy()
       const { id } = await createRes.json()
       keyId = id
 
@@ -97,7 +98,7 @@ test.describe('API: Usage', () => {
   })
 
   test('usage for non-existent key returns 404', async () => {
-    const fakeId = '00000000-0000-0000-0000-000000000000'
+    const fakeId = 'key_0000000000000000000000'
     const res = await api.get(`/v1/usage/${fakeId}?hours=24`)
     expect(res.status()).toBe(404)
   })

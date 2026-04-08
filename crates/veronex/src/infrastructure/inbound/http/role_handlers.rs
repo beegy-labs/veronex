@@ -1,21 +1,25 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::enums::{ALL_MENUS, ALL_PERMISSIONS};
+use crate::domain::value_objects::RoleId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireRoleManage;
 use crate::infrastructure::inbound::http::state::AppState;
 
 use super::audit_helpers::emit_audit;
 use super::error::AppError;
 
+const MAX_ROLES: i64 = 200;
+
 // ── Response types ──────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 pub struct RoleSummary {
-    pub id: Uuid,
+    pub id: RoleId,
     pub name: String,
     pub permissions: Vec<String>,
     pub menus: Vec<String>,
@@ -65,23 +69,33 @@ pub async fn list_roles(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RoleSummary>>, AppError> {
     let rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, Vec<String>, bool, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, permissions, menus, is_system, created_at FROM roles ORDER BY created_at ASC"
+        "SELECT id, name, permissions, menus, is_system, created_at FROM roles ORDER BY created_at ASC LIMIT $1"
     )
+    .bind(MAX_ROLES)
     .fetch_all(&state.pg_pool)
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("list roles: {e}")))?;
 
-    let mut result = Vec::with_capacity(rows.len());
-    for (id, name, permissions, menus, is_system, created_at) in rows {
-        let count: (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM account_roles ar JOIN accounts a ON a.id = ar.account_id WHERE ar.role_id = $1 AND a.deleted_at IS NULL"
-        )
-            .bind(id)
-            .fetch_one(&state.pg_pool)
-            .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("count accounts: {e}")))?;
-        result.push(RoleSummary { id, name, permissions, menus, is_system, account_count: count.0, created_at });
+    if rows.is_empty() {
+        return Ok(Json(vec![]));
     }
+
+    // Single batch COUNT query — avoids N round-trips.
+    let role_ids: Vec<Uuid> = rows.iter().map(|(id, ..)| *id).collect();
+    let count_rows: Vec<(Uuid, i64)> = sqlx::query_as(
+        "SELECT ar.role_id, COUNT(*)::bigint FROM account_roles ar JOIN accounts a ON a.id = ar.account_id WHERE a.deleted_at IS NULL AND ar.role_id = ANY($1) GROUP BY ar.role_id"
+    )
+    .bind(&role_ids as &[Uuid])
+    .fetch_all(&state.pg_pool)
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("count accounts: {e}")))?;
+
+    let count_map: std::collections::HashMap<Uuid, i64> = count_rows.into_iter().collect();
+
+    let result = rows.into_iter().map(|(id, name, permissions, menus, is_system, created_at)| {
+        let account_count = count_map.get(&id).copied().unwrap_or(0);
+        RoleSummary { id: RoleId::from_uuid(id), name, permissions, menus, is_system, account_count, created_at }
+    }).collect();
 
     Ok(Json(result))
 }
@@ -92,7 +106,7 @@ pub async fn create_role(
     RequireRoleManage(claims): RequireRoleManage,
     State(state): State<AppState>,
     Json(req): Json<CreateRoleRequest>,
-) -> Result<Json<RoleSummary>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     let name = req.name.trim().to_string();
     if name.is_empty() || name.len() > 64 {
         return Err(AppError::BadRequest("role name must be 1-64 characters".into()));
@@ -125,30 +139,28 @@ pub async fn create_role(
     emit_audit(&state, &claims, "create", "role", &id.to_string(), &name,
         &format!("Role '{}' created with permissions: {:?}", name, req.permissions)).await;
 
-    Ok(Json(RoleSummary {
-        id, name, permissions: req.permissions, menus: req.menus,
+    Ok((StatusCode::CREATED, Json(RoleSummary {
+        id: RoleId::from_uuid(id), name, permissions: req.permissions, menus: req.menus,
         is_system: false, account_count: 0, created_at: now,
-    }))
+    })))
 }
 
 // ── PATCH /v1/roles/{id} ────────────────────────────────────────────────────
 
 pub async fn update_role(
     RequireRoleManage(claims): RequireRoleManage,
-    Path(id): Path<String>,
+    Path(rid): Path<RoleId>,
     State(state): State<AppState>,
     Json(req): Json<UpdateRoleRequest>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
     let row = sqlx::query_as::<_, (String, bool)>(
         "SELECT name, is_system FROM roles WHERE id = $1"
     )
-    .bind(uuid)
+    .bind(rid.0)
     .fetch_optional(&state.pg_pool)
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("get role: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("role {id} not found")))?;
+    .ok_or_else(|| AppError::NotFound(format!("role {rid} not found")))?;
 
     if row.1 {
         return Err(AppError::Forbidden("system roles cannot be modified".into()));
@@ -161,37 +173,33 @@ pub async fn update_role(
         validate_menus(menus)?;
     }
 
-    let mut updates = Vec::new();
-    let mut bind_idx = 2u32; // $1 is id
-
-    // Build dynamic SET clause
-    if req.name.is_some() { updates.push(format!("name = ${bind_idx}")); bind_idx += 1; }
-    if req.permissions.is_some() { updates.push(format!("permissions = ${bind_idx}")); bind_idx += 1; }
-    if req.menus.is_some() { updates.push(format!("menus = ${bind_idx}")); bind_idx += 1; }
-    let _ = bind_idx; // suppress unused warning
-
-    if updates.is_empty() {
+    if req.name.is_none() && req.permissions.is_none() && req.menus.is_none() {
         return Ok(StatusCode::NO_CONTENT);
     }
 
-    let sql = format!("UPDATE roles SET {} WHERE id = $1", updates.join(", "));
-    let mut query = sqlx::query(&sql).bind(uuid);
-
-    if let Some(ref name) = req.name {
-        let trimmed = name.trim().to_string();
-        if trimmed.is_empty() || trimmed.len() > 64 {
-            return Err(AppError::BadRequest("role name must be 1-64 characters".into()));
+    let name = match req.name.as_ref() {
+        Some(n) => {
+            let trimmed = n.trim().to_string();
+            if trimmed.is_empty() || trimmed.len() > 64 {
+                return Err(AppError::BadRequest("role name must be 1-64 characters".into()));
+            }
+            Some(trimmed)
         }
-        query = query.bind(trimmed);
-    }
-    if let Some(ref perms) = req.permissions {
-        query = query.bind(perms);
-    }
-    if let Some(ref menus) = req.menus {
-        query = query.bind(menus);
-    }
+        None => None,
+    };
 
-    query.execute(&state.pg_pool)
+    sqlx::query(
+        "UPDATE roles \
+         SET name        = COALESCE($2, name), \
+             permissions = COALESCE($3, permissions), \
+             menus       = COALESCE($4, menus) \
+         WHERE id = $1",
+    )
+    .bind(rid.0)
+    .bind(name.as_deref())
+    .bind(req.permissions.as_deref())
+    .bind(req.menus.as_deref())
+    .execute(&state.pg_pool)
         .await
         .map_err(|e| {
             let msg = e.to_string();
@@ -202,7 +210,7 @@ pub async fn update_role(
             }
         })?;
 
-    emit_audit(&state, &claims, "update", "role", &id, &row.0,
+    emit_audit(&state, &claims, "update", "role", &rid.to_string(), &row.0,
         &format!("Role '{}' updated", row.0)).await;
 
     Ok(StatusCode::NO_CONTENT)
@@ -212,19 +220,17 @@ pub async fn update_role(
 
 pub async fn delete_role(
     RequireRoleManage(claims): RequireRoleManage,
-    Path(id): Path<String>,
+    Path(rid): Path<RoleId>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
-    let uuid = super::handlers::parse_uuid(&id)?;
-
     let row = sqlx::query_as::<_, (String, bool)>(
         "SELECT name, is_system FROM roles WHERE id = $1"
     )
-    .bind(uuid)
+    .bind(rid.0)
     .fetch_optional(&state.pg_pool)
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("get role: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("role {id} not found")))?;
+    .ok_or_else(|| AppError::NotFound(format!("role {rid} not found")))?;
 
     if row.1 {
         return Err(AppError::Forbidden("system roles cannot be deleted".into()));
@@ -233,7 +239,7 @@ pub async fn delete_role(
     let count: (i64,) = sqlx::query_as(
         "SELECT count(*) FROM account_roles ar JOIN accounts a ON a.id = ar.account_id WHERE ar.role_id = $1 AND a.deleted_at IS NULL"
     )
-        .bind(uuid)
+        .bind(rid.0)
         .fetch_one(&state.pg_pool)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("count accounts: {e}")))?;
@@ -245,13 +251,40 @@ pub async fn delete_role(
     }
 
     sqlx::query("DELETE FROM roles WHERE id = $1")
-        .bind(uuid)
+        .bind(rid.0)
         .execute(&state.pg_pool)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("delete role: {e}")))?;
 
-    emit_audit(&state, &claims, "delete", "role", &id, &row.0,
+    emit_audit(&state, &claims, "delete", "role", &rid.to_string(), &row.0,
         &format!("Role '{}' deleted", row.0)).await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_permissions_accepts_known() {
+        let known = ALL_PERMISSIONS[0].to_string();
+        assert!(validate_permissions(&[known]).is_ok());
+    }
+
+    #[test]
+    fn validate_permissions_rejects_unknown() {
+        assert!(validate_permissions(&["not_a_real_permission".to_string()]).is_err());
+    }
+
+    #[test]
+    fn validate_menus_accepts_known() {
+        let known = ALL_MENUS[0].to_string();
+        assert!(validate_menus(&[known]).is_ok());
+    }
+
+    #[test]
+    fn validate_menus_rejects_unknown() {
+        assert!(validate_menus(&["nonexistent_menu".to_string()]).is_err());
+    }
 }

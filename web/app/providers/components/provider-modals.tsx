@@ -3,8 +3,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Provider, GpuServer, RegisterProviderRequest, UpdateProviderRequest, VerifyState } from '@/lib/types'
-import { ApiHttpError } from '@/lib/types'
+import type { Provider, GpuServer, RegisterProviderRequest, UpdateProviderRequest } from '@/lib/types'
+import { useVerifyUrl } from '@/hooks/use-verify-url'
 import { serverMetricsQuery } from '@/lib/queries'
 import { Server, Key, CheckCircle2, XCircle } from 'lucide-react'
 import { fmtMb, fmtTemp, fmtPower } from '@/lib/chart-theme'
@@ -41,6 +41,20 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
   const [gpuIndex, setGpuIndex] = useState(provider.gpu_index !== null ? String(provider.gpu_index) : 'none')
   const [serverId, setServerId] = useState<string>(provider.server_id ?? 'none')
   const [isFreeTier, setIsFreeTier] = useState(provider.is_free_tier)
+  const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
+    verifyFn: api.verifyProvider,
+    labels: {
+      duplicate: t('providers.ollama.duplicateUrl'),
+      network: t('providers.ollama.networkError'),
+      unreachable: t('providers.ollama.unreachableError'),
+      fallback: t('providers.ollama.connectionFailed'),
+    },
+    initialUrl: provider.url,
+  })
+
+  const urlChanged = url.trim() !== provider.url
+
+  const handleUrlChange = (val: string) => { setUrl(val); onVerifyReset() }
 
   const { data: serverMetrics } = useQuery({
     ...serverMetricsQuery(serverId),
@@ -49,6 +63,8 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
   const gpuCards = serverMetrics?.gpus ?? []
   const serverMemTotalMb = serverMetrics?.mem_total_mb ?? null
   const queryClient = useQueryClient()
+
+  const isOllamaUrlVerified = !urlChanged || (verifyState === 'ok' && url.trim() === verifiedUrl)
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -63,7 +79,8 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
       }
       return api.updateProvider(provider.id, body)
     },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['providers'] }); onClose() },
+    onSuccess: () => onClose(),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['providers'] }),
   })
 
   return (
@@ -87,7 +104,22 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
             <>
               <div className="space-y-1.5">
                 <Label htmlFor="edit-url">{t('providers.ollama.ollamaUrl')}</Label>
-                <Input id="edit-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} />
+                <div className="flex gap-2">
+                  <Input id="edit-url" type="url" value={url}
+                    onChange={(e) => handleUrlChange(e.target.value)}
+                    className={urlChanged ? (verifyState === 'ok' ? 'border-status-success' : verifyState === 'error' ? 'border-destructive' : '') : ''} />
+                  {urlChanged && (
+                    <Button type="button" variant="outline" size="sm" className="shrink-0"
+                      disabled={!url.trim() || verifyState === 'checking'}
+                      onClick={() => verify(url.trim())}>
+                      {verifyState === 'checking' ? t('providers.ollama.verifying')
+                        : verifyState === 'ok' ? <><CheckCircle2 className="h-3.5 w-3.5 mr-1 text-status-success-fg" />{t('providers.ollama.connected')}</>
+                        : t('providers.ollama.verifyConnection')}
+                    </Button>
+                  )}
+                </div>
+                {verifyState === 'error' && <p className="text-xs text-destructive flex items-center gap-1"><XCircle className="h-3 w-3" />{verifyError}</p>}
+                {urlChanged && verifyState === 'idle' && <p className="text-xs text-muted-foreground">{t('providers.ollama.verifyFirst')}</p>}
               </div>
 
               <div className="space-y-1.5">
@@ -183,7 +215,7 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
 
         <DialogFooter className="gap-3 flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button onClick={() => mutation.mutate()} disabled={!name.trim() || mutation.isPending}>
+          <Button onClick={() => mutation.mutate()} disabled={!name.trim() || (provider.provider_type === PROVIDER_OLLAMA && !isOllamaUrlVerified) || mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}
           </Button>
         </DialogFooter>
@@ -212,10 +244,15 @@ export function RegisterModal({
   const [serverId, setServerId] = useState<string>('none')
   const [isFreeTier, setIsFreeTier] = useState(false)
 
-  // Ollama connection verification state
-  const [verifyState, setVerifyState] = useState<VerifyState>('idle')
-  const [verifyError, setVerifyError] = useState('')
-  const [verifiedUrl, setVerifiedUrl] = useState('')
+  const { verifyState, verifyError, verifiedUrl, verify, handleUrlChange: onVerifyReset } = useVerifyUrl({
+    verifyFn: api.verifyProvider,
+    labels: {
+      duplicate: t('providers.ollama.duplicateUrl'),
+      network: t('providers.ollama.networkError'),
+      unreachable: t('providers.ollama.unreachableError'),
+      fallback: t('providers.ollama.connectionFailed'),
+    },
+  })
 
   const { data: serverMetrics } = useQuery({
     ...serverMetricsQuery(serverId),
@@ -225,29 +262,7 @@ export function RegisterModal({
   const serverMemTotalMb = serverMetrics?.mem_total_mb ?? null
   const queryClient = useQueryClient()
 
-  const handleUrlChange = (val: string) => {
-    setUrl(val)
-    if (verifyState !== 'idle') {
-      setVerifyState('idle')
-      setVerifyError('')
-    }
-  }
-
-  const verifyMutation = useMutation({
-    mutationFn: () => api.verifyProvider(url.trim()),
-    onSuccess: () => {
-      setVerifyState('ok')
-      setVerifiedUrl(url.trim())
-    },
-    onError: (e) => {
-      setVerifyState('error')
-      setVerifyError(
-        e instanceof ApiHttpError && e.status === 409
-          ? t('providers.ollama.duplicateUrl')
-          : (e instanceof Error ? e.message : t('providers.ollama.connectionFailed'))
-      )
-    },
-  })
+  const handleUrlChange = (val: string) => { setUrl(val); onVerifyReset() }
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -312,7 +327,7 @@ export function RegisterModal({
                     size="sm"
                     className="shrink-0"
                     disabled={!url.trim() || verifyState === 'checking'}
-                    onClick={() => { setVerifyState('checking'); verifyMutation.mutate() }}
+                    onClick={() => verify(url.trim())}
                   >
                     {verifyState === 'checking'
                       ? t('providers.ollama.verifying')

@@ -155,11 +155,11 @@ export function NavigationProgressProvider({ children }: { children: React.React
   const { pct, phase, start, finish, done, reset } = useProgressMachine()
 
   const rawId = useId()
-  const safeId = rawId.replace(/:/g, '')
+  const safeId = rawId.replace(/[^a-zA-Z0-9]/g, '')
   const trackId = `vx-track-${safeId}`
   const fillId  = `vx-fill-${safeId}`
 
-  const prevPathnameRef = useRef(pathname)
+  const prevHrefRef = useRef(pathname)
   const pendingQueriesRef = useRef(new Set<string>())
 
   // Navigation: detect clicks on internal links
@@ -169,7 +169,8 @@ export function NavigationProgressProvider({ children }: { children: React.React
       if (!anchor?.href) return
       const url = new URL(anchor.href, window.location.href)
       if (url.origin !== window.location.origin) return
-      if (url.pathname === window.location.pathname && url.search === window.location.search) return
+      // Skip same-page navigations (including query param changes on same path)
+      if (url.pathname === window.location.pathname) return
       if (anchor.target === '_blank') return
       start()
     }
@@ -180,8 +181,8 @@ export function NavigationProgressProvider({ children }: { children: React.React
   // Navigation: force-complete when pathname changes
   // done() resets countRef to 0 so stale query start/finish pairs can't leak
   useEffect(() => {
-    if (pathname !== prevPathnameRef.current) {
-      prevPathnameRef.current = pathname
+    if (pathname !== prevHrefRef.current) {
+      prevHrefRef.current = pathname
       pendingQueriesRef.current.clear()
       if (phase === 'running') {
         done()

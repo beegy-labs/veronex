@@ -1,33 +1,45 @@
 # Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-18 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-04-07 | Classification: Operational | Exception: >200 lines (pattern registry)
+> Last code-review audit: 2026-04-07 — 6 rounds, confirmed clean.
 > Rust Edition 2024 · Axum 0.8 · sqlx 0.8
 > Frontend patterns -> `policies/patterns-frontend.md`
 
 ## Axum 0.8 Handler Signature
 
 ```rust
-// Read
+// Read — path param decoded from "job_3X4aB..." → JobId automatically
 pub async fn get_thing(
-  State(state): State<AppState>, Path(id): Path<Uuid>,
+  State(state): State<AppState>, Path(jid): Path<JobId>,
 ) -> Result<Json<ThingSummary>, AppError> {
-  let thing = state.thing_repo.get(id).await?.ok_or(AppError::NotFound)?;
+  let thing = state.thing_repo.get(&jid.0).await?.ok_or(AppError::NotFound)?;
   Ok(Json(to_summary(&thing)))
 }
-// Create -- returns 201
+// Create -- returns 201; response id encoded as "job_3X4aB..."
 pub async fn create_thing(
   State(state): State<AppState>, Json(req): Json<CreateThingRequest>,
 ) -> Result<(StatusCode, Json<ThingSummary>), AppError> {
-  Ok((StatusCode::CREATED, Json(to_summary(&state.thing_repo.create(req.into()).await?))))
+  let row = state.thing_repo.create(req.into()).await?;
+  Ok((StatusCode::CREATED, Json(ThingSummary { id: JobId::from_uuid(row.id), .. })))
 }
 // Delete -- returns 204
 pub async fn delete_thing(
-  State(state): State<AppState>, Path(id): Path<Uuid>,
+  State(state): State<AppState>, Path(jid): Path<JobId>,
 ) -> Result<StatusCode, AppError> {
-  state.thing_repo.delete(id).await?;
+  state.thing_repo.delete(&jid.0).await?;   // .0 extracts inner Uuid for DB
   Ok(StatusCode::NO_CONTENT)
 }
 ```
+
+| Rule | Detail |
+|------|--------|
+| `Path<EntityId>` | Use typed entity ID — never `Path<Uuid>` or `Path<String>` + manual parse |
+| Response `id` field | Always typed ID (e.g. `id: JobId`) — never raw `Uuid` or `String` |
+| `.0` for DB calls | Extract inner UUID with `.0` for `sqlx` binds and repo calls |
+| POST create → 201 | Return `(StatusCode::CREATED, Json(...))` — not implicit 200 |
+| RequireXxx first | Sensitive handlers must declare a `RequireXxx` extractor before `State` |
+
+→ Full ID encoding policy: `policies/id-encoding.md`
 
 ## AppError (thiserror v2)
 
@@ -62,6 +74,38 @@ let row = sqlx::query_as!(ProviderRow,
 // Never SELECT * -- column order breaks with JOINs
 ```
 
+## Pagination Pattern
+
+Shared params struct in `handlers.rs` (single definition, imported by all list handlers):
+
+```rust
+// infrastructure/inbound/http/handlers.rs
+pub struct ListPageParams {
+    pub search: Option<String>,
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+}
+```
+
+Handler signature:
+```rust
+pub async fn list_things(
+    State(state): State<AppState>,
+    Query(params): Query<ListPageParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(DEFAULT).clamp(1, MAX);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * limit;
+    let (items, total) = state.repo.list_page(&search, limit, offset).await?;
+    Ok(Json(serde_json::json!({ "things": items, "total": total, "page": page, "limit": limit })))
+}
+```
+
+Response shape: `{ <plural_name>: [...], total: i64, page: i64, limit: i64 }`
+
+Search uses ILIKE with pg_trgm GIN indexes (`docker/postgres/init.sql`). Default limits vary per endpoint (20–100); max 1000.
+
 ## async-trait (Required)
 
 `#[async_trait]` still required for `Arc<dyn Trait>`. Rust 1.75+ async fn in trait is object-safe with `impl Trait` only, not `dyn Trait`.
@@ -85,6 +129,62 @@ let span = tracing::info_span!("run_job", job_id = %job_id);
 tokio::spawn(async move { run_job(state, job_id).await }.instrument(span));
 ```
 
+## Mutex Rules — `std` vs `tokio`
+
+**Default: use `std::sync::Mutex`.** Only reach for `tokio::sync::Mutex` when the guard must be held across an `.await`.
+
+```rust
+// CORRECT — std Mutex for short-lived, sync-only critical sections
+let value = {
+    let g = std::sync::Mutex::lock(&state).unwrap();
+    g.counter  // clone/copy before dropping
+};  // guard dropped — no await while locked
+expensive_async_op(value).await;
+
+// CORRECT — tokio Mutex only when guard spans an await
+let g = tokio_mutex.lock().await;
+some_async_fn().await;  // guard still held — yields instead of blocking the thread
+```
+
+| Rule | Detail |
+|------|--------|
+| `std::sync::Mutex` (default) | No await-held risk; lower overhead |
+| `tokio::sync::Mutex` | Only when you must hold the guard across `.await` |
+| Never expose guard to async callers | Wrap in a struct; lock inside non-async methods only |
+| Never acquire the same `tokio::sync::Mutex` twice in one task | Deadlock — second `lock().await` parks forever |
+
+**Fetch/Apply split** — when a `tokio::Mutex` guards in-memory state that needs refreshing from an async source, separate the async fetch from the sync apply to minimize lock hold time:
+
+```rust
+// CORRECT — async I/O outside the lock, sync state update inside
+async fn refresh(&self) {
+    // 1. Lock-free async fetch — no lock held during network I/O
+    let fresh = self.fetch_from_remote().await;
+
+    // 2. Apply synchronously with lock held — no await inside
+    let mut state = self.state.lock().await;
+    if let Some(data) = fresh {
+        Self::apply_update(&mut state, &data);
+    }
+}   // guard drops here
+
+// WRONG — holds lock across HTTP await (blocks Tokio thread during I/O)
+async fn refresh_bad(&self) {
+    let mut state = self.state.lock().await;   // lock acquired
+    let fresh = self.http_client.get(...).await?;  // await while locked
+    state.data = fresh;
+}
+```
+
+**`Notify` + `std::Mutex` pattern** — preferred over `tokio::Mutex` for state-machine signaling:
+```rust
+let state = Arc::new(Mutex::new(State::default()));
+let notify = Arc::new(Notify::new());
+{ state.lock().unwrap().ready = true; }  // sync lock, no await inside
+notify.notify_one();
+notify.notified().await;                 // await is outside the lock
+```
+
 ## DashMap (not `Mutex<HashMap>`)
 
 ```rust
@@ -105,6 +205,28 @@ Never hold `Ref`/`RefMut` across `.await` -- it locks the shard.
 
 All `veronex:*` key patterns MUST be defined in `infrastructure/outbound/valkey_keys.rs`.
 This is the single source of truth — never hardcode key strings elsewhere.
+
+## Valkey Error Observability
+
+All Valkey I/O results MUST be handled — never silently discard errors.
+
+```rust
+// CORRECT — match with tracing
+match pool.mget::<Vec<Option<String>>, _>(keys).await {
+    Ok(vals) => vals,
+    Err(e) => { tracing::warn!(error = %e, "mcp: failed to fetch heartbeats from Valkey"); vec![] }
+}
+
+// CORRECT — unwrap_or_else with tracing
+pool.set(key, value, Some(Expiration::EX(ttl)), None, false).await
+    .unwrap_or_else(|e| tracing::warn!(error = %e, key, "Valkey SET failed"));
+
+// WRONG
+let _ = pool.set(...).await;          // ✗ silent discard
+pool.get(key).await.unwrap_or(None)   // ✗ no error logging
+```
+
+Security-critical paths (refresh token claims, JTI revocation) must fail-closed: Valkey error → `AppError::ServiceUnavailable`, not silent success.
 
 ## Valkey Lua Eval
 
@@ -199,6 +321,90 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 | `GEMINI_HEALTH_TIMEOUT` | 10s | Gemini API key validation |
 | `NODE_EXPORTER_METRICS_TIMEOUT` | 5s | node-exporter metrics scrape |
 
+## TimeoutLayer — `tower_http` over `tower`
+
+Use `tower_http::timeout::TimeoutLayer` (returns `408 Request Timeout` automatically) instead of `tower::timeout::TimeoutLayer` (requires a `HandleErrorLayer` wrapper).
+
+```rust
+// CORRECT — tower_http auto-returns 408, no extra wiring
+use tower_http::timeout::TimeoutLayer;
+.layer(TimeoutLayer::new(JWT_ROUTER_TIMEOUT))
+
+// WRONG — requires manual HandleErrorLayer to map error → HTTP response
+use tower::timeout::TimeoutLayer;
+.layer(HandleErrorLayer::new(|_| async { StatusCode::REQUEST_TIMEOUT }))
+.layer(tower::timeout::TimeoutLayer::new(JWT_ROUTER_TIMEOUT))
+```
+
+**Streaming vs. non-streaming:** Apply `TimeoutLayer` only to non-streaming routes. SSE/chunked routes must be outside the timeout layer (or use a much larger value), as `tower_http::TimeoutLayer` fires on total response duration.
+
+```rust
+// CORRECT — SSE route merged into a separate Router without TimeoutLayer
+let jwt_router = Router::new()
+    .route("/v1/something", get(handler))
+    .route_layer(/* auth */)
+    .layer(TimeoutLayer::new(JWT_ROUTER_TIMEOUT));  // fires on total duration
+
+// Merge SSE route WITHOUT the timeout layer
+let app = Router::new()
+    .merge(jwt_router)
+    .merge(
+        Router::new()
+            .route("/v1/dashboard/jobs/stream", get(job_events_sse))
+            .route_layer(middleware::from_fn_with_state(state.clone(), jwt_auth)),
+        // No TimeoutLayer — stream runs until client disconnects
+    );
+
+// WRONG — SSE inside the same .layer(TimeoutLayer) block
+// → stream will be killed after JWT_ROUTER_TIMEOUT (e.g. 30s)
+```
+
+## Per-Key Concurrent Connection Limit (LLM Gateway)
+
+Protects against Slowloris-style abuse and noisy-neighbor tenant exhaustion (OWASP API4:2023 / LLM10:2025). RPM alone cannot defend against slow-sender attacks.
+
+```rust
+// Middleware state — per-key semaphore via DashMap
+#[derive(Clone)]
+pub struct PerKeyConcurrency {
+    semaphores: Arc<DashMap<String, Arc<Semaphore>>>,
+    max: usize,
+}
+impl PerKeyConcurrency {
+    pub fn new(max: usize) -> Self { Self { semaphores: Arc::new(DashMap::new()), max } }
+    fn semaphore(&self, key: &str) -> Arc<Semaphore> {
+        self.semaphores.entry(key.to_owned())
+            .or_insert_with(|| Arc::new(Semaphore::new(self.max)))
+            .clone()
+    }
+}
+
+// In middleware: try_acquire (hard 429, no queue) — never queue under LLM load
+let sem = state.semaphore(&api_key);
+let _permit = sem.try_acquire_owned()
+    .map_err(|_| AppError::TooManyRequests { retry_after: 1 })?;
+// permit drops when response completes — slot released automatically
+```
+
+| Tier | Max concurrent | Rationale |
+|------|---------------|-----------|
+| Standard / free | 4 | Prevents budget exhaustion on expensive models |
+| Paid / team | 8 | Matches provider soft limits |
+| Internal | 16 | Full throughput, monitored |
+
+Rule: use `try_acquire` (immediate 429), not `acquire` (queue). Queued permits under flood hold tasks indefinitely.
+
+**Anti-pattern — AtomicU32 + manual RAII guard:**
+```rust
+// WRONG — race window between load and store; RAII struct needed; harder to reason about
+struct InFlightGuard { counter: Arc<AtomicU32> }
+impl Drop for InFlightGuard { fn drop(&mut self) { self.counter.fetch_sub(1, Ordering::Relaxed); } }
+let current = counter.fetch_add(1, Ordering::Relaxed);
+if current >= MAX { counter.fetch_sub(1, Ordering::Relaxed); return 429; }
+let _guard = InFlightGuard { counter: counter.clone() };
+```
+Use `Semaphore::try_acquire_owned()` — the permit is the guard; no custom RAII needed.
+
 ## Background Tasks -- JoinSet + CancellationToken
 
 ```rust
@@ -233,12 +439,21 @@ A separate task counts broadcast events (`pending` -> incoming, terminal -> comp
 
 ```rust
 PgPoolOptions::new()
-  .max_connections(10).min_connections(2)
-  .acquire_timeout(Duration::from_secs(5))
-  .idle_timeout(Duration::from_secs(600))
-  .max_lifetime(Duration::from_secs(1800))
+  .max_connections(max_conns)        // (vCPU × 2) + 1, cap at 20; read from PG_POOL_MAX env
+  .min_connections(2)                // warm floor — avoids cold-start latency on bursts
+  .acquire_timeout(Duration::from_secs(5))   // fail fast — shorter than HTTP timeout
+  .idle_timeout(Duration::from_secs(600))    // recycle idle conns that may have gone stale
+  .max_lifetime(Duration::from_secs(1800))   // force rotation to avoid long-lived state
+  .statement_cache_capacity(512)     // reduce parse/plan overhead; 0 if behind PgBouncer tx-mode
+  .test_before_acquire(false)        // skip ping on acquire — saves one round-trip per query
   .connect(url).await?
 ```
+
+| Rule | Detail |
+|------|--------|
+| `acquire_timeout` | 5s — must be shorter than HTTP timeout so callers fail fast |
+| `statement_cache_capacity` | 512 for fixed SQL queries; set to 0 if behind PgBouncer in transaction-pooling mode |
+| `test_before_acquire(false)` | Default `true` adds a ping on every acquire. Safe to disable when `max_lifetime` + `idle_timeout` handle stale connections |
 
 ## Adding a New Port + Adapter
 
@@ -246,7 +461,7 @@ PgPoolOptions::new()
 |------|------|--------|
 | 1 | `domain/entities/new_entity.rs` | Pure struct, no I/O |
 | 2 | `application/ports/outbound/new_port.rs` | `#[async_trait]` trait; add to mod.rs |
-| 3 | `migrations/YYYYMMDDHHMMSS_*.sql` | DB migration |
+| 3 | `docker/postgres/init.sql` | Add column/table to consolidated schema |
 | 4 | `infrastructure/outbound/persistence/new.rs` | Impl trait; add to mod.rs |
 | 5 | `infrastructure/inbound/http/state.rs` | `Arc<dyn NewPort>` field |
 | 6 | `main.rs` | Init + inject into AppState |
@@ -279,6 +494,71 @@ pub async fn list_roles(RequireRoleManage(_claims): RequireRoleManage, ...) { ..
 | `RequireSettingsManage` | `settings_manage` | System settings |
 | `RequireApiTest` | `api_test` | Test inference |
 | `RequireDashboardView` | `dashboard_view` | Dashboard data |
+
+## Audit Trail (`emit_audit`)
+
+All mutating handlers (POST/PATCH/DELETE) MUST call `emit_audit()` after the DB write succeeds:
+
+```rust
+emit_audit(
+    &state, &claims,
+    "action_verb",            // e.g. "create", "update", "delete", "grant", "revoke"
+    "resource_type",          // e.g. "api_key", "account", "mcp_server", "role"
+    &resource_id.to_string(),
+    &resource_name,
+    "Human-readable description of what changed",
+).await;
+```
+
+Location: `infrastructure/inbound/http/super::emit_audit` (imported as `super::emit_audit`).
+Call after the DB mutation succeeds, before returning the response. Non-blocking — fire-and-forget via `.await` is fine.
+
+**Common omission:** `emit_audit` is frequently missing from handlers added without consulting this doc. A 2026-04-07 audit found it absent in 9 handlers (across `key_mcp_access_handlers`, `key_provider_access_handlers`, `ollama_model_handlers`, `mcp_handlers`, `gemini_model_handlers`, `dashboard_handlers`). Run the quarterly audit grep after adding any mutating handler.
+
+**Prerequisite:** the handler must capture `RequireXxx(claims)` — not `RequireXxx(_)` — to have `claims` available for `emit_audit`. If no `RequireXxx` extractor exists at all, the handler has a missing auth guard (P1 security issue).
+
+## Batch DB Writes (N+1 Prevention)
+
+Never execute N sequential queries in a loop. Use UNNEST for inserts, `ANY($1)` for filters and aggregates.
+
+```rust
+// CORRECT — UNNEST batch insert/upsert
+sqlx::query(
+    "INSERT INTO mcp_server_tools (server_id, name, description)
+     SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[])
+     ON CONFLICT (server_id, name) DO UPDATE SET description = EXCLUDED.description"
+)
+.bind(&server_ids as &[Uuid])
+.bind(&names as &[String])
+.bind(&descriptions as &[String])
+.execute(&pool).await?;
+
+// CORRECT — ANY($1) batch aggregate
+let count_rows: Vec<(Uuid, i64)> = sqlx::query_as(
+    "SELECT role_id, COUNT(*)::bigint FROM account_roles
+     WHERE role_id = ANY($1) GROUP BY role_id"
+)
+.bind(&role_ids as &[Uuid])
+.fetch_all(&pool).await?;
+let count_map: HashMap<Uuid, i64> = count_rows.into_iter().collect();
+
+// WRONG — O(N) round-trips
+for id in &ids {
+    let n = sqlx::query_scalar("SELECT COUNT(*) FROM account_roles WHERE role_id = $1")
+        .bind(id).fetch_one(&pool).await?; // one DB call per row
+}
+```
+
+**SQL LIMIT**: all `fetch_all` list queries must have an explicit `LIMIT` clause — unbounded SELECT is prohibited at 10K+ provider scale.
+
+| Scope | Minimum LIMIT |
+|-------|--------------|
+| Admin list queries (servers, keys, accounts) | 500 |
+| Internal / cross-provider batch queries (model lists, capacity profiles, heartbeats) | 10000 |
+| Role membership counts | 200 |
+| Aggregate / GROUP BY | Commensurate with distinct count (e.g. 8760 for hourly, 10 for statuses) |
+
+**Recurrence:** a 2026-04-07 audit found missing LIMITs in 10+ repositories (`account_repository`, `api_key_repository`, `provider_registry`, `gemini_policy_repository`, `session_repository`, `model_capacity_repository`, `gpu_server_registry`, `global_model_settings`, `ollama_model_repository`, `provider_model_selection`). Run the quarterly audit grep after adding any `fetch_all` query.
 
 ## Domain Enum Patterns
 
@@ -541,6 +821,35 @@ Network blips (< 2 min) do not trigger cleanup. The suspect marker auto-expires 
 
 All agents down then restart: `tokio::time::interval` fires immediately on first tick, triggering an immediate scan and cleanup of any dead instances found.
 
+## Cross-Module Error Sentinel Constants
+
+Use a `const &str` to share error markers across module boundaries instead of duplicating string literals.
+
+```rust
+// session.rs — define once
+pub(crate) const SESSION_EXPIRED_MARKER: &str = "session expired";
+
+// client.rs — use in error construction
+return Err(anyhow!("MCP {SESSION_EXPIRED_MARKER} (404) for {}", session.url));
+
+// bridge.rs — use in match guard
+Err(e) if e.to_string().contains(SESSION_EXPIRED_MARKER) => { ... }
+```
+
+Prevents silent drift when one side is renamed. `pub(crate)` keeps the sentinel internal.
+
+## Docker Build Cache — `sharing=locked`
+
+All `--mount=type=cache` directives for the Cargo registry and target directory must use `sharing=locked`:
+
+```dockerfile
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release -p my-crate --recipe-path recipe.json
+```
+
+Without `sharing=locked`, parallel `docker compose build` services extracting the same crates simultaneously cause `EEXIST (os error 17)` failures. Apply to both `cargo chef cook` and `cargo build` steps in every service Dockerfile.
+
 ## Test Code Conventions
 
 | Rule | Rationale |
@@ -566,4 +875,174 @@ fn no_duplicates() {  // uniqueness check (implies determinism)
 fn deterministic_assignment() {  // determinism is trivial once uniqueness is proven
     assert!(owns("a", owner, 3));
 }
+```
+
+## UTF-8 Safe Truncation
+
+All string truncation must respect UTF-8 char boundaries. Use the shared utility in `veronex_mcp::truncate_at_char_boundary` instead of calling `String::truncate(n)` directly.
+
+```rust
+// CORRECT — via shared utility (veronex-mcp crate)
+use veronex_mcp::truncate_at_char_boundary;
+truncate_at_char_boundary(&mut s, MAX_BYTES);
+
+// CORRECT — inline (when veronex_mcp not in scope)
+let boundary = (0..=max_len).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+s.truncate(boundary);
+
+// WRONG — panics on multi-byte char boundaries
+s.truncate(MAX_BYTES);
+```
+
+The audit grep:
+```bash
+grep -rn "\.truncate(" crates/ --include="*.rs"
+```
+Expected: all calls preceded by `is_char_boundary()` reverse-scan or delegated to `truncate_at_char_boundary()`.
+
+## MCP Integration Patterns
+
+### Two-Level Tool Cache (L1 DashMap + L2 Valkey)
+
+```
+L1: DashMap<Uuid, CachedTools>  TTL 30s  — per-replica in-process
+L2: Valkey SET                  TTL 35s  — cross-replica shared
+Lock: Valkey SET NX             TTL 33s  — prevents thundering herd
+```
+
+Refresh sequence:
+1. Check L1 TTL — if valid, return immediately (zero network)
+2. Attempt `SET NX lock` — only one replica fetches at a time
+3. Fetch from MCP server via `McpSessionManager`
+4. Write to L1 + L2 atomically
+5. Release lock
+
+```rust
+// SET NX prevents multiple replicas hitting the MCP server simultaneously
+let locked: bool = conn.set(&lock_key, "1", Some(Expiration::EX(LOCK_TTL_SECS)), Some(SetOptions::NX), false).await.unwrap_or(false);
+if !locked { return; }
+```
+
+### MCP Valkey Key Convention (Cross-Crate)
+
+`veronex-mcp` defines its own key strings locally (cross-crate OK, unlike `veronex` which must use `valkey_keys.rs`).
+All `veronex-mcp` keys use the `veronex:mcp:` namespace:
+
+| Key | TTL | Purpose |
+|-----|-----|---------|
+| `veronex:mcp:tools:{server_id}` | 35s | L2 tool list |
+| `veronex:mcp:tools:lock:{server_id}` | 33s | Refresh NX lock |
+| `veronex:mcp:heartbeat:{server_id}` | set by agent | Server liveness |
+| `veronex:mcp:result:{tool}:{args_hash}` | 300s | Result cache |
+
+Rule: cross-crate local key definitions are allowed, but must be guarded with format tests.
+
+### Input Size Guards (OOM/DoS Prevention)
+
+Every entry point that accepts external data must have `MAX_*` constants bounding input size.
+
+Current MCP guards:
+
+| Constant | Value | Location | Purpose |
+|----------|-------|----------|---------|
+| `MAX_TOOLS_PER_SERVER` | 1,024 | `client.rs` | tools/list response |
+| `MAX_TOOL_DESCRIPTION_BYTES` | 4,096 | `client.rs` | Tool description field |
+| `MAX_TOOL_SCHEMA_BYTES` | 16,384 | `client.rs` | inputSchema serialized size |
+| `MAX_TOOL_RESULT_BYTES` | 32,768 | `bridge.rs` | LLM injection size |
+| `MAX_ARGS_FOR_HASH_BYTES` | 4,096 | `bridge.rs` | Loop-detect hashing input |
+| `MAX_CANONICAL_DEPTH` | 16 | `result_cache.rs` | JSON recursion depth |
+| `MAX_TOOLS_PER_REQUEST` | 32 | `bridge.rs` | Context window protection |
+
+Rule: always pair a `MAX_*` const with a test verifying the boundary does not panic.
+
+### Agentic Loop Duplicate Detection
+
+Prevents infinite loops where the model repeatedly calls the same tool with identical arguments.
+
+```rust
+// (tool_name, args_hash) → call count
+let mut call_sig_counts: HashMap<(String, String), u8> = HashMap::new();
+// ...
+let args_hash = quick_args_hash(args_str);
+let count = call_sig_counts.entry((name.clone(), args_hash)).or_insert(0);
+*count += 1;
+if *count >= LOOP_DETECT_THRESHOLD { break; }
+```
+
+Bounds: `MAX_ROUNDS(5) × MAX_TOOLS(32) = 160` — the HashMap is fully bounded, not unbounded.
+
+### Canonical JSON for Cache Keys
+
+Args hash for result cache must be order-independent (same args regardless of key ordering).
+
+```rust
+fn canonical_json(v: &serde_json::Value, depth: u8) -> String {
+    if depth >= MAX_CANONICAL_DEPTH { return "\"...\"".to_owned(); }  // stack overflow guard
+    match v {
+        serde_json::Value::Object(map) => {
+            let mut pairs: Vec<_> = map.iter().collect();
+            pairs.sort_by_key(|(k, _)| *k);  // deterministic key order
+            // ...
+        }
+    }
+}
+// key: SHA-256(tool_name + ":" + canonical_json(args)), first 8 bytes hex-encoded
+```
+
+---
+
+## Quarterly Audit Commands
+
+Run these greps to surface violations. Expected results noted per check.
+
+```bash
+# P1 — SSRF: validate_provider_url called for URL inputs
+grep -rn "url.*String\|String.*url" crates/veronex/src/infrastructure/inbound/ --include="*.rs" -l
+# → check each file for validate_provider_url call
+
+# P1 — SQL Interval: must use make_interval(), never format!()
+grep -rn "INTERVAL.*format!\|format!.*INTERVAL" crates/ --include="*.rs"
+# → expected: 0 results
+
+# P1 — UTF-8 truncation: must use is_char_boundary() or truncate_at_char_boundary()
+grep -rn "\.truncate(" crates/ --include="*.rs"
+# → all calls must be preceded by is_char_boundary() scan or delegated to truncate_at_char_boundary()
+
+# P1 — Valkey: no silent error discard on I/O
+grep -rn "\.await\.unwrap_or\b\|let _.*\.await\|\.await\.ok()" crates/veronex/src/infrastructure/inbound/ --include="*.rs"
+# → each result must be checked: Valkey I/O must log at tracing::warn! on error
+
+# P2 — Valkey key hardcoding: all veronex:* keys via valkey_keys.rs only
+grep -rn '"veronex:' crates/veronex/src/ | grep -v valkey_keys
+# → expected: 0 results
+
+# P2 — Magic Duration: all timeouts via named const
+grep -rn "Duration::from_secs([0-9]" crates/ --include="*.rs" | grep -v "const "
+# → expected: 0 results
+
+# P2 — O(N) DB scan: COUNT(*) in dashboard hot paths
+grep -rn "COUNT(\*)" crates/veronex/src/ --include="*.rs"
+# → dashboard_queries.rs must use pg_class.reltuples instead
+
+# P2 — Unbounded SELECT: all fetch_all must have LIMIT (search persistence layer)
+grep -rn "fetch_all" crates/veronex/src/infrastructure/outbound/persistence/ --include="*.rs" -B5 | grep -v "LIMIT\|ANY\|UNNEST\|--"
+# → expected: 0 results — every fetch_all must have a LIMIT clause above it
+
+# P2 — Missing emit_audit: all POST/PATCH/DELETE handlers must call emit_audit()
+grep -rn "pub async fn " crates/veronex/src/infrastructure/inbound/http/ --include="*handlers*.rs" -A30 \
+  | grep -B20 "\.execute\|\.insert\|\.update\|\.delete\|\.upsert" \
+  | grep -v "emit_audit"
+# → manual check: each mutating handler must have emit_audit after the DB write
+
+# P2 — N+1: fetch_all/fetch_one inside for loop
+grep -rn "for.*in.*{" crates/veronex/src/ --include="*.rs" -A6 | grep "fetch_all\|fetch_one\|\.execute("
+# → expected: 0 results (use UNNEST or ANY($1) instead)
+
+# P2 — Docker cache: sharing=locked on all cache mounts
+grep -rn "mount=type=cache" Dockerfile* **/Dockerfile* 2>/dev/null
+# → all --mount=type=cache entries must have sharing=locked
+
+# P3 — Cross-module error sentinel: no duplicated string literals
+grep -rn '"session expired"' crates/ --include="*.rs"
+# → expected: 1 definition (pub(crate) const), matched via .contains() elsewhere
 ```

@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
-use crate::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiSyncConfigRepository;
 use crate::domain::services::encryption::{decrypt_or_legacy, encrypt};
 
 pub struct PostgresGeminiSyncConfigRepository {

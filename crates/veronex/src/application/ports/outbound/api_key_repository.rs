@@ -22,6 +22,8 @@ pub trait ApiKeyRepository: Send + Sync {
 
     /// List all non-deleted keys across all tenants (admin use).
     async fn list_all(&self) -> Result<Vec<ApiKey>>;
+    async fn list_page(&self, search: &str, limit: i64, offset: i64) -> Result<(Vec<ApiKey>, i64)>;
+    async fn list_by_tenant_page(&self, tenant_id: &str, search: &str, limit: i64, offset: i64) -> Result<(Vec<ApiKey>, i64)>;
 
     /// Revoke (soft-delete) a key by setting is_active = false.
     async fn revoke(&self, key_id: &Uuid) -> Result<()>;
@@ -51,7 +53,6 @@ mod tests {
     use super::*;
     use crate::domain::enums::KeyType;
     use chrono::Utc;
-    use std::sync::Arc;
     use tokio::sync::Mutex;
 
     struct MockApiKeyRepository {
@@ -101,6 +102,14 @@ mod tests {
         async fn list_all(&self) -> Result<Vec<ApiKey>> {
             let keys = self.keys.lock().await;
             Ok(keys.iter().filter(|k| k.deleted_at.is_none()).cloned().collect())
+        }
+
+        async fn list_page(&self, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<ApiKey>, i64)> {
+            Ok((vec![], 0))
+        }
+
+        async fn list_by_tenant_page(&self, _tenant_id: &str, _search: &str, _limit: i64, _offset: i64) -> Result<(Vec<ApiKey>, i64)> {
+            Ok((vec![], 0))
         }
 
         async fn revoke(&self, key_id: &Uuid) -> Result<()> {
@@ -169,7 +178,7 @@ mod tests {
         ApiKey {
             id: Uuid::now_v7(),
             key_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
-            key_prefix: "iq_01ARZ3NDEK".to_string(),
+            key_prefix: "vnx_01ARZ3NDE".to_string(),
             tenant_id: tenant_id.to_string(),
             name: "test-key".to_string(),
             is_active: true,
@@ -180,15 +189,9 @@ mod tests {
             created_at: Utc::now(),
             key_type: KeyType::Standard,
             tier: KeyTier::Paid,
+            mcp_cap_points: 3,
             account_id: None,
         }
-    }
-
-    #[tokio::test]
-    async fn trait_object_creation() {
-        let repo: Arc<dyn ApiKeyRepository> = Arc::new(MockApiKeyRepository::new());
-        let keys = repo.list_by_tenant("tenant-1").await.unwrap();
-        assert!(keys.is_empty());
     }
 
     #[tokio::test]

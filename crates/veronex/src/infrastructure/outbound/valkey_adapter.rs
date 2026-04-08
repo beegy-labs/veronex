@@ -40,14 +40,14 @@ redis.call('HSET', KEYS[4], ARGV[1], ARGV[5])
 return 1
 "#;
 
-/// Atomic claim: ZREM + RPUSH processing + DECR demand + HDEL side hashes.
-/// KEYS[1]=queue:zset  KEYS[2]=processing  KEYS[3]=demand:{model}
+/// Atomic claim: ZREM + ZADD active (with deadline) + DECR demand + HDEL side hashes.
+/// KEYS[1]=queue:zset  KEYS[2]=queue:active  KEYS[3]=demand:{model}
 /// KEYS[4]=queue:enqueue_at  KEYS[5]=queue:model
-/// ARGV[1]=job_id
+/// ARGV[1]=job_id  ARGV[2]=deadline_ms
 /// Returns: 1=claimed, 0=already taken
 const LUA_ZSET_CLAIM: &str = r#"
 if redis.call('ZREM', KEYS[1], ARGV[1]) == 0 then return 0 end
-redis.call('RPUSH', KEYS[2], ARGV[1])
+redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1])
 local v = redis.call('DECR', KEYS[3])
 if v < 0 then redis.call('SET', KEYS[3], 0) end
 redis.call('HDEL', KEYS[4], ARGV[1])
@@ -77,11 +77,6 @@ impl ValkeyAdapter {
         Self { pool }
     }
 
-    /// Expose the inner pool for infrastructure code that still needs direct access
-    /// (e.g. `SubscriberClient` setup, reaper, health checker).
-    pub fn inner_pool(&self) -> &Pool {
-        &self.pool
-    }
 }
 
 #[async_trait::async_trait]
@@ -120,6 +115,14 @@ impl ValkeyPort for ValkeyAdapter {
     async fn list_remove(&self, key: &str, value: &str) -> Result<()> {
         self.pool.lrem::<i64, _, _>(key, 1, value).await?;
         Ok(())
+    }
+
+    async fn list_drain(&self, key: &str) -> Result<u64> {
+        let len: u64 = self.pool.llen(key).await.unwrap_or(0);
+        if len > 0 {
+            self.pool.del::<i64, _>(key).await?;
+        }
+        Ok(len)
     }
 
     // ── ZSET queue operations (Phase 3) ──────────────────────────────
@@ -174,8 +177,9 @@ impl ValkeyPort for ValkeyAdapter {
         processing_key: &str,
         model: &str,
     ) -> Result<bool> {
-        use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP};
+        use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP, LEASE_TTL_MS};
 
+        let deadline_ms = (chrono::Utc::now().timestamp_millis() as u64) + LEASE_TTL_MS;
         let demand_key = crate::domain::constants::demand_key(model);
         let keys = vec![
             QUEUE_ZSET.to_string(),
@@ -184,7 +188,7 @@ impl ValkeyPort for ValkeyAdapter {
             QUEUE_ENQUEUE_AT.to_string(),
             QUEUE_MODEL_MAP.to_string(),
         ];
-        let args = vec![job_id.to_string()];
+        let args = vec![job_id.to_string(), deadline_ms.to_string()];
 
         let result: i64 = self.pool.eval(LUA_ZSET_CLAIM, keys, args).await?;
         Ok(result == 1)
@@ -210,6 +214,47 @@ impl ValkeyPort for ValkeyAdapter {
         use crate::domain::constants::QUEUE_ZSET;
         let len: u64 = self.pool.zcard(QUEUE_ZSET).await?;
         Ok(len)
+    }
+
+    async fn active_lease_set(&self, job_id: &str, deadline_ms: u64) -> Result<()> {
+        use crate::domain::constants::QUEUE_ACTIVE;
+        let _: i64 = self.pool
+            .zadd(QUEUE_ACTIVE, None, None, false, false, (deadline_ms as f64, job_id))
+            .await?;
+        Ok(())
+    }
+
+    async fn active_lease_renew(&self, job_id: &str, deadline_ms: u64) -> Result<bool> {
+        use crate::domain::constants::QUEUE_ACTIVE;
+        // ZADD XX updates score only if member already exists; returns 0 added (not changed).
+        let _: i64 = self.pool
+            .zadd(
+                QUEUE_ACTIVE,
+                Some(SetOptions::XX),
+                None,
+                false,
+                false,
+                (deadline_ms as f64, job_id),
+            )
+            .await
+            .unwrap_or(0);
+        // Check if the member still exists (ZADD XX does not report updates via return value)
+        let score: Option<f64> = self.pool.zscore(QUEUE_ACTIVE, job_id).await.unwrap_or(None);
+        Ok(score.is_some())
+    }
+
+    async fn active_lease_remove(&self, job_id: &str) -> Result<()> {
+        use crate::domain::constants::QUEUE_ACTIVE;
+        let _: i64 = self.pool.zrem(QUEUE_ACTIVE, job_id).await?;
+        Ok(())
+    }
+
+    async fn active_lease_expired(&self, now_ms: u64) -> Result<Vec<String>> {
+        use crate::domain::constants::QUEUE_ACTIVE;
+        let members: Vec<fred::types::Value> = self.pool
+            .zrangebyscore(QUEUE_ACTIVE, 0.0_f64, now_ms as f64, false, None)
+            .await?;
+        Ok(members.into_iter().filter_map(|v: fred::types::Value| v.as_string()).collect())
     }
 
     // ── Key-value operations ────────────────────────────────────────

@@ -1,4 +1,4 @@
-import type { Account, AnalyticsStats, ApiKey, AuditEvent, Provider, ProviderSelectedModel, CapacityResponse, RoleSummary, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaProviderForModel, OllamaModelWithCount, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, ConversationSummary, ConversationDetail, TurnInternals, KeyPage, McpServer, McpServerAccess, McpServerStat, McpSettings, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterMcpServerRequest, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
@@ -16,6 +16,24 @@ async function fetchPublic<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
+}
+
+/** Shared verify fetch — POST url to verify endpoint, handle network errors. */
+async function verifyEndpoint(path: string, url: string): Promise<{ reachable: boolean }> {
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ url }),
+    })
+  } catch {
+    throw new ApiHttpError('NETWORK_ERROR', 0)
+  }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new ApiHttpError((data as { error?: string }).error ?? `${res.status}`, res.status)
+  return data as { reachable: boolean }
 }
 
 export const api = {
@@ -40,6 +58,12 @@ export const api = {
   performance: (hours = 24) =>
     apiClient.get<PerformanceStats>(`/v1/dashboard/performance?hours=${hours}`),
 
+  serviceHealth: () =>
+    apiClient.get<import('./types').ServiceHealthResponse>('/v1/dashboard/services'),
+
+  pipelineHealth: () =>
+    apiClient.get<import('./types').PipelineHealthResponse>('/v1/dashboard/pipeline'),
+
   analytics: (hours = 24) =>
     apiClient.get<AnalyticsStats>(`/v1/dashboard/analytics?hours=${hours}`),
 
@@ -48,19 +72,23 @@ export const api = {
     apiClient.get<QueueDepth>('/v1/dashboard/queue/depth'),
 
   // ── Capacity (JWT-protected) ──────────────────────────────────────────────
-  capacity: () =>
-    apiClient.get<CapacityResponse>('/v1/dashboard/capacity'),
+  capacity: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<CapacityPageResponse>(`/v1/dashboard/capacity${q ? '?' + q : ''}`)
+  },
+
+  capacityCluster: () =>
+    apiClient.get<import('./types').ClusterModelInfo[]>('/v1/dashboard/capacity/cluster'),
 
   syncSettings: () =>
     apiClient.get<SyncSettings>('/v1/dashboard/capacity/settings'),
 
   patchSyncSettings: (body: PatchSyncSettings) =>
     apiClient.patch<SyncSettings>('/v1/dashboard/capacity/settings', body),
-
-  triggerSessionGrouping: (beforeDate?: string) =>
-    apiClient.post<{ message: string }>('/v1/dashboard/session-grouping/trigger', {
-      before_date: beforeDate ?? null,
-    }),
 
   // ── Lab (experimental) features (JWT-protected) ───────────────────────────
   labSettings: () =>
@@ -70,8 +98,14 @@ export const api = {
     apiClient.patch<LabSettings>('/v1/dashboard/lab', body),
 
   // ── Key management (JWT-protected) ────────────────────────────────────────
-  keys: () =>
-    apiClient.get<ApiKey[]>('/v1/keys'),
+  keys: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<KeyPage>(`/v1/keys${q ? '?' + q : ''}`)
+  },
 
   createKey: (body: CreateKeyRequest) =>
     apiClient.post<CreateKeyResponse>('/v1/keys', body),
@@ -81,6 +115,9 @@ export const api = {
 
   toggleKeyActive: (id: string, is_active: boolean) =>
     apiClient.patch<void>(`/v1/keys/${id}`, { is_active }),
+
+  patchKey: (id: string, body: Partial<{ name: string; is_active: boolean; rate_limit_rpm: number; rate_limit_tpm: number; mcp_cap_points: number }>) =>
+    apiClient.patch<void>(`/v1/keys/${id}`, body),
 
   updateKeyTier: (id: string, tier: 'free' | 'paid') =>
     apiClient.patch<void>(`/v1/keys/${id}`, { tier }),
@@ -102,23 +139,19 @@ export const api = {
     apiClient.get<UsageBreakdown>(`/v1/usage/breakdown?hours=${hours}`),
 
   // ── GPU servers (JWT-protected) ───────────────────────────────────────────
-  servers: () =>
-    apiClient.get<GpuServer[]>('/v1/servers'),
+  servers: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<ServerPage>(`/v1/servers${q ? '?' + q : ''}`)
+  },
 
   registerServer: (body: RegisterGpuServerRequest) =>
     apiClient.post<{ id: string }>('/v1/servers', body),
 
-  verifyServer: async (url: string): Promise<{ reachable: boolean }> => {
-    const res = await fetch(`${BASE}/v1/servers/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ url }),
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new ApiHttpError((data as { error?: string }).error ?? `${res.status}`, res.status)
-    return data as { reachable: boolean }
-  },
+  verifyServer: (url: string) => verifyEndpoint('/v1/servers/verify', url),
 
   updateServer: (id: string, body: UpdateGpuServerRequest) =>
     apiClient.patch<GpuServer>(`/v1/servers/${id}`, body),
@@ -129,27 +162,27 @@ export const api = {
   serverMetrics: (id: string) =>
     apiClient.get<NodeMetrics>(`/v1/servers/${id}/metrics`),
 
+  serverMetricsBatch: (ids: string[]) =>
+    apiClient.get<Record<string, NodeMetrics>>(`/v1/servers/metrics/batch?ids=${ids.join(',')}`),
+
   serverMetricsHistory: (id: string, hours = 1) =>
     apiClient.get<ServerMetricsPoint[]>(`/v1/servers/${id}/metrics/history?hours=${hours}`),
 
   // ── Providers (JWT-protected) ──────────────────────────────────────────────
-  providers: () =>
-    apiClient.get<Provider[]>('/v1/providers'),
+  providers: (params?: { search?: string; page?: number; limit?: number; provider_type?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.provider_type) qs.set('provider_type', params.provider_type)
+    const q = qs.toString()
+    return apiClient.get<ProviderPage>(`/v1/providers${q ? '?' + q : ''}`)
+  },
 
   registerProvider: (body: RegisterProviderRequest) =>
     apiClient.post<RegisterProviderResponse>('/v1/providers', body),
 
-  verifyProvider: async (url: string): Promise<{ reachable: boolean }> => {
-    const res = await fetch(`${BASE}/v1/providers/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ url }),
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new ApiHttpError((data as { error?: string }).error ?? `${res.status}`, res.status)
-    return data as { reachable: boolean }
-  },
+  verifyProvider: (url: string) => verifyEndpoint('/v1/providers/verify', url),
 
   deleteProvider: (id: string) =>
     apiClient.delete<void>(`/v1/providers/${id}`),
@@ -175,6 +208,20 @@ export const api = {
   setModelEnabled: (providerId: string, modelName: string, isEnabled: boolean) =>
     apiClient.patch<void>(`/v1/providers/${providerId}/selected-models/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
 
+  // ── Global model settings (JWT-protected) ─────────────────────────────────
+  globalModelSettings: () =>
+    apiClient.get<{ model_name: string; is_enabled: boolean }[]>('/v1/models/global-settings'),
+  setGlobalModelEnabled: (modelName: string, isEnabled: boolean) =>
+    apiClient.patch<{ model_name: string; is_enabled: boolean }>(`/v1/models/global-settings/${encodeURIComponent(modelName)}`, { is_enabled: isEnabled }),
+
+  // ── API key → MCP server access (JWT-protected) ───────────────────────────
+  keyMcpAccess: (keyId: string) =>
+    apiClient.get<McpServerAccess[]>(`/v1/keys/${keyId}/mcp`),
+  grantKeyMcpAccess: (keyId: string, serverId: string, topK?: number | null) =>
+    apiClient.post<McpServerAccess>(`/v1/keys/${keyId}/mcp`, { server_id: serverId, top_k: topK ?? null }),
+  revokeKeyMcpAccess: (keyId: string, serverId: string) =>
+    apiClient.delete<void>(`/v1/keys/${keyId}/mcp/${serverId}`),
+
   // ── Gemini (JWT-protected) ────────────────────────────────────────────────
   geminiPolicies: () =>
     apiClient.get<GeminiRateLimitPolicy[]>('/v1/gemini/policies'),
@@ -198,8 +245,14 @@ export const api = {
     apiClient.get<{ models: GeminiModel[] }>('/v1/gemini/models'),
 
   // ── Ollama (JWT-protected) ────────────────────────────────────────────────
-  ollamaModels: () =>
-    apiClient.get<{ models: OllamaModelWithCount[] }>('/v1/ollama/models'),
+  ollamaModels: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<OllamaModelPage>(`/v1/ollama/models${q ? '?' + q : ''}`)
+  },
 
   syncOllamaModels: () =>
     apiClient.post<{ job_id: string; status: string }>('/v1/ollama/models/sync'),
@@ -207,11 +260,14 @@ export const api = {
   ollamaSyncStatus: () =>
     apiClient.get<OllamaSyncJob>('/v1/ollama/sync/status'),
 
-  ollamaModelProviders: (modelName: string) =>
-    apiClient.get<{ providers: OllamaProviderForModel[] }>(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers`),
-
-  ollamaProviderModels: (providerId: string) =>
-    apiClient.get<{ models: string[] }>(`/v1/ollama/providers/${providerId}/models`),
+  ollamaModelProviders: (modelName: string, params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<OllamaProviderPage>(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers${q ? '?' + q : ''}`)
+  },
 
   // ── Setup (public — no auth, first-run only) ──────────────────────────────
   setupStatus: () =>
@@ -236,8 +292,14 @@ export const api = {
     }),
 
   // ── Accounts (JWT-protected) ──────────────────────────────────────────────
-  accounts: () =>
-    apiClient.get<Account[]>('/v1/accounts'),
+  accounts: (params?: { search?: string; page?: number; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set('search', params.search)
+    if (params?.page) qs.set('page', String(params.page))
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const q = qs.toString()
+    return apiClient.get<AccountPage>(`/v1/accounts${q ? '?' + q : ''}`)
+  },
 
   createAccount: (body: CreateAccountRequest) =>
     apiClient.post<CreateAccountResponse>('/v1/accounts', body),
@@ -276,6 +338,39 @@ export const api = {
   deleteRole: (id: string) =>
     apiClient.delete<void>(`/v1/roles/${id}`),
 
+  // ── MCP servers (JWT-protected) ───────────────────────────────────────────
+  mcpServers: () =>
+    apiClient.get<McpServer[]>('/v1/mcp/servers'),
+
+  registerMcpServer: (body: RegisterMcpServerRequest) =>
+    apiClient.post<{ id: string }>('/v1/mcp/servers', body),
+
+  patchMcpServer: (id: string, body: { is_enabled: boolean }) =>
+    apiClient.patch<McpServer>(`/v1/mcp/servers/${id}`, body),
+
+  deleteMcpServer: (id: string) =>
+    apiClient.delete<void>(`/v1/mcp/servers/${id}`),
+
+  mcpStats: (hours = 24) =>
+    apiClient.get<McpServerStat[]>(`/v1/mcp/stats?hours=${hours}`),
+
+  getMcpSettings: () =>
+    apiClient.get<McpSettings>('/v1/mcp/settings'),
+
+  patchMcpSettings: (body: Partial<McpSettings>) =>
+    apiClient.patch<McpSettings>('/v1/mcp/settings', body),
+
+  // ── Conversations (JWT-protected) ─────────────────────────────────────────
+
+  conversations: (params?: string) =>
+    apiClient.get<{ conversations: ConversationSummary[]; total: number }>(
+      `/v1/conversations${params ? '?' + params : ''}`),
+
+  conversation: (id: string) =>
+    apiClient.get<ConversationDetail>(`/v1/conversations/${id}`),
+  turnInternals: (convId: string, jobId: string) =>
+    apiClient.get<TurnInternals>(`/v1/conversations/${convId}/turns/${jobId}/internals`),
+
   // ── Audit (JWT-protected) ─────────────────────────────────────────────────
   auditEvents: (params?: { limit?: number; offset?: number; action?: string; resource_type?: string; resource_id?: string }) => {
     const qs = new URLSearchParams()
@@ -287,4 +382,21 @@ export const api = {
     const q = qs.toString()
     return apiClient.get<AuditEvent[]>(`/v1/audit${q ? '?' + q : ''}`)
   },
+}
+
+// ── Verify error message helper ──────────────────────────────────────────────
+
+interface VerifyErrorLabels {
+  duplicate: string; network: string; unreachable: string; fallback: string
+}
+
+export function verifyErrorMessage(e: unknown, labels: VerifyErrorLabels): string {
+  if (e instanceof ApiHttpError) {
+    if (e.status === 409) return labels.duplicate
+    if (e.message === 'NETWORK_ERROR') return labels.network
+    if (e.status === 502) return labels.unreachable
+    return e.message
+  }
+  if (e instanceof Error) return e.message
+  return labels.fallback
 }

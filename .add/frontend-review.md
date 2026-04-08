@@ -1,6 +1,6 @@
 # Frontend Review
 
-> ADD Execution — Frontend Optimization & Policy Enforcement | **Last Updated**: 2026-03-16
+> ADD Execution — Frontend Optimization & Policy Enforcement | **Last Updated**: 2026-03-25
 
 ## Trigger
 
@@ -8,118 +8,20 @@ User requests frontend code review, optimization, design token audit, i18n audit
 
 ## Read Before Execution
 
-Read only docs relevant to the changed area.
-
-| Doc | Path | When to read |
-|-----|------|--------------|
-| Frontend patterns (SSOT) | `docs/llm/policies/patterns-frontend.md` | Always |
+| Doc | Path | When |
+|-----|------|------|
+| Execution contracts | `docs/llm/frontend/execution-contracts.md` | Always — folder structure, state classification, naming |
+| Frontend patterns (SSOT) | `docs/llm/policies/patterns-frontend.md` | Always — contains all checklists |
 | Design system (core) | `docs/llm/frontend/design-system.md` | Always |
 | Component patterns | `docs/llm/frontend/design-system-components.md` | Component changes |
-| i18n rules | `docs/llm/frontend/design-system-i18n.md` | Any i18n change |
+| Component patterns (extended) | `docs/llm/frontend/design-system-components-patterns.md` | ConfirmDialog, useApiMutation, 2-Step Verify, nav-404, Accounts |
+| i18n rules | `docs/llm/frontend/design-system-i18n.md` | i18n changes |
 | Chart patterns | `docs/llm/frontend/charts.md` | Chart/analytics changes |
-| Design tokens | `web/app/tokens.css` | Token compliance check |
-| Token module | `web/lib/design-tokens.ts` | Token compliance check |
-| i18n keys (source) | `web/messages/en.json` | i18n key parity check |
-| i18n keys (ko) | `web/messages/ko.json` | i18n key parity check |
-| i18n keys (ja) | `web/messages/ja.json` | i18n key parity check |
+| Design tokens | `web/app/tokens.css` + `web/lib/design-tokens.ts` | Token compliance |
+| i18n sources | `web/messages/en.json` + `ko.json` + `ja.json` | Key parity check |
+| Page doc | `docs/llm/frontend/pages/{page}.md` | When reviewing a specific page — read its page doc if it exists |
 
----
-
-## Review Checklist (run all in parallel per file)
-
-### 0. 4-Layer Architecture
-
-Token pipeline: `tokens.css (palette)` → `tokens.css (semantic --theme-*)` → `@theme inline (Tailwind)` → `components`
-
-Component layers:
-
-| Layer | Path | Rule |
-|-------|------|------|
-| 1. Pages | `app/*/page.tsx` | Route entry, `useQuery` wiring only |
-| 2. Feature components | `app/*/components/` | Page-specific composed UI — not shared |
-| 3. Shared components | `components/` + `components/ui/` | Reusable across pages — no business logic |
-| 4. Foundation | `lib/` · `hooks/` · `lib/queries/` | Types, API, formatters, tokens, query factories |
-
-Violations: placing shared logic in feature dirs, or page-specific logic in `components/`.
-
-### 1. Design Token Compliance
-
-| Check | Rule |
-|-------|------|
-| Inline `style={{}}` colors | Must use `tokens.*` from `@/lib/design-tokens` — never raw `'var(--theme-*)'` strings |
-| Tailwind color classes | Only `@theme inline`-generated utilities (e.g. `bg-status-success`, `text-status-warning-fg`) |
-| Hardcoded hex | Zero tolerance — no `#xxxxxx` in `.tsx`/`.ts` |
-| Gray/slate/zinc bypass | `gray-*` / `slate-*` / `zinc-*` / `stone-*` Tailwind colors forbidden — use semantic tokens |
-| Token name accuracy | `status-warning` / `status-warning-fg` (NOT `status-warn` / `status-warn-fg`) |
-| SVG fill/stroke | Use `{tokens.*}` expression syntax, not string `fill="var(--theme-*)"` |
-| Chart gradients | `stopColor={tokens.*}` (JSX expression), not `stopColor="var(--theme-*)"` |
-| Shared color maps | `PROVIDER_COLORS`, `JOB_STATUS_COLORS`, `FINISH_COLORS` in `constants.ts` already use tokens — never duplicate inline |
-| 3rd-party wrapper exception | `redoc-wrapper.tsx` and `swagger-ui-wrapper.tsx` use raw hex / `var(--theme-*)` — **legitimate exception**: these libraries accept config objects or `<style>` injection, not JSX. Do not flag these. |
-
-### 2. i18n Compliance
-
-| Check | Rule |
-|-------|------|
-| User-visible strings | Every string shown in UI must be `t('key')` — no hardcoded English/Korean/Japanese |
-| Key parity | All keys in `en.json` must exist in `ko.json` and `ja.json` |
-| Formatter usage | Use `fmtMs`, `fmtCompact`, `fmtPct` etc from `chart-theme.ts` — never local `toFixed`/`toLocaleString` for display |
-| Missing keys | Add missing keys to all three locale files simultaneously |
-| Scope | `t('namespace.key')` — always namespaced, never top-level single word keys |
-
-### 3. Performance
-
-| Check | Rule |
-|-------|------|
-| Derived state | Wrap filter/sort/map chains from query data in `useMemo` |
-| Event handlers in JSX | Stable references via `useCallback` when passed to child components |
-| Heavy components | Conditionally rendered heavy panels (modals, charts) → `dynamic(() => import(...), { ssr: false })` |
-| Query duplication | Same `queryKey` fetched independently in sibling components → lift to parent or use shared `queryOptions` factory |
-| Polling no-ops | Intervals that call `setState` unconditionally → add change-detection guard |
-| React key | All list renders must have stable `key` — never `index` as sole key for reorderable lists |
-| SSE-driven props | Components receiving props updated ≥1/sec from SSE must be wrapped with `React.memo` — without it every stats tick re-renders the full SVG/DOM tree |
-| High-frequency timer props | Components receiving props updated by `setInterval` ≤100ms (e.g. loading bar, live metrics) must be wrapped with `React.memo` — same re-render risk as SSE |
-| Time-display staleness | Any component that shows relative time strings (e.g. "5s ago") must have a `setInterval` tick (10–30s) so labels age without waiting for new events |
-| Zero-value stat containers | Stat rows/badges that show counts from live data must be hidden when all values are 0 — never show "0 pending, 0 running" noise at idle |
-
-### 4. Component Architecture
-
-| Check | Rule |
-|-------|------|
-| Chart styles | All Recharts `contentStyle`/`labelStyle`/`itemStyle`/`cursor` must use SSOT constants from `chart-theme.ts` |
-| Style maps | All status/role/provider badge class mappings must come from `constants.ts` — never inline duplicates |
-| UI logic separation | No API calls / business logic inside `ui/` primitive components |
-| Prop count | Handler/page components with >6 props → consider splitting or using a data-prop object |
-| Shared pattern 3+ | Same JSX pattern repeated 3+ times → extract shared component |
-| Date/time utilities | Before writing a new time formatter, check `lib/date.ts` — `fmtDatetime`, `fmtDatetimeShort`, `fmtDateOnly`, `fmtTimeAgo` already cover most cases |
-| Local helper duplication | Module-private helpers (`function foo()` inside a component file) that could be reused → move to the nearest `lib/` utility file |
-| StatusPill usage | `components/status-pill.tsx` is the shared component — use it for count+label+icon patterns. `app/providers/components/shared.tsx` has a local `StatusPill` that predates the shared one; do not create more local duplicates |
-
-### 5. TypeScript Strictness
-
-| Check | Rule |
-|-------|------|
-| `any` usage | Flag all `any` — replace with proper type or `unknown` + guard |
-| Non-null assertion `!` | Replace with optional chaining or explicit null check where possible |
-| Generated types | Use types from `web/lib/generated/` — never redefine domain enums locally |
-| Zod at boundaries | API responses parsed at API layer (`lib/api.ts`) — components receive typed data |
-
-### 6. Accessibility — WCAG 2.1 AA (Admin Dashboard Scope)
-
-**Applicable criteria only** (this is an internal admin tool — media captions 1.2.x not applicable):
-
-| Criterion | Check |
-|-----------|-------|
-| 1.4.1 Use of Color | Status conveyed by color MUST also have icon or text (e.g. status dot + icon + label) |
-| 1.4.3 Contrast | Minimum 4.5:1 for normal text — design tokens already exceed AA; flag any hardcoded low-contrast colors |
-| 2.1.1 Keyboard | All interactive elements reachable by Tab; dialogs trap focus |
-| 2.4.7 Focus Visible | All focusable elements have `focus-visible:` ring — use `--theme-focus-ring` token |
-| 4.1.2 Name/Role/Value | Icon-only buttons must have `aria-label`; form inputs must have `<Label>` or `aria-label` |
-| Loading states | Spinner/skeleton must have `aria-label="Loading"` or `aria-busy` |
-
-**Not applicable:**
-- 1.2.x (Audio/Video captions) — app has no media content
-- 1.4.4 Resize text — browser-native behavior, no override
-- 2.4.5 Multiple ways — single-page admin app, N/A
+> Checklist details (4-layer arch, design tokens, i18n, performance, TypeScript, a11y, fix priority) → `docs/llm/policies/patterns-frontend.md`
 
 ---
 
@@ -127,40 +29,69 @@ Violations: placing shared logic in feature dirs, or page-specific logic in `com
 
 | Step | Action |
 |------|--------|
-| 1 | Get the diff: `git diff HEAD` (or read user-specified files) |
-| 2 | Launch 3 parallel review agents (Reuse · Quality · Efficiency) — pass full diff to each |
+| 1 | Get the diff: `git diff HEAD` or read user-specified files |
+| 2 | Launch 3 parallel review agents (Reuse · Quality · Efficiency) — pass full diff + agent scope below to each |
 | 3 | Aggregate findings; discard false positives with reason |
-| 4 | Fix violations in order of severity (P0 → P1 → P2); each fix = one logical round |
-| 5 | For i18n: update `en.json`, `ko.json`, `ja.json` simultaneously in one edit |
-| 6 | Run `npx tsc --noEmit` — zero errors required before continuing |
-| 7 | If user requests N rounds: repeat steps 2–6 until N rounds consumed or no violations remain |
-| 8 | CDD sync — update the relevant doc(s) if a new pattern is established: |
+| 4 | Fix violations P0 → P1 → P2 (see fix priority in `patterns-frontend.md`) |
+| 5 | For i18n: update `en.json`, `ko.json`, `ja.json` simultaneously |
+| 6 | Run `npx tsc --noEmit` — zero errors required |
+| 7 | If N rounds requested: repeat steps 2–6 until N rounds consumed or no violations remain |
+| 8 | CDD feedback — run `.add/cdd-feedback.md` if a new pattern is confirmed (target doc table below) |
+
+### Agent Scope
+
+**Reuse agent** — checks that existing abstractions are used instead of reinvented:
+- `DataTable` used for all tables (never raw Card+Table boilerplate) (→ `design-system.md` § Task Guide)
+- `ConfirmDialog` for destructive actions (never `confirm()` native dialog) (→ `design-system-components-patterns.md` § ConfirmDialog)
+- `CopyButton`, `StatusPill`, `StatsCard`, `ProgressBar`, `TimeRangeSelector` — check for hand-rolled equivalents (→ `design-system-components.md`)
+- `useApiMutation` for mutations needing query invalidation (no repeated `useQueryClient()` + `onSettled` boilerplate) (→ `design-system-components-patterns.md` § useApiMutation)
+- `fmtMs`, `fmtCompact`, `fmtPct`, `fmtMbShort`, `fmtMsAxis` from `chart-theme.ts` — no local `toFixed`/`toLocaleString` for display (→ `patterns-frontend.md` § Chart Theme Formatters)
+- `TOOLTIP_STYLE` from `chart-theme.ts` — never inline tooltip `contentStyle` (→ `patterns-frontend.md` § Chart Tooltip Style)
+- `STATUS_STYLES`, `PROVIDER_BADGE`, `PROVIDER_COLORS`, `FINISH_COLORS` from `constants.ts` — no duplicate style maps (→ `patterns-frontend.md` § Shared Style Constants)
+- `queryOptions()` factory in `web/lib/queries/` — no inline `useQuery({queryKey, queryFn})` for queries used in 2+ places (→ `patterns-frontend.md` § TanStack Query v5 / `queryOptions()` Factory)
+- Query timing constants (`STALE_TIME_FAST/SLOW/HISTORY`, `REFETCH_INTERVAL_FAST`, `withJitter()`) — never hardcode `30_000` or similar values (→ `patterns-frontend.md` § TanStack Query v5 / Query Timing Constants)
+- Query key constants (`GEMINI_QUERY_KEYS` pattern) for groups of related queries (→ `patterns-frontend.md` § TanStack Query v5 / Query Key Constants)
+
+**Quality agent** — checks correctness and pattern compliance:
+- No raw `fetch()` in components — all HTTP via `apiGet`/`apiPost`/`apiFetch` from `lib/api.ts` (→ `execution-contracts.md` § Common Module Import Contract)
+- No raw `setInterval` in components — polling via `usePolling` from `lib/stream.ts` (→ `execution-contracts.md` § Realtime Contract)
+- Feature components in `app/{route}/components/` only — no cross-route imports (→ `execution-contracts.md` § Feature Boundary Rules)
+- `onSettled` (not `onSuccess`) for mutation cache invalidation (→ `patterns-frontend.md` § TanStack Query v5 / Mutation -- onSettled)
+- `useOptimistic` on all toggle/switch mutations (→ `patterns-frontend.md` § React 19 -- useOptimistic)
+- `ApiHttpError instanceof` checks — never `(e as any).status` or type casts (→ `patterns-frontend.md` § HTTP Errors with Status Code)
+- `usePageGuard(menuId)` present on new pages (→ `patterns-frontend.md` § Page Guard)
+- 2-Step Verify Flow for registration modals: URL change resets verify state, register button gated on `isVerified` and URL hasn't changed (→ `design-system-components-patterns.md` § 2-Step Verify Flow)
+- SVG `<pattern id>` uses `useId()` with non-alphanumeric chars stripped — never static strings in multi-instance components (→ `patterns-frontend.md` § SVG Pattern IDs)
+- `useMemo` wrapping filter/sort/map chains from query data (→ `patterns-frontend.md` § useMemo for Derived Data)
+- `useCallback` on handlers passed to child components (→ `patterns-frontend.md` § Performance Rules)
+- `refetchInterval` uses `withJitter(REFETCH_INTERVAL_FAST)` — never bare constant (prevents tab polling storms) (→ `patterns-frontend.md` § TanStack Query v5 / `withJitter()`)
+- `PUBLIC_PATHS` updated for any new unauthenticated route (→ `design-system-components.md` § Auth Guard)
+- 4-layer architecture: page logic in `app/*/page.tsx`, feature UI in `app/*/components/`, shared in `components/`, foundation in `lib/` (→ `patterns-frontend.md` § 4-Layer Component Architecture)
+- E2E tests: constants from `helpers/constants.ts`, `try/finally` resource cleanup (→ `patterns-frontend.md` § E2E Test Patterns)
+
+**Efficiency agent** — checks rendering and data performance:
+- `React.memo` on components receiving props at ≥1/s (SSE-driven, `setInterval` ≤100ms) (→ `patterns-frontend.md` § Performance Rules)
+- `dynamic(() => import(...), { ssr: false })` for heavy panels rendered conditionally (→ `patterns-frontend.md` § Performance Rules)
+- No duplicate `queryKey` across sibling components (lift or share `queryOptions` factory) (→ `patterns-frontend.md` § TanStack Query v5 / `queryOptions()` Factory)
+- Zero-value stat containers hidden when all values are 0
+- Relative time displays ("5s ago") have `setInterval` tick (10–30s)
+- No array `index` as sole React key for reorderable lists (→ `patterns-frontend.md` § Performance Rules)
+- `refetchOnWindowFocus: false` respected — no per-query override without comment (→ `patterns-frontend.md` § TanStack Query v5 / Query Timing Constants)
 
 **Step 8 — which doc to update:**
 
-| What changed | Update target |
-|--------------|---------------|
-| New token usage pattern | `docs/llm/policies/patterns-frontend.md` + `docs/llm/frontend/design-system.md` |
-| New component pattern or shared component | `docs/llm/frontend/design-system-components.md` |
-| New i18n rule or key convention | `docs/llm/frontend/design-system-i18n.md` |
-| New chart/formatter pattern | `docs/llm/frontend/charts.md` |
-| New review rule (performance, perf, a11y) | `.add/frontend-review.md` (this file) |
-| New query/data-fetch pattern | `docs/llm/policies/patterns-frontend.md` |
+| What changed | Target |
+|--------------|--------|
+| Token usage pattern | `docs/llm/policies/patterns-frontend.md` + `docs/llm/frontend/design-system.md` |
+| New component pattern | `docs/llm/frontend/design-system-components.md` |
+| i18n rule or key convention | `docs/llm/frontend/design-system-i18n.md` |
+| Chart/formatter pattern | `docs/llm/frontend/charts.md` |
+| Review rule (perf, a11y) | `docs/llm/policies/patterns-frontend.md` |
 
 ## Fix Iteration Policy
 
-When running **N rounds of fixes** (e.g. "10회 수정"):
-
-- Each *round* = one logical fix (a single coherent change, not a file save)
+- Each *round* = one logical fix (a single coherent change)
 - After every 3–4 rounds, run `tsc --noEmit` to catch regressions early
 - False positives count as a round (document why the finding was skipped)
 - Stop early if no remaining violations — do not manufacture changes to hit the count
 - Parallel review agents always run **before** fixes begin, not interleaved
-
-## Fix Priority
-
-| Priority | Category |
-|----------|----------|
-| P0 (fix immediately) | Hardcoded hex, wrong token names, broken i18n keys, missing i18n parity across locales |
-| P1 (fix in same pass) | Raw `var(--theme-*)` strings, missing `useMemo`, missing `aria-label`, SSE-driven components without `React.memo`, time-display staleness (no interval tick) |
-| P2 (fix if touching file) | Component extraction for 3+ duplicates, prop count reduction, zero-value stat containers, local helpers duplicating `lib/` utilities |

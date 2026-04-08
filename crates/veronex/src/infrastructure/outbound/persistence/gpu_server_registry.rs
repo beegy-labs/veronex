@@ -56,13 +56,36 @@ impl GpuServerRegistry for PostgresGpuServerRegistry {
         let rows = sqlx::query(
             "SELECT id, name, node_exporter_url, registered_at
              FROM gpu_servers
-             ORDER BY registered_at ASC",
+             ORDER BY registered_at ASC LIMIT 10000",
         )
         .fetch_all(&self.pool)
         .await
         .context("failed to list gpu servers")?;
 
         rows.iter().map(row_to_server).collect()
+    }
+
+    async fn list_page(&self, search: &str, limit: i64, offset: i64) -> Result<(Vec<GpuServer>, i64)> {
+        let pattern = format!("%{}%", search);
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM gpu_servers WHERE name ILIKE $1"
+        )
+        .bind(&pattern)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to count gpu servers")?;
+
+        let rows = sqlx::query(
+            "SELECT id, name, node_exporter_url, registered_at FROM gpu_servers WHERE name ILIKE $1 ORDER BY registered_at ASC LIMIT $2 OFFSET $3"
+        )
+        .bind(&pattern)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to list gpu servers page")?;
+
+        rows.iter().map(row_to_server).collect::<Result<Vec<_>>>().map(|v| (v, total))
     }
 
     async fn get(&self, id: Uuid) -> Result<Option<GpuServer>> {

@@ -1,6 +1,8 @@
-{{- if .Values.autoscaling.enabled }}
-{{- /* HPA targets the main API only. Analytics and Agent are single-instance by design:
-     analytics is a lightweight aggregator; agent is a StatefulSet with node affinity. */}}
+{{- if and .Values.autoscaling.enabled (not .Values.autoscaling.keda.enabled) }}
+{{- /* HPA targets the main API only (CPU-based fallback when KEDA is not enabled).
+     Analytics and Agent are single-instance by design:
+     analytics is a lightweight aggregator; agent is a StatefulSet with node affinity.
+     When autoscaling.keda.enabled=true, use veronex-keda.yaml instead (mutually exclusive). */}}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

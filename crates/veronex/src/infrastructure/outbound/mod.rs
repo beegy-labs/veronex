@@ -1,4 +1,5 @@
 pub mod analytics;
+pub mod mcp;
 pub mod s3;
 pub mod provider_dispatch;
 pub mod capacity;

@@ -20,32 +20,39 @@ impl PostgresProviderModelSelectionRepository {
 #[async_trait]
 impl ProviderModelSelectionRepository for PostgresProviderModelSelectionRepository {
     async fn upsert_models(&self, provider_id: Uuid, models: &[String]) -> Result<()> {
-        for model_name in models {
-            sqlx::query!(
-                r#"
-                INSERT INTO provider_selected_models (provider_id, model_name, is_enabled, added_at)
-                VALUES ($1, $2, true, NOW())
-                ON CONFLICT (provider_id, model_name) DO NOTHING
-                "#,
-                provider_id,
-                model_name,
-            )
-            .execute(&self.pool)
-            .await?;
+        if models.is_empty() {
+            return Ok(());
         }
+        // Single UNNEST batch insert — avoids N separate round-trips.
+        sqlx::query(
+            "INSERT INTO provider_selected_models (provider_id, model_name, is_enabled, added_at)
+             SELECT $1, UNNEST($2::text[]), true, NOW()
+             ON CONFLICT (provider_id, model_name) DO NOTHING",
+        )
+        .bind(provider_id)
+        .bind(models)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
     async fn list(&self, provider_id: Uuid) -> Result<Vec<ProviderSelectedModel>> {
-        let rows = sqlx::query!(
-            r#"
-            SELECT provider_id, model_name, is_enabled, added_at
-            FROM provider_selected_models
-            WHERE provider_id = $1
-            ORDER BY model_name ASC
-            "#,
-            provider_id,
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            provider_id: Uuid,
+            model_name: String,
+            is_enabled: bool,
+            added_at: chrono::DateTime<chrono::Utc>,
+        }
+
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT provider_id, model_name, is_enabled, added_at
+             FROM provider_selected_models
+             WHERE provider_id = $1
+             ORDER BY model_name ASC
+             LIMIT 10000",
         )
+        .bind(provider_id)
         .fetch_all(&self.pool)
         .await?;
 

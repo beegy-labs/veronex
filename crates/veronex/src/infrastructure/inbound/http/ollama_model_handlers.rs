@@ -1,30 +1,32 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 use crate::domain::enums::ProviderType;
+use crate::domain::value_objects::{JobId, ProviderId};
+use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 
+use super::audit_helpers::emit_audit;
 use super::constants::ERR_DATABASE;
 use super::error::error_json;
+use super::handlers::ListPageParams;
 use super::state::AppState;
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub struct SyncJobResponse {
-    pub job_id: Uuid,
+    pub job_id: JobId,
     pub status: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct OllamaSyncJobDto {
-    pub id: Uuid,
+    pub id: JobId,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub status: String,
@@ -37,83 +39,80 @@ pub struct OllamaSyncJobDto {
 pub struct OllamaModelDto {
     pub model_name: String,
     pub provider_count: i64,
+    pub is_vision: bool,
+    /// Maximum context window across all providers (0 = not yet profiled).
+    pub max_ctx: u32,
 }
 
 #[derive(Debug, Serialize)]
 pub struct OllamaProviderDto {
-    pub provider_id: Uuid,
+    pub provider_id: ProviderId,
     pub name: String,
     pub url: String,
     pub status: String,
+    pub is_enabled: bool,
 }
+
+const DEFAULT_MODEL_LIMIT: i64 = 20;
+const MAX_MODEL_LIMIT: i64 = 200;
+const DEFAULT_PROVIDER_LIMIT: i64 = 10;
+const MAX_PROVIDER_LIMIT: i64 = 100;
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
 
-/// `GET /v1/ollama/models` — list all distinct Ollama model names with provider counts.
-pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
-    match state.ollama_model_repo.list_with_counts().await {
-        Ok(models) => {
-            let dtos: Vec<OllamaModelDto> = models
-                .into_iter()
-                .map(|m| OllamaModelDto {
-                    model_name: m.model_name,
-                    provider_count: m.provider_count,
-                })
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("ollama list_models: {e}");
-            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
-        }
-    }
+/// `GET /v1/ollama/models?search=&page=1&limit=20`
+pub async fn list_models(
+    State(state): State<AppState>,
+    Query(params): Query<ListPageParams>,
+) -> Result<Json<serde_json::Value>, super::error::AppError> {
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(DEFAULT_MODEL_LIMIT).clamp(1, MAX_MODEL_LIMIT);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
+    let offset = (page - 1) * limit;
+
+    let page_result = state.ollama_model_repo.list_with_counts_page(&search, limit, offset).await
+        .map_err(|e| { tracing::error!("ollama list_models: {e}"); super::error::AppError::Internal(e) })?;
+    let dtos: Vec<OllamaModelDto> = page_result.items
+        .into_iter()
+        .map(|m| OllamaModelDto { is_vision: is_vision_model(&m.model_name), model_name: m.model_name, provider_count: m.provider_count, max_ctx: m.max_ctx.max(0) as u32 })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "models": dtos,
+        "total": page_result.total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
-/// `GET /v1/ollama/models/:model_name/providers`
-/// — list providers (id, name, url, status) that have the given model synced.
+/// `GET /v1/ollama/models/:model_name/providers?search=&page=1&limit=10`
 pub async fn list_model_providers(
     State(state): State<AppState>,
     Path(model_name): Path<String>,
-) -> impl IntoResponse {
-    match state
-        .ollama_model_repo
-        .providers_info_for_model(&model_name)
-        .await
-    {
-        Ok(providers) => {
-            let dtos: Vec<OllamaProviderDto> = providers
-                .into_iter()
-                .map(|p| OllamaProviderDto {
-                    provider_id: p.provider_id,
-                    name: p.name,
-                    url: p.url,
-                    status: p.status,
-                })
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!({"providers": dtos}))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("ollama list_model_providers: {e}");
-            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
-        }
-    }
-}
+    Query(params): Query<ListPageParams>,
+) -> Result<Json<serde_json::Value>, super::error::AppError> {
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(DEFAULT_PROVIDER_LIMIT).clamp(1, MAX_PROVIDER_LIMIT);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
+    let offset = (page - 1) * limit;
 
-/// `GET /v1/ollama/providers/:provider_id/models`
-/// — list model names synced for a specific Ollama provider.
-pub async fn list_provider_models(
-    State(state): State<AppState>,
-    Path(provider_id): Path<Uuid>,
-) -> impl IntoResponse {
-    match state.ollama_model_repo.models_for_provider(provider_id).await {
-        Ok(models) => {
-            (StatusCode::OK, Json(serde_json::json!({"models": models}))).into_response()
-        }
-        Err(e) => {
-            tracing::error!("ollama list_provider_models: {e}");
-            error_json(StatusCode::INTERNAL_SERVER_ERROR, ERR_DATABASE).into_response()
-        }
-    }
+    let page_result = state.ollama_model_repo.providers_info_for_model_page(&model_name, &search, limit, offset).await
+        .map_err(|e| { tracing::error!("ollama list_model_providers: {e}"); super::error::AppError::Internal(e) })?;
+    let dtos: Vec<OllamaProviderDto> = page_result.items
+        .into_iter()
+        .map(|p| OllamaProviderDto {
+            provider_id: ProviderId::from_uuid(p.provider_id),
+            name: p.name,
+            url: p.url,
+            status: p.status,
+            is_enabled: p.is_enabled,
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "providers": dtos,
+        "total": page_result.total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
 /// `POST /v1/ollama/models/sync` — trigger a global background sync of all Ollama providers.
@@ -121,7 +120,7 @@ pub async fn list_provider_models(
 /// Returns 202 immediately with the job ID. The sync runs in the background,
 /// processing each provider sequentially without retrying on failure.
 pub async fn sync_all_providers(
-    RequireProviderManage(_claims): RequireProviderManage,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     // List all active Ollama providers.
@@ -224,7 +223,7 @@ pub async fn sync_all_providers(
                         "provider_id": provider.id,
                         "name": provider.name,
                         "models": [],
-                        "error": e.to_string()
+                        "error": "sync failed"
                     })
                 }
             };
@@ -244,10 +243,14 @@ pub async fn sync_all_providers(
         tracing::info!(%job_id, "ollama global sync completed");
     });
 
+    emit_audit(&state, &claims, "trigger", "ollama_sync",
+        &job_id.to_string(), "global",
+        &format!("Triggered Ollama model sync for {} providers", total)).await;
+
     (
         StatusCode::ACCEPTED,
         Json(SyncJobResponse {
-            job_id,
+            job_id: JobId::from_uuid(job_id),
             status: "running".to_string(),
         }),
     )
@@ -262,7 +265,7 @@ pub async fn get_sync_status(
     match state.ollama_sync_job_repo.get_latest().await {
         Ok(Some(job)) => {
             let dto = OllamaSyncJobDto {
-                id: job.id,
+                id: JobId::from_uuid(job.id),
                 started_at: job.started_at,
                 completed_at: job.completed_at,
                 status: job.status,
@@ -289,7 +292,7 @@ pub async fn get_sync_status(
 #[derive(Debug, Deserialize)]
 pub struct PullModelRequest {
     pub model: String,
-    pub provider_id: Uuid,
+    pub provider_id: ProviderId,
 }
 
 /// `POST /v1/ollama/models/pull` — Pull drain sequence (SDD §5).
@@ -298,11 +301,11 @@ pub struct PullModelRequest {
 /// executes Ollama pull, then resets AIMD epoch. Requires admin auth.
 /// Returns 202 Accepted immediately; pull runs in background.
 pub async fn pull_model(
-    _: RequireProviderManage,
+    RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
     Json(req): Json<PullModelRequest>,
 ) -> impl IntoResponse {
-    let provider_id = req.provider_id;
+    let provider_id = req.provider_id.0;
     let model = req.model.clone();
 
     // Verify provider exists and is Ollama
@@ -338,6 +341,10 @@ pub async fn pull_model(
             &client, &base_url, &model_c, provider_id, &vram_c,
         ).await;
     });
+
+    emit_audit(&state, &claims, "trigger", "ollama_pull",
+        &provider_id.to_string(), &model,
+        &format!("Triggered pull drain for model '{}' on provider {}", model, provider_id)).await;
 
     (
         StatusCode::ACCEPTED,

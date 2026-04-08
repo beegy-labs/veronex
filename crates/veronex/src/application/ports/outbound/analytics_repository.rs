@@ -133,6 +133,41 @@ pub struct UsageJob {
     pub status: String,
 }
 
+// ── MCP tool call event ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct McpToolCallEvent {
+    pub event_time: DateTime<Utc>,
+    pub request_id: Uuid,
+    pub api_key_id: Option<Uuid>,
+    pub tenant_id: String,
+    pub server_id: Uuid,
+    pub server_slug: String,
+    pub tool_name: String,
+    pub namespaced_name: String,
+    pub outcome: String,
+    pub cache_hit: bool,
+    pub latency_ms: u32,
+    pub result_bytes: u32,
+    pub cap_charged: u8,
+    pub loop_round: u8,
+}
+
+// ── MCP stats ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerStat {
+    /// Slug identifying the MCP server (matches `mcp_servers.slug`).
+    pub server_slug: String,
+    pub total_calls: u64,
+    pub success_count: u64,
+    pub error_count: u64,
+    pub cache_hit_count: u64,
+    pub timeout_count: u64,
+    /// Weighted average latency across all hourly buckets in the window.
+    pub avg_latency_ms: f64,
+}
+
 // ── Port ───────────────────────────────────────────────────────────────────────
 
 #[async_trait]
@@ -144,4 +179,7 @@ pub trait AnalyticsRepository: Send + Sync {
     async fn audit_events(&self, filters: AuditFilters) -> Result<Vec<AuditEventRow>>;
     async fn analytics_summary(&self, hours: u32) -> Result<AnalyticsSummary>;
     async fn key_usage_jobs(&self, key_id: &Uuid, hours: u32) -> Result<Vec<UsageJob>>;
+    async fn mcp_server_stats(&self, hours: u32) -> Result<Vec<McpServerStat>>;
+    /// Fire-and-forget: emit one MCP tool call event into the analytics pipeline.
+    async fn ingest_mcp_tool_call(&self, event: McpToolCallEvent);
 }

@@ -23,18 +23,18 @@ export function extractHost(url: string): string {
 export function StatusBadge({ status }: { status: Provider['status'] }) {
   const { t } = useTranslation()
   if (status === 'online') return (
-    <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 font-medium">
-      <Wifi className="h-3 w-3 mr-1.5" />{t('common.online')}
+    <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 font-medium whitespace-nowrap">
+      <Wifi className="h-3 w-3 mr-1.5 shrink-0" />{t('common.online')}
     </Badge>
   )
   if (status === 'degraded') return (
-    <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 font-medium">
-      <AlertCircle className="h-3 w-3 mr-1.5" />{t('common.degraded')}
+    <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 font-medium whitespace-nowrap">
+      <AlertCircle className="h-3 w-3 mr-1.5 shrink-0" />{t('common.degraded')}
     </Badge>
   )
   return (
-    <Badge variant="outline" className="bg-surface-code text-muted-foreground border-border font-medium">
-      <WifiOff className="h-3 w-3 mr-1.5" />{t('common.offline')}
+    <Badge variant="outline" className="bg-surface-code text-muted-foreground border-border font-medium whitespace-nowrap">
+      <WifiOff className="h-3 w-3 mr-1.5 shrink-0" />{t('common.offline')}
     </Badge>
   )
 }
@@ -43,7 +43,7 @@ export function StatusBadge({ status }: { status: Provider['status'] }) {
 // ── VRAM input with MiB / GiB toggle ──────────────────────────────────────────
 
 export function VramInput({ valueMb, onChange, 'aria-label': ariaLabel }: { valueMb: string; onChange: (mb: string) => void; 'aria-label'?: string }) {
-  const [unit, setUnit] = useState<'mb' | 'gb'>('mb')
+  const [unit, setUnit] = useState<'mb' | 'gb'>('gb')
   const mbNum = parseInt(valueMb) || 0
   const display = mbNum > 0
     ? (unit === 'gb' ? String(Math.round(mbNum / 1024 * 10) / 10) : String(mbNum))

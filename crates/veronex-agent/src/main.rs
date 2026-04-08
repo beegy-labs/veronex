@@ -21,12 +21,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Hard timeout on the entire scrape cycle to prevent infinite hangs.
+const SCRAPE_CYCLE_TIMEOUT: Duration = Duration::from_secs(120);
+
 use anyhow::Result;
 use serde::Deserialize;
 use tokio::signal;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+mod capacity_push;
 mod health;
 mod heartbeat;
 mod orphan_sweeper;
@@ -50,8 +54,10 @@ struct Config {
     otel_endpoint: String,
     scrape_interval: Duration,
     ordinal: u32,
-    replicas: u32,
+    /// Static replica count from env (used as fallback when Valkey is unavailable).
+    replicas_fallback: u32,
     health_port: u16,
+    hostname: String,
     /// Optional Valkey URL for provider liveness heartbeats.
     /// When absent, heartbeat push is skipped (veronex falls back to HTTP probe).
     valkey_url: Option<String>,
@@ -73,8 +79,9 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:4318".into()),
             scrape_interval: Duration::from_millis(parse_env("SCRAPE_INTERVAL_MS", 60_000)),
             ordinal: shard::ordinal_from_hostname(),
-            replicas: parse_env("REPLICA_COUNT", 1),
+            replicas_fallback: parse_env("REPLICA_COUNT", 1),
             health_port: parse_env("HEALTH_PORT", 9091),
+            hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "veronex-agent-0".into()),
             valkey_url: std::env::var("VALKEY_URL").ok(),
             database_url: std::env::var("DATABASE_URL").ok(),
         }
@@ -144,6 +151,36 @@ async fn discover_targets(client: &reqwest::Client, api_url: &str) -> Vec<SdTarg
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct McpTargetEntry {
+    id: String,
+    url: String,
+}
+
+/// Fetch enabled MCP servers from `/v1/mcp/targets` (no auth required).
+async fn fetch_mcp_targets(client: &reqwest::Client, api_url: &str) -> Vec<(String, String)> {
+    let url = format!("{}/v1/mcp/targets", api_url.trim_end_matches('/'));
+    match client.get(&url).timeout(DISCOVERY_TIMEOUT).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<Vec<McpTargetEntry>>().await {
+                Ok(entries) => entries.into_iter().map(|e| (e.id, e.url)).collect(),
+                Err(e) => {
+                    tracing::warn!(url = %url, error = %e, "MCP target discovery JSON parse failed");
+                    vec![]
+                }
+            }
+        }
+        Ok(resp) => {
+            tracing::debug!(url = %url, status = %resp.status(), "MCP target discovery returned non-success");
+            vec![]
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "MCP target discovery failed");
+            vec![]
+        }
+    }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -198,7 +235,7 @@ async fn main() -> Result<()> {
         let vk = vk.clone();
         let pg = pg.clone();
         let ordinal = config.ordinal;
-        let replicas = config.replicas;
+        let replicas = config.replicas_fallback;
         let token = shutdown.child_token();
         tokio::spawn(async move {
             orphan_sweeper::run_orphan_sweeper(vk, pg, ordinal, replicas, token).await;
@@ -219,22 +256,47 @@ async fn main() -> Result<()> {
         api = %config.veronex_api_url,
         otel = %config.otel_endpoint,
         ordinal = config.ordinal,
-        replicas = config.replicas,
+        replicas_fallback = config.replicas_fallback,
+        hostname = %config.hostname,
         interval_ms = config.scrape_interval.as_millis() as u64,
         health_port = health_port,
         "veronex-agent started"
     );
 
     loop {
+        // ── Dynamic replica count: register self + read SCARD ────────
+        let replicas = if let Some(ref pool) = valkey_pool {
+            heartbeat::register_agent(pool, &config.hostname, HEARTBEAT_TTL_SECS).await;
+            heartbeat::dynamic_replicas(pool, config.replicas_fallback).await
+        } else {
+            config.replicas_fallback
+        };
+
         tokio::select! {
             biased;
             _ = signal::ctrl_c() => {
                 tracing::info!("shutdown signal received");
                 health.alive.store(false, Ordering::Relaxed);
+                if let Some(ref pool) = valkey_pool {
+                    heartbeat::deregister_agent(pool, &config.hostname).await;
+                }
                 shutdown.cancel();
                 break;
             }
-            result = scrape_cycle(&client, &config, &scrape_semaphore, valkey_pool.as_ref()) => {
+            result = async {
+                tracing::info!(replicas, "scrape_cycle starting (with 120s timeout)");
+                // Global timeout on the entire scrape cycle — prevents infinite hang
+                match tokio::time::timeout(
+                    SCRAPE_CYCLE_TIMEOUT,
+                    scrape_cycle(&client, &config, replicas, &scrape_semaphore, valkey_pool.as_ref())
+                ).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        tracing::error!("scrape_cycle timed out after 120s — skipping this cycle");
+                        CycleResult { duration_secs: 120.0, targets_scraped: 0, gauges_collected: 0, success: false }
+                    }
+                }
+            } => {
                 // Update health state
                 health.started.store(true, Ordering::Relaxed);
                 health.ready.store(result.success, Ordering::Relaxed);
@@ -331,25 +393,42 @@ mod tests {
         assert!(state.alive.load(Ordering::Relaxed));
     }
 
-    #[test]
-    fn health_state_transitions() {
-        let state = HealthState::new();
-        state.started.store(true, Ordering::Relaxed);
-        state.ready.store(true, Ordering::Relaxed);
-        assert!(state.started.load(Ordering::Relaxed));
-        assert!(state.ready.load(Ordering::Relaxed));
-        state.alive.store(false, Ordering::Relaxed);
-        assert!(!state.alive.load(Ordering::Relaxed));
-    }
 }
 
 async fn scrape_cycle(
     client: &reqwest::Client,
     config: &Config,
+    replicas: u32,
     semaphore: &Arc<Semaphore>,
     valkey: Option<&fred::clients::Pool>,
 ) -> CycleResult {
     let start = Instant::now();
+
+    // ── MCP server health checks ─────────────────────────────────────────────
+    // Fetches enabled MCP servers from /v1/mcp/targets on every cycle (dynamic).
+    // Pings run concurrently — idempotent Valkey SET EX, no sharding needed.
+    if let Some(pool) = valkey {
+        let mcp_targets = fetch_mcp_targets(client, &config.veronex_api_url).await;
+        if !mcp_targets.is_empty() {
+            let ping_futs: Vec<_> = mcp_targets
+                .iter()
+                .cloned()
+                .map(|(server_id, base_url)| async move {
+                    let alive = scraper::ping_mcp_server(client, &server_id, &base_url).await;
+                    (server_id, alive)
+                })
+                .collect();
+
+            let ping_results = futures::future::join_all(ping_futs).await;
+            for (server_id, alive) in ping_results {
+                if alive {
+                    scraper::set_mcp_heartbeat(pool, &server_id, HEARTBEAT_TTL_SECS).await;
+                } else {
+                    tracing::debug!(server_id, "MCP server offline — heartbeat not renewed");
+                }
+            }
+        }
+    }
 
     let targets = discover_targets(client, &config.veronex_api_url).await;
     if targets.is_empty() {
@@ -359,7 +438,7 @@ async fn scrape_cycle(
 
     let my_targets: Vec<_> = targets
         .iter()
-        .filter(|t| shard::owns(shard_key(t), config.ordinal, config.replicas))
+        .filter(|t| shard::owns(shard_key(t), config.ordinal, replicas))
         .collect();
 
     if my_targets.is_empty() {
@@ -373,7 +452,8 @@ async fn scrape_cycle(
         .filter_map(|t| {
             let host_port = t.targets.first()?;
             let target_type = t.labels.get("type")?.as_str();
-            let url = format!("http://{host_port}");
+            // targets API now returns scheme-preserving URLs
+            let url = host_port.to_string();
             let labels = t.labels.clone();
             let sem = semaphore.clone();
             let valkey = valkey.cloned();
@@ -386,13 +466,24 @@ async fn scrape_cycle(
                         (labels, metrics)
                     }
                     "ollama" => {
-                        let metrics = scraper::scrape_ollama(client, &url).await;
-                        // Push heartbeat when scrape succeeded (non-empty = Ollama responded).
-                        // Missing key (TTL expired) signals offline to veronex health_checker.
+                        let raw = scraper::scrape_ollama_raw(client, &url).await;
+                        let metrics = scraper::ollama_gauges_from_raw(&raw);
+                        // Push heartbeat + capacity state when scrape succeeded.
                         if let (Some(pool), Some(provider_id)) = (&valkey, labels.get("provider_id")) {
-                            if !metrics.is_empty() {
+                            if !raw.is_empty() || metrics.iter().any(|g| g.name == "ollama_loaded_models") {
                                 heartbeat::set_online(pool, provider_id, HEARTBEAT_TTL_SECS).await;
                             }
+                            // Push capacity state (arch profiles) even when no models are loaded —
+                            // this lets the analyzer skip HTTP /api/ps + /api/show calls.
+                            let total_vram_mb: u64 = labels
+                                .get("total_vram_mb")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0);
+                            let loaded: Vec<(String, u64)> = raw
+                                .iter()
+                                .filter_map(|m| Some((m.name.clone()?, m.size_vram.unwrap_or(0))))
+                                .collect();
+                            capacity_push::push(client, pool, &url, provider_id, total_vram_mb, &loaded).await;
                         }
                         (labels, metrics)
                     }

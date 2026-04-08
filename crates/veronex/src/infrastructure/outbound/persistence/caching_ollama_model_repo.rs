@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use super::ttl_cache::TtlCache;
 use crate::application::ports::outbound::ollama_model_repository::{
-    OllamaModelRepository, OllamaModelWithCount, OllamaProviderForModel,
+    ModelPage, OllamaModelRepository, OllamaModelWithCount, ProviderPage,
 };
 
 use crate::domain::constants::OLLAMA_MODEL_CACHE_TTL as TTL;
@@ -53,6 +53,10 @@ impl OllamaModelRepository for CachingOllamaModelRepo {
         self.inner.list_with_counts().await
     }
 
+    async fn list_with_counts_page(&self, search: &str, limit: i64, offset: i64) -> Result<ModelPage> {
+        self.inner.list_with_counts_page(search, limit, offset).await
+    }
+
     async fn providers_for_model(&self, model_name: &str) -> Result<Vec<Uuid>> {
         self.cache
             .get_or_insert(
@@ -62,11 +66,14 @@ impl OllamaModelRepository for CachingOllamaModelRepo {
             .await
     }
 
-    async fn providers_info_for_model(
+    async fn providers_info_for_model_page(
         &self,
         model_name: &str,
-    ) -> Result<Vec<OllamaProviderForModel>> {
-        self.inner.providers_info_for_model(model_name).await
+        search: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<ProviderPage> {
+        self.inner.providers_info_for_model_page(model_name, search, limit, offset).await
     }
 
     async fn models_for_provider(&self, provider_id: Uuid) -> Result<Vec<String>> {

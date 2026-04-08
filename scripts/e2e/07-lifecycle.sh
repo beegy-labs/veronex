@@ -2,7 +2,8 @@
 # Phase 07: Job Lifecycle / SSE Replay / Native API / Password Reset / Edge Cases
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
 
 # ── Job Cancel During Streaming ───────────────────────────────────────────────
 
@@ -72,9 +73,11 @@ if [ -n "$INF_JOB_ID" ] && [ "$INF_JOB_ID" != "None" ]; then
     S=$(kget "/v1/inference/$INF_JOB_ID/status" 2>/dev/null | jv '["status"]' 2>/dev/null || echo "")
     case "$S" in completed|Completed|failed|Failed) break ;; esac; sleep 1
   done
-  c=$(kgetc "/v1/inference/$INF_JOB_ID/stream" | code)
+  _stf=$(mktemp); curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+    "$API/v1/inference/$INF_JOB_ID/stream" -H "Authorization: Bearer $API_KEY" \
+    2>/dev/null > "$_stf" || true; c=$(cat "$_stf" 2>/dev/null || echo "000"); rm -f "$_stf"
   [ "$c" = "200" ] && pass "Job stream → 200" || fail "Job stream → $c"
-  c=$(kdelc "/v1/inference/$INF_JOB_ID" | code)
+  c=$(kdelc "/v1/inference/$INF_JOB_ID" 2>/dev/null | code || echo "000")
   case "$c" in 200|204) pass "Cancel inference → $c" ;; *) fail "Cancel → $c" ;; esac
 fi
 
@@ -164,8 +167,8 @@ done
 
 if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
   # Check if job is in ZSET (queued state)
-  ZSET_SCORE=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$QCANCEL_JOB" 2>/dev/null | tr -d ' \r\n' || echo "")
-  DEMAND_BEFORE=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "0")
+  ZSET_SCORE=$(valkey_zscore "veronex:queue:zset" "$QCANCEL_JOB")
+  DEMAND_BEFORE=$(valkey_get "veronex:demand:$MODEL" || echo "0")
 
   if [ -n "$ZSET_SCORE" ] && [ "$ZSET_SCORE" != "(nil)" ]; then
     info "Job $QCANCEL_JOB in ZSET (score=$ZSET_SCORE) — cancelling queued job"
@@ -183,7 +186,7 @@ if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
   sleep 1
 
   # Verify job removed from ZSET
-  ZSET_AFTER=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$QCANCEL_JOB" 2>/dev/null | tr -d ' \r\n' || echo "")
+  ZSET_AFTER=$(valkey_zscore "veronex:queue:zset" "$QCANCEL_JOB")
   if [ -z "$ZSET_AFTER" ] || [ "$ZSET_AFTER" = "(nil)" ]; then
     pass "Queued cancel: job removed from ZSET (ZREM confirmed)"
   else
@@ -200,7 +203,7 @@ if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
   esac
 
   # Verify demand counter decremented or consistent
-  DEMAND_AFTER=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "0")
+  DEMAND_AFTER=$(valkey_get "veronex:demand:$MODEL" || echo "0")
   if [ "${DEMAND_AFTER:-0}" -le "${DEMAND_BEFORE:-0}" ]; then
     pass "Queued cancel: demand counter consistent (before=$DEMAND_BEFORE after=$DEMAND_AFTER)"
   else
@@ -229,7 +232,8 @@ if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
   sleep 1
   c=$(curl -s -w "%{http_code}" -o /dev/null --max-time 15 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"test\"}],\"max_tokens\":4,\"stream\":false}")
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"test\"}],\"max_tokens\":4,\"stream\":false}" \
+    2>/dev/null || echo "000")
   case "$c" in
     200) info "Disabled on local: remote provider handled request" ;;
     400|404|503) pass "Model disabled on local → $c (no remote available)" ;;
@@ -243,24 +247,10 @@ fi
 assert_get "/v1/dashboard/jobs?status=completed&limit=5" 200 "Jobs filter: status=completed"
 assert_get "/v1/dashboard/jobs?q=hello&limit=5" 200 "Jobs filter: full-text search"
 assert_get "/v1/dashboard/jobs?source=api&limit=5" 200 "Jobs filter: source=api"
+assert_get "/v1/dashboard/jobs?provider_type=ollama&limit=5" 200 "Jobs filter: provider_type=ollama"
+assert_get "/v1/dashboard/jobs?provider_type=gemini&limit=5" 200 "Jobs filter: provider_type=gemini"
 
-# Session revoke
-SESS_LOGIN=$(curl -si "$API/v1/auth/login" \
-  -H 'Content-Type: application/json' -d @/tmp/_sched_login.json 2>/dev/null)
-SESS_TK=$(echo "$SESS_LOGIN" | sed -n 's/.*veronex_access_token=\([^;]*\).*/\1/p' | head -1)
-if [ -n "$SESS_TK" ]; then
-  ADMIN_ID=$(aget "/v1/accounts" 2>/dev/null | jv '[0]["id"]' 2>/dev/null || echo "")
-  if [ -n "$ADMIN_ID" ] && [ "$ADMIN_ID" != "None" ]; then
-    SESS_ID=$(aget "/v1/accounts/$ADMIN_ID/sessions" 2>/dev/null | python3 -c "
-import sys,json; d=json.loads(sys.stdin.read())
-print(d[-1].get('id',d[-1].get('session_id','')) if isinstance(d,list) and d else '')
-" 2>/dev/null || echo "")
-    if [ -n "$SESS_ID" ]; then
-      c=$(adelc "/v1/sessions/$SESS_ID" | code)
-      case "$c" in 200|204) pass "Revoke session → $c" ;; *) fail "Revoke → $c" ;; esac
-    fi
-  fi
-fi
+# Session revocation: tested in 05-security.sh (security phase owns this)
 
 FINAL_JOBS=$(aget "/v1/dashboard/stats" 2>/dev/null | jv '["total_jobs"]' 2>/dev/null || echo "0")
 [ "$FINAL_JOBS" != "0" ] && [ "$FINAL_JOBS" != "None" ] \
@@ -303,8 +293,8 @@ if [ -n "$RECOVERY_JOB" ] && [ "$RECOVERY_JOB" != "None" ]; then
   # (processing queue에 있던 job은 ZADD로 복원 → 재처리 또는 DB에 상태 유지)
   sleep 3
   STATUS_AFTER=$(aget "/v1/inference/$RECOVERY_JOB/status" 2>/dev/null | jv '["status"]' 2>/dev/null || echo "unknown")
-  PROCESSING_COUNT=$(docker compose exec -T valkey valkey-cli LLEN "veronex:queue:processing" 2>/dev/null | tr -d ' \r\n' || echo "0")
-  ZSET_RECOVERED=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$RECOVERY_JOB" 2>/dev/null | tr -d ' \r\n' || echo "")
+  PROCESSING_COUNT=$(valkey_llen "veronex:queue:processing")
+  ZSET_RECOVERED=$(valkey_zscore "veronex:queue:zset" "$RECOVERY_JOB")
 
   info "Job $RECOVERY_JOB status after restart: $STATUS_AFTER"
   info "Processing list after restart: $PROCESSING_COUNT entries"
@@ -326,7 +316,7 @@ if [ -n "$RECOVERY_JOB" ] && [ "$RECOVERY_JOB" != "None" ]; then
     || info "Processing list has $PROCESSING_COUNT entries (crash recovery may still be running)"
 
   # Verify instance registered in veronex:instances after restart
-  INST_COUNT=$(docker compose exec -T valkey valkey-cli SCARD "veronex:instances" 2>/dev/null | tr -d ' \r\n' || echo "0")
+  INST_COUNT=$(valkey_scard "veronex:instances")
   [ "${INST_COUNT:-0}" -ge 1 ] \
     && pass "Instance re-registered in veronex:instances after restart ($INST_COUNT member(s))" \
     || info "veronex:instances empty after restart (Valkey may not be configured)"

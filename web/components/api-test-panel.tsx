@@ -1,29 +1,33 @@
 'use client'
 
-import { useState, useRef, useEffect, useReducer, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useReducer, useMemo, useCallback, useEffectEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { isLoggedIn, getAuthUser } from '@/lib/auth'
 import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
-import type { RetryParams } from '@/lib/types'
+import type { RetryParams, ConversationDetail } from '@/lib/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { BASE } from '@/lib/api'
 import { compressImage } from '@/lib/compress-image'
 import { PROVIDER_OLLAMA, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import type { OpenAIChunk, Run, ProviderOption, Endpoint } from '@/components/api-test-types'
-import { runsReducer, MAX_RUNS } from '@/components/api-test-types'
+import type { OpenAIChunk, Run, ProviderOption, Endpoint, ConversationMessage, ConversationSession, TestMode } from '@/components/api-test-types'
+import { runsReducer, MAX_RUNS, MAX_CONV_SESSIONS } from '@/components/api-test-types'
 import { ApiTestForm } from '@/components/api-test-form'
 import { ApiTestRuns } from '@/components/api-test-runs'
+import { ApiTestConversation } from '@/components/api-test-conversation'
 
 // ── ApiTestPanel ───────────────────────────────────────────────────────────────
 
 interface Props {
   retryParams?: RetryParams | null
   onRetryConsumed?: () => void
+  onTurnComplete?: () => void
+  continueConversation?: ConversationDetail | null
+  onContinueConsumed?: () => void
 }
 
-export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
+export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, continueConversation, onContinueConsumed }: Props) {
   const { t } = useTranslation()
   const { labSettings } = useLabSettings()
 
@@ -39,7 +43,10 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   const [useApiKey, setUseApiKey] = useState(false)
   const [apiKeyValue, setApiKeyValue] = useState('')
 
-  // ── Run state ─────────────────────────────────────────────────────────────────
+  // ── Mode ─────────────────────────────────────────────────────────────────────
+  const [mode, setMode] = useState<TestMode>('single')
+
+  // ── Run state (single mode) ───────────────────────────────────────────────────
   const [runs, dispatch] = useReducer(runsReducer, [])
   const [activeRunId, setActiveRunId] = useState<number | null>(null)
   const nextIdRef = useRef(1)
@@ -47,8 +54,17 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   // Map from run id → active reader (for cancellation)
   const readersRef = useRef<Map<number, ReadableStreamDefaultReader<Uint8Array>>>(new Map())
 
+  // ── Conversation state ────────────────────────────────────────────────────────
+  const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([])
+  const [activeConvSessionId, setActiveConvSessionId] = useState<number | null>(null)
+  const convNextIdRef = useRef(1)
+  const convReadersRef = useRef<Map<number, ReadableStreamDefaultReader<Uint8Array>>>(new Map())
+
   // ── Providers ─────────────────────────────────────────────────────────────────
-  const { data: providers } = useQuery(providersQuery)
+  const { data: providersData } = useQuery(providersQuery())
+  const providers = providersData?.providers
+
+  const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   const availableOptions = useMemo((): ProviderOption[] => {
     if (!providers) return [{ value: 'ollama', label: 'Ollama', isGemini: false }]
@@ -56,14 +72,14 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_OLLAMA)) {
       opts.push({ value: 'ollama', label: 'Ollama', isGemini: false })
     }
-    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
+    if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
       opts.push({ value: 'gemini-free', label: t('test.geminiFree'), isGemini: true })
     }
-    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
+    if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
       opts.push({ value: 'gemini', label: t('test.gemini'), isGemini: true })
     }
     return opts.length > 0 ? opts : [{ value: 'ollama', label: 'Ollama', isGemini: false }]
-  }, [providers, t])
+  }, [providers, t, geminiEnabled])
 
   const isGeminiProvider = availableOptions.find((o) => o.value === providerType)?.isGemini ?? false
 
@@ -75,9 +91,29 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     }
   }, [availableOptions, providerType, providers])
 
+  // Auto-switch endpoint when provider type changes
+  useEffect(() => {
+    if (isGeminiProvider && endpoint !== '/v1/chat/completions' && endpoint !== '/v1beta/models') {
+      setEndpoint('/v1/chat/completions')
+    }
+    if (!isGeminiProvider && endpoint === '/v1beta/models') {
+      setEndpoint('/v1/chat/completions')
+    }
+  }, [isGeminiProvider, endpoint])
+
+  // Conversation mode: force messages-capable endpoint
+  useEffect(() => {
+    if (mode === 'conversation' && endpoint === '/api/generate') {
+      setEndpoint('/v1/chat/completions')
+    }
+    if (mode === 'conversation' && endpoint === '/v1beta/models') {
+      setEndpoint('/v1/chat/completions')
+    }
+  }, [mode, endpoint])
+
   // ── Models ────────────────────────────────────────────────────────────────────
   const { data: ollamaModelsData } = useQuery({
-    ...ollamaModelsQuery,
+    ...ollamaModelsQuery(),
     enabled: !isGeminiProvider,
   })
 
@@ -90,6 +126,15 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     ...geminiPoliciesQuery,
     enabled: isGeminiProvider,
   })
+
+  const modelContextWindows = useMemo<Record<string, number>>(() => {
+    if (isGeminiProvider) return {}
+    return Object.fromEntries(
+      (ollamaModelsData?.models ?? [])
+        .filter((m) => (m.max_ctx ?? 0) > 0)
+        .map((m) => [m.model_name, m.max_ctx!])
+    )
+  }, [isGeminiProvider, ollamaModelsData?.models])
 
   const availableModels = useMemo(() => {
     if (!isGeminiProvider) return ollamaModelsData?.models.map((m) => m.model_name) ?? []
@@ -108,7 +153,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
   }, [availableModels, model])
 
   // ── Retry params ─────────────────────────────────────────────────────────────
-  useEffect(() => {
+  const applyRetryParams = useEffectEvent(() => {
     if (!retryParams) return
     setPrompt(retryParams.prompt)
     setProviderType(retryParams.provider_type)
@@ -116,15 +161,42 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
       setModel(retryParams.model)
     }
     onRetryConsumed?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [retryParams])
+  })
+  useEffect(() => { applyRetryParams() }, [retryParams])
+
+  // ── Continue conversation ─────────────────────────────────────────────────────
+  const applyContinueConversation = useEffectEvent(() => {
+    if (!continueConversation) return
+    setMode('conversation')
+    if (conversationSessions.length >= MAX_CONV_SESSIONS) return
+    const id = convNextIdRef.current++
+    const messages: ConversationMessage[] = continueConversation.turns.flatMap((turn) => {
+      const msgs: ConversationMessage[] = [{ role: 'user', content: turn.prompt }]
+      if (turn.result) msgs.push({ role: 'assistant', content: turn.result, model: turn.model_name ?? undefined })
+      return msgs
+    })
+    const newSess: ConversationSession = {
+      id,
+      messages,
+      streamingText: '',
+      status: 'idle',
+      errorMsg: '',
+      conversationId: continueConversation.id,
+    }
+    setConversationSessions((prev) => [...prev, newSess])
+    setActiveConvSessionId(id)
+    if (continueConversation.model_name && availableModels.includes(continueConversation.model_name)) {
+      setModel(continueConversation.model_name)
+    }
+    onContinueConsumed?.()
+  })
+  useEffect(() => { applyContinueConversation() }, [continueConversation])
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      for (const reader of readersRef.current.values()) {
-        reader.cancel()
-      }
+      for (const reader of readersRef.current.values()) reader.cancel()
+      for (const reader of convReadersRef.current.values()) reader.cancel()
     }
   }, [])
 
@@ -169,6 +241,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
         }
       }
       dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
+      onTurnComplete?.()
     } catch (err) {
       dispatch({
         type: 'SET_STATUS',
@@ -176,6 +249,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
         status: 'error',
         errorMsg: err instanceof Error ? err.message : t('common.unknownError'),
       })
+      onTurnComplete?.()
     } finally {
       readersRef.current.delete(runId)
     }
@@ -210,9 +284,184 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     setImages((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
-  // ── Run handler ───────────────────────────────────────────────────────────────
-  async function handleRun() {
+  // ── Conversation session management ──────────────────────────────────────────
+  function handleNewConvSession() {
+    if (conversationSessions.length >= MAX_CONV_SESSIONS) return
+    const id = convNextIdRef.current++
+    const newSess: ConversationSession = { id, messages: [], streamingText: '', status: 'idle', errorMsg: '' }
+    setConversationSessions((prev) => [...prev, newSess])
+    setActiveConvSessionId(id)
+  }
+
+  function handleCloseConvSession(id: number) {
+    convReadersRef.current.get(id)?.cancel()
+    convReadersRef.current.delete(id)
+    const remaining = conversationSessions.filter((s) => s.id !== id)
+    setConversationSessions(remaining)
+    if (activeConvSessionId === id) {
+      setActiveConvSessionId(remaining.length > 0 ? remaining[remaining.length - 1].id : null)
+    }
+  }
+
+  // ── Conversation handler ──────────────────────────────────────────────────────
+  async function executeConversationTurn() {
     if (!prompt.trim() || !model) return
+    if (!isLoggedIn()) return
+
+    // Auto-create first session if none
+    let sid = activeConvSessionId
+    let currentMessages: ConversationMessage[] = []
+    if (sid === null) {
+      if (conversationSessions.length >= MAX_CONV_SESSIONS) return
+      const id = convNextIdRef.current++
+      const newSess: ConversationSession = { id, messages: [], streamingText: '', status: 'idle', errorMsg: '' }
+      setConversationSessions((prev) => [...prev, newSess])
+      setActiveConvSessionId(id)
+      sid = id
+    } else {
+      const sess = conversationSessions.find((s) => s.id === sid)
+      if (!sess || sess.status === 'streaming') return
+      currentMessages = sess.messages
+    }
+
+    const userContent = prompt.trim()
+    const userImages = images.length > 0 ? [...images] : undefined
+    const userMsg: ConversationMessage = { role: 'user', content: userContent, images: userImages }
+    const updatedMessages = [...currentMessages, userMsg]
+
+    setConversationSessions((prev) => prev.map((s) =>
+      s.id === sid ? { ...s, messages: updatedMessages, streamingText: '', status: 'streaming', errorMsg: '' } : s
+    ))
+    setPrompt('')
+    setImages([])
+
+    const ep = (endpoint === '/api/generate' || endpoint === '/v1beta/models')
+      ? '/v1/chat/completions'
+      : endpoint
+
+    const apiMessages = updatedMessages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      ...(m.images && m.images.length > 0 && { images: m.images }),
+    }))
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (useApiKey && apiKeyValue.trim()) {
+      headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
+    }
+
+    // Include server conversation_id to continue the same conversation context
+    const existingConvId = conversationSessions.find((s) => s.id === sid)?.conversationId
+      ?? (sid === activeConvSessionId ? activeConvSession?.conversationId : undefined)
+
+    const body: Record<string, unknown> = {
+      model,
+      messages: apiMessages,
+      provider_type: providerType,
+      stream: true,
+      ...(existingConvId && { conversation_id: existingConvId }),
+    }
+
+    let fullText = ''
+    try {
+      const resp = await fetch(`${BASE}${ep}`, {
+        method: 'POST',
+        headers,
+        ...(!useApiKey && { credentials: 'include' as RequestCredentials }),
+        body: JSON.stringify(body),
+      })
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`)
+
+      // Capture server conversation_id from response header and persist in session
+      const serverConvId = resp.headers.get('x-conversation-id')
+      if (serverConvId) {
+        const prevConvId = conversationSessions.find((s) => s.id === sid)?.conversationId
+          ?? (sid === activeConvSessionId ? activeConvSession?.conversationId : undefined)
+        const renewed = prevConvId !== undefined && serverConvId !== prevConvId
+        setConversationSessions((prev) => prev.map((s) => {
+          if (s.id !== sid) return s
+          const msgs = renewed
+            ? [...s.messages, { role: 'system' as const, content: t('test.sessionRenewed') }]
+            : s.messages
+          return { ...s, conversationId: serverConvId, messages: msgs }
+        }))
+      }
+
+      if (resp.body) {
+        const reader = resp.body.getReader()
+        convReadersRef.current.set(sid, reader)
+        const decoder = new TextDecoder()
+        let buf = ''
+        try {
+          outer: while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += decoder.decode(value, { stream: true })
+            const lines = buf.split('\n')
+            buf = lines.pop() ?? ''
+            for (const line of lines) {
+              const trimmed = line.trimEnd()
+              if (!trimmed.startsWith('data:')) continue
+              const raw = trimmed.slice(5)
+              const data = raw.startsWith(' ') ? raw.slice(1) : raw
+              if (data === '[DONE]') break outer
+              try {
+                const chunk: OpenAIChunk = JSON.parse(data)
+                if (chunk.error?.message) throw new Error(chunk.error.message)
+                const content = chunk.choices?.[0]?.delta?.content
+                if (content) {
+                  fullText += content
+                  setConversationSessions((prev) => prev.map((s) =>
+                    s.id === sid ? { ...s, streamingText: fullText } : s
+                  ))
+                }
+              } catch (err) {
+                if (err instanceof SyntaxError) continue
+                throw err
+              }
+            }
+          }
+        } finally {
+          convReadersRef.current.delete(sid)
+        }
+      }
+
+      setConversationSessions((prev) => prev.map((s) =>
+        s.id === sid
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'idle' }
+          : s
+      ))
+      onTurnComplete?.()
+    } catch (err) {
+      setConversationSessions((prev) => prev.map((s) =>
+        s.id === sid
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'error', errorMsg: err instanceof Error ? err.message : t('common.unknownError') }
+          : s
+      ))
+      onTurnComplete?.()
+    }
+  }
+
+  function handleConversationStop() {
+    if (activeConvSessionId === null) return
+    const sid = activeConvSessionId
+    convReadersRef.current.get(sid)?.cancel()
+    convReadersRef.current.delete(sid)
+    setConversationSessions((prev) => prev.map((s) =>
+      s.id === sid
+        ? { ...s, messages: [...s.messages, { role: 'assistant', content: s.streamingText, model }], streamingText: '', status: 'idle' }
+        : s
+    ))
+  }
+
+  // ── Run handler ───────────────────────────────────────────────────────────────
+  interface RunParams {
+    prompt: string; model: string; providerType: string
+    endpoint: Endpoint; useApiKey: boolean; images?: string[]
+  }
+
+  async function executeRun(p: RunParams) {
+    if (!p.prompt.trim() || !p.model) return
     if (!isLoggedIn()) return
 
     if (runs.length >= MAX_RUNS) {
@@ -223,19 +472,18 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     }
 
     const runId = nextIdRef.current++
-    const currentImages = images.length > 0 ? [...images] : undefined
 
     const newRun: Run = {
       id: runId,
-      prompt: prompt.trim(),
-      model,
-      provider_type: providerType,
-      endpoint,
-      useApiKey,
+      prompt: p.prompt.trim(),
+      model: p.model,
+      provider_type: p.providerType,
+      endpoint: p.endpoint,
+      useApiKey: p.useApiKey,
       status: 'streaming',
       text: '',
       errorMsg: '',
-      images: currentImages,
+      images: p.images,
     }
     dispatch({ type: 'ADD', run: newRun })
     setActiveRunId(runId)
@@ -243,53 +491,47 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     const jobIdRef = { current: null as string | null }
 
     try {
-      // Determine URL and headers based on endpoint + auth mode
-      const isStreaming = endpoint === '/v1/chat/completions'
+      const isStreaming = p.endpoint === '/v1/chat/completions' || p.endpoint === '/api/chat' || p.endpoint === '/api/generate'
       let url: string
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
-      if (useApiKey && apiKeyValue.trim()) {
-        // Real endpoints with API key auth
-        url = `${BASE}${endpoint}`
-        if (endpoint === '/v1/chat/completions') {
+      url = `${BASE}${p.endpoint}`
+      if (p.useApiKey && apiKeyValue.trim()) {
+        if (p.endpoint === '/v1/chat/completions' || p.endpoint === '/v1beta/models') {
           headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
         } else {
           headers['X-API-Key'] = apiKeyValue.trim()
         }
-      } else {
-        // Test endpoints with JWT session auth
-        const testEndpointMap: Record<Endpoint, string> = {
-          '/v1/chat/completions': '/v1/test/completions',
-          '/api/chat': '/v1/test/api/chat',
-          '/api/generate': '/v1/test/api/generate',
-        }
-        url = `${BASE}${testEndpointMap[endpoint]}`
       }
+      // Session auth (JWT cookie) is sent automatically by the browser.
 
-      // Build request body based on endpoint format
       let body: Record<string, unknown>
-      if (endpoint === '/api/generate') {
-        body = { model, prompt: prompt.trim(), stream: isStreaming }
-      } else if (endpoint === '/api/chat') {
+      if (p.endpoint === '/v1beta/models') {
+        // Gemini native: POST /v1beta/models/{model}:generateContent
+        url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
+        body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
+      } else if (p.endpoint === '/api/generate') {
+        body = { model: p.model, prompt: p.prompt.trim(), stream: isStreaming }
+      } else if (p.endpoint === '/api/chat') {
         body = {
-          model,
-          messages: [{ role: 'user', content: prompt.trim() }],
+          model: p.model,
+          messages: [{ role: 'user', content: p.prompt.trim() }],
           stream: isStreaming,
         }
       } else {
         body = {
-          model,
-          messages: [{ role: 'user', content: prompt.trim() }],
-          provider_type: providerType,
+          model: p.model,
+          messages: [{ role: 'user', content: p.prompt.trim() }],
+          provider_type: p.providerType,
           stream: isStreaming,
-          ...(currentImages && currentImages.length > 0 && { images: currentImages }),
+          ...(p.images && p.images.length > 0 && { images: p.images }),
         }
       }
 
       const resp = await fetch(url, {
         method: 'POST',
         headers,
-        ...(!useApiKey && { credentials: 'include' as RequestCredentials }),
+        ...(!p.useApiKey && { credentials: 'include' as RequestCredentials }),
         body: JSON.stringify(body),
       })
 
@@ -298,16 +540,16 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
       }
 
       if (isStreaming && resp.body) {
-        // SSE streaming for /v1/chat/completions
         const reader = resp.body.getReader()
         readersRef.current.set(runId, reader)
         await consumeStream(runId, reader, jobIdRef)
       } else {
-        // JSON response for /api/chat and /api/generate
         const json = await resp.json()
-        const text = endpoint === '/api/generate'
-          ? (json.response ?? '')
-          : (json.message?.content ?? '')
+        const text = p.endpoint === '/v1beta/models'
+          ? (json.candidates?.[0]?.content?.parts?.[0]?.text ?? JSON.stringify(json))
+          : p.endpoint === '/api/generate'
+            ? (json.response ?? '')
+            : (json.message?.content ?? '')
         dispatch({ type: 'APPEND', id: runId, token: text })
         dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
       }
@@ -319,6 +561,17 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
         errorMsg: err instanceof Error ? err.message : t('common.unknownError'),
       })
     }
+  }
+
+  function handleRun() {
+    if (mode === 'conversation') {
+      executeConversationTurn()
+      return
+    }
+    executeRun({
+      prompt, model, providerType, endpoint, useApiKey,
+      images: images.length > 0 ? [...images] : undefined,
+    })
   }
 
   function handleStop(runId: number) {
@@ -343,31 +596,48 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
     setModel(run.model)
     setEndpoint(run.endpoint)
     setUseApiKey(run.useApiKey)
-    handleRun()
+    executeRun({
+      prompt: run.prompt,
+      model: run.model,
+      providerType: run.provider_type,
+      endpoint: run.endpoint,
+      useApiKey: run.useApiKey,
+      images: run.images,
+    })
   }
 
-  const canRun = isLoggedIn() && !!prompt.trim() && !!model
+  const activeConvSession = conversationSessions.find((s) => s.id === activeConvSessionId) ?? null
+  const conversationTokenEstimate = activeConvSession
+    ? activeConvSession.messages
+        .filter((m) => m.role !== 'system')
+        .reduce((acc, m) => acc + Math.ceil(m.content.length / 3.5), 0)
+    : 0
+  const canRun = isLoggedIn() && !!prompt.trim() && !!model &&
+    (mode === 'single' || activeConvSession?.status !== 'streaming')
   const isAnyStreaming = runs.some((r) => r.status === 'streaming')
 
   return (
     <Card>
       <CardContent className="p-5 space-y-0">
         <ApiTestForm
+          mode={mode}
           providerType={providerType}
           model={model}
           prompt={prompt}
           images={images}
           maxImages={maxImages}
           isCompressing={isCompressing}
+          conversationTokenEstimate={conversationTokenEstimate}
+          modelContextWindows={modelContextWindows}
           availableOptions={availableOptions}
           availableModels={availableModels}
           isGeminiProvider={isGeminiProvider}
-          isAnyStreaming={isAnyStreaming}
           canRun={canRun}
           authUsername={authUser?.username ?? null}
           endpoint={endpoint}
           useApiKey={useApiKey}
           apiKeyValue={apiKeyValue}
+          onModeChange={setMode}
           onProviderChange={setProviderType}
           onModelChange={setModel}
           onPromptChange={setPrompt}
@@ -379,15 +649,48 @@ export function ApiTestPanel({ retryParams, onRetryConsumed }: Props) {
           onRun={handleRun}
         />
 
-        <ApiTestRuns
-          runs={runs}
-          activeRunId={activeRunId}
-          isAnyStreaming={isAnyStreaming}
-          onSelectRun={setActiveRunId}
-          onCloseRun={handleCloseRun}
-          onStop={handleStop}
-          onRerun={handleRerun}
-        />
+        {mode === 'conversation' ? (
+          <ApiTestConversation
+            sessions={conversationSessions}
+            activeSessionId={activeConvSessionId}
+            messages={activeConvSession?.messages ?? []}
+            streamingText={activeConvSession?.streamingText ?? ''}
+            status={activeConvSession?.status ?? 'idle'}
+            errorMsg={activeConvSession?.errorMsg ?? ''}
+            prompt={prompt}
+            images={images}
+            maxImages={maxImages}
+            isCompressing={isCompressing}
+            isGeminiProvider={isGeminiProvider}
+            canRun={canRun}
+            onNewSession={handleNewConvSession}
+            onCloseSession={handleCloseConvSession}
+            onSelectSession={setActiveConvSessionId}
+            onPromptChange={setPrompt}
+            onImageAdd={handleImageAdd}
+            onImageRemove={handleImageRemove}
+            onRun={handleRun}
+            onClear={() => {
+              if (activeConvSessionId === null) return
+              setConversationSessions((prev) => prev.map((s) =>
+                s.id === activeConvSessionId
+                  ? { ...s, messages: [], streamingText: '', status: 'idle', errorMsg: '' }
+                  : s
+              ))
+            }}
+            onStop={handleConversationStop}
+          />
+        ) : (
+          <ApiTestRuns
+            runs={runs}
+            activeRunId={activeRunId}
+            isAnyStreaming={isAnyStreaming}
+            onSelectRun={setActiveRunId}
+            onCloseRun={handleCloseRun}
+            onStop={handleStop}
+            onRerun={handleRerun}
+          />
+        )}
       </CardContent>
     </Card>
   )

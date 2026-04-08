@@ -67,7 +67,7 @@ impl SessionRepository for PostgresSessionRepository {
     }
 
     async fn list_active(&self, account_id: &Uuid) -> Result<Vec<Session>> {
-        let sql = format!("SELECT {SESSION_COLS} FROM account_sessions WHERE account_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC");
+        let sql = format!("SELECT {SESSION_COLS} FROM account_sessions WHERE account_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1000");
         let rows = sqlx::query(&sql)
         .bind(account_id)
         .fetch_all(&self.pool)

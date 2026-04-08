@@ -48,6 +48,47 @@ test.describe('API: Dashboard & Inference @smoke', () => {
     expect(body).toBeTruthy()
   })
 
+  // ── Dashboard Overview ──────────────────────────────────────────────────────
+  test('dashboard overview returns aggregated snapshot', async () => {
+    const res = await api.get('/v1/dashboard/overview')
+    expect(res.ok()).toBeTruthy()
+    const body = await res.json()
+    expect(typeof body.stats).toBe('object')
+    expect(typeof body.queue_depth).toBe('object')
+    expect(typeof body.lab).toBe('object')
+  })
+
+  // ── Capacity Cluster ────────────────────────────────────────────────────────
+  test('capacity cluster returns array', async () => {
+    const res = await api.get('/v1/dashboard/capacity/cluster')
+    expect(res.ok()).toBeTruthy()
+    const body = await res.json()
+    expect(Array.isArray(body)).toBeTruthy()
+  })
+
+  // ── Service Health ──────────────────────────────────────────────────────────
+  test('service health returns infrastructure and pod status', async () => {
+    const res = await api.get('/v1/dashboard/services')
+    expect(res.ok()).toBeTruthy()
+    const body = await res.json()
+    expect(Array.isArray(body.infrastructure)).toBeTruthy()
+    expect(Array.isArray(body.api_pods)).toBeTruthy()
+    expect(Array.isArray(body.agent_pods)).toBeTruthy()
+
+    // At least one API pod should be online (the instance serving this request)
+    expect(body.api_pods.length).toBeGreaterThan(0)
+    for (const pod of body.api_pods) {
+      expect(pod.id).toBeTruthy()
+      expect(['online', 'offline']).toContain(pod.status)
+    }
+
+    // Infrastructure services should have valid status values
+    for (const svc of body.infrastructure) {
+      expect(svc.name).toBeTruthy()
+      expect(['ok', 'degraded', 'unavailable']).toContain(svc.status)
+    }
+  })
+
   // ── Lab Settings ────────────────────────────────────────────────────────────
   test.describe.serial('lab settings', () => {
     test('lab settings CRUD', async () => {
@@ -59,15 +100,17 @@ test.describe('API: Dashboard & Inference @smoke', () => {
 
       // Patch — toggle gemini_function_calling and revert
       const current = settings.gemini_function_calling
-      const patchRes = await api.patch('/v1/dashboard/lab', {
-        gemini_function_calling: !current,
-      })
-      expect(patchRes.ok()).toBeTruthy()
-
-      // Revert
-      await api.patch('/v1/dashboard/lab', {
-        gemini_function_calling: current,
-      })
+      try {
+        const patchRes = await api.patch('/v1/dashboard/lab', {
+          gemini_function_calling: !current,
+        })
+        expect(patchRes.ok()).toBeTruthy()
+      } finally {
+        // Always revert to original state
+        await api.patch('/v1/dashboard/lab', {
+          gemini_function_calling: current,
+        })
+      }
     })
   })
 })

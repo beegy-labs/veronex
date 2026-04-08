@@ -23,7 +23,11 @@ export function MermaidBlock({ code }: { code: string }) {
         return mermaid.render(id, code)
       })
       .then(({ svg }) => {
-        if (!cancelled && ref.current) ref.current.innerHTML = svg
+        if (!cancelled && ref.current) {
+          // Strip any script/event-handler content from SVG as defense-in-depth
+          const sanitized = svg.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/on\w+="[^"]*"/gi, '')
+          ref.current.innerHTML = sanitized
+        }
       })
       .catch(() => {
         // Fallback: display as plain code
