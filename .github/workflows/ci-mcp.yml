@@ -116,7 +116,7 @@ jobs:
             develop) FILE="clusters/home/values/veronex-dev-values.yaml" ;;
             *)       exit 0 ;;
           esac
-          sed -i "/^veronexMcp:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+          sed -i "/^mcp:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
 
       - name: Commit and push
         run: |
