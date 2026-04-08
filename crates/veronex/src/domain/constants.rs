@@ -251,6 +251,11 @@ pub fn job_owner_key(job_id: uuid::Uuid) -> String {
     format!("veronex:job:owner:{job_id}")
 }
 
+/// Cached ConversationRecord key (zstd JSON, TTL 300s).
+pub fn conversation_record_key(conversation_id: uuid::Uuid) -> String {
+    format!("veronex:conv:{conversation_id}")
+}
+
 /// Instance heartbeat key — present (EX 30s) while the instance is alive.
 pub fn heartbeat_key(instance_id: &str) -> String {
     format!("veronex:heartbeat:{instance_id}")

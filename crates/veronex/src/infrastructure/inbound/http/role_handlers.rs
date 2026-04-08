@@ -13,6 +13,8 @@ use crate::infrastructure::inbound::http::state::AppState;
 use super::audit_helpers::emit_audit;
 use super::error::AppError;
 
+const MAX_ROLES: i64 = 200;
+
 // ── Response types ──────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -67,8 +69,9 @@ pub async fn list_roles(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RoleSummary>>, AppError> {
     let rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, Vec<String>, bool, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, permissions, menus, is_system, created_at FROM roles ORDER BY created_at ASC LIMIT 200"
+        "SELECT id, name, permissions, menus, is_system, created_at FROM roles ORDER BY created_at ASC LIMIT $1"
     )
+    .bind(MAX_ROLES)
     .fetch_all(&state.pg_pool)
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("list roles: {e}")))?;

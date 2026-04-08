@@ -17,12 +17,9 @@ use super::middleware::jwt_auth::{RequireAccountManage, RequireDashboardView};
 use super::state::AppState;
 use crate::application::ports::outbound::message_store::ConversationRecord;
 use crate::domain::value_objects::{ConvId, JobId};
+use crate::infrastructure::outbound::valkey_keys::conv_s3_cache;
 
 const CONV_CACHE_TTL_SECS: i64 = 300; // 5 min
-
-fn conv_cache_key(conv_id: Uuid) -> String {
-    format!("conv_s3:{}", conv_id)
-}
 
 /// Fetch ConversationRecord from Valkey cache; on miss, load from S3 and cache result.
 async fn fetch_conv_s3_cached(
@@ -31,7 +28,7 @@ async fn fetch_conv_s3_cached(
     date: chrono::NaiveDate,
     conv_id: Uuid,
 ) -> Option<ConversationRecord> {
-    let cache_key = conv_cache_key(conv_id);
+    let cache_key = conv_s3_cache(conv_id);
 
     // ── Try Valkey cache first ────────────────────────────────────────────────
     if let Some(ref pool) = state.valkey_pool {
@@ -158,7 +155,7 @@ pub async fn list_conversations(
 ) -> HandlerResult<Json<ConversationListResponse>> {
     use sqlx::Row;
 
-    let limit = params.limit.min(200);
+    let limit = params.limit.max(1).min(200);
     let offset = params.offset.max(0);
     let search_pat = params.search.as_deref()
         .filter(|s| !s.is_empty())
@@ -361,7 +358,7 @@ mod tests {
     #[test]
     fn conv_cache_key_format() {
         let id = uuid::Uuid::nil();
-        let key = conv_cache_key(id);
+        let key = conv_s3_cache(id);
         assert!(key.starts_with("conv_s3:"));
         assert!(key.contains(&id.to_string()));
     }

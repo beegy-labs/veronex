@@ -292,7 +292,7 @@ impl McpBridgeAdapter {
             final_tool_calls = round_result.tool_calls.clone();
 
             // ── Filter for MCP tool calls ──────────────────────────────────────
-            let mcp_calls: Vec<Value> = round_result
+            let mut mcp_calls: Vec<Value> = round_result
                 .tool_calls
                 .into_iter()
                 .filter(|tc| {
@@ -302,6 +302,8 @@ impl McpBridgeAdapter {
                         .unwrap_or(false)
                 })
                 .collect();
+            // Cap per-round execution count (model may return more tool_calls than injected tools).
+            mcp_calls.truncate(MAX_TOOLS_PER_REQUEST);
 
             if mcp_calls.is_empty() {
                 // No MCP tools requested — done.

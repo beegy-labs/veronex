@@ -279,7 +279,7 @@ async fn finalize_job(
                 // hits cache instead of S3. Compression re-write (Phase 3) will DEL
                 // to force a fresh load after the compressed turn is written back.
                 const CONV_CACHE_TTL_SECS: i64 = 300;
-                let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(conv_id);
+                let cache_key = crate::domain::constants::conversation_record_key(conv_id);
                 if let Ok(json) = serde_json::to_string(&record) {
                     if let Err(e) = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await {
                         tracing::warn!(error = %e, "runner: failed to cache conversation record");

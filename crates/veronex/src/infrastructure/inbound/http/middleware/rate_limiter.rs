@@ -103,7 +103,7 @@ pub async fn rate_limiter(
         .entry(api_key.id)
         .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(MAX_KEY_CONCURRENT as usize)))
         .clone();
-    let _permit = match sem.try_acquire_owned() {
+    let _permit = match sem.clone().try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
             return (
@@ -114,7 +114,16 @@ pub async fn rate_limiter(
         }
     };
 
-    next.run(req).await
+    let response = next.run(req).await;
+
+    // Best-effort cleanup: evict idle semaphore entries to prevent unbounded DashMap growth.
+    if sem.available_permits() == MAX_KEY_CONCURRENT as usize {
+        state.key_in_flight.remove_if(&api_key.id, |_, s| {
+            s.available_permits() == MAX_KEY_CONCURRENT as usize
+        });
+    }
+
+    response
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

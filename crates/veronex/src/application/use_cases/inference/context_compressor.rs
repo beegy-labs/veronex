@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 use anyhow::Result;
@@ -6,8 +6,14 @@ use chrono::NaiveDate;
 
 use crate::application::ports::outbound::message_store::{CompressedTurn, MessageStore};
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
+use crate::domain::constants::conversation_record_key;
 
 use super::compression_router::CompressParams;
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+fn http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 // ── Prompt ───────────────────────────────────────────────────────────────────
 
@@ -59,8 +65,7 @@ async fn try_compress(
     store: &Arc<dyn MessageStore>,
     valkey: &Option<Arc<dyn ValkeyPort>>,
 ) -> Result<()> {
-    let cache_key =
-        crate::infrastructure::outbound::valkey_keys::conversation_record(conversation_id);
+    let cache_key = conversation_record_key(conversation_id);
 
     // 1. Load ConversationRecord — Valkey first, S3 fallback
     let record_opt: Option<crate::application::ports::outbound::message_store::ConversationRecord> =
@@ -99,7 +104,7 @@ async fn try_compress(
     let original_tokens = (estimate_tokens(&prompt) + estimate_tokens(&result)) as u32;
 
     // 3. Call Ollama /api/chat for per-turn compression
-    let http = reqwest::Client::new();
+    let http = http_client();
     let endpoint = format!("{}/api/chat", params.provider_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "model": params.model,
@@ -205,7 +210,7 @@ pub async fn compress_input_inline(
         "compress_input_inline: prompt exceeds budget, compressing"
     );
 
-    let http = reqwest::Client::new();
+    let http = http_client();
     let endpoint = format!("{}/api/chat", provider_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "model": model,

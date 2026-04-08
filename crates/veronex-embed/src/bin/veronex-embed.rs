@@ -33,14 +33,20 @@ async fn embed_handler(
             .into_response();
     }
 
-    match state.embed(&req.text) {
-        Ok(vector) => {
+    let text = req.text.clone();
+    match tokio::task::spawn_blocking(move || state.embed(&text)).await {
+        Ok(Ok(vector)) => {
             let dims = vector.len();
             (StatusCode::OK, Json(serde_json::json!(EmbedResponse { vector, dims }))).into_response()
         }
-        Err(e) => (
+        Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "embedding task panicked"})),
         )
             .into_response(),
     }
@@ -58,8 +64,9 @@ async fn embed_batch_handler(
             .into_response();
     }
 
-    match state.embed_batch(&req.texts) {
-        Ok(vectors) => {
+    let texts = req.texts.clone();
+    match tokio::task::spawn_blocking(move || state.embed_batch(&texts)).await {
+        Ok(Ok(vectors)) => {
             let dims = vectors.first().map(|v| v.len()).unwrap_or(0);
             (
                 StatusCode::OK,
@@ -67,9 +74,14 @@ async fn embed_batch_handler(
             )
                 .into_response()
         }
-        Err(e) => (
+        Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "embedding task panicked"})),
         )
             .into_response(),
     }

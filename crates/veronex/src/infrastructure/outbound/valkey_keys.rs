@@ -191,8 +191,12 @@ pub const VRAM_LEASES_SCAN_PATTERN: &str = "veronex:vram_leases:*";
 /// Cached ConversationRecord for a multi-turn session (zstd-compressed JSON).
 /// TTL = 300s. Written by: runner.rs after S3 put_conversation().
 /// Invalidated (DEL) by: compress_turn() after S3 re-write.
-pub fn conversation_record(conversation_id: uuid::Uuid) -> String {
-    format!("veronex:conv:{conversation_id}")
+pub use crate::domain::constants::conversation_record_key as conversation_record;
+
+/// Cached S3 conversation detail (full turn list) for conversation_handlers.
+/// TTL = 300s. Written by: fetch_conv_s3_cached(). Invalidated by: MCP bridge after S3 re-write.
+pub fn conv_s3_cache(conv_id: uuid::Uuid) -> String {
+    format!("conv_s3:{conv_id}")
 }
 
 // ── Ollama model context cache ───────────────────────────────────────────────
