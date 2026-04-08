@@ -10,7 +10,7 @@
 | Change TTFT calculation logic | `infrastructure/outbound/provider_router.rs` `run_job()` | Modify TTFT detection block (first non-empty non-final token) |
 | Add new analytics endpoint | `infrastructure/inbound/http/handlers.rs` + ClickHouse SQL | Add handler + route in `router.rs` |
 | Change Ollama token count fallback | `infrastructure/outbound/provider_router.rs` `run_job()` | Modify `token_count` fallback (currently: SSE event count) |
-| Change ClickHouse data retention | `crates/veronex/migrations/` | Update pg_cron `DELETE` interval or add new MV TTL |
+| Change ClickHouse data retention | `docker/clickhouse/schema.sql` TTL clause | Modify `INTERVAL N DAY` on relevant table; for existing volumes use `ALTER TABLE ... MODIFY TTL` |
 | Add Gemini prompt token tracking | `infrastructure/outbound/gemini/adapter.rs` `extract_usage()` | Already implemented — verify `prompt_tokens` flows to `emit_inference_event()` |
 
 ## Key Files

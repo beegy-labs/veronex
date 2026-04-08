@@ -21,9 +21,10 @@ use crate::application::ports::outbound::global_model_settings::GlobalModelSetti
 use crate::application::ports::outbound::api_key_provider_access::ApiKeyProviderAccessRepository;
 use crate::application::ports::outbound::capacity_settings_repository::CapacitySettingsRepository;
 use crate::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
-use crate::application::ports::outbound::gemini_model_repository::GeminiModelRepository;
-use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
+use crate::application::ports::outbound::mcp_settings_repository::McpSettingsRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiModelRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiSyncConfigRepository;
 use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::model_capacity_repository::ModelCapacityRepository;
@@ -34,6 +35,8 @@ use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use crate::infrastructure::outbound::hw_metrics::CpuSnapshot;
+use crate::infrastructure::outbound::mcp::McpBridgeAdapter;
+use veronex_mcp::vector::{McpToolIndexer, McpVectorSelector};
 
 /// Shared application state passed to all HTTP handlers via Axum's State extractor.
 #[derive(Clone)]
@@ -91,6 +94,8 @@ pub struct AppState {
     pub stats_tx: Arc<broadcast::Sender<FlowStats>>,
     /// Lab (experimental) feature flags — singleton row in DB.
     pub lab_settings_repo: Arc<dyn LabSettingsRepository>,
+    /// MCP global settings — singleton row in DB.
+    pub mcp_settings_repo: Arc<dyn McpSettingsRepository>,
     /// Per-provider circuit breaker — isolates failing providers automatically.
     pub circuit_breaker: Arc<CircuitBreakerMap>,
     /// S3-compatible object store for conversation contexts (messages_json).
@@ -108,6 +113,32 @@ pub struct AppState {
     /// Global concurrent SSE connection counter.
     /// Prevents resource exhaustion from too many open SSE streams.
     pub sse_connections: Arc<AtomicU32>,
+    /// Per-API-key in-flight semaphore (Slowloris defense).
+    /// Keyed by API key UUID; `try_acquire_owned()` immediately 429s when limit hit.
+    pub key_in_flight: Arc<DashMap<Uuid, Arc<tokio::sync::Semaphore>>>,
     /// Persistent VRAM budget state per provider (safety_permil, source, kv_cache_type).
     pub vram_budget_repo: Arc<dyn crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudgetRepository>,
+    /// MCP bridge adapter — present when at least one MCP server is configured.
+    /// `None` disables MCP tool injection on all requests.
+    pub mcp_bridge: Option<Arc<McpBridgeAdapter>>,
+    /// Vespa-backed vector selector for MCP tool selection.
+    /// `None` when VESPA_URL is not configured — falls back to get_all().
+    pub mcp_vector_selector: Option<Arc<McpVectorSelector>>,
+    /// Tool indexer — embeds and feeds tools to Vespa on server register/delete.
+    /// `None` when VESPA_URL is not configured.
+    pub mcp_tool_indexer: Option<Arc<McpToolIndexer>>,
+    /// Instance ID of this API pod (UUID string).
+    /// Used by service health endpoint to identify pods.
+    pub instance_id: Arc<str>,
+    /// Maximum login attempts per IP per 5-minute window.
+    /// `0` disables IP-based rate limiting (e.g. for E2E test environments).
+    /// Controlled via `LOGIN_RATE_LIMIT` env var (default: 10).
+    pub login_rate_limit: u64,
+    /// Redpanda metrics URL for high-watermark scraping (e.g. `http://redpanda:9644`).
+    pub kafka_broker_admin_url: Option<Arc<str>>,
+    /// ClickHouse HTTP base URL for pipeline stats queries.
+    pub clickhouse_http_url: Option<Arc<str>>,
+    pub clickhouse_user: Option<Arc<str>>,
+    pub clickhouse_password: Option<Arc<str>>,
+    pub clickhouse_db: Option<Arc<str>>,
 }

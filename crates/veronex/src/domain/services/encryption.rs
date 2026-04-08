@@ -73,6 +73,20 @@ pub fn decrypt_or_legacy(encoded: &str, master_key: &[u8; 32]) -> (String, bool)
     }
 }
 
+// ── Password hashing ──────────────────────────────────────────────────────────
+
+use crate::domain::errors::DomainError;
+
+/// Hash a password with Argon2id.
+pub fn hash_password(password: &str) -> Result<String, DomainError> {
+    use argon2::{password_hash::{rand_core::OsRng as Argon2Rng, PasswordHasher, SaltString}, Argon2};
+    let salt = SaltString::generate(&mut Argon2Rng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| DomainError::Configuration(format!("password hashing failed: {e}")))
+}
+
 /// Derive a 32-byte key from a variable-length secret using SHA-256.
 pub fn derive_key(secret: &str) -> [u8; 32] {
     use sha2::{Digest, Sha256};

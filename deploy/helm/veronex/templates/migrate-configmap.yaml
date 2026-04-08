@@ -1,6 +1,5 @@
 {{- if .Values.migrations.enabled }}
 ---
-# PostgreSQL migration SQL files
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -12,44 +11,9 @@ metadata:
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation
 data:
-  000001_init.up.sql: |
-    {{- .Files.Get "files/postgres/000001_init.up.sql" | nindent 4 }}
-  000001_init.down.sql: |
-    {{- .Files.Get "files/postgres/000001_init.down.sql" | nindent 4 }}
-  000002_scheduler_phase0.up.sql: |
-    {{- .Files.Get "files/postgres/000002_scheduler_phase0.up.sql" | nindent 4 }}
-  000002_scheduler_phase0.down.sql: |
-    {{- .Files.Get "files/postgres/000002_scheduler_phase0.down.sql" | nindent 4 }}
-  000003_provider_vram_budget.up.sql: |
-    {{- .Files.Get "files/postgres/000003_provider_vram_budget.up.sql" | nindent 4 }}
-  000003_provider_vram_budget.down.sql: |
-    {{- .Files.Get "files/postgres/000003_provider_vram_budget.down.sql" | nindent 4 }}
-  000004_add_failure_reason.up.sql: |
-    {{- .Files.Get "files/postgres/000004_add_failure_reason.up.sql" | nindent 4 }}
-  000004_add_failure_reason.down.sql: |
-    {{- .Files.Get "files/postgres/000004_add_failure_reason.down.sql" | nindent 4 }}
-  000005_lab_settings_image.up.sql: |
-    {{- .Files.Get "files/postgres/000005_lab_settings_image.up.sql" | nindent 4 }}
-  000005_lab_settings_image.down.sql: |
-    {{- .Files.Get "files/postgres/000005_lab_settings_image.down.sql" | nindent 4 }}
-  000006_job_image_keys.up.sql: |
-    {{- .Files.Get "files/postgres/000006_job_image_keys.up.sql" | nindent 4 }}
-  000006_job_image_keys.down.sql: |
-    {{- .Files.Get "files/postgres/000006_job_image_keys.down.sql" | nindent 4 }}
-  000007_roles.up.sql: |
-    {{- .Files.Get "files/postgres/000007_roles.up.sql" | nindent 4 }}
-  000007_roles.down.sql: |
-    {{- .Files.Get "files/postgres/000007_roles.down.sql" | nindent 4 }}
-  000008_account_roles.up.sql: |
-    {{- .Files.Get "files/postgres/000008_account_roles.up.sql" | nindent 4 }}
-  000008_account_roles.down.sql: |
-    {{- .Files.Get "files/postgres/000008_account_roles.down.sql" | nindent 4 }}
-  000009_role_manage_perm.up.sql: |
-    {{- .Files.Get "files/postgres/000009_role_manage_perm.up.sql" | nindent 4 }}
-  000009_role_manage_perm.down.sql: |
-    {{- .Files.Get "files/postgres/000009_role_manage_perm.down.sql" | nindent 4 }}
+  init.sql: |
+    {{- .Files.Get "files/postgres/init.sql" | nindent 4 }}
 ---
-# ClickHouse migration SQL templates (placeholders resolved at runtime)
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -61,12 +25,6 @@ metadata:
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation
 data:
-  000001_init.up.sql: |
-    {{- .Files.Get "files/clickhouse/000001_init.up.sql" | nindent 4 }}
-  000001_init.down.sql: |
-    {{- .Files.Get "files/clickhouse/000001_init.down.sql" | nindent 4 }}
-  000002_metrics_sum_support.up.sql: |
-    {{- .Files.Get "files/clickhouse/000002_metrics_sum_support.up.sql" | nindent 4 }}
-  000002_metrics_sum_support.down.sql: |
-    {{- .Files.Get "files/clickhouse/000002_metrics_sum_support.down.sql" | nindent 4 }}
+  schema.sql: |
+    {{- .Files.Get "files/clickhouse/schema.sql" | nindent 4 }}
 {{- end }}

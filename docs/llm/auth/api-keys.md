@@ -1,12 +1,12 @@
 # API Keys — Server-Side: Auth & Rate Limiting
 
-> SSOT | **Last Updated**: 2026-03-22
+> SSOT | **Last Updated**: 2026-03-28
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add new API key field | `migrations/` + `domain/entities/api_key.rs` + `persistence/api_key_repository.rs` + `key_handlers.rs` `KeySummary` |
+| Add new API key field | `docker/postgres/init.sql` + `domain/entities/api_key.rs` + `persistence/api_key_repository.rs` + `key_handlers.rs` `KeySummary` |
 | Change auth rejection logic | `persistence/api_key_repository.rs` → `get_by_hash()` WHERE clause |
 | Add new rate limit type (e.g. requests/day) | `middleware/rate_limiter.rs` → add new Valkey check before handler |
 | Change RPM window duration | `middleware/rate_limiter.rs` → `RPM_WINDOW_MS` constant + `RATE_LIMIT_SCRIPT` Lua body |
@@ -21,9 +21,14 @@
 | `crates/veronex/src/domain/entities/api_key.rs` | `ApiKey` entity |
 | `crates/veronex/src/application/ports/outbound/api_key_repository.rs` | `ApiKeyRepository` trait |
 | `crates/veronex/src/infrastructure/outbound/persistence/api_key_repository.rs` | `PostgresApiKeyRepository` impl |
+| `crates/veronex/src/infrastructure/outbound/persistence/caching_api_key_repo.rs` | `CachingApiKeyRepo` — TtlCache 60s wrapper (hot-path) |
 | `crates/veronex/src/infrastructure/inbound/http/key_handlers.rs` | CRUD handlers |
 | `crates/veronex/src/infrastructure/inbound/http/middleware/rate_limiter.rs` | RPM/TPM middleware |
 | `crates/veronex/src/main.rs` | Bootstrap key creation on startup (planned) |
+
+`api_key_repo` in `AppState` is wired as `CachingApiKeyRepo(PostgresApiKeyRepository)`.
+`get_by_hash()` (hot path) hits in-memory cache; all writes call `invalidate_all()`.
+→ See `infra/hot-path-caching.md` for full caching strategy.
 
 ---
 
@@ -45,6 +50,7 @@ pub struct ApiKey {
     pub deleted_at: Option<DateTime<Utc>>,   // #[ts(skip)] — internal only
     pub key_type: KeyType,                   // #[ts(skip)] — internal only (Standard | Test)
     pub tier: KeyTier,                       // Free | Paid — domain enum (migration 000038)
+    pub mcp_cap_points: i16,                 // Max MCP agentic loop rounds (0 = disabled, default 3)
     pub account_id: Option<Uuid>,            // FK → accounts(id), set on create
 }
 ```
@@ -65,15 +71,17 @@ Default `tier`: `"paid"` (DB DEFAULT + `fn default_tier() -> String` in Rust).
 ```sql
 CREATE TABLE api_keys (
     id              UUID         PRIMARY KEY,
-    key_hash        TEXT         NOT NULL UNIQUE, -- BLAKE2b-256
-    key_prefix      VARCHAR(12)  NOT NULL,
-    tenant_id       VARCHAR(255) NOT NULL DEFAULT 'default',
+    key_hash        VARCHAR(64)  NOT NULL UNIQUE, -- BLAKE2b-256
+    key_prefix      VARCHAR(16)  NOT NULL,
+    tenant_id       VARCHAR(128) NOT NULL,
+    is_test_key     BOOLEAN      NOT NULL DEFAULT false,
     name            VARCHAR(255) NOT NULL,
     is_active       BOOLEAN      NOT NULL DEFAULT true,
     rate_limit_rpm  INTEGER      NOT NULL DEFAULT 0,
     rate_limit_tpm  INTEGER      NOT NULL DEFAULT 0,
     key_type        TEXT         NOT NULL DEFAULT 'standard', -- migration 000033
     tier            TEXT         NOT NULL DEFAULT 'paid',     -- migration 000038
+    mcp_cap_points  SMALLINT     NOT NULL DEFAULT 3,          -- max MCP rounds (0 = disabled)
     account_id      UUID REFERENCES accounts(id),         -- migration 000035, tracks creator
     expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
@@ -83,9 +91,18 @@ CREATE TABLE api_keys (
 -- No unique index on name. Names are labels; uniqueness is provided by `id` (UUIDv7).
 -- (migration 000032 added uq_api_keys_tenant_name; migration 000040 dropped it)
 -- (planned) One test key per account: uq_api_keys_account_test ON (account_id) WHERE is_test_key=true AND deleted_at IS NULL
+
+CREATE TABLE mcp_key_access (
+    api_key_id  UUID        NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    server_id   UUID        NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+    is_allowed  BOOLEAN     NOT NULL DEFAULT true,
+    granted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    top_k       SMALLINT    CHECK (top_k BETWEEN 1 AND 64),  -- per-server Vespa ANN override (NULL = global default)
+    PRIMARY KEY (api_key_id, server_id)
+);
 ```
 
-- migrations: 000001 CREATE, 000021 deleted_at, 000033 key_type column, 000035 account_id, 000038 tier column, 000040 drop name unique index
+- migrations: 000001 CREATE, 000021 deleted_at, 000033 key_type column, 000035 account_id, 000038 tier column, 000040 drop name unique index, mcp_cap_points + mcp_key_access added in feat/mcp-integration
 
 ---
 
@@ -120,9 +137,9 @@ pub struct CreateKeyRequest {
 // Note: key_type is NOT accepted from client — always "standard" for user-created keys
 
 pub struct CreateKeyResponse {
-    pub id: Uuid,
-    pub key: String,                         // Full plaintext — shown ONCE
-    pub key_prefix: String,                  // "iq_01ARZ3NDEK…"
+    pub id: ApiKeyId,                        // "key_3X4aB..." — entity ID (reversible)
+    pub key: String,                         // "vnx_..." — secret, shown ONCE (BLAKE2b hash stored)
+    pub key_prefix: String,                  // "vnx_01ARZ3NDEK…" — display prefix
     pub tenant_id: String,
     pub created_at: DateTime<Utc>,
 }
@@ -130,10 +147,11 @@ pub struct CreateKeyResponse {
 pub struct PatchKeyRequest {
     pub is_active: Option<bool>,
     pub tier: Option<String>,                // "free" | "paid"
+    pub mcp_cap_points: Option<i16>,         // 0 = MCP disabled
 }
 
 pub struct KeySummary {
-    pub id: Uuid,
+    pub id: ApiKeyId,                        // "key_3X4aB..." — entity ID (reversible)
     pub key_prefix: String,
     pub tenant_id: String,
     pub name: String,
@@ -147,129 +165,14 @@ pub struct KeySummary {
 }
 ```
 
-### Key Regeneration
+**`id` vs `key` — Two Different Concepts**
 
-`POST /v1/keys/{id}/regenerate` generates a new BLAKE2b-256 hash and prefix for an existing key. The key ID is preserved so historical usage data remains linked. The old key is invalidated immediately. The new plaintext is returned once (same as `CreateKeyResponse`).
+| Field | Format | Policy |
+|-------|--------|--------|
+| `id` (`ApiKeyId`) | `"key_3X4aB..."` | Entity row identifier — base62(UUIDv7), reversible server-side |
+| `key` | `"vnx_..."` | Auth secret — BLAKE2b-256 hash stored, **1-time plaintext exposure only** |
 
-RBAC: super admin can regenerate any key; non-super can only regenerate their own tenant's keys.
+→ Full ID encoding policy: `policies/id-encoding.md`
 
-```rust
-// key_handlers.rs — regenerate_key()
-let (_new_id, plaintext, new_hash, new_prefix) = generate_api_key();
-state.api_key_repo.regenerate(&uuid, &new_hash, &new_prefix).await?;
-// Returns CreateKeyResponse with new plaintext
-```
+→ `api-keys-impl.md` — auth flow, rate limiting, soft-delete, key regeneration, dashboard stats, audit, web UI
 
-### DashboardStats — key counts (test keys excluded)
-
-```rust
-// dashboard_handlers.rs
-pub struct DashboardStats {
-    pub total_keys: i64,   // key_type != 'test' AND deleted_at IS NULL AND tenant_id = 'default'
-    pub active_keys: i64,  // key_type = 'standard' AND is_active AND deleted_at IS NULL AND tenant_id = 'default'
-    // ...
-}
-```
-
-SQL:
-```sql
-COUNT(*) FILTER (WHERE deleted_at IS NULL AND key_type != 'test' AND tenant_id = 'default')              AS total_keys,
-COUNT(*) FILTER (WHERE is_active = true AND deleted_at IS NULL AND key_type = 'standard' AND tenant_id = 'default') AS active_keys
-```
-
-> **Tenant scope**: Dashboard query is explicitly scoped to `tenant_id = 'default'` to match what `GET /v1/keys` returns (`list_by_tenant("default")`). Without this filter, keys created with any other tenant ID (e.g. from tests or the example payload) inflate the count.
-
-Job count queries also exclude test-source jobs:
-```sql
--- total jobs / 24h jobs / status breakdown:
-WHERE source != 'test'
-```
-
----
-
-## Authentication Flow
-
-Middleware accepts three header formats:
-
-1. `X-API-Key: <key>`
-2. `Authorization: Bearer <key>` (OpenAI SDK compatible)
-3. `x-goog-api-key: <key>` (Gemini CLI compatible)
-
-```
-1. Extract key from headers (X-API-Key → Authorization: Bearer → x-goog-api-key)
-2. BLAKE2b-256 hash → lookup WHERE key_hash = ? AND deleted_at IS NULL
-3. Reject if: not found | is_active = false | expires_at < now()
-4. Pass ApiKey entity to handler via extensions (id stored in job record as api_key_id)
-```
-
-Note: `deleted_at` filtering happens at the SQL query level (`WHERE deleted_at IS NULL`), not in middleware logic.
-
-**Refresh token hashing**: Uses domain-separated BLAKE2b with `veronex-refresh-token-v1:` prefix to prevent cross-protocol hash collisions.
-
-**Bootstrap key** — **Status: Planned** — `BOOTSTRAP_API_KEY` env var support is not yet implemented in `main.rs`. The Helm chart defines the env var but the Rust code does not read or use it.
-
----
-
-## Rate Limiting (middleware/rate_limiter.rs)
-
-```
-RPM: Sorted set  veronex:ratelimit:rpm:{key_id}
-     ZADD now() uuid; ZCOUNT window=60s → count ≥ rpm_limit → 429
-     Valkey TTL = 62s (2s buffer for clock skew)
-
-TPM: Counter     veronex:ratelimit:tpm:{key_id}:{minute}
-     INCR; EXPIRE 120s → count + estimated_tokens ≥ tpm_limit → 429
-     TPM incremented AFTER job completes (actual completion_tokens)
-```
-
-Fail-closed: Valkey error → returns 503 Service Unavailable, job rejected.
-
----
-
-## Soft-Delete Behavior
-
-- `DELETE /v1/keys/{id}` → sets `deleted_at = NOW()`, row kept
-- Hidden from `GET /v1/keys` (WHERE deleted_at IS NULL)
-- Rejected at auth check
-- Historical jobs preserved: `inference_jobs.api_key_id` → NULL on hard delete (FK ON DELETE SET NULL)
-- ClickHouse `inference_logs.api_key_id` is String (UUID), preserved after soft-delete
-
-### Cascade Delete
-
-When an account is soft-deleted, all associated API keys are automatically soft-deleted via `soft_delete_by_tenant(tenant_id)`.
-
----
-
-## Audit Trail
-
-All key operations emit audit events to ClickHouse via OTel:
-
-| Action | resource_type | When |
-|--------|---------------|------|
-| `create` | `api_key` | Key created |
-| `update` | `api_key` | is_active or tier changed |
-| `delete` | `api_key` | Key soft-deleted |
-| `regenerate` | `api_key` | Key regenerated (new hash) |
-
-Per-key history: `GET /v1/audit?resource_type=api_key&resource_id={key_id}` returns all audit events for a specific key. The web UI shows a History button per key row.
-
----
-
-## API Key Provider Access
-
-Per-key provider allow/deny control. When no rows exist for a key, all providers are accessible (default allow-all). When rows exist, only providers with `is_allowed = true` are routable for that key.
-
-DB: `api_key_provider_access (api_key_id UUID FK, provider_id UUID FK, is_allowed BOOL, PK(api_key_id, provider_id))` — migration 000010.
-
-| Endpoint | Auth | Body | Response |
-|----------|------|------|----------|
-| `GET /v1/keys/{key_id}/providers` | `RequireSettingsManage` | — | `Vec<{ provider_id, provider_name, is_allowed }>` |
-| `PATCH /v1/keys/{key_id}/providers/{provider_id}` | `RequireSettingsManage` | `{ is_allowed: bool }` | 200 |
-
-Handler: `key_provider_access_handlers.rs`
-
----
-
-## Web UI
-
-→ See `docs/llm/frontend/pages/keys.md`

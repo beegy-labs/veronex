@@ -37,7 +37,7 @@ export const recentJobsQuery = queryOptions({
 // by source/status/page works correctly.
 
 export interface JobsQueryParams {
-  source: string
+  source?: string
   page: number
   status: string
   query: string
@@ -53,8 +53,8 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
     const qs = new URLSearchParams({
       limit: String(p.pageSize),
       offset: String(p.page * p.pageSize),
-      source: p.source,
     })
+    if (p.source) qs.set('source', p.source)
     if (p.status !== 'all') qs.set('status', p.status)
     if (p.query.trim()) qs.set('q', p.query.trim())
     if (p.model) qs.set('model', p.model)
@@ -67,13 +67,32 @@ export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
   refetchIntervalInBackground: false,
 })
 
-// ── Queue depth (live — 3 s poll) ─────────────────────────────────────────────
+// ── Active jobs live feed (2 s poll for near-real-time) ──────────────────────
 
-export const queueDepthQuery = queryOptions({
-  queryKey: ['queue-depth'] as const,
-  queryFn: () => api.queueDepth(),
+export const activeJobsQuery = queryOptions({
+  queryKey: ['active-jobs'] as const,
+  queryFn: () => api.jobs('status=pending,running&limit=50'),
   staleTime: STALE_TIME_LIVE,
-  refetchInterval: REFETCH_INTERVAL_LIVE,
+  refetchInterval: () => withJitter(2_000, 200), // minimal jitter — 2s live feed
+  refetchIntervalInBackground: false,
+})
+
+
+// ── Service health ───────────────────────────────────────────────────────────
+
+export const serviceHealthQuery = queryOptions({
+  queryKey: ['service-health'] as const,
+  queryFn: () => api.serviceHealth(),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
+  refetchIntervalInBackground: false,
+})
+
+export const pipelineHealthQuery = queryOptions({
+  queryKey: ['pipeline-health'] as const,
+  queryFn: () => api.pipelineHealth(),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
 })
 

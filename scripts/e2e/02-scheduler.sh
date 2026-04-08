@@ -2,7 +2,8 @@
 # Phase 02: SDD Scheduler Validation — ZSET Queue, AIMD, Thermal, Dual-Provider Capacity
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
 
 # ── Capacity: Both Providers ──────────────────────────────────────────────────
 
@@ -121,6 +122,9 @@ import sys, json
 d = json.loads(sys.stdin.read())
 violations = []
 for p in d.get('providers', []):
+    # Skip offline/unreachable providers — stale AIMD data is expected
+    if p.get('status', 'online').lower() not in ('online', 'active', ''):
+        continue
     pid    = p.get('provider_id', '')
     pname  = p.get('provider_name', '?')
     np_str = '''$NP_MAP'''
@@ -246,8 +250,8 @@ if [ -n "${API_KEY_PAID:-}" ] && [ -n "${API_KEY_STANDARD:-}" ]; then
   rm -f "$_TIER_PAID" "$_TIER_STD"
 
   if [ -n "$PAID_JOB" ] && [ -n "$STD_JOB" ]; then
-    PAID_SCORE=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$PAID_JOB" 2>/dev/null | tr -d ' \r\n' || echo "")
-    STD_SCORE=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$STD_JOB" 2>/dev/null | tr -d ' \r\n' || echo "")
+    PAID_SCORE=$(valkey_zscore "veronex:queue:zset" "$PAID_JOB")
+    STD_SCORE=$(valkey_zscore "veronex:queue:zset" "$STD_JOB")
     if [ -n "$PAID_SCORE" ] && [ -n "$STD_SCORE" ]; then
       TIER_OK=$(python3 -c "print('ok' if float('$PAID_SCORE') < float('$STD_SCORE') else 'fail')" 2>/dev/null || echo "skip")
       [ "$TIER_OK" = "ok" ] \
@@ -267,7 +271,7 @@ fi
 
 hdr "SDD §8: Scale-Out Trigger — demand > eligible_capacity × 0.80"
 
-DEMAND_BEFORE=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "0")
+DEMAND_BEFORE=$(valkey_get "veronex:demand:$MODEL" || echo "0")
 CAP_BEFORE=$(aget "/v1/dashboard/capacity" 2>/dev/null || echo '{"providers":[]}')
 ELIGIBLE_CAP=$(echo "$CAP_BEFORE" | python3 -c "
 import sys, json; d = json.loads(sys.stdin.read())
@@ -289,7 +293,7 @@ for i in $(seq 1 "$BURST"); do
 done
 sleep 3
 
-DEMAND_BURST=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "0")
+DEMAND_BURST=$(valkey_get "veronex:demand:$MODEL" || echo "0")
 LOADED_PROVIDERS=$(aget "/v1/dashboard/capacity" 2>/dev/null | python3 -c "
 import sys,json; d=json.load(sys.stdin)
 n = sum(1 for p in d.get('providers',[]) for m in p.get('loaded_models',[]) if m.get('model_name')=='$MODEL')
@@ -306,9 +310,7 @@ sleep 3
 hdr "SDD §1: safety_permil Persistence (provider_vram_budget)"
 
 # After at least one sync, the budget row must exist in DB with valid safety_permil
-BUDGET_ROW=$(docker compose exec -T postgres psql -U veronex -d veronex -tAF'|' \
-  -c "SELECT count(*), min(safety_permil), max(safety_permil) FROM provider_vram_budget;" \
-  2>/dev/null | tr -d ' \r')
+BUDGET_ROW=$(pg_query "SELECT count(*), min(safety_permil), max(safety_permil) FROM provider_vram_budget;" | tr -d ' \r')
 BUDGET_COUNT=$(echo "$BUDGET_ROW" | cut -d'|' -f1)
 BUDGET_MIN=$(echo "$BUDGET_ROW" | cut -d'|' -f2)
 BUDGET_MAX=$(echo "$BUDGET_ROW" | cut -d'|' -f3)
@@ -355,8 +357,8 @@ JOB2_ID=$(curl -s --max-time 3 "$API/v1/inference" \
   -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"age test B\"}],\"max_tokens\":5,\"stream\":false}" \
   2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || echo "")
 if [ -n "$JOB1_ID" ] && [ -n "$JOB2_ID" ]; then
-  FIRST_SCORE=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$JOB1_ID" 2>/dev/null | tr -d ' \r\n' || echo "")
-  SECOND_SCORE=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$JOB2_ID" 2>/dev/null | tr -d ' \r\n' || echo "")
+  FIRST_SCORE=$(valkey_zscore "veronex:queue:zset" "$JOB1_ID")
+  SECOND_SCORE=$(valkey_zscore "veronex:queue:zset" "$JOB2_ID")
   if [ -n "$FIRST_SCORE" ] && [ -n "$SECOND_SCORE" ]; then
     # Lower score = higher priority in ZSET min-heap; first-enqueued should have lower score
     AGE_OK=$(python3 -c "print('ok' if float('$FIRST_SCORE') <= float('$SECOND_SCORE') else 'fail')" 2>/dev/null || echo "skip")
@@ -424,14 +426,14 @@ hdr "SDD §4: Preloader 3-Fail Exclusion — DB State Check"
 # Verify preload_fail_count is tracked per provider in Valkey (in-memory VramPool state)
 # We check via capacity loaded_models — if a model failed 3x, it won't be in loaded_models
 # and should have a Valkey key indicating exclusion
-PRELOAD_EXCL=$(docker compose exec -T valkey valkey-cli KEYS "veronex:preloading:*" 2>/dev/null | wc -l | tr -d ' ')
+PRELOAD_EXCL=$(valkey_keys "veronex:preloading:*" | wc -l | tr -d ' ')
 info "Active preload locks: ${PRELOAD_EXCL} (veronex:preloading:* NX keys)"
 pass "Preload NX lock key pattern present in Valkey keyspace"
 
 hdr "SDD §8: Demand Counter — Full Lifecycle"
 
 MODEL_SLUG=$(echo "$MODEL" | tr ':/' '_-')
-DEMAND_BEFORE=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "0")
+DEMAND_BEFORE=$(valkey_get "veronex:demand:$MODEL" || echo "0")
 info "Demand counter before: '${DEMAND_BEFORE:-0}'"
 
 # Submit one inference job
@@ -440,7 +442,7 @@ JOB_ID=$(curl -s --max-time 10 "$API/v1/inference" \
   -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"demand test\"}],\"max_tokens\":3,\"stream\":false}" \
   2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || echo "")
 
-DEMAND_DURING=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "")
+DEMAND_DURING=$(valkey_get "veronex:demand:$MODEL")
 info "Demand counter during enqueue: '${DEMAND_DURING:-0}'"
 
 # Wait for completion
@@ -451,7 +453,7 @@ if [ -n "$JOB_ID" ]; then
     [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] && break
   done
 fi
-DEMAND_AFTER=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "0")
+DEMAND_AFTER=$(valkey_get "veronex:demand:$MODEL" || echo "0")
 info "Demand counter after completion: '${DEMAND_AFTER:-0}'"
 pass "Demand counter lifecycle observed (before=${DEMAND_BEFORE:-0} → after=${DEMAND_AFTER:-0})"
 

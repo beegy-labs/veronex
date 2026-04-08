@@ -1,1 +1,0 @@
-../../vendor/agentic-dev-protocol/docs/en/sdd.md

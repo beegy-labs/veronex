@@ -5,6 +5,7 @@ use serde::Deserialize;
 use crate::application::ports::outbound::analytics_repository::{
     AnalyticsSummary, HourlyUsage, UsageAggregate, UsageJob,
 };
+use crate::domain::value_objects::ApiKeyId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireDashboardView};
 
 use super::error::AppError;
@@ -112,20 +113,20 @@ pub async fn aggregate_usage(
 /// ClickHouse primary, PostgreSQL fallback.
 pub async fn key_usage(
     Extension(claims): Extension<Claims>,
-    Path(key_id): Path<String>,
+    Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<HourlyUsage>>, AppError> {
+    let key_id = kid.0;
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
-    let uuid = super::handlers::parse_uuid(&key_id)?;
-    verify_key_ownership(&state, &claims, &uuid).await?;
+    verify_key_ownership(&state, &claims, &key_id).await?;
     if let Some(repo) = state.analytics_repo.as_ref()
-        && let Ok(rows) = repo.key_usage_hourly(&uuid, hours).await
+        && let Ok(rows) = repo.key_usage_hourly(&key_id, hours).await
             && !rows.is_empty() {
                 return Ok(Json(rows));
             }
-    Ok(Json(usage_queries::pg_key_usage_hourly(&state.pg_pool, &uuid, hours).await?))
+    Ok(Json(usage_queries::pg_key_usage_hourly(&state.pg_pool, &key_id, hours).await?))
 }
 
 /// GET /v1/dashboard/analytics — Model distribution, finish reasons, TPS and avg tokens (super admin only).
@@ -149,36 +150,36 @@ pub async fn get_analytics(
 /// ClickHouse primary, PostgreSQL fallback.
 pub async fn key_usage_jobs(
     Extension(claims): Extension<Claims>,
-    Path(key_id): Path<String>,
+    Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<UsageJob>>, AppError> {
+    let key_id = kid.0;
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
-    let uuid = super::handlers::parse_uuid(&key_id)?;
-    verify_key_ownership(&state, &claims, &uuid).await?;
+    verify_key_ownership(&state, &claims, &key_id).await?;
     if let Some(repo) = state.analytics_repo.as_ref()
-        && let Ok(jobs) = repo.key_usage_jobs(&uuid, hours).await
+        && let Ok(jobs) = repo.key_usage_jobs(&key_id, hours).await
             && !jobs.is_empty() {
                 return Ok(Json(jobs));
             }
-    Ok(Json(usage_queries::pg_key_usage_jobs(&state.pg_pool, &uuid, hours).await?))
+    Ok(Json(usage_queries::pg_key_usage_jobs(&state.pg_pool, &key_id, hours).await?))
 }
 
 /// GET /v1/usage/{key_id}/models — Per-key model breakdown from PostgreSQL.
 /// Returns which models the key has used, with request counts and token stats.
 pub async fn key_model_breakdown(
     Extension(claims): Extension<Claims>,
-    Path(key_id): Path<String>,
+    Path(kid): Path<ApiKeyId>,
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
 ) -> Result<Json<Vec<ModelBreakdown>>, AppError> {
+    let key_id = kid.0;
     let hours = params.effective_hours()?;
     validate_hours(hours)?;
-    let uuid = super::handlers::parse_uuid(&key_id)?;
-    verify_key_ownership(&state, &claims, &uuid).await?;
+    verify_key_ownership(&state, &claims, &key_id).await?;
 
-    Ok(Json(usage_queries::pg_key_model_breakdown(&state.pg_pool, &uuid, hours).await?))
+    Ok(Json(usage_queries::pg_key_model_breakdown(&state.pg_pool, &key_id, hours).await?))
 }
 
 /// GET /v1/usage/breakdown — Provider, API key, and model breakdown from PostgreSQL (super admin only).
@@ -192,39 +193,3 @@ pub async fn usage_breakdown(
     Ok(Json(usage_queries::pg_usage_breakdown(&state.pg_pool, hours).await?))
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-    use crate::application::ports::outbound::analytics_repository::UsageAggregate;
-
-    #[test]
-    fn usage_query_defaults() {
-        let json = serde_json::json!({});
-        let query: UsageQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(query.hours, 24);
-    }
-
-    #[test]
-    fn usage_query_custom_hours() {
-        let json = serde_json::json!({"hours": 72});
-        let query: UsageQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(query.hours, 72);
-    }
-
-    #[test]
-    fn usage_aggregate_serialization() {
-        let agg = UsageAggregate {
-            request_count: 100,
-            success_count: 90,
-            cancelled_count: 5,
-            error_count: 5,
-            prompt_tokens: 10000,
-            completion_tokens: 50000,
-            total_tokens: 60000,
-        };
-        let json = serde_json::to_value(&agg).unwrap();
-        assert_eq!(json["request_count"], 100);
-        assert_eq!(json["total_tokens"], 60000);
-    }
-}

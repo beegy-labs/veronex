@@ -11,7 +11,7 @@ use crate::application::ports::outbound::model_capacity_repository::{
 /// Explicit column list for `model_vram_profiles` SELECT queries (SQL fragment SSOT).
 const VRAM_PROFILE_COLS: &str = "\
     provider_id, model_name, weight_mb, weight_estimated, kv_per_request_mb, \
-    num_layers, num_kv_heads, head_dim, configured_ctx, failure_count, \
+    num_layers, num_kv_heads, head_dim, configured_ctx, max_ctx, failure_count, \
     llm_concern, llm_reason, max_concurrent, baseline_tps, baseline_p95_ms, updated_at";
 
 pub struct PostgresModelCapacityRepository {
@@ -31,10 +31,10 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
             "INSERT INTO model_vram_profiles
                  (provider_id, model_name,
                   weight_mb, weight_estimated, kv_per_request_mb,
-                  num_layers, num_kv_heads, head_dim, configured_ctx,
+                  num_layers, num_kv_heads, head_dim, configured_ctx, max_ctx,
                   failure_count, llm_concern, llm_reason,
                   max_concurrent, baseline_tps, baseline_p95_ms, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
              ON CONFLICT (provider_id, model_name) DO UPDATE SET
                  weight_mb         = EXCLUDED.weight_mb,
                  weight_estimated  = EXCLUDED.weight_estimated,
@@ -43,6 +43,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
                  num_kv_heads      = EXCLUDED.num_kv_heads,
                  head_dim          = EXCLUDED.head_dim,
                  configured_ctx    = EXCLUDED.configured_ctx,
+                 max_ctx           = EXCLUDED.max_ctx,
                  failure_count     = EXCLUDED.failure_count,
                  llm_concern       = EXCLUDED.llm_concern,
                  llm_reason        = EXCLUDED.llm_reason,
@@ -60,6 +61,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
         .bind(e.num_kv_heads)
         .bind(e.head_dim)
         .bind(e.configured_ctx)
+        .bind(e.max_ctx)
         .bind(e.failure_count)
         .bind(&e.llm_concern)
         .bind(&e.llm_reason)
@@ -89,7 +91,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
 
     async fn list_all(&self) -> Result<Vec<ModelVramProfileEntry>> {
         let rows = sqlx::query_as::<_, VramProfileRow>(
-            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles ORDER BY provider_id, model_name"),
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles ORDER BY provider_id, model_name LIMIT 10000"),
         )
         .fetch_all(&self.pool)
         .await
@@ -100,7 +102,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
 
     async fn list_by_provider(&self, provider_id: Uuid) -> Result<Vec<ModelVramProfileEntry>> {
         let rows = sqlx::query_as::<_, VramProfileRow>(
-            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = $1 ORDER BY model_name"),
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = $1 ORDER BY model_name LIMIT 10000"),
         )
         .bind(provider_id)
         .fetch_all(&self.pool)
@@ -115,7 +117,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
             return Ok(vec![]);
         }
         let rows = sqlx::query_as::<_, VramProfileRow>(
-            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = ANY($1) ORDER BY provider_id, model_name"),
+            &format!("SELECT {VRAM_PROFILE_COLS} FROM model_vram_profiles WHERE provider_id = ANY($1) ORDER BY provider_id, model_name LIMIT 10000"),
         )
         .bind(ids)
         .fetch_all(&self.pool)
@@ -197,6 +199,7 @@ struct VramProfileRow {
     num_kv_heads:      i16,
     head_dim:          i16,
     configured_ctx:    i32,
+    max_ctx:           i32,
     failure_count:     i16,
     llm_concern:       Option<String>,
     llm_reason:        Option<String>,
@@ -218,6 +221,7 @@ impl From<VramProfileRow> for ModelVramProfileEntry {
             num_kv_heads:      r.num_kv_heads,
             head_dim:          r.head_dim,
             configured_ctx:    r.configured_ctx,
+            max_ctx:           r.max_ctx,
             failure_count:     r.failure_count,
             llm_concern:       r.llm_concern,
             llm_reason:        r.llm_reason,

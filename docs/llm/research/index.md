@@ -1,6 +1,6 @@
 # Research — 2026 Best Practices
 
-> **CDD Layer 2** | Editable | **Last Updated**: 2026-03-03
+> **CDD Layer 2** | Editable | **Last Updated**: 2026-04-07
 >
 > Web-searched, implementation-verified findings.
 > Each file records **what** was decided, **why**, and **where** it is used in this codebase.
@@ -28,9 +28,9 @@
 | File | Topics | Status |
 |------|--------|--------|
 | `frontend/css-animations.md` | CSS Motion Path, offset-path, SMIL, particle systems, keyframes | verified |
-| `frontend/react.md` | useReducer, ResizeObserver, onAnimationEnd, state patterns | verified |
+| `frontend/react.md` | useReducer, ResizeObserver, SSE rAF buffer, list key stability, relative time refresh | verified |
 | `frontend/data-fetching.md` | TanStack Query v5, polling, background refetch, staleTime | verified |
-| `frontend/nextjs.md` | App Router, 'use client' rationale, Server Actions, PPR, Suspense | verified |
+| `frontend/nextjs.md` | App Router, 'use client' rationale, PPR, Suspense, CVE-2025-29927 middleware | verified |
 | `frontend/tailwind.md` | Tailwind v4 CSS-first, 4-layer tokens, @utility, container queries | verified |
 | `frontend/tanstack-query.md` | queryOptions factory, lib/queries/ SSOT, invalidation, optimistic updates | verified |
 
@@ -39,6 +39,7 @@
 | File | Topics | Status |
 |------|--------|--------|
 | `backend/rust-axum.md` | Axum 0.8, tokio, path params, SSE, middleware, AppState | verified |
+| `backend/rust-axum-2026.md` | Axum 0.8, sqlx pool tuning, Mutex rules, TimeoutLayer, bounded channels | verified |
 | `backend/rust-axum-shutdown.md` | Graceful shutdown, JoinSet, CancellationToken, BLPOP cancel | verified |
 | `backend/api-design.md` | REST design, versioning, OpenAPI 3.1, rate limit headers, pagination | verified |
 | `backend/rust-perf-2026.md` | mimalloc, LTO, streaming hash, enum as_str(), reserve | verified |
@@ -56,6 +57,7 @@
 | File | Topics | Status |
 |------|--------|--------|
 | `security/auth.md` | JWT, sessions, refresh tokens, revocation, BLAKE2b | verified |
+| `security/llm-gateway-2026.md` | Per-key concurrency, Slowloris, timeout architecture, OWASP LLM01/LLM10 2025 | verified |
 
 ---
 
@@ -75,3 +77,4 @@
 | OTel metrics or traces | `infrastructure/observability.md` |
 | Auth / JWT session management | `security/auth.md` |
 | Rust runtime performance / allocator | `backend/rust-perf-2026.md` |
+| LLM gateway security (concurrency, timeouts, injection) | `security/llm-gateway-2026.md` |

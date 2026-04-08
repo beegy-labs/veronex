@@ -5,17 +5,19 @@ use crate::application::ports::inbound::inference_use_case::{InferenceUseCase, S
 use crate::application::ports::outbound::account_repository::AccountRepository;
 use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
 use crate::application::ports::outbound::lab_settings_repository::{LabSettings, LabSettingsRepository};
+use crate::application::ports::outbound::mcp_settings_repository::{McpSettings, McpSettingsRepository};
 use crate::application::ports::outbound::provider_model_selection::{ProviderModelSelectionRepository, ProviderSelectedModel};
-use crate::application::ports::outbound::gemini_model_repository::{GeminiModel, GeminiModelRepository};
-use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
+use crate::application::ports::outbound::gemini_repository::{GeminiModel, GeminiModelRepository};
+use crate::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiSyncConfigRepository;
 use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
-use crate::application::ports::outbound::ollama_model_repository::{ModelPage, OllamaProviderForModel, OllamaModelRepository, OllamaModelWithCount, ProviderPage};
+use crate::application::ports::outbound::ollama_model_repository::{ModelPage, OllamaModelRepository, OllamaModelWithCount, ProviderPage};
 use crate::application::ports::outbound::ollama_sync_job_repository::{OllamaSyncJob, OllamaSyncJobRepository};
 use crate::application::ports::outbound::provider_vram_budget_repository::{ProviderVramBudget, ProviderVramBudgetRepository};
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::domain::entities::{Account, ApiKey, GeminiRateLimitPolicy, GpuServer, LlmProvider, Session};
+use crate::infrastructure::inbound::http::middleware::infer_auth::InferCaller;
 use crate::domain::enums::{JobStatus, KeyTier, KeyType, LlmProviderStatus};
 use crate::domain::errors::DomainError;
 use crate::domain::value_objects::{JobId, StreamToken};
@@ -283,6 +285,14 @@ impl crate::application::ports::outbound::capacity_settings_repository::Capacity
     async fn record_run(&self, _: &str) -> Result<()> { Ok(()) }
 }
 
+pub(crate) struct MockMcpSettingsRepo;
+
+#[async_trait]
+impl McpSettingsRepository for MockMcpSettingsRepo {
+    async fn get(&self) -> anyhow::Result<McpSettings> { Ok(McpSettings::default()) }
+    async fn update(&self, _patch: crate::application::ports::outbound::mcp_settings_repository::McpSettingsUpdate) -> anyhow::Result<McpSettings> { Ok(McpSettings::default()) }
+}
+
 pub(crate) struct MockLabSettingsRepo;
 
 #[async_trait]
@@ -290,7 +300,7 @@ impl LabSettingsRepository for MockLabSettingsRepo {
     async fn get(&self) -> Result<LabSettings> {
         Ok(LabSettings::default())
     }
-    async fn update(&self, _gemini_function_calling: Option<bool>, _max_images: Option<i32>, _max_image_bytes: Option<i32>) -> Result<LabSettings> {
+    async fn update(&self, _patch: crate::application::ports::outbound::lab_settings_repository::LabSettingsUpdate) -> Result<LabSettings> {
         Ok(LabSettings::default())
     }
 }
@@ -331,6 +341,7 @@ pub(crate) fn make_app() -> axum::Router {
         created_at: chrono::Utc::now(),
         key_type: KeyType::Standard,
         tier: KeyTier::Paid,
+        mcp_cap_points: 3,
         account_id: None,
     };
     let pg_pool = sqlx::postgres::PgPoolOptions::new()
@@ -373,11 +384,23 @@ pub(crate) fn make_app() -> axum::Router {
         session_grouping_lock: Arc::new(tokio::sync::Semaphore::new(1)),
         sync_lock: Arc::new(tokio::sync::Semaphore::new(1)),
         lab_settings_repo: Arc::new(MockLabSettingsRepo),
+        mcp_settings_repo: Arc::new(MockMcpSettingsRepo),
         sse_connections: Arc::new(AtomicU32::new(0)),
+        key_in_flight: Arc::new(dashmap::DashMap::new()),
         vram_budget_repo: Arc::new(MockVramBudgetRepo),
+        mcp_bridge: None,
+        mcp_vector_selector: None,
+        mcp_tool_indexer: None,
+        instance_id: Arc::from("test-instance"),
+        login_rate_limit: 0,
+        kafka_broker_admin_url: None,
+        clickhouse_http_url: None,
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_db: None,
     };
-    // Inject a fake ApiKey extension so handlers that extract it work in tests.
+    // Inject a fake InferCaller extension so handlers that extract it work in tests.
     router::build_api_router()
-        .layer(axum::Extension(fake_key))
+        .layer(axum::Extension(InferCaller::ApiKey(fake_key)))
         .with_state(state)
 }

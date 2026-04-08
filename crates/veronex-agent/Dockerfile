@@ -11,16 +11,16 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
     RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
     cargo chef cook --release -p veronex-agent --recipe-path recipe.json
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY workspace-hack/ ./workspace-hack/
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
     RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
     cargo build --release -p veronex-agent && \
     cp /app/target/release/veronex-agent /app/veronex-agent

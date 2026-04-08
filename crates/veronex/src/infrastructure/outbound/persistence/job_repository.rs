@@ -7,15 +7,16 @@ use uuid::Uuid;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{ApiFormat, JobSource, JobStatus, ProviderType};
-use crate::domain::services::message_hashing::compute_message_hashes;
 use crate::domain::value_objects::{JobId, ModelName, Prompt};
 
 /// SELECT column list shared by `get()` and `list_pending()`.
-const JOB_COLS: &str = "id, prompt, model_name, provider_type, status, error, result_text, \
+/// Large content columns (prompt, result_text, messages_json, tool_calls_json)
+/// are omitted — they live in S3. Only metadata columns remain.
+const JOB_COLS: &str = "id, prompt_preview, model_name, provider_type, status, error, \
     created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, \
     prompt_tokens, completion_tokens, cached_tokens, source, provider_id, api_format, \
-    request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, \
-    cancelled_at, messages_hash, messages_prefix_hash, failure_reason, image_keys";
+    request_path, conversation_id, queue_time_ms, \
+    cancelled_at, messages_hash, messages_prefix_hash, failure_reason, image_keys, mcp_loop_id";
 
 pub struct PostgresJobRepository {
     pool: PgPool,
@@ -33,7 +34,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
     use sqlx::Row;
 
     let id: Uuid = row.try_get("id").context("missing column: id")?;
-    let prompt: String = row.try_get("prompt").context("missing column: prompt")?;
+    let prompt_preview: Option<String> = row.try_get("prompt_preview").unwrap_or(None);
     let model_name: String = row
         .try_get("model_name")
         .context("missing column: model_name")?;
@@ -53,9 +54,6 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
     let completed_at: Option<DateTime<Utc>> = row
         .try_get("completed_at")
         .context("missing column: completed_at")?;
-    let result_text: Option<String> = row
-        .try_get("result_text")
-        .context("missing column: result_text")?;
     let api_key_id: Option<Uuid> = row.try_get("api_key_id").unwrap_or(None);
     let account_id: Option<Uuid> = row.try_get("account_id").unwrap_or(None);
     let latency_ms: Option<i32> = row.try_get("latency_ms").unwrap_or(None);
@@ -67,19 +65,22 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
     let api_format_str: String = row.try_get("api_format").unwrap_or_else(|_| "openai_compat".to_string());
     let provider_id: Option<Uuid> = row.try_get("provider_id").unwrap_or(None);
     let request_path: Option<String> = row.try_get("request_path").unwrap_or(None);
-    let conversation_id: Option<String> = row.try_get("conversation_id").unwrap_or(None);
-    let tool_calls_json: Option<serde_json::Value> = row.try_get("tool_calls_json").unwrap_or(None);
-    let messages_json: Option<serde_json::Value> = row.try_get("messages_json").unwrap_or(None);
+    let conversation_id: Option<Uuid> = row.try_get("conversation_id").unwrap_or(None);
     let queue_time_ms: Option<i32> = row.try_get("queue_time_ms").unwrap_or(None);
     let cancelled_at: Option<DateTime<Utc>> = row.try_get("cancelled_at").unwrap_or(None);
     let messages_hash: Option<String> = row.try_get("messages_hash").unwrap_or(None);
     let messages_prefix_hash: Option<String> = row.try_get("messages_prefix_hash").unwrap_or(None);
     let failure_reason: Option<String> = row.try_get("failure_reason").unwrap_or(None);
     let image_keys: Option<Vec<String>> = row.try_get("image_keys").unwrap_or(None);
+    let mcp_loop_id: Option<Uuid> = row.try_get("mcp_loop_id").unwrap_or(None);
+
+    // Reconstruct Prompt from preview (in-memory placeholder — full prompt is in S3)
+    let prompt_str = prompt_preview.as_deref().unwrap_or("");
 
     Ok(InferenceJob {
         id: JobId(id),
-        prompt: Prompt::new(&prompt)?,
+        prompt: Prompt::new(prompt_str)?,
+        prompt_preview,
         model_name: ModelName::new(&model_name)?,
         provider_type: provider_str.parse::<ProviderType>().map_err(|e| anyhow::anyhow!(e))?,
         status: status_str.parse::<JobStatus>().map_err(|e| anyhow::anyhow!(e))?,
@@ -87,7 +88,7 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         created_at,
         started_at,
         completed_at,
-        result_text,
+        result_text: None,
         api_key_id,
         account_id,
         latency_ms,
@@ -98,13 +99,13 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         source: source_str.parse::<JobSource>().unwrap_or_default(),
         provider_id,
         api_format: api_format_str.parse::<ApiFormat>().unwrap_or_default(),
-        messages: messages_json,
+        messages: None,
         tools: None,
         request_path,
         queue_time_ms,
         cancelled_at,
         conversation_id,
-        tool_calls_json,
+        tool_calls_json: None,
         messages_hash,
         messages_prefix_hash,
         failure_reason,
@@ -115,6 +116,9 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
         response_format: None,
         frequency_penalty: None,
         presence_penalty: None,
+        mcp_loop_id,
+        max_tokens: None,
+        vision_analysis: None,
     })
 }
 
@@ -122,13 +126,13 @@ fn row_to_job(row: &sqlx::postgres::PgRow) -> Result<InferenceJob> {
 
 #[async_trait]
 impl JobRepository for PostgresJobRepository {
-    /// Insert or update the full job record (upsert).
+    /// Insert the initial job row (Pending state).
     ///
-    /// Safe to call on both initial save and subsequent status transitions
-    /// because immutable fields (prompt, model_name, provider, created_at)
-    /// are excluded from the ON CONFLICT update clause.
+    /// Only metadata + prompt_preview are stored. Large content (full prompt,
+    /// messages, result, tool_calls) is written to S3 at finalize time.
     async fn save(&self, job: &InferenceJob) -> Result<()> {
-        // Use pre-computed hashes from entity if available, otherwise compute on save.
+        use crate::domain::services::message_hashing::compute_message_hashes;
+
         let (messages_hash, messages_prefix_hash) = match (&job.messages_hash, &job.messages_prefix_hash) {
             (Some(h), Some(p)) => (Some(h.clone()), Some(p.clone())),
             _ => job.messages
@@ -140,36 +144,22 @@ impl JobRepository for PostgresJobRepository {
 
         sqlx::query(
             "INSERT INTO inference_jobs
-                 (id, prompt, model_name, provider_type, status, error, result_text, created_at, started_at, completed_at, api_key_id, account_id, latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens, source, provider_id, api_format, request_path, conversation_id, tool_calls_json, messages_json, queue_time_ms, cancelled_at, messages_hash, messages_prefix_hash, failure_reason, image_keys)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
-             ON CONFLICT (id) DO UPDATE SET
-                 status                = EXCLUDED.status,
-                 error                 = EXCLUDED.error,
-                 result_text           = COALESCE(EXCLUDED.result_text, inference_jobs.result_text),
-                 started_at            = EXCLUDED.started_at,
-                 completed_at          = EXCLUDED.completed_at,
-                 latency_ms            = COALESCE(EXCLUDED.latency_ms, inference_jobs.latency_ms),
-                 ttft_ms               = COALESCE(EXCLUDED.ttft_ms, inference_jobs.ttft_ms),
-                 prompt_tokens         = COALESCE(EXCLUDED.prompt_tokens, inference_jobs.prompt_tokens),
-                 completion_tokens     = COALESCE(EXCLUDED.completion_tokens, inference_jobs.completion_tokens),
-                 cached_tokens         = COALESCE(EXCLUDED.cached_tokens, inference_jobs.cached_tokens),
-                 provider_id           = COALESCE(EXCLUDED.provider_id, inference_jobs.provider_id),
-                 tool_calls_json       = COALESCE(EXCLUDED.tool_calls_json, inference_jobs.tool_calls_json),
-                 messages_json         = COALESCE(EXCLUDED.messages_json, inference_jobs.messages_json),
-                 queue_time_ms         = COALESCE(EXCLUDED.queue_time_ms, inference_jobs.queue_time_ms),
-                 cancelled_at          = COALESCE(EXCLUDED.cancelled_at, inference_jobs.cancelled_at),
-                 messages_hash         = COALESCE(EXCLUDED.messages_hash, inference_jobs.messages_hash),
-                 messages_prefix_hash  = COALESCE(EXCLUDED.messages_prefix_hash, inference_jobs.messages_prefix_hash),
-                 failure_reason        = COALESCE(EXCLUDED.failure_reason, inference_jobs.failure_reason),
-                image_keys            = COALESCE(EXCLUDED.image_keys, inference_jobs.image_keys)",
+                 (id, prompt_preview, model_name, provider_type, status, error,
+                  created_at, started_at, completed_at, api_key_id, account_id,
+                  latency_ms, ttft_ms, prompt_tokens, completion_tokens, cached_tokens,
+                  source, provider_id, api_format, request_path, conversation_id,
+                  queue_time_ms, cancelled_at, messages_hash, messages_prefix_hash,
+                  failure_reason, image_keys, mcp_loop_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                     $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+             ON CONFLICT (id) DO NOTHING",
         )
         .bind(job.id.0)
-        .bind(job.prompt.as_str())
+        .bind(&job.prompt_preview)
         .bind(job.model_name.as_str())
         .bind(job.provider_type.as_str())
         .bind(job.status.as_str())
         .bind(&job.error)
-        .bind(&job.result_text)
         .bind(job.created_at)
         .bind(job.started_at)
         .bind(job.completed_at)
@@ -185,14 +175,13 @@ impl JobRepository for PostgresJobRepository {
         .bind(job.api_format.as_str())
         .bind(&job.request_path)
         .bind(&job.conversation_id)
-        .bind(&job.tool_calls_json)
-        .bind(&job.messages)   // full input context (messages_json)
         .bind(job.queue_time_ms)
         .bind(job.cancelled_at)
         .bind(messages_hash)
         .bind(messages_prefix_hash)
         .bind(&job.failure_reason)
         .bind(&job.image_keys)
+        .bind(job.mcp_loop_id)
         .execute(&self.pool)
         .await
         .context("failed to save inference job")?;
@@ -260,6 +249,88 @@ impl JobRepository for PostgresJobRepository {
         .execute(&self.pool)
         .await
         .context("failed to mark job as failed with reason")?;
+        Ok(())
+    }
+
+    async fn finalize(
+        &self,
+        job_id: &JobId,
+        started_at: Option<DateTime<Utc>>,
+        completed_at: DateTime<Utc>,
+        provider_id: Option<Uuid>,
+        queue_time_ms: Option<i32>,
+        latency_ms: i32,
+        ttft_ms: Option<i32>,
+        prompt_tokens: Option<i32>,
+        completion_tokens: Option<i32>,
+        cached_tokens: Option<i32>,
+        has_tool_calls: bool,
+        result_preview: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE inference_jobs
+             SET status            = 'completed',
+                 started_at        = COALESCE($2, started_at),
+                 completed_at      = $3,
+                 provider_id       = COALESCE($4, provider_id),
+                 queue_time_ms     = COALESCE($5, queue_time_ms),
+                 latency_ms        = $6,
+                 ttft_ms           = $7,
+                 prompt_tokens     = $8,
+                 completion_tokens = $9,
+                 cached_tokens     = $10,
+                 has_tool_calls    = $11,
+                 result_preview    = $12
+             WHERE id = $1
+               AND status NOT IN ('cancelled', 'failed')",
+        )
+        .bind(job_id.0)
+        .bind(started_at)
+        .bind(completed_at)
+        .bind(provider_id)
+        .bind(queue_time_ms)
+        .bind(latency_ms)
+        .bind(ttft_ms)
+        .bind(prompt_tokens)
+        .bind(completion_tokens)
+        .bind(cached_tokens)
+        .bind(has_tool_calls)
+        .bind(result_preview)
+        .execute(&self.pool)
+        .await
+        .context("failed to finalize inference job")?;
+        Ok(())
+    }
+
+    async fn update_image_keys(&self, job_id: &JobId, image_keys: Vec<String>) -> Result<()> {
+        sqlx::query(
+            "UPDATE inference_jobs SET image_keys = $2 WHERE id = $1",
+        )
+        .bind(job_id.0)
+        .bind(&image_keys)
+        .execute(&self.pool)
+        .await
+        .context("failed to update image_keys")?;
+        Ok(())
+    }
+
+    async fn update_conversation_counters(
+        &self,
+        conversation_id: &Uuid,
+        prompt_tokens: i32,
+        completion_tokens: i32,
+        model_name: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE conversations SET turn_count = turn_count + 1, total_prompt_tokens = total_prompt_tokens + $1, total_completion_tokens = total_completion_tokens + $2, model_name = COALESCE(model_name, $3), updated_at = now() WHERE id = $4"
+        )
+        .bind(prompt_tokens)
+        .bind(completion_tokens)
+        .bind(model_name)
+        .bind(conversation_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to update conversation counters")?;
         Ok(())
     }
 

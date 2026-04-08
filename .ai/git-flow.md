@@ -31,6 +31,12 @@ gh pr merge --squash --delete-branch
 <type>(<scope>): <subject>
 ```
 
-Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
+| Field | Rule |
+| ----- | ---- |
+| type | `feat` `fix` `refactor` `docs` `test` `chore` `perf` `ci` `build` `revert` `style` |
+| scope | `[a-z0-9-]+` only — no spaces, no `+`, no `/` |
+| subject | non-empty, lowercase start |
+
+CI enforces: `^(type)\([a-z0-9-]+\): .+`
 
 **SSOT**: `docs/llm/policies/git-flow.md`

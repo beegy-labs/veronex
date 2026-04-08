@@ -2,7 +2,8 @@
 # Phase 04: Account / API Key / Provider (num_parallel) / Server CRUD
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
 
 # ── Account CRUD ──────────────────────────────────────────────────────────────
 
@@ -74,6 +75,22 @@ if [ "$KEY_CODE" = "200" ] || [ "$KEY_CODE" = "201" ] && [ -n "$KEY_ID" ] && [ "
 
   c=$(apatchc "/v1/keys/$KEY_ID" '{"tier":"paid"}' | code)
   [ "$c" = "204" ] || [ "$c" = "200" ] && pass "Change tier → $c" || fail "Tier → $c"
+
+  # Regenerate key — new raw key returned
+  REGEN_RES=$(apostc "/v1/keys/$KEY_ID/regenerate" "{}")
+  REGEN_CODE=$(echo "$REGEN_RES" | code)
+  REGEN_KEY=$(echo "$REGEN_RES" | body | jv '["key"]' 2>/dev/null || echo "")
+  if { [ "$REGEN_CODE" = "200" ] || [ "$REGEN_CODE" = "201" ]; } && [ -n "$REGEN_KEY" ] && [ "$REGEN_KEY" != "None" ] && [ "$REGEN_KEY" != "$KEY_RAW" ]; then
+    pass "Regenerate key → $REGEN_CODE (new key differs from original)"
+  elif [ "$REGEN_CODE" = "200" ] || [ "$REGEN_CODE" = "201" ]; then
+    pass "Regenerate key → $REGEN_CODE"
+  else
+    fail "Regenerate key → $REGEN_CODE"
+  fi
+
+  # mcp_cap_points PATCH
+  c=$(apatchc "/v1/keys/$KEY_ID" '{"mcp_cap_points":5}' | code)
+  [ "$c" = "204" ] || [ "$c" = "200" ] && pass "PATCH mcp_cap_points=5 → $c" || fail "PATCH mcp_cap_points → $c"
 
   c=$(adelc "/v1/keys/$KEY_ID" | code)
   [ "$c" = "204" ] && pass "Delete key → 204" || fail "Delete key → $c"
@@ -160,8 +177,8 @@ else
   fail "Create temp provider failed ($TMP_CODE)"
 fi
 
-# Non-existent provider → 404
-c=$(agetc "/v1/providers/00000000-0000-0000-0000-000000000000/models" | code)
+# Non-existent provider → 404 (use typed prov_xxx format — raw UUID returns 400)
+c=$(agetc "/v1/providers/prov_0000000000000000000000/models" | code)
 [ "$c" = "404" ] && pass "Non-existent provider → 404" || fail "Expected 404, got $c"
 
 # Registered providers model/selection endpoints
@@ -249,6 +266,122 @@ if [ -n "${API_KEY_ID_PAID:-}" ] && [ "$API_KEY_ID_PAID" != "None" ] && [ -n "${
   [ "$c" = "200" ] && pass "Allow provider access → 200" || fail "Allow → $c"
 else
   info "Skipping key provider access (no paid key or local provider)"
+fi
+
+# ── Server/Provider Verify + Liveness ────────────────────────────────────────
+
+hdr "Server Verify — POST /v1/servers/verify"
+
+c=$(apostc "/v1/servers/verify" '{"url":""}' | code)
+[ "$c" = "400" ] && pass "Verify server: empty URL → 400" || fail "Verify server: empty URL → $c (expected 400)"
+
+c=$(apostc "/v1/servers/verify" '{"url":"ftp://example.com"}' | code)
+[ "$c" = "400" ] && pass "Verify server: ftp:// scheme → 400" || fail "Verify server: ftp:// → $c (expected 400)"
+
+NE_URL="${NODE_EXPORTER_LOCAL:-http://host.docker.internal:9100}"
+c=$(apostc "/v1/servers/verify" "{\"url\":\"$NE_URL\"}" | code)
+[ "$c" = "409" ] && pass "Verify server: duplicate URL → 409" || fail "Verify server: duplicate URL → $c (expected 409)"
+
+c=$(apostc "/v1/servers/verify" '{"url":"http://192.0.2.1:19999"}' | code)
+[ "$c" = "502" ] && pass "Verify server: unreachable → 502" || fail "Verify server: unreachable → $c (expected 502)"
+
+hdr "Provider Verify — POST /v1/providers/verify"
+
+c=$(apostc "/v1/providers/verify" '{"url":""}' | code)
+[ "$c" = "400" ] && pass "Verify provider: empty URL → 400" || fail "Verify provider: empty URL → $c (expected 400)"
+
+c=$(apostc "/v1/providers/verify" '{"url":"ftp://example.com:11434"}' | code)
+[ "$c" = "400" ] && pass "Verify provider: ftp:// scheme → 400" || fail "Verify provider: ftp:// → $c (expected 400)"
+
+OLLAMA_URL="${OLLAMA_LOCAL:-http://host.docker.internal:11434}"
+if [ -n "${LOCAL_PROVIDER_ID:-}" ]; then
+  c=$(apostc "/v1/providers/verify" "{\"url\":\"$OLLAMA_URL\"}" | code)
+  [ "$c" = "409" ] && pass "Verify provider: duplicate URL → 409" || fail "Verify provider: duplicate URL → $c (expected 409)"
+else
+  info "SKIP: Verify provider duplicate — local provider not registered in setup"
+fi
+
+c=$(apostc "/v1/providers/verify" '{"url":"http://192.0.2.1:11434"}' | code)
+[ "$c" = "502" ] && pass "Verify provider: unreachable → 502" || fail "Verify provider: unreachable → $c (expected 502)"
+
+hdr "Server Registration Validation"
+
+c=$(apostc "/v1/servers" '{"name":"test-no-url"}' | code)
+[ "$c" = "400" ] && pass "Register server: no URL → 400" || fail "Register server: no URL → $c (expected 400)"
+
+c=$(apostc "/v1/servers" '{"name":"test-bad-scheme","node_exporter_url":"ftp://bad"}' | code)
+[ "$c" = "400" ] && pass "Register server: bad scheme → 400" || fail "Register server: bad scheme → $c (expected 400)"
+
+c=$(apostc "/v1/servers" "{\"name\":\"test-dup\",\"node_exporter_url\":\"$NE_URL\"}" | code)
+[ "$c" = "409" ] && pass "Register server: duplicate URL → 409" || fail "Register server: duplicate URL → $c (expected 409)"
+
+c=$(apostc "/v1/servers" '{"name":"test-unreachable","node_exporter_url":"http://192.0.2.1:19999"}' | code)
+[ "$c" = "502" ] && pass "Register server: unreachable → 502" || fail "Register server: unreachable → $c (expected 502)"
+
+hdr "Provider Registration Validation"
+
+if [ -n "${LOCAL_PROVIDER_ID:-}" ]; then
+  c=$(apostc "/v1/providers" \
+    "{\"name\":\"dup-test\",\"provider_type\":\"ollama\",\"url\":\"$OLLAMA_URL\"}" | code)
+  [ "$c" = "409" ] && pass "Register provider: duplicate URL → 409" || fail "Register provider: duplicate URL → $c (expected 409)"
+else
+  info "SKIP: Register provider duplicate — local provider not registered in setup"
+fi
+
+c=$(apostc "/v1/providers" \
+  '{"name":"bad-test","provider_type":"ollama","url":"http://192.0.2.1:11434"}' | code)
+[ "$c" = "502" ] && pass "Register provider: unreachable → 502" || fail "Register provider: unreachable → $c (expected 502)"
+
+c=$(apostc "/v1/providers" '{"name":"no-url","provider_type":"ollama"}' | code)
+[ "$c" = "400" ] && pass "Register provider: no URL → 400" || fail "Register provider: no URL → $c (expected 400)"
+
+c=$(apostc "/v1/providers" '{"name":"bad-scheme","provider_type":"ollama","url":"ftp://bad:11434"}' | code)
+[ "$c" = "400" ] && pass "Register provider: bad scheme → 400" || fail "Register provider: bad scheme → $c (expected 400)"
+
+hdr "Provider Liveness — Valkey Keys"
+
+ONLINE_COUNT=$(valkey_get "veronex:stats:providers:online")
+if [ -n "$ONLINE_COUNT" ] && [ "$ONLINE_COUNT" != "(nil)" ]; then
+  pass "PROVIDERS_ONLINE_COUNTER exists (value=$ONLINE_COUNT)"
+else
+  info "PROVIDERS_ONLINE_COUNTER not set (health_checker may not have run yet)"
+fi
+
+if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
+  HB_VAL=$(valkey_get "veronex:provider:hb:$PROVIDER_ID_LOCAL")
+  if [ -n "$HB_VAL" ] && [ "$HB_VAL" != "(nil)" ]; then
+    pass "Provider heartbeat key present (local)"
+  else
+    info "Provider heartbeat key absent — agent may not be pushing heartbeats yet"
+  fi
+fi
+
+if [ -n "${PROVIDER_ID_REMOTE:-}" ] && [ "$PROVIDER_ID_REMOTE" != "None" ]; then
+  HB_VAL=$(valkey_get "veronex:provider:hb:$PROVIDER_ID_REMOTE")
+  if [ -n "$HB_VAL" ] && [ "$HB_VAL" != "(nil)" ]; then
+    pass "Remote provider heartbeat key present"
+  else
+    info "Remote provider heartbeat key absent — agent may not be running"
+  fi
+fi
+
+hdr "API Instance Registry — veronex:instances"
+
+INSTANCE_COUNT=$(valkey_scard "veronex:instances")
+if [ "${INSTANCE_COUNT:-0}" -ge 1 ]; then
+  pass "veronex:instances SET has $INSTANCE_COUNT member(s)"
+else
+  info "veronex:instances SET empty — multi-instance coordination may not be active"
+fi
+
+INSTANCE_ID=$(docker compose exec -T valkey valkey-cli SRANDMEMBER "veronex:instances" 2>/dev/null | tr -d ' \r\n' || echo "")
+if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "(nil)" ]; then
+  HB_VAL=$(valkey_get "veronex:heartbeat:$INSTANCE_ID")
+  if [ -n "$HB_VAL" ] && [ "$HB_VAL" != "(nil)" ]; then
+    pass "API instance heartbeat present (veronex:heartbeat:$INSTANCE_ID)"
+  else
+    info "API instance heartbeat expired or absent for $INSTANCE_ID"
+  fi
 fi
 
 save_counts

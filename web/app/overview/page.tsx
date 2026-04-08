@@ -8,9 +8,11 @@ import {
 } from '@/lib/queries'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { DashboardTab } from './components/dashboard-tab'
 
 export default function OverviewPage() {
+  usePageGuard('dashboard')
   const { t } = useTranslation()
 
   // Single aggregated query for stats + perf(24h) + capacity + queue + lab

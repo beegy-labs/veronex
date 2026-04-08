@@ -6,11 +6,12 @@ use veronex::application::ports::outbound::api_key_repository::ApiKeyRepository;
 use veronex::application::ports::outbound::audit_port::AuditPort;
 use veronex::application::ports::outbound::capacity_settings_repository::CapacitySettingsRepository;
 use veronex::application::ports::outbound::concurrency_port::VramPoolPort;
-use veronex::application::ports::outbound::gemini_model_repository::GeminiModelRepository;
-use veronex::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
-use veronex::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
+use veronex::application::ports::outbound::gemini_repository::GeminiModelRepository;
+use veronex::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
+use veronex::application::ports::outbound::gemini_repository::GeminiSyncConfigRepository;
 use veronex::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use veronex::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
+use veronex::application::ports::outbound::mcp_settings_repository::McpSettingsRepository;
 use veronex::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use veronex::application::ports::outbound::image_store::ImageStore;
 use veronex::application::ports::outbound::message_store::MessageStore;
@@ -26,9 +27,13 @@ use veronex::application::ports::outbound::provider_vram_budget_repository::Prov
 use veronex::application::ports::outbound::session_repository::SessionRepository;
 use veronex::infrastructure::outbound::analytics::HttpAnalyticsClient;
 use veronex::infrastructure::outbound::capacity::vram_pool::VramPool;
-use veronex::infrastructure::outbound::observability::{HttpAuditAdapter, HttpObservabilityAdapter};
+use veronex::infrastructure::outbound::observability::{
+    HttpAuditAdapter, HttpObservabilityAdapter, OtlpAuditAdapter, OtlpObservabilityAdapter,
+};
 use veronex::infrastructure::outbound::persistence::account_repository::PostgresAccountRepository;
 use veronex::infrastructure::outbound::persistence::api_key_repository::PostgresApiKeyRepository;
+use veronex::infrastructure::outbound::persistence::caching_api_key_repo::CachingApiKeyRepo;
+use veronex::infrastructure::outbound::persistence::caching_lab_settings_repo::CachingLabSettingsRepo;
 use veronex::infrastructure::outbound::persistence::caching_model_selection::CachingModelSelection;
 use veronex::infrastructure::outbound::persistence::caching_ollama_model_repo::CachingOllamaModelRepo;
 use veronex::infrastructure::outbound::persistence::caching_provider_registry::CachingProviderRegistry;
@@ -39,6 +44,7 @@ use veronex::infrastructure::outbound::persistence::gemini_sync_config::Postgres
 use veronex::infrastructure::outbound::persistence::gpu_server_registry::PostgresGpuServerRegistry;
 use veronex::infrastructure::outbound::persistence::job_repository::PostgresJobRepository;
 use veronex::infrastructure::outbound::persistence::lab_settings_repository::PostgresLabSettingsRepository;
+use veronex::infrastructure::outbound::persistence::mcp_settings_repository::PostgresMcpSettingsRepository;
 use veronex::infrastructure::outbound::persistence::model_capacity_repository::PostgresModelCapacityRepository;
 use veronex::infrastructure::outbound::persistence::ollama_model_repository::PostgresOllamaModelRepository;
 use veronex::infrastructure::outbound::persistence::ollama_sync_job_repository::PostgresOllamaSyncJobRepository;
@@ -59,7 +65,7 @@ use super::config::AppConfig;
 pub struct Repositories {
     pub account_repo: Arc<dyn AccountRepository>,
     pub api_key_repo: Arc<dyn ApiKeyRepository>,
-    pub job_repo: Arc<PostgresJobRepository>,
+    pub job_repo: Arc<dyn veronex::application::ports::outbound::job_repository::JobRepository>,
     pub provider_registry: Arc<dyn LlmProviderRegistry>,
     pub gpu_server_registry: Arc<dyn GpuServerRegistry>,
     pub gemini_policy_repo: Arc<dyn GeminiPolicyRepository>,
@@ -72,6 +78,7 @@ pub struct Repositories {
     pub ollama_sync_job_repo: Arc<dyn OllamaSyncJobRepository>,
     pub session_repo: Arc<dyn SessionRepository>,
     pub lab_settings_repo: Arc<dyn LabSettingsRepository>,
+    pub mcp_settings_repo: Arc<dyn McpSettingsRepository>,
     pub capacity_repo: Arc<dyn ModelCapacityRepository>,
     pub capacity_settings_repo: Arc<dyn CapacitySettingsRepository>,
     pub valkey_port: Option<Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>>,
@@ -103,43 +110,55 @@ pub async fn wire_repositories(
         });
 
     // ── Observability adapter ──────────────────────────────────────
+    // Priority: OTLP direct (veronex → OTel Collector → Kafka → Redpanda → ClickHouse)
+    // Fallback:  HTTP via veronex-analytics (legacy, two-hop path)
     let observability: Option<Arc<dyn ObservabilityPort>> =
-        match (&config.analytics_url, &config.analytics_secret) {
-            (Some(url), Some(secret)) => {
-                tracing::info!("http observability adapter enabled (analytics: {url})");
-                Some(Arc::new(HttpObservabilityAdapter::new(
-                    http_client.clone(),
-                    url,
-                    secret,
-                )))
-            }
-            (Some(_), None) => {
-                tracing::warn!(
-                    "ANALYTICS_URL set but ANALYTICS_SECRET missing — observability disabled"
-                );
-                None
-            }
-            _ => {
-                tracing::warn!("ANALYTICS_URL not set — inference events will not be recorded");
-                None
+        if let Some(ref endpoint) = config.otel_http_endpoint {
+            tracing::info!("OTLP observability adapter enabled (endpoint: {endpoint})");
+            Some(Arc::new(OtlpObservabilityAdapter::new(endpoint)))
+        } else {
+            match (&config.analytics_url, &config.analytics_secret) {
+                (Some(url), Some(secret)) => {
+                    tracing::info!("http observability adapter enabled (analytics: {url})");
+                    Some(Arc::new(HttpObservabilityAdapter::new(
+                        http_client.clone(),
+                        url,
+                        secret,
+                    )))
+                }
+                (Some(_), None) => {
+                    tracing::warn!(
+                        "ANALYTICS_URL set but ANALYTICS_SECRET missing — observability disabled"
+                    );
+                    None
+                }
+                _ => {
+                    tracing::warn!("neither OTEL_HTTP_ENDPOINT nor ANALYTICS_URL set — inference events will not be recorded");
+                    None
+                }
             }
         };
 
     // ── Audit adapter ──────────────────────────────────────────────
     let audit_port: Option<Arc<dyn AuditPort>> =
-        match (&config.analytics_url, &config.analytics_secret) {
-            (Some(url), Some(secret)) => {
-                tracing::info!("http audit adapter enabled");
-                Some(Arc::new(HttpAuditAdapter::new(
-                    http_client.clone(),
-                    url,
-                    secret,
-                )))
-            }
-            (Some(_), None) => None, // already warned above
-            _ => {
-                tracing::warn!("ANALYTICS_URL not set — audit events will not be recorded");
-                None
+        if let Some(ref endpoint) = config.otel_http_endpoint {
+            tracing::info!("OTLP audit adapter enabled (endpoint: {endpoint})");
+            Some(Arc::new(OtlpAuditAdapter::new(endpoint)))
+        } else {
+            match (&config.analytics_url, &config.analytics_secret) {
+                (Some(url), Some(secret)) => {
+                    tracing::info!("http audit adapter enabled");
+                    Some(Arc::new(HttpAuditAdapter::new(
+                        http_client.clone(),
+                        url,
+                        secret,
+                    )))
+                }
+                (Some(_), None) => None, // already warned above
+                _ => {
+                    tracing::warn!("neither OTEL_HTTP_ENDPOINT nor ANALYTICS_URL set — audit events will not be recorded");
+                    None
+                }
             }
         };
 
@@ -234,8 +253,11 @@ pub async fn wire_repositories(
     let account_repo: Arc<dyn AccountRepository> =
         Arc::new(PostgresAccountRepository::new(pg_pool.clone()));
     let api_key_repo: Arc<dyn ApiKeyRepository> =
-        Arc::new(PostgresApiKeyRepository::new(pg_pool.clone()));
-    let job_repo = Arc::new(PostgresJobRepository::new(pg_pool.clone()));
+        Arc::new(CachingApiKeyRepo::new(Arc::new(
+            PostgresApiKeyRepository::new(pg_pool.clone()),
+        )));
+    let job_repo: Arc<dyn veronex::application::ports::outbound::job_repository::JobRepository> =
+        Arc::new(PostgresJobRepository::new(pg_pool.clone()));
     let provider_registry: Arc<dyn LlmProviderRegistry> = Arc::new(CachingProviderRegistry::new(
         Arc::new(PostgresProviderRegistry::new(pg_pool.clone(), config.gemini_encryption_key)),
         veronex::domain::constants::PROVIDER_REGISTRY_CACHE_TTL,
@@ -265,7 +287,11 @@ pub async fn wire_repositories(
     let session_repo: Arc<dyn SessionRepository> =
         Arc::new(PostgresSessionRepository::new(pg_pool.clone()));
     let lab_settings_repo: Arc<dyn LabSettingsRepository> =
-        Arc::new(PostgresLabSettingsRepository::new(pg_pool.clone()));
+        Arc::new(CachingLabSettingsRepo::new(Arc::new(
+            PostgresLabSettingsRepository::new(pg_pool.clone()),
+        )));
+    let mcp_settings_repo: Arc<dyn McpSettingsRepository> =
+        Arc::new(PostgresMcpSettingsRepository::new(pg_pool.clone()));
 
     // ── Capacity infrastructure ────────────────────────────────────
     let capacity_repo: Arc<dyn ModelCapacityRepository> =
@@ -324,6 +350,7 @@ pub async fn wire_repositories(
         ollama_sync_job_repo,
         session_repo,
         lab_settings_repo,
+        mcp_settings_repo,
         capacity_repo,
         capacity_settings_repo,
         valkey_port,

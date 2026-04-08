@@ -10,13 +10,48 @@ use serde::Deserialize;
 use tracing::instrument;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, FinishReason, JobSource, ProviderType};
-use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
+use crate::domain::enums::{ApiFormat, FinishReason, ProviderType};
+use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_TOKENS_CEILING};
 use super::error::AppError;
 use super::handlers::sanitize_sse_error;
 use super::inference_helpers::{build_sse_response, extract_conversation_id, validate_model_name, validate_content_length};
 use super::openai_sse_types::SYSTEM_FINGERPRINT;
+use super::middleware::infer_auth::InferCaller;
 use super::state::AppState;
+
+// ── OpenAI-compatible media stubs ─────────────────────────────────────────────
+//
+// These endpoints exist for API compatibility (Open WebUI, LiteLLM, etc.) but
+// Veronex does not support audio or image generation natively.
+// Clients receive a proper 501 Not Implemented response in OpenAI error format.
+
+fn not_implemented(feature: &str) -> AppError {
+    AppError::NotImplemented(format!("{feature} is not supported by this server"))
+}
+
+/// `POST /v1/audio/transcriptions` — Whisper speech-to-text (not supported).
+#[instrument]
+pub async fn audio_transcriptions() -> Response {
+    not_implemented("Audio transcription").into_response()
+}
+
+/// `POST /v1/audio/speech` — Text-to-speech (not supported).
+#[instrument]
+pub async fn audio_speech() -> Response {
+    not_implemented("Audio speech synthesis").into_response()
+}
+
+/// `POST /v1/images/generations` — Image generation (not supported).
+#[instrument]
+pub async fn image_generations() -> Response {
+    not_implemented("Image generation").into_response()
+}
+
+/// `POST /v1/moderations` — Content moderation (not supported).
+#[instrument]
+pub async fn moderations() -> Response {
+    not_implemented("Content moderation").into_response()
+}
 
 #[derive(Deserialize)]
 pub struct TextCompletionRequest {
@@ -63,9 +98,9 @@ impl TextCompletionRequest {
 #[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn text_completions(
     State(state): State<AppState>,
-    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     headers: axum::http::HeaderMap,
-    Json(req): Json<TextCompletionRequest>,
+    Json(mut req): Json<TextCompletionRequest>,
 ) -> Result<Response, AppError> {
     validate_model_name(&req.model)
         .map_err(|_| AppError::BadRequest(ERR_MODEL_INVALID.into()))?;
@@ -78,6 +113,9 @@ pub async fn text_completions(
         return Err(AppError::BadRequest("prompt cannot be empty".into()));
     }
 
+    // Cap max_tokens to prevent GPU slot monopoly
+    if let Some(ref mut mt) = req.max_tokens { *mt = (*mt).min(MAX_TOKENS_CEILING); }
+
     let model = req.model.clone();
     let stream = req.stream.unwrap_or(false);
     let conversation_id = extract_conversation_id(&headers);
@@ -87,21 +125,24 @@ pub async fn text_completions(
         model_name: model.clone(),
         provider_type: ProviderType::Ollama,
         gemini_tier: None,
-        api_key_id: Some(api_key.id),
-        account_id: None,
-        source: JobSource::Api,
+        api_key_id: caller.api_key_id(),
+        account_id: caller.account_id(),
+        source: caller.source(),
         api_format: ApiFormat::OpenaiCompat,
         messages: None,
         tools: None,
         request_path: Some("/v1/completions".to_string()),
         conversation_id,
-        key_tier: Some(api_key.tier),
+        key_tier: caller.key_tier(),
         images: None,
         stop: req.stop,
         seed: req.seed,
         response_format: None,
         frequency_penalty: req.frequency_penalty,
         presence_penalty: req.presence_penalty,
+        mcp_loop_id: None,
+        max_tokens: req.max_tokens,
+        vision_analysis: None,
     }).await.map_err(|e| {
         tracing::error!("text_completions: submit failed: {e}");
         AppError::Internal(anyhow::anyhow!("failed to submit inference job"))

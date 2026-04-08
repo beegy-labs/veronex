@@ -29,8 +29,6 @@ PASSWORD=${E2E_PASSWORD:-$_E2E_DEFAULT}
 unset _E2E_DEFAULT
 
 MODEL="${MODEL:-qwen3:8b}"
-# Additional models for multi-model inference tests (auto-detected from synced models)
-MODELS_EXTRA="${MODELS_EXTRA:-}"
 CONCURRENT="${CONCURRENT:-6}"
 SKIP_DB_RESET="${SKIP_DB_RESET:-0}"
 
@@ -44,18 +42,18 @@ aget()     { curl -sf "$API$1" -H "Authorization: Bearer $TK"; }
 apost()    { curl -sf "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2"; }
 apatch()   { curl -sf -X PATCH "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2"; }
 adel()     { curl -sf -X DELETE "$API$1" -H "Authorization: Bearer $TK"; }
-agetc()    { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $TK"; }
-apostc()   { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2"; }
-apatchc()  { curl -s -w "\n%{http_code}" -X PATCH "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2"; }
-adelc()    { curl -s -w "\n%{http_code}" -X DELETE "$API$1" -H "Authorization: Bearer $TK"; }
-rawc()     { curl -s -w "\n%{http_code}" "$API$1"; }
-rawpostc() { curl -s -w "\n%{http_code}" "$API$1" -H 'Content-Type: application/json' -d "$2"; }
+agetc()    { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $TK" 2>/dev/null || printf "\n000"; }
+apostc()   { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || printf "\n000"; }
+apatchc()  { curl -s -w "\n%{http_code}" -X PATCH "$API$1" -H "Authorization: Bearer $TK" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || printf "\n000"; }
+adelc()    { curl -s -w "\n%{http_code}" -X DELETE "$API$1" -H "Authorization: Bearer $TK" 2>/dev/null || printf "\n000"; }
+rawc()     { curl -s -w "\n%{http_code}" "$API$1" 2>/dev/null || printf "\n000"; }
+rawpostc() { curl -s -w "\n%{http_code}" "$API$1" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || printf "\n000"; }
 
 # ── Authenticated curl wrappers (API key) ─────────────────────────────────────
-kpostc()   { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' -d "$2"; }
-kgetc()    { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $API_KEY"; }
-kget()     { curl -sf "$API$1" -H "Authorization: Bearer $API_KEY"; }
-kdelc()    { curl -s -w "\n%{http_code}" -X DELETE "$API$1" -H "Authorization: Bearer $API_KEY"; }
+kpostc()   { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || printf "\n000"; }
+kgetc()    { curl -s -w "\n%{http_code}" "$API$1" -H "Authorization: Bearer $API_KEY" 2>/dev/null || printf "\n000"; }
+kget()     { curl -sf "$API$1" -H "Authorization: Bearer $API_KEY" 2>/dev/null || echo "{}"; }
+kdelc()    { curl -s -w "\n%{http_code}" -X DELETE "$API$1" -H "Authorization: Bearer $API_KEY" 2>/dev/null || printf "\n000"; }
 
 # ── Assertions ───────────────────────────────────────────────────────────────
 assert_get() { local c; c=$(agetc "$1" | code); [ "$c" = "$2" ] && pass "$3 → $2" || fail "$3 → $c"; }
@@ -111,9 +109,144 @@ for p in d.get('providers', []):
 }
 
 # ── Valkey helpers (requires docker compose in PATH) ──────────────────────────
-valkey_zcard() { docker compose exec -T valkey valkey-cli ZCARD "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
-valkey_get()   { docker compose exec -T valkey valkey-cli GET "$1" 2>/dev/null | tr -d ' \r\n' || echo ""; }
-valkey_hlen()  { docker compose exec -T valkey valkey-cli HLEN "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_zcard()  { docker compose exec -T valkey valkey-cli ZCARD "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_get()    { docker compose exec -T valkey valkey-cli GET "$1" 2>/dev/null | tr -d ' \r\n' || echo ""; }
+valkey_hlen()   { docker compose exec -T valkey valkey-cli HLEN "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_zscore() { docker compose exec -T valkey valkey-cli ZSCORE "$1" "$2" 2>/dev/null | tr -d ' \r\n' || echo ""; }
+valkey_llen()   { docker compose exec -T valkey valkey-cli LLEN "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_scard()  { docker compose exec -T valkey valkey-cli SCARD "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_ttl()    { docker compose exec -T valkey valkey-cli TTL "$1" 2>/dev/null | tr -d ' \r\n' || echo "-2"; }
+valkey_keys()   { docker compose exec -T valkey valkey-cli KEYS "$1" 2>/dev/null | tr -d '\r'; }
+
+# ── Database helpers ──────────────────────────────────────────────────────────
+pg_query() { docker compose exec -T postgres psql -U veronex -d veronex -tAq -c "$1" 2>/dev/null; }
+ch_query() { docker compose exec -T clickhouse clickhouse-client -d veronex --query "$1" 2>/dev/null; }
+
+# ── Model detection helpers ───────────────────────────────────────────────────
+get_text_model() {
+  curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for m in d.get('models',[]):
+    n=m['name'].lower()
+    if not any(x in n for x in ['embed','ocr','vision','vl','llava','minicpm','moondream']):
+        print(m['name']); break
+" 2>/dev/null || echo ""
+}
+
+get_vision_model() {
+  curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for m in d.get('models',[]):
+    n=m['name'].lower()
+    if any(x in n for x in ['vision','vl','llava','minicpm','moondream']):
+        print(m['name']); break
+" 2>/dev/null || echo ""
+}
+
+# ── Queue drain helper ────────────────────────────────────────────────────────
+# Wait up to MAX_WAIT seconds for the inference queue and active jobs to drain.
+# Prevents test-ordering failures caused by prior tests leaving running/queued jobs.
+wait_queue_empty() {
+  local max_wait="${1:-30}" waited=0
+  while [ "$waited" -lt "$max_wait" ]; do
+    local depth
+    depth=$(curl -sf "$API/v1/dashboard/queue" -H "Authorization: Bearer $TK" \
+      2>/dev/null | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('depth',0))" \
+      2>/dev/null || echo "0")
+    [ "${depth:-0}" -le 0 ] && return 0
+    sleep 2; waited=$((waited + 2))
+  done
+  return 0  # non-fatal: proceed even if queue is still busy
+}
+
+# ── Self-sufficient auth bootstrap ───────────────────────────────────────────
+# Replace bare `load_state` in script headers.
+# Loads state first; if TK or API_KEY is absent, self-authenticates so every
+# script can run standalone without 01-setup.sh having run first.
+ensure_auth() {
+  load_state
+
+  # Bootstrap JWT if missing or expired (validate with a cheap API call)
+  local _need_login=0
+  if [ -z "${TK:-}" ]; then
+    _need_login=1
+  else
+    local _probe_code
+    _probe_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+      "$API/v1/accounts" -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+    [ "$_probe_code" = "401" ] && _need_login=1
+  fi
+  if [ "$_need_login" = "1" ]; then
+    TK=""
+    curl -s "$API/v1/setup" -H 'Content-Type: application/json' \
+      -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" > /dev/null 2>&1 || true
+    local _login_raw
+    _login_raw=$(curl -si "$API/v1/auth/login" \
+      -H 'Content-Type: application/json' \
+      -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" 2>&1)
+    TK=$(echo "$_login_raw" | sed -n 's/.*veronex_access_token=\([^;]*\).*/\1/p')
+    [ -z "$TK" ] && { echo "[ERROR] ensure_auth: login failed"; exit 1; }
+  fi
+
+  # Bootstrap API key if missing
+  if [ -z "${API_KEY:-}" ]; then
+    local _acct_id
+    _acct_id=$(curl -sf "$API/v1/accounts" -H "Authorization: Bearer $TK" 2>/dev/null \
+      | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('accounts',[{}])[0].get('id',''))" 2>/dev/null || echo "")
+    if [ -n "$_acct_id" ]; then
+      local _key_res
+      _key_res=$(curl -sf "$API/v1/keys" -H "Authorization: Bearer $TK" \
+        -H 'Content-Type: application/json' \
+        -d "{\"tenant_id\":\"$_acct_id\",\"name\":\"e2e-auto-$$\",\"tier\":\"paid\"}" 2>/dev/null || echo "{}")
+      API_KEY=$(echo "$_key_res" \
+        | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('key',''))" 2>/dev/null || echo "")
+    fi
+    [ -z "$API_KEY" ] && { echo "[ERROR] ensure_auth: API key creation failed"; exit 1; }
+  fi
+}
+
+# ── Dynamic provider/server ID lookup ────────────────────────────────────────
+# Called by scripts that use PROVIDER_ID_LOCAL/REMOTE or SERVER_ID_LOCAL/REMOTE.
+# Fast-path: skips API calls when IDs are already loaded from state (after 01-setup).
+ensure_provider_ids() {
+  local _providers _servers
+  if [ -z "${PROVIDER_ID_LOCAL:-}" ] || [ "${PROVIDER_ID_LOCAL}" = "None" ]; then
+    _providers=$(curl -sf "$API/v1/providers" -H "Authorization: Bearer $TK" 2>/dev/null || echo '{"providers":[]}')
+    PROVIDER_ID_LOCAL=$(echo "$_providers" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+for p in d.get('providers',[]):
+    if p.get('provider_type')=='ollama' and 'local' in p.get('name','').lower():
+        print(p['id']); break
+" 2>/dev/null || echo "")
+    PROVIDER_ID_REMOTE=$(echo "$_providers" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+for p in d.get('providers',[]):
+    if p.get('provider_type')=='ollama' and 'local' not in p.get('name','').lower():
+        print(p['id']); break
+" 2>/dev/null || echo "")
+  fi
+  if [ -z "${SERVER_ID_LOCAL:-}" ] || [ "${SERVER_ID_LOCAL}" = "None" ]; then
+    _servers=$(curl -sf "$API/v1/servers" -H "Authorization: Bearer $TK" 2>/dev/null || echo '{"servers":[]}')
+    SERVER_ID_LOCAL=$(echo "$_servers" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+for s in d.get('servers',[]):
+    if 'local' in s.get('name','').lower():
+        print(s['id']); break
+" 2>/dev/null || echo "")
+    SERVER_ID_REMOTE=$(echo "$_servers" | python3 -c "
+import sys,json
+d=json.loads(sys.stdin.read())
+for s in d.get('servers',[]):
+    if 'local' not in s.get('name','').lower():
+        print(s['id']); break
+" 2>/dev/null || echo "")
+  fi
+}
 
 # ── State management ──────────────────────────────────────────────────────────
 E2E_STATE="${E2E_STATE:-/tmp/veronex-e2e-state.env}"

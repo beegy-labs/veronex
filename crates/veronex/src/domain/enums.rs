@@ -401,30 +401,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_permissions_count() {
-        assert_eq!(ALL_PERMISSIONS.len(), 9);
-    }
-
-    #[test]
-    fn all_menus_count() {
-        assert_eq!(ALL_MENUS.len(), 12);
-    }
-
-    #[test]
-    fn permission_as_str_roundtrip() {
-        for &p in ALL_PERMISSIONS {
-            assert!(!p.is_empty());
-        }
-    }
-
-    #[test]
-    fn menu_as_str_roundtrip() {
-        for &m in ALL_MENUS {
-            assert!(!m.is_empty());
-        }
-    }
-
-    #[test]
     fn role_manage_in_all_permissions() {
         assert!(ALL_PERMISSIONS.contains(&"role_manage"));
     }

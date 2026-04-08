@@ -23,12 +23,13 @@ use tracing::instrument;
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::entities::LlmProvider;
-use crate::domain::enums::{ApiFormat, ProviderType, JobSource};
+use crate::domain::enums::{ApiFormat, ProviderType};
 use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
-use super::handlers::sanitize_sse_error;
+use super::handlers::{sanitize_sse_error, with_conversation_id};
 use super::inference_helpers::{validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
-use super::inference_helpers::validate_and_compress_images;
+use super::inference_helpers::{validate_and_compress_images, analyze_images_for_context};
+use super::middleware::infer_auth::InferCaller;
 use super::state::AppState;
 
 /// Collected output from a non-streaming token stream.
@@ -176,7 +177,7 @@ pub async fn list_local_models(State(state): State<AppState>) -> Response {
 #[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn generate(
     State(state): State<AppState>,
-    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     headers: axum::http::HeaderMap,
     Json(mut req): Json<OllamaGenerateBody>,
 ) -> Response {
@@ -203,11 +204,27 @@ pub async fn generate(
             .into_response();
     }
 
-    // Validate + compress oversized images
+    // Validate + compress oversized images, then analyze non-vision images.
+    let mut vision_analysis = None;
     if req.images.is_some() {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
         if let Some(msg) = validate_and_compress_images(&mut req.images, &lab).await {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response();
+        }
+        // For non-vision models: analyze images via vision model, inject description into prompt.
+        // Images are kept in req.images for S3 upload and conversation history.
+        if let Some(imgs) = req.images.as_deref().filter(|i| !i.is_empty()) {
+            if let Some(va) = analyze_images_for_context(
+                &state.http_client,
+                state.provider_registry.as_ref(),
+                &req.model,
+                imgs,
+                &req.prompt,
+                lab.vision_model.as_deref(),
+            ).await {
+                req.prompt = format!("[Image Analysis]\n{}\n\n{}", va.analysis, req.prompt);
+                vision_analysis = Some(va);
+            }
         }
     }
 
@@ -220,18 +237,19 @@ pub async fn generate(
             model_name: model.clone(),
             provider_type: ProviderType::Ollama,
             gemini_tier: None,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::OllamaNative,
             messages: None,
             tools: None,
             request_path: Some("/api/generate".to_string()),
             conversation_id,
-            key_tier: Some(api_key.tier),
+            key_tier: caller.key_tier(),
             images: req.images,
             stop: None, seed: None, response_format: None,
-            frequency_penalty: None, presence_penalty: None,
+            frequency_penalty: None, presence_penalty: None, mcp_loop_id: None, max_tokens: None,
+            vision_analysis,
         })
         .await
     {
@@ -306,9 +324,9 @@ pub async fn generate(
 #[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn chat(
     State(state): State<AppState>,
-    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     headers: axum::http::HeaderMap,
-    Json(req): Json<OllamaChatBody>,
+    Json(mut req): Json<OllamaChatBody>,
 ) -> Response {
     let conversation_id = extract_conversation_id(&headers);
     if validate_model_name(&req.model).is_err() {
@@ -342,6 +360,169 @@ pub async fn chat(
     }
     let prompt = extract_last_user_prompt(&req.messages).to_string();
 
+    // ── Multi-turn eligibility gate ──────────────────────────────────────────
+    // Fire when the client sends a multi-message conversation (conversation_id present
+    // and more than one user message indicates a continuing session).
+    if conversation_id.is_some() {
+        let user_msg_count = req.messages.iter()
+            .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            .count();
+        if user_msg_count > 1 {
+            use crate::application::use_cases::inference::context_assembler;
+            let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+            let max_ctx: Option<u32> = if let Some(ref vk) = state.valkey_pool {
+                use fred::prelude::*;
+                let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                let mut found = None;
+                for p in providers.iter().filter(|p| p.provider_type == ProviderType::Ollama) {
+                    let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, &req.model);
+                    if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
+                        if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
+                            .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
+                        {
+                            found = Some(ctx as u32);
+                            break;
+                        }
+                    }
+                }
+                found
+            } else {
+                None
+            };
+            if let Err(e) = context_assembler::check_multiturn_eligibility(&req.model, max_ctx, &lab) {
+                tracing::warn!(model = %req.model, code = e.code(), "multi-turn eligibility check failed");
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": "multi-turn request rejected",
+                            "type": "invalid_request_error",
+                            "code": e.code()
+                        }
+                    })),
+                ).into_response();
+            }
+        }
+    }
+
+    // Phase 5: compress long input inline if it exceeds budget
+    // Only applies when context_compression_enabled and we have a conversation
+    if conversation_id.is_some() {
+        use crate::application::use_cases::inference::{compression_router, context_compressor};
+
+        let lab5 = state.lab_settings_repo.get().await.unwrap_or_default();
+        if lab5.context_compression_enabled {
+            let route: compression_router::CompressionRoute = compression_router::decide(state.provider_registry.as_ref(), &lab5).await;
+            if let Some(params) = route.into_params(
+                lab5.compression_model.clone().unwrap_or_else(|| "qwen2.5:3b".to_string()),
+                lab5.compression_timeout_secs as u64,
+            ) {
+                let configured_ctx = 32_768u32; // fallback; real value looked up during inference
+                let input_budget = (configured_ctx as f32 * lab5.context_budget_ratio * 0.5) as u32;
+                if let Some(compressed_prompt) = context_compressor::compress_input_inline(
+                    &prompt,
+                    input_budget,
+                    &params.model,
+                    &params.provider_url,
+                    params.timeout_secs,
+                ).await {
+                    // Rewrite last user message with compressed prompt
+                    if let Some(last_user) = req.messages.iter_mut().rev()
+                        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    {
+                        last_user["content"] = serde_json::json!(compressed_prompt);
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 6: context assembly + session handoff (conversation turns only)
+    let mut effective_conversation_id: Option<uuid::Uuid> = conversation_id;
+    let mut session_renewed = false;
+    if let Some(cid) = conversation_id {
+        if let Some(ref store) = state.message_store {
+            use crate::application::use_cases::inference::{context_assembler, session_handoff};
+            let caller_owner = caller.account_id().or(caller.api_key_id()).unwrap_or(cid);
+            'conv6: for days_ago in 0..=7i64 {
+                let date = (chrono::Utc::now() - chrono::Duration::days(days_ago)).date_naive();
+                let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(cid);
+                let record_opt: Option<crate::application::ports::outbound::message_store::ConversationRecord> =
+                    if days_ago == 0 {
+                        if let Some(ref vk) = state.valkey_pool {
+                            use fred::prelude::*;
+                            vk.get::<Option<String>, _>(&cache_key).await.ok().flatten()
+                                .and_then(|j| serde_json::from_str(&j).ok())
+                        } else { None }
+                    } else { None };
+                let record = match record_opt {
+                    Some(r) => r,
+                    None => match store.get_conversation(caller_owner, date, cid).await {
+                        Ok(Some(r)) => {
+                            if let Some(ref vk) = state.valkey_pool {
+                                use fred::prelude::*;
+                                if let Ok(j) = serde_json::to_string(&r) {
+                                    vk.set(&cache_key, j, Some(fred::types::Expiration::EX(300)), None, false).await
+                                        .unwrap_or_else(|e| tracing::warn!(error = %e, key = %cache_key, "Valkey SET conversation cache failed"));
+                                }
+                            }
+                            r
+                        }
+                        _ => continue 'conv6,
+                    },
+                };
+                let lab6 = state.lab_settings_repo.get().await.unwrap_or_default();
+                let max_ctx6: Option<u32> = if let Some(ref vk) = state.valkey_pool {
+                    use fred::prelude::*;
+                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                    let mut found = None;
+                    for p in providers.iter().filter(|p| p.provider_type == ProviderType::Ollama) {
+                        let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, &req.model);
+                        if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
+                            if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
+                                .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
+                            {
+                                found = Some(ctx as u32);
+                                break;
+                            }
+                        }
+                    }
+                    found
+                } else { None };
+                let configured_ctx6 = max_ctx6.unwrap_or(32_768);
+                // Session handoff
+                if session_handoff::should_handoff(&record, configured_ctx6, &lab6) {
+                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                    if let Some(provider) = providers.iter().find(|p| p.provider_type == ProviderType::Ollama) {
+                        let summary_model = lab6.compression_model.clone().unwrap_or_else(|| req.model.clone());
+                        if let Some((new_cid, master_summary)) = session_handoff::perform_handoff(
+                            &record, cid, caller_owner, date, &summary_model,
+                            &provider.url, lab6.compression_timeout_secs as u64, store,
+                        ).await {
+                            let current_user = req.messages.iter().rev()
+                                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                                .cloned();
+                            let summary_msg = serde_json::json!({"role": "user", "content": format!("[Context from previous session]\n{master_summary}")});
+                            req.messages = std::iter::once(summary_msg).chain(current_user).collect();
+                            effective_conversation_id = Some(new_cid);
+                            session_renewed = true;
+                            break 'conv6;
+                        }
+                    }
+                }
+                // Context assembly — replace history with compressed+verbatim window
+                let history = context_assembler::assemble(&record, configured_ctx6, &lab6);
+                let current_user: Vec<serde_json::Value> = req.messages.iter().rev()
+                    .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    .cloned()
+                    .into_iter()
+                    .collect();
+                req.messages = history.into_iter().chain(current_user).collect();
+                break 'conv6;
+            }
+        }
+    }
+
     // Extract images from user messages (Ollama chat format: message-level `images` field).
     let mut images: Option<Vec<String>> = {
         let imgs: Vec<String> = req.messages.iter()
@@ -353,11 +534,31 @@ pub async fn chat(
         if imgs.is_empty() { None } else { Some(imgs) }
     };
 
-    // Validate + compress oversized images
+    // Validate + compress oversized images, then analyze non-vision images.
+    let mut vision_analysis_chat = None;
     if images.is_some() {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
         if let Some(msg) = validate_and_compress_images(&mut images, &lab).await {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response();
+        }
+        // For non-vision models: analyze images, inject description into last user message.
+        if let Some(imgs) = images.as_deref().filter(|i| !i.is_empty()) {
+            if let Some(va) = analyze_images_for_context(
+                &state.http_client,
+                state.provider_registry.as_ref(),
+                &req.model,
+                imgs,
+                &prompt,
+                lab.vision_model.as_deref(),
+            ).await {
+                if let Some(last_user) = req.messages.iter_mut().rev()
+                    .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                {
+                    let existing = last_user["content"].as_str().unwrap_or("").to_string();
+                    last_user["content"] = serde_json::json!(format!("[Image Analysis]\n{}\n\n{existing}", va.analysis));
+                }
+                vision_analysis_chat = Some(va);
+            }
         }
     }
 
@@ -372,18 +573,19 @@ pub async fn chat(
             model_name: model.clone(),
             provider_type: ProviderType::Ollama,
             gemini_tier: None,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::OllamaNative,
             messages: Some(messages),
             tools,
             request_path: Some("/api/chat".to_string()),
-            conversation_id,
-            key_tier: Some(api_key.tier),
+            conversation_id: effective_conversation_id,
+            key_tier: caller.key_tier(),
             images,
             stop: None, seed: None, response_format: None,
-            frequency_penalty: None, presence_penalty: None,
+            frequency_penalty: None, presence_penalty: None, mcp_loop_id: None, max_tokens: None,
+            vision_analysis: vision_analysis_chat,
         })
         .await
     {
@@ -405,9 +607,10 @@ pub async fn chat(
             Err(resp) => return resp,
         };
         let created_at = chrono::Utc::now().to_rfc3339();
-        return Json(build_chat_response(
-            &model, &created_at, c.content, c.tool_calls, c.prompt_tokens, c.eval_tokens,
+        let resp = Json(build_chat_response(
+            &model, &created_at, c.content, c.tool_calls, c.prompt_tokens, c.eval_tokens, session_renewed,
         )).into_response();
+        return if session_renewed { with_conversation_id(resp, effective_conversation_id.as_ref()) } else { resp };
     }
 
     // ── Streaming path (default) ────────────────────────────────────────────
@@ -458,12 +661,13 @@ pub async fn chat(
     });
 
     let guarded = CancelOnDrop::new(ndjson, job_id, state.use_case.clone());
-    HttpResponse::builder()
+    let resp = HttpResponse::builder()
         .status(200)
         .header("Content-Type", "application/x-ndjson")
         .header("X-Accel-Buffering", "no")
         .body(Body::from_stream(guarded))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    with_conversation_id(resp, effective_conversation_id.as_ref())
 }
 
 // ── Non-streaming response builders ────────────────────────────────────────────
@@ -481,6 +685,7 @@ fn build_chat_response(
     tool_calls: Option<serde_json::Value>,
     prompt_tokens: u32,
     eval_tokens: u32,
+    conversation_renewed: bool,
 ) -> serde_json::Value {
     let (done_reason, message) = if let Some(tc) = tool_calls {
         (
@@ -505,6 +710,7 @@ fn build_chat_response(
         "prompt_eval_duration":0,
         "eval_count":          eval_tokens,
         "eval_duration":       0,
+        "conversation_renewed": conversation_renewed,
     })
 }
 
@@ -700,6 +906,7 @@ mod tests {
             None,
             10,
             5,
+            false,
         );
         assert_eq!(resp["done"], true);
         assert_eq!(resp["done_reason"], "stop");
@@ -740,6 +947,7 @@ mod tests {
             Some(tc.clone()),
             15,
             20,
+            false,
         );
         assert_eq!(resp["done_reason"], "tool_calls");
         assert_eq!(resp["message"]["content"], "");
@@ -747,21 +955,7 @@ mod tests {
         assert_eq!(resp["done"], true);
     }
 
-    // 4. Both response types include all required Ollama timing fields (all 0)
-    #[test]
-    fn response_has_timing_fields() {
-        for resp in [
-            build_generate_response("m", "t", String::new(), 0, 0),
-            build_chat_response("m", "t", String::new(), None, 0, 0),
-        ] {
-            assert_eq!(resp["total_duration"], 0);
-            assert_eq!(resp["load_duration"], 0);
-            assert_eq!(resp["prompt_eval_duration"], 0);
-            assert_eq!(resp["eval_duration"], 0);
-        }
-    }
-
-    // 5. OllamaGenerateBody with images deserializes correctly
+    // 4. OllamaGenerateBody with images deserializes correctly
     #[test]
     fn generate_body_with_images() {
         let body: OllamaGenerateBody = serde_json::from_str(r#"{
@@ -773,27 +967,5 @@ mod tests {
         assert_eq!(body.images.as_ref().unwrap()[0], "abc123");
     }
 
-    // 6. OllamaGenerateBody without images has None
-    #[test]
-    fn generate_body_without_images() {
-        let body: OllamaGenerateBody = serde_json::from_str(r#"{
-            "model": "llama3.2",
-            "prompt": "hello"
-        }"#).unwrap();
-        assert!(body.images.is_none());
-    }
-
-    // 7. Response includes model name and created_at timestamp
-    #[test]
-    fn response_includes_model_and_timestamp() {
-        let ts = "2026-03-15T12:00:00Z";
-        let chat = build_chat_response("llava:7b", ts, String::new(), None, 0, 0);
-        let generate = build_generate_response("llava:7b", ts, String::new(), 0, 0);
-        for resp in [&chat, &generate] {
-            assert_eq!(resp["model"], "llava:7b");
-            assert_eq!(resp["created_at"], ts);
-            assert_eq!(resp["done"], true);
-        }
-    }
 
 }

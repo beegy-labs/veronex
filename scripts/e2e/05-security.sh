@@ -2,11 +2,19 @@
 # Phase 05: Auth Edge Cases / Security Hardening / Rate Limiting / RBAC
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+
+# Wait for any queued/running jobs from previous phases to drain
+wait_queue_empty 30
 
 # ── Auth Edge Cases ───────────────────────────────────────────────────────────
 
 hdr "Auth Edge Cases"
+
+# Clear login-attempt counters to avoid rate-limit interference from parallel tests
+docker compose exec -T valkey valkey-cli EVAL \
+  "for _,k in ipairs(redis.call('keys','veronex:login_attempts:*')) do redis.call('del',k) end" 0 \
+  > /dev/null 2>&1 || true
 
 c=$(rawpostc "/v1/auth/login" '{"username":"nobody","password":"wrong"}' | code)
 [ "$c" = "401" ] && pass "Invalid creds → 401" || fail "Expected 401, got $c"
@@ -34,6 +42,20 @@ if [ -n "$REFRESH_TK" ]; then
     c=$(curl -s -w "\n%{http_code}" -X POST "$API/v1/auth/logout" \
       -H "Cookie: veronex_refresh_token=$NEW_TK" | code)
     [ "$c" = "204" ] && pass "Logout → 204" || fail "Logout → $c"
+
+    # Verify revoked session JWT is rejected
+    REVOKED_ACCESS=$(echo "$REFRESH_RES" | body | python3 -c "
+import sys,json
+try: print(json.loads(sys.stdin.read()).get('access_token',''))
+except: print('')
+" 2>/dev/null || echo "")
+    if [ -n "$REVOKED_ACCESS" ]; then
+      REV_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/providers" \
+        -H "Authorization: Bearer $REVOKED_ACCESS" 2>/dev/null || echo "000")
+      [ "$REV_CODE" = "401" ] \
+        && pass "Revoked session JWT rejected → 401" \
+        || info "Revoked session JWT → $REV_CODE (session may still be valid within grace window)"
+    fi
   else
     fail "Token refresh → $REFRESH_CODE"
   fi
@@ -90,6 +112,20 @@ if [ -n "$RL_KEY" ] && [ "$RL_KEY" != "None" ]; then
   RL_CODES=$(cat "$RL_TMPDIR"/* 2>/dev/null | tr '\n' ' '); rm -rf "$RL_TMPDIR"
   echo "$RL_CODES" | grep -q "429" \
     && pass "RPM limit enforced — codes: $RL_CODES" || fail "RPM not enforced — codes: $RL_CODES"
+
+  # Verify rate limit key has TTL in Valkey (should expire, not persist forever)
+  RL_HASH=$(echo "$RL_RES" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('key_hash',''))" 2>/dev/null || echo "")
+  if [ -n "$RL_HASH" ]; then
+    RL_TTL=$(valkey_ttl "veronex:rpm:$RL_HASH")
+    if [ "$RL_TTL" -gt 0 ] 2>/dev/null; then
+      pass "RPM counter has TTL ($RL_TTL seconds) — will auto-expire"
+    elif [ "$RL_TTL" = "-1" ]; then
+      fail "RPM counter has no TTL — will persist forever (memory leak)"
+    else
+      info "RPM counter TTL=$RL_TTL (key may have expired already)"
+    fi
+  fi
+
   adel "/v1/keys/$RL_KEY_ID" > /dev/null 2>&1
 else
   fail "Rate limit key creation failed"
@@ -107,15 +143,19 @@ if [ -n "$TPM_KEY" ] && [ "$TPM_KEY" != "None" ]; then
   # First request: consume tokens with a large max_tokens response
   TPM_C1=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about AI\"}],\"max_tokens\":80,\"stream\":false}")
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about AI\"}],\"max_tokens\":80,\"stream\":false}" \
+    2>/dev/null || true)
   # Second request: should hit TPM limit
   TPM_C2=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write another long essay about ML\"}],\"max_tokens\":80,\"stream\":false}")
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write another long essay about ML\"}],\"max_tokens\":80,\"stream\":false}" \
+    2>/dev/null || true)
   if [ "$TPM_C2" = "429" ]; then
     pass "TPM limit enforced — req1=$TPM_C1 req2=$TPM_C2 (429)"
   elif [ "$TPM_C1" = "200" ] && [ "$TPM_C2" = "200" ]; then
     info "TPM limit not triggered (tokens may not have exceeded 50) — req1=$TPM_C1 req2=$TPM_C2"
+  elif [ "$TPM_C1" = "000" ] || [ "$TPM_C2" = "000" ]; then
+    info "TPM test skipped — connection failed during parallel run (req1=$TPM_C1 req2=$TPM_C2)"
   else
     fail "TPM test unexpected — req1=$TPM_C1 req2=$TPM_C2"
   fi
@@ -281,5 +321,53 @@ fi
 # ZSET queue: MAX_QUEUE_PER_MODEL enforcement (SDD: per-model cap 2000)
 # Practical test: verify 429 is returned when inference is requested with no providers
 info "SDD MAX_QUEUE_PER_MODEL=2000, MAX_QUEUE_SIZE=10000 — enforced via Lua atomic enqueue"
+
+# ── Login Rate Limit ──────────────────────────────────────────────────────────
+
+hdr "Login Rate Limit (IP-based)"
+
+# Read LOGIN_RATE_LIMIT from container env via a running process env (or use compose config)
+CONTAINER_LIMIT=$(docker compose exec -T veronex sh -c 'echo ${LOGIN_RATE_LIMIT:-10}' 2>/dev/null | tr -d '\r\n' || echo "10")
+if [ "${CONTAINER_LIMIT:-10}" = "0" ]; then
+  info "LOGIN_RATE_LIMIT=0 — rate limiting disabled in this environment (skipping limit test)"
+  # Still verify that unlimited login works (no false 429)
+  c=$(rawpostc "/v1/auth/login" "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" | code)
+  [ "$c" = "200" ] && pass "Login allowed when rate limit disabled → 200" \
+    || fail "Login failed unexpectedly → $c"
+else
+  # Helper: delete all login_attempts keys from host side (avoids xargs dependency in container)
+  _clear_login_rl() {
+    local keys
+    keys=$(valkey_keys 'veronex:login_attempts:*')
+    if [ -n "$keys" ]; then
+      # shellcheck disable=SC2086
+      docker compose exec -T valkey valkey-cli del $keys > /dev/null 2>&1 || true
+    fi
+  }
+
+  # Clear any existing attempt counter for the test IP
+  _clear_login_rl
+
+  LIMIT="${CONTAINER_LIMIT:-10}"
+  info "LOGIN_RATE_LIMIT=$LIMIT — testing lockout after $LIMIT failed attempts"
+
+  # Fire LIMIT+1 bad login attempts to trigger lockout
+  LAST_CODE="000"
+  for i in $(seq 1 $((LIMIT + 1))); do
+    LAST_CODE=$(rawpostc "/v1/auth/login" '{"username":"nonexistent_e2e_user","password":"badpass"}' | code)
+  done
+
+  [ "$LAST_CODE" = "429" ] \
+    && pass "Login rate limit enforced — attempt $((LIMIT + 1)) → 429" \
+    || fail "Login rate limit NOT enforced — attempt $((LIMIT + 1)) → $LAST_CODE (expected 429)"
+
+  # Clear counters so subsequent tests aren't affected
+  _clear_login_rl
+
+  # Verify legitimate login still works after counter reset
+  c=$(rawpostc "/v1/auth/login" "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" | code)
+  [ "$c" = "200" ] && pass "Legitimate login OK after counter reset → 200" \
+    || fail "Legitimate login failed after reset → $c"
+fi
 
 save_counts

@@ -74,6 +74,11 @@ pub async fn spawn_background_tasks(
         shutdown.child_token(),
         infra.http_client.clone(),
         repos.vram_pool.clone(),
+        infra.pg_pool.clone(),
+        infra.instance_id.clone(),
+        config.analytics_url.clone(),
+        std::env::var("S3_ENDPOINT").ok(),
+        std::env::var("VESPA_URL").ok(),
     ));
 
     // ── Sync loop (unified: health + models + VRAM) ────────────────
@@ -167,6 +172,7 @@ pub async fn spawn_background_tasks(
         Some(repos.model_selection_repo.clone()),
         Some(repos.global_model_settings_repo.clone()),
         infra.instance_id.clone(),
+        Some(repos.lab_settings_repo.clone()),
     ));
 
     if let Err(e) = use_case_impl.recover_pending_jobs().await {
@@ -206,8 +212,10 @@ pub async fn spawn_background_tasks(
                 _ => {}
             }
         }
-        let _: Result<(), _> = vk.set(JOBS_PENDING_COUNTER, pending, None, None, false).await;
-        let _: Result<(), _> = vk.set(JOBS_RUNNING_COUNTER, running, None, None, false).await;
+        vk.set(JOBS_PENDING_COUNTER, pending, None, None, false).await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_pending_counter failed"));
+        vk.set(JOBS_RUNNING_COUNTER, running, None, None, false).await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_running_counter failed"));
         tracing::info!(pending, running, "job counters seeded from DB");
     }
 
@@ -345,11 +353,13 @@ pub async fn spawn_background_tasks(
                                 }
                                 if db_p != p {
                                     tracing::debug!(valkey = p, db = db_p, "reconciling pending counter");
-                                    let _: Result<(), _> = vk.set(JOBS_PENDING_COUNTER, db_p, None, None, false).await;
+                                    vk.set(JOBS_PENDING_COUNTER, db_p, None, None, false).await
+                                        .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_pending reconcile failed"));
                                 }
                                 if db_r != r {
                                     tracing::debug!(valkey = r, db = db_r, "reconciling running counter");
-                                    let _: Result<(), _> = vk.set(JOBS_RUNNING_COUNTER, db_r, None, None, false).await;
+                                    vk.set(JOBS_RUNNING_COUNTER, db_r, None, None, false).await
+                                        .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_running reconcile failed"));
                                 }
                                 (db_p.max(0) as u32, db_r.max(0) as u32)
                             } else {
@@ -468,7 +478,16 @@ pub async fn spawn_background_tasks(
             ));
         }
 
-        tracing::info!("queue maintenance loops started (promote_overdue=30s, demand_resync=60s, queue_wait_cancel=30s)");
+        if let Some(ref vk_port) = repos.valkey_port {
+            tasks.spawn(queue_maintenance::run_processing_reaper_loop(
+                vk_port.clone(),
+                repos.job_repo.clone(),
+                Duration::from_secs(veronex::domain::constants::PROCESSING_REAPER_SECS),
+                shutdown.child_token(),
+            ));
+        }
+
+        tracing::info!("queue maintenance loops started (promote_overdue=30s, demand_resync=60s, queue_wait_cancel=30s, processing_reaper=30s)");
 
         // ── Placement Planner (Phase 5) ──────────────────────────────────
         if let Some(ref vk_port) = repos.valkey_port {
@@ -481,6 +500,7 @@ pub async fn spawn_background_tasks(
                 infra.http_client.clone(),
                 infra.instance_id.clone(),
                 use_case_impl.as_thermal_drain(),
+                Some(repos.ollama_model_repo.clone()),
                 shutdown.child_token(),
             ));
             tracing::info!("placement planner started (interval=5s)");

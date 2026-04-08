@@ -4,10 +4,10 @@ import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { useState, useEffect, Suspense } from 'react'
 import {
-  LayoutDashboard, List, Key, Server,
+  LayoutDashboard, List, Key, Server, Activity,
   BarChart2, Gauge, Sun, Moon, ChevronLeft,
   BookOpen, HardDrive, Sparkles, ChevronDown, Menu,
-  Users, Shield, LogOut, Settings2,
+  Users, Shield, LogOut, Settings2, Plug,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
@@ -18,6 +18,7 @@ import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone } from '@/components/timezone-provider'
 import { NavSettingsDialog } from '@/components/nav-settings-dialog'
 import { HexLogo, OllamaIcon } from '@/components/nav-icons'
+import { useNav404 } from '@/components/nav-404-context'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,8 @@ type NavLink = {
   icon: React.ComponentType<{ className?: string }>
   /** Menu ID for role-based visibility filtering. */
   menuId?: string
+  /** Section ID for 404-based hiding. */
+  section?: string
 }
 
 type NavGroupChild = {
@@ -72,6 +75,7 @@ const navItems: NavItem[] = [
       { href: '/overview',     labelKey: 'nav.dashboard',   icon: LayoutDashboard, menuId: 'dashboard' },
       { href: '/usage',        labelKey: 'nav.usage',       icon: BarChart2,       menuId: 'usage' },
       { href: '/performance',  labelKey: 'nav.performance', icon: Gauge,           menuId: 'performance' },
+      { href: '/health',       labelKey: 'nav.health',      icon: Activity,        menuId: 'dashboard' },
     ],
   },
   { type: 'link', href: '/jobs',    labelKey: 'nav.jobs',    icon: List,      menuId: 'jobs' },
@@ -89,6 +93,7 @@ const navItems: NavItem[] = [
       { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini', menuId: 'providers' },
     ],
   },
+  { type: 'link', href: '/mcp', labelKey: 'nav.mcp', icon: Plug, menuId: 'providers', section: 'mcp' },
 ]
 
 // ── Inner nav (needs useSearchParams — wrapped in Suspense by parent) ───────────
@@ -99,6 +104,7 @@ function NavContent() {
   const { theme, toggleTheme } = useTheme()
   const { t } = useTranslation()
   const { resetToLocaleDefault } = useTimezone()
+  const { hidden: nav404 } = useNav404()
 
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -263,14 +269,16 @@ function NavContent() {
       {/* ── Nav links ──────────────────────────────────────────────── */}
       <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
         {navItems
-          // Filter by role-based menu access
+          // Filter by role-based menu access + 404-hidden sections
           .filter(item => !item.menuId || hasMenu(item.menuId))
+          .filter(item => !('section' in item) || !item.section || !nav404.has(item.section))
           .map(item => {
             if (item.type === 'group') {
               return {
                 ...item,
                 children: item.children
                   .filter(c => !c.menuId || hasMenu(c.menuId))
+                  .filter(c => !c.section || !nav404.has(c.section))
                   .filter(c =>
                     item.id !== 'providers' || c.section !== 'gemini' || (labSettings?.gemini_function_calling ?? false)
                   ),
@@ -375,7 +383,7 @@ function NavContent() {
 
       {/* ── Footer ─────────────────────────────────────────────────── */}
       <div className="border-t border-border py-3 px-2 space-y-2">
-        {/* Auth user + JWT-protected links */}
+        {/* Auth-protected nav links */}
         {authUser && !collapsed && (
           <div className="px-1 space-y-0.5">
             {hasMenu('accounts') && (
@@ -406,18 +414,6 @@ function NavContent() {
                 {t('audit.title')}
               </Link>
             )}
-            <div className="flex items-center justify-between px-3 py-1">
-              <span className="text-xs text-muted-foreground truncate">{authUser.username}</span>
-              <button
-                type="button"
-                aria-label={t('common.signOut')}
-                title={t('common.signOut')}
-                onClick={() => redirectToLogin()}
-                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-              </button>
-            </div>
           </div>
         )}
 
@@ -438,6 +434,24 @@ function NavContent() {
             {!collapsed && t('nav.apiDocs')}
           </Link>
         </div>
+
+        {/* Logged-in user + logout */}
+        {authUser && !collapsed && (
+          <div className="px-1">
+            <div className="flex items-center justify-between px-3 py-1.5 rounded-md hover:bg-accent/50 transition-colors">
+              <span className="text-xs text-muted-foreground truncate">{authUser.username}</span>
+              <button
+                type="button"
+                aria-label={t('common.signOut')}
+                title={t('common.signOut')}
+                onClick={() => redirectToLogin()}
+                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Footer: version | settings gear | theme toggle */}
         <div className={cn(

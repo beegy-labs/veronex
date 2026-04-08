@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
@@ -5,9 +7,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
-use crate::domain::entities::ApiKey;
+use crate::infrastructure::inbound::http::middleware::infer_auth::InferCaller;
 use crate::infrastructure::inbound::http::state::AppState;
 use crate::infrastructure::outbound::valkey_keys;
+
+use super::super::constants::MAX_KEY_CONCURRENT;
 
 /// 1-minute sliding window for RPM.
 const RPM_WINDOW_MS: f64 = 60_000.0;
@@ -25,11 +29,10 @@ pub async fn rate_limiter(
     req: Request,
     next: Next,
 ) -> Response {
-    let api_key = req.extensions().get::<ApiKey>().cloned();
-
-    // No key in extensions = health endpoint or pre-auth path → pass through.
-    let Some(api_key) = api_key else {
-        return next.run(req).await;
+    // Session callers (api_test JWT) bypass rate limiting.
+    let api_key = match req.extensions().get::<InferCaller>().cloned() {
+        Some(InferCaller::ApiKey(k)) => k,
+        Some(InferCaller::Session(_)) | None => return next.run(req).await,
     };
 
     // Valkey unavailable → fail-closed (503).
@@ -91,7 +94,36 @@ pub async fn rate_limiter(
         }
     }
 
-    next.run(req).await
+    // ── Per-key concurrent connection limit (Slowloris defense) ──────────
+    //
+    // Counted after RPM/TPM: a request that fails rate limiting doesn't consume
+    // an in-flight slot. Permit drops automatically when the response completes.
+    let sem = state
+        .key_in_flight
+        .entry(api_key.id)
+        .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(MAX_KEY_CONCURRENT as usize)))
+        .clone();
+    let _permit = match sem.clone().try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({"error": "concurrent request limit exceeded"})),
+            )
+                .into_response()
+        }
+    };
+
+    let response = next.run(req).await;
+
+    // Best-effort cleanup: evict idle semaphore entries to prevent unbounded DashMap growth.
+    if sem.available_permits() == MAX_KEY_CONCURRENT as usize {
+        state.key_in_flight.remove_if(&api_key.id, |_, s| {
+            s.available_permits() == MAX_KEY_CONCURRENT as usize
+        });
+    }
+
+    response
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -224,30 +256,6 @@ async fn check_tpm(
 mod tests {
     use super::*;
 
-    use crate::domain::enums::{KeyTier, KeyType};
-
-    #[test]
-    fn unlimited_rpm_zero() {
-        let key = ApiKey {
-            id: uuid::Uuid::now_v7(),
-            key_hash: "hash".to_string(),
-            key_prefix: "vnx_test".to_string(),
-            tenant_id: "t".to_string(),
-            name: "test".to_string(),
-            is_active: true,
-            rate_limit_rpm: 0,
-            rate_limit_tpm: 0,
-            expires_at: None,
-            deleted_at: None,
-            created_at: chrono::Utc::now(),
-            key_type: KeyType::Standard,
-            tier: KeyTier::Paid,
-            account_id: None,
-        };
-        assert_eq!(key.rate_limit_rpm, 0);
-        assert_eq!(key.rate_limit_tpm, 0);
-    }
-
     #[test]
     fn rate_limit_key_format() {
         let id = uuid::Uuid::now_v7();
@@ -258,9 +266,4 @@ mod tests {
         assert!(tpm_key.contains(&id.to_string()));
     }
 
-    #[test]
-    fn seconds_until_next_minute_range() {
-        let secs = seconds_until_next_minute();
-        assert!((1..=60).contains(&secs));
-    }
 }

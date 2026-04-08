@@ -2,14 +2,15 @@ use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::value_objects::{ApiKeyId, ProviderId};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSettingsManage;
+use super::audit_helpers::emit_audit;
 use super::error::AppError;
-use super::handlers::parse_uuid;
 use super::state::AppState;
 
 #[derive(Serialize)]
 pub struct ProviderAccessEntry {
-    pub provider_id: String,
+    pub provider_id: ProviderId,
     pub is_allowed: bool,
 }
 
@@ -22,28 +23,30 @@ pub struct SetAccessBody {
 pub async fn list_key_provider_access(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
-    Path(key_id): Path<String>,
+    Path(kid): Path<ApiKeyId>,
 ) -> Result<Json<Vec<ProviderAccessEntry>>, AppError> {
-    let uuid = parse_uuid(&key_id)?;
-    let rows = state.api_key_provider_access_repo.list(uuid).await?;
+    let rows = state.api_key_provider_access_repo.list(kid.0).await?;
     Ok(Json(rows.into_iter().map(|(pid, allowed)| ProviderAccessEntry {
-        provider_id: pid.to_string(),
+        provider_id: ProviderId::from_uuid(pid),
         is_allowed: allowed,
     }).collect()))
 }
 
 /// PATCH /v1/keys/{key_id}/providers/{provider_id} — Set provider access for a key.
 pub async fn set_key_provider_access(
-    RequireSettingsManage(_): RequireSettingsManage,
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
-    Path((key_id, provider_id)): Path<(String, String)>,
+    Path((kid, pid)): Path<(ApiKeyId, ProviderId)>,
     Json(body): Json<SetAccessBody>,
 ) -> Result<Json<ProviderAccessEntry>, AppError> {
-    let key_uuid = parse_uuid(&key_id)?;
-    let provider_uuid = parse_uuid(&provider_id)?;
-    state.api_key_provider_access_repo.set_access(key_uuid, provider_uuid, body.is_allowed).await?;
+    state.api_key_provider_access_repo.set_access(kid.0, pid.0, body.is_allowed).await?;
+
+    emit_audit(&state, &claims, "update", "key_provider_access",
+        &pid.to_string(), &pid.to_string(),
+        &format!("Set key {} provider {} access to {}", kid, pid, body.is_allowed)).await;
+
     Ok(Json(ProviderAccessEntry {
-        provider_id,
+        provider_id: pid,
         is_allowed: body.is_allowed,
     }))
 }

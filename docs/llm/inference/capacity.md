@@ -1,6 +1,6 @@
 # VRAM Pool Capacity Management
 
-> **Status**: Implemented | **Last Updated**: 2026-03-22 | Adaptive Learning + Thermal 5-State + AIMD num_parallel Cap + Placement Planner
+> SSOT | **Last Updated**: 2026-03-22 | Classification: Operational | Exception: >200 lines (capacity subsystem — VRAM pool, KV cache, thermal, AIMD, dispatch)
 
 ## Core Intent
 
@@ -175,7 +175,7 @@ kv_per_request_mb = max(kv_bytes_per_token * tokens / 1_048_576, 32)
 - `bytes_per_element`: determined by KV cache quantization type (q8_0 = 1)
 - Minimum 128 tokens, minimum 32MB
 
-#### Hybrid Mamba+Attention Support
+### Hybrid Mamba+Attention Support
 
 ```
 if attn_interval > 1:

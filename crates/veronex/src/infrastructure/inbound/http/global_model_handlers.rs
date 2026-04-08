@@ -3,6 +3,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireModelManage;
+use super::audit_helpers::emit_audit;
 use super::error::AppError;
 use super::state::AppState;
 
@@ -40,12 +41,15 @@ pub async fn list_global_disabled_models(
 
 /// PATCH /v1/models/global-settings/{model_name} — Set global enable/disable.
 pub async fn set_global_model_enabled(
-    RequireModelManage(_): RequireModelManage,
+    RequireModelManage(claims): RequireModelManage,
     State(state): State<AppState>,
     Path(model_name): Path<String>,
     Json(body): Json<SetEnabledBody>,
 ) -> Result<Json<GlobalModelSettingResponse>, AppError> {
     state.global_model_settings_repo.set_enabled(&model_name, body.is_enabled).await?;
+    let action = if body.is_enabled { "enable" } else { "disable" };
+    emit_audit(&state, &claims, action, "global_model_setting", &model_name, &model_name,
+        &format!("global model {model_name} set is_enabled={}", body.is_enabled)).await;
     Ok(Json(GlobalModelSettingResponse {
         model_name,
         is_enabled: body.is_enabled,

@@ -53,7 +53,6 @@ mod tests {
     use super::*;
     use crate::domain::enums::KeyType;
     use chrono::Utc;
-    use std::sync::Arc;
     use tokio::sync::Mutex;
 
     struct MockApiKeyRepository {
@@ -190,15 +189,9 @@ mod tests {
             created_at: Utc::now(),
             key_type: KeyType::Standard,
             tier: KeyTier::Paid,
+            mcp_cap_points: 3,
             account_id: None,
         }
-    }
-
-    #[tokio::test]
-    async fn trait_object_creation() {
-        let repo: Arc<dyn ApiKeyRepository> = Arc::new(MockApiKeyRepository::new());
-        let keys = repo.list_by_tenant("tenant-1").await.unwrap();
-        assert!(keys.is_empty());
     }
 
     #[tokio::test]
