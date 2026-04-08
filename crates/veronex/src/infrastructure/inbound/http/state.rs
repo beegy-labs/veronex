@@ -22,9 +22,9 @@ use crate::application::ports::outbound::api_key_provider_access::ApiKeyProvider
 use crate::application::ports::outbound::capacity_settings_repository::CapacitySettingsRepository;
 use crate::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
 use crate::application::ports::outbound::mcp_settings_repository::McpSettingsRepository;
-use crate::application::ports::outbound::gemini_model_repository::GeminiModelRepository;
-use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::gemini_sync_config_repository::GeminiSyncConfigRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiModelRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiSyncConfigRepository;
 use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::model_capacity_repository::ModelCapacityRepository;

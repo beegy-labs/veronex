@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
 use crate::domain::entities::GeminiRateLimitPolicy;
 
 pub struct PostgresGeminiPolicyRepository {

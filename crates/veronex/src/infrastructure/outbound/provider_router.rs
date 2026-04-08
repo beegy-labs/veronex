@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use futures::Stream;
 
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
-use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
 use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;

@@ -20,6 +20,7 @@ use super::key_provider_access_handlers;
 use super::key_mcp_access_handlers;
 use super::provider_handlers;
 use super::dashboard_handlers;
+use super::infra_health_handlers;
 use super::docs_handlers;
 use super::gemini_compat_handlers;
 use super::gemini_model_handlers;
@@ -38,7 +39,6 @@ use super::openai_handlers;
 use super::openai_models_handlers;
 use super::openai_embeddings_handlers;
 use super::openai_completions_handlers;
-use super::openai_media_handlers;
 use super::state::AppState;
 use super::usage_handlers;
 
@@ -67,10 +67,10 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/v1/embeddings", post(openai_embeddings_handlers::create_embeddings))
         .route("/v1/completions", post(openai_completions_handlers::text_completions))
         // ── OpenAI-compatible media stubs (501 Not Implemented) ────────────────
-        .route("/v1/audio/transcriptions",  post(openai_media_handlers::audio_transcriptions))
-        .route("/v1/audio/speech",          post(openai_media_handlers::audio_speech))
-        .route("/v1/images/generations",    post(openai_media_handlers::image_generations))
-        .route("/v1/moderations",           post(openai_media_handlers::moderations))
+        .route("/v1/audio/transcriptions",  post(openai_completions_handlers::audio_transcriptions))
+        .route("/v1/audio/speech",          post(openai_completions_handlers::audio_speech))
+        .route("/v1/images/generations",    post(openai_completions_handlers::image_generations))
+        .route("/v1/moderations",           post(openai_completions_handlers::moderations))
 
         // ── Ollama native API (OLLAMA_HOST=http://veronex:3001) ─────────
         // /api/tags uses Veronex-synchronized models; everything else proxies to provider.
@@ -139,8 +139,8 @@ fn build_jwt_router() -> Router<AppState> {
             get(dashboard_handlers::get_job_detail).delete(dashboard_handlers::cancel_job),
         )
         .route("/v1/dashboard/performance", get(dashboard_handlers::get_performance))
-        .route("/v1/dashboard/services", get(dashboard_handlers::get_service_health))
-        .route("/v1/dashboard/pipeline", get(dashboard_handlers::get_pipeline_health))
+        .route("/v1/dashboard/services", get(infra_health_handlers::get_service_health))
+        .route("/v1/dashboard/pipeline", get(infra_health_handlers::get_pipeline_health))
         // Provider management
         .route("/v1/providers", get(provider_handlers::list_providers).post(provider_handlers::register_provider))
         .route("/v1/providers/verify", post(provider_handlers::verify_provider))
@@ -165,7 +165,7 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/mcp/servers", get(mcp_handlers::list_mcp_servers).post(mcp_handlers::register_mcp_server))
         .route("/v1/mcp/servers/{id}", patch(mcp_handlers::patch_mcp_server).delete(mcp_handlers::delete_mcp_server))
         // MCP call statistics
-        .route("/v1/mcp/stats", get(dashboard_handlers::get_mcp_stats))
+        .route("/v1/mcp/stats", get(mcp_handlers::get_mcp_stats))
         // MCP global settings
         .route("/v1/mcp/settings", get(mcp_handlers::get_mcp_settings).patch(mcp_handlers::patch_mcp_settings))
         // Conversations (read-only, dashboard_view; internals require account_manage)

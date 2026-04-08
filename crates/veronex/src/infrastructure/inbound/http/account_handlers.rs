@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::domain::entities::{Account, ApiKey};
 use crate::domain::enums::{KeyTier, KeyType};
 use crate::domain::services::api_key_generator::generate_api_key;
-use crate::domain::services::password_hashing;
+use crate::domain::services::encryption;
 use crate::domain::value_objects::{AccountId, RoleId, SessionId};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireAccountManage;
 use crate::infrastructure::inbound::http::state::AppState;
@@ -217,7 +217,7 @@ pub async fn create_account(
         vec![row.0]
     };
 
-    let password_hash = password_hashing::hash_password(&req.password)?;
+    let password_hash = encryption::hash_password(&req.password)?;
     let now = Utc::now();
     let account = Account {
         id: Uuid::now_v7(),

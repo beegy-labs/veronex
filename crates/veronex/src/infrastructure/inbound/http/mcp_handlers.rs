@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -559,4 +559,59 @@ pub async fn patch_mcp_settings(
         max_routing_cache_entries: s.max_routing_cache_entries,
         updated_at: s.updated_at,
     }))
+}
+
+// ── GET /v1/mcp/stats ─────────────────────────────────────────────────────────
+
+pub async fn get_mcp_stats(
+    State(state): State<AppState>,
+    Query(params): Query<super::usage_handlers::UsageQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let hours = params.effective_hours()?;
+    super::query_helpers::validate_hours(hours)?;
+
+    let slug_stats = if let Some(repo) = state.analytics_repo.as_ref() {
+        repo.mcp_server_stats(hours).await.unwrap_or_default()
+    } else {
+        return Ok(Json(vec![]));
+    };
+
+    if slug_stats.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct McpRow { id: Uuid, name: String, slug: String }
+
+    let pg_rows: Vec<McpRow> = sqlx::query_as("SELECT id, name, slug FROM mcp_servers ORDER BY name LIMIT 500")
+        .fetch_all(&state.pg_pool)
+        .await?;
+
+    let pg_map: std::collections::HashMap<&str, &McpRow> =
+        pg_rows.iter().map(|r| (r.slug.as_str(), r)).collect();
+
+    let result = slug_stats.into_iter().map(|s| {
+        let (server_id, server_name) = pg_map.get(s.server_slug.as_str())
+            .map(|r| (r.id.to_string(), r.name.clone()))
+            .unwrap_or_else(|| (String::new(), s.server_slug.clone()));
+
+        let success_rate = if s.total_calls > 0 {
+            s.success_count as f64 / s.total_calls as f64
+        } else { 0.0 };
+
+        serde_json::json!({
+            "server_id": server_id,
+            "server_name": server_name,
+            "server_slug": s.server_slug,
+            "total_calls": s.total_calls,
+            "success_count": s.success_count,
+            "error_count": s.error_count,
+            "cache_hit_count": s.cache_hit_count,
+            "timeout_count": s.timeout_count,
+            "success_rate": success_rate,
+            "avg_latency_ms": s.avg_latency_ms,
+        })
+    }).collect();
+
+    Ok(Json(result))
 }

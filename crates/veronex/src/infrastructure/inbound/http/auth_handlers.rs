@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::domain::entities::{Account, Session};
 use crate::domain::enums::AccountRole;
-use crate::domain::services::password_hashing;
+use crate::domain::services::encryption;
 use crate::domain::value_objects::AccountId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::Claims;
 use crate::infrastructure::inbound::http::state::AppState;
@@ -507,7 +507,7 @@ pub async fn reset_password(
         Uuid::parse_str(&account_id_str)
             .map_err(|e| AppError::Internal(anyhow::anyhow!("invalid account id in reset token: {e}")))?;
 
-    let new_hash = password_hashing::hash_password(&req.new_password)?;
+    let new_hash = encryption::hash_password(&req.new_password)?;
 
     state
         .account_repo
@@ -561,7 +561,7 @@ pub async fn setup(
         ));
     }
 
-    let hash = password_hashing::hash_password(&req.password)?;
+    let hash = encryption::hash_password(&req.password)?;
 
     // Use a PG advisory lock to serialise the check-then-insert so two
     // concurrent requests cannot both pass the "no accounts exist" guard.

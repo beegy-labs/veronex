@@ -22,7 +22,7 @@ use crate::application::ports::outbound::ollama_model_repository::OllamaModelRep
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
-use crate::application::ports::outbound::thermal_drain_port::ThermalDrainPort;
+use crate::application::ports::outbound::thermal_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use super::compression_router::CompressionHandle;
