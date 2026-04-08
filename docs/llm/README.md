@@ -105,6 +105,7 @@
 | Design System Patterns | `frontend/design-system-patterns.md` | Next.js Activity, unstable_retry, useId React 19.2, fmtMs formatter |
 | Chart System | `frontend/charts.md` | chart-theme.ts SSOT, Recharts constants, tooltip fix, bar/line/area patterns |
 | DonutChart | `frontend/charts-donut.md` | DonutChart component, props, usage, DonutSlice |
+| Execution Contracts | `frontend/execution-contracts.md` | LLM-enforced domain contracts, type contracts, response shapes |
 
 ### Pages (`frontend/pages/`)
 
@@ -129,6 +130,7 @@
 | Flow | `frontend/pages/flow.md` | /flow, network flow visualization, real-time inference traffic |
 | Health | `frontend/pages/health.md` | /health, service health, pod status, HPA, KEDA, staleness |
 | Setup | `frontend/pages/setup.md` | /setup, bootstrap flow, first-run, admin account creation |
+| MCP | `frontend/pages/mcp.md` | /mcp, MCP server list, register, toggle, tool discovery |
 
 ---
 
@@ -148,6 +150,12 @@
 | Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, placement planner, scale-out/in, circuit breaker |
 | Thermal Protection | `flows/thermal.md` | Normal→Soft→Hard→Cooldown→RampUp, forced drain, 60s/90s watchdog |
 | Agent Scrape Cycle | `flows/agent.md` | scrape_cycle, MCP heartbeat, node-exporter, ollama, OTLP, dynamic sharding, KEDA |
+| Job Streaming | `flows/streaming.md` | SSE fan-out, job event streaming, stats streaming, pub/sub |
+| Multi-Instance Pub/Sub | `flows/pubsub-relay.md` | multi-instance relay, Valkey pub/sub, cross-instance fan-out |
+| Crash Recovery & Reaping | `flows/reaper.md` | crash recovery, job reaping, startup recovery, pending jobs |
+| Queue Maintenance | `flows/queue-maintenance.md` | promote_overdue, demand_resync, queue_wait_cancel, processing_reaper |
+| Placement Planner | `flows/placement-planner.md` | model auto-scaling, load_model, evict, placement score, VRAM fit |
+| Context Compression | `flows/context-compression.md` | context window, token budget, compress_context, sliding window |
 
 ---
 
@@ -176,6 +184,7 @@
 | Observability Production (2026) | `research/infrastructure/observability-2026.md` | verified |
 | Database | `research/infrastructure/database.md` | verified |
 | Auth Sessions | `research/security/auth.md` | verified |
+| LLM Gateway Security | `research/security/llm-gateway-2026.md` | research |
 
 ---
 
