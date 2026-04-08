@@ -129,7 +129,8 @@ pub struct InferenceJob {
     pub messages_prefix_hash: Option<String>,
     /// Machine-readable failure cause (G16). Set when status=Failed.
     /// Values: queue_full, no_eligible_provider, thermal_hard_gate, drain_forced,
-    ///         queue_wait_exceeded, provider_error, token_budget_exceeded
+    ///         queue_wait_exceeded, provider_error, token_budget_exceeded,
+    ///         lease_expired_max_attempts
     #[serde(default)]
     pub failure_reason: Option<String>,
     /// Base64 images for vision inference (/api/generate).
