@@ -107,13 +107,13 @@ mod tests {
 
     #[test]
     fn tool_doc_id_format() {
-        let id = tool_doc_id("prod-v1", "svc-abc", "srv-xyz", "web_search");
-        assert_eq!(id, "prod-v1:svc-abc:srv-xyz:web_search");
+        let id = tool_doc_id("test-deploy", "svc-abc", "srv-xyz", "web_search");
+        assert_eq!(id, "test-deploy:svc-abc:srv-xyz:web_search");
     }
 
     #[test]
     fn tool_doc_id_with_uuid_strings() {
-        let dep = "prod-v1";
+        let dep = "test-deploy";
         let svc = "00000000-0000-0000-0000-000000000001";
         let srv = "00000000-0000-0000-0000-000000000002";
         let id = tool_doc_id(dep, svc, srv, "get_weather");

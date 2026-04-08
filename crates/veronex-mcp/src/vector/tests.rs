@@ -24,8 +24,8 @@ async fn vespa_feed_ok() {
 
     let client = VespaClient::new(&server.uri());
     let doc = super::vespa_client::McpToolDoc {
-        tool_id:       "prod-v1:svc:srv:tool".into(),
-        deployment_id: "prod-v1".into(),
+        tool_id:       "test-deploy:svc:srv:tool".into(),
+        deployment_id: "test-deploy".into(),
         service_id:    "svc".into(),
         server_id:     "srv".into(),
         server_name:   "test_server".into(),
@@ -67,11 +67,11 @@ async fn vespa_search_returns_hits() {
                 "fields": { "totalCount": 2 },
                 "children": [
                     {
-                        "id": "id:mcp_tools:mcp_tools::prod-v1:svc:srv:get_weather",
+                        "id": "id:mcp_tools:mcp_tools::test-deploy:svc:srv:get_weather",
                         "relevance": 0.92,
                         "fields": {
-                            "tool_id": "prod-v1:svc:srv:get_weather",
-                            "deployment_id": "prod-v1",
+                            "tool_id": "test-deploy:svc:srv:get_weather",
+                            "deployment_id": "test-deploy",
                             "service_id": "svc",
                             "server_id": "srv",
                             "tool_name": "get_weather",
@@ -80,11 +80,11 @@ async fn vespa_search_returns_hits() {
                         }
                     },
                     {
-                        "id": "id:mcp_tools:mcp_tools::prod-v1:svc:srv:get_forecast",
+                        "id": "id:mcp_tools:mcp_tools::test-deploy:svc:srv:get_forecast",
                         "relevance": 0.85,
                         "fields": {
-                            "tool_id": "prod-v1:svc:srv:get_forecast",
-                            "deployment_id": "prod-v1",
+                            "tool_id": "test-deploy:svc:srv:get_forecast",
+                            "deployment_id": "test-deploy",
                             "service_id": "svc",
                             "server_id": "srv",
                             "tool_name": "get_forecast",
@@ -100,7 +100,7 @@ async fn vespa_search_returns_hits() {
 
     let client = VespaClient::new(&server.uri());
     let embedding = vec![0.1_f32; 1024];
-    let hits = client.search(&embedding, "prod-v1", "svc", 8).await.unwrap();
+    let hits = client.search(&embedding, "test-deploy", "svc", 8).await.unwrap();
 
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].tool_name, "get_weather");
@@ -120,7 +120,7 @@ async fn vespa_search_empty_result() {
         .await;
 
     let client = VespaClient::new(&server.uri());
-    let hits = client.search(&vec![0.0_f32; 1024], "prod-v1", "svc", 8).await.unwrap();
+    let hits = client.search(&vec![0.0_f32; 1024], "test-deploy", "svc", 8).await.unwrap();
     assert!(hits.is_empty());
 }
 
@@ -136,7 +136,7 @@ async fn vespa_delete_server_ok() {
         .await;
 
     let client = VespaClient::new(&server.uri());
-    assert!(client.delete_server("prod-v1", "svc", "srv").await.is_ok());
+    assert!(client.delete_server("test-deploy", "svc", "srv").await.is_ok());
 }
 
 // ── EmbedClient tests ─────────────────────────────────────────────────────────

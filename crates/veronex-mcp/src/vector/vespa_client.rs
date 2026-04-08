@@ -275,8 +275,8 @@ mod tests {
                 "children": [{
                     "relevance": 0.92,
                     "fields": {
-                        "tool_id": "prod-v1:svc:srv:get_weather",
-                        "deployment_id": "prod-v1",
+                        "tool_id": "test-deploy:svc:srv:get_weather",
+                        "deployment_id": "test-deploy",
                         "service_id": "svc",
                         "server_id": "srv",
                         "server_name": "weather_mcp",
@@ -290,15 +290,15 @@ mod tests {
         let hits = parse_hits(&json);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].tool_name, "get_weather");
-        assert_eq!(hits[0].deployment_id, "prod-v1");
+        assert_eq!(hits[0].deployment_id, "test-deploy");
         assert!((hits[0].relevance - 0.92).abs() < 1e-4);
     }
 
     #[test]
     fn doc_id_matches_tool_id() {
         let doc = McpToolDoc {
-            tool_id: "prod-v1:svc:srv:tool".into(),
-            deployment_id: "prod-v1".into(),
+            tool_id: "test-deploy:svc:srv:tool".into(),
+            deployment_id: "test-deploy".into(),
             service_id: "svc".into(),
             server_id: "srv".into(),
             server_name: "my_server".into(),
@@ -307,6 +307,6 @@ mod tests {
             input_schema: "{}".into(),
             embedding: vec![0.0; 1024],
         };
-        assert_eq!(doc.doc_id(), "prod-v1:svc:srv:tool");
+        assert_eq!(doc.doc_id(), "test-deploy:svc:srv:tool");
     }
 }
