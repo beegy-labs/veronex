@@ -167,8 +167,8 @@ done
 
 if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
   # Check if job is in ZSET (queued state)
-  ZSET_SCORE=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$QCANCEL_JOB" 2>/dev/null | tr -d ' \r\n' || echo "")
-  DEMAND_BEFORE=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "0")
+  ZSET_SCORE=$(valkey_zscore "veronex:queue:zset" "$QCANCEL_JOB")
+  DEMAND_BEFORE=$(valkey_get "veronex:demand:$MODEL" || echo "0")
 
   if [ -n "$ZSET_SCORE" ] && [ "$ZSET_SCORE" != "(nil)" ]; then
     info "Job $QCANCEL_JOB in ZSET (score=$ZSET_SCORE) — cancelling queued job"
@@ -186,7 +186,7 @@ if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
   sleep 1
 
   # Verify job removed from ZSET
-  ZSET_AFTER=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$QCANCEL_JOB" 2>/dev/null | tr -d ' \r\n' || echo "")
+  ZSET_AFTER=$(valkey_zscore "veronex:queue:zset" "$QCANCEL_JOB")
   if [ -z "$ZSET_AFTER" ] || [ "$ZSET_AFTER" = "(nil)" ]; then
     pass "Queued cancel: job removed from ZSET (ZREM confirmed)"
   else
@@ -203,7 +203,7 @@ if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
   esac
 
   # Verify demand counter decremented or consistent
-  DEMAND_AFTER=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "0")
+  DEMAND_AFTER=$(valkey_get "veronex:demand:$MODEL" || echo "0")
   if [ "${DEMAND_AFTER:-0}" -le "${DEMAND_BEFORE:-0}" ]; then
     pass "Queued cancel: demand counter consistent (before=$DEMAND_BEFORE after=$DEMAND_AFTER)"
   else
@@ -294,7 +294,7 @@ if [ -n "$RECOVERY_JOB" ] && [ "$RECOVERY_JOB" != "None" ]; then
   sleep 3
   STATUS_AFTER=$(aget "/v1/inference/$RECOVERY_JOB/status" 2>/dev/null | jv '["status"]' 2>/dev/null || echo "unknown")
   PROCESSING_COUNT=$(docker compose exec -T valkey valkey-cli LLEN "veronex:queue:processing" 2>/dev/null | tr -d ' \r\n' || echo "0")
-  ZSET_RECOVERED=$(docker compose exec -T valkey valkey-cli ZSCORE "veronex:queue:zset" "$RECOVERY_JOB" 2>/dev/null | tr -d ' \r\n' || echo "")
+  ZSET_RECOVERED=$(valkey_zscore "veronex:queue:zset" "$RECOVERY_JOB")
 
   info "Job $RECOVERY_JOB status after restart: $STATUS_AFTER"
   info "Processing list after restart: $PROCESSING_COUNT entries"

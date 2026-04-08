@@ -267,9 +267,7 @@ if [ "$INGEST_CODE" = "200" ] || [ "$INGEST_CODE" = "202" ]; then
   CH_FOUND=0
   for i in $(seq 1 6); do
     sleep 5
-    CH_COUNT=$(docker compose exec -T clickhouse clickhouse-client -d veronex \
-      --query "SELECT count() FROM mcp_tool_calls WHERE tenant_id = 'e2e-test-$E2E_RUN_ID' AND event_time > now() - INTERVAL 5 MINUTE" \
-      2>/dev/null | tr -d ' \r\n' || echo "0")
+    CH_COUNT=$(ch_query "SELECT count() FROM mcp_tool_calls WHERE tenant_id = 'e2e-test-$E2E_RUN_ID' AND event_time > now() - INTERVAL 5 MINUTE" | tr -d ' \r\n' || echo "0")
     if [ "${CH_COUNT:-0}" -gt 0 ] 2>/dev/null; then
       CH_FOUND=1
       pass "mcp_tool_calls: event arrived in ClickHouse after $((i*5))s ($CH_COUNT row(s))"
@@ -280,9 +278,7 @@ if [ "$INGEST_CODE" = "200" ] || [ "$INGEST_CODE" = "202" ]; then
   if [ "$CH_FOUND" = "0" ]; then
     fail "mcp_tool_calls: event not in ClickHouse after 30s (pipeline broken)"
     # Diagnostics
-    OTL_COUNT=$(docker compose exec -T clickhouse clickhouse-client -d veronex \
-      --query "SELECT count() FROM otel_logs WHERE LogAttributes['event.name']='mcp.tool_call' AND Timestamp > now() - INTERVAL 5 MINUTE" \
-      2>/dev/null | tr -d ' \r\n' || echo "?")
+    OTL_COUNT=$(ch_query "SELECT count() FROM otel_logs WHERE LogAttributes['event.name']='mcp.tool_call' AND Timestamp > now() - INTERVAL 5 MINUTE" | tr -d ' \r\n' || echo "?")
     info "otel_logs mcp.tool_call rows (last 5m): $OTL_COUNT"
     KAFKA_MSGS=$(docker compose exec -T redpanda rpk topic consume otel-logs --num 1 --timeout 3s 2>/dev/null | wc -l | tr -d ' ' || echo "?")
     info "Redpanda otel-logs topic readable: $KAFKA_MSGS lines"
@@ -296,9 +292,7 @@ hdr "ClickHouse MCP Schema"
 check_table() {
   local table="$1"
   local count
-  count=$(docker compose exec -T clickhouse clickhouse-client -d veronex \
-    --query "SELECT count() FROM system.tables WHERE database='veronex' AND name='$table'" \
-    2>/dev/null | tr -d ' \r\n' || echo "0")
+  count=$(ch_query "SELECT count() FROM system.tables WHERE database='veronex' AND name='$table'" | tr -d ' \r\n' || echo "0")
   [ "${count:-0}" -gt 0 ] 2>/dev/null \
     && pass "ClickHouse table/view exists: $table" \
     || fail "ClickHouse table/view missing: $table"

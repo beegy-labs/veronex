@@ -29,8 +29,6 @@ PASSWORD=${E2E_PASSWORD:-$_E2E_DEFAULT}
 unset _E2E_DEFAULT
 
 MODEL="${MODEL:-qwen3:8b}"
-# Additional models for multi-model inference tests (auto-detected from synced models)
-MODELS_EXTRA="${MODELS_EXTRA:-}"
 CONCURRENT="${CONCURRENT:-6}"
 SKIP_DB_RESET="${SKIP_DB_RESET:-0}"
 
@@ -111,9 +109,37 @@ for p in d.get('providers', []):
 }
 
 # ── Valkey helpers (requires docker compose in PATH) ──────────────────────────
-valkey_zcard() { docker compose exec -T valkey valkey-cli ZCARD "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
-valkey_get()   { docker compose exec -T valkey valkey-cli GET "$1" 2>/dev/null | tr -d ' \r\n' || echo ""; }
-valkey_hlen()  { docker compose exec -T valkey valkey-cli HLEN "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_zcard()  { docker compose exec -T valkey valkey-cli ZCARD "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_get()    { docker compose exec -T valkey valkey-cli GET "$1" 2>/dev/null | tr -d ' \r\n' || echo ""; }
+valkey_hlen()   { docker compose exec -T valkey valkey-cli HLEN "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_zscore() { docker compose exec -T valkey valkey-cli ZSCORE "$1" "$2" 2>/dev/null | tr -d ' \r\n' || echo ""; }
+
+# ── Database helpers ──────────────────────────────────────────────────────────
+pg_query() { docker compose exec -T postgres psql -U veronex -d veronex -tAq -c "$1" 2>/dev/null; }
+ch_query() { docker compose exec -T clickhouse clickhouse-client -d veronex --query "$1" 2>/dev/null; }
+
+# ── Model detection helpers ───────────────────────────────────────────────────
+get_text_model() {
+  curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for m in d.get('models',[]):
+    n=m['name'].lower()
+    if not any(x in n for x in ['embed','ocr','vision','vl','llava','minicpm','moondream']):
+        print(m['name']); break
+" 2>/dev/null || echo ""
+}
+
+get_vision_model() {
+  curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for m in d.get('models',[]):
+    n=m['name'].lower()
+    if any(x in n for x in ['vision','vl','llava','minicpm','moondream']):
+        print(m['name']); break
+" 2>/dev/null || echo ""
+}
 
 # ── Queue drain helper ────────────────────────────────────────────────────────
 # Wait up to MAX_WAIT seconds for the inference queue and active jobs to drain.

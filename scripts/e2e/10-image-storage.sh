@@ -11,17 +11,7 @@ hdr "Image Storage & Provider Name (post-parallel)"
 
 # ── Detect vision model ──────────────────────────────────────────────────────
 
-VISION_MODEL=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
-import sys, json
-try:
-    d = json.loads(sys.stdin.read())
-    for m in d.get('models', []):
-        name = m.get('name', '')
-        if any(v in name.lower() for v in ['llava', 'vision', 'minicpm', 'moondream', '-vl', '_vl']):
-            print(name); exit()
-except: pass
-print('')
-" 2>/dev/null || echo "")
+VISION_MODEL=$(get_vision_model)
 
 if [ -z "$VISION_MODEL" ]; then
   info "SKIP: No vision model on local Ollama"

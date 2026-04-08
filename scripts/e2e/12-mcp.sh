@@ -579,7 +579,7 @@ esac
 
 # 4. Verify Valkey heartbeat key exists for registered server
 if [ -n "$INT_ID" ]; then
-  HB_VAL=$(docker compose exec -T valkey valkey-cli GET "veronex:mcp:heartbeat:$INT_ID" 2>/dev/null | tr -d ' \r\n' || echo "")
+  HB_VAL=$(valkey_get "veronex:mcp:heartbeat:$INT_ID")
   [ -n "$HB_VAL" ] \
     && pass "MCP heartbeat: Valkey key present for server $INT_ID" \
     || info "MCP heartbeat: no Valkey key yet (agent scrape pending)"
@@ -914,8 +914,7 @@ except Exception as e: print(f'error:{e}')
     || fail "Expected source=api, got source=$CONV_SOURCE"
 
   # ── DB: source column check ───────────────────────────────────────────────
-  DB_SOURCE=$(docker compose exec -T postgres psql -U veronex -d veronex -tAc \
-    "SELECT source FROM conversations ORDER BY created_at DESC LIMIT 1;" 2>/dev/null | tr -d ' \r')
+  DB_SOURCE=$(pg_query "SELECT source FROM conversations ORDER BY created_at DESC LIMIT 1;" | tr -d ' \r')
   [ "$DB_SOURCE" = "api" ] \
     && pass "DB conversations.source='api'" \
     || fail "DB conversations.source='$DB_SOURCE' (expected 'api')"

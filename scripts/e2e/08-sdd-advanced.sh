@@ -99,9 +99,7 @@ MC_R0=$(mc_for "$CAP_PRE" "remote" "$MODEL")
 info "Pre-stress max_concurrent: local=$MC_L0 remote=$MC_R0"
 
 # DB baseline verification
-BASELINE_INFO=$(docker compose exec -T postgres psql -U veronex -d veronex -tA \
-  -c "SELECT provider_id, baseline_tps, max_concurrent FROM model_vram_profiles WHERE model_name='$MODEL';" \
-  2>/dev/null || echo "")
+BASELINE_INFO=$(pg_query "SELECT provider_id, baseline_tps, max_concurrent FROM model_vram_profiles WHERE model_name='$MODEL';" || echo "")
 info "AIMD DB state: $BASELINE_INFO"
 
 # Extreme overload: 15 concurrent heavy requests — well beyond combined max_concurrent
@@ -149,9 +147,7 @@ else
 fi
 
 # DB verification: AIMD state persisted
-AIMD_ROWS=$(docker compose exec -T postgres psql -U veronex -d veronex -tA \
-  -c "SELECT count(*) FROM model_vram_profiles WHERE model_name='$MODEL';" \
-  2>/dev/null | tr -d ' \r\n' || echo "0")
+AIMD_ROWS=$(pg_query "SELECT count(*) FROM model_vram_profiles WHERE model_name='$MODEL';" | tr -d ' \r\n' || echo "0")
 [ "${AIMD_ROWS:-0}" -ge 1 ] && pass "AIMD state persisted in DB ($AIMD_ROWS profiles for $MODEL)" \
   || fail "No AIMD profiles in DB for $MODEL"
 
@@ -255,7 +251,7 @@ RESYNC_FAKE_KEY="veronex:demand:__resync_test_model__"
 
 # Set a bogus demand for non-existent model
 docker compose exec -T valkey valkey-cli SET "$RESYNC_FAKE_KEY" "42" > /dev/null 2>&1
-RESYNC_SET=$(docker compose exec -T valkey valkey-cli GET "$RESYNC_FAKE_KEY" 2>/dev/null | tr -d ' \r\n' || echo "")
+RESYNC_SET=$(valkey_get "$RESYNC_FAKE_KEY")
 info "Demand counter set for fake model: ${RESYNC_SET} (should be corrected to 0 within 60s)"
 
 # ── 3. Scale-In / Scale-Out Cycle ──────────────────────────────────────────
@@ -263,7 +259,7 @@ info "Demand counter set for fake model: ${RESYNC_SET} (should be corrected to 0
 hdr "SDD §8: Scale-In — Idle Provider Standby + Scale-Out Recovery"
 
 # Verify preconditions: demand=0, no active requests
-DEMAND_NOW=$(docker compose exec -T valkey valkey-cli GET "veronex:demand:$MODEL" 2>/dev/null | tr -d ' \r\n' || echo "0")
+DEMAND_NOW=$(valkey_get "veronex:demand:$MODEL" || echo "0")
 info "Demand counter: ${DEMAND_NOW:-0}"
 
 # Mark timestamp for log scanning
@@ -309,7 +305,7 @@ fi
 
 # After 70s, the demand_resync loop (60s) should have corrected the fake model counter.
 # Since __resync_test_model__ has 0 jobs in ZSET, resync should set demand to 0 or delete the key.
-RESYNC_AFTER=$(docker compose exec -T valkey valkey-cli GET "$RESYNC_FAKE_KEY" 2>/dev/null | tr -d ' \r\n' || echo "")
+RESYNC_AFTER=$(valkey_get "$RESYNC_FAKE_KEY")
 
 if [ -z "$RESYNC_AFTER" ] || [ "$RESYNC_AFTER" = "0" ]; then
   pass "Demand resync: fake model counter corrected from 42 -> ${RESYNC_AFTER:-deleted} (ZSCAN ground truth)"
@@ -407,11 +403,7 @@ esac
 # Verify thermal auto-detection per gpu_vendor
 # AMD providers use CPU thresholds (75/82/90°C), NVIDIA use GPU (80/88/93°C)
 # Check that providers have gpu_vendor info in DB
-GPU_VENDORS=$(docker compose exec -T postgres psql -U veronex -d veronex -tA \
-  -c "SELECT s.name, s.gpu_vendor FROM gpu_servers s
-      JOIN llm_providers p ON p.server_id = s.id
-      WHERE p.is_active = true;" \
-  2>/dev/null || echo "")
+GPU_VENDORS=$(pg_query "SELECT s.name, s.gpu_vendor FROM gpu_servers s JOIN llm_providers p ON p.server_id = s.id WHERE p.is_active = true;" || echo "")
 if [ -n "$GPU_VENDORS" ]; then
   info "GPU vendors: $GPU_VENDORS"
   pass "Per-provider thermal thresholds configured via gpu_vendor auto-detection"
@@ -427,14 +419,7 @@ fi
 # §3: gpu_vendor -> thermal threshold auto-detection
 # AMD APU: normal_below=75, soft_at=82, hard_at=90 (CPU profile)
 # NVIDIA:  normal_below=80, soft_at=88, hard_at=93 (GPU profile)
-GPU_THRESHOLD_CHECK=$(docker compose exec -T postgres psql -U veronex -d veronex -tA \
-  -c "SELECT s.name, s.gpu_vendor,
-        CASE WHEN s.gpu_vendor = 'nvidia' THEN 'GPU(80/88/93)'
-             ELSE 'CPU(75/82/90)' END AS expected_profile
-      FROM gpu_servers s
-      JOIN llm_providers p ON p.server_id = s.id
-      WHERE p.is_active = true;" \
-  2>/dev/null || echo "")
+GPU_THRESHOLD_CHECK=$(pg_query "SELECT s.name, s.gpu_vendor, CASE WHEN s.gpu_vendor = 'nvidia' THEN 'GPU(80/88/93)' ELSE 'CPU(75/82/90)' END AS expected_profile FROM gpu_servers s JOIN llm_providers p ON p.server_id = s.id WHERE p.is_active = true;" || echo "")
 if [ -n "$GPU_THRESHOLD_CHECK" ]; then
   info "GPU vendor -> thermal profile mapping:"
   echo "$GPU_THRESHOLD_CHECK" | while IFS='|' read -r sname vendor profile; do
@@ -499,18 +484,14 @@ esac
 hdr "G16: failure_reason Column"
 
 # Verify migration applied: failure_reason column exists
-FR_COL=$(docker compose exec -T postgres psql -U veronex -d veronex -tA \
-  -c "SELECT column_name FROM information_schema.columns WHERE table_name='inference_jobs' AND column_name='failure_reason';" \
-  2>/dev/null || echo "")
+FR_COL=$(pg_query "SELECT column_name FROM information_schema.columns WHERE table_name='inference_jobs' AND column_name='failure_reason';" || echo "")
 [ "$FR_COL" = "failure_reason" ] \
   && pass "failure_reason column exists in inference_jobs" \
   || fail "failure_reason column missing from inference_jobs"
 
 # Test: failed jobs from this test run should have failure_reason populated
 # Query any recent failed job (from stress tests above, or general failures)
-FR_SAMPLE=$(docker compose exec -T postgres psql -U veronex -d veronex -tA \
-  -c "SELECT failure_reason FROM inference_jobs WHERE status='failed' AND failure_reason IS NOT NULL ORDER BY created_at DESC LIMIT 1;" \
-  2>/dev/null || echo "")
+FR_SAMPLE=$(pg_query "SELECT failure_reason FROM inference_jobs WHERE status='failed' AND failure_reason IS NOT NULL ORDER BY created_at DESC LIMIT 1;" || echo "")
 if [ -n "$FR_SAMPLE" ]; then
   pass "failure_reason populated on failed jobs (sample: $FR_SAMPLE)"
 else
@@ -522,9 +503,7 @@ else
     2>/dev/null || printf "\n000")
   FR_TEST_CODE=$(echo "$FR_TEST" | tail -1)
   sleep 1
-  FR_VERIFY=$(docker compose exec -T postgres psql -U veronex -d veronex -tA \
-    -c "SELECT failure_reason FROM inference_jobs WHERE model_name='nonexistent-model-e2e-test' AND status='failed' ORDER BY created_at DESC LIMIT 1;" \
-    2>/dev/null || echo "")
+  FR_VERIFY=$(pg_query "SELECT failure_reason FROM inference_jobs WHERE model_name='nonexistent-model-e2e-test' AND status='failed' ORDER BY created_at DESC LIMIT 1;" || echo "")
   if [ "$FR_VERIFY" = "no_eligible_provider" ]; then
     pass "failure_reason='no_eligible_provider' for invalid model request"
   elif [ -n "$FR_VERIFY" ]; then
@@ -535,9 +514,7 @@ else
 fi
 
 # Verify known failure_reason values are valid enum strings
-FR_VALUES=$(docker compose exec -T postgres psql -U veronex -d veronex -tA \
-  -c "SELECT DISTINCT failure_reason FROM inference_jobs WHERE failure_reason IS NOT NULL;" \
-  2>/dev/null || echo "")
+FR_VALUES=$(pg_query "SELECT DISTINCT failure_reason FROM inference_jobs WHERE failure_reason IS NOT NULL;" || echo "")
 if [ -n "$FR_VALUES" ]; then
   FR_VALID=true
   while IFS= read -r val; do
@@ -577,9 +554,7 @@ fi
 
 # Verify MAX_QUEUE_WAIT_SECS constant is respected: check that no queued job
 # has been waiting longer than 300s+30s margin (the cancel loop runs every 30s)
-STALE_QUEUED=$(docker compose exec -T postgres psql -U veronex -d veronex -tA \
-  -c "SELECT COUNT(*) FROM inference_jobs WHERE status IN ('pending') AND created_at < NOW() - INTERVAL '330 seconds';" \
-  2>/dev/null || echo "0")
+STALE_QUEUED=$(pg_query "SELECT COUNT(*) FROM inference_jobs WHERE status IN ('pending') AND created_at < NOW() - INTERVAL '330 seconds';" || echo "0")
 if [ "${STALE_QUEUED:-0}" = "0" ]; then
   pass "No stale queued jobs older than 330s (queue_wait_cancel working)"
 else

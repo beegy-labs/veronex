@@ -87,8 +87,8 @@ if [ "${SKIP_SETUP:-0}" = "0" ]; then
 fi
 
 # ── Wave 1: Read-only / independent (parallel) ───────────────────────────────
-echo -e "\n${CYAN}${BOLD}── Wave 1 (parallel): security · metrics · liveness · frontend ──${NC}"
-_run_wave 05-security 09-metrics-pipeline 11-verify-liveness 13-frontend
+echo -e "\n${CYAN}${BOLD}── Wave 1 (parallel): security · metrics · frontend ──${NC}"
+_run_wave 05-security 09-metrics-pipeline 13-frontend
 
 # ── Wave 2: Feature tests with isolated resources (parallel) ─────────────────
 echo -e "\n${CYAN}${BOLD}── Wave 2 (parallel): crud · api-surface · image-storage · mcp · vision-fallback · mcp-analytics ──${NC}"

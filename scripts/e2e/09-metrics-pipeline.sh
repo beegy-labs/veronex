@@ -87,9 +87,7 @@ info "Waiting up to ${WAIT_SECS}s for metrics to appear in ClickHouse..."
 METRICS_FOUND=0
 for i in $(seq 1 $((WAIT_SECS / 5))); do
   # Check if ANY metric has arrived for either server
-  CH_COUNT=$(docker compose exec -T clickhouse clickhouse-client -d veronex \
-    --query "SELECT count() FROM otel_metrics_gauge WHERE ts > now() - INTERVAL 5 MINUTE" \
-    2>/dev/null | tr -d ' \r\n' || echo "0")
+  CH_COUNT=$(ch_query "SELECT count() FROM otel_metrics_gauge WHERE ts > now() - INTERVAL 5 MINUTE" | tr -d ' \r\n' || echo "0")
 
   if [ "$CH_COUNT" -gt 0 ]; then
     METRICS_FOUND=1
@@ -119,9 +117,7 @@ check_metric() {
   [ -n "$server_filter" ] && where_server="AND server_id = '$server_filter'"
 
   local count
-  count=$(docker compose exec -T clickhouse clickhouse-client -d veronex \
-    --query "SELECT count() FROM otel_metrics_gauge WHERE metric_name = '$metric_name' $where_server AND ts > now() - INTERVAL 10 MINUTE" \
-    2>/dev/null | tr -d ' \r\n' || echo "0")
+  count=$(ch_query "SELECT count() FROM otel_metrics_gauge WHERE metric_name = '$metric_name' $where_server AND ts > now() - INTERVAL 10 MINUTE" | tr -d ' \r\n' || echo "0")
 
   if [ "$count" -gt 0 ]; then
     pass "$label: $count rows"

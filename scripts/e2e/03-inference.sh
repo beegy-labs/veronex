@@ -112,26 +112,20 @@ fi
 
 hdr "Database Verification"
 
-docker compose exec -T postgres psql -U veronex -d veronex -c \
-  "SELECT model_name, weight_mb, kv_per_request_mb, max_concurrent, baseline_tps FROM model_vram_profiles LIMIT 10;" \
-  2>/dev/null || true
+pg_query "SELECT model_name, weight_mb, kv_per_request_mb, max_concurrent, baseline_tps FROM model_vram_profiles LIMIT 10;" || true
 
-VRAM_ROWS=$(docker compose exec -T postgres psql -U veronex -d veronex -t -c \
-  "SELECT COUNT(*) FROM model_vram_profiles;" 2>/dev/null | tr -d ' ')
+VRAM_ROWS=$(pg_query "SELECT COUNT(*) FROM model_vram_profiles;" | tr -d ' ')
 [ -n "$VRAM_ROWS" ] && [ "$VRAM_ROWS" -ge 1 ] \
   && pass "model_vram_profiles: $VRAM_ROWS rows" || info "model_vram_profiles: empty"
 
-docker compose exec -T postgres psql -U veronex -d veronex -c \
-  "SELECT status, COUNT(*) FROM inference_jobs GROUP BY status;" 2>/dev/null || true
+pg_query "SELECT status, COUNT(*) FROM inference_jobs GROUP BY status;" || true
 
-JOB_ROWS=$(docker compose exec -T postgres psql -U veronex -d veronex -t -c \
-  "SELECT COUNT(*) FROM inference_jobs;" 2>/dev/null | tr -d ' ')
+JOB_ROWS=$(pg_query "SELECT COUNT(*) FROM inference_jobs;" | tr -d ' ')
 [ -n "$JOB_ROWS" ] && [ "$JOB_ROWS" -ge 1 ] && pass "inference_jobs: $JOB_ROWS rows" \
   || fail "No inference_jobs in DB"
 
 # Verify num_parallel column exists
-docker compose exec -T postgres psql -U veronex -d veronex -c \
-  "SELECT id, name, num_parallel FROM llm_providers LIMIT 5;" 2>/dev/null \
+pg_query "SELECT id, name, num_parallel FROM llm_providers LIMIT 5;" \
   && pass "num_parallel column present in llm_providers" || info "num_parallel check skipped"
 
 # ── Round 2: AIMD-Regulated Multi-Model Load ─────────────────────────────────
@@ -215,9 +209,7 @@ info "Firing $DIST_CONCURRENT concurrent requests to induce N-server distributio
 fire_concurrent "$DIST_CONCURRENT" "distribution test"
 sleep 3
 
-DIST_RESULT=$(docker compose exec -T postgres psql -U veronex -d veronex -tAF'|' \
-  -c "SELECT p.name, COUNT(j.id) FROM inference_jobs j JOIN llm_providers p ON p.id=j.provider_id WHERE j.status='completed' GROUP BY p.name ORDER BY COUNT(j.id) DESC;" \
-  2>/dev/null | tr -d ' \r')
+DIST_RESULT=$(pg_query "SELECT p.name, COUNT(j.id) FROM inference_jobs j JOIN llm_providers p ON p.id=j.provider_id WHERE j.status='completed' GROUP BY p.name ORDER BY COUNT(j.id) DESC;" | tr -d ' \r')
 
 DIST_PROVIDER_COUNT=$(echo "$DIST_RESULT" | grep -c '|' 2>/dev/null || echo "0")
 echo "$DIST_RESULT" | while IFS='|' read -r pname cnt; do

@@ -18,17 +18,7 @@ hdr "Vision Fallback — non-vision model auto image analysis"
 
 # ── Detect vision fallback model (must be loaded in Ollama) ─────────────────
 
-VISION_MODEL=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
-import sys, json
-try:
-    d = json.loads(sys.stdin.read())
-    for m in d.get('models', []):
-        name = m.get('name', '')
-        if any(v in name.lower() for v in ['-vl', '_vl', 'llava', 'moondream', 'minicpm-v']):
-            print(name); exit()
-except: pass
-print('')
-" 2>/dev/null || echo "")
+VISION_MODEL=$(get_vision_model)
 
 if [ -z "$VISION_MODEL" ]; then
   info "SKIP: No vision model available (need qwen3-vl:8b or similar)"
@@ -39,19 +29,7 @@ info "Vision fallback model: $VISION_MODEL"
 
 # ── Detect a non-vision text model ──────────────────────────────────────────
 
-TEXT_MODEL=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
-import sys, json
-try:
-    d = json.loads(sys.stdin.read())
-    for m in d.get('models', []):
-        name = m.get('name', '').lower()
-        # Skip vision, embed, ocr models
-        if any(v in name for v in ['-vl', '_vl', 'llava', 'moondream', 'minicpm-v', 'embed', 'ocr']):
-            continue
-        print(m['name']); exit()
-except: pass
-print('')
-" 2>/dev/null || echo "")
+TEXT_MODEL=$(get_text_model)
 
 if [ -z "$TEXT_MODEL" ]; then
   info "SKIP: No text-only model available"
