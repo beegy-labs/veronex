@@ -519,7 +519,7 @@ if [ -n "$FR_VALUES" ]; then
   FR_VALID=true
   while IFS= read -r val; do
     case "$val" in
-      queue_full|no_eligible_provider|thermal_hard_gate|drain_forced|queue_wait_exceeded|provider_error|token_budget_exceeded|lease_expired_max_attempts) ;;
+      queue_full|no_eligible_provider|queue_wait_exceeded|provider_error|token_budget_exceeded|lease_expired_max_attempts|lease_expired_reenqueue_failed) ;;
       *) FR_VALID=false; info "Unknown failure_reason value: $val" ;;
     esac
   done <<< "$FR_VALUES"
