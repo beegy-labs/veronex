@@ -7,7 +7,7 @@ on:
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'Dockerfile'
+      - 'crates/veronex/Dockerfile'
       - '.github/workflows/ci.yml'
   workflow_dispatch:
     inputs:
@@ -91,7 +91,7 @@ jobs:
         if: steps.check_image.outputs.exists != 'true'
         with:
           context: .
-          file: ./Dockerfile
+          file: ./crates/veronex/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
