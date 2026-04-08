@@ -113,6 +113,10 @@ valkey_zcard()  { docker compose exec -T valkey valkey-cli ZCARD "$1" 2>/dev/nul
 valkey_get()    { docker compose exec -T valkey valkey-cli GET "$1" 2>/dev/null | tr -d ' \r\n' || echo ""; }
 valkey_hlen()   { docker compose exec -T valkey valkey-cli HLEN "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
 valkey_zscore() { docker compose exec -T valkey valkey-cli ZSCORE "$1" "$2" 2>/dev/null | tr -d ' \r\n' || echo ""; }
+valkey_llen()   { docker compose exec -T valkey valkey-cli LLEN "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_scard()  { docker compose exec -T valkey valkey-cli SCARD "$1" 2>/dev/null | tr -d ' \r\n' || echo "0"; }
+valkey_ttl()    { docker compose exec -T valkey valkey-cli TTL "$1" 2>/dev/null | tr -d ' \r\n' || echo "-2"; }
+valkey_keys()   { docker compose exec -T valkey valkey-cli KEYS "$1" 2>/dev/null | tr -d '\r'; }
 
 # ── Database helpers ──────────────────────────────────────────────────────────
 pg_query() { docker compose exec -T postgres psql -U veronex -d veronex -tAq -c "$1" 2>/dev/null; }

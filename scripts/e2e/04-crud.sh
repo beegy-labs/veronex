@@ -367,7 +367,7 @@ fi
 
 hdr "API Instance Registry — veronex:instances"
 
-INSTANCE_COUNT=$(docker compose exec -T valkey valkey-cli SCARD "veronex:instances" 2>/dev/null | tr -d ' \r\n' || echo "0")
+INSTANCE_COUNT=$(valkey_scard "veronex:instances")
 if [ "${INSTANCE_COUNT:-0}" -ge 1 ]; then
   pass "veronex:instances SET has $INSTANCE_COUNT member(s)"
 else

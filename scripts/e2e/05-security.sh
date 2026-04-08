@@ -116,7 +116,7 @@ if [ -n "$RL_KEY" ] && [ "$RL_KEY" != "None" ]; then
   # Verify rate limit key has TTL in Valkey (should expire, not persist forever)
   RL_HASH=$(echo "$RL_RES" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('key_hash',''))" 2>/dev/null || echo "")
   if [ -n "$RL_HASH" ]; then
-    RL_TTL=$(docker compose exec -T valkey valkey-cli TTL "veronex:rpm:$RL_HASH" 2>/dev/null | tr -d '\r\n' || echo "-2")
+    RL_TTL=$(valkey_ttl "veronex:rpm:$RL_HASH")
     if [ "$RL_TTL" -gt 0 ] 2>/dev/null; then
       pass "RPM counter has TTL ($RL_TTL seconds) — will auto-expire"
     elif [ "$RL_TTL" = "-1" ]; then
@@ -338,7 +338,7 @@ else
   # Helper: delete all login_attempts keys from host side (avoids xargs dependency in container)
   _clear_login_rl() {
     local keys
-    keys=$(docker compose exec -T valkey valkey-cli KEYS 'veronex:login_attempts:*' 2>/dev/null | tr -d '\r')
+    keys=$(valkey_keys 'veronex:login_attempts:*')
     if [ -n "$keys" ]; then
       # shellcheck disable=SC2086
       docker compose exec -T valkey valkey-cli del $keys > /dev/null 2>&1 || true

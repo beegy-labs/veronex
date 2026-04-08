@@ -293,7 +293,7 @@ if [ -n "$RECOVERY_JOB" ] && [ "$RECOVERY_JOB" != "None" ]; then
   # (processing queue에 있던 job은 ZADD로 복원 → 재처리 또는 DB에 상태 유지)
   sleep 3
   STATUS_AFTER=$(aget "/v1/inference/$RECOVERY_JOB/status" 2>/dev/null | jv '["status"]' 2>/dev/null || echo "unknown")
-  PROCESSING_COUNT=$(docker compose exec -T valkey valkey-cli LLEN "veronex:queue:processing" 2>/dev/null | tr -d ' \r\n' || echo "0")
+  PROCESSING_COUNT=$(valkey_llen "veronex:queue:processing")
   ZSET_RECOVERED=$(valkey_zscore "veronex:queue:zset" "$RECOVERY_JOB")
 
   info "Job $RECOVERY_JOB status after restart: $STATUS_AFTER"
@@ -316,7 +316,7 @@ if [ -n "$RECOVERY_JOB" ] && [ "$RECOVERY_JOB" != "None" ]; then
     || info "Processing list has $PROCESSING_COUNT entries (crash recovery may still be running)"
 
   # Verify instance registered in veronex:instances after restart
-  INST_COUNT=$(docker compose exec -T valkey valkey-cli SCARD "veronex:instances" 2>/dev/null | tr -d ' \r\n' || echo "0")
+  INST_COUNT=$(valkey_scard "veronex:instances")
   [ "${INST_COUNT:-0}" -ge 1 ] \
     && pass "Instance re-registered in veronex:instances after restart ($INST_COUNT member(s))" \
     || info "veronex:instances empty after restart (Valkey may not be configured)"

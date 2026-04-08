@@ -24,7 +24,6 @@ hdr "Round 1: Inference Burst — $CONCURRENT concurrent (cold start)"
 
 fire_concurrent "$CONCURRENT" "Say only the digit"
 R1_OK=$R_OK; R1_Q=$R_Q; R1_F=$R_F
-save_var R1_OK "$R1_OK"; save_var R1_Q "$R1_Q"; save_var R1_F "$R1_F"
 info "Round 1: OK=$R1_OK Queued=$R1_Q Failed=$R1_F"
 [ "$R1_OK" -ge 1 ] && pass "Inference routing works (OK=$R1_OK)" || fail "No successful inferences"
 
@@ -99,7 +98,6 @@ fi
 [ -n "$AIMD_LIMIT" ] && [ "$AIMD_LIMIT" -gt 0 ] \
   && pass "AIMD limit for $MODEL = $AIMD_LIMIT" \
   || fail "AIMD limit not set after sync cycles"
-save_var AIMD_LIMIT "$AIMD_LIMIT"
 
 # SDD: max_concurrent must not exceed the provider's own num_parallel (online providers only)
 if [ -n "$AIMD_LIMIT" ] && [ "$AIMD_LIMIT" != "0" ]; then
@@ -165,7 +163,6 @@ for f in "$TMPDIR_R2"/r_*; do
 done
 rm -rf "$TMPDIR_R2"
 R2_OK=$R_OK; R2_Q=$R_Q; R2_F=$R_F
-save_var R2_OK "$R2_OK"; save_var R2_Q "$R2_Q"; save_var R2_F "$R2_F"
 info "Round 2: OK=$R2_OK Queued=$R2_Q Failed=$R2_F"
 [ "$R2_OK" -ge 1 ] && pass "AIMD-regulated inference works" || fail "No successful inferences in round 2"
 [ "$R2_F" -eq 0 ] && pass "All $R2_COUNT requests completed without error" \
@@ -331,7 +328,4 @@ if [ "$GP_OK" -gt 0 ]; then
 else
   info "Goodput test: 0 requests completed (queue may be saturated from parallel tests)"
 fi
-save_var GP_OK "$GP_OK"
-save_var GP_ELAPSED "$GP_ELAPSED"
-
 save_counts

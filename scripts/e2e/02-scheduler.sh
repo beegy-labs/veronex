@@ -426,7 +426,7 @@ hdr "SDD §4: Preloader 3-Fail Exclusion — DB State Check"
 # Verify preload_fail_count is tracked per provider in Valkey (in-memory VramPool state)
 # We check via capacity loaded_models — if a model failed 3x, it won't be in loaded_models
 # and should have a Valkey key indicating exclusion
-PRELOAD_EXCL=$(docker compose exec -T valkey valkey-cli KEYS "veronex:preloading:*" 2>/dev/null | wc -l | tr -d ' ')
+PRELOAD_EXCL=$(valkey_keys "veronex:preloading:*" | wc -l | tr -d ' ')
 info "Active preload locks: ${PRELOAD_EXCL} (veronex:preloading:* NX keys)"
 pass "Preload NX lock key pattern present in Valkey keyspace"
 
