@@ -1,0 +1,144 @@
+name: CI MCP
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'crates/veronex-mcp/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci-mcp.yml'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force rebuild even if image exists'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  REGISTRY: gitea.girok.dev
+  IMAGE_NAME: beegy-labs/veronex-mcp
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build MCP
+    runs-on: arc-runner-set
+    timeout-minutes: 60
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      skipped: ${{ steps.check_image.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Wait for Docker (DinD sidecar)
+        run: |
+          for i in $(seq 1 30); do
+            docker info >/dev/null 2>&1 && exit 0
+            echo "Waiting for Docker daemon... ($i/30)"
+            sleep 2
+          done
+          echo "Docker daemon not available after 60s"
+          exit 1
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GITEA_USERNAME }}
+          password: ${{ secrets.GITEA_TOKEN }}
+
+      - name: Meta
+        id: meta
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          case "${{ github.ref_name }}" in
+            main)    TAG="${SHORT_SHA}";         TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" ;;
+            develop) TAG="develop-${SHORT_SHA}"; TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop" ;;
+            *)       TAG="develop-${SHORT_SHA}"; TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}" ;;
+          esac
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Check if image exists
+        id: check_image
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          if [ "${{ inputs.force_build }}" = "true" ]; then
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Force build requested, skipping image check"
+            exit 0
+          fi
+          TAG="${{ steps.meta.outputs.tag }}"
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            "https://${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex-mcp/${TAG}")
+          if [ "$RESPONSE" = "200" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Image ${TAG} already exists, skipping build"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Image ${TAG} not found, proceeding with build"
+          fi
+
+      - uses: docker/build-push-action@v5
+        if: steps.check_image.outputs.exists != 'true'
+        with:
+          context: .
+          file: ./crates/veronex-mcp/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+  deploy:
+    name: Update GitOps
+    needs: build
+    if: needs.build.outputs.skipped != 'true'
+    runs-on: arc-runner-set
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: beegy-labs/platform-gitops
+          ref: develop
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Update image tag
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          case "${{ github.ref_name }}" in
+            main)    FILE="clusters/home/values/veronex-prod-values.yaml" ;;
+            develop) FILE="clusters/home/values/veronex-dev-values.yaml" ;;
+            *)       exit 0 ;;
+          esac
+          sed -i "/^veronexMcp:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(veronex): update mcp image tag to ${{ needs.build.outputs.tag }}"
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1
+
+  cleanup:
+    name: Cleanup Old Images
+    needs: build
+    if: github.ref_name == 'develop' || github.ref_name == 'main'
+    uses: ./.github/workflows/cleanup-images.yml
+    with:
+      image_name: veronex-mcp
+      branch: ${{ github.ref_name }}
+      keep: 5
+    secrets:
+      GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
