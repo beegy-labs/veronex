@@ -46,7 +46,9 @@ test.describe('API: Capacity', () => {
     expect(typeof body.sync_interval_secs).toBe('number')
     expect(typeof body.probe_permits).toBe('number')
     expect(typeof body.probe_rate).toBe('number')
-    expect(Array.isArray(body.available_models)).toBeTruthy()
+    // available_models is an object keyed by provider type e.g. {ollama: [...]}
+    expect(body.available_models).toBeTruthy()
+    expect(typeof body.available_models).toBe('object')
   })
 
   test.describe.serial('capacity settings CRUD', () => {
@@ -56,22 +58,21 @@ test.describe('API: Capacity', () => {
       expect(getRes.ok()).toBeTruthy()
       const original = await getRes.json()
 
-      // Toggle sync_enabled
-      const newValue = !original.sync_enabled
-      const patchRes = await api.patch('/v1/dashboard/capacity/settings', {
-        sync_enabled: newValue,
-      })
-      expect(patchRes.ok()).toBeTruthy()
-      const patched = await patchRes.json()
-      expect(patched.sync_enabled).toBe(newValue)
-
-      // Revert
-      const revertRes = await api.patch('/v1/dashboard/capacity/settings', {
-        sync_enabled: original.sync_enabled,
-      })
-      expect(revertRes.ok()).toBeTruthy()
-      const reverted = await revertRes.json()
-      expect(reverted.sync_enabled).toBe(original.sync_enabled)
+      try {
+        // Toggle sync_enabled
+        const newValue = !original.sync_enabled
+        const patchRes = await api.patch('/v1/dashboard/capacity/settings', {
+          sync_enabled: newValue,
+        })
+        expect(patchRes.ok()).toBeTruthy()
+        const patched = await patchRes.json()
+        expect(patched.sync_enabled).toBe(newValue)
+      } finally {
+        // Always revert to original state
+        await api.patch('/v1/dashboard/capacity/settings', {
+          sync_enabled: original.sync_enabled,
+        })
+      }
     })
   })
 })

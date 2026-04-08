@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { TIME_LABEL_MAP, TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
 import { SectionLabel } from '@/components/section-label'
 
@@ -28,6 +29,7 @@ import { ModelLatencyChart } from './components/model-latency-chart'
 
 /* ─── page ────────────────────────────────────────────────── */
 export default function UsagePage() {
+  usePageGuard('usage')
   const { t } = useTranslation()
   const [range, setRange] = useState<TimeRange>({ hours: 24 })
   const hours = range.hours

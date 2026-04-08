@@ -13,6 +13,8 @@ pub struct OllamaModel {
 pub struct OllamaModelWithCount {
     pub model_name: String,
     pub provider_count: i64,
+    /// Maximum context window across all providers carrying this model (0 = unknown).
+    pub max_ctx: i32,
 }
 
 /// Provider info for use in "which servers have this model?" responses.

@@ -41,6 +41,8 @@ export interface ApiKey {
   expires_at: string | null
   /** Billing tier: `"free"` or `"paid"` */
   tier: 'free' | 'paid'
+  /** MCP capability points (0–10, default 3). Controls how many MCP tools this key may use per request. */
+  mcp_cap_points: number
   /** Username of the creator (super admin view) */
   created_by?: string
 }
@@ -79,6 +81,8 @@ export interface Job extends JobBase {
   has_tool_calls: boolean
   /** Name of the provider (Ollama server) that processed this job. */
   provider_name: string | null
+  /** Conversation this job belongs to (multi-turn), if any. */
+  conversation_id: string | null
 }
 
 export interface ChatMessage {
@@ -292,6 +296,7 @@ export interface Provider {
   name: string
   provider_type: ProviderType
   url: string
+  timeout_secs?: number
   is_active: boolean
   total_vram_mb: number
   /** GPU index on the host (0-based). Used to filter node-exporter metrics. */
@@ -451,6 +456,9 @@ export interface OllamaSyncJob {
 export interface OllamaModelWithCount {
   model_name: string
   provider_count: number
+  is_vision?: boolean
+  /** Maximum context window across providers (0 = not yet profiled). */
+  max_ctx?: number
 }
 
 /** Provider info returned by GET /v1/ollama/models/:model_name/providers. */
@@ -464,6 +472,7 @@ export interface OllamaProviderForModel {
   provider_id: string
   name: string
   url: string
+  timeout_secs?: number
   status: string
   is_enabled: boolean
 }
@@ -581,10 +590,6 @@ export interface ProviderVramInfo {
   loaded_models: LoadedModelInfo[]
 }
 
-export interface CapacityResponse {
-  providers: ProviderVramInfo[]
-}
-
 export interface CapacityPageResponse {
   providers: ProviderVramInfo[]
   total: number
@@ -626,6 +631,18 @@ export interface LabSettings {
   gemini_function_calling: boolean
   max_images_per_request: number
   max_image_b64_bytes: number
+  context_compression_enabled: boolean
+  compression_model: string | null
+  context_budget_ratio: number
+  compression_trigger_turns: number
+  recent_verbatim_window: number
+  compression_timeout_secs: number
+  multiturn_min_params: number
+  multiturn_min_ctx: number
+  multiturn_allowed_models: string[]
+  vision_model: string | null
+  handoff_enabled: boolean
+  handoff_threshold: number
   updated_at: string
 }
 
@@ -633,6 +650,23 @@ export interface PatchLabSettings {
   gemini_function_calling?: boolean
   max_images_per_request?: number
   max_image_b64_bytes?: number
+  context_compression_enabled?: boolean
+  compression_model?: string | null
+  context_budget_ratio?: number
+  compression_trigger_turns?: number
+  recent_verbatim_window?: number
+  compression_timeout_secs?: number
+  multiturn_min_params?: number
+  multiturn_min_ctx?: number
+  multiturn_allowed_models?: string[]
+  vision_model?: string | null
+  handoff_enabled?: boolean
+  handoff_threshold?: number
+}
+
+export interface MultiturnWarning {
+  code: 'model_too_small' | 'context_too_small' | 'model_not_allowed'
+  message: string
 }
 
 /** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/queue/lab queries. */
@@ -641,6 +675,47 @@ export interface DashboardOverview {
   performance: PerformanceStats
   queue_depth: QueueDepth
   lab: LabSettings
+}
+
+export interface ConversationSummary {
+  id: string
+  title?: string | null
+  model_name: string | null
+  source: string
+  turn_count: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ConversationTurn {
+  job_id: string
+  prompt: string
+  result: string | null
+  tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> | null
+  model_name?: string | null
+  created_at: string
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  turns: ConversationTurn[]
+}
+
+export interface TurnInternals {
+  job_id: string
+  compressed?: {
+    summary: string
+    original_tokens: number
+    compressed_tokens: number
+    compression_model: string
+  } | null
+  vision_analysis?: {
+    analysis: string
+    vision_model: string
+    image_count: number
+    analysis_tokens: number
+  } | null
 }
 
 export interface AuditEvent {
@@ -653,4 +728,94 @@ export interface AuditEvent {
   resource_name: string
   ip_address: string
   details: string
+}
+
+export interface InfraServiceItem {
+  name: string
+  status: string
+  checked_at: number | null
+  latency_ms?: number | null
+}
+
+export interface PodItem {
+  id: string
+  status: string
+  last_heartbeat_ms?: number | null
+}
+
+export interface ServiceHealthResponse {
+  infrastructure: InfraServiceItem[]
+  api_pods: PodItem[]
+  agent_pods: PodItem[]
+}
+
+export interface TopicPipelineStats {
+  topic: string
+  consumer_offset: number
+  log_end_offset: number
+  lag: number
+  tpm_1m: number
+  tpm_5m: number
+  last_poll_secs: number | null
+  is_active: boolean
+  last_error: string | null
+  consumer_count: number
+}
+
+export interface PipelineHealthResponse {
+  topics: TopicPipelineStats[]
+  available: boolean
+}
+
+export interface McpToolSummary {
+  name: string
+  namespaced_name: string
+  description?: string
+}
+
+export interface McpServer {
+  id: string
+  name: string
+  slug: string
+  url: string
+  timeout_secs?: number
+  is_enabled: boolean
+  tool_count: number
+  tools?: McpToolSummary[]
+  online?: boolean
+  created_at: string
+}
+
+export interface McpServerStat {
+  server_slug: string
+  server_name: string
+  tool_name: string
+  total_calls: number
+  success_rate: number
+  cache_hit_count: number
+  avg_latency_ms: number
+}
+
+export interface McpServerAccess {
+  server_id: string
+  server_name: string
+  is_allowed: boolean
+  slug?: string
+  /** Top-K tool limit for this key/server pair. null = no override (use server default). */
+  top_k: number | null
+}
+
+export interface McpSettings {
+  routing_cache_ttl_secs: number
+  tool_schema_refresh_secs: number
+  embedding_model: string
+  max_tools_per_request: number
+  max_routing_cache_entries: number
+}
+
+export interface RegisterMcpServerRequest {
+  name: string
+  slug: string
+  url: string
+  timeout_secs?: number
 }

@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::application::ports::outbound::analytics_repository::{
     AnalyticsRepository, AnalyticsSummary, AuditEventRow, AuditFilters, HourlyUsage,
-    MetricsPoint, PerformanceMetrics, UsageAggregate, UsageJob,
+    McpServerStat, McpToolCallEvent, MetricsPoint, PerformanceMetrics, UsageAggregate, UsageJob,
 };
 
 /// HTTP client that delegates all analytics queries to the `veronex-analytics`
@@ -139,6 +139,38 @@ impl AnalyticsRepository for HttpAnalyticsClient {
         self.get(&format!("/internal/usage/{key_id}/jobs?hours={hours}"))
             .await
     }
+
+    async fn mcp_server_stats(&self, hours: u32) -> Result<Vec<McpServerStat>> {
+        self.get(&format!("/internal/mcp/stats?hours={hours}")).await
+    }
+
+    async fn ingest_mcp_tool_call(&self, event: McpToolCallEvent) {
+        let url = format!("{}/internal/ingest/mcp", self.base_url);
+        let body = serde_json::json!({
+            "event_time":      event.event_time,
+            "request_id":      event.request_id,
+            "api_key_id":      event.api_key_id,
+            "tenant_id":       event.tenant_id,
+            "server_id":       event.server_id,
+            "server_slug":     event.server_slug,
+            "tool_name":       event.tool_name,
+            "namespaced_name": event.namespaced_name,
+            "outcome":         event.outcome,
+            "cache_hit":       event.cache_hit,
+            "latency_ms":      event.latency_ms,
+            "result_bytes":    event.result_bytes,
+            "cap_charged":     event.cap_charged,
+            "loop_round":      event.loop_round,
+        });
+        if let Err(e) = self.http.post(&url)
+            .bearer_auth(&self.secret)
+            .json(&body)
+            .send()
+            .await
+        {
+            tracing::warn!(error = %e, "mcp tool call ingest failed");
+        }
+    }
 }
 
 // Very simple percent-encoding for query param values.
@@ -148,4 +180,19 @@ fn urlencoding(s: &str) -> String {
         .replace('=', "%3D")
         .replace('+', "%2B")
         .replace(' ', "%20")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn urlencoding_encodes_special_chars() {
+        assert_eq!(urlencoding("a b"), "a%20b");
+        assert_eq!(urlencoding("k=v"), "k%3Dv");
+        assert_eq!(urlencoding("a&b"), "a%26b");
+        assert_eq!(urlencoding("100%"), "100%25");
+        assert_eq!(urlencoding("a+b"), "a%2Bb");
+    }
+
 }

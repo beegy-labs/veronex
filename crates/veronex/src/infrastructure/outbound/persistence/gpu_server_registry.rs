@@ -56,7 +56,7 @@ impl GpuServerRegistry for PostgresGpuServerRegistry {
         let rows = sqlx::query(
             "SELECT id, name, node_exporter_url, registered_at
              FROM gpu_servers
-             ORDER BY registered_at ASC",
+             ORDER BY registered_at ASC LIMIT 10000",
         )
         .fetch_all(&self.pool)
         .await

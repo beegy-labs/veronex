@@ -14,6 +14,7 @@ pub struct ModelVramProfileEntry {
     pub num_kv_heads:      i16,
     pub head_dim:          i16,
     pub configured_ctx:    i32,
+    pub max_ctx:           i32,
     pub failure_count:     i16,
     pub llm_concern:       Option<String>,
     pub llm_reason:        Option<String>,

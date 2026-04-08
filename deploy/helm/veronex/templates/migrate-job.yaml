@@ -1,8 +1,7 @@
 {{- if .Values.migrations.enabled }}
 {{- $chHost := ternary (printf "%s-clickhouse" .Release.Name) .Values.externalClickhouse.host .Values.clickhouse.enabled }}
-{{- if not .Values.migrations.clickhouse.kafkaBroker }}{{ fail "migrations.clickhouse.kafkaBroker is required (e.g. redpanda:9092)" }}{{- end }}
 ---
-# ── PostgreSQL migration ──────────────────────────────────────────────────────
+# ── PostgreSQL init ───────────────────────────────────────────────────────────
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -23,11 +22,13 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: migrate
-          image: {{ .Values.migrations.image }}
+          image: postgres:18-alpine
+          command: ["/bin/sh", "-c"]
           args:
-            - -path=/migrations
-            - -database={{ include "veronex.postgresUrl" . }}?sslmode=disable
-            - up
+            - psql "$(DATABASE_URL)?sslmode=disable" -f /migrations/init.sql
+          env:
+            - name: DATABASE_URL
+              value: {{ include "veronex.postgresUrl" . | quote }}
           volumeMounts:
             - name: migrations
               mountPath: /migrations
@@ -43,7 +44,7 @@ spec:
           configMap:
             name: {{ .Release.Name }}-migrate-postgres-sql
 ---
-# ── ClickHouse migration ──────────────────────────────────────────────────────
+# ── ClickHouse init ───────────────────────────────────────────────────────────
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -62,61 +63,30 @@ spec:
         {{- include "veronex.labels" . | nindent 8 }}
     spec:
       restartPolicy: OnFailure
-      initContainers:
-        - name: substitute
-          image: alpine:3.21
+      containers:
+        - name: migrate
+          image: clickhouse/clickhouse-server:26.1
           command: ["/bin/sh", "-c"]
           args:
             - |
-              apk add --no-cache gettext -q
-              for f in /tpl/*.sql; do
-                sed \
-                  -e "s|__KAFKA_BROKER__|$(KAFKA_BROKER)|g" \
-                  -e "s|__KAFKA_SECURITY_PROTOCOL__|$(KAFKA_SECURITY_PROTOCOL)|g" \
-                  -e "s|__KAFKA_SASL_MECHANISM__|$(KAFKA_SASL_MECHANISM)|g" \
-                  -e "s|__KAFKA_USERNAME__|$(KAFKA_USERNAME)|g" \
-                  -e "s|__KAFKA_PASSWORD__|$(KAFKA_PASSWORD)|g" \
-                  -e "s|__CLICKHOUSE_DB__|{{ include "veronex.clickhouseDb" . }}|g" \
-                  -e "s|__RETENTION_METRICS_DAYS__|{{ .Values.migrations.clickhouse.retentionMetricsDays }}|g" \
-                  -e "s|__RETENTION_LOGS_DAYS__|{{ .Values.migrations.clickhouse.retentionLogsDays }}|g" \
-                  -e "s|__RETENTION_INFERENCE_DAYS__|{{ .Values.migrations.clickhouse.retentionInferenceDays }}|g" \
-                  -e "s|__RETENTION_AUDIT_DAYS__|{{ .Values.migrations.clickhouse.retentionAuditDays }}|g" \
-                  -e "s|__RETENTION_TRACES_DAYS__|{{ .Values.migrations.clickhouse.retentionTracesDays }}|g" \
-                  "$f" > "/out/$(basename "$f")"
-              done
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
-          env:
-            - name: KAFKA_BROKER
-              value: {{ .Values.migrations.clickhouse.kafkaBroker | quote }}
-            - name: KAFKA_SECURITY_PROTOCOL
-              value: {{ .Values.migrations.clickhouse.kafkaSecurityProtocol | quote }}
-            - name: KAFKA_SASL_MECHANISM
-              value: {{ .Values.migrations.clickhouse.kafkaSaslMechanism | quote }}
-            - name: KAFKA_USERNAME
-              value: {{ .Values.migrations.clickhouse.kafkaUsername | quote }}
-            - name: KAFKA_PASSWORD
-              value: {{ .Values.migrations.clickhouse.kafkaPassword | quote }}
+              sed \
+                -e "s/__RETENTION_METRICS_DAYS__/{{ .Values.migrations.clickhouse.retentionMetricsDays }}/g" \
+                -e "s/__RETENTION_LOGS_DAYS__/{{ .Values.migrations.clickhouse.retentionLogsDays }}/g" \
+                -e "s/__RETENTION_INFERENCE_DAYS__/{{ .Values.migrations.clickhouse.retentionInferenceDays }}/g" \
+                -e "s/__RETENTION_AUDIT_DAYS__/{{ .Values.migrations.clickhouse.retentionAuditDays }}/g" \
+                -e "s/__RETENTION_TRACES_DAYS__/{{ .Values.migrations.clickhouse.retentionTracesDays }}/g" \
+                -e "s/__RETENTION_MCP_DAYS__/{{ .Values.migrations.clickhouse.retentionMcpDays | default 90 }}/g" \
+                /schema/schema.sql \
+              | clickhouse-client \
+                  --host={{ $chHost }} \
+                  --port=9000 \
+                  --user={{ include "veronex.clickhouseUser" . }} \
+                  --password={{ include "veronex.clickhousePassword" . }} \
+                  --database={{ include "veronex.clickhouseDb" . }} \
+                  --multiquery
           volumeMounts:
-            - name: tpl
-              mountPath: /tpl
-            - name: rendered
-              mountPath: /out
-      containers:
-        - name: migrate
-          image: {{ .Values.migrations.image }}
-          args:
-            - -path=/migrations
-            - -database=clickhouse://{{ include "veronex.clickhouseUser" . }}:{{ include "veronex.clickhousePassword" . }}@{{ $chHost }}:9000/{{ include "veronex.clickhouseDb" . }}?x-multi-statement=true
-            - up
-          volumeMounts:
-            - name: rendered
-              mountPath: /migrations
+            - name: schema
+              mountPath: /schema
           resources:
             requests:
               cpu: 100m
@@ -125,9 +95,7 @@ spec:
               cpu: 500m
               memory: 512Mi
       volumes:
-        - name: tpl
+        - name: schema
           configMap:
             name: {{ .Release.Name }}-migrate-clickhouse-sql
-        - name: rendered
-          emptyDir: {}
 {{- end }}

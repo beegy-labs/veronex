@@ -1,11 +1,13 @@
 /// Application configuration parsed from environment variables.
-#[allow(dead_code)]
 pub struct AppConfig {
     pub database_url: String,
     pub valkey_url: Option<String>,
     pub analytics_url: Option<String>,
     pub analytics_secret: Option<String>,
-    pub ollama_url: String,
+    /// OTLP HTTP endpoint for the OTel Collector (e.g. `http://otel-collector:4318`).
+    /// When set, inference and audit events are emitted directly via OTLP,
+    /// bypassing the veronex-analytics HTTP write path.
+    pub otel_http_endpoint: Option<String>,
     pub jwt_secret: String,
     pub bootstrap_super_user: Option<String>,
     pub bootstrap_super_pass: Option<String>,
@@ -14,6 +16,14 @@ pub struct AppConfig {
     pub analyzer_url: String,
     pub session_grouping_interval_secs: u64,
     pub gemini_encryption_key: [u8; 32],
+    /// Redpanda/Kafka broker address (e.g. `redpanda:9092`). Used for pipeline metrics.
+    pub kafka_broker: Option<String>,
+    /// ClickHouse HTTP URL (e.g. `http://clickhouse:8123`). Used for pipeline metrics.
+    pub clickhouse_http_url: Option<String>,
+    /// ClickHouse credentials.
+    pub clickhouse_user: Option<String>,
+    pub clickhouse_password: Option<String>,
+    pub clickhouse_db: Option<String>,
 }
 
 impl AppConfig {
@@ -25,6 +35,7 @@ impl AppConfig {
 
         let analytics_url = std::env::var("ANALYTICS_URL").ok();
         let analytics_secret = std::env::var("ANALYTICS_SECRET").ok();
+        let otel_http_endpoint = std::env::var("OTEL_HTTP_ENDPOINT").ok();
 
         let ollama_url = std::env::var("OLLAMA_URL")
             .unwrap_or_else(|_| "http://localhost:11434".to_string());
@@ -77,12 +88,18 @@ impl AppConfig {
             veronex::domain::services::encryption::derive_key(&raw)
         };
 
+        let kafka_broker = std::env::var("KAFKA_BROKER").ok();
+        let clickhouse_http_url = std::env::var("CLICKHOUSE_HTTP_URL").ok();
+        let clickhouse_user = std::env::var("CLICKHOUSE_USER").ok();
+        let clickhouse_password = std::env::var("CLICKHOUSE_PASSWORD").ok();
+        let clickhouse_db = std::env::var("CLICKHOUSE_DB").ok();
+
         Self {
             database_url,
             valkey_url,
             analytics_url,
             analytics_secret,
-            ollama_url,
+            otel_http_endpoint,
             jwt_secret,
             bootstrap_super_user,
             bootstrap_super_pass,
@@ -91,6 +108,11 @@ impl AppConfig {
             analyzer_url,
             session_grouping_interval_secs,
             gemini_encryption_key,
+            kafka_broker,
+            clickhouse_http_url,
+            clickhouse_user,
+            clickhouse_password,
+            clickhouse_db,
         }
     }
 }
@@ -112,4 +134,39 @@ fn parse_cors_origins(raw: &str) -> Vec<axum::http::HeaderValue> {
             axum::http::HeaderValue::from_str(s).ok()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_cors_origins_wildcard_returns_empty() {
+        assert!(parse_cors_origins("*").is_empty());
+        assert!(parse_cors_origins("  *  ").is_empty());
+    }
+
+    #[test]
+    fn parse_cors_origins_single_origin() {
+        let result = parse_cors_origins("http://localhost:3000");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "http://localhost:3000");
+    }
+
+    #[test]
+    fn parse_cors_origins_multiple_origins() {
+        let result = parse_cors_origins("http://localhost:3000,https://app.example.com");
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn parse_cors_origins_skips_empty_segments() {
+        let result = parse_cors_origins("http://localhost:3000,,https://app.example.com");
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn parse_cors_origins_empty_string_returns_empty() {
+        assert!(parse_cors_origins("").is_empty());
+    }
 }

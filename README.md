@@ -1,13 +1,15 @@
 # Veronex
 
-**Autonomous scheduler and gateway for N Ollama servers** — VRAM-aware routing, adaptive concurrency, thermal protection, OpenAI-compatible API.
+**Autonomous scheduler and gateway for N Ollama servers** — VRAM-aware routing, adaptive concurrency, thermal protection, MCP agentic loop, OpenAI-compatible API.
 
-Veronex is not a reverse proxy. It treats all your Ollama instances as a single compute pool and learns the optimal concurrency per model through live inference data.
+Veronex treats all your Ollama instances as a single compute pool. It learns optimal concurrency per model through live inference data, runs ReAct-style tool-calling loops via MCP, and compresses long conversations automatically.
 
 - **Smart routing** — dispatches to the provider with the most VRAM headroom; keeps models resident to avoid reloading
-- **Adaptive concurrency** — learns `max_concurrent` per model via AIMD (TPS + p95), then refines via LLM batch analysis
+- **Adaptive concurrency** — learns `max_concurrent` per model via AIMD (TPS + p95), refined via LLM batch analysis
 - **Thermal protection** — detects GPU/CPU thermal state per provider; throttles automatically before hardware is stressed
-- **Self-healing** — circuit breaker + queue reaper recover from provider crashes without losing requests
+- **MCP agentic loop** — ReAct loop with multi-round tool calling (web search, image analysis, vector retrieval, datetime, weather)
+- **Context compression** — automatic conversation summarization when approaching context window limits
+- **Self-healing queue** — lease-based ZSET with heartbeat reaper; orphaned jobs are automatically recovered or failed
 - **API compatible** — OpenAI, Ollama native, and Gemini — drop-in for existing clients and SDKs
 
 ---
@@ -23,8 +25,6 @@ open http://localhost:3002     # setup wizard → create admin → add provider 
 
 > **macOS**: `OLLAMA_URL=http://host.docker.internal:11434` works out of the box.
 > **Linux**: set `OLLAMA_URL=http://172.17.0.1:11434` in `.env`.
-
-Then call it like any OpenAI-compatible endpoint:
 
 ```bash
 curl http://localhost:3001/v1/chat/completions \
@@ -51,10 +51,15 @@ Interactive API docs: `http://localhost:3001/swagger-ui`
 flowchart TD
     C([Client]) --> M[API Key Auth + Rate Limit]
     M -->|rejected| E([401 / 429])
-    M -->|ok| Q[Valkey Priority Queue\npaid › standard › test]
+    M -->|ok| Q[Valkey ZSET Priority Queue\npaid › standard › test]
 
     Q --> D[Queue Dispatcher]
-    D --> F[Provider Filter\n① active + type match\n② model available\n③ admin-enabled]
+    D -->|MCP enabled| MCP[ReAct Loop\nMAX_ROUNDS=5]
+    MCP --> TOOLS[Tool Execution\nweb_search · analyze_image\nvector_retrieve · datetime · weather]
+    TOOLS --> MCP
+    MCP --> F
+
+    D -->|direct| F[Provider Filter\n① active + type match\n② model available\n③ admin-enabled]
     F -->|no match| FAIL([job → failed])
     F -->|candidates| S[Score & rank\nVRAM headroom + model stickiness]
 
@@ -67,8 +72,8 @@ flowchart TD
     RUN --> OL[Ollama]
     RUN --> GM[Gemini]
     OL & GM --> SSE[SSE stream → client]
-    SSE --> DROP[VramPermit drop — KV cache released]
-    DROP --> OBS[(Postgres + ClickHouse)]
+    SSE --> S3[(S3 TurnRecord\ntool_calls + turn data)]
+    S3 --> OBS[(Postgres + ClickHouse)]
 ```
 
 ### Adaptive Concurrency (per provider × model, every 30s)
@@ -80,13 +85,35 @@ flowchart LR
         VRAM -->|APU unified memory| EST[estimated = observed × 1.15]
         VRAM -->|discrete GPU| DRM[total = DRM reported]
         EST & DRM --> POOL[VramPool update]
-        POOL --> KV[KV cache estimate\nfrom model arch]
-        KV --> PHASE{samples ≥ 3?}
+        KV[Valkey context window cache] --> PHASE
+        POOL --> PHASE{samples ≥ 3?}
         PHASE -->|cold start| INIT[weight table\n<5GB→8 · 5-20GB→4\n20-50GB→2 · >50GB→1]
         PHASE -->|learning| AIMD[AIMD\ntps<0.7× → ×0.75\ntps≥0.9× → +1\np95 spike → decrease]
         INIT & AIMD --> LLM[LLM Batch\nqwen2.5:3b · ±2 clamp]
     end
 ```
+
+### Lease-Based Queue
+
+Workers hold a lease on `queue:active` (ZSET, score = deadline_ms) and renew every 30s. If a worker dies mid-job, the reaper reclaims the expired lease and re-enqueues up to 2 times before marking the job permanently failed.
+
+---
+
+## Services
+
+| Service | Port | Role |
+|---------|------|------|
+| veronex | 3001 | API server (OpenAI compat + admin) |
+| veronex-web | 3002 | Dashboard UI |
+| veronex-agent | — | Provider sync, metrics, KEDA autoscaling |
+| veronex-embed | — | Embedding service (multilingual-e5-large, 1024-dim) |
+| veronex-mcp | — | MCP server (tools: web_search, weather, datetime, vector) |
+| veronex-analytics | — | Analytics ingest |
+| PostgreSQL | 5433 | Primary store |
+| Valkey | 6380 | Queue, cache, pub/sub |
+| ClickHouse | 8123 | Analytics |
+| Redpanda | — | Kafka-compatible event stream |
+| OTel Collector | 4317/4318 | Telemetry ingestion |
 
 ---
 
@@ -95,12 +122,17 @@ flowchart LR
 | | |
 |-|-|
 | **API server** | Rust · Axum 0.8 · tokio · SSE |
-| **Scheduler** | Valkey (Lua priority queue) · PostgreSQL 18 |
+| **Scheduler** | Valkey (Lua ZSET priority queue + lease ZSET) · PostgreSQL 18 |
+| **MCP / Embedding** | Rust + fastembed · multilingual-e5-large · SearXNG |
 | **Analytics** | ClickHouse · OTel Collector · Redpanda |
-| **Dashboard** | Next.js 16 · Tailwind v4 · shadcn/ui |
-| **Deploy** | Docker Compose · Kubernetes (Helm) |
+| **Dashboard** | Next.js 16 · React 19 · Tailwind v4 · shadcn/ui |
+| **Deploy** | Docker Compose · Kubernetes (Helm + KEDA) |
 
 ---
+
+## Security
+
+Report vulnerabilities via [GitHub Security Advisories](../../security/advisories/new) — do not open a public issue.
 
 ## License
 

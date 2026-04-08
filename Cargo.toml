@@ -3,6 +3,8 @@ members = [
     "crates/veronex",
     "crates/veronex-analytics",
     "crates/veronex-agent",
+    "crates/veronex-mcp",
+    "crates/veronex-embed",
     "workspace-hack",
 ]
 resolver = "2"

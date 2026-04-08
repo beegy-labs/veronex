@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDatetime } from '@/lib/date'
 
@@ -36,6 +37,7 @@ const ACTION_COLORS: Record<string, 'default' | 'secondary' | 'destructive' | 'o
 }
 
 export default function AuditPage() {
+  usePageGuard('audit')
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const [action, setAction] = useState<string>('all')

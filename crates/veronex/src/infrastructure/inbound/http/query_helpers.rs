@@ -1,6 +1,7 @@
 //! Shared SQL helpers used by both dashboard and usage query modules.
 
 use serde::Serialize;
+use crate::domain::value_objects::JobId;
 
 /// LATERAL JOIN for per-model pricing lookup.
 /// Used by usage breakdown, key model breakdown, and dashboard job queries.
@@ -65,6 +66,7 @@ pub(super) struct JobRowCommon {
     pub account_name: Option<String>,
     pub request_path: Option<String>,
     pub estimated_cost_usd: Option<f64>,
+    pub conversation_id: Option<uuid::Uuid>,
 }
 
 impl JobRowCommon {
@@ -90,6 +92,7 @@ impl JobRowCommon {
             account_name:      row.try_get("account_name").unwrap_or(None),
             request_path:      row.try_get("request_path").unwrap_or(None),
             estimated_cost_usd: row.try_get("estimated_cost_usd").unwrap_or(None),
+            conversation_id:   row.try_get("conversation_id").unwrap_or(None),
         }
     }
 
@@ -126,13 +129,15 @@ pub struct JobSummary {
     pub estimated_cost_usd: Option<f64>,
     /// Name of the provider (Ollama server) that processed this job.
     pub provider_name: Option<String>,
+    /// Conversation this job belongs to (multi-turn), if any.
+    pub conversation_id: Option<String>,
 }
 
 /// Build a `JobSummary` from a `JobRowCommon` and a `has_tool_calls` flag.
 pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, provider_name: Option<String>) -> JobSummary {
     let tps = c.tps();
     JobSummary {
-        id: c.id.to_string(),
+        id: JobId::from_uuid(c.id).to_string(),
         model_name: c.model_name,
         provider_type: c.provider_type,
         status: c.status,
@@ -151,5 +156,45 @@ pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, pro
         has_tool_calls,
         estimated_cost_usd: c.estimated_cost_usd,
         provider_name,
+        conversation_id: c.conversation_id.map(|id| id.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pct_zero_denominator_returns_zero() {
+        assert_eq!(pct(100, 0), 0.0);
+    }
+
+    #[test]
+    fn validate_hours_rejects_zero() {
+        assert!(validate_hours(0).is_err());
+    }
+
+    #[test]
+    fn validate_hours_rejects_over_8760() {
+        assert!(validate_hours(8761).is_err());
+    }
+
+    #[test]
+    fn compute_tps_normal() {
+        // 100 tokens, latency 2000ms, ttft 500ms → gen_ms=1500 → tps=66.7
+        let tps = compute_tps(Some(2000), Some(500), Some(100)).unwrap();
+        assert_eq!(tps, 66.7);
+    }
+
+    #[test]
+    fn compute_tps_none_when_missing_fields() {
+        assert!(compute_tps(None, None, Some(100)).is_none());
+        assert!(compute_tps(Some(1000), None, None).is_none());
+    }
+
+    #[test]
+    fn compute_tps_none_when_gen_ms_zero() {
+        // ttft == latency → gen_ms = 0 → no TPS
+        assert!(compute_tps(Some(500), Some(500), Some(100)).is_none());
     }
 }

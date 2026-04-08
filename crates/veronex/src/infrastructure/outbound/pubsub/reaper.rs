@@ -142,7 +142,9 @@ async fn refresh_heartbeat(pool: &Pool, instance_id: &str) {
         tracing::warn!("heartbeat refresh failed: {e}");
     }
     // Register in global instance set so orphan sweeper can enumerate all instances.
-    let _: Result<i64, _> = pool.sadd(valkey_keys::INSTANCES_SET, instance_id).await;
+    if let Err(e) = pool.sadd::<i64, _, _>(valkey_keys::INSTANCES_SET, instance_id).await {
+        tracing::warn!(error = %e, "Valkey SADD instances_set failed");
+    }
 }
 
 /// Scan the processing list for jobs whose owner instance is dead, re-enqueue them.
@@ -338,12 +340,14 @@ async fn reenqueue_reaped_jobs_batch(
         .collect();
 
     // Single batch UPDATE: reset all reaped running jobs to pending.
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "UPDATE inference_jobs SET status = 'pending', started_at = NULL WHERE id = ANY($1::uuid[]) AND status = 'running'",
     )
     .bind(&ids as &[uuid::Uuid])
     .execute(pg_pool)
-    .await;
+    .await {
+        tracing::warn!(error = %e, "reaper: failed to reset reaped jobs to pending");
+    }
 
     // Per-job Lua ZADD to QUEUE_ZSET with emergency priority (lowest score = highest priority).
     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -358,7 +362,7 @@ async fn reenqueue_reaped_jobs_batch(
             }
         };
 
-        let demand_key = format!("veronex:demand:{model}");
+        let demand_key = valkey_keys::demand_counter(&model);
 
         let result: Result<(), _> = pool
             .eval(

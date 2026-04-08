@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useOptimistic, startTransition } from 'react'
 import type { Provider } from '@/lib/types'
 import { Plus, Trash2, RefreshCw, Key, ShieldCheck, ListFilter, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,30 @@ import { StatusBadge, StatusPill } from './shared'
 import { ApiKeyCell, ModelSelectionModal } from './modals'
 import { PAGE_SIZE } from './ollama-sections'
 import { GeminiStatusSyncSection, GeminiSyncSection } from './gemini-sections'
+
+// ── Gemini provider active toggle with optimistic update ───────────────────────
+
+function GeminiProviderActiveToggle({
+  provider,
+  onToggleActive,
+  toggleActivePending,
+}: {
+  provider: Provider
+  onToggleActive: (b: Provider) => void
+  toggleActivePending: boolean
+}) {
+  const { t } = useTranslation()
+  const [optimistic, setOptimistic] = useOptimistic(provider.is_active, (_, v: boolean) => v)
+  return (
+    <Switch
+      checked={optimistic}
+      onCheckedChange={(checked) => startTransition(() => { setOptimistic(checked); onToggleActive(provider) })}
+      disabled={toggleActivePending}
+      title={optimistic ? t('providers.disableProvider') : t('providers.enableProvider')}
+      aria-label={optimistic ? t('providers.disableProvider') : t('providers.enableProvider')}
+    />
+  )
+}
 
 // ── Tab: Gemini providers + policies ───────────────────────────────────────────
 
@@ -205,12 +229,10 @@ export function GeminiTab({
                     )}
                   </TableCell>
                   <TableCell>
-                    <Switch
-                      checked={b.is_active}
-                      onCheckedChange={() => onToggleActive(b)}
-                      disabled={toggleActivePending}
-                      title={b.is_active ? t('providers.disableProvider') : t('providers.enableProvider')}
-                      aria-label={b.is_active ? t('providers.disableProvider') : t('providers.enableProvider')}
+                    <GeminiProviderActiveToggle
+                      provider={b}
+                      onToggleActive={onToggleActive}
+                      toggleActivePending={toggleActivePending}
                     />
                   </TableCell>
                   <TableCell>

@@ -1,6 +1,6 @@
 # Code Review
 
-> ADD Execution | **Last Updated**: 2026-03-16
+> ADD Execution | **Last Updated**: 2026-03-28
 
 ## Trigger
 
@@ -15,13 +15,18 @@ Read only docs relevant to the changed domain.
 | Architecture | `docs/llm/policies/architecture.md` |
 | Code patterns (Rust) | `docs/llm/policies/patterns.md` |
 | Code patterns (Frontend) | `docs/llm/policies/patterns-frontend.md` |
+| Frontend execution contracts | `docs/llm/frontend/execution-contracts.md` |
 | Frontend review criteria | `.add/frontend-review.md` |
 | Testing | `docs/llm/policies/testing-strategy.md` |
 | Security | `docs/llm/auth/security.md` |
 | Capacity | `docs/llm/inference/capacity.md` |
 | Thermal | `docs/llm/providers/hardware.md` |
 | Job lifecycle | `docs/llm/inference/job-lifecycle.md` |
-| Scheduler spec | `.specs/veronex/scheduler.md` |
+| Scheduler flow | `docs/llm/flows/scheduler.md` |
+| MCP integration | `docs/llm/inference/mcp-schema.md` |
+| MCP / Embed / Agent | `docs/llm/infra/` |
+| LLM Gateway Security | `.add/best-practices.md` Part 4 |
+| Best practices update | `.add/best-practices.md` |
 
 > **Frontend changes**: use `.add/frontend-review.md` checklist instead of this file.
 
@@ -32,9 +37,11 @@ Read only docs relevant to the changed domain.
 | 1 | Identify changed domain from target files |
 | 2 | Read relevant CDD/SDD docs above |
 | 3 | Scan target files (git diff or user-specified) |
-| 4 | Fix violations directly in code |
-| 5 | Verify via `cargo check`, `cargo test` |
-| 6 | CDD sync — if a new pattern is established, update the specific doc: architecture change → `docs/llm/policies/architecture.md`; code pattern → `docs/llm/policies/patterns.md`; test pattern → `docs/llm/policies/testing-strategy.md` |
+| 4 | **Best practices check** — run the relevant audit items from `.add/best-practices.md` Part 3 against changed files: security (P1) items always; architecture/performance (P2) items if touching infra/handlers/Valkey/DashMap; quality (P3) items if touching shared utilities or tests |
+| 5 | Fix violations directly in code (P1 → P2 → P3 order) |
+| 6 | Verify via `cargo check`, `cargo test` |
+| 7 | CDD feedback — run `.add/cdd-feedback.md` if a new pattern is confirmed (Operational classification) |
+| 8 | Same issue repeated 2+ times → run `.add/best-practices.md` Part 1 update workflow |
 
 ## Scale Assumption
 

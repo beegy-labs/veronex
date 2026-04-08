@@ -1,0 +1,77 @@
+{{- if .Values.veronexMcp.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-veronex-mcp
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    {{- include "veronex.veronexMcp.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.veronexMcp.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "veronex.veronexMcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        {{- include "veronex.veronexMcp.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: veronex-mcp
+          image: "{{ .Values.veronexMcp.image.repository }}:{{ .Values.veronexMcp.image.tag }}"
+          imagePullPolicy: {{ .Values.veronexMcp.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.veronexMcp.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          env:
+            - name: PORT
+              value: "{{ .Values.veronexMcp.service.port }}"
+            - name: VALKEY_URL
+              value: {{ include "veronex.valkeyUrl" . | quote }}
+            {{- if .Values.veronexMcp.apiRateLimit }}
+            - name: WEATHER_API_RATE_LIMIT
+              value: {{ .Values.veronexMcp.apiRateLimit | quote }}
+            {{- end }}
+            {{- if .Values.veronexMcp.l1MaxEntries }}
+            - name: WEATHER_L1_MAX_ENTRIES
+              value: {{ .Values.veronexMcp.l1MaxEntries | quote }}
+            {{- end }}
+            {{- if .Values.veronexMcp.valkeyPool }}
+            - name: WEATHER_VALKEY_POOL
+              value: {{ .Values.veronexMcp.valkeyPool | quote }}
+            {{- end }}
+            {{- if .Values.veronexMcp.veronexUrl }}
+            - name: VERONEX_URL
+              value: {{ .Values.veronexMcp.veronexUrl | quote }}
+            {{- end }}
+            {{- if .Values.veronexMcp.veronexApiKey }}
+            - name: VERONEX_API_KEY
+              value: {{ .Values.veronexMcp.veronexApiKey | quote }}
+            {{- end }}
+            {{- if .Values.veronexMcp.searxngUrl }}
+            - name: SEARXNG_URL
+              value: {{ .Values.veronexMcp.searxngUrl | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.veronexMcp.logLevel | default "info" | quote }}
+            {{- range $k, $v := .Values.veronexMcp.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.veronexMcp.resources | nindent 12 }}
+{{- end }}

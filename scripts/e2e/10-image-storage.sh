@@ -2,26 +2,16 @@
 # Phase 10: Image Storage — WebP upload, thumbnails, provider_name
 #
 # Runs AFTER parallel phases (08-sdd-advanced may Scale-In providers).
-# Tests both API key (/api/generate) and test panel (/v1/test/completions) paths.
+# Tests both API key (/api/generate) and session auth (/v1/chat/completions) paths.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 
 hdr "Image Storage & Provider Name (post-parallel)"
 
 # ── Detect vision model ──────────────────────────────────────────────────────
 
-VISION_MODEL=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
-import sys, json
-try:
-    d = json.loads(sys.stdin.read())
-    for m in d.get('models', []):
-        name = m.get('name', '')
-        if any(v in name.lower() for v in ['llava', 'vision', 'minicpm', 'moondream', '-vl', '_vl']):
-            print(name); exit()
-except: pass
-print('')
-" 2>/dev/null || echo "")
+VISION_MODEL=$(get_vision_model)
 
 if [ -z "$VISION_MODEL" ]; then
   info "SKIP: No vision model on local Ollama"
@@ -60,7 +50,7 @@ for i in $(seq 1 10); do
   echo "$MODELS" | python3 -c "
 import sys, json
 try:
-    for m in json.loads(sys.stdin.read()):
+    for m in json.loads(sys.stdin.read()).get('models', []):
         if '$VISION_MODEL' in m.get('model_name',''): exit(0)
 except: pass
 exit(1)
@@ -72,8 +62,8 @@ done
 # We send a text request to load the vision model, then immediately fire image requests.
 info "Warming up with vision model ($VISION_MODEL)..."
 curl -s --max-time 120 "$API/api/generate" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"say ok\",\"stream\":false}" > /dev/null 2>&1
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"say ok\",\"stream\":false}" > /dev/null 2>&1 || true
 
 # Fire both image inference requests IMMEDIATELY (no sleep — Scale-In runs every 5s)
 info "Firing image tests immediately after warm-up..."
@@ -83,13 +73,13 @@ TEST_IMG_RES=""
 TMPDIR_IMG=$(mktemp -d)
 
 (curl -s -w "\n%{http_code}" --max-time 120 "$API/api/generate" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
   -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"/no_think Describe this image in one sentence.\",\"images\":[\"$BEE_IMG\"],\"stream\":false}" \
   > "$TMPDIR_IMG/api" 2>/dev/null || printf "\n000" > "$TMPDIR_IMG/api") &
 
-(curl -s -w "\n%{http_code}" --max-time 120 "$API/v1/test/completions" \
+(curl -s -w "\n%{http_code}" --max-time 120 "$API/v1/chat/completions" \
   -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think What is this?\"}],\"images\":[\"$BEE_IMG\"],\"stream\":false}" \
+  -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think What is this?\"}],\"images\":[\"$BEE_IMG\"],\"stream\":false,\"provider_type\":\"ollama\"}" \
   > "$TMPDIR_IMG/test" 2>/dev/null || printf "\n000" > "$TMPDIR_IMG/test") &
 
 wait
@@ -183,7 +173,7 @@ case "$API_IMG_CODE" in
   *)   fail "API image inference → $API_IMG_CODE"; save_counts; exit 0 ;;
 esac
 
-hdr "Image Inference — Test panel (/v1/test/completions)"
+hdr "Image Inference — Session auth (/v1/chat/completions)"
 
 case "$TEST_IMG_CODE" in
   200) pass "Test image inference → 200" ;;

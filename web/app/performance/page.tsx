@@ -17,6 +17,7 @@ import { Timer, TrendingUp, CheckCircle, AlertTriangle, Zap } from 'lucide-react
 import StatsCard from '@/components/stats-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { TIME_LABEL_MAP, TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
@@ -26,6 +27,7 @@ import { tokens } from '@/lib/design-tokens'
 
 /* ─── page ────────────────────────────────────────────────── */
 export default function PerformancePage() {
+  usePageGuard('performance')
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const [range, setRange] = useState<TimeRange>({ hours: 24 })
@@ -44,10 +46,10 @@ export default function PerformancePage() {
       errors:    Math.max(0, h.request_count - h.success_count),
       tokens:    h.total_tokens,
       errorRate: h.request_count > 0
-        ? parseFloat(((h.request_count - h.success_count) / h.request_count * 100).toFixed(1))
+        ? Math.round((h.request_count - h.success_count) / h.request_count * 1000) / 10
         : 0,
       tps: h.request_count > 0 && h.total_tokens > 0
-        ? parseFloat((h.total_tokens / (h.avg_latency_ms / 1000 * h.request_count)).toFixed(1))
+        ? Math.round(h.total_tokens / (h.avg_latency_ms / 1000 * h.request_count) * 10) / 10
         : 0,
     })),
     [data?.hourly, tz],

@@ -11,7 +11,7 @@
 | Change sync behavior (filter logic) | `infrastructure/outbound/gemini/adapter.rs` | model list filter in sync handler |
 | Enable/disable model for paid provider | `PATCH /v1/providers/{id}/selected-models/{model}` | `provider_handlers.rs` → `set_model_enabled()` |
 | Change merge logic (global + per-provider) | `provider_handlers.rs` → `list_selected_models()` | `gemini_model_repo.list()` + `sel_map` merge |
-| Add field to ProviderSelectedModel | `migrations/` + `domain/entities/` + `persistence/provider_model_selection.rs` | |
+| Add field to ProviderSelectedModel | `docker/postgres/init.sql` + `domain/entities/` + `persistence/provider_model_selection.rs` | |
 
 ## Key Files
 

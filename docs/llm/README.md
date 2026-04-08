@@ -1,6 +1,6 @@
 # docs/llm — SSOT Index
 
-> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-03-18
+> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-03-28
 
 ## Policies (Cross-Cutting)
 
@@ -12,6 +12,7 @@
 | ADD Policy | `policies/add.md` | work type, policy selection, autonomous execution |
 | Architecture | `policies/architecture.md` | hexagonal, ports, adapters, layers, AppState, dependency rule |
 | Code Patterns (Rust) | `policies/patterns.md` | AppError, thiserror, sqlx query_as!, async-trait, tracing, DashMap, Valkey Lua |
+| ID & API Key Policy | `policies/id-encoding.md` | UUIDv7 DB, base62 public IDs, prefix registry, BLAKE2b-256 API key hash |
 | Code Patterns (Frontend) | `policies/patterns-frontend.md` | TanStack Query v5, useOptimistic, Zod, Tailwind v4 |
 | Git Flow | `policies/git-flow.md` | branch, commit, squash, merge, conventional |
 | Testing Strategy | `policies/testing-strategy.md` | testing trophy, purity, proptest, cargo-mutants, OpenAPI schema, layer responsibility |
@@ -20,6 +21,7 @@
 | Development Methodology | `policies/development-methodology.md` | AI-native, methodology overview |
 | Monorepo | `policies/monorepo.md` | project structure, backend/frontend layout |
 | Agents Customization | `policies/agents-customization.md` | AGENTS.md guide, LLM config |
+| Agents Customization Sync | `policies/agents-customization-sync.md` | sync behavior, migration guide, best practices, validation |
 
 ---
 
@@ -29,7 +31,9 @@
 |----------|------|---------|
 | JWT & Sessions | `auth/jwt-sessions.md` | JWT HS256, accounts, sessions, RBAC, setup flow, password reset |
 | JWT Impl | `auth/jwt-sessions-impl.md` | test runs, account endpoints, audit trail, web frontend token storage |
-| API Keys | `auth/api-keys.md` | ApiKey, BLAKE2b, UUIDv7 id, non-unique name, auth flow, RPM, TPM, rate_limiter.rs |
+| JWT Endpoints | `auth/jwt-sessions-endpoints.md` | auth endpoints, test run endpoints, account endpoints, env vars |
+| API Keys | `auth/api-keys.md` | ApiKey, BLAKE2b, UUIDv7 id, non-unique name, RPM, TPM |
+| API Keys Impl | `auth/api-keys-impl.md` | auth flow, rate limiting, soft-delete, audit trail, provider access, web UI |
 | Security | `auth/security.md` | CORS, circuit breaker, rate limiting, Argon2id, BLAKE2b, security headers, SSRF |
 
 ---
@@ -38,14 +42,21 @@
 
 | Document | Path | Keywords |
 |----------|------|---------|
-| Job Lifecycle | `inference/job-lifecycle.md` | InferenceJob, queue, BLPOP, latency, TTFT, cancellation, DashMap, JobEntry |
+| Job Lifecycle | `inference/job-lifecycle.md` | InferenceJob, queue, ZSET, latency, TTFT, DashMap, JobEntry |
+| Job Lifecycle (impl) | `inference/job-lifecycle-impl.md` | JobRepository patterns, DashMap store, cancellation, CancelOnDrop |
 | Job API | `inference/job-api.md` | JobSummary, JobDetail, dashboard endpoints, queue depth, SSE stream, JobStatusEvent |
 | Session Grouping | `inference/session-grouping.md` | conversation_id, messages_hash, training data, batch auto-inference, Blake2b |
 | Job Analytics | `inference/job-analytics.md` | StreamToken, usageMetadata, ClickHouse, inference_logs, run_job |
-| OpenAI Compat | `inference/openai-compat.md` | /v1/chat/completions, SSE, provider_type field, curl, Python SDK |
+| OpenAI Compat | `inference/openai-compat.md` | /v1/chat/completions, SSE, provider_type field, two execution paths |
+| OpenAI Compat Endpoints | `inference/openai-compat-endpoints.md` | /v1/completions, /v1/embeddings, /v1/models, 501 stubs |
+| OpenAI Compat Native | `inference/openai-compat-native.md` | native endpoints, API doc endpoints, shared constants, SSE parsing, client examples |
 | Capacity | `inference/capacity.md` | VramPool, AIMD+p95, LLM Batch±2, thermal auto-detect, model stickiness, gate chain |
 | Model Pricing | `inference/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, Ollama $0.00, provider wildcard |
-| Lab Features | `inference/lab-features.md` | gemini_function_calling, LabSettingsProvider, LabSettingsRepository, feature gating |
+| Lab Features | `inference/lab-features.md` | gemini_function_calling, context_compression_enabled, multiturn gate, vision_model, handoff |
+| Lab Features (impl) | `inference/lab-features-impl.md` | Port, API, Frontend for lab_settings |
+| Context Compression | `inference/context-compression.md` | compression_router, context_assembler, session_handoff, compress_input_inline, conversation_renewed, TurnInternals |
+| MCP | `inference/mcp.md` | McpBridgeAdapter, run_loop, tool intercept, tool naming, ACL, concurrency |
+| MCP Schema | `inference/mcp-schema.md` | mcp_servers, mcp_server_tools, mcp_key_access, mcp_loop_tool_calls |
 
 ---
 
@@ -54,11 +65,14 @@
 | Document | Path | Keywords |
 |----------|------|---------|
 | Ollama | `providers/ollama.md` | LlmProvider, VRAM routing, DynamicProviderRouter, health_checker |
+| Ollama Allocation | `providers/ollama-allocation.md` | end-to-end automatic allocation flow, scheduling logic |
 | Ollama Implementation | `providers/ollama-impl.md` | OllamaAdapter, streaming protocol, num_ctx, format conversion |
 | Ollama Models | `providers/ollama-models.md` | ollama_models, ollama_sync_jobs, OllamaModelRepository, model-aware routing |
 | Gemini | `providers/gemini.md` | GeminiRateLimitPolicy, RPM, RPD, pick_gemini_provider, tier routing |
 | Gemini Models | `providers/gemini-models.md` | gemini_sync_config, gemini_models, provider_selected_models, UPSERT |
-| Hardware | `providers/hardware.md` | GpuServer, node-exporter, hw_metrics, AMD APU, gpu_vendor detection, thermal thresholds |
+| Hardware | `providers/hardware.md` | GpuServer, node-exporter, hw_metrics, NodeMetrics, ServerMetricsPoint, API endpoints |
+| Hardware (impl) | `providers/hardware-impl.md` | node-exporter metrics parsed, GPU vendor detection, service health monitoring |
+| Hardware Metrics | `providers/hardware-metrics.md` | history buckets, ClickHouse history query, thermal state machine, web UI |
 
 ---
 
@@ -66,12 +80,17 @@
 
 | Document | Path | Keywords |
 |----------|------|---------|
-| Deploy | `infra/deploy.md` | docker-compose, Helm, Kubernetes, ports, env vars, CORS, Valkey keys, DB migrations |
-| OTel Pipeline | `infra/otel-pipeline.md` | OTel Collector, Redpanda, ClickHouse Kafka Engine, Chain 1 otel-logs MV |
+| Deploy | `infra/deploy.md` | docker-compose, services, env vars, CORS, Valkey keys, DB migrations, UUID policy |
+| Deploy Helm | `infra/deploy-helm.md` | Helm, Kubernetes, KEDA, HPA, autoscaling, AppState wiring |
+| OTel Pipeline | `infra/otel-pipeline.md` | OTel Collector, Redpanda, ClickHouse Kafka Engine, pipeline overview, agent policy |
+| OTel Pipeline Chains | `infra/otel-pipeline-chains.md` | collector config yaml, Chain 1 otel-logs MV, derived MVs, PG fallback |
 | OTel Pipeline Ops | `infra/otel-pipeline-ops.md` | Chains 2-3, gotchas, verification, data retention, Rust adapters, Redpanda, GPU server |
-| Distributed Coordination | `infra/distributed.md` | Instance ID, VRAM leases, reliable queue, model filter, stickiness, pubsub, crash recovery |
+| Distributed Coordination | `infra/distributed.md` | Instance ID, VRAM leases, reliable queue, ZSET, model filter, stickiness |
+| Distributed Ops | `infra/distributed-ops.md` | cross-instance pub/sub, TPM accounting, crash recovery, Valkey key registry, wiring |
 | Build Optimization | `infra/build-optimization.md` | mold, cargo-chef, hakari, nextest, Docker cache mounts, cargo profiles |
-| Crate Structure | `infra/crate-structure.md` | workspace members, dependency rules, veronex, veronex-agent, veronex-analytics |
+| Crate Structure | `infra/crate-structure.md` | workspace members, dependency rules, veronex, veronex-agent, veronex-analytics, veronex-mcp, veronex-embed |
+| Hot-Path Caching | `infra/hot-path-caching.md` | TtlCache wrappers, Valkey ACL cache, inference hot-path SQL audit, long-term roadmap |
+| Job Event Pipeline | `infra/job-event-pipeline.md` | KafkaJobRepository, JobEvent, veronex.job.events, bulk unnest UPDATE, at-least-once |
 
 ---
 
@@ -81,8 +100,12 @@
 |----------|------|---------|
 | Design System | `frontend/design-system.md` | brand, tokens.css, Tailwind v4, nav sidebar, theme, DataTable, state management |
 | Design System i18n | `frontend/design-system-i18n.md` | i18n, locale config, timezone provider, date formatting, translation workflow |
-| Design System Components | `frontend/design-system-components.md` | login page, auth guard, API client, status colors, flow viz, adding provider |
-| Chart System | `frontend/charts.md` | chart-theme.ts SSOT, DonutChart, Recharts constants, tooltip fix |
+| Design System Components | `frontend/design-system-components.md` | login page, auth guard, API client, status colors, auth-cookie session |
+| Design System Component Patterns | `frontend/design-system-components-patterns.md` | provider taxonomy, network flow viz, accounts page, dialogs, hooks, 2-step registration |
+| Design System Patterns | `frontend/design-system-patterns.md` | Next.js Activity, unstable_retry, useId React 19.2, fmtMs formatter |
+| Chart System | `frontend/charts.md` | chart-theme.ts SSOT, Recharts constants, tooltip fix, bar/line/area patterns |
+| DonutChart | `frontend/charts-donut.md` | DonutChart component, props, usage, DonutSlice |
+| Execution Contracts | `frontend/execution-contracts.md` | LLM-enforced domain contracts, type contracts, response shapes |
 
 ### Pages (`frontend/pages/`)
 
@@ -101,10 +124,38 @@
 | Keys | `frontend/pages/keys.md` | keys/page.tsx, CreateKeyModal, toggle, soft-delete, KeyUsageModal |
 | Accounts | `frontend/pages/accounts.md` | /accounts, user CRUD, role assignment, AccountSessionsModal |
 | Audit | `frontend/pages/audit.md` | /audit, super role, AuditTable, action filter |
-| API Test | `frontend/pages/api-test.md` | api-test, SSE parsing, /docs/swagger, /docs/redoc |
+| API Test | `frontend/pages/api-test.md` | api-test, SSE parsing, conversation mode, TurnInternals, context warnings |
+| API Docs | `frontend/pages/api-docs.md` | /api-docs, Swagger, ReDoc, OpenAPI spec, locale overlay |
 | Login | `frontend/pages/login.md` | /login, auth form, token storage, redirect |
 | Flow | `frontend/pages/flow.md` | /flow, network flow visualization, real-time inference traffic |
+| Health | `frontend/pages/health.md` | /health, service health, pod status, HPA, KEDA, staleness |
 | Setup | `frontend/pages/setup.md` | /setup, bootstrap flow, first-run, admin account creation |
+| MCP | `frontend/pages/mcp.md` | /mcp, MCP server list, register, toggle, tool discovery |
+
+---
+
+## Logic Flows (`flows/`)
+
+> Algorithm reference — read before implementing logic in any subsystem.
+> Flowcharts are the source of truth for control flow; code must match.
+
+| Document | Path | Keywords |
+|----------|------|---------|
+| Index | `flows/README.md` | all subsystems overview |
+| Inference Lifecycle | `flows/inference.md` | submit, queue, dispatch, VRAM reserve, stream, cleanup |
+| Job Event Pipeline | `flows/job-event-pipeline.md` | overall architecture, state transitions, repo call mapping |
+| Job Event Pipeline Steps | `flows/job-event-pipeline-steps.md` | submit, cancel, stream, run_job step diagrams |
+| Authentication | `flows/auth.md` | API key BLAKE2b, JWT HS256, InferCaller dual-auth, rate limit, MCP ACL, provider ACL |
+| MCP Agentic Loop | `flows/mcp.md` | run_loop, execute_one, ACL, circuit breaker, result cache, loop detect |
+| Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, placement planner, scale-out/in, circuit breaker |
+| Thermal Protection | `flows/thermal.md` | Normal→Soft→Hard→Cooldown→RampUp, forced drain, 60s/90s watchdog |
+| Agent Scrape Cycle | `flows/agent.md` | scrape_cycle, MCP heartbeat, node-exporter, ollama, OTLP, dynamic sharding, KEDA |
+| Job Streaming | `flows/streaming.md` | SSE fan-out, job event streaming, stats streaming, pub/sub |
+| Multi-Instance Pub/Sub | `flows/pubsub-relay.md` | multi-instance relay, Valkey pub/sub, cross-instance fan-out |
+| Crash Recovery & Reaping | `flows/reaper.md` | crash recovery, job reaping, startup recovery, pending jobs |
+| Queue Maintenance | `flows/queue-maintenance.md` | promote_overdue, demand_resync, queue_wait_cancel, processing_reaper |
+| Placement Planner | `flows/placement-planner.md` | model auto-scaling, load_model, evict, placement score, VRAM fit |
+| Context Compression | `flows/context-compression.md` | context window, token budget, compress_context, sliding window |
 
 ---
 
@@ -117,16 +168,23 @@
 | React Patterns | `research/frontend/react.md` | verified |
 | Data Fetching | `research/frontend/data-fetching.md` | verified |
 | Next.js 16 | `research/frontend/nextjs.md` | verified |
+| Next.js 15/16 Breaking Changes | `research/frontend/nextjs-breaking-changes.md` | verified |
 | Tailwind v4 | `research/frontend/tailwind.md` | verified |
+| Tailwind v4 2026 Updates | `research/frontend/tailwind-2026.md` | verified |
 | TanStack Query | `research/frontend/tanstack-query.md` | verified |
+| TanStack Query Advanced | `research/frontend/tanstack-query-advanced.md` | verified |
 | Rust / Axum | `research/backend/rust-axum.md` | verified |
 | Rust / Axum Shutdown | `research/backend/rust-axum-shutdown.md` | verified |
+| Rust / Axum 2026 Updates | `research/backend/rust-axum-2026.md` | verified |
 | API Design | `research/backend/api-design.md` | verified |
 | Rust Performance | `research/backend/rust-perf-2026.md` | verified |
 | LLM Scheduling | `research/backend/llm-scheduling-2026.md` | research |
+| LLM Scheduling Demand | `research/backend/llm-scheduling-demand-2026.md` | research |
 | Observability | `research/infrastructure/observability.md` | verified |
+| Observability Production (2026) | `research/infrastructure/observability-2026.md` | verified |
 | Database | `research/infrastructure/database.md` | verified |
 | Auth Sessions | `research/security/auth.md` | verified |
+| LLM Gateway Security | `research/security/llm-gateway-2026.md` | research |
 
 ---
 
@@ -148,10 +206,15 @@
 | Account RBAC | `auth/jwt-sessions.md` + `frontend/pages/accounts.md` |
 | API keys / rate limiting | `auth/api-keys.md` + `frontend/pages/keys.md` |
 | Security (CORS, crypto) | `auth/security.md` |
-| VRAM pool / AIMD / thermal | `inference/capacity.md` |
+| VRAM pool / AIMD / thermal | `inference/capacity.md` + `flows/scheduler.md` + `flows/thermal.md` |
 | Lab feature flag | `inference/lab-features.md` |
+| Context compression / multi-turn / handoff | `inference/context-compression.md` + `flows/context-compression.md` |
+| MCP integration | `inference/mcp.md` + `flows/mcp.md` |
+| Any subsystem logic / control flow | `flows/{subsystem}.md` |
+| veronex-mcp server / add a tool | `infra/crate-structure.md` (veronex-mcp Layout) |
 | OTel pipeline | `infra/otel-pipeline.md` + `infra/otel-pipeline-ops.md` + `research/infrastructure/observability.md` |
-| Kubernetes / Helm | `infra/deploy.md` |
+| Kubernetes / Helm / KEDA | `infra/deploy-helm.md` + `flows/agent.md` |
+| Service health monitoring | `providers/hardware.md` (§ Service Health Monitoring) + `frontend/pages/health.md` |
 | CORS config | `infra/deploy.md` (CORS_ALLOWED_ORIGINS) |
 | Design token / theme | `frontend/design-system.md` + `policies/patterns-frontend.md` |
 | Add i18n key | `frontend/design-system-i18n.md` + relevant `frontend/pages/*.md` |
@@ -168,6 +231,8 @@
 | Session grouping | `inference/session-grouping.md` + `frontend/pages/jobs.md` |
 | Job dashboard API | `inference/job-api.md` |
 | Rust performance / allocator | `research/backend/rust-perf-2026.md` |
+| Hot-path DB optimization / caching strategy | `infra/hot-path-caching.md` |
+| Job state-transition writes / Redpanda pipeline | `infra/job-event-pipeline.md` + `flows/job-event-pipeline.md` |
 | Add application constant | `policies/architecture.md` — Domain constants live in `domain/constants.rs` |
 | Testing strategy / purity | `policies/testing-strategy.md` — layer responsibility, decision checklist |
 | Build / compile speed | `infra/build-optimization.md` — mold, hakari, cargo-chef, profiles |

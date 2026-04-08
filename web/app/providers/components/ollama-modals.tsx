@@ -1,9 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useOptimistic, startTransition } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Provider, ProviderSelectedModel } from '@/lib/types'
+import type { Provider, ProviderSelectedModel, OllamaProviderForModel } from '@/lib/types'
 import { selectedModelsQuery, ollamaModelProvidersQuery } from '@/lib/queries'
 import { Search, Cpu, ChevronLeft, ChevronRight, ListFilter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -28,9 +28,36 @@ import { extractHost } from './shared'
 
 const PROVIDERS_LIMIT = 10
 
+// Optimistic toggle for a single provider-model pair
+function OllamaProviderModelToggle({
+  modelName,
+  provider,
+}: {
+  modelName: string
+  provider: OllamaProviderForModel
+}) {
+  const queryClient = useQueryClient()
+  const [optimistic, setOptimistic] = useOptimistic(provider.is_enabled, (_, v: boolean) => v)
+  const mutation = useMutation({
+    mutationFn: (enabled: boolean) => api.setModelEnabled(provider.provider_id, modelName, enabled),
+    onError: () => setOptimistic(provider.is_enabled),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['selected-models'] })
+      queryClient.invalidateQueries({ queryKey: ['ollama-model-providers', modelName] })
+    },
+  })
+  return (
+    <Switch
+      checked={optimistic}
+      onCheckedChange={(checked) => startTransition(() => { setOptimistic(checked); mutation.mutate(checked) })}
+      disabled={mutation.isPending}
+      aria-label={`${provider.name} ${modelName} toggle`}
+    />
+  )
+}
+
 export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: string; onClose: () => void }) {
   const { t } = useTranslation()
-  const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -39,15 +66,6 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
   const { data, isLoading } = useQuery(
     ollamaModelProvidersQuery(modelName, { search: debouncedSearch, page, limit: PROVIDERS_LIMIT }),
   )
-
-  const toggleModelMutation = useMutation({
-    mutationFn: ({ providerId, enabled }: { providerId: string; enabled: boolean }) =>
-      api.setModelEnabled(providerId, modelName, enabled),
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['selected-models'] })
-      queryClient.invalidateQueries({ queryKey: ['ollama-model-providers', modelName] })
-    },
-  })
 
   const providers = data?.providers ?? []
   const total = data?.total ?? 0
@@ -127,14 +145,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
                   {statusLabel(b.status)}
                 </Badge>
                 {canManage && (
-                  <Switch
-                    checked={b.is_enabled}
-                    onCheckedChange={(checked) =>
-                      toggleModelMutation.mutate({ providerId: b.provider_id, enabled: checked })
-                    }
-                    disabled={toggleModelMutation.isPending}
-                    aria-label={`${b.name} ${modelName} toggle`}
-                  />
+                  <OllamaProviderModelToggle modelName={modelName} provider={b} />
                 )}
               </div>
             ))}
@@ -176,37 +187,37 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
 
 // ── OllamaProviderModelsModal ───────────────────────────────────────────────────
 
-export function OllamaProviderModelsModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
-  const { t } = useTranslation()
+// Optimistic toggle for a single model within a provider
+function OllamaProviderModelItemToggle({
+  providerId,
+  model,
+}: {
+  providerId: string
+  model: ProviderSelectedModel
+}) {
   const queryClient = useQueryClient()
-
-  const { data, isLoading } = useQuery(selectedModelsQuery(provider.id))
-
-  const toggleMutation = useMutation({
-    mutationFn: ({ modelName, isEnabled }: { modelName: string; isEnabled: boolean }) =>
-      api.setModelEnabled(provider.id, modelName, isEnabled),
-    onMutate: async ({ modelName, isEnabled }) => {
-      await queryClient.cancelQueries({ queryKey: ['selected-models', provider.id] })
-      const prev = queryClient.getQueryData<{ models: ProviderSelectedModel[] }>(['selected-models', provider.id])
-      queryClient.setQueryData<{ models: ProviderSelectedModel[] }>(['selected-models', provider.id], (old) => {
-        if (!old) return old
-        return {
-          models: old.models.map((m) =>
-            m.model_name === modelName ? { ...m, is_enabled: isEnabled } : m,
-          ),
-        }
-      })
-      return { prev }
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.prev) {
-        queryClient.setQueryData(['selected-models', provider.id], context.prev)
-      }
-    },
+  const [optimistic, setOptimistic] = useOptimistic(model.is_enabled, (_, v: boolean) => v)
+  const mutation = useMutation({
+    mutationFn: (enabled: boolean) => api.setModelEnabled(providerId, model.model_name, enabled),
+    onError: () => setOptimistic(model.is_enabled),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['selected-models', provider.id] })
+      queryClient.invalidateQueries({ queryKey: ['selected-models', providerId] })
     },
   })
+  return (
+    <Switch
+      checked={optimistic}
+      onCheckedChange={(checked) => startTransition(() => { setOptimistic(checked); mutation.mutate(checked) })}
+      disabled={mutation.isPending}
+      aria-label={model.model_name}
+    />
+  )
+}
+
+export function OllamaProviderModelsModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
+  const { t } = useTranslation()
+
+  const { data, isLoading } = useQuery(selectedModelsQuery(provider.id))
 
   const models = data?.models ?? []
   const enabledCount = models.filter((m) => m.is_enabled).length
@@ -244,14 +255,7 @@ export function OllamaProviderModelsModal({ provider, onClose }: { provider: Pro
               <div key={m.model_name}
                 className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
                 <span className="font-mono text-sm text-text-bright">{m.model_name}</span>
-                <Switch
-                  checked={m.is_enabled}
-                  onCheckedChange={(checked) =>
-                    toggleMutation.mutate({ modelName: m.model_name, isEnabled: checked })
-                  }
-                  disabled={toggleMutation.isPending}
-                  aria-label={m.model_name}
-                />
+                <OllamaProviderModelItemToggle providerId={provider.id} model={m} />
               </div>
             ))}
           </div>

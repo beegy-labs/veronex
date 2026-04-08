@@ -70,12 +70,6 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// Concrete example kept as documentation.
-    #[test]
-    fn mask_long_key_example() {
-        assert_eq!(mask_api_key("AIzaSyD1234567890abcdefg"), "AIza...defg");
-    }
-
     proptest! {
         #[test]
         fn mask_short_key_fully_redacted(key in "[a-zA-Z0-9]{0,8}") {

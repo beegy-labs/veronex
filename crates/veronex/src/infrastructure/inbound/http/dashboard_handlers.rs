@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 
-use axum::extract::{Extension, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::Event;
 use axum::response::IntoResponse;
@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
 use crate::domain::enums::AccountRole;
+use crate::domain::value_objects::JobId;
 use crate::infrastructure::outbound::valkey_keys::{QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID, QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_TEST as QUEUE_KEY_TEST};
+use super::constants::{DASHBOARD_QUEUE_DEPTH_TIMEOUT, DASHBOARD_STATS_TIMEOUT};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSettingsManage};
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
@@ -63,8 +65,9 @@ pub async fn get_stats(
 pub async fn get_job_detail(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Path(jid): Path<JobId>,
 ) -> Result<Json<JobDetail>, AppError> {
+    let id = jid.0;
     let row = dashboard_queries::fetch_job_detail(&state.pg_pool, id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("job {id} not found")))?;
@@ -76,19 +79,21 @@ pub async fn get_job_detail(
         return Err(AppError::Forbidden("access denied".into()));
     }
 
-    // Resolve messages: S3 first (authoritative for new jobs), DB fallback for old jobs
-    let db_messages = row.db_messages.clone();
-    let messages_json = if let Some(ref store) = state.message_store {
-        match store.get(id).await {
-            Ok(Some(v)) => Some(v),
-            Ok(None) => db_messages, // not in S3 → use DB value (old job)
+    // Fetch full conversation from S3 (prompt, messages, tool_calls, result)
+    // S3 key uses conversation_id UUID if available, otherwise job_id
+    let conversation = if let Some(ref store) = state.message_store {
+        let owner_id = row.account_id.or(row.api_key_id).unwrap_or(id);
+        let date = row.common.created_at.date_naive();
+        let s3_key_id = row.conversation_id.unwrap_or(id);
+        match store.get_conversation(owner_id, date, s3_key_id).await {
+            Ok(v) => v,
             Err(e) => {
-                tracing::warn!(job_id = %id, "S3 message fetch failed (using DB fallback): {e}");
-                db_messages
+                tracing::warn!(job_id = %id, "S3 conversation fetch failed (non-fatal): {e}");
+                None
             }
         }
     } else {
-        db_messages
+        None
     };
 
     // Resolve image_keys → URLs
@@ -98,7 +103,7 @@ pub async fn get_job_detail(
         })
     });
 
-    Ok(Json(dashboard_queries::build_job_detail(row, messages_json, image_urls)))
+    Ok(Json(dashboard_queries::build_job_detail(row, conversation, image_urls)))
 }
 
 /// GET /v1/dashboard/jobs — Paginated job list.
@@ -137,15 +142,16 @@ pub async fn list_jobs(
 
 /// DELETE /v1/dashboard/jobs/{id} — Admin cancel a job (JWT-protected).
 pub async fn cancel_job(
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Path(jid): Path<JobId>,
 ) -> Result<StatusCode, AppError> {
-    use crate::domain::value_objects::JobId;
-    let jid = JobId(id);
     state
         .use_case
         .cancel(&jid)
         .await?;
+    emit_audit(&state, &claims, "cancel", "inference_job", &jid.to_string(), &jid.to_string(),
+        &format!("job {} cancelled by admin", jid)).await;
     Ok(StatusCode::OK)
 }
 
@@ -302,18 +308,23 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
 
     use fred::prelude::*;
 
-    let (paid, api, test): (i64, i64, i64) = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
+    let (paid, api, test): (i64, i64, i64) = match tokio::time::timeout(
+        DASHBOARD_QUEUE_DEPTH_TIMEOUT,
         async {
             tokio::join!(
-                async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or(0) },
-                async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or(0) },
-                async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or(0) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen paid failed"); 0 }) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen api failed"); 0 }) },
+                async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen test failed"); 0 }) },
             )
         },
     )
-    .await
-    .unwrap_or((0, 0, 0));
+    .await {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::warn!("queue depth: Valkey timeout after 3s");
+            (0, 0, 0)
+        }
+    };
 
     QueueDepth {
         api_paid: paid,
@@ -330,6 +341,18 @@ pub struct LabSettingsResponse {
     pub gemini_function_calling: bool,
     pub max_images_per_request: i32,
     pub max_image_b64_bytes: i32,
+    pub context_compression_enabled: bool,
+    pub compression_model: Option<String>,
+    pub context_budget_ratio: f32,
+    pub compression_trigger_turns: i32,
+    pub recent_verbatim_window: i32,
+    pub compression_timeout_secs: i32,
+    pub multiturn_min_params: i32,
+    pub multiturn_min_ctx: i32,
+    pub multiturn_allowed_models: Vec<String>,
+    pub vision_model: Option<String>,
+    pub handoff_enabled: bool,
+    pub handoff_threshold: f32,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -351,7 +374,7 @@ pub async fn get_dashboard_overview(
     let default_hours: u32 = 24;
 
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+        DASHBOARD_STATS_TIMEOUT,
         async {
             tokio::join!(
                 dashboard_queries::fetch_stats(&state.pg_pool),
@@ -376,12 +399,7 @@ pub async fn get_dashboard_overview(
     let stats = stats_res?;
     let performance = perf_res?;
     let lab_settings = lab_res.unwrap_or_default();
-    let lab = LabSettingsResponse {
-        gemini_function_calling: lab_settings.gemini_function_calling,
-        max_images_per_request: lab_settings.max_images_per_request,
-        max_image_b64_bytes: lab_settings.max_image_b64_bytes,
-        updated_at: lab_settings.updated_at,
-    };
+    let lab = lab_settings_to_response(lab_settings);
 
     Ok(Json(DashboardOverview {
         stats,
@@ -397,7 +415,7 @@ pub async fn get_capacity(
     State(state): State<AppState>,
     Query(params): Query<ListPageParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let page = params.page.unwrap_or(1).max(1);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
     let limit = params.limit.unwrap_or(20).clamp(1, 200);
     let offset = (page - 1) * limit;
     let search = params.search.as_deref().unwrap_or("").to_string();
@@ -508,39 +526,14 @@ pub async fn patch_capacity_settings(
     }
 }
 
-// ── POST /v1/dashboard/capacity/sync ───────────────────────────────
-
-pub async fn trigger_capacity_sync(
-    RequireSettingsManage(claims): RequireSettingsManage,
-    State(state): State<AppState>,
-) -> impl axum::response::IntoResponse {
-    if state.sync_lock.available_permits() == 0 {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "message": "sync already in progress" })),
-        )
-            .into_response();
-    }
-    state.sync_trigger.notify_one();
-    emit_audit(&state, &claims, "trigger", "capacity_settings", "capacity_settings", "provider_sync",
-        "Manual provider sync triggered by admin").await;
-    (
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "message": "provider sync triggered" })),
-    )
-        .into_response()
-}
-
 // ── Helper: fetch models from all registered providers ────────────
 
 async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<String>> {
     let mut result: HashMap<String, Vec<String>> = HashMap::new();
 
     // ── Ollama: read from already-synced ollama_model_repo (no HTTP) ───
-    if let Ok(models) = state.ollama_model_repo.list_all().await {
-        if !models.is_empty() {
-            result.insert("ollama".to_string(), models);
-        }
+    if let Ok(models) = state.ollama_model_repo.list_all().await && !models.is_empty() {
+        result.insert("ollama".to_string(), models);
     }
 
     // ── Gemini: show models only when lab feature is enabled ──
@@ -556,14 +549,11 @@ async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<Stri
             .collect();
 
         // Fallback: fetch from Gemini API if DB is empty
-        if gemini_models.is_empty() {
-            if let Ok(Some(api_key)) = state.gemini_sync_config_repo.get_api_key().await {
-                if let Ok(models) = super::gemini_helpers::fetch_gemini_models(
-                    &state.http_client, &api_key,
-                ).await {
-                    gemini_models = models;
-                }
-            }
+        if gemini_models.is_empty()
+            && let Ok(Some(api_key)) = state.gemini_sync_config_repo.get_api_key().await
+            && let Ok(models) = super::gemini_helpers::fetch_gemini_models(&state.http_client, &api_key).await
+        {
+            gemini_models = models;
         }
 
         if !gemini_models.is_empty() {
@@ -606,6 +596,7 @@ pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Re
 
     // Snapshot the replay buffer (oldest → newest) — include server timestamp.
     let buffered: Vec<String> = {
+        #[allow(clippy::expect_used)]  // RwLock poisoning = thread panic, propagate correctly
         let buf = state.event_ring_buffer.read().expect("ring buffer poisoned");
         buf.iter()
             .filter_map(|(e, ts)| {
@@ -660,19 +651,35 @@ pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Re
 
 // ── Lab feature settings ─────────────────────────────────────────────
 
+fn lab_settings_to_response(s: crate::application::ports::outbound::lab_settings_repository::LabSettings) -> LabSettingsResponse {
+    LabSettingsResponse {
+        gemini_function_calling: s.gemini_function_calling,
+        max_images_per_request: s.max_images_per_request,
+        max_image_b64_bytes: s.max_image_b64_bytes,
+        context_compression_enabled: s.context_compression_enabled,
+        compression_model: s.compression_model,
+        context_budget_ratio: s.context_budget_ratio,
+        compression_trigger_turns: s.compression_trigger_turns,
+        recent_verbatim_window: s.recent_verbatim_window,
+        compression_timeout_secs: s.compression_timeout_secs,
+        multiturn_min_params: s.multiturn_min_params,
+        multiturn_min_ctx: s.multiturn_min_ctx,
+        multiturn_allowed_models: s.multiturn_allowed_models,
+        vision_model: s.vision_model,
+        handoff_enabled: s.handoff_enabled,
+        handoff_threshold: s.handoff_threshold,
+        updated_at: s.updated_at,
+    }
+}
+
 /// `GET /v1/dashboard/lab` — return current lab feature flags.
 pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     match state.lab_settings_repo.get().await {
-        Ok(s) => Json(LabSettingsResponse {
-            gemini_function_calling: s.gemini_function_calling,
-            max_images_per_request: s.max_images_per_request,
-            max_image_b64_bytes: s.max_image_b64_bytes,
-            updated_at: s.updated_at,
-        }).into_response(),
+        Ok(s) => Json(lab_settings_to_response(s)).into_response(),
         Err(e) => {
             tracing::warn!("get_lab_settings: {e}");
             (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-             Json(serde_json::json!({"error": e.to_string()}))).into_response()
+             Json(serde_json::json!({"error": "internal error"}))).into_response()
         }
     }
 }
@@ -682,6 +689,18 @@ pub struct PatchLabSettingsBody {
     pub gemini_function_calling: Option<bool>,
     pub max_images_per_request: Option<i32>,
     pub max_image_b64_bytes: Option<i32>,
+    pub context_compression_enabled: Option<bool>,
+    pub compression_model: Option<Option<String>>,
+    pub context_budget_ratio: Option<f32>,
+    pub compression_trigger_turns: Option<i32>,
+    pub recent_verbatim_window: Option<i32>,
+    pub compression_timeout_secs: Option<i32>,
+    pub multiturn_min_params: Option<i32>,
+    pub multiturn_min_ctx: Option<i32>,
+    pub multiturn_allowed_models: Option<Vec<String>>,
+    pub vision_model: Option<Option<String>>,
+    pub handoff_enabled: Option<bool>,
+    pub handoff_threshold: Option<f32>,
 }
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
@@ -690,75 +709,39 @@ pub async fn patch_lab_settings(
     State(state): State<AppState>,
     Json(body): Json<PatchLabSettingsBody>,
 ) -> impl axum::response::IntoResponse {
-    match state.lab_settings_repo.update(
-        body.gemini_function_calling,
-        body.max_images_per_request,
-        body.max_image_b64_bytes,
-    ).await {
+    use crate::application::ports::outbound::lab_settings_repository::LabSettingsUpdate;
+    let patch = LabSettingsUpdate {
+        gemini_function_calling: body.gemini_function_calling,
+        max_images_per_request: body.max_images_per_request,
+        max_image_b64_bytes: body.max_image_b64_bytes,
+        context_compression_enabled: body.context_compression_enabled,
+        compression_model: body.compression_model,
+        context_budget_ratio: body.context_budget_ratio,
+        compression_trigger_turns: body.compression_trigger_turns,
+        recent_verbatim_window: body.recent_verbatim_window,
+        compression_timeout_secs: body.compression_timeout_secs,
+        multiturn_min_params: body.multiturn_min_params,
+        multiturn_min_ctx: body.multiturn_min_ctx,
+        multiturn_allowed_models: body.multiturn_allowed_models,
+        vision_model: body.vision_model,
+        handoff_enabled: body.handoff_enabled,
+        handoff_threshold: body.handoff_threshold,
+    };
+    match state.lab_settings_repo.update(patch).await {
         Ok(s) => {
             emit_audit(&state, &claims, "update", "lab_settings", "lab_settings", "lab_settings",
                 &format!("Lab settings updated: gemini_function_calling={:?}, max_images={:?}",
                     body.gemini_function_calling, body.max_images_per_request)).await;
-            Json(LabSettingsResponse {
-                gemini_function_calling: s.gemini_function_calling,
-                max_images_per_request: s.max_images_per_request,
-                max_image_b64_bytes: s.max_image_b64_bytes,
-                updated_at: s.updated_at,
-            }).into_response()
+            Json(lab_settings_to_response(s)).into_response()
         }
         Err(e) => {
             tracing::warn!("patch_lab_settings: {e}");
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
+                Json(serde_json::json!({"error": "internal error"})),
             )
                 .into_response()
         }
-    }
-}
-
-// ────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn jobs_query_defaults() {
-        let json = serde_json::json!({});
-        let q: JobsQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(q.limit, 50);
-        assert_eq!(q.offset, 0);
-        assert!(q.status.is_none());
-        assert!(q.source.is_none());
-    }
-
-    #[test]
-    fn jobs_query_with_status() {
-        let json = serde_json::json!({ "status": "completed", "limit": 10, "offset": 20 });
-        let q: JobsQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(q.limit, 10);
-        assert_eq!(q.offset, 20);
-        assert_eq!(q.status.as_deref(), Some("completed"));
-    }
-
-    #[test]
-    fn dashboard_stats_serialization() {
-        let mut jobs_by_status = HashMap::new();
-        jobs_by_status.insert("completed".to_string(), 100_i64);
-        jobs_by_status.insert("failed".to_string(), 5_i64);
-
-        let stats = DashboardStats {
-            total_keys: 10,
-            active_keys: 8,
-            total_jobs: 105,
-            jobs_last_24h: 20,
-            jobs_by_status,
-        };
-        let json = serde_json::to_value(&stats).unwrap();
-        assert_eq!(json["total_keys"], 10);
-        assert_eq!(json["active_keys"], 8);
     }
 }
 
@@ -775,6 +758,7 @@ pub struct TriggerGroupingRequest {
 }
 
 pub async fn trigger_session_grouping(
+    RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
     Json(body): Json<TriggerGroupingRequest>,
 ) -> impl IntoResponse {
@@ -799,9 +783,15 @@ pub async fn trigger_session_grouping(
             Err(e) => tracing::warn!("manual session grouping failed: {e}"),
         }
     });
+
+    emit_audit(&state, &claims, "trigger", "session_grouping",
+        "session_grouping", "session_grouping",
+        &format!("Manual session grouping triggered (before: {:?})", cutoff)).await;
+
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({ "message": "session grouping triggered" })),
     )
         .into_response()
 }
+

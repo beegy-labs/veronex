@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useOptimistic, startTransition } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { accountsQuery, rolesQuery, accountSessionsQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
@@ -37,6 +37,24 @@ import { useTranslation } from '@/i18n'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDatetime } from '@/lib/date'
 import { hasPermission } from '@/lib/auth'
+
+// ── Account active toggle with optimistic update ──────────────────────────────
+
+function AccountActiveToggle({ account }: { account: Account }) {
+  const { t } = useTranslation()
+  const [optimistic, setOptimistic] = useOptimistic(account.is_active, (_, v: boolean) => v)
+  const mutation = useApiMutation(
+    (is_active: boolean) => api.setAccountActive(account.id, is_active),
+    { invalidateKey: ['accounts'] },
+  )
+  return (
+    <Switch
+      checked={optimistic}
+      onCheckedChange={(v) => startTransition(() => { setOptimistic(v); mutation.mutate(v) })}
+      aria-label={optimistic ? t('common.deactivate') : t('common.activate')}
+    />
+  )
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -608,11 +626,6 @@ export default function AccountsPage() {
     { invalidateKey: ['accounts'], onSuccess: () => setDeleteTarget(null) },
   )
 
-  const activeMutation = useApiMutation(
-    (vars: { id: string; is_active: boolean }) => api.setAccountActive(vars.id, vars.is_active),
-    { invalidateKey: ['accounts'] },
-  )
-
   const resetMutation = useApiMutation(
     (id: string) => api.createResetLink(id),
     { onSuccess: (data) => setResetToken(data.token) },
@@ -736,11 +749,7 @@ export default function AccountsPage() {
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">{a.department ?? '—'}</TableCell>
                     <TableCell>
-                      <Switch
-                        checked={a.is_active}
-                        onCheckedChange={(v) => activeMutation.mutate({ id: a.id, is_active: v })}
-                        aria-label={a.is_active ? t('common.deactivate') : t('common.activate')}
-                      />
+                      <AccountActiveToggle account={a} />
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {a.last_login_at ? fmtDatetime(a.last_login_at, tz) : t('common.never')}

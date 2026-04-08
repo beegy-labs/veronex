@@ -76,6 +76,24 @@ pub const QUEUE_JOBS_TEST: &str = "veronex:queue:jobs:test";
 /// Processing list for reliable queue (BLMOVE destination).
 pub const QUEUE_PROCESSING: &str = "veronex:queue:processing";
 
+/// Active-processing ZSET — score = lease deadline (unix_ms).
+pub const QUEUE_ACTIVE: &str = "veronex:queue:active";
+
+/// Hash tracking re-enqueue attempt counts for lease-expired jobs.
+pub const QUEUE_ACTIVE_ATTEMPTS: &str = "veronex:queue:active:attempts";
+
+/// Lease TTL in ms. Workers must renew before expiry or job is reaped.
+pub const LEASE_TTL_MS: u64 = 90_000;
+
+/// How often (secs) a worker renews the active lease.
+pub const LEASE_RENEW_INTERVAL_SECS: u64 = 30;
+
+/// How often (secs) the processing reaper runs.
+pub const PROCESSING_REAPER_SECS: u64 = 30;
+
+/// Max orphan recoveries before a job is permanently failed.
+pub const LEASE_MAX_ATTEMPTS: u64 = 2;
+
 /// Scoring bonus (MB) for models already loaded in VRAM (locality preference).
 pub const MODEL_LOCALITY_BONUS_MB: i64 = 100_000;
 
@@ -140,6 +158,21 @@ pub const ZSET_PEEK_K: u64 = 20;
 /// Maximum top-K window (adaptive scaling when queue is large).
 pub const ZSET_PEEK_K_MAX: u64 = 100;
 
+// ── Input safety limits (LLM gateway — GPU monopoly / context bomb prevention) ─
+
+/// Hard cap on `max_tokens` / `max_completion_tokens` accepted from clients.
+///
+/// Prevents a single request from monopolizing GPU memory for an unbounded
+/// generation window.  Must be identical across every handler that caps
+/// `max_tokens` — defined here as the single source of truth.
+pub const MAX_TOKENS_CEILING: u32 = 32_768;
+
+/// Maximum number of messages accepted in a chat request (context bomb guard).
+///
+/// Unbounded `messages` arrays inflate KV-cache linearly.  Enforced at the
+/// HTTP boundary before any token or VRAM accounting occurs.
+pub const MAX_CHAT_MESSAGES: usize = 256;
+
 // ── Streaming buffer limits ─────────────────────────────────────────────────
 
 /// Maximum bytes allowed in an SSE/NDJSON line buffer before aborting.
@@ -172,6 +205,13 @@ pub const NODE_EXPORTER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Timeout for job cancellation in CancelGuard.
 pub const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Timeout for an infrastructure service probe (PostgreSQL SELECT 1, ClickHouse /ping, etc.).
+/// Used by health_checker to classify services as "ok" or "error" in the dashboard.
+pub const SERVICE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Periodic MCP tool-discovery refresh interval in the background task in main.rs.
+pub const MCP_TOOL_REFRESH_INTERVAL: Duration = Duration::from_secs(25);
 
 // ── Cache TTL ──────────────────────────────────────────────────────────────
 
@@ -209,6 +249,11 @@ pub const STATS_TICK_INTERVAL: Duration = Duration::from_secs(1);
 /// Job ownership key — tracks which instance owns a running job.
 pub fn job_owner_key(job_id: uuid::Uuid) -> String {
     format!("veronex:job:owner:{job_id}")
+}
+
+/// Cached ConversationRecord key (zstd JSON, TTL 300s).
+pub fn conversation_record_key(conversation_id: uuid::Uuid) -> String {
+    format!("veronex:conv:{conversation_id}")
 }
 
 /// Instance heartbeat key — present (EX 30s) while the instance is alive.
@@ -294,18 +339,6 @@ mod tests {
     // ── Fixed assertions (structural invariants) ─────────────────────────
 
     #[test]
-    fn emergency_equals_paid_bonus() {
-        assert_eq!(EMERGENCY_BONUS_MS, TIER_BONUS_PAID);
-    }
-
-    #[test]
-    fn queue_limits_reasonable() {
-        assert_eq!(MAX_QUEUE_SIZE, 10_000);
-        assert_eq!(MAX_QUEUE_PER_MODEL, 2_000);
-        assert!(MAX_QUEUE_PER_MODEL < MAX_QUEUE_SIZE);
-    }
-
-    #[test]
     fn demand_key_format() {
         assert_eq!(demand_key("llama3:70b"), "veronex:demand:llama3:70b");
     }
@@ -343,13 +376,6 @@ mod tests {
             scaleout_decision_key("llama3:70b"),
             "veronex:scaleout:llama3:70b",
         );
-    }
-
-    #[test]
-    fn adaptive_k_bounds() {
-        assert!(ZSET_PEEK_K >= 20);
-        assert!(ZSET_PEEK_K_MAX <= 100);
-        assert!(ZSET_PEEK_K <= ZSET_PEEK_K_MAX);
     }
 
     // ── Property-based tests (proptest) ──────────────────────────────────

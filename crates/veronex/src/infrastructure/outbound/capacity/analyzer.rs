@@ -45,6 +45,7 @@ async fn save_analyzer_job(
     let job = crate::domain::entities::InferenceJob {
         id: JobId::new(),
         prompt: Prompt::new(&prompt[..prompt.len().min(4096)]).unwrap_or_else(|_| Prompt::new("analyzer").unwrap()),
+        prompt_preview: None,
         model_name: ModelName::new(model).unwrap_or_else(|_| ModelName::new("unknown").unwrap()),
         status: JobStatus::Completed,
         provider_type: ProviderType::Ollama,
@@ -71,6 +72,7 @@ async fn save_analyzer_job(
         conversation_id: None,
         tool_calls_json: None,
         messages_hash: None,
+        vision_analysis: None,
         messages_prefix_hash: None,
         failure_reason: None,
         images: None,
@@ -80,6 +82,8 @@ async fn save_analyzer_job(
         response_format: None,
         frequency_penalty: None,
         presence_penalty: None,
+        mcp_loop_id: None,
+        max_tokens: None,
     };
     if let Err(e) = repo.save(&job).await {
         tracing::debug!("failed to save analyzer job: {e}");
@@ -677,7 +681,8 @@ pub async fn sync_provider(
         let cache_key = crate::infrastructure::outbound::valkey_keys::provider_models(provider_id);
         let json = serde_json::to_string(&model_names).unwrap_or_default();
         let ttl = crate::infrastructure::inbound::http::constants::MODELS_CACHE_TTL;
-        let _: Result<(), _> = pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await;
+        pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, %cache_key, "Valkey SET provider_models cache failed"));
     }
 
     // 3. VRAM probing: prefer agent capacity_state from Valkey (avoids O(N_models) HTTP calls).
@@ -1077,6 +1082,7 @@ pub async fn sync_provider(
                 num_kv_heads:      arch.num_kv_heads as i16,
                 head_dim:          arch.head_dim as i16,
                 configured_ctx:    arch.configured_ctx as i32,
+                max_ctx:           arch.max_ctx as i32,
                 failure_count:     0,
                 llm_concern:       llm.concern,
                 llm_reason:        llm.reason,
@@ -1086,6 +1092,18 @@ pub async fn sync_provider(
                 updated_at:        Utc::now(),
             })
             .await?;
+
+        // Cache ctx profile in Valkey for OllamaAdapter hot-path reads.
+        if let Some(pool) = valkey_pool {
+            use fred::prelude::*;
+            let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(provider_id, &model.name);
+            let ctx_json = serde_json::json!({
+                "configured_ctx": arch.configured_ctx,
+                "max_ctx": arch.max_ctx,
+            }).to_string();
+            pool.set(&ctx_key, ctx_json, Some(Expiration::EX(600)), None, false).await
+                .unwrap_or_else(|e| tracing::warn!(error = %e, %ctx_key, "Valkey SET ctx cache failed"));
+        }
 
         // Collect snapshot for batch LLM analysis
         model_snapshots.push(ModelSnapshot {

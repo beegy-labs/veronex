@@ -13,6 +13,7 @@ use crate::state::AppState;
 const ALLOWED_EVENT_TYPES: &[&str] = &[
     "inference.completed",
     "audit.action",
+    "mcp.tool_call",
 ];
 
 // ── Inference ingest ────────────────────────────────────────────────────────
@@ -162,6 +163,59 @@ pub async fn ingest_audit(
     ];
 
     state.otlp.emit("audit.action", event_time, attrs).await;
+    Ok(StatusCode::ACCEPTED)
+}
+
+// ── MCP tool call ingest ────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct IngestMcpToolCallRequest {
+    pub event_time: DateTime<Utc>,
+    pub request_id: Uuid,
+    pub api_key_id: Option<Uuid>,
+    pub tenant_id: String,
+    pub server_id: Uuid,
+    pub server_slug: String,
+    pub tool_name: String,
+    pub namespaced_name: String,
+    pub outcome: String,
+    pub cache_hit: bool,
+    pub latency_ms: u32,
+    pub result_bytes: u32,
+    pub cap_charged: u8,
+    pub loop_round: u8,
+}
+
+/// `POST /internal/ingest/mcp`
+///
+/// Converts an [`IngestMcpToolCallRequest`] into an OTel LogRecord and emits it
+/// via OTLP HTTP -> OTel Collector -> Redpanda [otel-logs] -> ClickHouse.
+/// The `otel_mcp_tool_calls_mv` materialized view extracts it into `mcp_tool_calls`.
+pub async fn ingest_mcp_tool_call(
+    State(state): State<AppState>,
+    Json(req): Json<IngestMcpToolCallRequest>,
+) -> Result<StatusCode, StatusCode> {
+    let mut attrs = vec![
+        ("event.name",      json!({"stringValue": "mcp.tool_call"})),
+        ("request_id",      json!({"stringValue": req.request_id.to_string()})),
+        ("tenant_id",       json!({"stringValue": req.tenant_id})),
+        ("server_id",       json!({"stringValue": req.server_id.to_string()})),
+        ("server_slug",     json!({"stringValue": req.server_slug})),
+        ("tool_name",       json!({"stringValue": req.tool_name})),
+        ("namespaced_name", json!({"stringValue": req.namespaced_name})),
+        ("outcome",         json!({"stringValue": req.outcome})),
+        ("cache_hit",       json!({"intValue": (req.cache_hit as u8).to_string()})),
+        ("latency_ms",      json!({"intValue": req.latency_ms.to_string()})),
+        ("result_bytes",    json!({"intValue": req.result_bytes.to_string()})),
+        ("cap_charged",     json!({"intValue": req.cap_charged.to_string()})),
+        ("loop_round",      json!({"intValue": req.loop_round.to_string()})),
+    ];
+
+    if let Some(id) = req.api_key_id {
+        attrs.push(("api_key_id", json!({"stringValue": id.to_string()})));
+    }
+
+    state.otlp.emit("mcp.tool_call", req.event_time, attrs).await;
     Ok(StatusCode::ACCEPTED)
 }
 

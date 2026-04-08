@@ -44,7 +44,7 @@ export const serverMetricsHistoryQuery = (serverId: string, hours = 1440) => que
   queryKey: ['server-metrics-history', serverId, hours] as const,
   queryFn: () => api.serverMetricsHistory(serverId, hours),
   staleTime: STALE_TIME_HISTORY,
-  refetchInterval: REFETCH_INTERVAL_HISTORY,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_HISTORY, 30_000),
   refetchIntervalInBackground: false,
   retry: false,
 })

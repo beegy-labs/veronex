@@ -89,13 +89,17 @@ impl AccountRepository for PostgresAccountRepository {
         .await
         .context("failed to create account")?;
 
-        for rid in role_ids {
-            sqlx::query("INSERT INTO account_roles (account_id, role_id) VALUES ($1, $2)")
-                .bind(account.id)
-                .bind(rid)
-                .execute(&mut *tx)
-                .await
-                .context("failed to assign role")?;
+        if !role_ids.is_empty() {
+            sqlx::query(
+                "INSERT INTO account_roles (account_id, role_id)
+                 SELECT $1, UNNEST($2::uuid[])
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(account.id)
+            .bind(role_ids)
+            .execute(&mut *tx)
+            .await
+            .context("failed to assign roles")?;
         }
 
         tx.commit().await.context("commit tx")?;
@@ -111,13 +115,17 @@ impl AccountRepository for PostgresAccountRepository {
             .await
             .context("failed to clear roles")?;
 
-        for rid in role_ids {
-            sqlx::query("INSERT INTO account_roles (account_id, role_id) VALUES ($1, $2)")
-                .bind(account_id)
-                .bind(rid)
-                .execute(&mut *tx)
-                .await
-                .context("failed to assign role")?;
+        if !role_ids.is_empty() {
+            sqlx::query(
+                "INSERT INTO account_roles (account_id, role_id)
+                 SELECT $1, UNNEST($2::uuid[])
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(account_id)
+            .bind(role_ids)
+            .execute(&mut *tx)
+            .await
+            .context("failed to assign roles")?;
         }
 
         tx.commit().await.context("commit tx")?;
@@ -126,7 +134,7 @@ impl AccountRepository for PostgresAccountRepository {
 
     async fn get_role_ids(&self, account_id: &Uuid) -> Result<Vec<Uuid>> {
         let rows: Vec<(Uuid,)> = sqlx::query_as(
-            "SELECT role_id FROM account_roles WHERE account_id = $1",
+            "SELECT role_id FROM account_roles WHERE account_id = $1 ORDER BY role_id LIMIT 200",
         )
         .bind(account_id)
         .fetch_all(&self.pool)
@@ -165,7 +173,7 @@ impl AccountRepository for PostgresAccountRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<Account>> {
-        let sql = format!("SELECT {ACCOUNT_COLS} FROM accounts WHERE {SOFT_DELETE} ORDER BY created_at ASC");
+        let sql = format!("SELECT {ACCOUNT_COLS} FROM accounts WHERE {SOFT_DELETE} ORDER BY created_at ASC LIMIT 10000");
         let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await

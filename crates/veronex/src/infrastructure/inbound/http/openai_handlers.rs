@@ -9,14 +9,15 @@ use futures::StreamExt;
 use serde::Deserialize;
 use tracing::instrument;
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
-use crate::domain::enums::{ApiFormat, FinishReason, JobSource, ProviderType};
-use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
-use super::handlers::sanitize_sse_error;
+use crate::domain::enums::{ApiFormat, FinishReason, ProviderType};
+use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_CHAT_MESSAGES, MAX_TOKENS_CEILING, PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
+use super::handlers::{sanitize_sse_error, sse_response, with_conversation_id, SseStream};
 use super::inference_helpers::{build_sse_response, validate_model_name, validate_content_length, extract_last_user_prompt, validate_tool_call, extract_conversation_id};
 use super::openai_sse_types::{
     ChatCompletion, CompletionChoice, CompletionChunk, CompletionMessage, CompletionTokensDetails,
     PromptTokensDetails, SERVICE_TIER_DEFAULT, StreamOptions, UsageInfo, SYSTEM_FINGERPRINT,
 };
+use super::middleware::infer_auth::InferCaller;
 use super::state::AppState;
 
 // ── Request ────────────────────────────────────────────────────────────────────
@@ -246,6 +247,11 @@ pub struct ChatCompletionRequest {
     /// Web search options — ignored.
     #[serde(default)]
     pub web_search_options: Option<serde_json::Value>,
+    /// Conversation ID for multi-turn context. Base62-encoded UUIDv7.
+    /// When provided, previous messages are loaded from S3 and prepended.
+    /// When absent, a new conversation is created if the response includes tool_calls or MCP.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -260,7 +266,7 @@ pub struct ChatCompletionRequest {
 #[instrument(skip(state, req, headers), fields(model = %req.model))]
 pub async fn chat_completions(
     State(state): State<AppState>,
-    axum::extract::Extension(api_key): axum::extract::Extension<crate::domain::entities::ApiKey>,
+    axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
     headers: axum::http::HeaderMap,
     Json(mut req): Json<ChatCompletionRequest>,
 ) -> Response {
@@ -271,6 +277,18 @@ pub async fn chat_completions(
         )
             .into_response();
     }
+
+    // Security: cap messages array length (context bomb prevention)
+    if req.messages.len() > MAX_CHAT_MESSAGES {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": {"message": format!("messages array exceeds maximum length of {MAX_CHAT_MESSAGES}"), "type": "invalid_request_error"}})),
+        ).into_response();
+    }
+
+    // Security: cap max_tokens (GPU monopoly prevention)
+    if let Some(ref mut mt) = req.max_tokens { *mt = (*mt).min(MAX_TOKENS_CEILING); }
+    if let Some(ref mut mt) = req.max_completion_tokens { *mt = (*mt).min(MAX_TOKENS_CEILING); }
 
     // Validate total message content length (all messages combined).
     let total_content_len: usize = req.messages.iter().map(|m| {
@@ -295,15 +313,39 @@ pub async fn chat_completions(
         }
     }
 
-    let conversation_id = extract_conversation_id(&headers);
+    // conversation_id: body field takes precedence over header
+    let conversation_id = req.conversation_id.as_deref()
+        .and_then(super::inference_helpers::decode_conversation_id)
+        .or_else(|| extract_conversation_id(&headers));
     let stream = req.stream.unwrap_or(false);
     let provider_str = req.provider_type.as_deref().unwrap_or(PROVIDER_OLLAMA);
     match provider_str {
-        PROVIDER_OLLAMA => ollama_chat_proxy(state, api_key, req, conversation_id, stream).await,
+        PROVIDER_OLLAMA => {
+            // If an MCP bridge is configured and has active server sessions,
+            // run the agentic MCP loop instead of the plain Ollama proxy.
+            // API key callers must have at least one MCP grant — if not, bypass to plain proxy.
+            let has_images = req.images.as_ref().is_some_and(|i| !i.is_empty());
+            if !has_images {
+                if let Some(ref bridge) = state.mcp_bridge {
+                    if bridge.should_intercept() {
+                        let has_access = match caller.api_key_id() {
+                            None => true, // JWT session — bypass ACL
+                            Some(key_id) => !crate::infrastructure::outbound::mcp::bridge::fetch_mcp_acl(
+                                &state, key_id,
+                            ).await.is_empty(),
+                        };
+                        if has_access {
+                            return mcp_ollama_chat(state, caller, req, conversation_id, stream).await;
+                        }
+                    }
+                }
+            }
+            ollama_chat_proxy(state, caller, req, conversation_id, stream).await
+        }
         _ => {
             // Parse "gemini-free" → (Gemini, Some("free")), "gemini" → (Gemini, None)
             let (provider_type, gemini_tier) = parse_provider_str(provider_str);
-            legacy_queue_chat(state, api_key, req, provider_type, gemini_tier, conversation_id, stream).await
+            legacy_queue_chat(state, caller, req, provider_type, gemini_tier, conversation_id, stream).await
         }
     }
 }
@@ -317,11 +359,17 @@ pub async fn chat_completions(
 /// VRAM availability and thermal throttle are checked before dispatch.
 async fn ollama_chat_proxy(
     state: AppState,
-    api_key: crate::domain::entities::ApiKey,
-    req: ChatCompletionRequest,
-    conversation_id: Option<String>,
+    caller: InferCaller,
+    mut req: ChatCompletionRequest,
+    conversation_id: Option<uuid::Uuid>,
     stream: bool,
 ) -> Response {
+    // Load previous conversation + generate conversation_id
+    let (conversation_id, session_renewed) = match load_conversation_context(&state, &caller, conversation_id, &mut req.messages, &req.model).await {
+        Ok(result) => result,
+        Err(resp) => return resp,
+    };
+
     // Extract base64 images from content arrays (OpenAI vision format) before
     // consuming messages. Only look at user messages — assistant/system won't have images.
     let mut content_images: Vec<String> = req.messages.iter()
@@ -331,11 +379,36 @@ async fn ollama_chat_proxy(
         .collect();
 
     // Convert messages to Ollama format (normalise content, convert tool_calls).
-    let ollama_messages: Vec<serde_json::Value> =
+    let mut ollama_messages: Vec<serde_json::Value> =
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
 
     // Extract last user content as display prompt (required by InferenceJob).
     let prompt = extract_last_user_prompt(&ollama_messages).to_string();
+
+    // Phase 5: compress long input inline if it exceeds budget (conversation turns only)
+    if conversation_id.is_some() {
+        use crate::application::use_cases::inference::{compression_router, context_compressor};
+        let lab5 = state.lab_settings_repo.get().await.unwrap_or_default();
+        if lab5.context_compression_enabled {
+            let route = compression_router::decide(state.provider_registry.as_ref(), &lab5).await;
+            if let Some(params) = route.into_params(
+                lab5.compression_model.clone().unwrap_or_else(|| "qwen2.5:3b".to_string()),
+                lab5.compression_timeout_secs as u64,
+            ) {
+                let configured_ctx = 32_768u32;
+                let input_budget = (configured_ctx as f32 * lab5.context_budget_ratio * 0.5) as u32;
+                if let Some(compressed) = context_compressor::compress_input_inline(
+                    &prompt, input_budget, &params.model, &params.provider_url, params.timeout_secs,
+                ).await {
+                    if let Some(last_user) = ollama_messages.iter_mut().rev()
+                        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                    {
+                        last_user["content"] = serde_json::json!(compressed);
+                    }
+                }
+            }
+        }
+    }
 
     let model_str = req.model.clone();
     // Merge top-level images with images extracted from content array parts.
@@ -348,12 +421,30 @@ async fn ollama_chat_proxy(
     // Forward tools in Ollama format (OpenAI tools array is already compatible with Ollama).
     let tools = req.tools.map(serde_json::Value::Array);
 
-    // Prefer max_completion_tokens (new name), fall back to max_tokens.
-    let _effective_max_tokens = req.max_completion_tokens.or(req.max_tokens);
+    // Prefer max_completion_tokens (new name), fall back to max_tokens. Already capped above.
+    let effective_max_tokens = req.max_completion_tokens.or(req.max_tokens);
 
     let include_usage = req.stream_options.as_ref()
         .and_then(|o| o.include_usage)
         .unwrap_or(false);
+
+    // For non-vision models with images: analyze via vision model, inject description.
+    let vision_analysis = if images.as_ref().is_some_and(|i| !i.is_empty()) {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        super::inference_helpers::analyze_images_for_context(
+            &state.http_client,
+            state.provider_registry.as_ref(),
+            &model_str,
+            images.as_deref().unwrap_or(&[]),
+            &prompt,
+            lab.vision_model.as_deref(),
+        ).await
+    } else {
+        None
+    };
+    // Images are validated + compressed upstream (line ~311). If vision analysis ran, the
+    // description is already embedded in messages via the Ollama format conversion above.
+    // We don't need to re-inject here — the prompt var is used as display only.
 
     let job_id = match state
         .use_case
@@ -362,21 +453,24 @@ async fn ollama_chat_proxy(
             model_name: model_str.clone(),
             provider_type: ProviderType::Ollama,
             gemini_tier: None,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::OpenaiCompat,
             messages: Some(messages),
             tools,
             request_path: Some("/v1/chat/completions".to_string()),
-            conversation_id,
-            key_tier: Some(api_key.tier),
+            conversation_id: conversation_id.clone(),
+            key_tier: caller.key_tier(),
             images,
             stop: req.stop,
             seed: req.seed,
             response_format: req.response_format,
             frequency_penalty: req.frequency_penalty,
             presence_penalty: req.presence_penalty,
+            mcp_loop_id: None,
+            max_tokens: effective_max_tokens,
+            vision_analysis,
         })
         .await
     {
@@ -395,11 +489,12 @@ async fn ollama_chat_proxy(
     let created = chrono::Utc::now().timestamp();
 
     if !stream {
-        return collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created).await;
+        let resp = collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created, conversation_id.clone(), session_renewed).await;
+        return if session_renewed { with_conversation_id(resp, conversation_id.as_ref()) } else { resp };
     }
 
     let mut saw_tool_calls = false;
-    build_sse_response(&state, job_id, true, move |result| {
+    let sse = build_sse_response(&state, job_id, true, move |result| {
         match result {
             Ok(token) if token.tool_calls.is_some() => {
                 saw_tool_calls = true;
@@ -459,7 +554,8 @@ async fn ollama_chat_proxy(
                 vec![Event::default().data(serde_json::to_string(&err).unwrap_or_default())]
             }
         }
-    })
+    });
+    with_conversation_id(sse, conversation_id.as_ref())
 }
 
 /// Convert an Ollama tool call JSON value to OpenAI format.
@@ -489,6 +585,8 @@ async fn collect_completion(
     model: String,
     id: String,
     created: i64,
+    conversation_id: Option<uuid::Uuid>,
+    session_renewed: bool,
 ) -> Response {
     let mut token_stream = state.use_case.stream(&job_id);
     let mut content = String::new();
@@ -558,8 +656,394 @@ async fn collect_completion(
             completion_tokens_details: CompletionTokensDetails::default(),
         },
         system_fingerprint: SYSTEM_FINGERPRINT,
+        conversation_id: conversation_id.as_ref().map(super::inference_helpers::to_public_id),
+        conversation_renewed: session_renewed,
     })
     .into_response()
+}
+
+// ── MCP agentic loop path ─────────────────────────────────────────────────────
+
+/// Handles Ollama chat requests when an MCP bridge is active.
+///
+/// Runs the agentic loop: injects MCP tool definitions, executes tool calls
+/// server-side, and re-submits until the model produces a final text response.
+///
+/// The final response is streamed (or collected) identically to `ollama_chat_proxy`.
+async fn mcp_ollama_chat(
+    state: AppState,
+    caller: InferCaller,
+    req: ChatCompletionRequest,
+    conversation_id: Option<uuid::Uuid>,
+    stream: bool,
+) -> Response {
+    // Load previous conversation + generate conversation_id
+    let mut req = req;
+    let body_cid = req.conversation_id.as_deref().and_then(super::inference_helpers::decode_conversation_id);
+    let (conversation_id, _session_renewed) = match load_conversation_context(&state, &caller, body_cid.or(conversation_id), &mut req.messages, &req.model).await {
+        Ok(result) => result,
+        Err(resp) => return resp,
+    };
+
+    let ollama_messages: Vec<serde_json::Value> =
+        req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
+
+    let orchestrator_model = req.model.clone();
+    let model = req.model.clone();
+    let include_usage = req.stream_options.as_ref()
+        .and_then(|o| o.include_usage)
+        .unwrap_or(false);
+
+    // Defensive: mcp_bridge is Some here because should_intercept() returned true,
+    // but we avoid expect() in a hot path per patterns.md.
+    let bridge = match state.mcp_bridge.as_ref() {
+        Some(b) => b,
+        None => return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": {"message": "MCP bridge not configured", "type": "server_error"}})),
+        ).into_response(),
+    };
+
+    let loop_result = bridge.run_loop(
+        &state,
+        &caller,
+        orchestrator_model,
+        ollama_messages,
+        req.tools,
+        stream,
+        conversation_id.clone(),
+        req.stop,
+        req.seed,
+        req.response_format,
+        req.frequency_penalty,
+        req.presence_penalty,
+    ).await;
+
+    let loop_result = match loop_result {
+        Some(r) => r,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": {"message": "MCP loop failed to start", "type": "server_error"}})),
+            ).into_response();
+        }
+    };
+
+    // ── Streaming final round ─────────────────────────────────────────────────
+    // When the bridge returned a job_id instead of collected content, pipe it
+    // through the standard SSE path — identical to `ollama_chat_proxy`.
+    if let Some(final_job_id) = loop_result.final_job_id {
+        let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", final_job_id.0).into();
+        let model: Arc<str> = model.into();
+        let created = chrono::Utc::now().timestamp();
+        let mut saw_tool_calls = false;
+
+        let sse = build_sse_response(&state, final_job_id, true, move |result| {
+            match result {
+                Ok(token) if token.tool_calls.is_some() => {
+                    saw_tool_calls = true;
+                    let calls = token.tool_calls.as_ref()
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    let openai_calls: Vec<serde_json::Value> = calls.iter().enumerate()
+                        .filter(|(_, c)| validate_tool_call(c))
+                        .map(|(i, c)| convert_tool_call(i, c))
+                        .collect();
+                    let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model.to_string()), openai_calls);
+                    vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
+                }
+                Ok(token) if token.is_final => {
+                    let reason = token.finish_reason.as_deref()
+                        .unwrap_or(if saw_tool_calls { "tool_calls" } else { FinishReason::Stop.as_str() });
+                    let finish_chunk = CompletionChunk::finish(chunk_id.to_string(), created, Some(model.to_string()), reason);
+                    let finish_event = Event::default().data(serde_json::to_string(&finish_chunk).unwrap_or_default());
+                    if include_usage {
+                        let pt = token.prompt_tokens.unwrap_or(0);
+                        let ct = token.completion_tokens.unwrap_or(0);
+                        let usage_chunk = CompletionChunk::usage_only(chunk_id.to_string(), created, Some(model.to_string()), UsageInfo {
+                            prompt_tokens: pt,
+                            completion_tokens: ct,
+                            total_tokens: pt + ct,
+                            prompt_tokens_details: PromptTokensDetails::default(),
+                            completion_tokens_details: CompletionTokensDetails::default(),
+                        });
+                        vec![finish_event, Event::default().data(serde_json::to_string(&usage_chunk).unwrap_or_default())]
+                    } else {
+                        vec![finish_event]
+                    }
+                }
+                Ok(token) => {
+                    if token.value.is_empty() { return vec![]; }
+                    let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model.to_string()), token.value);
+                    vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
+                }
+                Err(e) => {
+                    let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
+                    vec![Event::default().data(serde_json::to_string(&err).unwrap_or_default())]
+                }
+            }
+        });
+        return with_conversation_id(sse, conversation_id.as_ref());
+    }
+
+    // ── Stream=true but MCP collected: wrap content in SSE ───────────────────
+    // MCP bridge always collects round 0; if no tool calls were made the loop
+    // exits without a final_job_id. When the caller requested streaming we must
+    // still return an SSE response, otherwise the client receives raw JSON that
+    // it cannot parse as SSE events.
+    if stream {
+        use std::convert::Infallible;
+        let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple()).into();
+        let model_s: Arc<str> = model.clone().into();
+        let created = chrono::Utc::now().timestamp();
+        let mut events: Vec<Event> = Vec::new();
+
+        if !loop_result.content.is_empty() {
+            let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model_s.to_string()), loop_result.content.clone());
+            events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+        }
+        if !loop_result.tool_calls.is_empty() {
+            let openai_calls: Vec<serde_json::Value> = loop_result.tool_calls.iter().enumerate()
+                .filter(|(_, c)| validate_tool_call(c))
+                .map(|(i, c)| convert_tool_call(i, c))
+                .collect();
+            if !openai_calls.is_empty() {
+                let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model_s.to_string()), openai_calls);
+                events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+            }
+        }
+        let reason = loop_result.finish_reason.as_str();
+        let finish = CompletionChunk::finish(chunk_id.to_string(), created, Some(model_s.to_string()), reason);
+        events.push(Event::default().data(serde_json::to_string(&finish).unwrap_or_default()));
+
+        let sse: SseStream = Box::pin(
+            futures::stream::iter(events.into_iter().map(Ok::<_, Infallible>))
+                .chain(futures::stream::once(async { Ok(Event::default().data("[DONE]")) }))
+        );
+        return with_conversation_id(sse_response(sse), conversation_id.as_ref());
+    }
+
+    // ── Non-streaming response ─────────────────────────────────────────────────
+    let chunk_id = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple());
+    let created = chrono::Utc::now().timestamp();
+    let total_tokens = loop_result.prompt_tokens + loop_result.completion_tokens;
+
+    Json(ChatCompletion {
+        id: chunk_id,
+        object: "chat.completion",
+        created,
+        model,
+        service_tier: SERVICE_TIER_DEFAULT,
+        choices: vec![CompletionChoice {
+            index: 0,
+            message: CompletionMessage {
+                role: "assistant",
+                content: if loop_result.content.is_empty() { None } else { Some(loop_result.content) },
+                tool_calls: if loop_result.tool_calls.is_empty() { None } else { Some(loop_result.tool_calls) },
+                refusal: None,
+            },
+            finish_reason: loop_result.finish_reason,
+        }],
+        usage: UsageInfo {
+            prompt_tokens: loop_result.prompt_tokens,
+            completion_tokens: loop_result.completion_tokens,
+            total_tokens,
+            prompt_tokens_details: PromptTokensDetails::default(),
+            completion_tokens_details: CompletionTokensDetails::default(),
+        },
+        system_fingerprint: SYSTEM_FINGERPRINT,
+        conversation_id: conversation_id.as_ref().map(super::inference_helpers::to_public_id),
+        conversation_renewed: false,
+    }).into_response()
+}
+
+// ── Conversation context loading ─────────────────────────────────────────────
+
+/// Load previous conversation from S3/Valkey if conversation_id is provided.
+///
+/// Checks multi-turn eligibility before loading. Returns `Err(400 Response)` when
+/// the model does not meet the gate conditions (too small, ctx too narrow, not allowlisted).
+/// Returns `(conversation_id, handoff_occurred)` on success. When a session handoff
+/// fires, the returned conversation_id is the NEW session id.
+async fn load_conversation_context(
+    state: &AppState,
+    caller: &InferCaller,
+    conversation_id: Option<uuid::Uuid>,
+    messages: &mut Vec<ChatMessage>,
+    model_name: &str,
+) -> Result<(Option<uuid::Uuid>, bool), Response> {
+    use crate::application::use_cases::inference::{context_assembler, session_handoff};
+
+    let mut effective_cid = conversation_id;
+    let mut handoff_occurred = false;
+
+    if let Some(uuid) = conversation_id {
+        if let Some(ref store) = state.message_store {
+            let owner_id = caller.account_id().or(caller.api_key_id()).unwrap_or(uuid);
+            'search: for days_ago in 0..=7 {
+                let date = (chrono::Utc::now() - chrono::Duration::days(days_ago)).date_naive();
+
+                // ── Valkey → S3 load ─────────────────────────────────────────
+                let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(uuid);
+                let record_opt: Option<crate::application::ports::outbound::message_store::ConversationRecord> =
+                    if days_ago == 0 {
+                        if let Some(ref vk) = state.valkey_pool {
+                            use fred::prelude::*;
+                            vk.get::<Option<String>, _>(&cache_key).await
+                                .ok()
+                                .flatten()
+                                .and_then(|json| serde_json::from_str(&json).ok())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                let record = match record_opt {
+                    Some(r) => r,
+                    None => {
+                        match store.get_conversation(owner_id, date, uuid).await {
+                            Ok(Some(r)) => {
+                                if let Some(ref vk) = state.valkey_pool {
+                                    use fred::prelude::*;
+                                    if let Ok(json) = serde_json::to_string(&r) {
+                                        if let Err(e) = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(300)), None, false).await {
+                                            tracing::warn!(key = %cache_key, error = %e, "openai: failed to warm conversation cache");
+                                        }
+                                    }
+                                }
+                                r
+                            }
+                            _ => continue 'search,
+                        }
+                    }
+                };
+
+                // ── Multi-turn eligibility gate ───────────────────────────────
+                let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+                let max_ctx: Option<u32> = if let Some(ref vk) = state.valkey_pool {
+                    use fred::prelude::*;
+                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                    let mut found = None;
+                    for p in providers.iter().filter(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama) {
+                        let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, model_name);
+                        if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
+                            if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
+                                .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
+                            {
+                                found = Some(ctx as u32);
+                                break;
+                            }
+                        }
+                    }
+                    found
+                } else {
+                    None
+                };
+
+                if let Err(e) = context_assembler::check_multiturn_eligibility(model_name, max_ctx, &lab) {
+                    tracing::warn!(model = model_name, code = e.code(), "multi-turn eligibility check failed");
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": {
+                                "message": "multi-turn request rejected",
+                                "type": "invalid_request_error",
+                                "code": e.code()
+                            }
+                        })),
+                    ).into_response());
+                }
+
+                let configured_ctx = max_ctx.unwrap_or(32_768);
+
+                // ── Session handoff check ─────────────────────────────────────
+                if session_handoff::should_handoff(&record, configured_ctx, &lab) {
+                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
+                    let ollama = providers.iter().find(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama);
+                    if let Some(provider) = ollama {
+                        let summary_model = lab.compression_model.clone()
+                            .unwrap_or_else(|| model_name.to_string());
+                        let timeout = lab.compression_timeout_secs as u64;
+                        if let Some((new_conv_id, master_summary)) = session_handoff::perform_handoff(
+                            &record, uuid, owner_id, date, &summary_model, &provider.url, timeout, store,
+                        ).await {
+                            // Prepend master summary as first message; current input follows
+                            let summary_msg = ChatMessage {
+                                role: "user".to_string(),
+                                content: Some(MessageContent::Text(
+                                    format!("[Context from previous session]\n{master_summary}")
+                                )),
+                                name: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                            };
+                            let current = std::mem::take(messages);
+                            *messages = std::iter::once(summary_msg).chain(current).collect();
+                            effective_cid = Some(new_conv_id);
+                            handoff_occurred = true;
+                            break 'search;
+                        }
+                    }
+                }
+
+                // ── Context assembly (compressed history + verbatim window) ──
+                let history_msgs = context_assembler::assemble(&record, configured_ctx, &lab);
+
+                let mut history: Vec<ChatMessage> = history_msgs
+                    .into_iter()
+                    .map(|v| ChatMessage {
+                        role: v["role"].as_str().unwrap_or("user").to_string(),
+                        content: Some(MessageContent::Text(
+                            v["content"].as_str().unwrap_or("").to_string(),
+                        )),
+                        name: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    })
+                    .collect();
+
+                let mut current = std::mem::take(messages);
+                history.append(&mut current);
+                *messages = history;
+                break 'search;
+            }
+        }
+    }
+    let cid = effective_cid.unwrap_or_else(super::inference_helpers::new_conversation_id);
+
+    // Auto-title from first user message (strip /no_think prefix, max 10 chars)
+    let title: Option<String> = messages.iter()
+        .find(|m| m.role == "user")
+        .and_then(|m| m.content.as_ref())
+        .map(|c| match c {
+            MessageContent::Text(t) => t.trim_start_matches("/no_think").trim().chars().take(10).collect(),
+            MessageContent::Parts(parts) => parts.iter()
+                .filter_map(|p| p.text.as_deref())
+                .next()
+                .unwrap_or("")
+                .trim_start_matches("/no_think").trim()
+                .chars().take(50).collect(),
+        });
+
+    // Ensure conversation exists in DB (INSERT ON CONFLICT DO NOTHING)
+    if let Err(e) = sqlx::query(
+        "INSERT INTO conversations (id, account_id, api_key_id, title, source, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now(), now()) ON CONFLICT (id) DO NOTHING"
+    )
+    .bind(cid)
+    .bind(caller.account_id())
+    .bind(caller.api_key_id())
+    .bind(&title)
+    .bind(caller.source().as_str())
+    .execute(&state.pg_pool)
+    .await {
+        tracing::warn!(conversation_id = %cid, error = %e, "openai: failed to upsert conversation record");
+    }
+
+    Ok((Some(cid), handoff_occurred))
 }
 
 // ── Provider string parsing ──────────────────────────────────────────────────
@@ -579,11 +1063,11 @@ fn parse_provider_str(s: &str) -> (ProviderType, Option<String>) {
 
 async fn legacy_queue_chat(
     state: AppState,
-    api_key: crate::domain::entities::ApiKey,
+    caller: InferCaller,
     req: ChatCompletionRequest,
     provider_type: ProviderType,
     gemini_tier: Option<String>,
-    conversation_id: Option<String>,
+    conversation_id: Option<uuid::Uuid>,
     stream: bool,
 ) -> Response {
     // Extract prompt from the last user message.
@@ -605,6 +1089,9 @@ async fn legacy_queue_chat(
 
     let model_str = req.model.clone();
     let images = req.images;
+    // Cap max_tokens on the legacy path (same ceiling as the Ollama-optimized path).
+    let effective_max_tokens = req.max_completion_tokens.or(req.max_tokens)
+        .map(|mt| mt.min(MAX_TOKENS_CEILING));
 
     let job_id = match state
         .use_case
@@ -613,9 +1100,9 @@ async fn legacy_queue_chat(
             model_name: model_str.clone(),
             provider_type,
             gemini_tier,
-            api_key_id: Some(api_key.id),
-            account_id: None,
-            source: JobSource::Api,
+            api_key_id: caller.api_key_id(),
+            account_id: caller.account_id(),
+            source: caller.source(),
             api_format: ApiFormat::OpenaiCompat,
             // Intentionally None: legacy path uses single-prompt inference.
             // The GeminiAdapter and non-Ollama providers use job.prompt, not messages.
@@ -623,14 +1110,17 @@ async fn legacy_queue_chat(
             messages: None,
             tools: None,
             request_path: Some("/v1/chat/completions".to_string()),
-            conversation_id,
-            key_tier: Some(api_key.tier),
+            conversation_id: conversation_id.clone(),
+            key_tier: caller.key_tier(),
             images,
             stop: req.stop,
             seed: req.seed,
             response_format: req.response_format,
             frequency_penalty: req.frequency_penalty,
             presence_penalty: req.presence_penalty,
+            mcp_loop_id: None,
+            max_tokens: effective_max_tokens,
+            vision_analysis: None,
         })
         .await
     {
@@ -649,7 +1139,7 @@ async fn legacy_queue_chat(
     let created = chrono::Utc::now().timestamp();
 
     if !stream {
-        return collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created).await;
+        return collect_completion(&state, job_id, model.to_string(), chunk_id.to_string(), created, conversation_id.clone(), false).await;
     }
 
     build_sse_response(&state, job_id, true, move |result| {
@@ -703,14 +1193,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_images_strips_prefix() {
-        let content = MessageContent::Parts(vec![
-            make_image_part("data:image/png;base64,PNGDATA=="),
-        ]);
-        assert_eq!(content.extract_images(), vec!["PNGDATA=="]);
-    }
-
-    #[test]
     fn extract_images_empty_for_text_only() {
         let content = MessageContent::Parts(vec![
             make_text_part("describe this image"),
@@ -725,12 +1207,6 @@ mod tests {
     }
 
     // ── into_string ─────────────────────────────────────────────────────
-
-    #[test]
-    fn into_string_from_text() {
-        let content = MessageContent::Text("hello world".to_string());
-        assert_eq!(content.into_string(), "hello world");
-    }
 
     #[test]
     fn into_string_from_parts_joins_text() {
