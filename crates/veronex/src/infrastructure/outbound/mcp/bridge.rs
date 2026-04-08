@@ -161,11 +161,12 @@ impl McpBridgeAdapter {
         // select Top-K semantically relevant tools via Vespa ANN.
         // Fallback (Vespa unavailable or not configured): get_all() + MAX_TOOLS cut.
         let last_user_query = extract_last_user_prompt(&messages);
-        // MCP servers are registered globally — tools are indexed under service_id="global".
+        let deployment_id = state.vespa_deployment_id.as_ref();
+        // service_id = "global" until per-account MCP server ownership is introduced.
         let service_id = "global";
 
         let mcp_openai_tools: Vec<Value> = if let Some(ref selector) = state.mcp_vector_selector {
-            match selector.select(&last_user_query, service_id, top_k_override).await {
+            match selector.select(&last_user_query, deployment_id, service_id, top_k_override).await {
                 Some(hits) => {
                     use veronex_mcp::vector::McpVectorSelector;
                     McpVectorSelector::hits_to_openai(&hits)
