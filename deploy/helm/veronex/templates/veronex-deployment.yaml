@@ -96,6 +96,8 @@ spec:
             {{- if .Values.vespa.enabled }}
             - name: VESPA_URL
               value: {{ .Values.vespa.url | default (printf "http://%s-vespa:8080" .Release.Name) | quote }}
+            - name: VESPA_DEPLOYMENT_ID
+              value: {{ .Values.vespa.deploymentId | default "default" | quote }}
             {{- end }}
             {{- if .Values.embed.url }}
             - name: EMBED_URL

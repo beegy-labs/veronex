@@ -26,6 +26,7 @@ fn validate_vespa_id(s: &str) -> Result<()> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolDoc {
     pub tool_id: String,
+    pub deployment_id: String,
     pub service_id: String,
     /// MCP server UUID (used for deletion and multi-tenant filtering).
     pub server_id: String,
@@ -49,6 +50,7 @@ impl McpToolDoc {
 #[derive(Debug, Clone, Deserialize)]
 pub struct VespaHit {
     pub tool_id: String,
+    pub deployment_id: String,
     pub service_id: String,
     pub server_id: String,
     /// Server slug — used by `hits_to_openai` to build the namespaced function name.
@@ -91,8 +93,9 @@ impl VespaClient {
         // Vespa document API expects {"fields": {...}}
         let body = serde_json::json!({
             "fields": {
-                "tool_id":      doc.tool_id,
-                "service_id":   doc.service_id,
+                "tool_id":       doc.tool_id,
+                "deployment_id": doc.deployment_id,
+                "service_id":    doc.service_id,
                 "server_id":    doc.server_id,
                 "server_name":  doc.server_name,
                 "tool_name":    doc.tool_name,
@@ -119,13 +122,14 @@ impl VespaClient {
 
     // ── Delete by selection ────────────────────────────────────────────────────
 
-    /// Delete all documents matching `service_id = X AND server_id = Y`.
-    pub async fn delete_server(&self, service_id: &str, server_id: &str) -> Result<()> {
+    /// Delete all documents matching `deployment_id = X AND service_id = Y AND server_id = Z`.
+    pub async fn delete_server(&self, deployment_id: &str, service_id: &str, server_id: &str) -> Result<()> {
+        validate_vespa_id(deployment_id)?;
         validate_vespa_id(service_id)?;
         validate_vespa_id(server_id)?;
         let selection = format!(
-            "mcp_tools.service_id == \"{}\" and mcp_tools.server_id == \"{}\"",
-            service_id, server_id
+            "mcp_tools.deployment_id == \"{}\" and mcp_tools.service_id == \"{}\" and mcp_tools.server_id == \"{}\"",
+            deployment_id, service_id, server_id
         );
         let url = format!(
             "{}/document/v1/mcp_tools/mcp_tools/docid/?selection={}&continuation=",
@@ -165,26 +169,30 @@ impl VespaClient {
 
     // ── ANN search ─────────────────────────────────────────────────────────────
 
-    /// Nearest-neighbour search filtered by `service_id`.
+    /// Nearest-neighbour search filtered by `deployment_id` + `service_id`.
     /// Returns up to `top_k` hits ordered by cosine similarity (angular distance).
     pub async fn search(
         &self,
         embedding: &[f32],
+        deployment_id: &str,
         service_id: &str,
         top_k: usize,
     ) -> Result<Vec<VespaHit>> {
+        validate_vespa_id(deployment_id)?;
         validate_vespa_id(service_id)?;
         let url = format!("{}/search/", self.base_url);
 
-        // YQL: filter on service_id + HNSW ANN
+        // YQL: filter on deployment_id + service_id + HNSW ANN.
+        // Uses attribute equality (=) — correct for non-indexed string fields.
         let yql = format!(
-            "select tool_id, service_id, server_id, server_name, tool_name, description, input_schema \
+            "select tool_id, deployment_id, service_id, server_id, server_name, tool_name, description, input_schema \
              from mcp_tools \
-             where service_id contains \"{}\" \
+             where deployment_id = \"{}\" \
+             and service_id = \"{}\" \
              and ({{targetHits: {top_k}}}nearestNeighbor(embedding, qe)) \
              order by closeness(field, embedding) desc \
              limit {top_k}",
-            service_id
+            deployment_id, service_id
         );
 
         let body = serde_json::json!({
@@ -234,8 +242,9 @@ fn parse_hits(json: &serde_json::Value) -> Vec<VespaHit> {
             let fields = hit.get("fields")?;
             let relevance = hit["relevance"].as_f64().unwrap_or(0.0) as f32;
             Some(VespaHit {
-                tool_id:      fields["tool_id"].as_str()?.to_owned(),
-                service_id:   fields["service_id"].as_str()?.to_owned(),
+                tool_id:       fields["tool_id"].as_str()?.to_owned(),
+                deployment_id: fields["deployment_id"].as_str().unwrap_or("").to_owned(),
+                service_id:    fields["service_id"].as_str()?.to_owned(),
                 server_id:    fields["server_id"].as_str()?.to_owned(),
                 server_name:  fields["server_name"].as_str().unwrap_or("").to_owned(),
                 tool_name:    fields["tool_name"].as_str()?.to_owned(),
@@ -266,7 +275,8 @@ mod tests {
                 "children": [{
                     "relevance": 0.92,
                     "fields": {
-                        "tool_id": "svc:srv:get_weather",
+                        "tool_id": "prod-v1:svc:srv:get_weather",
+                        "deployment_id": "prod-v1",
                         "service_id": "svc",
                         "server_id": "srv",
                         "server_name": "weather_mcp",
@@ -280,13 +290,15 @@ mod tests {
         let hits = parse_hits(&json);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].tool_name, "get_weather");
+        assert_eq!(hits[0].deployment_id, "prod-v1");
         assert!((hits[0].relevance - 0.92).abs() < 1e-4);
     }
 
     #[test]
     fn doc_id_matches_tool_id() {
         let doc = McpToolDoc {
-            tool_id: "svc:srv:tool".into(),
+            tool_id: "prod-v1:svc:srv:tool".into(),
+            deployment_id: "prod-v1".into(),
             service_id: "svc".into(),
             server_id: "srv".into(),
             server_name: "my_server".into(),
@@ -295,6 +307,6 @@ mod tests {
             input_schema: "{}".into(),
             embedding: vec![0.0; 1024],
         };
-        assert_eq!(doc.doc_id(), "svc:srv:tool");
+        assert_eq!(doc.doc_id(), "prod-v1:svc:srv:tool");
     }
 }
