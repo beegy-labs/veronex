@@ -37,9 +37,9 @@ CREATE TABLE mcp_server_tools (
 CREATE TABLE mcp_key_access (
     api_key_id UUID    NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
     server_id  UUID    NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
-    is_allowed BOOLEAN NOT NULL DEFAULT true,
-    top_k      SMALLINT CHECK (top_k BETWEEN 1 AND 64),
+    is_allowed BOOLEAN     NOT NULL DEFAULT true,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    top_k      SMALLINT    CHECK (top_k BETWEEN 1 AND 64),
     PRIMARY KEY (api_key_id, server_id)
 );
 
