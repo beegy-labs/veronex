@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-16 | Classification: Constitutional
+> SSOT | **Last Updated**: 2026-03-28 | Classification: Constitutional
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision
@@ -49,6 +49,9 @@ crates/veronex/src/
 │       ├── observability/      # HttpObservabilityAdapter + HttpAuditAdapter (fail-open → veronex-analytics)
 │       ├── analytics/          # HttpAnalyticsClient (GET from veronex-analytics)
 │       ├── pubsub/             # Cross-instance relay (Valkey Streams + Pub/Sub) + reaper (crash recovery)
+│       ├── s3/                 # S3ImageStore, S3MessageStore, WebP conversion
+│       ├── session_grouping.rs # Conversation session grouping (background loop)
+│       ├── queue_maintenance.rs # Queue reaper, orphan cleanup
 │       ├── valkey_keys.rs      # Valkey key patterns (infra-only helpers; queue names live in domain/constants.rs)
 │       └── capacity/           # VramPool, DistributedVramPool, ThermalThrottleMap, CapacityAnalyzer
 │
@@ -86,7 +89,8 @@ Notable: `CachingProviderRegistry` decorates `PostgresProviderRegistry` (5s TTL)
 Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → ZADD queue:zset (score=now_ms-tier_bonus)
       OR POST /v1/test/completions  (Bearer JWT, source=Test)  → ZADD queue:zset (score=now_ms-0)
        → queue_dispatcher_loop: ZRANGE peek top-K → Rust scoring → Lua ZREM claim → processing list
-         → 2-stage model filter:
+         → 3-stage model filter:
+           0. global_model_settings → globally disabled? reject all
            1. providers_for_model() → has the model installed?
            2. list_enabled() → model enabled on this provider?
          → VRAM sort + model stickiness (+100GB bonus for loaded model)
@@ -178,6 +182,8 @@ Background loops:
 | `GeminiSyncConfigRepository` | `PostgresGeminiSyncConfigRepository` | Singleton admin key |
 | `GeminiModelRepository` | `PostgresGeminiModelRepository` | Global model pool |
 | `ProviderModelSelectionRepository` | `PostgresProviderModelSelectionRepository` | Per-provider model filter |
+| `GlobalModelSettingsRepository` | `PostgresGlobalModelSettingsRepository` | Global model enable/disable (priority over per-provider) |
+| `ApiKeyProviderAccessRepository` | `PostgresApiKeyProviderAccessRepository` | Per-key provider allow/deny |
 | `VramPoolPort` | `VramPool`, `DistributedVramPool` | Per-provider VRAM pool: try_reserve → VramPermit (RAII, KV-only release) |
 | `CircuitBreakerPort` | `CircuitBreakerMap` | Per-provider failure isolation (Closed→Open→HalfOpen) |
 | `ThermalPort` | `ThermalThrottleMap` | Per-provider GPU thermal throttle level (Normal/Soft/Hard) |

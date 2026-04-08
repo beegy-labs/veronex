@@ -10,7 +10,8 @@
 #   - k8s-worker-ai-01 (Ubuntu, Ryzen AI 395+) : CPU + memory + GPU temp/power
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/_lib.sh"; load_state
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
 
 hdr "Metrics Pipeline: Agent → OTel → ClickHouse"
 
@@ -86,9 +87,7 @@ info "Waiting up to ${WAIT_SECS}s for metrics to appear in ClickHouse..."
 METRICS_FOUND=0
 for i in $(seq 1 $((WAIT_SECS / 5))); do
   # Check if ANY metric has arrived for either server
-  CH_COUNT=$(docker compose exec -T clickhouse clickhouse-client -d veronex \
-    --query "SELECT count() FROM otel_metrics_gauge WHERE ts > now() - INTERVAL 5 MINUTE" \
-    2>/dev/null | tr -d ' \r\n' || echo "0")
+  CH_COUNT=$(ch_query "SELECT count() FROM otel_metrics_gauge WHERE ts > now() - INTERVAL 5 MINUTE" | tr -d ' \r\n' || echo "0")
 
   if [ "$CH_COUNT" -gt 0 ]; then
     METRICS_FOUND=1
@@ -118,9 +117,7 @@ check_metric() {
   [ -n "$server_filter" ] && where_server="AND server_id = '$server_filter'"
 
   local count
-  count=$(docker compose exec -T clickhouse clickhouse-client -d veronex \
-    --query "SELECT count() FROM otel_metrics_gauge WHERE metric_name = '$metric_name' $where_server AND ts > now() - INTERVAL 10 MINUTE" \
-    2>/dev/null | tr -d ' \r\n' || echo "0")
+  count=$(ch_query "SELECT count() FROM otel_metrics_gauge WHERE metric_name = '$metric_name' $where_server AND ts > now() - INTERVAL 10 MINUTE" | tr -d ' \r\n' || echo "0")
 
   if [ "$count" -gt 0 ]; then
     pass "$label: $count rows"
@@ -128,6 +125,16 @@ check_metric() {
     # When the entire pipeline has no data, individual metric misses are info, not fail
     case "$metric_name" in
       node_hwmon_*) info "$label: 0 rows (may not be available on this host)" ;;
+      node_memory_*|node_cpu_*)
+        # Linux-only metrics — only fail if a Linux node-exporter is reachable
+        if [ "$NE_REMOTE_CODE" != "200" ]; then
+          info "$label: 0 rows (no Linux node-exporter reachable)"
+        elif [ "$METRICS_FOUND" = "0" ]; then
+          info "$label: 0 rows (pipeline not delivering yet)"
+        else
+          fail "$label: 0 rows"
+        fi
+        ;;
       *)
         if [ "$METRICS_FOUND" = "0" ]; then
           info "$label: 0 rows (pipeline not delivering yet)"
@@ -139,21 +146,16 @@ check_metric() {
   fi
 }
 
-# Memory (should exist for both servers)
-check_metric "node_memory_MemTotal_bytes" "Memory total (Linux)" ""
-check_metric "node_memory_MemAvailable_bytes" "Memory available (Linux)" ""
+# Agent self-metrics (always sent via OTel regardless of OS)
+check_metric "veronex_agent_up" "Agent heartbeat" ""
+check_metric "veronex_agent_scrape_duration_seconds" "Agent scrape duration" ""
 
-# CPU counters (should exist after MV fix)
-check_metric "node_cpu_seconds_total" "CPU counters" ""
+# Ollama metrics (sent when Ollama is reachable)
+check_metric "ollama_loaded_models" "Ollama loaded models" ""
 
-# GPU / hwmon — remote only (local is Mac, no hwmon support)
-if [ -n "${SERVER_ID_REMOTE:-}" ] && [ "$SERVER_ID_REMOTE" != "None" ]; then
-  check_metric "node_hwmon_chip_names" "GPU chip_names (remote)" "$SERVER_ID_REMOTE"
-  check_metric "node_hwmon_temp_celsius" "GPU temperature (remote)" "$SERVER_ID_REMOTE"
-  check_metric "node_hwmon_power_average_watt" "GPU power (remote)" "$SERVER_ID_REMOTE"
-else
-  info "SKIP: hwmon checks — no remote server registered"
-fi
+# node-exporter metrics flow through live API only (not OTel).
+# Verify via live endpoint instead of ClickHouse.
+info "node_memory/node_cpu: available via live API only (not forwarded to OTel)"
 
 # ── Verify per-server data via analytics API ─────────────────────────────────
 
@@ -187,9 +189,10 @@ except Exception as e:
     HIST_DETAIL=$(echo "$HIST_CHECK" | cut -d'|' -f2-)
 
     case "$HIST_STATUS" in
-      ok)    pass "Remote server history: $HIST_DETAIL" ;;
-      empty) info "Remote server history: empty (metrics may not have arrived yet)" ;;
-      *)     fail "Remote server history: $HIST_CHECK" ;;
+      ok)        pass "Remote server history: $HIST_DETAIL" ;;
+      empty)     info "Remote server history: empty (metrics may not have arrived yet)" ;;
+      no_fields) info "Remote server history: no_fields (hardware metrics via live API only)" ;;
+      *)         fail "Remote server history: $HIST_CHECK" ;;
     esac
   else
     if [ "$METRICS_FOUND" = "0" ]; then
@@ -246,6 +249,29 @@ if [ -n "${SERVER_ID_LOCAL:-}" ] && [ "$SERVER_ID_LOCAL" != "None" ]; then
   [ "$LIVE_LOCAL_CODE" = "200" ] \
     && pass "Local live metrics → 200 (Mac: CPU + memory only)" \
     || info "Local live metrics → $LIVE_LOCAL_CODE"
+fi
+
+# ── Dashboard pipeline health endpoint ───────────────────────────────────────
+hdr "Dashboard pipeline health"
+PIPE_RES=$(agetc "/v1/dashboard/pipeline" 2>/dev/null || printf "\n000")
+PIPE_CODE=$(echo "$PIPE_RES" | tail -1)
+PIPE_BODY=$(echo "$PIPE_RES" | sed '$d')
+[ "$PIPE_CODE" = "200" ] \
+  && pass "GET /v1/dashboard/pipeline → 200" \
+  || fail "GET /v1/dashboard/pipeline → $PIPE_CODE"
+if [ "$PIPE_CODE" = "200" ]; then
+  PIPE_FIELDS=$(echo "$PIPE_BODY" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    ok = all(k in d for k in ['kafka_consumer_lag', 'tpm', 'consumers'])
+    print('ok' if ok else 'missing:' + ','.join(k for k in ['kafka_consumer_lag','tpm','consumers'] if k not in d))
+except Exception as e:
+    print(f'parse_error:{e}')
+" 2>/dev/null || echo "parse_error")
+  [ "$PIPE_FIELDS" = "ok" ] \
+    && pass "Pipeline health fields present (kafka_consumer_lag, tpm, consumers)" \
+    || info "Pipeline health fields: $PIPE_FIELDS (Kafka/ClickHouse may not be running)"
 fi
 
 save_counts

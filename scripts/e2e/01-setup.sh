@@ -11,7 +11,12 @@ hdr "Phase 1: Infrastructure Setup"
 if [ "$SKIP_DB_RESET" = "0" ]; then
   docker compose exec -T postgres psql -U veronex -d veronex -c \
     "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
-  docker compose run --rm migrate-postgres > /dev/null 2>&1
+  docker compose exec -T postgres psql -U veronex -d veronex \
+    < "$(dirname "$0")/../../docker/postgres/init.sql" > /dev/null 2>&1
+  docker compose exec -T clickhouse clickhouse-client \
+    --user "${CLICKHOUSE_USER:-veronex}" --password "${CLICKHOUSE_PASSWORD:-veronex}" \
+    --database veronex \
+    < "$(dirname "$0")/../../docker/clickhouse/schema.sql" > /dev/null 2>&1
   # Clear all Valkey keys (ZSET queue, demand counters, caches, etc.)
   docker compose exec -T valkey valkey-cli EVAL \
     "local count=0; for _,k in ipairs(redis.call('keys','veronex:*')) do count=count+redis.call('del',k) end; return count" 0 \
@@ -37,6 +42,17 @@ docker compose exec -T valkey valkey-cli EVAL \
 H=$(curl -sf "$API/health" 2>/dev/null || echo "")
 R=$(curl -sf "$API/readyz" 2>/dev/null || echo "")
 [ "$H" = "ok" ] && [ "$R" = "ok" ] && pass "health=ok, readyz=ok" || fail "health=$H readyz=$R"
+
+# Verify all infrastructure services are running
+INFRA_OK=true
+for svc in postgres valkey clickhouse redpanda minio otel-collector veronex-mcp veronex-embed; do
+  STATUS=$(docker compose ps "$svc" --format "{{.Status}}" 2>/dev/null | head -1)
+  case "$STATUS" in
+    *healthy*|*Up*) ;;
+    *) INFRA_OK=false; fail "Service $svc not running: $STATUS" ;;
+  esac
+done
+$INFRA_OK && pass "All infrastructure services running"
 
 # ── Phase 2: Authentication ───────────────────────────────────────────────────
 
@@ -129,7 +145,7 @@ if [ -n "$PROVIDER_ID_REMOTE" ] && [ "$PROVIDER_ID_REMOTE" != "None" ] && \
 fi
 
 # Verify both providers listed
-PROV_COUNT=$(aget "/v1/providers" | jv '.__len__()' || echo "0")
+PROV_COUNT=$(aget "/v1/providers" | jv '["total"]' || echo "0")
 [ "$PROV_COUNT" -ge 2 ] && pass "Both providers registered (count=$PROV_COUNT)" \
   || fail "Expected ≥2 providers, got $PROV_COUNT"
 
@@ -181,21 +197,28 @@ PP2=$(echo "$S2" | jv '["probe_permits"]' || echo "")
 PR2=$(echo "$S2" | jv '["probe_rate"]' || echo "")
 [ "$PP2" = "2" ] && [ "$PR2" = "5" ] && pass "Capacity settings updated (permits=2 rate=5)" \
   || fail "Capacity settings update failed (pp=$PP2 pr=$PR2)"
-apatch "/v1/dashboard/capacity/settings" '{"probe_permits":1,"probe_rate":3}' > /dev/null 2>&1
+apatch "/v1/dashboard/capacity/settings" '{"probe_permits":1,"probe_rate":3,"analyzer_model":"'"$MODEL"'"}' > /dev/null 2>&1
+
+S3=$(aget "/v1/dashboard/capacity/settings" || echo "{}")
+AM=$(echo "$S3" | jv '["analyzer_model"]' || echo "")
+[ "$AM" = "$MODEL" ] && pass "Analyzer model set to $MODEL" \
+  || fail "Analyzer model not set (got=$AM)"
 
 # ── Phase 7: API Key ──────────────────────────────────────────────────────────
 
 hdr "Phase 7: API Key"
 
-ACCOUNT_ID=$(aget "/v1/accounts" | jv '[0]["id"]' || echo "")
+ACCOUNT_ID=$(aget "/v1/accounts" | jv '["accounts"][0]["id"]' || echo "")
 if [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ]; then
   KEY_RES=$(apost "/v1/keys" \
     "{\"tenant_id\":\"$ACCOUNT_ID\",\"name\":\"e2e-paid\",\"tier\":\"paid\"}" || echo "")
   API_KEY=$(echo "$KEY_RES" | jv '["key"]' || echo "")
   [ -n "$API_KEY" ] && [ "$API_KEY" != "None" ] \
     && pass "Paid API key created: ${API_KEY:0:12}..." || fail "API key creation failed"
+  API_KEY_ID_PAID=$(echo "$KEY_RES" | jv '["id"]' || echo "")
   save_var API_KEY "$API_KEY"
   save_var API_KEY_PAID "$API_KEY"
+  save_var API_KEY_ID_PAID "$API_KEY_ID_PAID"
 
   # Also create a standard key for tier-priority tests
   STD_KEY_RES=$(apost "/v1/keys" \
@@ -208,5 +231,19 @@ if [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ]; then
 else
   fail "Could not find account for API key creation"
 fi
+
+# ── Phase 8: Wait for providers to come online ────────────────────────────────
+
+hdr "Phase 8: Provider Online Wait"
+
+for attempt in $(seq 1 12); do
+  STATUS=$(aget "/v1/providers" 2>/dev/null | jv '["providers"][0]["status"]' 2>/dev/null || echo "")
+  if [ "$STATUS" = "online" ]; then
+    pass "Provider online (attempt $attempt)"
+    break
+  fi
+  [ "$attempt" -eq 12 ] && info "Provider still offline after 60s — inference tests may fail"
+  sleep 5
+done
 
 save_counts

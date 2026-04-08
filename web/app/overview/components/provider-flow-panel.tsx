@@ -27,6 +27,7 @@ import { useLabSettings } from '@/components/lab-settings-provider'
 import { PROVIDER_GEMINI, JOB_STATUS_COLORS } from '@/lib/constants'
 import { getOllamaProviders, getGeminiProviders } from '@/lib/utils'
 import { tokens } from '@/lib/design-tokens'
+import { fmtCompact } from '@/lib/chart-theme'
 
 /* ─── viewport ──────────────────────────────────────────────── */
 const VIEW_W = 540
@@ -332,7 +333,7 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
                 }} />
               <text x={API_CX} y={API_CY + API_H / 2 + 13} textAnchor="middle"
                 style={{ fill: recentRequests > 0 ? tokens.brand.primary : tokens.text.secondary, fontSize: 8, fontWeight: 700 }}>
-                {t('overview.flowReqPerSec', { value: typeof recentRequests === 'number' ? recentRequests.toFixed(1) : recentRequests })}
+                {t('overview.flowReqPerSec', { value: typeof recentRequests === 'number' ? fmtCompact(recentRequests) : recentRequests })}
               </text>
               <text x={API_CX} y={API_CY + API_H / 2 + 22} textAnchor="middle"
                 style={{ fill: tokens.text.secondary, fontSize: 7 }}>

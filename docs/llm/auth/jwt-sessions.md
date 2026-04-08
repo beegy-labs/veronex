@@ -1,6 +1,6 @@
 # Auth -- RBAC, JWT & Sessions
 
-> SSOT | **Last Updated**: 2026-03-18 (rev 6 -- N:N roles, permissions in JWT, RequirePermission extractors)
+> SSOT | **Last Updated**: 2026-03-28 (rev 6 -- N:N roles, permissions in JWT, RequirePermission extractors)
 
 ## Overview
 
@@ -25,7 +25,7 @@ Accounts have N:N role assignment via `account_roles` join table. Each role gran
 
 | Role | `is_system` | Permissions |
 |------|-------------|-------------|
-| `super` | true | All: `dashboard_view`, `api_test`, `provider_manage`, `key_manage`, `account_manage`, `audit_view`, `settings_manage`, `role_manage` |
+| `super` | true | All: `dashboard_view`, `api_test`, `provider_manage`, `key_manage`, `account_manage`, `audit_view`, `settings_manage`, `role_manage`, `model_manage` |
 | `viewer` | true | `dashboard_view` only |
 
 System roles (`is_system=true`) cannot be edited or deleted.
@@ -42,6 +42,7 @@ System roles (`is_system=true`) cannot be edited or deleted.
 | `audit_view` | View audit log |
 | `settings_manage` | Modify system settings |
 | `role_manage` | CRUD roles (except system roles) |
+| `model_manage` | Manage models (enable/disable, sync) |
 
 ### JWT Claims
 
@@ -94,7 +95,7 @@ Usage: `RequireRoleManage(claims): RequireRoleManage` as handler arg.
 
 ```sql
 CREATE TABLE accounts (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id            UUID PRIMARY KEY DEFAULT uuidv7(),
   username      VARCHAR(64) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,          -- Argon2id
   name          VARCHAR(128) NOT NULL,
@@ -169,11 +170,11 @@ CREATE TABLE account_sessions (
 );
 ```
 
-Migration: `20260301000036_account_sessions.sql`
+Migration: consolidated in `000001_init.up.sql`
 
 **Revocation flow**: Login inserts session with `jti`. Logout sets `revoked_at` + Valkey `SET veronex:revoked:{jti} 1 EX {remaining_ttl}`. Refresh revokes old session, creates new one with new `jti` and new refresh hash. Valkey entries auto-expire.
 
-> **Note**: `RefreshResponse` returns only `{ access_token, token_type }`. The server generates a new refresh token hash but does not send the raw value to the client. The client's original refresh token becomes invalid after one refresh call (old session revoked).
+> **Note**: RefreshResponse returns `{ ok: bool }`. New tokens are set as HttpOnly cookies.
 
 ## Password Reset
 
@@ -181,73 +182,4 @@ One-time token in Valkey: `veronex:pwreset:{token} -> account_id`, TTL 24h.
 - Super creates: `POST /v1/accounts/{id}/reset-link` returns `{ token }`
 - User resets: `POST /v1/auth/reset-password { token, new_password }` -- token deleted immediately
 
-## Auth Endpoints
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/v1/setup/status` | None | `{ needs_setup }` |
-| POST | `/v1/setup` | None | Create first super + issue session; 409 if exists |
-| POST | `/v1/auth/login` | None | Verify Argon2id, issue access+refresh tokens |
-| POST | `/v1/auth/logout` | None | Revoke session by refresh token; 204 |
-| POST | `/v1/auth/refresh` | None | Revoke old session, issue new access+refresh (server-side); only `access_token` returned to client. Note: new refresh hash stored but not sent -- client's original refresh token is invalidated after one refresh |
-| POST | `/v1/auth/reset-password` | None | Validate Valkey token, save new hash; 204 |
-
-## Test Run Endpoints (JWT Bearer)
-
-Logged-in accounts run inference without an API key. Jobs tracked by `account_id`, `source=Test`, excluded from API metrics. See [openai-compat.md](../inference/openai-compat.md) for request/response format details.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v1/test/completions` | OpenAI SSE stream |
-| GET | `/v1/test/jobs/{job_id}/stream` | SSE reconnect |
-| POST | `/v1/test/api/chat` | Ollama NDJSON stream |
-| POST | `/v1/test/api/generate` | Ollama NDJSON stream |
-| POST | `/v1/test/v1beta/models/{*path}` | Gemini SSE stream |
-
-All test routes: `api_key_id=NULL`, `account_id=claims.sub`, queue=`veronex:queue:jobs:test` (low-priority).
-
-Full request/response specs: [jwt-sessions-impl.md](jwt-sessions-impl.md#test-run-endpoint-details)
-
-## Account Endpoints (RequireSuper)
-
-All require `Authorization: Bearer <super-token>`.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/v1/accounts` | List all active accounts |
-| POST | `/v1/accounts` | Create account + auto-generate test API key |
-| PATCH | `/v1/accounts/{id}` | Update name/email/department/position |
-| DELETE | `/v1/accounts/{id}` | Soft-delete |
-| PATCH | `/v1/accounts/{id}/active` | Toggle `is_active` |
-| POST | `/v1/accounts/{id}/reset-link` | Generate 24h reset token |
-| GET | `/v1/accounts/{id}/sessions` | List active sessions |
-| DELETE | `/v1/accounts/{id}/sessions` | Revoke all sessions |
-| DELETE | `/v1/sessions/{session_id}` | Revoke specific session |
-
-Full request/response specs: [jwt-sessions-impl.md](jwt-sessions-impl.md#account-endpoint-details)
-
-## Environment Variables
-
-```bash
-JWT_SECRET=change-me-in-production   # HS256 signing key -- MUST change in production
-# BOOTSTRAP_SUPER_USER=admin         # optional: pre-seed super account
-# BOOTSTRAP_SUPER_PASS=secret        # optional: both must be set
-```
-
-## Implementation Files
-
-| File | Role |
-|------|------|
-| `infrastructure/inbound/http/auth_handlers.rs` | setup + login/logout/refresh/reset-password |
-| `infrastructure/inbound/http/test_handlers.rs` | test completions + stream (JWT, no rate limit) |
-| `infrastructure/inbound/http/account_handlers.rs` | CRUD + reset-link + session endpoints |
-| `infrastructure/inbound/http/audit_handlers.rs` | GET /v1/audit |
-| `infrastructure/inbound/http/middleware/jwt_auth.rs` | jwt_auth + RequireSuper |
-| `domain/entities/{account,session}.rs` | Account + Session entities |
-| `application/ports/outbound/{account,session}_repository.rs` | Repository ports |
-| `application/ports/outbound/audit_port.rs` | AuditPort + AuditEvent |
-| `infrastructure/outbound/persistence/{account,session}_repository.rs` | Postgres impls |
-| `infrastructure/outbound/observability/http_audit_adapter.rs` | HttpAuditAdapter |
-| `web/lib/auth.ts` | Token cookie helpers |
-| `web/lib/auth-guard.ts` | Refresh mutex + redirect logic |
-| `web/lib/api-client.ts` | ApiClient (auto 401 refresh+retry) |
+→ Endpoints and environment variables: `jwt-sessions-endpoints.md`

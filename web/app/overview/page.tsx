@@ -4,25 +4,30 @@ import { useQuery, useQueries } from '@tanstack/react-query'
 import {
   dashboardOverviewQuery, recentJobsQuery, performanceQuery,
   usageAggregateQuery, usageBreakdownQuery,
-  providersQuery, serversQuery, serverMetricsQuery, serverMetricsHistoryQuery,
+  providersQuery, serversQuery, serverMetricsBatchQuery, serverMetricsHistoryQuery,
 } from '@/lib/queries'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { DashboardTab } from './components/dashboard-tab'
 
 export default function OverviewPage() {
+  usePageGuard('dashboard')
   const { t } = useTranslation()
 
   // Single aggregated query for stats + perf(24h) + capacity + queue + lab
   const { data: overview, isLoading: overviewLoading, error: overviewError } = useQuery(dashboardOverviewQuery)
 
-  const { data: providers } = useQuery(providersQuery)
-  const { data: servers } = useQuery(serversQuery)
+  const { data: providersData } = useQuery(providersQuery())
+  const providers = providersData?.providers
+  const { data: serversData } = useQuery(serversQuery())
+  const servers = serversData?.servers
 
-  const serverMetricQueries = useQueries({
-    queries: (servers ?? []).map(s => serverMetricsQuery(s.id)),
-  })
+  // Single batch request replaces N individual /metrics calls
+  const serverIds = (servers ?? []).map(s => s.id)
+  const { data: serverMetricsBatch } = useQuery(serverMetricsBatchQuery(serverIds))
 
+  // History queries remain per-server (ClickHouse-backed, 5 min refetch)
   const serverHistoryQueries = useQueries({
     queries: (servers ?? []).map(s => serverMetricsHistoryQuery(s.id, 1440)),
   })
@@ -59,7 +64,7 @@ export default function OverviewPage() {
         statsLoading={overviewLoading}
         providers={providers}
         servers={servers}
-        serverMetricQueries={serverMetricQueries}
+        serverMetricsBatch={serverMetricsBatch ?? {}}
         serverHistoryQueries={serverHistoryQueries}
         perf={overview?.performance}
         perf7d={perf7d}

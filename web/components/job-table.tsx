@@ -53,14 +53,17 @@ export default function JobTable({
 
   return (
     <>
-      <DataTable minWidth="900px">
+      <DataTable minWidth="1000px">
         <TableHeader>
           <TableRow>
             <TableHead className="whitespace-nowrap">{t('jobs.id')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.conversationId')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.model')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.provider')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.providerName')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.apiKey')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.endpoint')}</TableHead>
+            <TableHead className="whitespace-nowrap">{t('jobs.source')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.status')}</TableHead>
             <TableHead className="whitespace-nowrap">{t('jobs.createdAt')}</TableHead>
             <TableHead className="text-right whitespace-nowrap">{t('jobs.ttft')}</TableHead>
@@ -77,9 +80,17 @@ export default function JobTable({
               <TableCell className="font-mono text-xs text-muted-foreground">
                 <span title={job.id}>{truncateId(job.id)}</span>
               </TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground">
+                {job.conversation_id
+                  ? <span title={job.conversation_id}>{truncateId(job.conversation_id)}</span>
+                  : <span className="opacity-40">—</span>}
+              </TableCell>
               <TableCell>{job.model_name}</TableCell>
-              <TableCell className="text-muted-foreground">
-                {job.provider_name ?? job.provider_type}
+              <TableCell className="text-muted-foreground capitalize">
+                {job.provider_type}
+              </TableCell>
+              <TableCell className="text-muted-foreground text-sm">
+                {job.provider_name ?? <span className="opacity-40">—</span>}
               </TableCell>
               <TableCell className="text-xs text-primary/80">
                 {job.source === 'test'
@@ -88,6 +99,13 @@ export default function JobTable({
               </TableCell>
               <TableCell className="font-mono text-xs text-muted-foreground max-w-[160px] truncate" title={job.request_path ?? undefined}>
                 {job.request_path ?? <span className="opacity-40">—</span>}
+              </TableCell>
+              <TableCell>
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
+                  job.source === 'test' ? 'bg-status-warning/15 text-status-warning-fg' :
+                  job.source === 'analyzer' ? 'bg-accent/15 text-accent-foreground' :
+                  'bg-primary/10 text-primary'
+                }`}>{job.source}</span>
               </TableCell>
               <TableCell>
                 <div className="flex items-center gap-1.5">
@@ -99,7 +117,7 @@ export default function JobTable({
                   )}
                 </div>
               </TableCell>
-              <TableCell className="text-xs text-muted-foreground">
+              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                 {fmtDatetime(job.created_at, tz)}
               </TableCell>
               <TableCell className="text-right tabular-nums text-muted-foreground text-xs">

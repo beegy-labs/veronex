@@ -1,25 +1,17 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { STALE_TIME_SLOW, STALE_TIME_FAST, REFETCH_INTERVAL_FAST } from '@/lib/constants'
+import { STALE_TIME_SLOW, STALE_TIME_FAST, STALE_TIME_LIVE, REFETCH_INTERVAL_FAST, withJitter } from '@/lib/constants'
 
 // ── LLM providers list ─────────────────────────────────────────────────────────
 
-export const providersQuery = queryOptions({
-  queryKey: ['providers'] as const,
-  queryFn: () => api.providers(),
+export const providersQuery = (params?: { search?: string; page?: number; limit?: number; provider_type?: string }) => queryOptions({
+  queryKey: ['providers', params] as const,
+  queryFn: () => api.providers(params),
   staleTime: STALE_TIME_FAST,
-  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
 })
 
-// ── Provider-specific ──────────────────────────────────────────────────────────
-
-export const providerModelsQuery = (providerId: string) => queryOptions({
-  queryKey: ['provider-models', providerId] as const,
-  queryFn: () => api.providerModels(providerId),
-  staleTime: STALE_TIME_SLOW,
-  retry: false,
-})
 
 export const providerKeyQuery = (providerId: string) => queryOptions({
   queryKey: ['provider-key', providerId] as const,
@@ -27,9 +19,12 @@ export const providerKeyQuery = (providerId: string) => queryOptions({
   enabled: false,
 })
 
-export const ollamaModelProvidersQuery = (modelName: string) => queryOptions({
-  queryKey: ['ollama-model-providers', modelName] as const,
-  queryFn: () => api.ollamaModelProviders(modelName),
+export const ollamaModelProvidersQuery = (
+  modelName: string,
+  params?: { search?: string; page?: number; limit?: number },
+) => queryOptions({
+  queryKey: ['ollama-model-providers', modelName, params] as const,
+  queryFn: () => api.ollamaModelProviders(modelName, params),
   staleTime: STALE_TIME_FAST,
 })
 
@@ -42,9 +37,11 @@ export const selectedModelsQuery = (providerId: string) => queryOptions({
 
 // ── Ollama ────────────────────────────────────────────────────────────────────
 
-export const ollamaModelsQuery = queryOptions({
-  queryKey: ['ollama-models'] as const,
-  queryFn: () => api.ollamaModels(),
+export const ollamaModelsQuery = (
+  params?: { search?: string; page?: number; limit?: number },
+) => queryOptions({
+  queryKey: ['ollama-models', params] as const,
+  queryFn: () => api.ollamaModels(params),
   staleTime: STALE_TIME_SLOW,
   retry: false,
 })
@@ -52,8 +49,14 @@ export const ollamaModelsQuery = queryOptions({
 export const ollamaSyncStatusQuery = queryOptions({
   queryKey: ['ollama-sync-status'] as const,
   queryFn: () => api.ollamaSyncStatus(),
-  staleTime: 4_900,
+  staleTime: STALE_TIME_LIVE,
   retry: false,
+})
+
+export const globalModelSettingsQuery = queryOptions({
+  queryKey: ['global-model-settings'] as const,
+  queryFn: () => api.globalModelSettings(),
+  staleTime: STALE_TIME_SLOW,
 })
 
 // ── Query key constants (for invalidation) ──────────────────────────────────
@@ -90,11 +93,11 @@ export const geminiSyncConfigQuery = queryOptions({
 
 // ── Capacity ──────────────────────────────────────────────────────────────────
 
-export const capacityQuery = queryOptions({
-  queryKey: ['capacity'] as const,
-  queryFn: () => api.capacity(),
+export const capacityQuery = (params?: { search?: string; page?: number; limit?: number }) => queryOptions({
+  queryKey: ['capacity', params] as const,
+  queryFn: () => api.capacity(params),
   staleTime: STALE_TIME_FAST,
-  refetchInterval: REFETCH_INTERVAL_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,
   retry: false,
 })
@@ -103,5 +106,14 @@ export const syncSettingsQuery = queryOptions({
   queryKey: ['sync-settings'] as const,
   queryFn: () => api.syncSettings(),
   staleTime: Infinity,
+  retry: false,
+})
+
+export const capacityClusterQuery = queryOptions({
+  queryKey: ['capacity-cluster'] as const,
+  queryFn: () => api.capacityCluster(),
+  staleTime: STALE_TIME_FAST,
+  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
+  refetchIntervalInBackground: false,
   retry: false,
 })

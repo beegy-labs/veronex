@@ -9,11 +9,13 @@ use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPor
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
+use crate::application::ports::outbound::message_store::MessageStore;
 use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::ObservabilityPort;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
+use crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::entities::{InferenceJob, LlmProvider};
@@ -22,7 +24,7 @@ use crate::domain::value_objects::JobStatusEvent;
 use crate::domain::constants::{
     GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
     MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
-    QUEUE_POLL_INTERVAL, QUEUE_PROCESSING,
+    QUEUE_POLL_INTERVAL, QUEUE_ACTIVE,
     LOCALITY_BONUS_MS, ZSET_PEEK_K, ZSET_PEEK_K_MAX,
 };
 use crate::application::ports::outbound::concurrency_port::VramPermit;
@@ -33,16 +35,29 @@ use super::runner::run_job;
 
 // ── Provider filtering ──────────────────────────────────────────────────────
 
-/// Four-stage filter: active+type+tier → model availability → model selection → preload exclusion.
+/// Five-stage filter: global model gate → active+type+tier → model availability → model selection → preload exclusion.
 async fn filter_candidates(
     registry: &dyn LlmProviderRegistry,
     ollama_model_repo: &Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: &Option<Arc<dyn ProviderModelSelectionRepository>>,
+    global_model_settings_repo: &Option<Arc<dyn GlobalModelSettingsRepository>>,
     vram_pool: &dyn VramPoolPort,
     provider_type: ProviderType,
     model: &str,
     gemini_tier: Option<&str>,
 ) -> Vec<LlmProvider> {
+    // Stage 0: global model gate — if model is globally disabled, reject immediately
+    if !model.is_empty() {
+        if let Some(repo) = global_model_settings_repo {
+            if let Ok(enabled) = repo.is_enabled(model).await {
+                if !enabled {
+                    tracing::debug!(model, "model globally disabled — rejecting all providers");
+                    return vec![];
+                }
+            }
+        }
+    }
+
     let all = registry.list_all().await.unwrap_or_default();
 
     // Stage 1: active + type + tier (standby providers included — woken on demand)
@@ -131,6 +146,10 @@ fn score_and_claim(
                 // Use VramPool's O(1) atomic read instead of per-provider Valkey call.
                 // Thermal/overheating checks are handled below in the find_map closure.
                 let base = vram.available_vram_mb(b.id) as i64;
+                // VramPool returns 0 when agent hasn't pushed capacity yet.
+                // total_vram_mb = 0 means unlimited (server handles capacity internally).
+                // Treat as max available so dispatcher never blocks on unknown VRAM.
+                let base = if base == 0 { i64::MAX / 2 } else { base };
                 if vram.loaded_model_names(b.id).iter().any(|m| m == model) {
                     base.saturating_add(MODEL_LOCALITY_BONUS_MB)
                 } else { base }
@@ -220,6 +239,7 @@ async fn fail_job_no_provider(
 pub(super) fn spawn_job_direct(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
     job_repo: Arc<dyn JobRepository>,
+    message_store: Option<Arc<dyn MessageStore>>,
     valkey: Option<Arc<dyn ValkeyPort>>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
@@ -265,7 +285,7 @@ pub(super) fn spawn_job_direct(
         };
 
         match run_job(
-            jobs, adapter, job_repo, valkey, observability, model_manager,
+            jobs, adapter, job_repo, message_store, valkey, observability, model_manager,
             provider_dispatch, uuid, job, Some(provider_id), is_free,
             event_tx, instance_id, cancel_notifiers,
         ).await {
@@ -290,6 +310,7 @@ pub(super) async fn queue_dispatcher_loop(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
     registry: Arc<dyn LlmProviderRegistry>,
     job_repo: Arc<dyn JobRepository>,
+    message_store: Option<Arc<dyn MessageStore>>,
     valkey: Arc<dyn ValkeyPort>,
     observability: Option<Arc<dyn ObservabilityPort>>,
     model_manager: Option<Arc<dyn ModelManagerPort>>,
@@ -302,6 +323,7 @@ pub(super) async fn queue_dispatcher_loop(
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
     ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
+    global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
     shutdown: CancellationToken,
 ) {
     tracing::info!("queue dispatcher started — ZSET scoring (locality + age × perf_factor)");
@@ -347,12 +369,16 @@ pub(super) async fn queue_dispatcher_loop(
                             cancel_notify: Arc::new(Notify::new()),
                             gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
                             assigned_provider_id: None,
+                            vision_analysis: None,
+                            compression_handle: None,
                         });
                         (j, None, None)
                     }
                     Ok(None) => {
                         tracing::warn!(%uuid, "queued job not in DB — removing from ZSET");
-                        let _ = valkey.zset_cancel(job_id_str, "").await;
+                        if let Err(e) = valkey.zset_cancel(job_id_str, "").await {
+                            tracing::warn!(%uuid, error = %e, "dispatcher: zset_cancel failed");
+                        }
                         continue;
                     }
                     Err(e) => { tracing::error!(%uuid, "failed to load job: {e}"); continue; }
@@ -390,20 +416,28 @@ pub(super) async fn queue_dispatcher_loop(
         let mut dispatched = false;
 
         for (job_id_str, _final_score, job, gemini_tier, key_tier) in scored {
-            let uuid = Uuid::parse_str(&job_id_str).expect("already validated");
+            let uuid = match Uuid::parse_str(&job_id_str) {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::error!(job_id = %job_id_str, error = %e, "dispatcher: invalid UUID in queue — skipping");
+                    continue;
+                }
+            };
             let model = job.model_name.as_str();
 
             // Find provider + claim VRAM
             let candidates = filter_candidates(
                 registry.as_ref(), &ollama_model_repo, &model_selection_repo,
+                &global_model_settings_repo,
                 vram_pool.as_ref(), job.provider_type, model, gemini_tier.as_deref(),
             ).await;
 
             if candidates.is_empty() {
                 // No eligible provider → atomically remove from ZSET and fail
-                let claimed = valkey.zset_claim(&job_id_str, QUEUE_PROCESSING, model).await.unwrap_or(false);
+                let claimed = valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await.unwrap_or(false);
                 if claimed {
-                    let _ = valkey.list_remove(QUEUE_PROCESSING, &job_id_str).await;
+                    valkey.active_lease_remove(&job_id_str).await
+                        .unwrap_or_else(|e| tracing::warn!(%uuid, error = %e, "dispatcher: active_lease_remove failed"));
                     let vk_opt: Option<Arc<dyn ValkeyPort>> = Some(valkey.clone());
                     fail_job_no_provider(&jobs, &job_repo, &vk_opt, uuid, "no eligible provider for this model").await;
                     dispatched = true;
@@ -422,8 +456,8 @@ pub(super) async fn queue_dispatcher_loop(
                 continue;
             };
 
-            // Atomic ZSET claim (ZREM + RPUSH processing + DECR demand)
-            match valkey.zset_claim(&job_id_str, QUEUE_PROCESSING, model).await {
+            // Atomic ZSET claim (ZREM + ZADD active + DECR demand)
+            match valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await {
                 Ok(true) => { /* claimed successfully */ }
                 Ok(false) => {
                     // Another instance already took it — release VRAM and try next
@@ -446,11 +480,13 @@ pub(super) async fn queue_dispatcher_loop(
             }
 
             let owner_key = crate::domain::constants::job_owner_key(uuid);
-            let _ = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await;
+            if let Err(e) = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await {
+                tracing::warn!(%uuid, key = %owner_key, error = %e, "dispatcher: failed to set job owner key");
+            }
 
-            let (jobs_c, repo_c, vk_c, obs_c, mm_c) = (
-                jobs.clone(), job_repo.clone(), valkey.clone(),
-                observability.clone(), model_manager.clone(),
+            let (jobs_c, repo_c, ms_c, vk_c, obs_c, mm_c) = (
+                jobs.clone(), job_repo.clone(), message_store.clone(),
+                valkey.clone(), observability.clone(), model_manager.clone(),
             );
             let (ev_c, cb_c, pd_c, iid_c, cn_c) = (
                 event_tx.clone(), circuit_breaker.clone(), provider_dispatch.clone(),
@@ -459,8 +495,34 @@ pub(super) async fn queue_dispatcher_loop(
 
             tokio::spawn(async move {
                 let _permit = permit;
+
+                // Keepalive: renew lease every LEASE_RENEW_INTERVAL_SECS
+                let (ka_stop_tx, mut ka_stop_rx) = tokio::sync::oneshot::channel::<()>();
+                let vk_ka = vk_c.clone();
+                let job_id_ka = job_id_str.clone();
+                tokio::spawn(async move {
+                    let interval = std::time::Duration::from_secs(
+                        crate::domain::constants::LEASE_RENEW_INTERVAL_SECS,
+                    );
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = &mut ka_stop_rx => break,
+                            _ = tokio::time::sleep(interval) => {
+                                let deadline = (chrono::Utc::now().timestamp_millis() as u64)
+                                    + crate::domain::constants::LEASE_TTL_MS;
+                                match vk_ka.active_lease_renew(&job_id_ka, deadline).await {
+                                    Ok(false) => break, // already removed (completed or reaped)
+                                    Ok(true) => {}
+                                    Err(e) => tracing::warn!(job_id = %job_id_ka, "lease renew failed: {e}"),
+                                }
+                            }
+                        }
+                    }
+                });
+
                 match run_job(
-                    jobs_c, adapter, repo_c, Some(vk_c.clone()), obs_c, mm_c,
+                    jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,
                     pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
                 ).await {
                     Ok(Some(latency_ms)) => {
@@ -470,8 +532,20 @@ pub(super) async fn queue_dispatcher_loop(
                     Ok(None) => {} // cancelled or ownership lost
                     Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
                 }
-                let _ = vk_c.list_remove(QUEUE_PROCESSING, &job_id_str).await;
-                let _ = vk_c.kv_del(&owner_key).await;
+
+                let _ = ka_stop_tx.send(());
+
+                // Remove from active ZSET (replaces list_remove on QUEUE_PROCESSING)
+                if let Err(e) = vk_c.active_lease_remove(&job_id_str).await {
+                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to remove job from active queue");
+                }
+                // Clean up attempts counter
+                let attempts_key = crate::domain::constants::QUEUE_ACTIVE_ATTEMPTS;
+                let _ = vk_c.kv_del(&format!("{attempts_key}:{job_id_str}")).await;
+
+                if let Err(e) = vk_c.kv_del(&owner_key).await {
+                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to delete job owner key");
+                }
             });
 
             dispatched = true;

@@ -1,4 +1,19 @@
 {{/*
+Full release name — used as prefix for resource names (e.g. Vespa StatefulSet).
+*/}}
+{{- define "veronex.fullname" -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Base selector labels — release-scoped, combined with component label for uniqueness.
+Used by Vespa service/statefulset selectors.
+*/}}
+{{- define "veronex.selectorLabels" -}}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
 Common labels applied to all resources.
 */}}
 {{- define "veronex.labels" -}}
@@ -44,6 +59,15 @@ app.kubernetes.io/component: agent
 {{- end }}
 
 {{/*
+Selector labels — veronex-mcp
+*/}}
+{{- define "veronex.veronexMcp.selectorLabels" -}}
+app.kubernetes.io/name: veronex-mcp
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: veronex-mcp
+{{- end }}
+
+{{/*
 Selector labels — otel-collector
 */}}
 {{- define "veronex.otel.selectorLabels" -}}
@@ -79,6 +103,17 @@ redis://:{{ .Values.externalValkey.password }}@{{ .Values.externalValkey.host }}
 {{- else -}}
 redis://{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}/{{ .Values.externalValkey.db | default 0 }}
 {{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Valkey host:port for KEDA redis scaler (no protocol prefix).
+*/}}
+{{- define "veronex.valkeyAddress" -}}
+{{- if .Values.valkey.enabled -}}
+{{ .Release.Name }}-valkey-master:6379
+{{- else -}}
+{{ .Values.externalValkey.host }}:{{ .Values.externalValkey.port }}
 {{- end -}}
 {{- end }}
 

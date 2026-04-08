@@ -77,8 +77,24 @@ export const REFETCH_INTERVAL_FAST = 30_000
 /** Refetch interval for data that changes infrequently (keys, usage, models). */
 export const REFETCH_INTERVAL_SLOW = 60_000
 
+/** Stale time for live-polled data (queue depth). */
+export const STALE_TIME_LIVE = 2_000
+
+/** Refetch interval for live-polled data (queue depth — 3s). */
+export const REFETCH_INTERVAL_LIVE = 3_000
+
 /** Refetch interval for historical data (power history, metric history). */
 export const REFETCH_INTERVAL_HISTORY = 5 * 60_000
+
+/**
+ * Add random jitter to a refetch interval to prevent synchronized polling storms
+ * when many browser tabs open at the same time.
+ *
+ * Returns base + U[0, maxJitter) ms — always ≥ base, never shrinks the interval.
+ */
+export function withJitter(base: number, maxJitter = 5_000): number {
+  return base + Math.floor(Math.random() * maxJitter)
+}
 
 /** Stale time for long-window historical data (60-day power / metrics history).
  *  Data is refetched in the background every REFETCH_INTERVAL_HISTORY, so it
@@ -146,6 +162,20 @@ export const PROVIDER_STATUS_I18N: Record<string, string> = {
   online:   'common.online',
   degraded: 'common.degraded',
   offline:  'common.offline',
+}
+
+/** Service health status → dot indicator class. */
+export const SERVICE_STATUS_DOT: Record<string, string> = {
+  ok:          'h-2 w-2 rounded-full bg-status-success shrink-0',
+  degraded:    'h-2 w-2 rounded-full bg-status-warning shrink-0',
+  unavailable: 'h-2 w-2 rounded-full bg-status-error shrink-0',
+}
+
+/** Service health status → text colour class. */
+export const SERVICE_STATUS_TEXT: Record<string, string> = {
+  ok:          'text-status-success-fg',
+  degraded:    'text-status-warning-fg',
+  unavailable: 'text-status-error-fg',
 }
 
 /** Job status → Tailwind class mapping. SSOT for all status badges. */

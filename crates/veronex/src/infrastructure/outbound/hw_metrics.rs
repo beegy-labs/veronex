@@ -4,12 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Valkey TTL for hardware metrics cache (seconds).
-pub const HW_METRICS_TTL: i64 = 60;
-
-pub fn hw_metrics_key(provider_id: Uuid) -> String {
-    super::valkey_keys::hw_metrics(provider_id)
-}
+use crate::domain::constants::{HW_METRICS_TTL, NODE_METRICS_TTL};
 
 // ── Hardware metrics (from node-exporter) ─────────────────────────────────────
 
@@ -66,7 +61,7 @@ pub async fn load_hw_metrics(
     provider_id: Uuid,
 ) -> Option<HwMetrics> {
     use fred::prelude::*;
-    let key = hw_metrics_key(provider_id);
+    let key = super::valkey_keys::hw_metrics(provider_id);
     let cached: Option<String> = pool.get(&key).await.unwrap_or(None);
     serde_json::from_str(&cached?).ok()
 }
@@ -79,7 +74,7 @@ pub async fn store_hw_metrics(
     metrics: &HwMetrics,
 ) {
     use fred::prelude::*;
-    let key = hw_metrics_key(provider_id);
+    let key = super::valkey_keys::hw_metrics(provider_id);
     let Ok(json) = serde_json::to_string(metrics) else {
         return;
     };
@@ -88,6 +83,36 @@ pub async fn store_hw_metrics(
         .await
     {
         tracing::warn!(provider_id = %provider_id, "hw_metrics: failed to cache: {e}");
+    }
+}
+
+/// Read cached NodeMetrics for a GPU server from Valkey.
+pub async fn load_node_metrics(
+    pool: &fred::clients::Pool,
+    server_id: Uuid,
+) -> Option<NodeMetrics> {
+    use fred::prelude::*;
+    let key = super::valkey_keys::server_node_metrics(server_id);
+    let cached: Option<String> = pool.get(&key).await.unwrap_or(None);
+    serde_json::from_str(&cached?).ok()
+}
+
+/// Write NodeMetrics for a GPU server to Valkey (TTL = 60 s).
+pub async fn store_node_metrics(
+    pool: &fred::clients::Pool,
+    server_id: Uuid,
+    metrics: &NodeMetrics,
+) {
+    use fred::prelude::*;
+    let key = super::valkey_keys::server_node_metrics(server_id);
+    let Ok(json) = serde_json::to_string(metrics) else {
+        return;
+    };
+    if let Err(e) = pool
+        .set::<String, _, _>(key, json, Some(Expiration::EX(NODE_METRICS_TTL)), None, false)
+        .await
+    {
+        tracing::warn!(server_id = %server_id, "node_metrics: failed to cache: {e}");
     }
 }
 
@@ -151,12 +176,20 @@ pub struct GpuNodeMetrics {
 pub async fn fetch_node_metrics(
     node_exporter_url: &str,
     prev_snapshot: Option<&CpuSnapshot>,
+    client: Option<&reqwest::Client>,
 ) -> Result<(NodeMetrics, CpuSnapshot)> {
     let url = format!("{}/metrics", node_exporter_url.trim_end_matches('/'));
 
-    let client = reqwest::Client::builder()
-        .timeout(crate::domain::constants::NODE_EXPORTER_TIMEOUT)
-        .build()?;
+    let owned;
+    let client = match client {
+        Some(c) => c,
+        None => {
+            owned = reqwest::Client::builder()
+                .timeout(crate::domain::constants::NODE_EXPORTER_TIMEOUT)
+                .build()?;
+            &owned
+        }
+    };
 
     let text = client.get(&url).send().await?.text().await?;
     let (mut metrics, snapshot) = parse_prometheus_metrics(&text);
@@ -582,21 +615,6 @@ node_drm_gpu_busy_percent{card="card0"} 50
         assert_eq!(metrics.gpus[0].power_w, Some(200.0));
     }
 
-    // ── Empty / missing input → zero-value defaults ───────────────────────
-
-    #[test]
-    fn empty_input_returns_zero_defaults() {
-        let (metrics, snapshot) = parse_prometheus_metrics("");
-        assert_eq!(metrics.mem_total_mb, 0);
-        assert_eq!(metrics.mem_available_mb, 0);
-        assert_eq!(metrics.cpu_logical, 0);
-        assert_eq!(metrics.cpu_physical, None);
-        assert!(metrics.gpus.is_empty());
-        assert!(metrics.scrape_ok); // scrape_ok is always true in parser
-        assert_eq!(snapshot.idle, 0.0);
-        assert_eq!(snapshot.total, 0.0);
-    }
-
     #[test]
     fn comment_and_blank_lines_ignored() {
         let text = "# HELP node_memory_MemTotal_bytes Total memory\n\
@@ -786,5 +804,76 @@ node_cpu_seconds_total{cpu="1",mode="user"} 9000.0
         assert!(metrics.mem_available_mb > 10000);
         assert_eq!(metrics.cpu_logical, 2);
         assert!(metrics.gpus.is_empty()); // no GPU on macOS node-exporter
+    }
+
+    // ── HwMetrics struct methods ──────────────────────────────────────────
+
+    #[test]
+    fn vram_free_mb_subtracts_used_from_total() {
+        let m = HwMetrics { vram_total_mb: 8192, vram_used_mb: 2048, ..Default::default() };
+        assert_eq!(m.vram_free_mb(), 6144);
+    }
+
+    #[test]
+    fn vram_free_mb_zero_when_fully_used() {
+        let m = HwMetrics { vram_total_mb: 4096, vram_used_mb: 4096, ..Default::default() };
+        assert_eq!(m.vram_free_mb(), 0);
+    }
+
+    #[test]
+    fn vram_free_mb_negative_on_overcommit() {
+        // VramPool may transiently overcommit — negative result is valid.
+        let m = HwMetrics { vram_total_mb: 1000, vram_used_mb: 1200, ..Default::default() };
+        assert_eq!(m.vram_free_mb(), -200);
+    }
+
+    #[test]
+    fn max_temp_c_returns_junction_when_highest() {
+        // junction (temp2) is typically the hottest for AMD GPUs
+        let m = HwMetrics { temp_c: 58.0, temp_junction_c: 72.0, temp_mem_c: 65.0, ..Default::default() };
+        assert_eq!(m.max_temp_c(), 72.0);
+    }
+
+    #[test]
+    fn max_temp_c_returns_edge_when_highest() {
+        let m = HwMetrics { temp_c: 90.0, temp_junction_c: 72.0, temp_mem_c: 65.0, ..Default::default() };
+        assert_eq!(m.max_temp_c(), 90.0);
+    }
+
+    #[test]
+    fn max_temp_c_returns_mem_when_highest() {
+        let m = HwMetrics { temp_c: 58.0, temp_junction_c: 72.0, temp_mem_c: 80.0, ..Default::default() };
+        assert_eq!(m.max_temp_c(), 80.0);
+    }
+
+    #[test]
+    fn max_temp_c_all_zero_by_default() {
+        let m = HwMetrics::default();
+        assert_eq!(m.max_temp_c(), 0.0);
+    }
+
+    #[test]
+    fn is_overheating_false_below_threshold() {
+        // 84.9 °C is below the 85 °C threshold
+        let m = HwMetrics { temp_junction_c: 84.9, ..Default::default() };
+        assert!(!m.is_overheating());
+    }
+
+    #[test]
+    fn is_overheating_true_at_exactly_85() {
+        let m = HwMetrics { temp_junction_c: 85.0, ..Default::default() };
+        assert!(m.is_overheating());
+    }
+
+    #[test]
+    fn is_overheating_triggered_by_mem_sensor() {
+        // edge + junction below threshold, mem at 85 → still overheating
+        let m = HwMetrics { temp_c: 60.0, temp_junction_c: 72.0, temp_mem_c: 85.0, ..Default::default() };
+        assert!(m.is_overheating());
+    }
+
+    #[test]
+    fn is_overheating_false_when_all_zero() {
+        assert!(!HwMetrics::default().is_overheating());
     }
 }

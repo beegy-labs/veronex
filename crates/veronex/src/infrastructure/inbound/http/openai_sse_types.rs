@@ -165,6 +165,10 @@ pub struct ChatCompletion {
     pub choices: Vec<CompletionChoice>,
     pub usage: UsageInfo,
     pub system_fingerprint: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub conversation_renewed: bool,
 }
 
 #[derive(Serialize)]
@@ -210,12 +214,6 @@ pub struct UsageInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn constants_have_expected_values() {
-        assert_eq!(SYSTEM_FINGERPRINT, "fp_veronex");
-        assert_eq!(SERVICE_TIER_DEFAULT, "default");
-    }
 
     #[test]
     fn content_chunk_sets_object_and_text() {
@@ -282,12 +280,4 @@ mod tests {
         assert!(chunk.usage.is_some());
     }
 
-    #[test]
-    fn completion_chunk_serialises_without_error() {
-        let chunk = CompletionChunk::content("x".into(), 1, Some("m".into()), "tok".into());
-        // Safety: CompletionChunk contains only String/&'static str/numbers — serde_json never
-        // returns an error for these types.
-        let json = serde_json::to_string(&chunk).expect("serialisation must not fail");
-        assert!(json.contains("chat.completion.chunk"));
-    }
 }

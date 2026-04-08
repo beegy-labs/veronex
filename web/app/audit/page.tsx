@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { auditQuery } from '@/lib/queries'
 import type { AuditEvent } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -22,6 +23,7 @@ import {
 } from '@/components/ui/table'
 import { DataTable, DataTableEmpty } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
+import { usePageGuard } from '@/hooks/use-page-guard'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDatetime } from '@/lib/date'
 
@@ -35,12 +37,19 @@ const ACTION_COLORS: Record<string, 'default' | 'secondary' | 'destructive' | 'o
 }
 
 export default function AuditPage() {
+  usePageGuard('audit')
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const [action, setAction] = useState<string>('all')
   const [resourceType, setResourceType] = useState<string>('all')
+  const [page, setPage] = useState(0)
+  const PAGE_SIZE = 50
 
   const { data: events = [], isLoading, isError, refetch } = useQuery(auditQuery(action, resourceType))
+
+  const totalPages = Math.max(1, Math.ceil(events.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages - 1)
+  const pageItems = useMemo(() => events.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE), [events, safePage])
 
   return (
     <div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto">
@@ -93,26 +102,27 @@ export default function AuditPage() {
       ) : events.length === 0 ? (
         <DataTableEmpty>{t('audit.noEvents')}</DataTableEmpty>
       ) : (
+        <>
         <DataTable minWidth="800px">
           <TableHeader>
             <TableRow>
-              <TableHead>{t('audit.time')}</TableHead>
-              <TableHead>{t('audit.account')}</TableHead>
-              <TableHead>{t('audit.action')}</TableHead>
-              <TableHead>{t('audit.resourceType')}</TableHead>
-              <TableHead>{t('audit.resourceName')}</TableHead>
-              <TableHead>{t('audit.ip')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.time')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.account')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.action')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.resourceType')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.resourceName')}</TableHead>
+              <TableHead className="whitespace-nowrap">{t('audit.ip')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {events.map((e: AuditEvent) => (
+            {pageItems.map((e: AuditEvent) => (
                 <TableRow key={`${e.event_time}-${e.account_id}-${e.action}-${e.resource_id}`}>
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                     {fmtDatetime(e.event_time, tz)}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{e.account_name}</TableCell>
                   <TableCell>
-                    <Badge variant={ACTION_COLORS[e.action] ?? 'outline'} className="text-xs">
+                    <Badge variant={ACTION_COLORS[e.action] ?? 'outline'} className="text-xs whitespace-nowrap">
                       {e.action}
                     </Badge>
                   </TableCell>
@@ -124,6 +134,22 @@ export default function AuditPage() {
             }
           </TableBody>
         </DataTable>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-end gap-2">
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, events.length)} / {events.length}
+            </span>
+            <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage <= 0}
+              onClick={() => setPage(p => p - 1)}>
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </Button>
+            <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage >= totalPages - 1}
+              onClick={() => setPage(p => p + 1)}>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
+        </>
       )}
     </div>
   )

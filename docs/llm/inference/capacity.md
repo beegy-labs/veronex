@@ -1,6 +1,6 @@
 # VRAM Pool Capacity Management
 
-> **Status**: Implemented | **Last Updated**: 2026-03-13 | Adaptive Learning + Thermal 5-State + AIMD num_parallel Cap + Placement Planner
+> SSOT | **Last Updated**: 2026-03-22 | Classification: Operational | Exception: >200 lines (capacity subsystem — VRAM pool, KV cache, thermal, AIMD, dispatch)
 
 ## Core Intent
 
@@ -43,7 +43,7 @@ POST /v1/servers (register provider)
 
 | State | `total_mb` | Dispatch Behavior |
 |-------|-----------|------------------|
-| **Unknown** | `0` | Pass-through — `try_reserve()` always allows (VRAM not enforced) |
+| **Unknown** | `0` | Concurrency-headroom score — `available_vram_mb` returns `(max_concurrent - active) * 1_024 MB` (min 1); routing still works, delegates enforcement to Ollama |
 | **Known** | `> 0` | Strict reservation — available VRAM checked before every dispatch |
 
 `total_mb` is set by the 30s sync loop from node-exporter DRM metrics or APU `mem_available_mb`. DB column `weight_estimated: bool` tracks whether per-model weight was measured or estimated, but is not consulted at dispatch time.
@@ -175,7 +175,7 @@ kv_per_request_mb = max(kv_bytes_per_token * tokens / 1_048_576, 32)
 - `bytes_per_element`: determined by KV cache quantization type (q8_0 = 1)
 - Minimum 128 tokens, minimum 32MB
 
-#### Hybrid Mamba+Attention Support
+### Hybrid Mamba+Attention Support
 
 ```
 if attn_interval > 1:
@@ -233,11 +233,11 @@ struct VramPool {
 }
 
 struct ProviderVramState {
-    total_mb: AtomicU32,
-    reserved_kv_mb: Arc<AtomicU32>,       // global KV reservation across all models
+    total_mb: AtomicU64,
+    reserved_kv_mb: Arc<AtomicU64>,       // global KV reservation across all models
     safety_permil: AtomicU32,             // e.g. 200 = 20%, increases on OOM (range 100–500)
     models: DashMap<String, ModelState>,
-    cached_loaded_weight_mb: AtomicU32,   // O(1) sum of loaded model weights (updated on load/unload)
+    cached_loaded_weight_mb: AtomicU64,   // O(1) sum of loaded model weights (updated on load/unload)
     is_standby: AtomicBool,               // Scale-In flag (routing excluded)
     transition_until: AtomicU64,          // Scale-In/Out transition guard (Unix ms)
     last_mem_available_mb: AtomicU32,     // APU drift detection (0 = not yet set)
@@ -245,10 +245,10 @@ struct ProviderVramState {
 }
 
 struct ModelState {
-    weight_mb: u32,
+    weight_mb: u64,
     is_loaded: bool,
-    kv_per_request_mb: u32,            // from throughput stats during sync
-    active_kv_mb: Arc<AtomicU32>,      // per-model KV reservation
+    kv_per_request_mb: u64,            // from throughput stats during sync
+    active_kv_mb: Arc<AtomicU64>,      // per-model KV reservation
     active_count: Arc<AtomicU32>,      // per-model active request count
     max_concurrent: AtomicU32,         // adaptive concurrency limit (0 = unlimited, capped at num_parallel)
     baseline_tps: AtomicU32,           // baseline tps × 100 for AIMD
@@ -279,10 +279,10 @@ struct ModelState {
 
 ```rust
 struct VramPermit {
-    kv_mb: u32,
-    reserved_kv: Option<Arc<AtomicU32>>,             // provider-global KV counter
+    kv_mb: u64,
+    reserved_kv: Option<Arc<AtomicU64>>,             // provider-global KV counter
     active_count: Option<Arc<AtomicU32>>,            // per-model request count
-    release_tx: Option<oneshot::Sender<u32>>,        // distributed release (Valkey)
+    release_tx: Option<oneshot::Sender<u64>>,        // distributed release (Valkey)
     last_active_at: Option<Arc<AtomicU64>>,          // updates on drop for idle tracking
     provider_active_count: Option<Arc<AtomicU32>>,   // provider-total active count (O(1) provider_active_requests)
 }

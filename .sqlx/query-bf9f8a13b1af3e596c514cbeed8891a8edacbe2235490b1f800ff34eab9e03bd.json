@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM gemini_models",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "bf9f8a13b1af3e596c514cbeed8891a8edacbe2235490b1f800ff34eab9e03bd"
+}

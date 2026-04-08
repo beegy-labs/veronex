@@ -14,6 +14,7 @@ pub struct ModelVramProfileEntry {
     pub num_kv_heads:      i16,
     pub head_dim:          i16,
     pub configured_ctx:    i32,
+    pub max_ctx:           i32,
     pub failure_count:     i16,
     pub llm_concern:       Option<String>,
     pub llm_reason:        Option<String>,
@@ -40,6 +41,8 @@ pub trait ModelCapacityRepository: Send + Sync {
     async fn get(&self, provider_id: Uuid, model: &str) -> Result<Option<ModelVramProfileEntry>>;
     async fn list_all(&self) -> Result<Vec<ModelVramProfileEntry>>;
     async fn list_by_provider(&self, provider_id: Uuid) -> Result<Vec<ModelVramProfileEntry>>;
+    /// Fetch entries for a batch of providers in a single query.
+    async fn list_by_providers(&self, ids: &[Uuid]) -> Result<Vec<ModelVramProfileEntry>>;
     /// Aggregate throughput stats from completed inference_jobs over the last `window_hours`.
     async fn compute_throughput_stats(
         &self,

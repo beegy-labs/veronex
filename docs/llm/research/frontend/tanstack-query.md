@@ -1,7 +1,8 @@
 # TanStack Query v5 — Research
 
-> **Last Researched**: 2026-03-02 | **Source**: Official docs + web search + implementation
+> **Last Researched**: 2026-04-07 | **Source**: Official docs + web search + implementation
 > **Status**: verified — patterns used across all 13 pages
+> **Companion**: `research/frontend/tanstack-query-advanced.md` — suspense, prefetch, parallel queries
 
 ---
 
@@ -140,56 +141,6 @@ useMutation({
   },
 })
 ```
-
----
-
-## `useQueries` for Parallel Queries
-
-Use `useQueries` for dynamic parallel fetches (never `useQuery` in a loop):
-
-```ts
-const results = useQueries({
-  queries: providers.map(p => ({
-    queryKey: ['server-metrics', p.id],
-    queryFn: () => api.serverMetrics(p.id),
-    staleTime: 5_000,
-  }))
-})
-```
-
----
-
-## Query Key Conventions
-
-```ts
-// Format: [domain, ...specifics]
-['dashboard', 'stats']              // GET /v1/dashboard/stats
-['dashboard', 'jobs', params]       // GET /v1/dashboard/jobs?{params}
-['dashboard', 'jobs', id]           // GET /v1/dashboard/jobs/{id}
-['keys']                            // GET /v1/keys
-['servers']                         // GET /v1/servers
-['servers', id, 'metrics']          // GET /v1/servers/{id}/metrics
-['servers', id, 'metrics', 'history'] // GET /v1/servers/{id}/metrics/history
-['accounts']                        // GET /v1/accounts
-['capacity']                        // GET /v1/dashboard/capacity
-['capacity', 'settings']            // GET /v1/dashboard/capacity/settings
-```
-
-**Rule:** Invalidating `['servers']` also invalidates `['servers', id, 'metrics']` (prefix matching). Use exact keys when you want surgical invalidation.
-
----
-
-## Anti-Patterns
-
-| Anti-pattern | Correct approach |
-|---|---|
-| Duplicated `queryKey` in multiple components | `queryOptions()` factory, shared from `lib/queries/` |
-| `refetchInterval` without `staleTime` | Always pair them |
-| `onSuccess` for cache invalidation | Use `onSettled` (runs on error too) |
-| `useQuery` inside a loop | Use `useQueries` |
-| Storing `data` from `useQuery` in `useState` | Read from cache directly via `queryClient.getQueryData` |
-| Background polling when tab hidden | Set `refetchIntervalInBackground: false` |
-| `retry: 3` (default) for non-critical data | Set `retry: false` for peripheral data (metrics, charts) |
 
 ---
 

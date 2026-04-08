@@ -6,6 +6,106 @@ use uuid::Uuid;
 
 use crate::domain::errors::DomainError;
 
+// ── Public ID encoding ───────────────────────────────────────────────────────
+//
+// All IDs stored internally as UUIDv7. External API exposes them as
+// `{prefix}_{base62}` (e.g. `job_3X4aB...`). Each entity gets a typed
+// newtype so the compiler prevents mixing IDs across entity boundaries.
+//
+// The macro generates: struct, Display (as prefix_base62), FromStr,
+// Serialize (base62 string), Deserialize (from base62 string), From<Uuid>,
+// Into<Uuid>, new(), from_uuid(), as_uuid().
+
+macro_rules! define_entity_id {
+    ($name:ident, $prefix:literal) => {
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct $name(pub Uuid);
+
+        impl $name {
+            pub const PREFIX: &'static str = $prefix;
+
+            pub fn new() -> Self {
+                Self(Uuid::now_v7())
+            }
+
+            pub fn from_uuid(uuid: Uuid) -> Self {
+                Self(uuid)
+            }
+
+            pub fn as_uuid(&self) -> Uuid {
+                self.0
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl From<Uuid> for $name {
+            fn from(u: Uuid) -> Self {
+                Self(u)
+            }
+        }
+
+        impl From<$name> for Uuid {
+            fn from(id: $name) -> Self {
+                id.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}_{}", $prefix, base62::encode(self.0.as_u128()))
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = String;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                let encoded = s
+                    .strip_prefix(concat!($prefix, "_"))
+                    .ok_or_else(|| format!("expected prefix '{}_'", $prefix))?;
+                let n = base62::decode(encoded)
+                    .map_err(|e| format!("invalid base62: {e}"))?;
+                Ok(Self(Uuid::from_u128(n)))
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.serialize_str(&self.to_string())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let s = String::deserialize(d)?;
+                s.parse::<Self>().map_err(serde::de::Error::custom)
+            }
+        }
+    };
+}
+
+// ── Entity ID types ──────────────────────────────────────────────────────────
+
+define_entity_id!(JobId,        "job");
+define_entity_id!(ConvId,       "conv");
+define_entity_id!(AccountId,    "acct");
+define_entity_id!(ApiKeyId,     "key");
+define_entity_id!(RoleId,       "role");
+define_entity_id!(SessionId,    "sess");
+define_entity_id!(ProviderId,   "prov");
+define_entity_id!(GpuServerId,  "gpu");
+define_entity_id!(McpId,        "mcp");
+
+/// Encode a UUID as a prefixed base62 public ID (e.g. `"job_3X4aB..."`).
+pub fn pub_id_encode(prefix: &str, uuid: Uuid) -> String {
+    format!("{}_{}", prefix, base62::encode(uuid.as_u128()))
+}
+
 /// Lightweight event fired on every job status transition.
 /// Broadcast via tokio broadcast channel → SSE endpoint → network flow UI.
 #[derive(Debug, Clone, Serialize)]
@@ -33,28 +133,6 @@ pub struct FlowStats {
     pub running: u32,
     /// Jobs that completed (any terminal status) in the last 60 seconds.
     pub completed: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../web/lib/generated/")]
-pub struct JobId(pub Uuid);
-
-impl fmt::Display for JobId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl JobId {
-    pub fn new() -> Self {
-        Self(Uuid::now_v7())
-    }
-}
-
-impl Default for JobId {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
-use crate::application::ports::outbound::thermal_drain_port::ThermalDrainPort;
+use crate::application::ports::outbound::thermal_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::constants::demand_key;
@@ -78,6 +78,7 @@ pub async fn run_placement_planner_loop(
     http_client: reqwest::Client,
     instance_id: Arc<str>,
     thermal_drain: Arc<dyn ThermalDrainPort>,
+    ollama_model_repo: Option<Arc<dyn crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository>>,
     shutdown: CancellationToken,
 ) {
     tracing::info!("placement planner started (interval=5s)");
@@ -97,6 +98,7 @@ pub async fn run_placement_planner_loop(
             &vram_pool,
             &thermal,
             &circuit_breaker,
+            &ollama_model_repo,
             &valkey,
             &http_client,
             &instance_id,
@@ -117,6 +119,7 @@ async fn planner_tick(
     vram_pool: &Arc<dyn VramPoolPort>,
     thermal: &Arc<dyn ThermalPort>,
     circuit_breaker: &Arc<dyn CircuitBreakerPort>,
+    ollama_model_repo: &Option<Arc<dyn crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository>>,
     valkey: &Arc<dyn ValkeyPort>,
     http_client: &reqwest::Client,
     instance_id: &str,
@@ -219,7 +222,7 @@ async fn planner_tick(
         .collect();
 
     // Provisional free VRAM tracking (prevents multi-model collision in same cycle)
-    let mut provisional_free: HashMap<Uuid, u32> = HashMap::new();
+    let mut provisional_free: HashMap<Uuid, u64> = HashMap::new();
     for p in &scale_out_candidates {
         provisional_free.insert(p.id, vram_pool.available_vram_mb(p.id));
     }
@@ -314,11 +317,19 @@ async fn planner_tick(
             continue;
         }
 
-        // Find best server: most free VRAM, not already loaded, not preload-excluded,
+        // Find best server: must have the model in ollama_models (sync'd),
+        // most free VRAM, not already loaded, not preload-excluded,
         // not in transition (STANDBY recovery guard from Step ④ — prevents conflict).
+        let model_providers: std::collections::HashSet<Uuid> = if let Some(repo) = ollama_model_repo {
+            repo.providers_for_model(model).await.unwrap_or_default().into_iter().collect()
+        } else {
+            // No repo — allow all (fallback)
+            scale_out_candidates.iter().map(|p| p.id).collect()
+        };
         let best_server = scale_out_candidates.iter()
             .filter(|p| {
-                !vram_pool.loaded_model_names(p.id).contains(&model.to_string())
+                model_providers.contains(&p.id)
+                    && !vram_pool.loaded_model_names(p.id).contains(&model.to_string())
                     && !vram_pool.is_preloading(p.id, model)
                     && !vram_pool.is_pulling(p.id, model)
                     && !vram_pool.is_preload_excluded(p.id, model)
@@ -349,13 +360,17 @@ async fn planner_tick(
         let preload_key = preload_lock_key(model, server.id);
         match valkey.kv_get(&preload_key).await {
             Ok(Some(_)) => {
-                let _ = valkey.kv_del(&decision_key).await;
+                if let Err(e) = valkey.kv_del(&decision_key).await {
+                    tracing::warn!(error = %e, "placement: failed to release decision lock");
+                }
                 continue;
             }
             _ => {}
         }
         if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL, false).await.is_err() {
-            let _ = valkey.kv_del(&decision_key).await;
+            if let Err(e) = valkey.kv_del(&decision_key).await {
+                tracing::warn!(error = %e, "placement: failed to release decision lock on preload conflict");
+            }
             continue;
         }
 
@@ -384,8 +399,12 @@ async fn planner_tick(
                 &http_c, &url, &model_c, provider_id, &vram_c, np,
             ).await;
             // Release locks
-            let _ = valkey_c.kv_del(&preload_key_c).await;
-            let _ = valkey_c.kv_del(&decision_key_c).await;
+            if let Err(e) = valkey_c.kv_del(&preload_key_c).await {
+                tracing::warn!(error = %e, "placement: failed to release preload lock");
+            }
+            if let Err(e) = valkey_c.kv_del(&decision_key_c).await {
+                tracing::warn!(error = %e, "placement: failed to release decision lock after preload");
+            }
 
             if success {
                 vram_c.mark_model_loaded(provider_id, &model_c, 0); // weight will be updated by sync loop
@@ -402,7 +421,17 @@ async fn planner_tick(
             continue; // already handled in ①
         }
 
+        // Only preload to providers that have the model in ollama_models
+        let preload_eligible: std::collections::HashSet<Uuid> = if let Some(repo) = ollama_model_repo {
+            repo.providers_for_model(model).await.unwrap_or_default().into_iter().collect()
+        } else {
+            ollama_providers.iter().map(|p| p.id).collect()
+        };
+
         for p in &ollama_providers {
+            if !preload_eligible.contains(&p.id) {
+                continue; // model not available on this provider
+            }
             // Skip thermally throttled providers (Soft/Hard/Cooldown).
             if matches!(thermal.get_level(p.id), ThrottleLevel::Soft | ThrottleLevel::Hard | ThrottleLevel::Cooldown) {
                 continue;
@@ -457,7 +486,9 @@ async fn planner_tick(
                 let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
                     &http_c, &url, &model_c, provider_id, &vram_c, np,
                 ).await;
-                let _ = valkey_c.kv_del(&preload_key_c).await;
+                if let Err(e) = valkey_c.kv_del(&preload_key_c).await {
+                    tracing::warn!(error = %e, "placement: failed to release preload lock");
+                }
                 if success {
                     vram_c.mark_model_loaded(provider_id, &model_c, 0);
                 }

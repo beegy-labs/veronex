@@ -12,6 +12,7 @@ use crate::application::ports::inbound::inference_use_case::{InferenceUseCase, L
 use crate::application::ports::outbound::circuit_breaker_port::CircuitBreakerPort;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
+use crate::application::ports::outbound::lab_settings_repository::LabSettingsRepository;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::image_store::ImageStore;
 use crate::application::ports::outbound::message_store::MessageStore;
@@ -20,9 +21,11 @@ use crate::application::ports::outbound::observability_port::ObservabilityPort;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
-use crate::application::ports::outbound::thermal_drain_port::ThermalDrainPort;
+use crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
+use crate::application::ports::outbound::thermal_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
+use super::compression_router::CompressionHandle;
 use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{JobSource, JobStatus, KeyTier};
 use crate::domain::errors::DomainError;
@@ -36,7 +39,6 @@ use crate::domain::constants::{
 use super::JobEntry;
 use super::dispatcher::{queue_dispatcher_loop, spawn_job_direct};
 use super::helpers::{broadcast_event, decr_pending, incr_pending, schedule_cleanup};
-use super::runner::run_job;
 
 type Result<T> = std::result::Result<T, DomainError>;
 
@@ -58,8 +60,12 @@ pub struct InferenceUseCaseImpl {
     image_store: Option<Arc<dyn ImageStore>>,
     ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
+    global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
     instance_id: Arc<str>,
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
+    /// Compression resources injected into every JobEntry at submit time.
+    /// `None` when neither lab_settings_repo nor registry are available.
+    compression_handle: Option<Arc<CompressionHandle>>,
 }
 
 impl InferenceUseCaseImpl {
@@ -79,14 +85,24 @@ impl InferenceUseCaseImpl {
         image_store: Option<Arc<dyn ImageStore>>,
         ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
         model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
+        global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
         instance_id: Arc<str>,
+        lab_settings_repo: Option<Arc<dyn LabSettingsRepository>>,
     ) -> Self {
+        let compression_handle = lab_settings_repo.map(|lab| {
+            Arc::new(CompressionHandle {
+                registry: registry.clone(),
+                lab_settings: lab,
+            })
+        });
         Self {
             registry, job_repo, valkey, observability, model_manager,
             jobs: Arc::new(DashMap::new()),
             vram_pool, thermal, circuit_breaker, provider_dispatch,
             event_tx, message_store, image_store, ollama_model_repo, model_selection_repo,
+            global_model_settings_repo,
             instance_id, cancel_notifiers: Arc::new(DashMap::new()),
+            compression_handle,
         }
     }
 
@@ -168,22 +184,31 @@ impl InferenceUseCaseImpl {
             self.vram_pool.clone(), self.thermal.clone(),
             self.circuit_breaker.clone(), self.provider_dispatch.clone(),
         );
-        let (ev, iid, cn, omr, msr) = (
+        let (ev, iid, cn, omr, msr, gmsr) = (
             self.event_tx.clone(), self.instance_id.clone(),
             self.cancel_notifiers.clone(), self.ollama_model_repo.clone(),
-            self.model_selection_repo.clone(),
+            self.model_selection_repo.clone(), self.global_model_settings_repo.clone(),
         );
+        let msg_store = self.message_store.clone();
         tracing::info!("multi-provider queue dispatcher started");
         async move {
             queue_dispatcher_loop(
-                jobs, registry, job_repo, valkey, obs, mm, vram, thermal,
-                cb, pd, ev, iid, cn, omr, msr, shutdown,
+                jobs, registry, job_repo, msg_store, valkey, obs, mm, vram, thermal,
+                cb, pd, ev, iid, cn, omr, msr, gmsr, shutdown,
             ).await;
         }.boxed()
     }
 
     pub async fn recover_pending_jobs(&self) -> anyhow::Result<()> {
         let Some(ref valkey) = self.valkey else { return Ok(()); };
+
+        // Drain legacy QUEUE_JOBS list (jobs mis-routed there by old reaper code).
+        // These are recovered via DB below; stale list entries are just discarded.
+        let legacy_drained = valkey.list_drain(crate::domain::constants::QUEUE_JOBS).await.unwrap_or(0);
+        if legacy_drained > 0 {
+            tracing::info!(legacy_drained, "drained legacy QUEUE_JOBS list (will recover via DB)");
+        }
+
         let pending = self.job_repo.list_pending().await?;
         if pending.is_empty() { return Ok(()); }
 
@@ -191,16 +216,26 @@ impl InferenceUseCaseImpl {
         for mut job in pending {
             let uuid = job.id.0;
             if job.status == JobStatus::Running {
-                // Check if another node currently owns this job — skip if so.
+                // Check if another node currently owns this job.
+                // Skip only if the other node is still alive (heartbeat present).
                 let owner_key = crate::domain::constants::job_owner_key(uuid);
                 if let Ok(Some(owner)) = valkey.kv_get(&owner_key).await
                     && owner != self.instance_id.as_ref()
                 {
+                    let hb_key = crate::domain::constants::heartbeat_key(&owner);
+                    // owner_alive: fail-closed (true) if Valkey error
+                    let owner_alive = valkey.kv_get(&hb_key).await.unwrap_or(Some(String::new())).is_some();
+                    if owner_alive {
+                        tracing::info!(
+                            %uuid, current_owner = %owner,
+                            "skipping recovery — job owned by another live node"
+                        );
+                        continue;
+                    }
                     tracing::info!(
-                        %uuid, current_owner = %owner,
-                        "skipping recovery — job owned by another node"
+                        %uuid, dead_owner = %owner,
+                        "taking over job from dead instance (heartbeat expired)"
                     );
-                    continue;
                 }
                 if let Err(e) = self.job_repo.update_status(&job.id, JobStatus::Pending).await {
                     tracing::warn!(%uuid, "failed to reset running→pending: {e}");
@@ -216,6 +251,8 @@ impl InferenceUseCaseImpl {
                 cancel_notify: Arc::new(Notify::new()),
                 gemini_tier: None, key_tier: None, tpm_reservation_minute: None,
                 assigned_provider_id: None,
+                vision_analysis: None,
+                compression_handle: self.compression_handle.clone(),
             });
             // Re-enqueue to ZSET with emergency priority (recovered jobs get highest priority)
             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -240,13 +277,34 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             prompt, model_name, provider_type, gemini_tier, api_key_id,
             account_id, source, api_format, messages, tools, request_path,
             conversation_id, key_tier, images, stop, seed, response_format,
-            frequency_penalty, presence_penalty,
+            frequency_penalty, presence_penalty, mcp_loop_id, max_tokens,
+            vision_analysis,
         } = req;
 
         let job_id = JobId::new();
+
+        // Generate prompt_preview: first ≤10 chars (char boundary, CJK-safe).
+        // Strip /no_think prefix. Full prompt stored in S3 — preview is for list/search only.
+        let prompt_src = prompt.trim_start_matches("/no_think").trim();
+        let prompt_preview = {
+            const LIMIT: usize = 10;
+            if prompt_src.chars().count() <= LIMIT {
+                prompt_src.to_string()
+            } else {
+                let mut end = 0;
+                for (i, _) in prompt_src.char_indices().take(LIMIT - 1) {
+                    end = i;
+                }
+                // advance past last included char
+                end += prompt_src[end..].chars().next().map_or(0, |c| c.len_utf8());
+                format!("{}…", &prompt_src[..end])
+            }
+        };
+
         let job = InferenceJob {
             id: job_id.clone(),
             prompt: Prompt::new(&prompt)?,
+            prompt_preview: Some(prompt_preview),
             model_name: ModelName::new(&model_name)?,
             status: JobStatus::Pending, provider_type,
             created_at: chrono::Utc::now(),
@@ -260,13 +318,11 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             messages_hash: None, messages_prefix_hash: None, failure_reason: None,
             images, image_keys: None,
             stop, seed, response_format, frequency_penalty, presence_penalty,
+            mcp_loop_id, max_tokens,
+            vision_analysis: vision_analysis.clone(),
         };
 
-        // Upload messages to S3
-        if let (Some(msgs), Some(store)) = (&job.messages, &self.message_store)
-            && let Err(e) = store.put(job_id.0, msgs).await {
-                tracing::warn!(job_id = %job_id.0, "S3 upload failed (non-fatal): {e}");
-            }
+        // Persist metadata-only row to Postgres. Large content is written to S3 at finalize.
         let job_for_db = InferenceJob {
             messages: None,
             stop: None, seed: None, response_format: None,
@@ -276,8 +332,6 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         self.job_repo.save(&job_for_db).await?;
 
         // Spawn async image upload (WebP conversion + S3) — non-blocking.
-        // Conversion+upload is delegated to ImageStore::put_base64() to keep infrastructure
-        // concerns (image codec) out of the application layer.
         if let (Some(images), Some(store)) = (&job.images, &self.image_store) {
             let images = images.clone();
             let store = store.clone();
@@ -292,12 +346,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     }
                 }
                 if !keys.is_empty() {
-                    let update_job = InferenceJob {
-                        id: jid, image_keys: Some(keys),
-                        ..job_for_db
-                    };
-                    if let Err(e) = repo.save(&update_job).await {
-                        tracing::warn!("failed to save image_keys: {e}");
+                    if let Err(e) = repo.update_image_keys(&jid, keys).await {
+                        tracing::warn!(job_id = %jid.0, "failed to update image_keys: {e}");
                     }
                 }
             });
@@ -305,6 +355,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
         let cancel_notify = Arc::new(Notify::new());
         self.cancel_notifiers.insert(job_id.0, cancel_notify.clone());
+        // Keep messages in DashMap so the provider can use them at dispatch time.
+        // (No mark_running DB write, so messages no longer need to be stripped here.)
         self.jobs.insert(job_id.0, JobEntry {
             job: job.clone(), status: JobStatus::Pending,
             tokens: Vec::with_capacity(INITIAL_TOKEN_CAPACITY),
@@ -313,6 +365,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             gemini_tier: gemini_tier.clone(), key_tier,
             tpm_reservation_minute: Some(chrono::Utc::now().timestamp() / 60),
             assigned_provider_id: None,
+            vision_analysis,
+            compression_handle: self.compression_handle.clone(),
         });
 
         let uuid = job_id.0;
@@ -354,8 +408,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 Err(e) => {
                     tracing::warn!(%uuid, "Valkey ZSET enqueue failed, direct spawn: {e}");
                     spawn_job_direct(
-                        self.jobs.clone(), self.job_repo.clone(), self.valkey.clone(),
-                        self.observability.clone(), self.model_manager.clone(),
+                        self.jobs.clone(), self.job_repo.clone(), self.message_store.clone(),
+                        self.valkey.clone(), self.observability.clone(), self.model_manager.clone(),
                         self.vram_pool.clone(), self.thermal.clone(),
                         self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                         uuid, job, gemini_tier, self.event_tx.clone(),
@@ -365,8 +419,8 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             }
         } else {
             spawn_job_direct(
-                self.jobs.clone(), self.job_repo.clone(), None,
-                self.observability.clone(), self.model_manager.clone(),
+                self.jobs.clone(), self.job_repo.clone(), self.message_store.clone(),
+                None, self.observability.clone(), self.model_manager.clone(),
                 self.vram_pool.clone(), self.thermal.clone(),
                 self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                 uuid, job, gemini_tier, self.event_tx.clone(),
@@ -392,9 +446,9 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             .pick_and_build(&job.provider_type, job.model_name.as_str(), gemini_tier.as_deref())
             .await?;
 
-        run_job(
-            self.jobs.clone(), adapter, self.job_repo.clone(), self.valkey.clone(),
-            self.observability.clone(), self.model_manager.clone(),
+        super::runner::run_job(
+            self.jobs.clone(), adapter, self.job_repo.clone(), self.message_store.clone(),
+            self.valkey.clone(), self.observability.clone(), self.model_manager.clone(),
             self.provider_dispatch.clone(), uuid, job, Some(pid), is_free,
             self.event_tx.clone(), self.instance_id.clone(), self.cancel_notifiers.clone(),
         ).await?;
@@ -479,7 +533,9 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 let model = self.jobs.get(&job_id.0)
                     .map(|e| e.job.model_name.as_str().to_string())
                     .unwrap_or_default();
-                let _ = vk.zset_cancel(&job_id.0.to_string(), &model).await;
+                if let Err(e) = vk.zset_cancel(&job_id.0.to_string(), &model).await {
+                    tracing::warn!(job_id = %job_id.0, error = %e, "use_case: failed to cancel job from queue");
+                }
             }
         }
         if !is_local

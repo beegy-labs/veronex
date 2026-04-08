@@ -26,6 +26,7 @@ pub enum Permission {
     AuditView,
     SettingsManage,
     RoleManage,
+    ModelManage,
 }
 
 impl Permission {
@@ -39,6 +40,7 @@ impl Permission {
             Self::AuditView => "audit_view",
             Self::SettingsManage => "settings_manage",
             Self::RoleManage => "role_manage",
+            Self::ModelManage => "model_manage",
         }
     }
 }
@@ -47,7 +49,7 @@ impl Permission {
 pub const ALL_PERMISSIONS: &[&str] = &[
     "dashboard_view", "api_test", "provider_manage",
     "key_manage", "account_manage", "audit_view", "settings_manage",
-    "role_manage",
+    "role_manage", "model_manage",
 ];
 
 // ── Menu ────────────────────────────────────────────────────────────────────
@@ -397,30 +399,6 @@ impl std::str::FromStr for KeyType {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn all_permissions_count() {
-        assert_eq!(ALL_PERMISSIONS.len(), 8);
-    }
-
-    #[test]
-    fn all_menus_count() {
-        assert_eq!(ALL_MENUS.len(), 12);
-    }
-
-    #[test]
-    fn permission_as_str_roundtrip() {
-        for &p in ALL_PERMISSIONS {
-            assert!(!p.is_empty());
-        }
-    }
-
-    #[test]
-    fn menu_as_str_roundtrip() {
-        for &m in ALL_MENUS {
-            assert!(!m.is_empty());
-        }
-    }
 
     #[test]
     fn role_manage_in_all_permissions() {

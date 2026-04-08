@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useOptimistic, startTransition } from 'react'
 import type { Provider } from '@/lib/types'
 import { Plus, Trash2, RefreshCw, Key, ShieldCheck, ListFilter, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,30 @@ import { StatusBadge, StatusPill } from './shared'
 import { ApiKeyCell, ModelSelectionModal } from './modals'
 import { PAGE_SIZE } from './ollama-sections'
 import { GeminiStatusSyncSection, GeminiSyncSection } from './gemini-sections'
+
+// ── Gemini provider active toggle with optimistic update ───────────────────────
+
+function GeminiProviderActiveToggle({
+  provider,
+  onToggleActive,
+  toggleActivePending,
+}: {
+  provider: Provider
+  onToggleActive: (b: Provider) => void
+  toggleActivePending: boolean
+}) {
+  const { t } = useTranslation()
+  const [optimistic, setOptimistic] = useOptimistic(provider.is_active, (_, v: boolean) => v)
+  return (
+    <Switch
+      checked={optimistic}
+      onCheckedChange={(checked) => startTransition(() => { setOptimistic(checked); onToggleActive(provider) })}
+      disabled={toggleActivePending}
+      title={optimistic ? t('providers.disableProvider') : t('providers.enableProvider')}
+      aria-label={optimistic ? t('providers.disableProvider') : t('providers.enableProvider')}
+    />
+  )
+}
 
 // ── Tab: Gemini providers + policies ───────────────────────────────────────────
 
@@ -175,13 +199,13 @@ export function GeminiTab({
           >
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>{t('providers.gemini.name')}</TableHead>
-                <TableHead>{t('providers.gemini.apiKey')}</TableHead>
-                <TableHead>{t('providers.gemini.freeTier')}</TableHead>
-                <TableHead>{t('providers.gemini.activeToggle')}</TableHead>
-                <TableHead>{t('providers.gemini.status')}</TableHead>
-                <TableHead>{t('providers.servers.registeredAt')}</TableHead>
-                <TableHead className="text-right">{t('keys.actions')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.name')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.apiKey')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.freeTier')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.activeToggle')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.gemini.status')}</TableHead>
+                <TableHead className="whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
+                <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -195,22 +219,20 @@ export function GeminiTab({
                   </TableCell>
                   <TableCell>
                     {b.is_free_tier ? (
-                      <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-2 py-0.5">
+                      <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-2 py-0.5 whitespace-nowrap">
                         {t('providers.gemini.freeTier')}
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-2 py-0.5">
+                      <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-2 py-0.5 whitespace-nowrap">
                         {t('providers.gemini.paid')}
                       </Badge>
                     )}
                   </TableCell>
                   <TableCell>
-                    <Switch
-                      checked={b.is_active}
-                      onCheckedChange={() => onToggleActive(b)}
-                      disabled={toggleActivePending}
-                      title={b.is_active ? t('providers.disableProvider') : t('providers.enableProvider')}
-                      aria-label={b.is_active ? t('providers.disableProvider') : t('providers.enableProvider')}
+                    <GeminiProviderActiveToggle
+                      provider={b}
+                      onToggleActive={onToggleActive}
+                      toggleActivePending={toggleActivePending}
                     />
                   </TableCell>
                   <TableCell>

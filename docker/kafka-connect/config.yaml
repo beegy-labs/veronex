@@ -1,0 +1,124 @@
+# Kafka Connect (Redpanda) — OTel → ClickHouse consumer
+#
+# Consumes OTLP JSON batches from Kafka topics produced by OTel Collector
+# (gzip-compressed, decompressed automatically by the kafka_franz input).
+# Transforms each batch into flat rows and bulk-inserts into ClickHouse via
+# the HTTP interface (JSONEachRow format).
+#
+# Broker: Redpanda (Kafka-compatible) — no Redpanda-specific APIs used.
+#
+# Topics handled:
+#   otel-logs     → otel_logs   (then otel_inference_logs_mv / otel_audit_events_mv
+#                                fan out automatically via ClickHouse MVs)
+#   otel-metrics  → otel_metrics_gauge
+#   otel-traces   → otel_traces_raw
+#
+# Env vars:
+#   KAFKA_BROKER          (default: kafka:9092)
+#   CLICKHOUSE_HTTP_URL   (default: http://clickhouse:8123)
+#   CLICKHOUSE_DB         (default: veronex)
+#   CLICKHOUSE_USER       (default: default)
+#   CLICKHOUSE_PASSWORD   (default: "")
+
+input:
+  kafka_franz:
+    seed_brokers:
+      - "${KAFKA_BROKER:kafka:9092}"
+    topics:
+      - otel-logs
+      - otel-metrics
+      - otel-traces
+    consumer_group: kafka-connect-clickhouse
+    # Compression (gzip from OTel Collector) is handled transparently by the
+    # Kafka client — no explicit decompression config needed.
+
+pipeline:
+  processors:
+    - switch:
+        # ── otel-logs ───────────────────────────────────────────────────────────
+        - check: 'meta("kafka_topic") == "otel-logs"'
+          processors:
+            - bloblang: |
+                # map_each(v -> expr) + flatten() replaces flatmap
+                # fold uses implicit tally/value variables (not lambda params)
+                root = (this.resourceLogs | []).map_each(rm -> (rm.scopeLogs | []).map_each(sl -> (sl.logRecords | []).map_each(lr -> {
+                  "Timestamp":          (lr.timeUnixNano | "0").number() / 1000000000,
+                  "TraceId":            lr.traceId | "",
+                  "SpanId":             lr.spanId | "",
+                  "SeverityText":       lr.severityText | "INFO",
+                  "SeverityNumber":     (lr.severityNumber | 9),
+                  "ServiceName":        (rm.resource.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | value.value.intValue | value.value.asDouble.string() | "")})).get("service.name") | "",
+                  "Body":               lr.body.stringValue | "",
+                  "ResourceAttributes": (rm.resource.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | value.value.intValue | value.value.asDouble.string() | "")})),
+                  "LogAttributes":      (lr.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | value.value.intValue | value.value.asDouble.string() | "")})),
+                })).flatten()).flatten()
+            - unarchive:
+                format: json_array
+
+        # ── otel-metrics ────────────────────────────────────────────────────────
+        - check: 'meta("kafka_topic") == "otel-metrics"'
+          processors:
+            - bloblang: |
+                root = (this.resourceMetrics | []).map_each(rm -> (rm.scopeMetrics | []).map_each(sm -> (sm.metrics | []).map_each(metric -> (if metric.exists("gauge") { metric.gauge.dataPoints | [] } else { metric.sum.dataPoints | [] }).map_each(dp -> {
+                  "ts":          (dp.timeUnixNano | "0").number() / 1000000000,
+                  "server_id":   (rm.resource.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | "")})).get("server_id") | "",
+                  "metric_name": metric.name | "",
+                  "value":       dp.asDouble | 0.0,
+                  "attributes":  (dp.attributes | []).fold({}, tally.assign({(value.key): (value.value.stringValue | "")})),
+                })).flatten()).flatten()).flatten()
+            - unarchive:
+                format: json_array
+
+        # ── otel-traces ─────────────────────────────────────────────────────────
+        - check: 'meta("kafka_topic") == "otel-traces"'
+          processors:
+            - bloblang: |
+                # Store the raw OTLP trace batch as-is.
+                # received_at uses the ClickHouse DEFAULT now64(3) — only payload needed.
+                root = {"payload": content().string()}
+
+output:
+  switch:
+    retry_until_success: true
+    cases:
+      - check: 'meta("kafka_topic") == "otel-logs"'
+        output:
+          http_client:
+            url: "${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}&query=INSERT%20INTO%20otel_logs%20FORMAT%20JSONEachRow&user=${CLICKHOUSE_USER:default}&password=${CLICKHOUSE_PASSWORD:}"
+            verb: POST
+            headers:
+              Content-Type: application/octet-stream
+            batching:
+              count: 500
+              period: 5s
+              processors:
+                - archive:
+                    format: lines
+
+      - check: 'meta("kafka_topic") == "otel-metrics"'
+        output:
+          http_client:
+            url: "${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}&query=INSERT%20INTO%20otel_metrics_gauge%20FORMAT%20JSONEachRow&user=${CLICKHOUSE_USER:default}&password=${CLICKHOUSE_PASSWORD:}"
+            verb: POST
+            headers:
+              Content-Type: application/octet-stream
+            batching:
+              count: 500
+              period: 5s
+              processors:
+                - archive:
+                    format: lines
+
+      - check: 'meta("kafka_topic") == "otel-traces"'
+        output:
+          http_client:
+            url: "${CLICKHOUSE_HTTP_URL:http://clickhouse:8123}/?database=${CLICKHOUSE_DB:veronex}&query=INSERT%20INTO%20otel_traces_raw%20(payload)%20FORMAT%20JSONEachRow&user=${CLICKHOUSE_USER:default}&password=${CLICKHOUSE_PASSWORD:}"
+            verb: POST
+            headers:
+              Content-Type: application/octet-stream
+            batching:
+              count: 100
+              period: 5s
+              processors:
+                - archive:
+                    format: lines

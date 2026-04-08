@@ -28,6 +28,9 @@ pub trait ValkeyPort: Send + Sync {
     /// LREM: remove one occurrence of a value from a list.
     async fn list_remove(&self, key: &str, value: &str) -> Result<()>;
 
+    /// DEL + return count: delete a list key entirely. Used to drain legacy queues.
+    async fn list_drain(&self, key: &str) -> Result<u64>;
+
     // ── ZSET queue operations (Phase 3) ──────────────────────────────
 
     /// Atomic Lua: ZCARD guard + ZADD + INCR demand + HSET enqueue_at + HSET model.
@@ -60,6 +63,19 @@ pub trait ValkeyPort: Send + Sync {
 
     /// ZCARD — current ZSET queue length.
     async fn zset_len(&self) -> Result<u64>;
+
+    /// ZADD queue:active <deadline_ms> <job_id> — register new lease.
+    async fn active_lease_set(&self, job_id: &str, deadline_ms: u64) -> Result<()>;
+
+    /// ZADD XX queue:active <deadline_ms> <job_id> — renew existing lease.
+    /// Returns true if the job is still in the active set (score updated), false if already removed.
+    async fn active_lease_renew(&self, job_id: &str, deadline_ms: u64) -> Result<bool>;
+
+    /// ZREM queue:active <job_id> — remove lease on job completion.
+    async fn active_lease_remove(&self, job_id: &str) -> Result<()>;
+
+    /// ZRANGEBYSCORE queue:active 0 now_ms — returns expired job_ids.
+    async fn active_lease_expired(&self, now_ms: u64) -> Result<Vec<String>>;
 
     // ── Key-value operations ────────────────────────────────────────
 

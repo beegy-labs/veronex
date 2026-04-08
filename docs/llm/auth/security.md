@@ -1,6 +1,6 @@
 # Security
 
-> SSOT | **Last Updated**: 2026-03-08 (review fixes: fail-closed JWT, atomic refresh, AES-GCM, audit whitelist)
+> SSOT | **Last Updated**: 2026-03-28 (review fixes: fail-closed JWT, atomic refresh, AES-GCM, audit whitelist)
 
 ## Authentication & Authorization
 
@@ -13,7 +13,7 @@ For full details see:
 | Role | Permissions |
 |------|-------------|
 | `super` | All endpoints (including `/v1/accounts/*`, `/v1/audit/*`) |
-| `admin` | Tenant-level resources (keys, servers, providers); no account management or audit |
+| `viewer` | `dashboard_view` only |
 
 ---
 
@@ -38,7 +38,7 @@ For full details see:
 | Storage | Valkey (auto-expires after 5 min) |
 | Exceeded | `429 Too Many Requests` |
 
-**Fail-closed**: Valkey unavailable -> returns 503 Service Unavailable (log error). Does not allow the request through.
+**Fail-open on INCR error (defaults to count=1)**: Valkey unavailable -> allows the request through with count=1 (log error).
 **Exceeded**: `429 TOO_MANY_REQUESTS` + `Retry-After` header.
 
 ---

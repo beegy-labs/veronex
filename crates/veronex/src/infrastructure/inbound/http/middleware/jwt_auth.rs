@@ -93,7 +93,7 @@ pub async fn jwt_auth(
 }
 
 /// Extract the access token value from the `Cookie` header.
-fn extract_access_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+pub fn extract_access_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
     for value in headers.get_all(axum::http::header::COOKIE) {
         if let Ok(s) = value.to_str() {
             for part in s.split(';') {
@@ -188,3 +188,39 @@ define_require_permission!(RequireAccountManage,  "account_manage");
 define_require_permission!(RequireAuditView,      "audit_view");
 define_require_permission!(RequireSettingsManage, "settings_manage");
 define_require_permission!(RequireRoleManage,     "role_manage");
+define_require_permission!(RequireModelManage,    "model_manage");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn headers_with_cookie(val: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(axum::http::header::COOKIE, HeaderValue::from_str(val).unwrap());
+        h
+    }
+
+    #[test]
+    fn extract_access_cookie_present() {
+        let h = headers_with_cookie("veronex_access_token=tok123; other=val");
+        assert_eq!(extract_access_cookie(&h).as_deref(), Some("tok123"));
+    }
+
+    #[test]
+    fn extract_access_cookie_absent() {
+        let h = headers_with_cookie("session=abc; theme=dark");
+        assert!(extract_access_cookie(&h).is_none());
+    }
+
+    #[test]
+    fn extract_access_cookie_empty_value_skipped() {
+        let h = headers_with_cookie("veronex_access_token=");
+        assert!(extract_access_cookie(&h).is_none());
+    }
+
+    #[test]
+    fn extract_access_cookie_empty_headers() {
+        assert!(extract_access_cookie(&HeaderMap::new()).is_none());
+    }
+}

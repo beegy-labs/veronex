@@ -2,6 +2,7 @@
 
 > **Last Researched**: 2026-03-02 | **Source**: Implementation experience + web search
 > **Status**: Verified — all patterns researched and documented
+> **Companion**: `research/frontend/nextjs-breaking-changes.md` — Next.js 15/16 breaking changes
 
 ---
 
@@ -182,8 +183,48 @@ function ClientList({ dataPromise }: { dataPromise: Promise<Item[]> }) {
 
 ---
 
+---
+
+## Security: Middleware Is NOT a Security Boundary (CVE-2025-29927)
+
+**CVE-2025-29927** (March 2025) — Next.js middleware bypass via `x-middleware-subrequest` header:
+
+| Item | Detail |
+|------|--------|
+| CVE | CVE-2025-29927 |
+| Affected | Next.js ≤ 15.2.2 (and older 14.x) |
+| Attack | Set `x-middleware-subrequest` header to skip middleware entirely |
+| Impact | Auth checks, redirects, rewrites in middleware are bypassed |
+
+**Rule — Middleware is UX layer only:**
+- Middleware is correct for: redirects, locale routing, A/B flags, header decoration
+- Middleware is WRONG for: auth enforcement, permission checks, data access control
+- **All security enforcement must happen at the API level** (Rust backend JWT validation)
+
+```tsx
+// WRONG — middleware as security boundary (bypassable)
+export function middleware(req: NextRequest) {
+  const token = req.cookies.get('token')
+  if (!token) return NextResponse.redirect('/login')   // can be bypassed via CVE-2025-29927
+}
+
+// CORRECT — middleware for UX redirect, API enforces security
+export function middleware(req: NextRequest) {
+  const token = req.cookies.get('token')
+  if (!token) return NextResponse.redirect('/login')   // UX convenience only
+  // Real auth happens when the Rust backend validates the JWT on every API call
+}
+```
+
+**This codebase:** All pages are `'use client'` with JWT stored client-side. The Rust backend validates JWT on every request — middleware is used only for the login redirect UX. This architecture is NOT vulnerable to CVE-2025-29927 because the security enforcement is in the backend, not the middleware.
+
+> Source: [Next.js CVE-2025-29927](https://nextjs.org/blog/cve-2025-29927) | [Veronex is not affected — backend enforces auth]
+
+---
+
 ## Sources
 
-- Next.js 16 docs: https://nextjs.org/docs
-- Verified: `web/app/` directory structure, `web/app/layout.tsx`
-- Web search: Next.js 16 App Router 2026 patterns, PPR, Server Actions
+- [Next.js 16 Official Blog](https://nextjs.org/blog/next-16)
+- [PPR deep dive](https://dev.to/pockit_tools/nextjs-partial-prerendering-ppr-deep-dive-how-it-works-when-to-use-it-and-why-it-changes-48dk)
+- [CVE-2025-29927 Next.js middleware bypass](https://nextjs.org/blog/cve-2025-29927)
+- Verified: `web/app/`, `web/postcss.config.mjs`

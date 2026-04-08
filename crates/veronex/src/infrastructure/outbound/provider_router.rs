@@ -1,14 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
-use futures::StreamExt as _;
 
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
-use crate::application::ports::outbound::gemini_policy_repository::GeminiPolicyRepository;
+use crate::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
 use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
@@ -20,147 +19,7 @@ use crate::infrastructure::outbound::hw_metrics::load_hw_metrics;
 use crate::infrastructure::outbound::ollama::OllamaAdapter;
 use crate::infrastructure::outbound::valkey_keys;
 
-/// TTL (seconds) for the per-minute Gemini RPM counter key.
-const GEMINI_RPM_TTL_SECS: i64 = 120;
-
-/// TTL (seconds) for the per-day Gemini RPD counter key (~25 hours).
-const GEMINI_RPD_TTL_SECS: i64 = 90_000;
-
-// ── Static provider router (kept for tests) ────────────────────────────────────
-
-/// Routes inference calls to the appropriate provider adapter based on
-/// `InferenceJob::provider_type`. Built at startup from a static set of adapters.
-pub struct ProviderRouter {
-    providers: HashMap<ProviderType, Arc<dyn InferenceProviderPort>>,
-}
-
-impl ProviderRouter {
-    pub fn builder() -> ProviderRouterBuilder {
-        ProviderRouterBuilder::default()
-    }
-
-    fn get(&self, provider_type: &ProviderType) -> Result<&Arc<dyn InferenceProviderPort>> {
-        self.providers
-            .get(provider_type)
-            .ok_or_else(|| anyhow::anyhow!("no adapter registered for provider {:?}", provider_type))
-    }
-}
-
-#[async_trait]
-impl InferenceProviderPort for ProviderRouter {
-    async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
-        self.get(&job.provider_type)?.infer(job).await
-    }
-
-    fn stream_tokens(
-        &self,
-        job: &InferenceJob,
-    ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
-        match self.get(&job.provider_type) {
-            Ok(provider) => provider.stream_tokens(job),
-            Err(e) => Box::pin(async_stream::stream! {
-                yield Err(e);
-            }),
-        }
-    }
-}
-
-// ── Builder ────────────────────────────────────────────────────────────────────
-
-#[derive(Default)]
-pub struct ProviderRouterBuilder {
-    providers: HashMap<ProviderType, Arc<dyn InferenceProviderPort>>,
-}
-
-impl ProviderRouterBuilder {
-    pub fn register(
-        mut self,
-        provider_type: ProviderType,
-        adapter: Arc<dyn InferenceProviderPort>,
-    ) -> Self {
-        self.providers.insert(provider_type, adapter);
-        self
-    }
-
-    pub fn build(self) -> ProviderRouter {
-        ProviderRouter {
-            providers: self.providers,
-        }
-    }
-}
-
-// ── Dynamic provider router ────────────────────────────────────────────────────
-
-/// Routes inference calls to providers registered in the database.
-///
-/// For Ollama: picks the server with the most available VRAM (via `/api/ps`).
-/// For Gemini: picks the first active key (round-robin in future).
-///
-/// If no provider of the requested type is registered, the stream yields an error.
-pub struct DynamicProviderRouter {
-    registry: Arc<dyn LlmProviderRegistry>,
-    model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
-    ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
-}
-
-impl DynamicProviderRouter {
-    pub fn new(registry: Arc<dyn LlmProviderRegistry>) -> Self {
-        Self { registry, model_selection_repo: None, ollama_model_repo: None }
-    }
-
-    pub fn with_model_selection(
-        mut self,
-        repo: Arc<dyn ProviderModelSelectionRepository>,
-    ) -> Self {
-        self.model_selection_repo = Some(repo);
-        self
-    }
-
-    pub fn with_ollama_model_repo(
-        mut self,
-        repo: Arc<dyn OllamaModelRepository>,
-    ) -> Self {
-        self.ollama_model_repo = Some(repo);
-        self
-    }
-
-    /// Select the best available provider for the given type.
-    /// Returns the `LlmProvider` record so callers can build a specific adapter.
-    pub async fn pick_provider(&self, pt: &ProviderType) -> Result<LlmProvider> {
-        pick_best_provider(&*self.registry, None, self.model_selection_repo.as_deref(), self.ollama_model_repo.as_deref(), pt, "", None, None).await
-    }
-}
-
-#[async_trait]
-impl InferenceProviderPort for DynamicProviderRouter {
-    async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult> {
-        let cfg = pick_best_provider(&*self.registry, None, self.model_selection_repo.as_deref(), self.ollama_model_repo.as_deref(), &job.provider_type, job.model_name.as_str(), None, None).await?;
-        make_adapter(&cfg).as_ref().infer(job).await
-    }
-
-    fn stream_tokens(
-        &self,
-        job: &InferenceJob,
-    ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>> {
-        let registry = self.registry.clone();
-        let model_selection_repo = self.model_selection_repo.clone();
-        let ollama_model_repo = self.ollama_model_repo.clone();
-        let job = job.clone();
-
-        Box::pin(async_stream::stream! {
-            let cfg = match pick_best_provider(&*registry, None, model_selection_repo.as_deref(), ollama_model_repo.as_deref(), &job.provider_type, job.model_name.as_str(), None, None).await {
-                Ok(c) => c,
-                Err(e) => { yield Err(e); return; }
-            };
-
-            let adapter = make_adapter(&cfg);
-            let mut s = adapter.stream_tokens(&job);
-            while let Some(item) = s.next().await {
-                yield item;
-            }
-        })
-    }
-}
+use crate::domain::constants::{GEMINI_RPM_TTL_SECS, GEMINI_RPD_TTL_SECS};
 
 // ── Provider selection helpers ─────────────────────────────────────────────────
 
@@ -576,7 +435,7 @@ fn validate_provider_url(url_str: &str) -> Result<()> {
 /// Validates the provider URL against SSRF-dangerous targets before constructing
 /// the adapter. Providers with blocked URLs are logged and return an error adapter
 /// that yields a descriptive failure on every call.
-pub fn make_adapter(cfg: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
+pub fn make_adapter(cfg: &LlmProvider, valkey: Option<&fred::clients::Pool>) -> Arc<dyn InferenceProviderPort> {
     match cfg.provider_type {
         ProviderType::Ollama => {
             if let Err(e) = validate_provider_url(&cfg.url) {
@@ -588,7 +447,10 @@ pub fn make_adapter(cfg: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
                 );
                 return Arc::new(BlockedAdapter(e.to_string()));
             }
-            Arc::new(OllamaAdapter::new(&cfg.url))
+            match valkey {
+                Some(pool) => Arc::new(OllamaAdapter::with_ctx_cache(&cfg.url, pool.clone(), cfg.id)),
+                None => Arc::new(OllamaAdapter::new(&cfg.url)),
+            }
         }
         ProviderType::Gemini => {
             // Gemini uses a fixed Google API host; URL validation is N/A.

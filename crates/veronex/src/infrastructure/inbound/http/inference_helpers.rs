@@ -10,9 +10,9 @@ use axum::response::sse::Event;
 use axum::response::Response;
 use futures::StreamExt;
 
-use crate::domain::value_objects::{JobId, StreamToken};
+use crate::domain::value_objects::{ConvId, JobId, StreamToken};
 use super::cancel_guard::CancelOnDrop;
-use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_MODEL_NAME_BYTES, MAX_PROMPT_BYTES};
+use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_MODEL_NAME_BYTES, MAX_PROMPT_BYTES, VISION_HTTP_TIMEOUT};
 use super::handlers::{SseStream, try_acquire_sse, sse_response};
 use super::state::AppState;
 
@@ -20,13 +20,30 @@ use super::state::AppState;
 
 /// Extract the `x-conversation-id` header value, if present and valid.
 ///
-/// Returns `None` when the header is absent, not valid UTF-8, or exceeds 256 bytes.
-pub fn extract_conversation_id(headers: &axum::http::HeaderMap) -> Option<String> {
+/// Decodes the `conv_{base62}` string from the header into a UUID.
+/// Returns `None` when the header is absent, not valid UTF-8, exceeds 256 bytes,
+/// or fails to decode.
+pub fn extract_conversation_id(headers: &axum::http::HeaderMap) -> Option<uuid::Uuid> {
     headers
         .get("x-conversation-id")
         .and_then(|v| v.to_str().ok())
         .filter(|s| s.len() <= 256)
-        .map(str::to_string)
+        .and_then(|s| decode_conversation_id(s))
+}
+
+/// Generate a new conversation ID as UUIDv7.
+pub fn new_conversation_id() -> uuid::Uuid {
+    uuid::Uuid::now_v7()
+}
+
+/// Encode a UUID as a prefixed base62 conversation ID (e.g. `"conv_3X4aB..."`).
+pub fn to_public_id(uuid: &uuid::Uuid) -> String {
+    ConvId::from_uuid(*uuid).to_string()
+}
+
+/// Decode a `conv_{base62}` conversation ID back to UUID.
+pub fn decode_conversation_id(id: &str) -> Option<uuid::Uuid> {
+    id.parse::<ConvId>().ok().map(|c| c.0)
 }
 
 // ── Input validation ────────────────────────────────────────────────────────
@@ -50,10 +67,23 @@ pub fn validate_content_length(total_bytes: usize) -> Result<(), &'static str> {
 // ── Image validation ────────────────────────────────────────────────────────
 
 use crate::application::ports::outbound::lab_settings_repository::LabSettings;
+use crate::application::ports::outbound::message_store::VisionAnalysis;
 
-/// Validate images against lab_settings limits.
+/// Estimate token count from raw text (chars / 4).
+/// Known limitation: underestimates CJK text.
+pub fn estimate_tokens(text: &str) -> usize {
+    text.len() / 4
+}
+
+/// Validate image count and compress oversized images to WebP.
+///
+/// - Images within `max_image_b64_bytes` are passed through unchanged (avoids
+///   unnecessary re-encoding and double-lossy quality loss).
+/// - Images exceeding the limit are resized to [`IMAGE_COMPRESS_MAX_EDGE`] + WebP.
+///
+/// Uses `spawn_blocking` for CPU-intensive image decode/resize/encode.
 /// Returns error message on failure, None on success.
-pub fn validate_images(images: &Option<Vec<String>>, lab: &LabSettings) -> Option<String> {
+pub async fn validate_and_compress_images(images: &mut Option<Vec<String>>, lab: &LabSettings) -> Option<String> {
     let imgs = match images {
         Some(v) if !v.is_empty() => v,
         _ => return None,
@@ -66,12 +96,138 @@ pub fn validate_images(images: &Option<Vec<String>>, lab: &LabSettings) -> Optio
         return Some(format!("too many images (max {max_count})"));
     }
     let max_bytes = lab.max_image_b64_bytes as usize;
-    for img in imgs {
+    for img in imgs.iter_mut() {
         if img.len() > max_bytes {
-            return Some(format!("image too large (max {} bytes)", max_bytes));
+            let b64 = img.clone();
+            match tokio::task::spawn_blocking(move || {
+                crate::infrastructure::outbound::s3::webp_convert::compress_base64_image(
+                    &b64,
+                    super::constants::IMAGE_COMPRESS_MAX_EDGE,
+                )
+            }).await {
+                Ok(Ok(compressed)) => *img = compressed,
+                Ok(Err(e)) => {
+                    tracing::warn!("image compression failed, rejecting: {e}");
+                    return Some("invalid image data".into());
+                }
+                Err(e) => {
+                    tracing::warn!("image compression task panicked: {e}");
+                    return Some("image processing failed".into());
+                }
+            }
         }
     }
     None
+}
+
+// ── Vision fallback — analyze images for non-vision models ──────────────────
+
+/// Returns true if the model is known to support vision (multimodal) input.
+/// Uses a name-based heuristic — Ollama vision models consistently carry "vl",
+/// "llava", "vision", "moondream", "cogvlm", "bakllava", or "minicpm-v" in
+/// their names.
+pub fn is_vision_model(model_name: &str) -> bool {
+    let lower = model_name.to_lowercase();
+    lower.contains("-vl") || lower.contains(":vl")
+        || lower.contains("llava") || lower.contains("moondream")
+        || lower.contains("cogvlm") || lower.contains("bakllava")
+        || lower.contains("minicpm-v") || lower.contains("vision")
+}
+
+/// For non-vision models that receive images, analyze each image via the
+/// configured vision model and return a `VisionAnalysis` with the text description.
+///
+/// `vision_model_override`: use this model name if `Some`; otherwise falls back to
+/// the `VISION_FALLBACK_MODEL` env var (default `qwen3-vl:8b`).
+///
+/// Returns `None` when:
+/// - No images are present
+/// - The inference model already supports vision (`is_vision_model`)
+/// - All providers fail or the vision model is unavailable
+///
+/// On success the caller should prepend `analysis.analysis` to the user prompt.
+pub async fn analyze_images_for_context(
+    http: &reqwest::Client,
+    provider_registry: &dyn crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry,
+    model_name: &str,
+    images: &[String],
+    user_prompt: &str,
+    vision_model_override: Option<&str>,
+) -> Option<VisionAnalysis> {
+    if images.is_empty() || is_vision_model(model_name) {
+        return None;
+    }
+
+    let vision_model = vision_model_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| std::env::var("VISION_FALLBACK_MODEL")
+            .unwrap_or_else(|_| "qwen3-vl:8b".to_string()));
+
+    let providers = provider_registry.list_all().await.ok()?;
+    let ollama_urls: Vec<String> = providers
+        .into_iter()
+        .filter(|p| p.is_active && p.provider_type == crate::domain::enums::ProviderType::Ollama)
+        .map(|p| p.url)
+        .collect();
+
+    if ollama_urls.is_empty() {
+        return None;
+    }
+
+    // Describe each image, collecting results from the first responding provider.
+    let prompt = if user_prompt.trim().is_empty() { "Describe this image in detail." } else { user_prompt };
+    let mut descriptions: Vec<String> = Vec::new();
+    for image in images {
+        'provider: for url in &ollama_urls {
+            let endpoint = format!("{}/api/generate", url.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model":  vision_model,
+                "prompt": prompt,
+                "images": [image],
+                "stream": false,
+                "options": { "temperature": 0.0 }
+            });
+            let resp = match http
+                .post(&endpoint)
+                .json(&body)
+                .timeout(VISION_HTTP_TIMEOUT)
+                .send()
+                .await
+            {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    tracing::debug!("vision fallback: {} returned {}", url, r.status());
+                    continue 'provider;
+                }
+                Err(e) => {
+                    tracing::debug!("vision fallback: {} error: {}", url, e);
+                    continue 'provider;
+                }
+            };
+            let json: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(_) => continue 'provider,
+            };
+            let text = json["response"].as_str().unwrap_or("").trim().to_string();
+            if !text.is_empty() {
+                descriptions.push(text);
+                break 'provider; // got result for this image, move to next
+            }
+        }
+    }
+
+    if descriptions.is_empty() {
+        return None;
+    }
+
+    let analysis = descriptions.join("\n\n");
+    let analysis_tokens = estimate_tokens(&analysis) as u32;
+    Some(VisionAnalysis {
+        vision_model,
+        image_count: images.len() as u32,
+        analysis_tokens,
+        analysis,
+    })
 }
 
 // ── Tool call validation (security) ─────────────────────────────────────────
@@ -257,43 +413,26 @@ mod tests {
             prop_assert!(!validate_tool_call(&call));
         }
 
-        #[test]
-        fn images_within_limits_pass(count in 1_usize..=4, size in 1_usize..=100) {
-            let imgs: Vec<String> = (0..count).map(|_| "x".repeat(size)).collect();
-            let lab = LabSettings { max_images_per_request: 4, max_image_b64_bytes: 100, ..LabSettings::default() };
-            prop_assert!(validate_images(&Some(imgs), &lab).is_none());
-        }
-
-        #[test]
-        fn images_over_count_rejected(count in 5_usize..=10) {
-            let imgs: Vec<String> = (0..count).map(|_| "x".into()).collect();
-            let lab = LabSettings { max_images_per_request: 4, ..LabSettings::default() };
-            prop_assert!(validate_images(&Some(imgs), &lab).is_some());
-        }
-
-        #[test]
-        fn image_over_size_rejected(excess in 1_usize..=100) {
-            let lab = LabSettings { max_image_b64_bytes: 10, ..LabSettings::default() };
-            let imgs = Some(vec!["x".repeat(10 + excess)]);
-            prop_assert!(validate_images(&imgs, &lab).is_some());
-        }
-
-        #[test]
-        fn image_exact_size_passes(size in 1_usize..=1000) {
-            let lab = LabSettings { max_image_b64_bytes: size as i32, ..LabSettings::default() };
-            let imgs = Some(vec!["x".repeat(size)]);
-            prop_assert!(validate_images(&imgs, &lab).is_none());
-        }
     }
 
-    #[test]
-    fn validate_images_none_passes() {
-        assert!(validate_images(&None, &LabSettings::default()).is_none());
+    #[tokio::test]
+    async fn images_over_count_rejected() {
+        let mut imgs: Option<Vec<String>> = Some((0..6).map(|_| "x".into()).collect());
+        let lab = LabSettings { max_images_per_request: 4, ..LabSettings::default() };
+        assert!(validate_and_compress_images(&mut imgs, &lab).await.is_some());
     }
 
-    #[test]
-    fn validate_images_disabled_rejected() {
+    #[tokio::test]
+    async fn validate_images_disabled_rejected() {
         let lab = LabSettings { max_images_per_request: 0, ..LabSettings::default() };
-        assert!(validate_images(&Some(vec!["abc".into()]), &lab).is_some());
+        assert!(validate_and_compress_images(&mut Some(vec!["abc".into()]), &lab).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn validate_images_oversized_invalid_data_rejected() {
+        let lab = LabSettings { max_image_b64_bytes: 10, ..LabSettings::default() };
+        let mut imgs = Some(vec!["x".repeat(20)]);
+        // Exceeds max_bytes → compression attempted → invalid data → rejected
+        assert!(validate_and_compress_images(&mut imgs, &lab).await.is_some());
     }
 }

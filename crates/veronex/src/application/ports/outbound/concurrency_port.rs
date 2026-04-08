@@ -6,9 +6,9 @@ use uuid::Uuid;
 /// VRAM profile for a model — architecture-derived KV cache estimation.
 #[derive(Debug, Clone)]
 pub struct ModelVramProfile {
-    pub weight_mb: u32,
+    pub weight_mb: u64,
     pub weight_estimated: bool,
-    pub kv_per_request_mb: u32,
+    pub kv_per_request_mb: u64,
     pub num_layers: u16,
     pub num_kv_heads: u16,
     pub head_dim: u16,
@@ -23,10 +23,10 @@ pub struct ModelVramProfile {
 /// Weight stays loaded (models persist in VRAM between requests).
 /// Only the per-request KV cache allocation is returned on drop.
 pub struct VramPermit {
-    kv_mb: u32,
-    reserved_kv: Option<Arc<AtomicU32>>,
+    kv_mb: u64,
+    reserved_kv: Option<Arc<AtomicU64>>,
     active_count: Option<Arc<AtomicU32>>,
-    release_tx: Option<tokio::sync::oneshot::Sender<u32>>,
+    release_tx: Option<tokio::sync::oneshot::Sender<u64>>,
     /// Updated to current Unix ms on drop (Phase 7: last_active_at tracking).
     last_active_at: Option<Arc<AtomicU64>>,
     /// Provider-level total active count (decremented on drop for O(1) provider_active_requests).
@@ -36,8 +36,8 @@ pub struct VramPermit {
 impl VramPermit {
     /// Create a local permit with last_active_at tracking (Phase 7).
     pub(crate) fn with_last_active(
-        kv_mb: u32,
-        reserved_kv: Arc<AtomicU32>,
+        kv_mb: u64,
+        reserved_kv: Arc<AtomicU64>,
         active_count: Arc<AtomicU32>,
         last_active_at: Arc<AtomicU64>,
         provider_active_count: Arc<AtomicU32>,
@@ -54,10 +54,10 @@ impl VramPermit {
 
     /// Create a combined permit: local atomic decrement + distributed Valkey release.
     pub(crate) fn combined(
-        kv_mb: u32,
-        reserved_kv: Arc<AtomicU32>,
+        kv_mb: u64,
+        reserved_kv: Arc<AtomicU64>,
         active_count: Arc<AtomicU32>,
-        release_tx: tokio::sync::oneshot::Sender<u32>,
+        release_tx: tokio::sync::oneshot::Sender<u64>,
         provider_active_count: Arc<AtomicU32>,
     ) -> Self {
         Self {
@@ -71,7 +71,7 @@ impl VramPermit {
     }
 
     /// Extract internals, consuming this permit without triggering drop.
-    pub(crate) fn into_parts(mut self) -> Option<(Arc<AtomicU32>, Arc<AtomicU32>, Arc<AtomicU32>, u32)> {
+    pub(crate) fn into_parts(mut self) -> Option<(Arc<AtomicU64>, Arc<AtomicU32>, Arc<AtomicU32>, u64)> {
         let reserved = self.reserved_kv.take();
         let active = self.active_count.take();
         let prov_active = self.provider_active_count.take();
@@ -86,7 +86,7 @@ impl VramPermit {
 impl Drop for VramPermit {
     fn drop(&mut self) {
         if let Some(ref reserved_kv) = self.reserved_kv {
-            // Saturating sub: prevents u32 wrap-around if accounting diverges under bugs.
+            // Saturating sub: prevents u64 wrap-around if accounting diverges under bugs.
             let mut cur = reserved_kv.load(Ordering::Acquire);
             loop {
                 let next = cur.saturating_sub(self.kv_mb);
@@ -143,22 +143,22 @@ pub trait VramPoolPort: Send + Sync {
     fn try_reserve(&self, provider_id: Uuid, model: &str) -> Option<VramPermit>;
 
     /// Total VRAM for a provider (0 = not yet probed).
-    fn total_vram_mb(&self, provider_id: Uuid) -> u32;
+    fn total_vram_mb(&self, provider_id: Uuid) -> u64;
 
     /// Currently used VRAM (loaded model weights + active KV cache).
-    fn used_vram_mb(&self, provider_id: Uuid) -> u32;
+    fn used_vram_mb(&self, provider_id: Uuid) -> u64;
 
     /// Available VRAM for new allocations.
-    fn available_vram_mb(&self, provider_id: Uuid) -> u32;
+    fn available_vram_mb(&self, provider_id: Uuid) -> u64;
 
     /// Set the total VRAM for a provider (from hw_metrics probe).
-    fn set_total_vram(&self, provider_id: Uuid, total_mb: u32);
+    fn set_total_vram(&self, provider_id: Uuid, total_mb: u64);
 
     /// Register or update the VRAM profile for a model.
     fn set_model_profile(&self, provider_id: Uuid, model: &str, profile: ModelVramProfile);
 
     /// Mark a model as loaded (its weight occupies VRAM).
-    fn mark_model_loaded(&self, provider_id: Uuid, model: &str, weight_mb: u32);
+    fn mark_model_loaded(&self, provider_id: Uuid, model: &str, weight_mb: u64);
 
     /// Mark a model as unloaded (its weight is freed).
     fn mark_model_unloaded(&self, provider_id: Uuid, model: &str);
@@ -262,7 +262,7 @@ pub trait VramPoolPort: Send + Sync {
     fn sum_loaded_max_concurrent(&self, provider_id: Uuid) -> u32;
 
     /// Get model weight in VRAM (0 if not known/unloaded).
-    fn model_weight_mb(&self, provider_id: Uuid, model: &str) -> u32;
+    fn model_weight_mb(&self, provider_id: Uuid, model: &str) -> u64;
 
     /// Get stable cycle count (consecutive cycles with stable throughput, for 3-cycle AIMD baseline).
     fn stable_cycle_count(&self, provider_id: Uuid, model: &str) -> u32;
@@ -287,4 +287,12 @@ pub trait VramPoolPort: Send + Sync {
 
     /// Decay APU safety margin by 10 permil per stable sync (min = DEFAULT_SAFETY_PERMIL = 100).
     fn decay_safety_permil(&self, provider_id: Uuid);
+
+    /// Aggregate all loaded models across all providers.
+    ///
+    /// Returns one entry per unique model name: (model_name, weight_mb, kv_per_request_mb,
+    /// total_active, total_limit, provider_count).
+    ///
+    /// Used by the cluster-view dashboard endpoint to avoid a full DB scan on every poll.
+    fn cluster_snapshot(&self) -> Vec<(String, u64, u64, u32, u32, u32)>;
 }

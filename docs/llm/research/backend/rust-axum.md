@@ -3,7 +3,7 @@
 > **Last Researched**: 2026-03-02 | **Source**: Axum 0.8 docs + web search + verified in production
 > **Status**: Verified -- used throughout `crates/veronex/src/`
 > **Deps**: fred 10 (`Pool` type, `pool.init().await?`), reqwest 0.13
-> **Companion**: See `rust-axum-shutdown.md` for tokio graceful shutdown patterns (`JoinSet`, `CancellationToken`)
+> **Companion**: `rust-axum-shutdown.md` (tokio graceful shutdown) | `rust-axum-2026.md` (2026 additions)
 
 ---
 
@@ -182,10 +182,7 @@ sqlx::query!(
 
 ## Sources
 
-- Axum 0.8 changelog: https://github.com/tokio-rs/axum/releases
-- tokio docs: https://docs.rs/tokio
-- tokio-util CancellationToken: https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html
-- Axum graceful shutdown: https://docs.rs/axum/latest/axum/serve/struct.Serve.html#method.with_graceful_shutdown
-- sqlx docs: https://docs.rs/sqlx
-- Web search: tokio JoinSet graceful shutdown 2026, tokio-util CancellationToken patterns
+- [Announcing axum 0.8.0 — Tokio Blog](https://tokio.rs/blog/2025-01-01-announcing-axum-0-8-0)
+- [axum CHANGELOG](https://github.com/tokio-rs/axum/blob/main/axum/CHANGELOG.md)
+- tokio docs: https://docs.rs/tokio | sqlx docs: https://docs.rs/sqlx
 - Verified: `crates/veronex/src/infrastructure/inbound/http/`, `crates/veronex/src/main.rs`

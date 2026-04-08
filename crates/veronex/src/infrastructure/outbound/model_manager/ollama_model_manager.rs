@@ -85,29 +85,36 @@ impl OllamaModelManager {
         }
     }
 
-    /// Query Ollama `/api/ps` and sync the in-memory LRU state with actual state.
-    async fn sync_from_ollama(&self, state: &mut LruState) {
+    /// Fetch currently-running models from Ollama `/api/ps` without holding any lock.
+    ///
+    /// Returns `None` on network/parse failure (caller keeps cached LRU state as-is).
+    async fn fetch_running_models(&self) -> Option<Vec<String>> {
         match self
             .client
             .get(format!("{}/api/ps", self.base_url))
             .send()
             .await
         {
-            Ok(resp) => {
-                if let Ok(ps) = resp.json::<PsResponse>().await {
-                    let running: Vec<String> = ps.models.into_iter().map(|m| m.name).collect();
-                    // Remove from LRU any model that is no longer running in Ollama
-                    state.loaded.retain(|m| running.contains(m));
-                    // Add any running model not yet tracked (e.g. manually loaded)
-                    for m in &running {
-                        if !state.is_loaded(m) {
-                            state.loaded.push_back(m.clone());
-                        }
-                    }
+            Ok(resp) => match resp.json::<PsResponse>().await {
+                Ok(ps) => Some(ps.models.into_iter().map(|m| m.name).collect()),
+                Err(e) => {
+                    tracing::warn!("model manager: /api/ps parse failed (using cached state): {e}");
+                    None
                 }
-            }
+            },
             Err(e) => {
                 tracing::warn!("model manager: /api/ps query failed (using cached state): {e}");
+                None
+            }
+        }
+    }
+
+    /// Apply a fresh model list to the in-memory LRU state (caller holds the lock).
+    fn apply_running_models(state: &mut LruState, running: &[String]) {
+        state.loaded.retain(|m| running.contains(m));
+        for m in running {
+            if !state.is_loaded(m) {
+                state.loaded.push_back(m.clone());
             }
         }
     }
@@ -138,10 +145,15 @@ impl OllamaModelManager {
 #[async_trait]
 impl ModelManagerPort for OllamaModelManager {
     async fn ensure_loaded(&self, model_name: &str) -> Result<()> {
+        // Fetch /api/ps WITHOUT holding the lock — avoids holding tokio::Mutex across I/O.
+        let running = self.fetch_running_models().await;
+
         let mut state = self.state.lock().await;
 
-        // Sync in-memory LRU with actual Ollama state
-        self.sync_from_ollama(&mut state).await;
+        // Sync in-memory LRU with actual Ollama state (pure, no I/O)
+        if let Some(ref models) = running {
+            Self::apply_running_models(&mut state, models);
+        }
 
         if state.is_loaded(model_name) {
             // Already loaded — bump to MRU position

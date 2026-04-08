@@ -93,6 +93,52 @@ spec:
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ include "veronex.otelEndpoint" . | quote }}
             {{- end }}
+            {{- if .Values.vespa.enabled }}
+            - name: VESPA_URL
+              value: {{ .Values.vespa.url | default (printf "http://%s-vespa:8080" .Release.Name) | quote }}
+            {{- end }}
+            {{- if .Values.embed.url }}
+            - name: EMBED_URL
+              value: {{ .Values.embed.url | quote }}
+            {{- end }}
+            {{- if or .Values.redpandaEnabled .Values.externalRedpanda.brokers }}
+            - name: KAFKA_BROKER
+              value: {{ include "veronex.redpandaBroker" . | quote }}
+            {{- end }}
+            {{- if or .Values.clickhouse.enabled .Values.externalClickhouse.host }}
+            - name: CLICKHOUSE_HTTP_URL
+              value: {{ include "veronex.clickhouseUrl" . | quote }}
+            - name: CLICKHOUSE_USER
+              value: {{ include "veronex.clickhouseUser" . | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              value: {{ include "veronex.clickhousePassword" . | quote }}
+            - name: CLICKHOUSE_DB
+              value: {{ include "veronex.clickhouseDb" . | quote }}
+            {{- end }}
+            - name: VERONEX_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- if .Values.veronex.valkeyPoolSize }}
+            - name: VALKEY_POOL_SIZE
+              value: {{ .Values.veronex.valkeyPoolSize | quote }}
+            {{- end }}
+            {{- if .Values.veronex.pgPoolMax }}
+            - name: PG_POOL_MAX
+              value: {{ .Values.veronex.pgPoolMax | quote }}
+            {{- end }}
+            {{- if .Values.veronex.loginRateLimit }}
+            - name: LOGIN_RATE_LIMIT
+              value: {{ .Values.veronex.loginRateLimit | quote }}
+            {{- end }}
+            {{- if .Values.veronex.visionFallbackModel }}
+            - name: VISION_FALLBACK_MODEL
+              value: {{ .Values.veronex.visionFallbackModel | quote }}
+            {{- end }}
+            {{- if .Values.veronex.mcpVectorTopK }}
+            - name: MCP_VECTOR_TOP_K
+              value: {{ .Values.veronex.mcpVectorTopK | quote }}
+            {{- end }}
             {{- range $k, $v := .Values.veronex.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

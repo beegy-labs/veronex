@@ -1,6 +1,6 @@
 # Escalation
 
-> ADD Execution | **Last Updated**: 2026-03-15
+> ADD Execution | **Last Updated**: 2026-03-25
 
 ## Trigger
 
@@ -26,3 +26,7 @@ Uncertainty during any execution workflow.
 | Default: ask | When in doubt, escalate |
 | Document decisions | Even when proceeding, log rationale |
 | No silent assumptions | Make all assumptions explicit |
+
+## Reference
+
+Full escalation protocol: `docs/llm/policies/add.md#escalation-protocol`

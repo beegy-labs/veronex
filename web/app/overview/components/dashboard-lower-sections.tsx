@@ -12,6 +12,7 @@ import {
   fmtMsNullable, fmtCompact,
 } from '@/lib/chart-theme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { ArrowRight } from 'lucide-react'
 import { useTranslation } from '@/i18n'
@@ -139,32 +140,32 @@ export function RecentJobsSection({ recentJobs, tz }: {
         </CardContent>
       ) : (
         <div className="overflow-x-auto">
-          <table style={{ minWidth: '560px' }} className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border">
-                <th className="h-11 px-4 pl-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.model')}</th>
-                <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.provider')}</th>
-                <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.status')}</th>
-                <th className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.latency')}</th>
-                <th className="h-11 px-4 pr-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.createdAt')}</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table style={{ minWidth: '560px' }} className="text-sm">
+            <TableHeader>
+              <TableRow className="border-b border-border">
+                <TableHead className="h-11 px-4 pl-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.model')}</TableHead>
+                <TableHead className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.provider')}</TableHead>
+                <TableHead className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.status')}</TableHead>
+                <TableHead className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.latency')}</TableHead>
+                <TableHead className="h-11 px-4 pr-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.createdAt')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {recentJobs.map((job) => (
-                <tr key={job.id} className="border-b border-border last:border-0">
-                  <td className="py-3 px-4 pl-6 font-mono text-xs max-w-[180px] truncate">{job.model_name}</td>
-                  <td className="py-3 px-4 text-xs text-muted-foreground max-w-[120px] truncate">{job.provider_type}</td>
-                  <td className="py-3 px-4">
+                <TableRow key={job.id} className="border-b border-border last:border-0">
+                  <TableCell className="py-3 px-4 pl-6 font-mono text-xs max-w-[180px] truncate">{job.model_name}</TableCell>
+                  <TableCell className="py-3 px-4 text-xs text-muted-foreground max-w-[120px] truncate">{job.provider_type}</TableCell>
+                  <TableCell className="py-3 px-4">
                     <Badge variant="outline" className={`text-xs ${STATUS_STYLES[job.status] ?? 'bg-muted/20 text-muted-foreground border-muted/30'}`}>
                       {t(`jobs.statuses.${job.status}` as Parameters<typeof t>[0])}
                     </Badge>
-                  </td>
-                  <td className="py-3 px-4 text-xs tabular-nums">{fmtMsNullable(job.latency_ms)}</td>
-                  <td className="py-3 px-4 pr-6 text-xs text-muted-foreground whitespace-nowrap">{fmtDatetimeShort(job.created_at, tz)}</td>
-                </tr>
+                  </TableCell>
+                  <TableCell className="py-3 px-4 text-xs tabular-nums">{fmtMsNullable(job.latency_ms)}</TableCell>
+                  <TableCell className="py-3 px-4 pr-6 text-xs text-muted-foreground whitespace-nowrap">{fmtDatetimeShort(job.created_at, tz)}</TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
     </Card>

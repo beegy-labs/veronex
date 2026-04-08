@@ -19,14 +19,19 @@ where
 }
 
 pub mod account_repository;
+pub mod caching_api_key_repo;
+pub mod caching_lab_settings_repo;
 pub mod caching_model_selection;
 pub mod caching_ollama_model_repo;
 pub mod caching_provider_registry;
 pub mod capacity_settings_repository;
 pub mod lab_settings_repository;
+pub mod mcp_settings_repository;
 pub mod model_capacity_repository;
 pub mod api_key_repository;
 pub mod provider_model_selection;
+pub mod global_model_settings;
+pub mod api_key_provider_access;
 pub mod gemini_model_repository;
 pub mod gemini_policy_repository;
 pub mod gemini_sync_config;
@@ -39,3 +44,26 @@ pub mod ollama_sync_job_repository;
 pub mod session_repository;
 pub mod ttl_cache;
 pub mod provider_vram_budget_repository;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_db_enum_valid_value() {
+        let result: i32 = parse_db_enum(Some("42".to_string()), "test_col");
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn parse_db_enum_none_returns_default() {
+        let result: i32 = parse_db_enum(None, "test_col");
+        assert_eq!(result, 0); // i32::default()
+    }
+
+    #[test]
+    fn parse_db_enum_invalid_falls_back_to_default() {
+        let result: i32 = parse_db_enum(Some("not_a_number".to_string()), "test_col");
+        assert_eq!(result, 0);
+    }
+}

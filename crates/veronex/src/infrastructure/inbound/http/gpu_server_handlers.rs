@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::domain::constants::NODE_EXPORTER_TIMEOUT;
 use crate::domain::entities::GpuServer;
+use crate::domain::value_objects::GpuServerId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::outbound::hw_metrics;
 
@@ -44,7 +45,7 @@ pub struct VerifyServerRequest {
 
 #[derive(Debug, Serialize)]
 pub struct GpuServerSummary {
-    pub id: Uuid,
+    pub id: GpuServerId,
     pub name: String,
     pub node_exporter_url: Option<String>,
     pub registered_at: chrono::DateTime<Utc>,
@@ -53,7 +54,7 @@ pub struct GpuServerSummary {
 impl From<GpuServer> for GpuServerSummary {
     fn from(s: GpuServer) -> Self {
         Self {
-            id: s.id,
+            id: GpuServerId::from_uuid(s.id),
             name: s.name,
             node_exporter_url: s.node_exporter_url,
             registered_at: s.registered_at,
@@ -67,7 +68,7 @@ async fn get_gpu_server(state: &AppState, id: Uuid) -> Result<GpuServer, AppErro
         .gpu_server_registry
         .get(id)
         .await
-        .map_err(|e| db_error(e))?
+        .map_err(db_error)?
         .ok_or_else(|| AppError::NotFound("server not found".into()))
 }
 
@@ -146,7 +147,7 @@ pub async fn register_gpu_server(
     .bind(&node_exporter_url)
     .fetch_one(&state.pg_pool)
     .await
-    .map_err(|e| db_error(e))?;
+    .map_err(db_error)?;
     if count > 0 {
         return Err(AppError::Conflict("a server with this URL is already registered".into()));
     }
@@ -167,19 +168,35 @@ pub async fn register_gpu_server(
     };
 
     let id = server.id;
-    state.gpu_server_registry.register(server).await.map_err(|e| db_error(e))?;
+    state.gpu_server_registry.register(server).await.map_err(db_error)?;
 
-    emit_audit(&state, &claims, "create", "gpu_server", &id.to_string(), &req.name,
-        &format!("GPU server '{}' registered (id: {})", req.name, id)).await;
+    let pub_id = GpuServerId::from_uuid(id);
+    emit_audit(&state, &claims, "create", "gpu_server", &pub_id.to_string(), &req.name,
+        &format!("GPU server '{}' registered (id: {})", req.name, pub_id)).await;
     tracing::info!(%id, name = %req.name, "gpu server registered");
-    Ok((StatusCode::CREATED, Json(serde_json::json!({"id": id}))))
+    Ok((StatusCode::CREATED, Json(serde_json::json!({"id": pub_id.to_string()}))))
 }
 
+use super::handlers::ListPageParams;
+
 /// `GET /v1/servers`
-pub async fn list_gpu_servers(State(state): State<AppState>) -> HandlerResult<Json<Vec<GpuServerSummary>>> {
-    let servers = state.gpu_server_registry.list_all().await.map_err(|e| db_error(e))?;
+pub async fn list_gpu_servers(
+    State(state): State<AppState>,
+    Query(params): Query<ListPageParams>,
+) -> HandlerResult<axum::Json<serde_json::Value>> {
+    let search = params.search.as_deref().unwrap_or("").trim().to_string();
+    let limit = params.limit.unwrap_or(100).clamp(1, 1000);
+    let page = params.page.unwrap_or(1).clamp(1, super::constants::MAX_PAGE);
+    let offset = (page - 1) * limit;
+
+    let (servers, total) = state.gpu_server_registry.list_page(&search, limit, offset).await.map_err(db_error)?;
     let summaries: Vec<GpuServerSummary> = servers.into_iter().map(Into::into).collect();
-    Ok(Json(summaries))
+    Ok(axum::Json(serde_json::json!({
+        "servers": summaries,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    })))
 }
 
 // ── Update ─────────────────────────────────────────────────────────────────────
@@ -194,9 +211,10 @@ pub struct UpdateGpuServerRequest {
 pub async fn update_gpu_server(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(gid): Path<GpuServerId>,
     Json(req): Json<UpdateGpuServerRequest>,
 ) -> HandlerResult<Json<GpuServerSummary>> {
+    let id = gid.0;
     let server = get_gpu_server(&state, id).await?;
 
     let updated = GpuServer {
@@ -214,7 +232,7 @@ pub async fn update_gpu_server(
         registered_at: server.registered_at,
     };
 
-    state.gpu_server_registry.update(&updated).await.map_err(|e| db_error(e))?;
+    state.gpu_server_registry.update(&updated).await.map_err(db_error)?;
 
     emit_audit(&state, &claims, "update", "gpu_server", &id.to_string(), &updated.name,
         &format!("GPU server '{}' ({}) configuration updated", updated.name, id)).await;
@@ -226,43 +244,81 @@ pub async fn update_gpu_server(
 pub async fn delete_gpu_server(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(gid): Path<GpuServerId>,
 ) -> HandlerResult<StatusCode> {
-    state.gpu_server_registry.delete(id).await.map_err(|e| db_error(e))?;
+    let id = gid.0;
+    state.gpu_server_registry.delete(id).await.map_err(db_error)?;
 
-    emit_audit(&state, &claims, "delete", "gpu_server", &id.to_string(), &id.to_string(),
-        &format!("GPU server {} permanently deleted", id)).await;
+    emit_audit(&state, &claims, "delete", "gpu_server", &gid.to_string(), &gid.to_string(),
+        &format!("GPU server {} permanently deleted", gid)).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /v1/servers/{id}/metrics` — Live hardware metrics from node-exporter.
+/// `GET /v1/servers/{id}/metrics` — Cached hardware metrics from Valkey.
+///
+/// The health_checker background loop scrapes node-exporter every cycle
+/// and caches full `NodeMetrics` per server. This endpoint reads from
+/// cache instead of live-scraping, avoiding per-request network calls
+/// and scaling to 10K+ providers.
 pub async fn get_server_metrics(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(gid): Path<GpuServerId>,
 ) -> HandlerResult<Json<hw_metrics::NodeMetrics>> {
-    let server = get_gpu_server(&state, id).await?;
+    let id = gid.0;
+    // Verify server exists
+    let _server = get_gpu_server(&state, id).await?;
 
-    let Some(ne_url) = server.node_exporter_url.filter(|u| !u.is_empty()) else {
-        return Err(AppError::UnprocessableEntity(
-            "no node_exporter_url configured for this server".into(),
-        ));
+    let Some(pool) = state.valkey_pool.as_ref() else {
+        return Ok(Json(hw_metrics::NodeMetrics::default()));
     };
 
-    let prev_snapshot = state
-        .cpu_snapshot_cache
-        .get(&id)
-        .map(|r| r.clone());
-
-    match hw_metrics::fetch_node_metrics(&ne_url, prev_snapshot.as_ref()).await {
-        Ok((metrics, snapshot)) => {
-            state.cpu_snapshot_cache.insert(id, snapshot);
-            Ok(Json(metrics))
-        }
-        Err(e) => {
-            tracing::warn!(%id, url = %ne_url, error = %e, "failed to fetch node metrics");
-            Ok(Json(hw_metrics::NodeMetrics::default()))
-        }
+    match hw_metrics::load_node_metrics(pool, id).await {
+        Some(metrics) => Ok(Json(metrics)),
+        None => Ok(Json(hw_metrics::NodeMetrics::default())),
     }
+}
+
+// ── Batch metrics ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct BatchMetricsQuery {
+    /// Comma-separated server UUIDs (max 100).
+    pub ids: String,
+}
+
+/// `GET /v1/servers/metrics/batch?ids=id1,id2,...`
+///
+/// Returns a map of server_id → NodeMetrics for up to 100 servers in a single
+/// request. Replaces N individual `/metrics` calls from the dashboard.
+pub async fn get_server_metrics_batch(
+    State(state): State<AppState>,
+    Query(params): Query<BatchMetricsQuery>,
+) -> HandlerResult<Json<std::collections::HashMap<String, hw_metrics::NodeMetrics>>> {
+    let Some(pool) = state.valkey_pool.as_ref() else {
+        return Ok(Json(std::collections::HashMap::new()));
+    };
+
+    let ids: Vec<Uuid> = params
+        .ids
+        .split(',')
+        .take(100)
+        .filter_map(|s| {
+            let s = s.trim();
+            s.parse::<GpuServerId>().map(|id| id.0)
+                .or_else(|_| Uuid::parse_str(s))
+                .ok()
+        })
+        .collect();
+
+    let mut result = std::collections::HashMap::with_capacity(ids.len());
+    for id in ids {
+        let metrics = hw_metrics::load_node_metrics(pool, id)
+            .await
+            .unwrap_or_default();
+        result.insert(GpuServerId::from_uuid(id).to_string(), metrics);
+    }
+
+    Ok(Json(result))
 }
 
 // ── Metrics history via analytics-service ─────────────────────────────────────
@@ -278,9 +334,10 @@ pub struct MetricsHistoryQuery {
 /// Returns 503 when analytics is not configured.
 pub async fn get_server_metrics_history(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path(gid): Path<GpuServerId>,
     Query(params): Query<MetricsHistoryQuery>,
 ) -> HandlerResult<impl IntoResponse> {
+    let id = gid.0;
     let repo = state.analytics_repo.as_ref().ok_or_else(|| {
         AppError::ServiceUnavailable("analytics not configured".into())
     })?;
@@ -289,7 +346,7 @@ pub async fn get_server_metrics_history(
 
     let points = repo.server_metrics_history(&id, hours).await.map_err(|e| {
         tracing::error!(%id, error = %e, "metrics history failed");
-        AppError::Internal(anyhow::anyhow!("query failed"))
+        AppError::ServiceUnavailable("analytics query failed".into())
     })?;
 
     Ok(Json(points))
