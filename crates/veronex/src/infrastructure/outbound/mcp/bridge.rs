@@ -335,7 +335,7 @@ impl McpBridgeAdapter {
             }
 
             // ── Collect tool_calls for S3 record ──────────────────────────────
-            all_mcp_tool_calls.extend(final_tool_calls.iter().cloned());
+            all_mcp_tool_calls.extend(mcp_calls.iter().cloned());
 
             // ── Append assistant message with tool_calls ───────────────────────
             messages.push(serde_json::json!({
@@ -432,8 +432,8 @@ impl McpBridgeAdapter {
                 let _ = sqlx::query(
                     "UPDATE inference_jobs SET prompt_tokens = $1, completion_tokens = $2 WHERE id = $3"
                 )
-                .bind(total_prompt_tokens as i32)
-                .bind(total_completion_tokens as i32)
+                .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
+                .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
                 .bind(fid.0)
                 .execute(pg)
                 .await
