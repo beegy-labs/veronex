@@ -9,6 +9,8 @@
 | File | Subsystem |
 |------|-----------|
 | [inference.md](inference.md) | Inference request lifecycle — submit → queue → dispatch → stream |
+| [job-event-pipeline.md](job-event-pipeline.md) | Job event pipeline — overall architecture, state transitions, repo call mapping |
+| [job-event-pipeline-steps.md](job-event-pipeline-steps.md) | Job event pipeline steps — submit, cancel, stream, run_job step diagrams |
 | [auth.md](auth.md) | Authentication — API Key & JWT session flows |
 | [mcp.md](mcp.md) | MCP agentic loop — ACL, tool injection, execute, loop detection |
 | [scheduler.md](scheduler.md) | Provider selection — VRAM, thermal, circuit breaker, scoring |
