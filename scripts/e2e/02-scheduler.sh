@@ -122,6 +122,9 @@ import sys, json
 d = json.loads(sys.stdin.read())
 violations = []
 for p in d.get('providers', []):
+    # Skip offline/unreachable providers — stale AIMD data is expected
+    if p.get('status', 'online').lower() not in ('online', 'active', ''):
+        continue
     pid    = p.get('provider_id', '')
     pname  = p.get('provider_name', '?')
     np_str = '''$NP_MAP'''

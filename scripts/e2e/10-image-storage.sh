@@ -72,7 +72,7 @@ done
 # We send a text request to load the vision model, then immediately fire image requests.
 info "Warming up with vision model ($VISION_MODEL)..."
 curl -s --max-time 120 "$API/api/generate" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
   -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"say ok\",\"stream\":false}" > /dev/null 2>&1 || true
 
 # Fire both image inference requests IMMEDIATELY (no sleep — Scale-In runs every 5s)
@@ -83,7 +83,7 @@ TEST_IMG_RES=""
 TMPDIR_IMG=$(mktemp -d)
 
 (curl -s -w "\n%{http_code}" --max-time 120 "$API/api/generate" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
   -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"/no_think Describe this image in one sentence.\",\"images\":[\"$BEE_IMG\"],\"stream\":false}" \
   > "$TMPDIR_IMG/api" 2>/dev/null || printf "\n000" > "$TMPDIR_IMG/api") &
 

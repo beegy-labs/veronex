@@ -40,11 +40,13 @@ apostc "/v1/providers/sync" "{}" > /dev/null 2>&1 || true
 info "Manual sync triggered, waiting for VRAM probing..."
 
 get_aimd_limit() {
-  # Returns "max_concurrent num_parallel" for the provider+model pair with highest max_concurrent
+  # Returns "max_concurrent num_parallel" for the online provider+model pair with highest max_concurrent
   aget "/v1/dashboard/capacity" 2>/dev/null | python3 -c "
 import sys, json; d=json.loads(sys.stdin.read())
 best=(0,4)
 for p in d.get('providers',[]):
+  if p.get('status', 'online').lower() not in ('online', 'active', ''):
+    continue
   np=p.get('num_parallel',4)
   for m in p.get('loaded_models',[]):
     if m['model_name']=='$MODEL' and m['max_concurrent']>best[0]:
@@ -99,7 +101,7 @@ fi
   || fail "AIMD limit not set after sync cycles"
 save_var AIMD_LIMIT "$AIMD_LIMIT"
 
-# SDD: max_concurrent must not exceed the provider's own num_parallel
+# SDD: max_concurrent must not exceed the provider's own num_parallel (online providers only)
 if [ -n "$AIMD_LIMIT" ] && [ "$AIMD_LIMIT" != "0" ]; then
   [ "$AIMD_LIMIT" -le "$AIMD_NP" ] \
     && pass "AIMD max_concurrent ($AIMD_LIMIT) ≤ num_parallel ($AIMD_NP) — SDD constraint satisfied" \

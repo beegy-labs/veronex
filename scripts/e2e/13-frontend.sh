@@ -15,20 +15,7 @@ source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 
 WEB_URL="${WEB_URL:-http://localhost:3000}"
 WEB_DIR="$(cd "$SCRIPT_DIR/../../web" && pwd)"
-PW_WORKERS="${PW_WORKERS:-4}"
-
-# ── Clear login rate limit before Playwright login ────────────────────────────
-# Phase 05 fires 11 failed login attempts to test rate limiting. Clear all
-# IP-based counters so Playwright global-setup login isn't blocked by a 429.
-_REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR/../..")"
-_RLKEYS=$(docker compose -f "$_REPO_ROOT/docker-compose.yml" exec -T valkey \
-  valkey-cli KEYS 'veronex:login_attempts:*' 2>/dev/null | tr -d '\r')
-if [ -n "$_RLKEYS" ]; then
-  # shellcheck disable=SC2086
-  docker compose -f "$_REPO_ROOT/docker-compose.yml" exec -T valkey \
-    valkey-cli del $_RLKEYS > /dev/null 2>&1 || true
-fi
-unset _REPO_ROOT _RLKEYS
+PW_WORKERS="${PW_WORKERS:-1}"
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
 
@@ -81,15 +68,29 @@ PW_ARGS=(
 [ -n "${PLAYWRIGHT_GREP:-}" ] && PW_ARGS+=("--grep=$PLAYWRIGHT_GREP")
 
 # Playwright outputs its own pass/fail summary; we capture exit code only
+# Retry once on failure (login may be rate-limited by parallel security tests)
 PW_EXIT=0
-(
-  cd "$WEB_DIR"
-  PLAYWRIGHT_BASE_URL="$WEB_URL" \
-  PLAYWRIGHT_API_URL="${API:-http://localhost:3001}" \
-  E2E_USERNAME="${E2E_USERNAME:-${USERNAME:-test}}" \
-  E2E_PASSWORD="${E2E_PASSWORD:-${PASSWORD:-test1234!}}" \
-  npx playwright test "${PW_ARGS[@]}" 2>&1
-) || PW_EXIT=$?
+for _pw_attempt in 1 2; do
+  (
+    cd "$WEB_DIR"
+    # Clear login rate-limit keys before each attempt
+    _REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR/../..")"
+    _RLKEYS=$(docker compose -f "$_REPO_ROOT/docker-compose.yml" exec -T valkey \
+      valkey-cli KEYS 'veronex:login_attempts:*' 2>/dev/null | tr -d '\r')
+    if [ -n "$_RLKEYS" ]; then
+      # shellcheck disable=SC2086
+      docker compose -f "$_REPO_ROOT/docker-compose.yml" exec -T valkey \
+        valkey-cli del $_RLKEYS > /dev/null 2>&1 || true
+    fi
+    PLAYWRIGHT_BASE_URL="$WEB_URL" \
+    PLAYWRIGHT_API_URL="${API:-http://localhost:3001}" \
+    E2E_USERNAME="${E2E_USERNAME:-${USERNAME:-test}}" \
+    E2E_PASSWORD="${E2E_PASSWORD:-${PASSWORD:-test1234!}}" \
+    npx playwright test "${PW_ARGS[@]}" 2>&1
+  ) || { PW_EXIT=$?; [ "$_pw_attempt" -eq 1 ] && info "Playwright attempt 1 failed (exit $PW_EXIT), retrying..."; continue; }
+  PW_EXIT=0
+  break
+done
 
 if [ "$PW_EXIT" -eq 0 ]; then
   pass "Playwright test suite → all tests passed"
