@@ -1,5 +1,5 @@
 use axum::extract::DefaultBodyLimit;
-use axum::http::{HeaderValue, Method};
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
@@ -356,7 +356,7 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                     state.clone(),
                     jwt_auth,
                 ))
-                .layer(TimeoutLayer::new(JWT_ROUTER_TIMEOUT)),
+                .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, JWT_ROUTER_TIMEOUT)),
         )
         // Dashboard SSE — JWT auth but no timeout (stream runs until client disconnects)
         .merge(
@@ -376,7 +376,7 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
                     state.clone(),
                     infer_auth,
                 ))
-                .layer(TimeoutLayer::new(INFERENCE_ROUTER_TIMEOUT))
+                .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, INFERENCE_ROUTER_TIMEOUT))
                 .layer(middleware::map_response(openai_compat_headers)),
         )
         .layer(DefaultBodyLimit::max(super::constants::JSON_BODY_LIMIT))
