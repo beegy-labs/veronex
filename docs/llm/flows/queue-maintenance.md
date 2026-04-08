@@ -58,14 +58,14 @@ demand_resync_pass():
   ZSCAN QUEUE_ZSET (cursor, count=200):
     per page:
       page_ids = collect job_ids
-      models = HMGET queue:model_map page_ids   // batch per page
+      models = HMGET queue:model page_ids   // batch per page
       accumulate model_counts[model]++
       add page_ids to zset_set
 
   for (model, count) in model_counts:
     SET demand:{model} count                    // overwrite drift
 
-  gc_stale_hash(queue:model_map, zset_set)      // HSCAN + batch HDEL
+  gc_stale_hash(queue:model, zset_set)      // HSCAN + batch HDEL
   gc_stale_hash(queue:enqueue_at, zset_set)
 ```
 
@@ -83,7 +83,7 @@ queue_wait_cancel_pass():
         expired.push(job_id, enqueue_at_ms)
 
   Pass 2 — batch model lookup:
-    HMGET queue:model_map expired_ids
+    HMGET queue:model expired_ids
 
   Pass 3 — cancel each:
     valkey.zset_cancel(job_id, model)            // atomic ZREM

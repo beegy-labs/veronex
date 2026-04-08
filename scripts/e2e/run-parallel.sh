@@ -3,7 +3,7 @@
 #
 # Execution model:
 #   Phase 0  (sequential) : 01-setup — DB reset + auth + providers + API keys
-#   Wave  1  (parallel)   : 05-security  09-metrics  11-liveness  13-frontend
+#   Wave  1  (parallel)   : 05-security  09-metrics-pipeline  13-frontend
 #   Wave  2  (parallel)   : 04-crud  06-api-surface  10-image-storage  12-mcp  15-vision-fallback  17-mcp-analytics
 #   Wave  3  (sequential) : 02-scheduler  03-inference  07-lifecycle  08-sdd-advanced  16-context-compression  14-vespa-load-test
 #

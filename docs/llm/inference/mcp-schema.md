@@ -60,4 +60,17 @@ CREATE TABLE mcp_loop_tool_calls (
     result_bytes    INT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Global MCP settings singleton (id always = 1)
+CREATE TABLE mcp_settings (
+    id                        INT          PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    routing_cache_ttl_secs    INTEGER      NOT NULL DEFAULT 300,
+    tool_schema_refresh_secs  INTEGER      NOT NULL DEFAULT 3600,
+    embedding_model           VARCHAR(128) NOT NULL DEFAULT 'nomic-embed-text',
+    max_tools_per_request     INTEGER      NOT NULL DEFAULT 20 CHECK (max_tools_per_request BETWEEN 1 AND 200),
+    max_routing_cache_entries INTEGER      NOT NULL DEFAULT 1000,
+    updated_at                TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
 ```
+
+`GET /v1/mcp/settings` / `PATCH /v1/mcp/settings` — handler: `mcp_handlers::get_mcp_settings`, `patch_mcp_settings`.
