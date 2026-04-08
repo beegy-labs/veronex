@@ -100,12 +100,13 @@ impl McpVectorSelector {
         Self { vespa, embed, valkey, top_k }
     }
 
-    /// Select top-k tools relevant to `query` within `service_id`.
+    /// Select top-k tools relevant to `query` within `deployment_id` + `service_id`.
     ///
     /// Returns `None` on any error (caller falls back to `get_all()`).
     pub async fn select(
         &self,
         query: &str,
+        deployment_id: &str,
         service_id: &str,
         top_k_override: Option<usize>,
     ) -> Option<Vec<VespaHit>> {
@@ -116,12 +117,12 @@ impl McpVectorSelector {
             .map_err(|e| warn!(error = %e, "McpVectorSelector: embed failed"))
             .ok()?;
 
-        // 2. ANN search in Vespa
-        let hits = self.vespa.search(&embedding, service_id, top_k).await
+        // 2. ANN search in Vespa filtered by deployment_id + service_id
+        let hits = self.vespa.search(&embedding, deployment_id, service_id, top_k).await
             .map_err(|e| warn!(error = %e, "McpVectorSelector: search failed"))
             .ok()?;
 
-        debug!(query_len = query.len(), hits = hits.len(), service_id, "McpVectorSelector: selected tools");
+        debug!(query_len = query.len(), hits = hits.len(), deployment_id, service_id, "McpVectorSelector: selected tools");
         Some(hits)
     }
 
@@ -189,7 +190,8 @@ mod tests {
 
     fn make_hit(server_name: &str, tool_name: &str, schema: &str) -> VespaHit {
         VespaHit {
-            tool_id: format!("svc:{server_name}:{tool_name}"),
+            tool_id: format!("default:svc:{server_name}:{tool_name}"),
+            deployment_id: "default".into(),
             service_id: "svc".into(),
             server_id: "550e8400-e29b-41d4-a716-446655440000".into(),
             server_name: server_name.into(),

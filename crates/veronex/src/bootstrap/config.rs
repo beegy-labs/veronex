@@ -24,6 +24,10 @@ pub struct AppConfig {
     pub clickhouse_user: Option<String>,
     pub clickhouse_password: Option<String>,
     pub clickhouse_db: Option<String>,
+    /// Vespa deployment isolation key — injected via `VESPA_DEPLOYMENT_ID`.
+    /// Partitions a shared Vespa instance per deployment (prod, staging, dev, ...).
+    /// Defaults to `"default"` when unset.
+    pub vespa_deployment_id: String,
 }
 
 impl AppConfig {
@@ -93,6 +97,8 @@ impl AppConfig {
         let clickhouse_user = std::env::var("CLICKHOUSE_USER").ok();
         let clickhouse_password = std::env::var("CLICKHOUSE_PASSWORD").ok();
         let clickhouse_db = std::env::var("CLICKHOUSE_DB").ok();
+        let vespa_deployment_id = std::env::var("VESPA_DEPLOYMENT_ID")
+            .unwrap_or_else(|_| "default".to_string());
 
         Self {
             database_url,
@@ -113,6 +119,7 @@ impl AppConfig {
             clickhouse_user,
             clickhouse_password,
             clickhouse_db,
+            vespa_deployment_id,
         }
     }
 }

@@ -4,9 +4,16 @@ schema mcp_tools {
         field tool_id type string {
             indexing: attribute | summary
         }
+        # Deployment-level isolation key — injected via VESPA_DEPLOYMENT_ID env var.
+        # Partitions a shared Vespa instance per deployment (prod, staging, dev, ...).
+        field deployment_id type string {
+            indexing: attribute | summary
+            rank: filter
+        }
         # Multi-tenant isolation key
         field service_id type string {
             indexing: attribute | summary
+            rank: filter
         }
         field server_id type string {
             indexing: attribute | summary

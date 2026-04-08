@@ -211,6 +211,7 @@ async fn main() -> Result<()> {
         clickhouse_user: config.clickhouse_user.as_deref().map(Arc::from),
         clickhouse_password: config.clickhouse_password.as_deref().map(Arc::from),
         clickhouse_db: config.clickhouse_db.as_deref().map(Arc::from),
+        vespa_deployment_id: Arc::from(config.vespa_deployment_id.as_str()),
     };
 
     // ── MCP tool refresh loop ──────────────────────────────────────
@@ -236,8 +237,9 @@ async fn main() -> Result<()> {
                                 if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await {
                                     if let Some(ref indexer) = state_clone.mcp_tool_indexer {
                                         let indexer = indexer.clone();
+                                        let deployment_id = state_clone.vespa_deployment_id.to_string();
                                         tokio::spawn(async move {
-                                            indexer.index_server_tools("global", server_id, &tools).await;
+                                            indexer.index_server_tools(&deployment_id, "global", server_id, &tools).await;
                                         });
                                     }
                                 }
