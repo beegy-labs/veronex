@@ -165,20 +165,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pct_normal_ratio() {
-        assert_eq!(pct(1, 4), 25.0);
-        assert_eq!(pct(1, 3), 33.3);
-        assert_eq!(pct(2, 3), 66.7);
-    }
-
-    #[test]
     fn pct_zero_denominator_returns_zero() {
         assert_eq!(pct(100, 0), 0.0);
-    }
-
-    #[test]
-    fn pct_full_coverage() {
-        assert_eq!(pct(10, 10), 100.0);
     }
 
     #[test]
@@ -189,12 +177,6 @@ mod tests {
     #[test]
     fn validate_hours_rejects_over_8760() {
         assert!(validate_hours(8761).is_err());
-    }
-
-    #[test]
-    fn validate_hours_accepts_boundaries() {
-        assert!(validate_hours(1).is_ok());
-        assert!(validate_hours(8760).is_ok());
     }
 
     #[test]

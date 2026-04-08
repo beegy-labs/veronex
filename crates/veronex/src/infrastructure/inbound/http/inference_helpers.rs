@@ -423,11 +423,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_images_none_passes() {
-        assert!(validate_and_compress_images(&mut None, &LabSettings::default()).await.is_none());
-    }
-
-    #[tokio::test]
     async fn validate_images_disabled_rejected() {
         let lab = LabSettings { max_images_per_request: 0, ..LabSettings::default() };
         assert!(validate_and_compress_images(&mut Some(vec!["abc".into()]), &lab).await.is_some());

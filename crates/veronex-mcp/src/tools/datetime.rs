@@ -89,19 +89,3 @@ fn weekday_name(wd: chrono::Weekday) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Weekday;
-
-    #[test]
-    fn weekday_name_all_days() {
-        assert_eq!(weekday_name(Weekday::Mon), "Monday");
-        assert_eq!(weekday_name(Weekday::Tue), "Tuesday");
-        assert_eq!(weekday_name(Weekday::Wed), "Wednesday");
-        assert_eq!(weekday_name(Weekday::Thu), "Thursday");
-        assert_eq!(weekday_name(Weekday::Fri), "Friday");
-        assert_eq!(weekday_name(Weekday::Sat), "Saturday");
-        assert_eq!(weekday_name(Weekday::Sun), "Sunday");
-    }
-}

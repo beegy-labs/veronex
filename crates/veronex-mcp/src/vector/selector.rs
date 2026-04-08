@@ -183,37 +183,62 @@ fn embed_cache_key(text: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn embed_cache_key_deterministic() {
-        let k1 = embed_cache_key("hello");
-        let k2 = embed_cache_key("hello");
-        assert_eq!(k1, k2);
-        assert!(k1.starts_with("veronex:mcp:embed:"));
-    }
+    // (embed_cache_key_deterministic removed: SHA256 determinism is a library guarantee;
+    //  format tested by embed_cache_key_prefix_and_hash_length)
+    // (embed_cache_key_collision_free removed: SHA256 collision resistance is a library guarantee)
 
-    #[test]
-    fn embed_cache_key_collision_free() {
-        let k1 = embed_cache_key("hello");
-        let k2 = embed_cache_key("world");
-        assert_ne!(k1, k2);
+    fn make_hit(server_name: &str, tool_name: &str, schema: &str) -> VespaHit {
+        VespaHit {
+            tool_id: format!("svc:{server_name}:{tool_name}"),
+            service_id: "svc".into(),
+            server_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+            server_name: server_name.into(),
+            tool_name: tool_name.into(),
+            description: "desc".into(),
+            input_schema: schema.into(),
+            relevance: 0.9,
+        }
     }
 
     #[test]
     fn hits_to_openai_format() {
-        let hits = vec![VespaHit {
-            tool_id: "svc:srv:get_weather".into(),
-            service_id: "svc".into(),
-            server_id: "550e8400-e29b-41d4-a716-446655440000".into(),
-            server_name: "weather_mcp".into(),
-            tool_name: "get_weather".into(),
-            description: "Get weather for a city".into(),
-            input_schema: r#"{"type":"object","properties":{"city":{"type":"string"}}}"#.into(),
-            relevance: 0.95,
-        }];
+        let hits = vec![make_hit(
+            "weather_mcp", "get_weather",
+            r#"{"type":"object","properties":{"city":{"type":"string"}}}"#,
+        )];
 
         let fns = McpVectorSelector::hits_to_openai(&hits);
         assert_eq!(fns.len(), 1);
         assert_eq!(fns[0]["function"]["name"], "mcp_weather_mcp_get_weather");
         assert_eq!(fns[0]["type"], "function");
+    }
+
+    // (hits_to_openai_empty_slice removed: trivial empty iterator, no logic under test)
+
+    #[test]
+    fn hits_to_openai_malformed_schema_falls_back_to_empty_object() {
+        let hits = vec![make_hit("srv", "tool", "NOT_JSON!!!")];
+        let fns = McpVectorSelector::hits_to_openai(&hits);
+        assert_eq!(fns.len(), 1);
+        // fallback: {"type":"object","properties":{}}
+        assert_eq!(fns[0]["function"]["parameters"]["type"], "object");
+    }
+
+    // (hits_to_openai_preserves_order removed: stdlib iterator order is a language guarantee)
+
+    #[test]
+    fn embed_cache_key_prefix_and_hash_length() {
+        let key = embed_cache_key("test query");
+        let hash_part = key.strip_prefix("veronex:mcp:embed:").unwrap();
+        assert_eq!(hash_part.len(), 16);
+        assert!(hash_part.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn embed_client_strips_trailing_slash() {
+        let c = EmbedClient::new("http://localhost:8080/");
+        assert!(!c.base_url.ends_with('/'));
+        let c2 = EmbedClient::new("http://localhost:8080");
+        assert_eq!(c.base_url, c2.base_url);
     }
 }

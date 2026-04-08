@@ -278,11 +278,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_permissions_empty_slice_ok() {
-        assert!(validate_permissions(&[]).is_ok());
-    }
-
-    #[test]
     fn validate_menus_accepts_known() {
         let known = ALL_MENUS[0].to_string();
         assert!(validate_menus(&[known]).is_ok());

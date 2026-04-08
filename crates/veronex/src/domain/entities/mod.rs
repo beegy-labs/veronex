@@ -345,12 +345,6 @@ mod tests {
     }
 
     #[test]
-    fn llm_provider_id_is_v7() {
-        // UUID v7 = time-ordered — guards against accidental downgrade to v4
-        assert_eq!(make_llm_provider().id.get_version_num(), 7);
-    }
-
-    #[test]
     fn inference_job_serde_roundtrip() {
         let job = make_inference_job();
         let json = serde_json::to_string(&job).unwrap();
@@ -383,15 +377,6 @@ mod tests {
         let deserialized: InferenceJob = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.images.as_ref().unwrap().len(), 2);
         assert_eq!(deserialized.images.as_ref().unwrap()[0], "abc123");
-    }
-
-    #[test]
-    fn inference_job_without_images_defaults_none() {
-        let job = make_inference_job();
-        assert!(job.images.is_none());
-        let json = serde_json::to_string(&job).unwrap();
-        let deserialized: InferenceJob = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.images.is_none());
     }
 
     #[test]

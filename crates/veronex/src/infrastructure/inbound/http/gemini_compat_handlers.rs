@@ -674,8 +674,4 @@ mod tests {
         assert_eq!(extract_text_parts(&parts), "hello world");
     }
 
-    #[test]
-    fn extract_text_parts_empty_slice() {
-        assert_eq!(extract_text_parts(&[]), "");
-    }
 }

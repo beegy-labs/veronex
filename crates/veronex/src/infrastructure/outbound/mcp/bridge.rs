@@ -788,7 +788,11 @@ fn prune_tool_messages(messages: &mut [Value], keep_rounds: usize) {
     }
 
     // The cut point: everything before boundaries[len - keep_rounds] is "old".
-    let cut = boundaries[boundaries.len() - keep_rounds];
+    // .get() guards keep_rounds=0 (len - 0 == len = OOB) → prune everything.
+    let cut = boundaries
+        .get(boundaries.len().saturating_sub(keep_rounds))
+        .copied()
+        .unwrap_or(messages.len());
 
     // Replace all tool-role messages before `cut` with a compact summary.
     // We replace them in-place rather than splicing to avoid index shifts.
@@ -1109,27 +1113,12 @@ mod tests {
     // ── server_slug_from_namespaced ───────────────────────────────────────────
 
     #[test]
-    fn server_slug_simple() {
-        assert_eq!(server_slug_from_namespaced("mcp_weather_get_weather"), "weather");
-    }
-
-    #[test]
     fn server_slug_multi_word_returns_first_segment() {
         // Only the first segment is returned — callers should prefer tool_def.server_name.
         assert_eq!(server_slug_from_namespaced("mcp_my_server_get_weather"), "my");
     }
 
-    #[test]
-    fn server_slug_no_prefix_returns_empty() {
-        assert_eq!(server_slug_from_namespaced("get_weather"), "");
-    }
-
     // ── raw_tool_name ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn raw_tool_name_simple_slug() {
-        assert_eq!(raw_tool_name("mcp_weather_get_weather"), "get_weather");
-    }
 
     /// Multi-word slug: raw_tool_name() strips only the first segment.
     /// bridge.rs mitigates this by preferring tool_def.name from the cache.
@@ -1140,52 +1129,9 @@ mod tests {
         assert_eq!(raw_tool_name("mcp_my_server_get_weather"), "server_get_weather");
     }
 
-    #[test]
-    fn raw_tool_name_no_prefix_returns_original() {
-        assert_eq!(raw_tool_name("get_weather"), "get_weather");
-    }
-
-    // ── quick_args_hash ───────────────────────────────────────────────────────
-
-    #[test]
-    fn quick_args_hash_is_deterministic() {
-        assert_eq!(quick_args_hash(r#"{"lat":37.5}"#), quick_args_hash(r#"{"lat":37.5}"#));
-    }
-
-    #[test]
-    fn quick_args_hash_different_inputs_differ() {
-        assert_ne!(quick_args_hash(r#"{"lat":37.5}"#), quick_args_hash(r#"{"lat":37.6}"#));
-    }
-
-    #[test]
-    fn quick_args_hash_empty_string() {
-        // Must not panic; must produce a deterministic 8-char hex string.
-        let h = quick_args_hash("");
-        assert_eq!(h.len(), 8);
-    }
-
-    #[test]
-    fn quick_args_hash_max_tools_per_request_boundary() {
-        // Ensure large payloads don't panic (DOS boundary check for MAX_TOOLS_PER_REQUEST).
-        let big = "x".repeat(MAX_TOOLS_PER_REQUEST * 1024);
-        let h = quick_args_hash(&big);
-        assert_eq!(h.len(), 8);
-    }
-
-    // ── Loop-detect threshold constant ───────────────────────────────────────
-
-    #[test]
-    fn loop_detect_threshold_at_least_two() {
-        // Threshold of 1 would break on the first tool call; ≥ 2 is required.
-        assert!(LOOP_DETECT_THRESHOLD >= 2);
-    }
-
-    #[test]
-    fn max_rounds_within_reasonable_cap() {
-        // Sanity: MAX_ROUNDS must be finite and not absurdly large.
-        assert!(MAX_ROUNDS >= 1);
-        assert!(MAX_ROUNDS <= 20);
-    }
+    // ── quick_args_hash — output contract ────────────────────────────────────
+    // (SHA256 determinism and collision resistance are library guarantees; only
+    // our output format and capping behaviour need testing)
 
     // ── convert_ollama_tool_call ──────────────────────────────────────────────
 
@@ -1237,11 +1183,6 @@ mod tests {
     fn extract_last_user_prompt_empty_when_no_user_role() {
         let msgs = vec![serde_json::json!({"role": "assistant", "content": "hi"})];
         assert_eq!(extract_last_user_prompt(&msgs), "");
-    }
-
-    #[test]
-    fn extract_last_user_prompt_empty_slice() {
-        assert_eq!(extract_last_user_prompt(&[]), "");
     }
 
     // ── prune_tool_messages ───────────────────────────────────────────────────
@@ -1318,5 +1259,60 @@ mod tests {
         prune_tool_messages(&mut msgs, 1);
         assert_eq!(msgs[2]["tool_call_id"].as_str(), Some("abc123"));
         assert_eq!(msgs[2]["name"].as_str(), Some("fn"));
+    }
+
+    #[test]
+    fn prune_tool_messages_zero_keep_rounds_prunes_all_tool_content() {
+        let mut msgs = vec![
+            serde_json::json!({"role": "user", "content": "ask"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "t", "content": "old"}),
+        ];
+        prune_tool_messages(&mut msgs, 0);
+        // keep_rounds=0 → every tool message is pruned
+        assert_eq!(msgs[2]["content"].as_str(), Some("[result truncated — see earlier context]"));
+    }
+
+    // ── convert_ollama_tool_call — edge cases ─────────────────────────────────
+
+    #[test]
+    fn convert_ollama_tool_call_invalid_args_string_becomes_empty() {
+        // When arguments is a JSON string, it passes through as-is.
+        let tc = serde_json::json!({ "function": { "name": "t", "arguments": "NOT_JSON" } });
+        let r = convert_ollama_tool_call(0, &tc);
+        // "NOT_JSON" is a valid JSON string value, serialised as `"NOT_JSON"`
+        assert_eq!(r["function"]["arguments"].as_str(), Some("\"NOT_JSON\""));
+    }
+
+    #[test]
+    fn convert_ollama_tool_call_no_arguments_field_empty_string() {
+        let tc = serde_json::json!({ "function": { "name": "t" } });
+        let r = convert_ollama_tool_call(0, &tc);
+        assert_eq!(r["function"]["arguments"].as_str(), Some(""));
+    }
+
+    // ── quick_args_hash — always 8 hex chars ─────────────────────────────────
+
+    #[test]
+    fn quick_args_hash_always_8_hex_chars() {
+        for input in ["", "{}", r#"{"a":1}"#, &"x".repeat(MAX_ARGS_FOR_HASH_BYTES * 2)] {
+            let h = quick_args_hash(input);
+            assert_eq!(h.len(), 8, "wrong length for input len {}", input.len());
+            assert!(h.chars().all(|c| c.is_ascii_hexdigit()), "not hex: {h}");
+        }
+    }
+
+    // ── extract_last_user_prompt — edge cases ─────────────────────────────────
+
+    #[test]
+    fn extract_last_user_prompt_null_content_returns_empty() {
+        let msgs = vec![serde_json::json!({"role": "user", "content": null})];
+        assert_eq!(extract_last_user_prompt(&msgs), "");
+    }
+
+    #[test]
+    fn extract_last_user_prompt_missing_content_field_returns_empty() {
+        let msgs = vec![serde_json::json!({"role": "user"})];
+        assert_eq!(extract_last_user_prompt(&msgs), "");
     }
 }

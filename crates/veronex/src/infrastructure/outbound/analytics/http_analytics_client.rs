@@ -195,8 +195,4 @@ mod tests {
         assert_eq!(urlencoding("a+b"), "a%2Bb");
     }
 
-    #[test]
-    fn urlencoding_plain_string_unchanged() {
-        assert_eq!(urlencoding("hello"), "hello");
-    }
 }

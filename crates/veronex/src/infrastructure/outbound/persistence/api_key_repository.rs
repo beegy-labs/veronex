@@ -266,20 +266,3 @@ impl ApiKeyRepository for PostgresApiKeyRepository {
         Ok(result.rows_affected())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    #[test]
-    fn constructor_creates_struct() {
-        fn _assert_trait_impl<T: ApiKeyRepository>() {}
-        _assert_trait_impl::<PostgresApiKeyRepository>();
-    }
-
-    #[test]
-    fn can_be_arc_dyn_trait() {
-        fn _accepts_trait_object(_repo: Arc<dyn ApiKeyRepository>) {}
-    }
-}

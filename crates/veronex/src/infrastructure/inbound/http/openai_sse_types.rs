@@ -280,12 +280,4 @@ mod tests {
         assert!(chunk.usage.is_some());
     }
 
-    #[test]
-    fn completion_chunk_serialises_without_error() {
-        let chunk = CompletionChunk::content("x".into(), 1, Some("m".into()), "tok".into());
-        // Safety: CompletionChunk contains only String/&'static str/numbers — serde_json never
-        // returns an error for these types.
-        let json = serde_json::to_string(&chunk).expect("serialisation must not fail");
-        assert!(json.contains("chat.completion.chunk"));
-    }
 }

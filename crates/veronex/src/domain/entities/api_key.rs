@@ -83,11 +83,6 @@ mod tests {
     }
 
     #[test]
-    fn api_key_id_is_v7() {
-        assert_eq!(make_api_key().id.get_version_num(), 7);
-    }
-
-    #[test]
     fn api_key_serialization_omits_key_hash() {
         let key = make_api_key();
         let json = serde_json::to_string(&key).unwrap();

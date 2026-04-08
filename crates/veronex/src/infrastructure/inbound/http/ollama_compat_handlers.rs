@@ -955,21 +955,7 @@ mod tests {
         assert_eq!(resp["done"], true);
     }
 
-    // 4. Both response types include all required Ollama timing fields (all 0)
-    #[test]
-    fn response_has_timing_fields() {
-        for resp in [
-            build_generate_response("m", "t", String::new(), 0, 0),
-            build_chat_response("m", "t", String::new(), None, 0, 0, false),
-        ] {
-            assert_eq!(resp["total_duration"], 0);
-            assert_eq!(resp["load_duration"], 0);
-            assert_eq!(resp["prompt_eval_duration"], 0);
-            assert_eq!(resp["eval_duration"], 0);
-        }
-    }
-
-    // 5. OllamaGenerateBody with images deserializes correctly
+    // 4. OllamaGenerateBody with images deserializes correctly
     #[test]
     fn generate_body_with_images() {
         let body: OllamaGenerateBody = serde_json::from_str(r#"{
@@ -981,27 +967,5 @@ mod tests {
         assert_eq!(body.images.as_ref().unwrap()[0], "abc123");
     }
 
-    // 6. OllamaGenerateBody without images has None
-    #[test]
-    fn generate_body_without_images() {
-        let body: OllamaGenerateBody = serde_json::from_str(r#"{
-            "model": "llama3.2",
-            "prompt": "hello"
-        }"#).unwrap();
-        assert!(body.images.is_none());
-    }
-
-    // 7. Response includes model name and created_at timestamp
-    #[test]
-    fn response_includes_model_and_timestamp() {
-        let ts = "2026-03-15T12:00:00Z";
-        let chat = build_chat_response("llava:7b", ts, String::new(), None, 0, 0, false);
-        let generate = build_generate_response("llava:7b", ts, String::new(), 0, 0);
-        for resp in [&chat, &generate] {
-            assert_eq!(resp["model"], "llava:7b");
-            assert_eq!(resp["created_at"], ts);
-            assert_eq!(resp["done"], true);
-        }
-    }
 
 }

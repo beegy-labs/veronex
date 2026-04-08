@@ -615,21 +615,6 @@ node_drm_gpu_busy_percent{card="card0"} 50
         assert_eq!(metrics.gpus[0].power_w, Some(200.0));
     }
 
-    // ── Empty / missing input → zero-value defaults ───────────────────────
-
-    #[test]
-    fn empty_input_returns_zero_defaults() {
-        let (metrics, snapshot) = parse_prometheus_metrics("");
-        assert_eq!(metrics.mem_total_mb, 0);
-        assert_eq!(metrics.mem_available_mb, 0);
-        assert_eq!(metrics.cpu_logical, 0);
-        assert_eq!(metrics.cpu_physical, None);
-        assert!(metrics.gpus.is_empty());
-        assert!(metrics.scrape_ok); // scrape_ok is always true in parser
-        assert_eq!(snapshot.idle, 0.0);
-        assert_eq!(snapshot.total, 0.0);
-    }
-
     #[test]
     fn comment_and_blank_lines_ignored() {
         let text = "# HELP node_memory_MemTotal_bytes Total memory\n\

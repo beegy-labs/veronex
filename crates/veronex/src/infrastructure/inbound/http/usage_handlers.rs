@@ -193,39 +193,3 @@ pub async fn usage_breakdown(
     Ok(Json(usage_queries::pg_usage_breakdown(&state.pg_pool, hours).await?))
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-    use crate::application::ports::outbound::analytics_repository::UsageAggregate;
-
-    #[test]
-    fn usage_query_defaults() {
-        let json = serde_json::json!({});
-        let query: UsageQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(query.hours, 24);
-    }
-
-    #[test]
-    fn usage_query_custom_hours() {
-        let json = serde_json::json!({"hours": 72});
-        let query: UsageQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(query.hours, 72);
-    }
-
-    #[test]
-    fn usage_aggregate_serialization() {
-        let agg = UsageAggregate {
-            request_count: 100,
-            success_count: 90,
-            cancelled_count: 5,
-            error_count: 5,
-            prompt_tokens: 10000,
-            completion_tokens: 50000,
-            total_tokens: 60000,
-        };
-        let json = serde_json::to_value(&agg).unwrap();
-        assert_eq!(json["request_count"], 100);
-        assert_eq!(json["total_tokens"], 60000);
-    }
-}

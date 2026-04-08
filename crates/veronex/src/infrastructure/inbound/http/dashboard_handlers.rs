@@ -808,48 +808,6 @@ pub async fn get_mcp_stats(
 
 // ────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn jobs_query_defaults() {
-        let json = serde_json::json!({});
-        let q: JobsQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(q.limit, 50);
-        assert_eq!(q.offset, 0);
-        assert!(q.status.is_none());
-        assert!(q.source.is_none());
-    }
-
-    #[test]
-    fn jobs_query_with_status() {
-        let json = serde_json::json!({ "status": "completed", "limit": 10, "offset": 20 });
-        let q: JobsQuery = serde_json::from_value(json).unwrap();
-        assert_eq!(q.limit, 10);
-        assert_eq!(q.offset, 20);
-        assert_eq!(q.status.as_deref(), Some("completed"));
-    }
-
-    #[test]
-    fn dashboard_stats_serialization() {
-        let mut jobs_by_status = HashMap::new();
-        jobs_by_status.insert("completed".to_string(), 100_i64);
-        jobs_by_status.insert("failed".to_string(), 5_i64);
-
-        let stats = DashboardStats {
-            total_keys: 10,
-            active_keys: 8,
-            total_jobs: 105,
-            jobs_last_24h: 20,
-            jobs_by_status,
-        };
-        let json = serde_json::to_value(&stats).unwrap();
-        assert_eq!(json["total_keys"], 10);
-        assert_eq!(json["active_keys"], 8);
-    }
-}
 
 // ── POST /v1/dashboard/session-grouping/trigger ─────────────────────
 

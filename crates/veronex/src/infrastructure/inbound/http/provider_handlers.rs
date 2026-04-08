@@ -738,13 +738,4 @@ mod tests {
         assert_eq!(s.status, "offline");
     }
 
-    #[test]
-    fn register_request_deserialization() {
-        let json = r#"{"name":"local","provider_type":"ollama","url":"http://localhost:11434"}"#;
-        let req: RegisterProviderRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.name, "local");
-        assert_eq!(req.provider_type, "ollama");
-        assert_eq!(req.url.as_deref(), Some("http://localhost:11434"));
-        assert!(req.api_key.is_none());
-    }
 }

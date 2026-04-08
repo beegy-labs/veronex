@@ -279,11 +279,6 @@ mod tests {
     }
 
     #[test]
-    fn from_ollama_empty_array() {
-        assert!(McpToolCall::from_ollama(&serde_json::json!([])).is_empty());
-    }
-
-    #[test]
     fn from_ollama_missing_name_skipped() {
         let raw = serde_json::json!([{"type": "function", "function": {"index": 0}}]);
         assert!(McpToolCall::from_ollama(&raw).is_empty());
@@ -341,5 +336,110 @@ mod tests {
         assert!(r.is_error);
         assert!(r.is_timeout());
         assert!(!r.is_skipped());
+    }
+
+    // ── McpToolCall::from_ollama — edge cases ────────────────────────────────
+
+    #[test]
+    fn from_ollama_non_array_returns_empty() {
+        assert!(McpToolCall::from_ollama(&serde_json::json!({})).is_empty());
+        assert!(McpToolCall::from_ollama(&serde_json::json!(null)).is_empty());
+        assert!(McpToolCall::from_ollama(&serde_json::json!("string")).is_empty());
+    }
+
+    #[test]
+    fn from_ollama_missing_function_key_skipped() {
+        let raw = serde_json::json!([{"type": "function"}]);
+        assert!(McpToolCall::from_ollama(&raw).is_empty());
+    }
+
+    #[test]
+    fn from_ollama_absent_arguments_defaults_to_empty_object() {
+        let raw = serde_json::json!([{
+            "type": "function",
+            "function": { "name": "mcp_w_t" }
+        }]);
+        let calls = McpToolCall::from_ollama(&raw);
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].arguments.is_object());
+        assert!(calls[0].arguments.as_object().unwrap().is_empty());
+    }
+
+    // ── McpToolCall::server_slug — boundary cases ────────────────────────────
+
+    #[test]
+    fn server_slug_no_mcp_prefix_returns_none() {
+        let c = McpToolCall { name: "get_weather".into(), arguments: serde_json::json!({}) };
+        assert_eq!(c.server_slug(), None);
+        assert_eq!(c.raw_tool_name(), None);
+    }
+
+    #[test]
+    fn server_slug_only_prefix_no_underscore_returns_none() {
+        // "mcp_server" — no second underscore, raw_tool_name returns empty after first '_'
+        let c = McpToolCall { name: "mcp_notools".into(), arguments: serde_json::json!({}) };
+        // server_slug finds first '_' in "notools" — None since no '_' in "notools"
+        assert_eq!(c.server_slug(), None);
+        assert_eq!(c.raw_tool_name(), None);
+    }
+
+    // ── McpToolResult::to_llm_string — filters images ───────────────────────
+    // (as_text_returns_none_for_image removed: trivial enum pattern match,
+    //  filtering behaviour is covered by to_llm_string_filters_out_image_content)
+
+    #[test]
+    fn to_llm_string_filters_out_image_content() {
+        let r = McpToolResult::success(
+            vec![
+                McpContent::text("text line"),
+                McpContent::Image { data: "data".into(), mime_type: "image/png".into() },
+                McpContent::text("second text"),
+            ],
+            0,
+        );
+        assert_eq!(r.to_llm_string(), "text line\nsecond text");
+    }
+
+    #[test]
+    fn to_llm_string_empty_content_returns_empty_string() {
+        let r = McpToolResult::success(vec![], 0);
+        assert_eq!(r.to_llm_string(), "");
+    }
+
+    // ── McpTool::to_openai_function ──────────────────────────────────────────
+    // (success_result_not_error_not_skipped_not_timeout and cached_result_is_not_error
+    // removed: trivial constructor field assertions, no logic under test)
+
+    #[test]
+    fn to_openai_function_structure() {
+        let t = tool("weather", "get_weather", true, true);
+        let f = t.to_openai_function();
+        assert_eq!(f["type"], "function");
+        assert_eq!(f["function"]["name"], "mcp_weather_get_weather");
+        assert!(f["function"].get("description").is_some());
+        assert!(f["function"].get("parameters").is_some());
+    }
+
+    // ── McpToolAnnotations — serde conservative defaults via missing-field ────
+    // Note: Default::default() gives false for all bools (Rust derive behaviour).
+    // The conservative defaults (destructive=true, open_world=true) only apply
+    // during JSON deserialization when the field is absent (serde `default="bool_true"`).
+
+    #[test]
+    fn annotations_serde_missing_fields_use_conservative_defaults() {
+        let a: McpToolAnnotations = serde_json::from_str("{}").unwrap();
+        assert!(!a.read_only_hint);
+        assert!(!a.idempotent_hint);
+        assert!(a.destructive_hint,  "destructiveHint must default to true");
+        assert!(a.open_world_hint,   "openWorldHint must default to true");
+    }
+
+    #[test]
+    fn annotations_explicit_false_overrides_conservative_defaults() {
+        let a: McpToolAnnotations = serde_json::from_str(
+            r#"{"destructiveHint":false,"openWorldHint":false}"#
+        ).unwrap();
+        assert!(!a.destructive_hint);
+        assert!(!a.open_world_hint);
     }
 }

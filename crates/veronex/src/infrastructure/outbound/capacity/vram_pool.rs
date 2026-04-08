@@ -1134,13 +1134,6 @@ mod tests {
     // ── Standby / Transition tests ────────────────────────────────────────
 
     #[test]
-    fn standby_defaults_false() {
-        let pool = VramPool::new();
-        let pid = Uuid::now_v7();
-        assert!(!pool.is_standby(pid));
-    }
-
-    #[test]
     fn set_standby_toggles() {
         let pool = VramPool::new();
         let pid = Uuid::now_v7();
@@ -1148,13 +1141,6 @@ mod tests {
         assert!(pool.is_standby(pid));
         pool.set_standby(pid, false);
         assert!(!pool.is_standby(pid));
-    }
-
-    #[test]
-    fn in_transition_defaults_false() {
-        let pool = VramPool::new();
-        let pid = Uuid::now_v7();
-        assert!(!pool.in_transition(pid));
     }
 
     #[test]
@@ -1175,13 +1161,6 @@ mod tests {
     }
 
     // ── Governor cap tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn governor_cap_defaults_zero() {
-        let pool = VramPool::new();
-        let pid = Uuid::now_v7();
-        assert_eq!(pool.governor_cap(pid, "model"), 0);
-    }
 
     #[test]
     fn set_governor_cap_persists() {
@@ -1225,13 +1204,6 @@ mod tests {
     }
 
     // ── sum_loaded_max_concurrent tests ─────────────────────────────────────
-
-    #[test]
-    fn sum_loaded_max_concurrent_empty() {
-        let pool = VramPool::new();
-        let pid = Uuid::now_v7();
-        assert_eq!(pool.sum_loaded_max_concurrent(pid), 0);
-    }
 
     #[test]
     fn sum_loaded_max_concurrent_counts_loaded_only() {

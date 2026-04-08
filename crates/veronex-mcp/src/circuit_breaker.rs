@@ -219,15 +219,8 @@ mod tests {
         assert!(matches!(state.state, State::Closed { consecutive_failures: 0 }));
     }
 
-    // ── Threshold constant guard ──────────────────────────────────────────────
-
-    #[test]
-    fn failure_threshold_is_reasonable() {
-        assert!(FAILURE_THRESHOLD >= 2, "threshold too low — single transient failure would open");
-        assert!(FAILURE_THRESHOLD <= 20, "threshold too high — unresponsive server stays live too long");
-    }
-
     // ── record() convenience ─────────────────────────────────────────────────
+    // (failure_threshold_is_reasonable removed: pure constant assertion)
 
     #[test]
     fn record_convenience_delegates_correctly() {
@@ -242,4 +235,36 @@ mod tests {
         // record_success() on an Open server resets to Closed immediately.
         assert!(!cb.is_open(id));
     }
+
+    // ── Server isolation ─────────────────────────────────────────────────────
+
+    #[test]
+    fn servers_are_isolated() {
+        let cb = fresh();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        for _ in 0..FAILURE_THRESHOLD {
+            cb.record_failure(a);
+        }
+        // Server A is open; server B is unaffected
+        assert!(cb.is_open(a));
+        assert!(!cb.is_open(b));
+    }
+
+    #[test]
+    fn failure_in_halfopen_reopens_only_that_server() {
+        let cb = fresh();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        {
+            let mut entry = cb.servers.entry(a).or_insert_with(ServerState::new);
+            entry.state = State::HalfOpen;
+        }
+        cb.record_failure(a);
+        assert!(cb.is_open(a));
+        assert!(!cb.is_open(b));
+    }
+
 }
+// (new_state_starts_closed_with_zero_failures removed: trivial struct init covered by new_server_is_closed)
+// (failure_below_threshold_stays_closed removed: duplicate of failures_below_threshold_stay_closed)

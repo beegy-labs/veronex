@@ -71,13 +71,6 @@ mod tests {
     }
 
     #[test]
-    fn truncate_exactly_at_limit() {
-        let mut s = "hello".to_string();
-        truncate_at_char_boundary(&mut s, 5);
-        assert_eq!(s, "hello");
-    }
-
-    #[test]
     fn truncate_multibyte_backs_off_to_boundary() {
         // "가" = 3 bytes. "hello가" = 8 bytes. Limit 7 splits mid-char → back off to 5.
         let mut s = "hello가".to_string();
@@ -100,10 +93,4 @@ mod tests {
         assert_eq!(s, "");
     }
 
-    #[test]
-    fn truncate_empty_string_no_panic() {
-        let mut s = String::new();
-        truncate_at_char_boundary(&mut s, 10);
-        assert_eq!(s, "");
-    }
 }

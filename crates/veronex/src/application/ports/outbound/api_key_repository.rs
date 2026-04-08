@@ -53,7 +53,6 @@ mod tests {
     use super::*;
     use crate::domain::enums::KeyType;
     use chrono::Utc;
-    use std::sync::Arc;
     use tokio::sync::Mutex;
 
     struct MockApiKeyRepository {

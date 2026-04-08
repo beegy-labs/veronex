@@ -155,19 +155,75 @@ mod tests {
         assert_ne!(cache_key("tool_a", &args), cache_key("tool_b", &args));
     }
 
+    // ── canonical_json — primitive types ─────────────────────────────────────
+    // (canonical_json_sorts_keys and args_hash_stable removed: covered by
+    // cache_key_order_independent, canonical_json_nested_objects_sorted,
+    // and args_hash_always_16_hex_chars)
+
     #[test]
-    fn canonical_json_sorts_keys() {
-        let a = serde_json::json!({"b": 2, "a": 1});
-        let b = serde_json::json!({"a": 1, "b": 2});
-        assert_eq!(canonical_json(&a, 0), canonical_json(&b, 0));
+    fn canonical_json_primitives() {
+        assert_eq!(canonical_json(&serde_json::json!(null), 0), "null");
+        assert_eq!(canonical_json(&serde_json::json!(true), 0), "true");
+        assert_eq!(canonical_json(&serde_json::json!(false), 0), "false");
+        assert_eq!(canonical_json(&serde_json::json!(42), 0), "42");
+        assert_eq!(canonical_json(&serde_json::json!("hello"), 0), "\"hello\"");
     }
 
     #[test]
-    fn args_hash_stable() {
-        let args = serde_json::json!({"lat": 37.5, "lng": 126.9});
-        let h1 = args_hash("get_weather", &args);
-        let h2 = args_hash("get_weather", &serde_json::json!({"lng": 126.9, "lat": 37.5}));
-        assert_eq!(h1, h2);
-        assert_eq!(h1.len(), 16);
+    fn canonical_json_array_preserves_order() {
+        // Arrays are order-sensitive (not sorted)
+        let a = canonical_json(&serde_json::json!([1, 2, 3]), 0);
+        let b = canonical_json(&serde_json::json!([3, 2, 1]), 0);
+        assert_ne!(a, b);
+        assert_eq!(a, "[1,2,3]");
+    }
+
+    #[test]
+    fn canonical_json_nested_objects_sorted() {
+        let v = serde_json::json!({"z": {"b": 2, "a": 1}, "a": 0});
+        let c = canonical_json(&v, 0);
+        // outer: a before z; inner: a before b
+        assert!(c.starts_with("{\"a\":0,\"z\":"));
+        assert!(c.contains("\"a\":1,\"b\":2"));
+    }
+
+    #[test]
+    fn canonical_json_depth_cutoff() {
+        // Build an object nested exactly at MAX_CANONICAL_DEPTH — must produce "..."
+        let mut v = serde_json::json!("leaf");
+        for _ in 0..MAX_CANONICAL_DEPTH {
+            v = serde_json::json!({ "k": v });
+        }
+        let result = canonical_json(&v, 0);
+        assert!(result.contains("\"...\""), "expected depth cutoff sentinel: {result}");
+    }
+
+    // ── args_hash — always 16 hex chars ──────────────────────────────────────
+
+    #[test]
+    fn args_hash_always_16_hex_chars() {
+        for args in [
+            serde_json::json!({}),
+            serde_json::json!(null),
+            serde_json::json!({"a": "very long string ".repeat(1000)}),
+        ] {
+            let h = args_hash("tool", &args);
+            assert_eq!(h.len(), 16, "hash wrong length for args: {args}");
+            assert!(h.chars().all(|c| c.is_ascii_hexdigit()), "not hex: {h}");
+        }
+    }
+
+    // ── cache_key — full structure ────────────────────────────────────────────
+
+    #[test]
+    fn cache_key_structure() {
+        let key = cache_key("my_tool", &serde_json::json!({"x": 1}));
+        let parts: Vec<&str> = key.splitn(5, ':').collect();
+        // "veronex:mcp:result:{tool_name}:{hash}"
+        assert_eq!(parts[0], "veronex");
+        assert_eq!(parts[1], "mcp");
+        assert_eq!(parts[2], "result");
+        assert_eq!(parts[3], "my_tool");
+        assert_eq!(parts[4].len(), 16);
     }
 }

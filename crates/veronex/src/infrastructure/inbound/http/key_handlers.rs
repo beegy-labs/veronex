@@ -319,33 +319,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_key_request_deserialization() {
-        let json = serde_json::json!({
-            "tenant_id": "tenant-1",
-            "name": "my-key"
-        });
-        let req: CreateKeyRequest = serde_json::from_value(json).unwrap();
-        assert_eq!(req.tenant_id, "tenant-1");
-        assert_eq!(req.name, "my-key");
-        assert_eq!(req.rate_limit_rpm, 0);
-        assert_eq!(req.rate_limit_tpm, 0);
-        assert!(req.expires_at.is_none());
-    }
-
-    #[test]
-    fn create_key_request_with_limits() {
-        let json = serde_json::json!({
-            "tenant_id": "tenant-1",
-            "name": "my-key",
-            "rate_limit_rpm": 60,
-            "rate_limit_tpm": 100000
-        });
-        let req: CreateKeyRequest = serde_json::from_value(json).unwrap();
-        assert_eq!(req.rate_limit_rpm, 60);
-        assert_eq!(req.rate_limit_tpm, 100_000);
-    }
-
-    #[test]
     fn create_key_response_serialization() {
         let resp = CreateKeyResponse {
             id: ApiKeyId::new(),

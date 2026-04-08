@@ -1193,14 +1193,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_images_strips_prefix() {
-        let content = MessageContent::Parts(vec![
-            make_image_part("data:image/png;base64,PNGDATA=="),
-        ]);
-        assert_eq!(content.extract_images(), vec!["PNGDATA=="]);
-    }
-
-    #[test]
     fn extract_images_empty_for_text_only() {
         let content = MessageContent::Parts(vec![
             make_text_part("describe this image"),
@@ -1215,12 +1207,6 @@ mod tests {
     }
 
     // ── into_string ─────────────────────────────────────────────────────
-
-    #[test]
-    fn into_string_from_text() {
-        let content = MessageContent::Text("hello world".to_string());
-        assert_eq!(content.into_string(), "hello world");
-    }
 
     #[test]
     fn into_string_from_parts_joins_text() {

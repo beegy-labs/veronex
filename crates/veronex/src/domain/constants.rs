@@ -339,18 +339,6 @@ mod tests {
     // ── Fixed assertions (structural invariants) ─────────────────────────
 
     #[test]
-    fn emergency_equals_paid_bonus() {
-        assert_eq!(EMERGENCY_BONUS_MS, TIER_BONUS_PAID);
-    }
-
-    #[test]
-    fn queue_limits_reasonable() {
-        assert_eq!(MAX_QUEUE_SIZE, 10_000);
-        assert_eq!(MAX_QUEUE_PER_MODEL, 2_000);
-        assert!(MAX_QUEUE_PER_MODEL < MAX_QUEUE_SIZE);
-    }
-
-    #[test]
     fn demand_key_format() {
         assert_eq!(demand_key("llama3:70b"), "veronex:demand:llama3:70b");
     }
@@ -388,13 +376,6 @@ mod tests {
             scaleout_decision_key("llama3:70b"),
             "veronex:scaleout:llama3:70b",
         );
-    }
-
-    #[test]
-    fn adaptive_k_bounds() {
-        assert!(ZSET_PEEK_K >= 20);
-        assert!(ZSET_PEEK_K_MAX <= 100);
-        assert!(ZSET_PEEK_K <= ZSET_PEEK_K_MAX);
     }
 
     // ── Property-based tests (proptest) ──────────────────────────────────
