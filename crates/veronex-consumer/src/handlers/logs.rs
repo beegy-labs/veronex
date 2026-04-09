@@ -1,13 +1,13 @@
-/// otel-logs topic handler.
-///
-/// Parses an OTLP JSON log batch and fans out rows to:
-///   - `otel_logs`       — unified raw event store (all events, 7-day TTL)
-///   - `inference_logs`  — event.name = "inference.completed"
-///   - `audit_events`    — event.name = "audit.action"
-///   - `mcp_tool_calls`  — event.name = "mcp.tool_call"
-///
-/// Fan-out is done here instead of ClickHouse MVs to get explicit offset
-/// commit control: offsets are committed only after ALL INSERTs succeed.
+//! otel-logs topic handler.
+//!
+//! Parses an OTLP JSON log batch and fans out rows to:
+//!   - `otel_logs`       — unified raw event store (all events, 7-day TTL)
+//!   - `inference_logs`  — event.name = "inference.completed"
+//!   - `audit_events`    — event.name = "audit.action"
+//!   - `mcp_tool_calls`  — event.name = "mcp.tool_call"
+//!
+//! Fan-out is done here instead of ClickHouse MVs to get explicit offset
+//! commit control: offsets are committed only after ALL INSERTs succeed.
 
 use serde_json::{json, Value};
 

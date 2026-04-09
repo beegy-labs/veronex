@@ -1,7 +1,7 @@
-/// OTLP JSON parsing helpers.
-///
-/// OTel Collector's `otlp_json` encoding uses camelCase protobuf field names:
-/// `resourceLogs`, `scopeLogs`, `logRecords`, `timeUnixNano` (as string!), `asDouble`, etc.
+//! OTLP JSON parsing helpers.
+//!
+//! OTel Collector's `otlp_json` encoding uses camelCase protobuf field names:
+//! `resourceLogs`, `scopeLogs`, `logRecords`, `timeUnixNano` (as string!), `asDouble`, etc.
 
 use serde_json::Value;
 use std::collections::HashMap;

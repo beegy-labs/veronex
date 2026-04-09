@@ -1,7 +1,7 @@
-/// otel-traces topic handler.
-///
-/// Stores raw OTLP trace payloads as-is in `otel_traces_raw`.
-/// No parsing — ClickHouse stores the raw JSON string for future analysis.
+//! otel-traces topic handler.
+//!
+//! Stores raw OTLP trace payloads as-is in `otel_traces_raw`.
+//! No parsing — ClickHouse stores the raw JSON string for future analysis.
 
 use serde_json::{json, Value};
 

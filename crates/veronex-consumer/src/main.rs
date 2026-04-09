@@ -1,15 +1,15 @@
-/// veronex-consumer: Kafka consumer for OTel pipeline.
-///
-/// Pipeline: veronex-analytics → OTel Collector → Redpanda → [this] → ClickHouse
-///
-/// At-least-once guarantee:
-///   1. Consume batch from Redpanda
-///   2. Parse OTLP JSON + fan-out rows to per-table buffers
-///   3. INSERT into ClickHouse (all tables)
-///   4. Commit offsets ONLY after ALL inserts succeed
-///
-/// Idempotency: ClickHouse block-level deduplication (`insert_deduplicate=1`, default)
-/// deduplicates identical blocks on retry. Safe to re-deliver messages after restart.
+//! veronex-consumer: Kafka consumer for OTel pipeline.
+//!
+//! Pipeline: veronex-analytics → OTel Collector → Redpanda → [this] → ClickHouse
+//!
+//! At-least-once guarantee:
+//!   1. Consume batch from Redpanda
+//!   2. Parse OTLP JSON + fan-out rows to per-table buffers
+//!   3. INSERT into ClickHouse (all tables)
+//!   4. Commit offsets ONLY after ALL inserts succeed
+//!
+//! Idempotency: ClickHouse block-level deduplication (`insert_deduplicate=1`, default)
+//! deduplicates identical blocks on retry. Safe to re-deliver messages after restart.
 
 use std::collections::HashMap;
 use std::sync::Arc;

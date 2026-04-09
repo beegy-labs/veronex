@@ -1,7 +1,7 @@
-/// otel-metrics topic handler.
-///
-/// Parses an OTLP JSON metrics batch and produces rows for `otel_metrics_gauge`.
-/// Handles both gauge and sum (isMonotonic) metric types — agent classifies in scraper.rs.
+//! otel-metrics topic handler.
+//!
+//! Parses an OTLP JSON metrics batch and produces rows for `otel_metrics_gauge`.
+//! Handles both gauge and sum (isMonotonic) metric types — agent classifies in scraper.rs.
 
 use serde_json::{json, Value};
 
