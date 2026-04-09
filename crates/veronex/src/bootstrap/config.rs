@@ -28,6 +28,10 @@ pub struct AppConfig {
     /// Partitions a shared Vespa instance per deployment (prod, staging, dev, ...).
     /// Defaults to `"default"` when unset.
     pub vespa_deployment_id: String,
+    /// Optional Valkey key prefix — injected via `VALKEY_KEY_PREFIX`.
+    /// Namespaces all Valkey keys for multi-tenant / multi-deployment shared instances.
+    /// Defaults to `""` (no prefix) when unset.
+    pub valkey_key_prefix: String,
 }
 
 impl AppConfig {
@@ -99,6 +103,8 @@ impl AppConfig {
         let clickhouse_db = std::env::var("CLICKHOUSE_DB").ok();
         let vespa_deployment_id = std::env::var("VESPA_DEPLOYMENT_ID")
             .unwrap_or_else(|_| "default".to_string());
+        let valkey_key_prefix = std::env::var("VALKEY_KEY_PREFIX")
+            .unwrap_or_default();
 
         Self {
             database_url,
@@ -120,6 +126,7 @@ impl AppConfig {
             clickhouse_password,
             clickhouse_db,
             vespa_deployment_id,
+            valkey_key_prefix,
         }
     }
 }

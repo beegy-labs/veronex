@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol) Integration
 
-> SSOT | **Last Updated**: 2026-03-28
+> SSOT | **Last Updated**: 2026-04-08
 
 Veronex acts as an **MCP client** — it connects to external MCP servers and
 executes their tools on behalf of LLM inference loops.
@@ -81,6 +81,52 @@ The `namespaced_name` is stored in `mcp_server_tools.namespaced_name` and used
 as the tool name exposed to the LLM.
 
 ---
+
+---
+
+## Vector Tool Selection (Vespa)
+
+When `VESPA_URL` + `EMBED_URL` are configured, `McpVectorSelector` replaces the full `get_all()` fallback with semantic ANN search.
+
+```
+User query → embed (veronex-embed) → Vespa ANN → Top-K tools → LLM
+                    ↑
+           Valkey cache (5 min TTL, keyed by SHA256[:16] of query)
+```
+
+### Vespa Document Structure
+
+```
+tool_id      = "{deployment_id}:{service_id}:{server_id}:{tool_name}"
+deployment_id = VESPA_DEPLOYMENT_ID (deployment-level partition)
+service_id    = "global"  (per-account isolation — future work)
+embedding     = 1024-dim float32 (multilingual-e5-large via veronex-embed)
+```
+
+### Multi-Deployment Isolation
+
+A single Vespa instance can serve multiple deployments (prod, staging, dev) simultaneously. Each deployment writes and reads under its own `deployment_id` partition:
+
+```
+YQL: where deployment_id = "prod-v1" and service_id = "global"
+     and ({targetHits: K}nearestNeighbor(embedding, qe))
+```
+
+`deployment_id` is injected via `VESPA_DEPLOYMENT_ID` env var:
+- **Helm**: `vespa.deploymentId` → `veronex-deployment.yaml` env
+- **docker-compose**: `VESPA_DEPLOYMENT_ID=${VESPA_DEPLOYMENT_ID:-local-dev}`
+
+### Indexing Lifecycle
+
+| Event | Action |
+|-------|--------|
+| MCP server registered / tools discovered | `McpToolIndexer.index_server_tools(deployment_id, "global", server_id, tools)` |
+| MCP server deleted | `McpToolIndexer.remove_server_tools(deployment_id, "global", server_id)` |
+| Periodic refresh (25s) | Re-index if tool cache changes |
+
+### Fallback
+
+On any Vespa/embed error → falls back to `tool_cache.get_all()` (all registered tools, capped at `MAX_TOOLS_PER_REQUEST = 32`).
 
 → `mcp-schema.md` — DB schema (mcp_servers, mcp_server_tools, mcp_key_access, mcp_loop_tool_calls)
 

@@ -16,11 +16,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
-use crate::domain::constants::{
-    EMERGENCY_BONUS_MS, MAX_QUEUE_WAIT_SECS, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP,
-    QUEUE_ZSET, TIER_EXPIRE_SECS,
-};
-use crate::infrastructure::outbound::valkey_keys::JOBS_PENDING_COUNTER;
+use crate::domain::constants::{EMERGENCY_BONUS_MS, MAX_QUEUE_WAIT_SECS, TIER_EXPIRE_SECS};
+use crate::infrastructure::outbound::valkey_keys as vk;
 
 // ── Promote Overdue ─────────────────────────────────────────────────────────
 
@@ -55,9 +52,11 @@ async fn promote_overdue_pass(pool: &Pool) -> anyhow::Result<()> {
     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
     let threshold_ms = TIER_EXPIRE_SECS * 1000;
     let mut promoted = 0_u32;
+    let queue_enqueue_at = vk::queue_enqueue_at();
+    let queue_zset = vk::queue_zset();
 
     // HSCAN queue:enqueue_at — streaming cursor scan via fred 10 API
-    let stream = pool.next().hscan(QUEUE_ENQUEUE_AT, "*", Some(200));
+    let stream = pool.next().hscan(&queue_enqueue_at, "*", Some(200));
     futures::pin_mut!(stream);
 
     while let Some(result) = stream.next().await {
@@ -79,7 +78,7 @@ async fn promote_overdue_pass(pool: &Pool) -> anyhow::Result<()> {
                     // ZADD XX: update only if member exists (no re-insert)
                     let _: i64 = pool
                         .zadd(
-                            QUEUE_ZSET,
+                            &queue_zset,
                             Some(SetOptions::XX),
                             None,
                             false,
@@ -131,8 +130,12 @@ pub async fn run_demand_resync_loop(
 }
 
 async fn demand_resync_pass(pool: &Pool) -> anyhow::Result<()> {
+    let queue_zset = vk::queue_zset();
+    let queue_model_map = vk::queue_model_map();
+    let queue_enqueue_at = vk::queue_enqueue_at();
+
     // ZCARD guard: skip entirely if queue is tiny (no significant drift possible)
-    let zcard: u64 = pool.zcard(QUEUE_ZSET).await.unwrap_or(0);
+    let zcard: u64 = pool.zcard(&queue_zset).await.unwrap_or(0);
     if zcard < 50 {
         return Ok(());
     }
@@ -141,7 +144,7 @@ async fn demand_resync_pass(pool: &Pool) -> anyhow::Result<()> {
     let mut zset_set: HashSet<String> = HashSet::new();
 
     // Stream ZSCAN and process each page directly with HMGET (no pre-allocation of all members)
-    let stream = pool.next().zscan(QUEUE_ZSET, "*", Some(200));
+    let stream = pool.next().zscan(&queue_zset, "*", Some(200));
     futures::pin_mut!(stream);
 
     while let Some(result) = stream.next().await {
@@ -159,7 +162,7 @@ async fn demand_resync_pass(pool: &Pool) -> anyhow::Result<()> {
 
             // Batch HMGET for this page immediately — no global Vec accumulation
             let keys: Vec<&str> = page_ids.iter().map(|s| s.as_str()).collect();
-            let models: Vec<Option<String>> = pool.hmget(QUEUE_MODEL_MAP, keys).await?;
+            let models: Vec<Option<String>> = pool.hmget(&queue_model_map, keys).await?;
 
             for model_opt in models.into_iter().flatten() {
                 *model_counts.entry(model_opt).or_insert(0) += 1;
@@ -174,13 +177,13 @@ async fn demand_resync_pass(pool: &Pool) -> anyhow::Result<()> {
 
     // SET demand:{model} to actual count (overwrite any drift)
     for (model, count) in &model_counts {
-        let key = crate::domain::constants::demand_key(model);
+        let key = vk::demand_counter(model);
         let _: () = pool.set(&key, count.to_string(), None, None, false).await?;
     }
 
     // Stale GC: HSCAN side hashes — remove entries not in ZSET
-    gc_stale_hash(pool, QUEUE_MODEL_MAP, &zset_set).await;
-    gc_stale_hash(pool, QUEUE_ENQUEUE_AT, &zset_set).await;
+    gc_stale_hash(pool, &queue_model_map, &zset_set).await;
+    gc_stale_hash(pool, &queue_enqueue_at, &zset_set).await;
 
     if !model_counts.is_empty() {
         tracing::debug!(
@@ -239,7 +242,9 @@ async fn queue_wait_cancel_pass(
 
     // Pass 1: HSCAN queue:enqueue_at — collect expired (job_id, enqueue_at_ms) pairs
     let mut expired: Vec<(String, u64)> = Vec::new();
-    let stream = pool.next().hscan(QUEUE_ENQUEUE_AT, "*", Some(200));
+    let queue_enqueue_at = vk::queue_enqueue_at();
+    let queue_model_map = vk::queue_model_map();
+    let stream = pool.next().hscan(&queue_enqueue_at, "*", Some(200));
     futures::pin_mut!(stream);
 
     while let Some(result) = stream.next().await {
@@ -268,7 +273,7 @@ async fn queue_wait_cancel_pass(
 
     // Pass 2: single HMGET to fetch all models for expired jobs
     let expired_ids: Vec<&str> = expired.iter().map(|(id, _)| id.as_str()).collect();
-    let models: Vec<Option<String>> = pool.hmget(QUEUE_MODEL_MAP, expired_ids).await?;
+    let models: Vec<Option<String>> = pool.hmget(&queue_model_map, expired_ids).await?;
 
     // Pass 3: process each cancellation
     for ((job_id_str, enqueue_at_ms), model_opt) in expired.iter().zip(models.into_iter()) {
@@ -290,7 +295,7 @@ async fn queue_wait_cancel_pass(
                     tracing::warn!(%uuid, "failed to persist queue_wait_exceeded: {e}");
                 }
                 // pending → failed (queue_wait_exceeded): DECR pending
-                if let Err(e) = valkey.incr_by(JOBS_PENDING_COUNTER, -1).await {
+                if let Err(e) = valkey.incr_by(&vk::jobs_pending_counter(), -1).await {
                     tracing::warn!("DECR pending counter failed: {e}");
                 }
                 cancelled += 1;
@@ -361,11 +366,7 @@ async fn processing_reaper_pass(
         };
         let job_id = crate::domain::value_objects::JobId(uuid);
 
-        let attempts_key = format!(
-            "{}:{}",
-            crate::domain::constants::QUEUE_ACTIVE_ATTEMPTS,
-            job_id_str,
-        );
+        let attempts_key = format!("{}:{}", vk::queue_active_attempts(), job_id_str);
         let attempts: u64 = valkey
             .kv_get(&attempts_key)
             .await

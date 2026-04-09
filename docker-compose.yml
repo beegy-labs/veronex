@@ -140,6 +140,7 @@ services:
       S3_REGION: us-east-1
       VESPA_URL: http://vespa:8080
       VESPA_DEPLOYMENT_ID: ${VESPA_DEPLOYMENT_ID:-local-dev}
+      VALKEY_KEY_PREFIX: ${VALKEY_KEY_PREFIX:-}
       EMBED_URL: http://veronex-embed:3200
       KAFKA_BROKER: redpanda:9092
       CLICKHOUSE_HTTP_URL: http://clickhouse:8123

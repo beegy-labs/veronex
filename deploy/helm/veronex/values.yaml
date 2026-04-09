@@ -43,6 +43,10 @@ veronex:
   # Valkey connection pool size. Default: 16
   valkeyPoolSize: ""
 
+  # Valkey key prefix for deployment isolation on shared Valkey instances.
+  # Default: "" (no prefix). Example: "prod:" → keys become "prod:veronex:..."
+  valkeyKeyPrefix: ""
+
   # Login rate limit (max attempts per IP per 5-minute window). Default: 10. 0 = disabled.
   loginRateLimit: ""
 
