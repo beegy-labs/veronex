@@ -398,6 +398,7 @@ pub(crate) fn make_app() -> axum::Router {
         clickhouse_user: None,
         clickhouse_password: None,
         clickhouse_db: None,
+        vespa_deployment_id: Arc::from(""),
     };
     // Inject a fake InferCaller extension so handlers that extract it work in tests.
     router::build_api_router()

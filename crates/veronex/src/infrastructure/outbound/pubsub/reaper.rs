@@ -17,7 +17,7 @@ use std::sync::Arc;
 use fred::prelude::*;
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP, TIER_BONUS_PAID};
+use crate::domain::constants::TIER_BONUS_PAID;
 use crate::infrastructure::outbound::capacity::distributed_vram_pool::DistributedVramPool;
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -142,7 +142,7 @@ async fn refresh_heartbeat(pool: &Pool, instance_id: &str) {
         tracing::warn!("heartbeat refresh failed: {e}");
     }
     // Register in global instance set so orphan sweeper can enumerate all instances.
-    if let Err(e) = pool.sadd::<i64, _, _>(valkey_keys::INSTANCES_SET, instance_id).await {
+    if let Err(e) = pool.sadd::<i64, _, _>(valkey_keys::instances_set(), instance_id).await {
         tracing::warn!(error = %e, "Valkey SADD instances_set failed");
     }
 }
@@ -155,8 +155,9 @@ async fn refresh_heartbeat(pool: &Pool, instance_id: &str) {
 /// `reenqueue_reaped_jobs_batch` for a single DB SELECT + single UPDATE.
 async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
     // Step 1: bounded LRANGE — at most REAP_CHUNK_SIZE entries per cycle.
+    let queue_processing = valkey_keys::queue_processing();
     let entries: Vec<String> = match pool
-        .lrange(valkey_keys::QUEUE_PROCESSING, 0, REAP_CHUNK_SIZE - 1)
+        .lrange(&queue_processing, 0, REAP_CHUNK_SIZE - 1)
         .await
     {
         Ok(e) => e,
@@ -178,9 +179,10 @@ async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
             Err(_) => {
                 let pool = pool.clone();
                 let s_owned = s.clone();
+                let qp = queue_processing.clone();
                 tokio::spawn(async move {
                     let _ = pool
-                        .lrem::<i64, _, _>(valkey_keys::QUEUE_PROCESSING, 1, &s_owned)
+                        .lrem::<i64, _, _>(&qp, 1, &s_owned)
                         .await;
                 });
                 None
@@ -256,7 +258,7 @@ async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
                             vec![
                                 owner_key,
                                 hb_key,
-                                valkey_keys::QUEUE_PROCESSING.to_string(),
+                                valkey_keys::queue_processing(),
                             ],
                             vec![uuid_str.clone(), instance_id.clone()],
                         )
@@ -281,7 +283,7 @@ async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
                         LUA_REAP_OWNERLESS_JOB,
                         vec![
                             owner_key,
-                            valkey_keys::QUEUE_PROCESSING.to_string(),
+                            valkey_keys::queue_processing(),
                         ],
                         vec![uuid_str.clone()],
                     )
@@ -368,10 +370,10 @@ async fn reenqueue_reaped_jobs_batch(
             .eval(
                 LUA_EMERGENCY_ENQUEUE,
                 vec![
-                    QUEUE_ZSET.to_string(),
+                    valkey_keys::queue_zset(),
                     demand_key,
-                    QUEUE_ENQUEUE_AT.to_string(),
-                    QUEUE_MODEL_MAP.to_string(),
+                    valkey_keys::queue_enqueue_at(),
+                    valkey_keys::queue_model_map(),
                 ],
                 vec![
                     uuid_str.clone(),

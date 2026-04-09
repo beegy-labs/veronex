@@ -54,7 +54,7 @@ pub async fn get_service_health(
         .ok_or_else(|| AppError::ServiceUnavailable("Valkey not configured".into()))?;
 
     // ── 1. Infrastructure: merge service probes from all pods ──────
-    let instance_ids: Vec<String> = pool.smembers(valkey_keys::INSTANCES_SET).await
+    let instance_ids: Vec<String> = pool.smembers(valkey_keys::instances_set()).await
         .unwrap_or_default();
 
     let mut all_probes: HashMap<String, Vec<SvcProbeEntry>> = HashMap::new();
@@ -98,7 +98,7 @@ pub async fn get_service_health(
             let ttl: i64 = pool.ttl(valkey_keys::heartbeat(iid)).await.unwrap_or(-2);
             if ttl <= 0 {
                 let _: Result<(), _> = pool
-                    .srem(valkey_keys::INSTANCES_SET, iid.as_str())
+                    .srem(valkey_keys::instances_set(), iid.as_str())
                     .await;
                 continue;
             }
@@ -114,7 +114,7 @@ pub async fn get_service_health(
 
     // ── 3. Agent pods ───────────────────────────────────────────────
     let agent_ids: Vec<String> = pool
-        .smembers(valkey_keys::AGENT_INSTANCES_SET)
+        .smembers(valkey_keys::agent_instances_set())
         .await
         .unwrap_or_default();
 
@@ -126,7 +126,7 @@ pub async fn get_service_health(
             let ttl: i64 = pool.ttl(&hb_key).await.unwrap_or(-2);
             if ttl <= 0 {
                 let _: Result<(), _> = pool
-                    .srem(valkey_keys::AGENT_INSTANCES_SET, hostname.as_str())
+                    .srem(valkey_keys::agent_instances_set(), hostname.as_str())
                     .await;
                 continue;
             }
