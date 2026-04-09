@@ -356,11 +356,11 @@ veronexEmbed:
 
   resources:
     requests:
-      cpu: 20m
-      memory: 64Mi
+      cpu: 100m
+      memory: 512Mi   # multilingual-e5-large ONNX ~280MB + runtime overhead
     limits:
-      cpu: 500m
-      memory: 256Mi
+      cpu: "2"
+      memory: 1Gi
 
   env: {}
 
