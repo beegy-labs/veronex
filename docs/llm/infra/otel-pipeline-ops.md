@@ -1,6 +1,6 @@
 # Infrastructure -- OTel Pipeline Operations
 
-> SSOT | **Last Updated**: 2026-04-07
+> SSOT | **Last Updated**: 2026-04-09
 
 See `infra/otel-pipeline.md` for pipeline overview, OTel Collector config, and Chain 1 (otel-logs).
 
@@ -8,13 +8,15 @@ See `infra/otel-pipeline.md` for pipeline overview, OTel Collector config, and C
 
 ## Chain 2 -- otel-metrics -> otel_metrics_gauge
 
-Lean schema — only 5 columns (was 17). `server_id` extracted from OTLP resource attributes for direct column filtering.
+Lean schema — only 5 columns. `server_id` extracted from OTLP resource attributes for direct column filtering.
 
 Handles **both** OTLP metric types:
 - **gauge** — instantaneous values (memory, temperature, power)
 - **sum** (`isMonotonic: true`) — monotonic counters (e.g., `node_cpu_seconds_total`)
 
-Agent classifies metric type in `scraper.rs`; the MV processes both via `UNION ALL`.
+Agent classifies metric type in `scraper.rs`; **veronex-consumer**가 두 타입 모두 처리하여 INSERT.
+
+> Redpanda Connect 제거 — veronex-consumer가 `otel-metrics` topic consume → ClickHouse HTTP INSERT.
 
 ```sql
 CREATE TABLE otel_metrics_gauge (
@@ -26,15 +28,16 @@ CREATE TABLE otel_metrics_gauge (
 ) ENGINE = MergeTree() PARTITION BY toDate(ts)
 ORDER BY (metric_name, server_id, ts)
 TTL toDate(ts) + INTERVAL __RETENTION_METRICS_DAYS__ DAY;
--- No MV — Redpanda Connect HTTP INSERTs directly into this table
+-- No Kafka Engine, No Redpanda Connect — veronex-consumer HTTP INSERTs directly
 ```
 
 ## Chain 3 -- otel-traces -> otel_traces_raw
 
-Redpanda Connect reads from `otel-traces` topic and HTTP INSERTs raw payloads directly:
+**veronex-consumer**가 `otel-traces` topic consume → raw payload HTTP INSERT:
+
+> Redpanda Connect 제거 — veronex-consumer가 담당.
 
 ```sql
--- Target table only — no Kafka Engine (Redpanda Connect → HTTP INSERT)
 CREATE TABLE otel_traces_raw (
     received_at DateTime64(3) DEFAULT now64(3),
     payload     String
@@ -42,15 +45,16 @@ CREATE TABLE otel_traces_raw (
 PARTITION BY toYYYYMM(received_at)
 ORDER BY received_at
 TTL toDate(received_at) + INTERVAL __RETENTION_TRACES_DAYS__ DAY;
+-- No Kafka Engine, No Redpanda Connect — veronex-consumer HTTP INSERTs directly
 ```
 
 ---
 
 ## Gotchas
 
-### Target tables must exist before Materialized Views
+### Target tables must exist before consumer starts
 
-All MergeTree targets (`otel_logs`, `otel_metrics_gauge`, `otel_traces_raw`) must be declared before any Materialized Views in `schema.sql`.
+All MergeTree targets (`otel_logs`, `otel_metrics_gauge`, `otel_traces_raw`, `inference_logs`, `audit_events`) must exist before `veronex-consumer` starts. schema.sql 적용 후 consumer 기동.
 
 ### Init scripts run only on first volume creation
 
@@ -148,15 +152,15 @@ Env vars: `CLICKHOUSE_URL`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUS
 ## Verification
 
 ```bash
-# Check MV + target tables exist
+# Check target tables exist
 docker compose exec clickhouse clickhouse-client \
   --user veronex --password veronex --database veronex \
-  --query "SHOW TABLES" | grep -E "otel_"
+  --query "SHOW TABLES" | grep -E "otel_|inference_logs|audit_events"
 
-# Consume raw OTel logs from Redpanda
+# Consume raw OTel logs from Redpanda (consumer 이전 단계 확인)
 docker compose exec redpanda rpk topic consume otel-logs -n 1 | jq .
 
-# Confirm otel_logs populated (after first inference)
+# Confirm otel_logs populated (veronex-consumer가 INSERT한 이후)
 curl "http://localhost:8123/?query=SELECT+LogAttributes['event.name'],count()+FROM+veronex.otel_logs+GROUP+BY+1&user=veronex&password=veronex"
 
 # Confirm otel_metrics_gauge populated (after ~30s scrape)
@@ -164,6 +168,9 @@ curl "http://localhost:8123/?query=SELECT+count()+FROM+veronex.otel_metrics_gaug
 
 # veronex-analytics health
 docker compose exec veronex-analytics wget -qO- http://localhost:3003/health
+
+# veronex-consumer lag (consumer group offset vs latest)
+docker compose exec redpanda rpk group describe veronex-consumer
 ```
 
 ---
