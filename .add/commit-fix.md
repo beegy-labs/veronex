@@ -21,6 +21,8 @@ Fails when:
 - Scope has underscore: `fix(mcp_bridge): ...`
 - Unknown type: `update(api): ...`
 - AI co-author in body: `Co-Authored-By: Claude ...`
+- `git revert` auto-message: `Revert "..."` → must be `revert(scope): ...`
+- Non-standard prefix: `Reapply "..."`, `WIP: ...` → fix or drop
 
 ## Execution
 
@@ -58,6 +60,17 @@ echo "<type>(<scope>): <subject>" > "$1"
 grep -v "Co-Authored-By:.*[Cc]laude\|Co-Authored-By:.*[Gg][Pp][Tt]" "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 ```
 
+## Pre-Push Validation (run before every push)
+
+```bash
+git log --format="%H %s" origin/develop..HEAD | while read hash msg; do
+  echo "$msg" | grep -qE '^(feat|fix|chore|docs|refactor|test|perf|ci|build|revert|style)\([a-z0-9-]+\): .+' \
+    && echo "✅ $msg" || echo "❌ $msg"
+done
+```
+
+Run this before `git push` to catch violations before CI does.
+
 ## Rules
 
 | Rule | Detail |
@@ -66,3 +79,5 @@ grep -v "Co-Authored-By:.*[Cc]laude\|Co-Authored-By:.*[Gg][Pp][Tt]" "$1" > "$1.t
 | Rebase from `origin/develop` | Not from local develop |
 | Always validate after rebase | Re-run CI regex check before push |
 | Multiple violations | Fix all in one rebase pass |
+| `git revert` creates non-conforming messages | Always rename: `revert(scope): ...` |
+| Drop Revert+Reapply pairs | They're a no-op — squash or drop both |

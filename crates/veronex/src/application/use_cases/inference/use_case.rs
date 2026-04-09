@@ -204,7 +204,7 @@ impl InferenceUseCaseImpl {
 
         // Drain legacy QUEUE_JOBS list (jobs mis-routed there by old reaper code).
         // These are recovered via DB below; stale list entries are just discarded.
-        let legacy_drained = valkey.list_drain(crate::domain::constants::QUEUE_JOBS).await.unwrap_or(0);
+        let legacy_drained = valkey.list_drain(&crate::infrastructure::outbound::valkey_keys::queue_jobs()).await.unwrap_or(0);
         if legacy_drained > 0 {
             tracing::info!(legacy_drained, "drained legacy QUEUE_JOBS list (will recover via DB)");
         }

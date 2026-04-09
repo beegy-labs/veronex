@@ -1,7 +1,8 @@
 # OTel Pipeline: Collector Config & Chains
 
-> SSOT | **Last Updated**: 2026-03-24 | Classification: Operational
+> SSOT | **Last Updated**: 2026-04-09 | Classification: Operational
 > OTel Collector config, processing chains, derived materialized views, and PG fallback pattern.
+> **ClickHouse Kafka Engine 및 Redpanda Connect 제거 — 모든 체인은 veronex-consumer가 처리.**
 
 ## OTel Collector Config (docker/otel/config.yaml)
 
@@ -41,8 +42,9 @@ service:
 
 ## Chain 1 -- otel-logs -> otel_logs
 
-Produced by `veronex-analytics` via OTel Logs SDK -> OTel Collector -> Redpanda `otel-logs`.
-One Kafka Engine chain (Chain 1 only). Chains 2 and 3 use Redpanda Connect HTTP INSERT — see `otel-pipeline-ops.md`.
+`veronex-analytics`에서 앱레이어 가공 완료 → OTel Logs SDK → OTel Collector → Redpanda `otel-logs` → **veronex-consumer** → ClickHouse HTTP INSERT.
+
+> ClickHouse Kafka Engine(`kafka_otel_logs`) 및 관련 MV 제거. veronex-consumer가 직접 파싱 + INSERT 담당.
 
 **Target table** (`docker/clickhouse/schema.sql`):
 
@@ -63,48 +65,13 @@ ORDER BY (ServiceName, Timestamp)
 TTL toDate(Timestamp) + INTERVAL 90 DAY;
 ```
 
-**Materialized View**:
+**veronex-consumer 처리**:
+- Redpanda `otel-logs` topic consume
+- OTLP JSON 파싱 (resourceLogs → scopeLogs → logRecords flatten)
+- `LogAttributes['event.name']` 기준으로 `inference_logs` / `audit_events` 분기 INSERT
+- ClickHouse HTTP INSERT (batch)
 
-```sql
-CREATE TABLE kafka_otel_logs (raw String) ENGINE = Kafka SETTINGS
-  kafka_broker_list='redpanda:9092', kafka_topic_list='otel-logs',
-  kafka_group_name='clickhouse-otel-logs', kafka_format='JSONAsString';
-
-CREATE MATERIALIZED VIEW kafka_otel_logs_mv TO otel_logs AS
-SELECT
-  fromUnixTimestamp64Nano(toInt64OrZero(JSONExtractString(lr, 'timeUnixNano'))) AS Timestamp,
-  JSONExtractString(lr, 'traceId')                    AS TraceId,
-  JSONExtractString(lr, 'spanId')                     AS SpanId,
-  JSONExtractString(lr, 'severityText')               AS SeverityText,
-  JSONExtractInt(lr, 'severityNumber')                AS SeverityNumber,
-  ResourceAttributes['service.name']                  AS ServiceName,
-  JSONExtractString(JSONExtractRaw(lr, 'body'), 'stringValue') AS Body,
-  ResourceAttributes,
-  LogAttributes
-FROM (
-  SELECT lr,
-    CAST(arrayMap(x -> (JSONExtractString(x,'key'), COALESCE(
-        nullIf(JSONExtractString(JSONExtractRaw(x,'value'),'stringValue'),''),
-        nullIf(JSONExtractString(JSONExtractRaw(x,'value'),'intValue'),''),
-        toString(JSONExtractFloat(JSONExtractRaw(x,'value'),'doubleValue'))
-      )), JSONExtractArrayRaw(JSONExtractRaw(rm,'resource'),'attributes')),
-      'Map(LowCardinality(String), String)') AS ResourceAttributes,
-    CAST(arrayMap(x -> (JSONExtractString(x,'key'), COALESCE(
-        nullIf(JSONExtractString(JSONExtractRaw(x,'value'),'stringValue'),''),
-        nullIf(JSONExtractString(JSONExtractRaw(x,'value'),'intValue'),''),
-        toString(JSONExtractFloat(JSONExtractRaw(x,'value'),'doubleValue'))
-      )), JSONExtractArrayRaw(lr,'attributes')),
-      'Map(LowCardinality(String), String)') AS LogAttributes
-  FROM (
-    SELECT arrayJoin(JSONExtractArrayRaw(raw,'resourceLogs')) AS rm,
-           arrayJoin(JSONExtractArrayRaw(rm,'scopeLogs'))     AS sl,
-           arrayJoin(JSONExtractArrayRaw(sl,'logRecords'))    AS lr
-    FROM kafka_otel_logs
-  )
-);
-```
-
-**Log attribute keys** (via `LogAttributes['key']`):
+**Log attribute keys** (veronex-analytics가 가공하여 전송, via `LogAttributes['key']`):
 
 | event.name | Attribute keys |
 |------------|----------------|
@@ -113,59 +80,22 @@ FROM (
 
 ---
 
-## Derived MVs -- otel_logs → specialized tables
+## Derived Inserts -- otel_logs 경유 specialized tables
 
-Two additional Materialized Views extract structured events from `otel_logs` into domain-specific MergeTree tables for efficient analytical queries.
+MV 체인 제거. veronex-consumer가 `event.name` 기준으로 직접 분기 INSERT.
 
-### otel_inference_logs_mv (otel_logs → inference_logs)
-
-```sql
-CREATE MATERIALIZED VIEW otel_inference_logs_mv TO inference_logs AS
-SELECT
-    Timestamp                                     AS event_time,
-    toUUIDOrZero(LogAttributes['api_key_id'])     AS api_key_id,
-    LogAttributes['tenant_id']                    AS tenant_id,
-    toUUIDOrZero(LogAttributes['request_id'])     AS request_id,
-    LogAttributes['model_name']                   AS model_name,
-    toUInt32OrZero(LogAttributes['prompt_tokens']) AS prompt_tokens,
-    toUInt32OrZero(LogAttributes['completion_tokens']) AS completion_tokens,
-    toUInt32OrZero(LogAttributes['latency_ms'])   AS latency_ms,
-    LogAttributes['finish_reason']                AS finish_reason,
-    LogAttributes['status']                       AS status
-FROM otel_logs
-WHERE LogAttributes['event.name'] = 'inference.completed';
-```
-
-Feeds into `api_key_usage_hourly_mv` (aggregating MV on `inference_logs`).
-
-### otel_audit_events_mv (otel_logs → audit_events)
-
-```sql
-CREATE MATERIALIZED VIEW otel_audit_events_mv TO audit_events AS
-SELECT
-    Timestamp                                     AS event_time,
-    toUUIDOrZero(LogAttributes['account_id'])     AS account_id,
-    LogAttributes['account_name']                 AS account_name,
-    LogAttributes['action']                       AS action,
-    LogAttributes['resource_type']                AS resource_type,
-    LogAttributes['resource_id']                  AS resource_id,
-    LogAttributes['resource_name']                AS resource_name,
-    LogAttributes['ip_address']                   AS ip_address,
-    LogAttributes['details']                      AS details
-FROM otel_logs
-WHERE LogAttributes['event.name'] = 'audit.action';
-```
-
-### MV Chain Summary
+### veronex-consumer 분기 로직
 
 ```
-otel_logs
-  ├─ otel_inference_logs_mv → inference_logs
-  │                             └─ api_key_usage_hourly_mv → api_key_usage_hourly
-  └─ otel_audit_events_mv  → audit_events
+otel-logs topic consume
+  ├─ event.name = 'inference.completed' → INSERT INTO inference_logs
+  │                                         └─ api_key_usage_hourly_mv (MergeTree MV, ClickHouse 내부) → api_key_usage_hourly
+  └─ event.name = 'audit.action'        → INSERT INTO audit_events
 ```
 
-**Backfill** (after creating MVs on existing data):
+> `api_key_usage_hourly_mv`는 ClickHouse 내부 집계 MV (source = `inference_logs`)로 유지. 외부 consumer가 개입하지 않음.
+
+**Backfill**:
 
 ```sql
 INSERT INTO inference_logs SELECT ... FROM otel_logs WHERE LogAttributes['event.name'] = 'inference.completed';

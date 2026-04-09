@@ -1,0 +1,3 @@
+[submodule "vendor/agentic-dev-protocol"]
+	path = vendor/agentic-dev-protocol
+	url = https://github.com/beegy-labs/agentic-dev-protocol

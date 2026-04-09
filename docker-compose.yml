@@ -139,6 +139,8 @@ services:
       S3_IMAGE_PUBLIC_URL: http://localhost:9010/veronex-images
       S3_REGION: us-east-1
       VESPA_URL: http://vespa:8080
+      VESPA_DEPLOYMENT_ID: ${VESPA_DEPLOYMENT_ID:-local-dev}
+      VALKEY_KEY_PREFIX: ${VALKEY_KEY_PREFIX:-}
       EMBED_URL: http://veronex-embed:3200
       KAFKA_BROKER: redpanda:9092
       CLICKHOUSE_HTTP_URL: http://clickhouse:8123
@@ -215,7 +217,7 @@ services:
   otel-collector:
     build:
       context: ./docker/otel
-      dockerfile: crates/veronex/Dockerfile
+      dockerfile: Dockerfile
     command: ["--config=/etc/otel/config.yaml"]
     volumes:
       - ./docker/otel/config.yaml:/etc/otel/config.yaml:ro
@@ -332,30 +334,23 @@ services:
       veronex:
         condition: service_healthy
 
-  kafka-connect:
-    profiles: [legacy]  # ClickHouse consumes Kafka directly — this service is not needed
-    image: docker.redpanda.com/redpandadata/connect:4.43.1
-    command: run --chilled /etc/kafka-connect/config.yaml
-    volumes:
-      - ./docker/kafka-connect/config.yaml:/etc/kafka-connect/config.yaml:ro
+  veronex-consumer:
+    build:
+      context: .
+      dockerfile: crates/veronex-consumer/Dockerfile
     environment:
       KAFKA_BROKER: redpanda:9092
       CLICKHOUSE_HTTP_URL: http://clickhouse:8123
       CLICKHOUSE_DB: veronex
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-veronex}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-veronex}
+      RUST_LOG: info
     depends_on:
       redpanda:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:4195/ready || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
   vespa:
     image: vespaengine/vespa:8

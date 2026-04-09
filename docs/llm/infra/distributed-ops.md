@@ -67,7 +67,9 @@ Global `Arc<AtomicU32>` counter in `AppState` tracks active SSE connections. Eac
 
 ## Valkey Key Registry
 
-All keys defined in `infrastructure/outbound/valkey_keys.rs`:
+All keys defined in `infrastructure/outbound/valkey_keys.rs`.
+
+**Key prefix**: call `init_prefix(prefix)` once at startup (before any Valkey ops) to prepend a deployment-level namespace to every key. Default `""` = no prefix. Example: `init_prefix("prod:")` → `"prod:veronex:queue:zset"`. Runtime code always uses pk-aware functions (e.g. `queue_zset()`). Raw constants (e.g. `QUEUE_ZSET`) are retained for cross-boundary test format guards only.
 
 | Key | Type | TTL | Purpose |
 |-----|------|-----|---------|
@@ -92,14 +94,26 @@ All keys defined in `infrastructure/outbound/valkey_keys.rs`:
 
 ## Wiring (`main.rs`)
 
-1. Generate `instance_id` at startup.
-2. Create `DistributedVramPool` when Valkey available, else `VramPool`.
+1. Parse `AppConfig` from env vars.
+2. Call `valkey_keys::init_prefix(&config.valkey_key_prefix)` — must run before any Valkey ops.
+3. Generate `instance_id` at startup.
+4. Create `DistributedVramPool` when Valkey available, else `VramPool`.
 3. Pass `instance_id` to `InferenceUseCaseImpl`.
 4. Start job event subscriber (dedicated `SubscriberClient`).
 5. Start cancel subscriber (dedicated `SubscriberClient` with psubscribe).
 6. Start reaper loop (heartbeat + slot reap + queue reap).
 7. Initialize `sse_connections: Arc<AtomicU32>` in `AppState`.
 8. Start job sweeper (orphaned DashMap entry cleanup every 5 min).
+
+## Key Prefix (`VALKEY_KEY_PREFIX`)
+
+Optional deployment-level namespace for all Valkey keys. Allows multiple deployments to share a single Valkey instance without key collision.
+
+| Env var | Default | Example |
+|---------|---------|---------|
+| `VALKEY_KEY_PREFIX` | `""` (no prefix) | `"prod:"` → keys become `"prod:veronex:queue:zset"` |
+
+Set in `config.rs` → `valkey_key_prefix`. Called as `valkey_keys::init_prefix(&config.valkey_key_prefix)` at startup. Zero-cost no-op when empty.
 
 ## Dev Mode
 

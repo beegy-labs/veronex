@@ -96,10 +96,17 @@ spec:
             {{- if .Values.vespa.enabled }}
             - name: VESPA_URL
               value: {{ .Values.vespa.url | default (printf "http://%s-vespa:8080" .Release.Name) | quote }}
+            {{- else if .Values.vespa.url }}
+            - name: VESPA_URL
+              value: {{ .Values.vespa.url | quote }}
             {{- end }}
-            {{- if .Values.embed.url }}
+            {{- if or .Values.vespa.enabled .Values.vespa.url }}
+            - name: VESPA_DEPLOYMENT_ID
+              value: {{ .Values.vespa.deploymentId | default "default" | quote }}
+            {{- end }}
+            {{- if (include "veronex.embedUrl" .) }}
             - name: EMBED_URL
-              value: {{ .Values.embed.url | quote }}
+              value: {{ include "veronex.embedUrl" . | quote }}
             {{- end }}
             {{- if or .Values.redpandaEnabled .Values.externalRedpanda.brokers }}
             - name: KAFKA_BROKER
@@ -122,6 +129,10 @@ spec:
             {{- if .Values.veronex.valkeyPoolSize }}
             - name: VALKEY_POOL_SIZE
               value: {{ .Values.veronex.valkeyPoolSize | quote }}
+            {{- end }}
+            {{- if .Values.veronex.valkeyKeyPrefix }}
+            - name: VALKEY_KEY_PREFIX
+              value: {{ .Values.veronex.valkeyKeyPrefix | quote }}
             {{- end }}
             {{- if .Values.veronex.pgPoolMax }}
             - name: PG_POOL_MAX

@@ -43,6 +43,10 @@ veronex:
   # Valkey connection pool size. Default: 16
   valkeyPoolSize: ""
 
+  # Valkey key prefix for deployment isolation on shared Valkey instances.
+  # Default: "" (no prefix). Example: "prod:" → keys become "prod:veronex:..."
+  valkeyKeyPrefix: ""
+
   # Login rate limit (max attempts per IP per 5-minute window). Default: 10. 0 = disabled.
   loginRateLimit: ""
 
@@ -65,11 +69,11 @@ veronex:
 
   resources:
     requests:
-      cpu: 250m
-      memory: 256Mi
+      cpu: 50m
+      memory: 128Mi
     limits:
-      cpu: "2"
-      memory: 1Gi
+      cpu: "1"
+      memory: 512Mi
 
   logLevel: "info"  # RUST_LOG level: error, warn, info, debug, trace
 
@@ -91,11 +95,30 @@ veronexAnalytics:
 
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 20m
+      memory: 64Mi
     limits:
-      cpu: "1"
-      memory: 512Mi
+      cpu: 500m
+      memory: 256Mi
+
+  env: {}
+
+veronexConsumer:
+  image:
+    repository: gitea.girok.dev/beegy-labs/veronex-consumer
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  logLevel: "info"  # RUST_LOG level
+
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
 
   env: {}
 
@@ -112,11 +135,11 @@ veronexAgent:
   healthPort: 9091
   resources:
     requests:
-      cpu: 50m
+      cpu: 10m
       memory: 32Mi
     limits:
-      cpu: 200m
-      memory: 128Mi
+      cpu: 100m
+      memory: 64Mi
   env: {}
 
 veronexWeb:
@@ -172,11 +195,11 @@ veronexMcp:
 
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 20m
+      memory: 64Mi
     limits:
-      cpu: "1"
-      memory: 512Mi
+      cpu: 500m
+      memory: 256Mi
 
   autoscaling:
     enabled: false
@@ -308,12 +331,41 @@ vespa:
   # Internal service URL — used by veronex pods
   # Override if deploying Vespa outside this chart.
   url: ""   # default: http://<release>-vespa:8080
+  # Deployment-level partition key for shared Vespa instances.
+  # Isolates this deployment's documents from others (prod, staging, dev, ...).
+  # REQUIRED when multiple deployments share a single Vespa — override per environment.
+  # e.g. --set vespa.deploymentId=prod-v1
+  deploymentId: "default"
 
 # ── Embedding service (for MCP vector selection with Vespa) ──────────────────
-# Used alongside vespa.enabled=true. Set url to your embedding service endpoint.
+# Deployed automatically when vespa.enabled=true.
+# Override embed.url to use an external embedding service instead.
+
+veronexEmbed:
+  image:
+    repository: gitea.girok.dev/beegy-labs/veronex-embed
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 3200
+
+  logLevel: "info"
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi   # multilingual-e5-large ONNX ~280MB + runtime overhead
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  env: {}
 
 embed:
-  url: ""  # e.g. http://veronex-embed:8000
+  url: ""  # override to use external embed service; default: http://<release>-veronex-embed:3200
 
 # ── Database Migrations ──────────────────────────────────────────────────────
 # Runs as pre-install,pre-upgrade Helm hook.

@@ -24,9 +24,10 @@ use crate::domain::value_objects::JobStatusEvent;
 use crate::domain::constants::{
     GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
     MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
-    QUEUE_POLL_INTERVAL, QUEUE_ACTIVE,
+    QUEUE_POLL_INTERVAL,
     LOCALITY_BONUS_MS, ZSET_PEEK_K, ZSET_PEEK_K_MAX,
 };
+use crate::infrastructure::outbound::valkey_keys as vk_keys;
 use crate::application::ports::outbound::concurrency_port::VramPermit;
 
 use super::JobEntry;
@@ -434,7 +435,8 @@ pub(super) async fn queue_dispatcher_loop(
 
             if candidates.is_empty() {
                 // No eligible provider → atomically remove from ZSET and fail
-                let claimed = valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await.unwrap_or(false);
+                let queue_active = vk_keys::queue_active();
+                let claimed = valkey.zset_claim(&job_id_str, &queue_active, model).await.unwrap_or(false);
                 if claimed {
                     valkey.active_lease_remove(&job_id_str).await
                         .unwrap_or_else(|e| tracing::warn!(%uuid, error = %e, "dispatcher: active_lease_remove failed"));
@@ -457,7 +459,8 @@ pub(super) async fn queue_dispatcher_loop(
             };
 
             // Atomic ZSET claim (ZREM + ZADD active + DECR demand)
-            match valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await {
+            let queue_active = vk_keys::queue_active();
+            match valkey.zset_claim(&job_id_str, &queue_active, model).await {
                 Ok(true) => { /* claimed successfully */ }
                 Ok(false) => {
                     // Another instance already took it — release VRAM and try next

@@ -228,6 +228,19 @@ us-east-1
 {{- end }}
 
 {{/*
+Embedding service URL. Uses in-cluster veronex-embed when vespa.enabled=true
+and embed.url is not overridden.
+*/}}
+{{- define "veronex.embedUrl" -}}
+{{- if .Values.embed.url -}}
+{{ .Values.embed.url }}
+{{- else if .Values.vespa.enabled -}}
+http://{{ .Release.Name }}-veronex-embed:{{ .Values.veronexEmbed.service.port }}
+{{- else -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Redpanda / Kafka broker address (single broker string).
 */}}
 {{- define "veronex.redpandaBroker" -}}

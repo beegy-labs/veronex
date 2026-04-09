@@ -1,0 +1,25 @@
+[package]
+name = "veronex-consumer"
+version = "0.0.1"
+edition = "2024"
+description = "Kafka consumer — Redpanda topic → ClickHouse HTTP INSERT (at-least-once, offset commit after INSERT)"
+
+[dependencies]
+# Kafka consumer (librdkafka, cmake static build for musl/alpine)
+rdkafka = { version = "0.38", features = ["cmake-build", "ssl-vendored"] }
+
+# HTTP / Async
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+futures = "0.3"
+
+# Serialization
+serde_json = "1"
+
+# Misc
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+
+# Workspace hack for faster builds (managed by cargo-hakari)
+workspace-hack = { path = "../../workspace-hack" }
