@@ -1,3 +1,6 @@
+# Vendor (submodule directories — not tracked in this repo)
+vendor/
+
 # Rust
 target/
 **/*.rs.bk
