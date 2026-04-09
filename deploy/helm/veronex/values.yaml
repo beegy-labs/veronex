@@ -103,6 +103,25 @@ veronexAnalytics:
 
   env: {}
 
+veronexConsumer:
+  image:
+    repository: gitea.girok.dev/beegy-labs/veronex-consumer
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  logLevel: "info"  # RUST_LOG level
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  env: {}
+
 veronexAgent:
   enabled: true
   image:
