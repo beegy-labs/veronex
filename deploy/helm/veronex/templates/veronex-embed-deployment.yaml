@@ -1,0 +1,55 @@
+{{- if .Values.vespa.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-veronex-embed
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    app.kubernetes.io/component: veronex-embed
+spec:
+  replicas: {{ .Values.veronexEmbed.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: veronex-embed
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        app.kubernetes.io/component: veronex-embed
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
+      containers:
+        - name: veronex-embed
+          image: "{{ .Values.veronexEmbed.image.repository }}:{{ .Values.veronexEmbed.image.tag }}"
+          imagePullPolicy: {{ .Values.veronexEmbed.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.veronexEmbed.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.veronexEmbed.logLevel | default "info" | quote }}
+            - name: PORT
+              value: "{{ .Values.veronexEmbed.service.port }}"
+            {{- range $k, $v := .Values.veronexEmbed.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.veronexEmbed.resources | nindent 12 }}
+{{- end }}

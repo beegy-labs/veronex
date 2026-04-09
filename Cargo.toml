@@ -3,6 +3,7 @@ members = [
     "crates/veronex",
     "crates/veronex-analytics",
     "crates/veronex-agent",
+    "crates/veronex-consumer",
     "crates/veronex-mcp",
     "crates/veronex-embed",
     "workspace-hack",

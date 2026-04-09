@@ -9,6 +9,7 @@
 | veronex | Main API server + scheduler | 3000 | axum, sqlx, fred, tokio |
 | veronex-agent | Metrics collector (node-exporter + Ollama scraper) | 9091 | reqwest, OTLP proto |
 | veronex-analytics | ClickHouse analytics service | 3003 | axum, clickhouse-rs |
+| veronex-consumer | Kafka consumer — Redpanda → ClickHouse (replaces Redpanda Connect) | -- | rdkafka, reqwest, tokio |
 | veronex-mcp | MCP tool server (multi-tool, single deployment) | 3100 (docker-compose) / 8080 (Helm) | axum, moka, fred, reqwest |
 | veronex-embed | Embedding server | 3200 | axum, candle |
 | workspace-hack | Dependency unification (hakari) | -- | -- |
@@ -20,6 +21,7 @@
 | No circular deps | Cargo workspace enforces |
 | veronex-agent -> veronex | Not allowed (separate binary) |
 | veronex-analytics -> veronex | Not allowed (separate binary) |
+| veronex-consumer -> veronex | Not allowed (separate binary) |
 | veronex-mcp -> veronex | Not allowed (separate binary) |
 | veronex -> veronex-mcp | Allowed (client library only — `McpHttpClient`, `McpSessionManager`, etc.) |
 
@@ -48,5 +50,6 @@ Architecture: flat module — no hexagonal layers. Tools implement `Tool` trait;
 | Command | Purpose |
 |---------|---------|
 | cargo check --workspace | Type check all crates |
-| cargo test --workspace | Run all tests (325 total) |
+| cargo test --workspace | Run all tests |
+| cargo test -p veronex-consumer | Consumer OTLP parse + routing tests |
 | cargo clippy --workspace | Lint all crates |

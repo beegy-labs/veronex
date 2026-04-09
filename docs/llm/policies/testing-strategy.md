@@ -130,7 +130,17 @@ Multi-model: `03-inference` auto-detects available models and cycles through the
 
 Verify + Liveness: merged into `04-crud` — tests pre-registration verify endpoints (server/provider URL validation), heartbeat keys, online counter.
 
-`09-metrics-pipeline.sh` tests the full metrics pipeline end-to-end: verifies agent scrapes node-exporter, pushes via OTLP, data flows through Redpanda into ClickHouse, and the analytics API returns both gauge metrics (memory, GPU temp/power) and counter-derived metrics (CPU usage %). Tests both local (Mac) and remote (Ubuntu Ryzen AI 395+) server configurations.
+`09-metrics-pipeline.sh` tests the full metrics pipeline end-to-end: verifies agent scrapes node-exporter, pushes via OTLP, data flows through Redpanda **→ veronex-consumer → ClickHouse**, and the analytics API returns both gauge metrics (memory, GPU temp/power) and counter-derived metrics (CPU usage %). Tests both local (Mac) and remote (Ubuntu Ryzen AI 395+) server configurations.
+
+**veronex-consumer unit tests** (`cargo test -p veronex-consumer`):
+
+| Module | Coverage |
+|--------|----------|
+| `handlers::logs` | inference routing, audit routing, mcp_tool_calls routing, unknown event drop, empty payload, empty resourceLogs |
+| `handlers::metrics` | gauge datapoints, sum datapoints, empty payload, multi-resource |
+| `handlers::traces` | raw payload storage, empty resourceSpans |
+
+Unit tests verify pure OTLP parse → row mapping logic only (no Kafka/ClickHouse I/O). Integration coverage comes from `09-metrics-pipeline.sh` which confirms data actually reaches ClickHouse through the full pipeline.
 
 ---
 
