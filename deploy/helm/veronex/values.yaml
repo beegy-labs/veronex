@@ -338,10 +338,34 @@ vespa:
   deploymentId: "default"
 
 # ── Embedding service (for MCP vector selection with Vespa) ──────────────────
-# Used alongside vespa.enabled=true. Set url to your embedding service endpoint.
+# Deployed automatically when vespa.enabled=true.
+# Override embed.url to use an external embedding service instead.
+
+veronexEmbed:
+  image:
+    repository: gitea.girok.dev/beegy-labs/veronex-embed
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 3200
+
+  logLevel: "info"
+
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  env: {}
 
 embed:
-  url: ""  # e.g. http://veronex-embed:8000
+  url: ""  # override to use external embed service; default: http://<release>-veronex-embed:3200
 
 # ── Database Migrations ──────────────────────────────────────────────────────
 # Runs as pre-install,pre-upgrade Helm hook.
