@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
 use crate::domain::enums::AccountRole;
 use crate::domain::value_objects::JobId;
-use crate::infrastructure::outbound::valkey_keys::{QUEUE_JOBS_PAID as QUEUE_KEY_API_PAID, QUEUE_JOBS as QUEUE_KEY_API, QUEUE_JOBS_TEST as QUEUE_KEY_TEST};
+use crate::infrastructure::outbound::valkey_keys as vk_keys;
 use super::constants::{DASHBOARD_QUEUE_DEPTH_TIMEOUT, DASHBOARD_STATS_TIMEOUT};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireSettingsManage};
 use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
@@ -312,9 +312,9 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
         DASHBOARD_QUEUE_DEPTH_TIMEOUT,
         async {
             tokio::join!(
-                async { pool.llen::<i64, _>(QUEUE_KEY_API_PAID).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen paid failed"); 0 }) },
-                async { pool.llen::<i64, _>(QUEUE_KEY_API).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen api failed"); 0 }) },
-                async { pool.llen::<i64, _>(QUEUE_KEY_TEST).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen test failed"); 0 }) },
+                async { pool.llen::<i64, _>(vk_keys::queue_jobs_paid()).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen paid failed"); 0 }) },
+                async { pool.llen::<i64, _>(vk_keys::queue_jobs()).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen api failed"); 0 }) },
+                async { pool.llen::<i64, _>(vk_keys::queue_jobs_test()).await.unwrap_or_else(|e| { tracing::warn!(error = %e, "queue depth: llen test failed"); 0 }) },
             )
         },
     )

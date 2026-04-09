@@ -31,6 +31,9 @@ async fn main() -> Result<()> {
 
     let config = bootstrap::AppConfig::from_env();
 
+    // ── Valkey key prefix (must be set before any Valkey operations) ──
+    veronex::infrastructure::outbound::valkey_keys::init_prefix(&config.valkey_key_prefix);
+
     // ── PostgreSQL ─────────────────────────────────────────────────
     let masked_db_url = mask_database_url(&config.database_url);
     tracing::info!("connecting to postgres at {masked_db_url}");
@@ -284,7 +287,7 @@ async fn main() -> Result<()> {
         use fred::prelude::*;
         use veronex::infrastructure::outbound::valkey_keys;
         let iid = shutdown_instance_id.as_ref();
-        if let Err(e) = vk.srem::<i64, _, _>(valkey_keys::INSTANCES_SET, iid).await {
+        if let Err(e) = vk.srem::<i64, _, _>(valkey_keys::instances_set(), iid).await {
             tracing::warn!(error = %e, "Valkey SREM instances_set on shutdown failed");
         }
         if let Err(e) = vk.del::<i64, _>(valkey_keys::heartbeat(iid)).await {

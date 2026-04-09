@@ -464,7 +464,7 @@ pub async fn run_health_checker_loop(
                         };
                         if delta != 0 {
                             if let Err(e) = pool
-                                .incr_by::<i64, _>(valkey_keys::PROVIDERS_ONLINE_COUNTER, delta)
+                                .incr_by::<i64, _>(valkey_keys::providers_online_counter(), delta)
                                 .await
                             {
                                 tracing::warn!(

@@ -130,6 +130,10 @@ spec:
             - name: VALKEY_POOL_SIZE
               value: {{ .Values.veronex.valkeyPoolSize | quote }}
             {{- end }}
+            {{- if .Values.veronex.valkeyKeyPrefix }}
+            - name: VALKEY_KEY_PREFIX
+              value: {{ .Values.veronex.valkeyKeyPrefix | quote }}
+            {{- end }}
             {{- if .Values.veronex.pgPoolMax }}
             - name: PG_POOL_MAX
               value: {{ .Values.veronex.pgPoolMax | quote }}

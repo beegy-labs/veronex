@@ -93,7 +93,8 @@ impl DistributedVramPool {
         use futures::TryStreamExt as _;
 
         let mut keys: Vec<String> = Vec::new();
-        let mut scanner = self.pool.next().scan(crate::infrastructure::outbound::valkey_keys::VRAM_LEASES_SCAN_PATTERN, Some(100), None);
+        let scan_pattern = crate::infrastructure::outbound::valkey_keys::vram_leases_scan_pattern();
+        let mut scanner = self.pool.next().scan(&scan_pattern, Some(100), None);
         while let Ok(Some(mut page)) = scanner.try_next().await {
             if let Some(results) = page.take_results() {
                 for key in results.into_iter() {
