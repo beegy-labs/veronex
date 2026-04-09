@@ -248,6 +248,32 @@ mod tests {
     }
 
     #[test]
+    fn parse_routes_mcp_tool_call() {
+        let payload = make_log_payload("mcp.tool_call", &[
+            ("request_id", "00000000-0000-0000-0000-000000000003"),
+            ("api_key_id", "k1"),
+            ("tenant_id", "t1"),
+            ("server_id", "s1"),
+            ("server_slug", "weather"),
+            ("tool_name", "get_weather"),
+            ("namespaced_name", "weather__get_weather"),
+            ("outcome", "success"),
+            ("cache_hit", "0"),
+            ("latency_ms", "42"),
+            ("result_bytes", "512"),
+            ("cap_charged", "1"),
+            ("loop_round", "0"),
+        ]);
+        let rows = parse(&payload).unwrap();
+        assert_eq!(rows.mcp_tool_calls.len(), 1);
+        assert_eq!(rows.otel_logs.len(), 1);
+        assert!(rows.inference_logs.is_empty());
+        assert!(rows.audit_events.is_empty());
+        assert_eq!(rows.mcp_tool_calls[0]["tool_name"], "get_weather");
+        assert_eq!(rows.mcp_tool_calls[0]["outcome"], "success");
+    }
+
+    #[test]
     fn parse_unknown_event_name_stored_in_otel_logs_only() {
         let payload = make_log_payload("unknown.event", &[]);
         let rows = parse(&payload).unwrap();

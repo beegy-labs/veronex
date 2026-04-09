@@ -12,7 +12,6 @@
 //! deduplicates identical blocks on retry. Safe to re-deliver messages after restart.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -45,12 +44,12 @@ async fn main() -> Result<()> {
 
     let cfg = Config::from_env()?;
 
-    let ch = Arc::new(ClickhouseClient::new(
+    let ch = ClickhouseClient::new(
         cfg.clickhouse_url.clone(),
         cfg.clickhouse_db.clone(),
         cfg.clickhouse_user.clone(),
         cfg.clickhouse_password.clone(),
-    ));
+    );
 
     let consumer: StreamConsumer = ClientConfig::new()
         .set("bootstrap.servers", &cfg.kafka_broker)
@@ -72,7 +71,7 @@ async fn main() -> Result<()> {
     run_consumer_loop(consumer, ch).await
 }
 
-async fn run_consumer_loop(consumer: StreamConsumer, ch: Arc<ClickhouseClient>) -> Result<()> {
+async fn run_consumer_loop(consumer: StreamConsumer, ch: ClickhouseClient) -> Result<()> {
     // Register shutdown future once — handles SIGINT (ctrl_c) + SIGTERM (K8s).
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
