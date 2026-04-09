@@ -80,6 +80,7 @@ ANALYTICS_URL=http://localhost:3003
 ANALYTICS_SECRET=<shared-secret>
 PG_POOL_MAX=10                       # PostgreSQL pool size (default: 10)
 VALKEY_POOL_SIZE=6                   # Valkey connection pool size (default: 6)
+VALKEY_KEY_PREFIX=                   # optional: key namespace prefix (default: "" = no prefix). Example: "prod:" → "prod:veronex:queue:zset"
 
 # veronex-analytics (internal service)
 CLICKHOUSE_URL=http://localhost:8123
@@ -144,6 +145,7 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 | `veronex:pubsub:cancel:*` | PSUBSCRIBE pattern for all cancel channels |
 
 > SSOT for all key patterns: `crates/veronex/src/infrastructure/outbound/valkey_keys.rs`
+> All patterns above assume no prefix (`VALKEY_KEY_PREFIX=""`). When a prefix is set, it is prepended to every key (e.g. `"prod:veronex:queue:zset"`).
 
 ---
 

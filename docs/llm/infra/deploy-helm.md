@@ -117,6 +117,7 @@ Set via `values.yaml` or `--set`. All optional — app falls back to built-in de
 | `veronex.visionFallbackModel` | `VISION_FALLBACK_MODEL` | — | Model for vision requests on non-image providers (e.g. `llava:13b`) |
 | `veronex.mcpVectorTopK` | `MCP_VECTOR_TOP_K` | 8 | Vespa ANN top-K for MCP tool selection |
 | `vespa.deploymentId` | `VESPA_DEPLOYMENT_ID` | `"default"` | Vespa partition key — isolates this deployment from others sharing the same Vespa instance (e.g. `prod-v1`, `staging-v1`) |
+| `veronex.valkeyKeyPrefix` | `VALKEY_KEY_PREFIX` | `""` | Valkey key namespace prefix — isolates deployments sharing a single Valkey instance. Not injected when empty. Example: `"prod:"` → keys become `"prod:veronex:queue:zset"` |
 
 Auto-injected (no values.yaml key needed):
 

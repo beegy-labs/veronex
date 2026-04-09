@@ -426,4 +426,58 @@ mod tests {
     fn agent_heartbeat_format_matches_agent_convention() {
         assert_eq!(agent_heartbeat("my-host"), "veronex:agent:hb:my-host");
     }
+
+    // ── Key prefix format guards ──────────────────────────────────────────────
+    // Tests run without init_prefix(), so KEY_PREFIX is unset → p() returns "".
+    // These guards pin key formats AND verify pk() is a no-op when prefix is empty.
+
+    /// pk() must be identity when no prefix is configured.
+    #[test]
+    fn pk_no_prefix_is_identity() {
+        assert_eq!(pk("veronex:queue:zset"), "veronex:queue:zset");
+        assert_eq!(pk(""), "");
+    }
+
+    /// Queue key format guards for cross-boundary contracts (veronex-agent reads these).
+    #[test]
+    fn queue_key_formats_no_prefix() {
+        assert_eq!(queue_zset(),         "veronex:queue:zset");
+        assert_eq!(queue_enqueue_at(),   "veronex:queue:enqueue_at");
+        assert_eq!(queue_model_map(),    "veronex:queue:model");
+        assert_eq!(queue_active(),       "veronex:queue:active");
+        assert_eq!(queue_processing(),   "veronex:queue:processing");
+    }
+
+    /// Pub/sub key format guards — relay.rs and cancel-subscriber strip these prefixes.
+    #[test]
+    fn pubsub_key_formats_no_prefix() {
+        assert_eq!(pubsub_job_events(),    "veronex:pubsub:job_events");
+        assert_eq!(pubsub_cancel_pattern(), "veronex:pubsub:cancel:*");
+        assert_eq!(pubsub_cancel_prefix(),  "veronex:pubsub:cancel:");
+    }
+
+    /// Stat counter key formats — background.rs seeds these at startup.
+    #[test]
+    fn counter_key_formats_no_prefix() {
+        assert_eq!(jobs_pending_counter(),    "veronex:stats:jobs:pending");
+        assert_eq!(jobs_running_counter(),    "veronex:stats:jobs:running");
+        assert_eq!(providers_online_counter(), "veronex:stats:providers:online");
+    }
+
+    /// demand_counter must embed the model name — demand_resync relies on exact format.
+    #[test]
+    fn demand_counter_embeds_model_name() {
+        assert_eq!(demand_counter("llama3:8b"), "veronex:demand:llama3:8b");
+    }
+
+    /// pubsub_cancel_prefix must be a strict prefix of pubsub_cancel(job_id).
+    #[test]
+    fn cancel_channel_prefix_matches_cancel_channel() {
+        let job_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440099").unwrap();
+        let channel = pubsub_cancel(job_id);
+        let prefix  = pubsub_cancel_prefix();
+        assert!(channel.starts_with(&prefix),
+            "channel {channel:?} must start with prefix {prefix:?}");
+        assert_eq!(channel.strip_prefix(&prefix), Some("550e8400-e29b-41d4-a716-446655440099"));
+    }
 }
