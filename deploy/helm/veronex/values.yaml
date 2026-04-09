@@ -114,11 +114,11 @@ veronexConsumer:
 
   resources:
     requests:
-      cpu: 100m
-      memory: 64Mi
+      cpu: 10m
+      memory: 32Mi
     limits:
-      cpu: 500m
-      memory: 256Mi
+      cpu: 200m
+      memory: 64Mi
 
   env: {}
 
