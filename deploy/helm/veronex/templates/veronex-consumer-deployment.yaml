@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-veronex-consumer
+  labels:
+    {{- include "veronex.labels" . | nindent 4 }}
+    app.kubernetes.io/component: veronex-consumer
+spec:
+  replicas: {{ .Values.veronexConsumer.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: veronex-consumer
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "veronex.labels" . | nindent 8 }}
+        app.kubernetes.io/component: veronex-consumer
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
+      containers:
+        - name: veronex-consumer
+          image: "{{ .Values.veronexConsumer.image.repository }}:{{ .Values.veronexConsumer.image.tag }}"
+          imagePullPolicy: {{ .Values.veronexConsumer.image.pullPolicy }}
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.veronexConsumer.logLevel | default "info" | quote }}
+            - name: KAFKA_BROKER
+              value: {{ include "veronex.redpandaBroker" . | quote }}
+            - name: CLICKHOUSE_HTTP_URL
+              value: {{ include "veronex.clickhouseUrl" . | quote }}
+            - name: CLICKHOUSE_USER
+              value: {{ include "veronex.clickhouseUser" . | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              value: {{ include "veronex.clickhousePassword" . | quote }}
+            - name: CLICKHOUSE_DB
+              value: {{ include "veronex.clickhouseDb" . | quote }}
+            {{- range $k, $v := .Values.veronexConsumer.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.veronexConsumer.resources | nindent 12 }}

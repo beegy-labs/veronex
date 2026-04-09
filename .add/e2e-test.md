@@ -29,7 +29,7 @@ Run scripts in order — each depends on state from prior scripts.
 | 6 | `06-api-surface.sh` | Multi-format inference, endpoint smoke tests, audit | 90s |
 | 7 | `07-lifecycle.sh` | Job submit → stream → cancel → delete | 60s |
 | 8 | `08-sdd-advanced.sh` | Concurrent load (15 requests), AIMD stress | 120s |
-| 9 | `09-metrics-pipeline.sh` | OTel → ClickHouse metrics ingestion | 30s |
+| 9 | `09-metrics-pipeline.sh` | OTel → Redpanda → veronex-consumer → ClickHouse metrics ingestion | 30s |
 | 10 | `10-image-storage.sh` | Image inference + S3 storage | 30s |
 | 11 | `11-verify-liveness.sh` | Provider/server verification, heartbeat | 15s |
 | 12 | `12-mcp.sh` | MCP CRUD, tools, embed, web search, ReAct loop | 120s |
@@ -100,7 +100,7 @@ bash scripts/e2e/12-mcp.sh        # creates unique slug via E2E_RUN_ID=$$
 | 06-api-surface | OpenAI/Ollama/Gemini compat, audit |
 | 07-lifecycle | Job state machine |
 | 08-sdd-advanced | Stress test, AIMD |
-| 09-metrics-pipeline | OTel, ClickHouse |
+| 09-metrics-pipeline | OTel, Redpanda, veronex-consumer, ClickHouse |
 | 10-image-storage | Image processing, S3 |
 | 11-verify-liveness | Health checks, heartbeat |
 | 12-mcp | MCP, embed, web search, ReAct |

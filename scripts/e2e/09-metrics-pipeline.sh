@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Phase 09: Metrics Pipeline — Agent → OTel → Redpanda → ClickHouse
+# Phase 09: Metrics Pipeline — Agent → OTel → Redpanda → veronex-consumer → ClickHouse
 #
 # Validates that hardware metrics (CPU, GPU temp, GPU power) flow
 # end-to-end from node-exporter through the agent and OTel pipeline
-# into ClickHouse, and are queryable via the analytics history API.
+# into ClickHouse via veronex-consumer, and are queryable via the analytics history API.
 #
 # Two servers:
 #   - local-dev (Mac)  : CPU + memory only (no GPU hwmon)
@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 ensure_provider_ids
 
-hdr "Metrics Pipeline: Agent → OTel → ClickHouse"
+hdr "Metrics Pipeline: Agent → OTel → Redpanda → veronex-consumer → ClickHouse"
 
 # Restart agent to pick up new targets after DB reset
 docker compose restart veronex-agent > /dev/null 2>&1 || true
@@ -79,8 +79,8 @@ fi
 hdr "Waiting for metrics to flow through pipeline"
 
 # The agent scrapes every SCRAPE_INTERVAL_MS (default 60s).
-# OTel batches every 5s, Redpanda → ClickHouse MV is real-time.
-# Total pipeline latency: up to ~70s (scrape + batch + MV insert).
+# OTel batches every 5s, veronex-consumer flushes every 5s (MAX_BATCH=500).
+# Total pipeline latency: up to ~75s (scrape + OTel batch + consumer flush).
 WAIT_SECS=90
 info "Waiting up to ${WAIT_SECS}s for metrics to appear in ClickHouse..."
 
@@ -102,9 +102,14 @@ if [ "$METRICS_FOUND" = "0" ]; then
   # Dump diagnostic info
   info "Checking Redpanda topic..."
   TOPIC_COUNT=$(docker compose exec -T redpanda rpk topic consume otel-metrics --num 1 --timeout 3s 2>/dev/null | wc -l | tr -d ' ' || echo "0")
-  [ "${TOPIC_COUNT:-0}" -gt 0 ] 2>/dev/null \
-    && info "Redpanda otel-metrics topic has data (OTel → Redpanda OK, Redpanda → ClickHouse broken)" \
-    || info "Redpanda otel-metrics topic empty (OTel → Redpanda broken)"
+  if [ "${TOPIC_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+    info "Redpanda otel-metrics topic has data (OTel → Redpanda OK, veronex-consumer → ClickHouse broken)"
+    CONSUMER_STATUS=$(docker compose ps veronex-consumer --format json 2>/dev/null \
+      | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('State','unknown'))" 2>/dev/null || echo "unknown")
+    info "veronex-consumer container state: $CONSUMER_STATUS"
+  else
+    info "Redpanda otel-metrics topic empty (OTel → Redpanda broken)"
+  fi
 fi
 
 # ── Verify specific metric types in ClickHouse ──────────────────────────────

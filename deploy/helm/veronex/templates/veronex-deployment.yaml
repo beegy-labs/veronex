@@ -104,9 +104,9 @@ spec:
             - name: VESPA_DEPLOYMENT_ID
               value: {{ .Values.vespa.deploymentId | default "default" | quote }}
             {{- end }}
-            {{- if .Values.embed.url }}
+            {{- if (include "veronex.embedUrl" .) }}
             - name: EMBED_URL
-              value: {{ .Values.embed.url | quote }}
+              value: {{ include "veronex.embedUrl" . | quote }}
             {{- end }}
             {{- if or .Values.redpandaEnabled .Values.externalRedpanda.brokers }}
             - name: KAFKA_BROKER
