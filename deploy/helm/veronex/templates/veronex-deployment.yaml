@@ -102,7 +102,7 @@ spec:
             {{- end }}
             {{- if or .Values.vespa.enabled .Values.vespa.url }}
             - name: VESPA_DEPLOYMENT_ID
-              value: {{ .Values.vespa.deploymentId | default "default" | quote }}
+              value: {{ .Values.veronex.vespaDeploymentId | default "default" | quote }}
             {{- end }}
             {{- if (include "veronex.embedUrl" .) }}
             - name: EMBED_URL
