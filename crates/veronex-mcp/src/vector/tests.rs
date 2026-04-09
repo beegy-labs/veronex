@@ -24,14 +24,15 @@ async fn vespa_feed_ok() {
 
     let client = VespaClient::new(&server.uri());
     let doc = super::vespa_client::McpToolDoc {
-        tool_id:      "svc:srv:tool".into(),
-        service_id:   "svc".into(),
-        server_id:    "srv".into(),
-        server_name:  "test_server".into(),
-        tool_name:    "tool".into(),
-        description:  "A test tool".into(),
-        input_schema: "{}".into(),
-        embedding:    vec![0.1; 1024],
+        tool_id:       "test-deploy:svc:srv:tool".into(),
+        deployment_id: "test-deploy".into(),
+        service_id:    "svc".into(),
+        server_id:     "srv".into(),
+        server_name:   "test_server".into(),
+        tool_name:     "tool".into(),
+        description:   "A test tool".into(),
+        input_schema:  "{}".into(),
+        embedding:     vec![0.1; 1024],
     };
     assert!(client.feed(&doc).await.is_ok());
 }
@@ -47,9 +48,9 @@ async fn vespa_feed_server_error_returns_err() {
 
     let client = VespaClient::new(&server.uri());
     let doc = super::vespa_client::McpToolDoc {
-        tool_id: "t".into(), service_id: "s".into(), server_id: "r".into(),
-        server_name: "s".into(), tool_name: "t".into(), description: "d".into(),
-        input_schema: "{}".into(), embedding: vec![0.0; 1024],
+        tool_id: "d:s:r:t".into(), deployment_id: "d".into(), service_id: "s".into(),
+        server_id: "r".into(), server_name: "s".into(), tool_name: "t".into(),
+        description: "d".into(), input_schema: "{}".into(), embedding: vec![0.0; 1024],
     };
     assert!(client.feed(&doc).await.is_err());
 }
@@ -66,10 +67,11 @@ async fn vespa_search_returns_hits() {
                 "fields": { "totalCount": 2 },
                 "children": [
                     {
-                        "id": "id:mcp_tools:mcp_tools::svc:srv:get_weather",
+                        "id": "id:mcp_tools:mcp_tools::test-deploy:svc:srv:get_weather",
                         "relevance": 0.92,
                         "fields": {
-                            "tool_id": "svc:srv:get_weather",
+                            "tool_id": "test-deploy:svc:srv:get_weather",
+                            "deployment_id": "test-deploy",
                             "service_id": "svc",
                             "server_id": "srv",
                             "tool_name": "get_weather",
@@ -78,10 +80,11 @@ async fn vespa_search_returns_hits() {
                         }
                     },
                     {
-                        "id": "id:mcp_tools:mcp_tools::svc:srv:get_forecast",
+                        "id": "id:mcp_tools:mcp_tools::test-deploy:svc:srv:get_forecast",
                         "relevance": 0.85,
                         "fields": {
-                            "tool_id": "svc:srv:get_forecast",
+                            "tool_id": "test-deploy:svc:srv:get_forecast",
+                            "deployment_id": "test-deploy",
                             "service_id": "svc",
                             "server_id": "srv",
                             "tool_name": "get_forecast",
@@ -97,7 +100,7 @@ async fn vespa_search_returns_hits() {
 
     let client = VespaClient::new(&server.uri());
     let embedding = vec![0.1_f32; 1024];
-    let hits = client.search(&embedding, "svc", 8).await.unwrap();
+    let hits = client.search(&embedding, "test-deploy", "svc", 8).await.unwrap();
 
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].tool_name, "get_weather");
@@ -117,7 +120,7 @@ async fn vespa_search_empty_result() {
         .await;
 
     let client = VespaClient::new(&server.uri());
-    let hits = client.search(&vec![0.0_f32; 1024], "svc", 8).await.unwrap();
+    let hits = client.search(&vec![0.0_f32; 1024], "test-deploy", "svc", 8).await.unwrap();
     assert!(hits.is_empty());
 }
 
@@ -133,7 +136,7 @@ async fn vespa_delete_server_ok() {
         .await;
 
     let client = VespaClient::new(&server.uri());
-    assert!(client.delete_server("svc", "srv").await.is_ok());
+    assert!(client.delete_server("test-deploy", "svc", "srv").await.is_ok());
 }
 
 // ── EmbedClient tests ─────────────────────────────────────────────────────────

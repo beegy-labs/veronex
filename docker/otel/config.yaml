@@ -23,7 +23,7 @@ processors:
 
 exporters:
   # Kafka/Redpanda exporters — Redpanda is the single message bus.
-  # ClickHouse consumes these topics via Kafka Engine → Materialized View.
+  # veronex-consumer subscribes to all three topics and HTTP INSERTs into ClickHouse.
   kafka/metrics:
     brokers: [redpanda:9092]
     topic: otel-metrics

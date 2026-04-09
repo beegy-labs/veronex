@@ -136,14 +136,13 @@ impl ValkeyPort for ValkeyAdapter {
         max_size: u64,
         max_per_model: u64,
     ) -> Result<bool> {
-        use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP};
+        use crate::infrastructure::outbound::valkey_keys as vk;
 
-        let demand_key = crate::domain::constants::demand_key(model);
         let keys = vec![
-            QUEUE_ZSET.to_string(),
-            demand_key,
-            QUEUE_ENQUEUE_AT.to_string(),
-            QUEUE_MODEL_MAP.to_string(),
+            vk::queue_zset(),
+            vk::demand_counter(model),
+            vk::queue_enqueue_at(),
+            vk::queue_model_map(),
         ];
         let args = vec![
             job_id.to_string(),
@@ -162,11 +161,10 @@ impl ValkeyPort for ValkeyAdapter {
     }
 
     async fn zset_peek(&self, k: u64) -> Result<Vec<(String, f64)>> {
-        use crate::domain::constants::QUEUE_ZSET;
-
+        let zset = crate::infrastructure::outbound::valkey_keys::queue_zset();
         let raw: Vec<(String, f64)> = self
             .pool
-            .zrange(QUEUE_ZSET, 0, (k as i64) - 1, None, false, None, true)
+            .zrange(&zset, 0, (k as i64) - 1, None, false, None, true)
             .await?;
         Ok(raw)
     }
@@ -177,16 +175,16 @@ impl ValkeyPort for ValkeyAdapter {
         processing_key: &str,
         model: &str,
     ) -> Result<bool> {
-        use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP, LEASE_TTL_MS};
+        use crate::domain::constants::LEASE_TTL_MS;
+        use crate::infrastructure::outbound::valkey_keys as vk;
 
         let deadline_ms = (chrono::Utc::now().timestamp_millis() as u64) + LEASE_TTL_MS;
-        let demand_key = crate::domain::constants::demand_key(model);
         let keys = vec![
-            QUEUE_ZSET.to_string(),
+            vk::queue_zset(),
             processing_key.to_string(),
-            demand_key,
-            QUEUE_ENQUEUE_AT.to_string(),
-            QUEUE_MODEL_MAP.to_string(),
+            vk::demand_counter(model),
+            vk::queue_enqueue_at(),
+            vk::queue_model_map(),
         ];
         let args = vec![job_id.to_string(), deadline_ms.to_string()];
 
@@ -195,14 +193,13 @@ impl ValkeyPort for ValkeyAdapter {
     }
 
     async fn zset_cancel(&self, job_id: &str, model: &str) -> Result<bool> {
-        use crate::domain::constants::{QUEUE_ZSET, QUEUE_ENQUEUE_AT, QUEUE_MODEL_MAP};
+        use crate::infrastructure::outbound::valkey_keys as vk;
 
-        let demand_key = crate::domain::constants::demand_key(model);
         let keys = vec![
-            QUEUE_ZSET.to_string(),
-            demand_key,
-            QUEUE_ENQUEUE_AT.to_string(),
-            QUEUE_MODEL_MAP.to_string(),
+            vk::queue_zset(),
+            vk::demand_counter(model),
+            vk::queue_enqueue_at(),
+            vk::queue_model_map(),
         ];
         let args = vec![job_id.to_string()];
 
@@ -211,25 +208,25 @@ impl ValkeyPort for ValkeyAdapter {
     }
 
     async fn zset_len(&self) -> Result<u64> {
-        use crate::domain::constants::QUEUE_ZSET;
-        let len: u64 = self.pool.zcard(QUEUE_ZSET).await?;
+        let zset = crate::infrastructure::outbound::valkey_keys::queue_zset();
+        let len: u64 = self.pool.zcard(&zset).await?;
         Ok(len)
     }
 
     async fn active_lease_set(&self, job_id: &str, deadline_ms: u64) -> Result<()> {
-        use crate::domain::constants::QUEUE_ACTIVE;
+        let active = crate::infrastructure::outbound::valkey_keys::queue_active();
         let _: i64 = self.pool
-            .zadd(QUEUE_ACTIVE, None, None, false, false, (deadline_ms as f64, job_id))
+            .zadd(&active, None, None, false, false, (deadline_ms as f64, job_id))
             .await?;
         Ok(())
     }
 
     async fn active_lease_renew(&self, job_id: &str, deadline_ms: u64) -> Result<bool> {
-        use crate::domain::constants::QUEUE_ACTIVE;
+        let active = crate::infrastructure::outbound::valkey_keys::queue_active();
         // ZADD XX updates score only if member already exists; returns 0 added (not changed).
         let _: i64 = self.pool
             .zadd(
-                QUEUE_ACTIVE,
+                &active,
                 Some(SetOptions::XX),
                 None,
                 false,
@@ -239,20 +236,20 @@ impl ValkeyPort for ValkeyAdapter {
             .await
             .unwrap_or(0);
         // Check if the member still exists (ZADD XX does not report updates via return value)
-        let score: Option<f64> = self.pool.zscore(QUEUE_ACTIVE, job_id).await.unwrap_or(None);
+        let score: Option<f64> = self.pool.zscore(&active, job_id).await.unwrap_or(None);
         Ok(score.is_some())
     }
 
     async fn active_lease_remove(&self, job_id: &str) -> Result<()> {
-        use crate::domain::constants::QUEUE_ACTIVE;
-        let _: i64 = self.pool.zrem(QUEUE_ACTIVE, job_id).await?;
+        let active = crate::infrastructure::outbound::valkey_keys::queue_active();
+        let _: i64 = self.pool.zrem(&active, job_id).await?;
         Ok(())
     }
 
     async fn active_lease_expired(&self, now_ms: u64) -> Result<Vec<String>> {
-        use crate::domain::constants::QUEUE_ACTIVE;
+        let active = crate::infrastructure::outbound::valkey_keys::queue_active();
         let members: Vec<fred::types::Value> = self.pool
-            .zrangebyscore(QUEUE_ACTIVE, 0.0_f64, now_ms as f64, false, None)
+            .zrangebyscore(&active, 0.0_f64, now_ms as f64, false, None)
             .await?;
         Ok(members.into_iter().filter_map(|v: fred::types::Value| v.as_string()).collect())
     }

@@ -11,7 +11,7 @@ use crate::domain::enums::FinishReason;
 use crate::domain::value_objects::JobStatusEvent;
 use crate::domain::constants::TPM_ESTIMATED_TOKENS;
 
-use crate::infrastructure::outbound::valkey_keys::{JOBS_PENDING_COUNTER, JOBS_RUNNING_COUNTER};
+use crate::infrastructure::outbound::valkey_keys as vk_keys;
 
 use super::JobEntry;
 
@@ -20,7 +20,8 @@ use super::JobEntry;
 /// Atomically increment the pending job counter in Valkey.
 pub(super) async fn incr_pending(valkey: &Option<Arc<dyn ValkeyPort>>) {
     if let Some(vk) = valkey {
-        if let Err(e) = vk.incr_by(JOBS_PENDING_COUNTER, 1).await {
+        let key = vk_keys::jobs_pending_counter();
+        if let Err(e) = vk.incr_by(&key, 1).await {
             tracing::warn!("INCR pending counter failed: {e}");
         }
     }
@@ -29,7 +30,8 @@ pub(super) async fn incr_pending(valkey: &Option<Arc<dyn ValkeyPort>>) {
 /// Atomically decrement the pending job counter in Valkey.
 pub(super) async fn decr_pending(valkey: &Option<Arc<dyn ValkeyPort>>) {
     if let Some(vk) = valkey {
-        if let Err(e) = vk.incr_by(JOBS_PENDING_COUNTER, -1).await {
+        let key = vk_keys::jobs_pending_counter();
+        if let Err(e) = vk.incr_by(&key, -1).await {
             tracing::warn!("DECR pending counter failed: {e}");
         }
     }
@@ -38,7 +40,8 @@ pub(super) async fn decr_pending(valkey: &Option<Arc<dyn ValkeyPort>>) {
 /// Atomically increment the running job counter in Valkey.
 pub(super) async fn incr_running(valkey: &Option<Arc<dyn ValkeyPort>>) {
     if let Some(vk) = valkey {
-        if let Err(e) = vk.incr_by(JOBS_RUNNING_COUNTER, 1).await {
+        let key = vk_keys::jobs_running_counter();
+        if let Err(e) = vk.incr_by(&key, 1).await {
             tracing::warn!("INCR running counter failed: {e}");
         }
     }
@@ -47,7 +50,8 @@ pub(super) async fn incr_running(valkey: &Option<Arc<dyn ValkeyPort>>) {
 /// Atomically decrement the running job counter in Valkey.
 pub(super) async fn decr_running(valkey: &Option<Arc<dyn ValkeyPort>>) {
     if let Some(vk) = valkey {
-        if let Err(e) = vk.incr_by(JOBS_RUNNING_COUNTER, -1).await {
+        let key = vk_keys::jobs_running_counter();
+        if let Err(e) = vk.incr_by(&key, -1).await {
             tracing::warn!("DECR running counter failed: {e}");
         }
     }

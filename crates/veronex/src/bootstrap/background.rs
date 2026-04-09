@@ -184,7 +184,7 @@ pub async fn spawn_background_tasks(
         use fred::interfaces::SetsInterface;
         let _: Result<i64, _> = vk
             .sadd(
-                veronex::infrastructure::outbound::valkey_keys::INSTANCES_SET,
+                veronex::infrastructure::outbound::valkey_keys::instances_set(),
                 infra.instance_id.as_ref(),
             )
             .await;
@@ -193,9 +193,7 @@ pub async fn spawn_background_tasks(
     // ── Startup reconciliation: seed Valkey job counters from DB ──
     if let Some(ref vk) = infra.valkey_pool {
         use fred::interfaces::KeysInterface;
-        use veronex::infrastructure::outbound::valkey_keys::{
-            JOBS_PENDING_COUNTER, JOBS_RUNNING_COUNTER,
-        };
+        use veronex::infrastructure::outbound::valkey_keys as vkeys;
         let rows: Vec<(String, i64)> = sqlx::query_as(
             "SELECT status::text, COUNT(*) FROM inference_jobs \
              WHERE status IN ('pending','running') GROUP BY status"
@@ -212,9 +210,9 @@ pub async fn spawn_background_tasks(
                 _ => {}
             }
         }
-        vk.set(JOBS_PENDING_COUNTER, pending, None, None, false).await
+        vk.set(vkeys::jobs_pending_counter(), pending, None, None, false).await
             .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_pending_counter failed"));
-        vk.set(JOBS_RUNNING_COUNTER, running, None, None, false).await
+        vk.set(vkeys::jobs_running_counter(), running, None, None, false).await
             .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_running_counter failed"));
         tracing::info!(pending, running, "job counters seeded from DB");
     }
@@ -326,12 +324,10 @@ pub async fn spawn_background_tasks(
                         // Reconciled from DB every 60 ticks to correct any drift.
                         let (queued, running) = if let Some(ref vk) = vk_pool {
                             use fred::interfaces::KeysInterface;
-                            use veronex::infrastructure::outbound::valkey_keys::{
-                                JOBS_PENDING_COUNTER, JOBS_RUNNING_COUNTER,
-                            };
+                            use veronex::infrastructure::outbound::valkey_keys as vkeys2;
 
-                            let p: i64 = vk.get(JOBS_PENDING_COUNTER).await.unwrap_or(0);
-                            let r: i64 = vk.get(JOBS_RUNNING_COUNTER).await.unwrap_or(0);
+                            let p: i64 = vk.get(vkeys2::jobs_pending_counter()).await.unwrap_or(0);
+                            let r: i64 = vk.get(vkeys2::jobs_running_counter()).await.unwrap_or(0);
 
                             // Periodic reconciliation: every 60 ticks, verify against DB
                             if tick_count % 60 == 0 {
@@ -353,12 +349,12 @@ pub async fn spawn_background_tasks(
                                 }
                                 if db_p != p {
                                     tracing::debug!(valkey = p, db = db_p, "reconciling pending counter");
-                                    vk.set(JOBS_PENDING_COUNTER, db_p, None, None, false).await
+                                    vk.set(vkeys2::jobs_pending_counter(), db_p, None, None, false).await
                                         .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_pending reconcile failed"));
                                 }
                                 if db_r != r {
                                     tracing::debug!(valkey = r, db = db_r, "reconciling running counter");
-                                    vk.set(JOBS_RUNNING_COUNTER, db_r, None, None, false).await
+                                    vk.set(vkeys2::jobs_running_counter(), db_r, None, None, false).await
                                         .unwrap_or_else(|e| tracing::warn!(error = %e, "Valkey SET jobs_running reconcile failed"));
                                 }
                                 (db_p.max(0) as u32, db_r.max(0) as u32)

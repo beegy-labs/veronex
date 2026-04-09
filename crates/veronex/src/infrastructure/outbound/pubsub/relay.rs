@@ -49,7 +49,7 @@ pub async fn publish_job_event(pool: &Pool, event: &JobStatusEvent, instance_id:
     });
     if let Err(e) = pool
         .next()
-        .publish::<i64, _, _>(valkey_keys::PUBSUB_JOB_EVENTS.to_string(), payload.to_string())
+        .publish::<i64, _, _>(valkey_keys::pubsub_job_events(), payload.to_string())
         .await
     {
         tracing::warn!(error = %e, "Valkey PUBLISH job_events failed");
@@ -77,7 +77,7 @@ pub async fn run_job_event_subscriber(
     let mut rx = subscriber.message_rx();
 
     if let Err(e) = subscriber
-        .subscribe(valkey_keys::PUBSUB_JOB_EVENTS.to_string())
+        .subscribe(valkey_keys::pubsub_job_events())
         .await
     {
         tracing::error!("failed to subscribe to job events: {e}");
@@ -130,7 +130,7 @@ pub async fn run_job_event_subscriber(
     }
 
     let _ = subscriber
-        .unsubscribe(valkey_keys::PUBSUB_JOB_EVENTS.to_string())
+        .unsubscribe(valkey_keys::pubsub_job_events())
         .await;
     tracing::info!("job event subscriber stopped");
 }
@@ -147,7 +147,7 @@ pub async fn run_cancel_subscriber(
     let mut rx = subscriber.message_rx();
 
     if let Err(e) = subscriber
-        .psubscribe(valkey_keys::PUBSUB_CANCEL_PATTERN.to_string())
+        .psubscribe(valkey_keys::pubsub_cancel_pattern())
         .await
     {
         tracing::error!("failed to psubscribe to cancel channels: {e}");
@@ -171,7 +171,8 @@ pub async fn run_cancel_subscriber(
 
                 // Extract job_id from channel: veronex:pubsub:cancel:{job_id}
                 let channel = msg.channel.to_string();
-                let job_id_str = match channel.strip_prefix(valkey_keys::PUBSUB_CANCEL_PREFIX) {
+                let cancel_prefix = valkey_keys::pubsub_cancel_prefix();
+                let job_id_str = match channel.strip_prefix(&cancel_prefix) {
                     Some(s) => s,
                     None => continue,
                 };
@@ -189,7 +190,7 @@ pub async fn run_cancel_subscriber(
     }
 
     let _ = subscriber
-        .punsubscribe(valkey_keys::PUBSUB_CANCEL_PATTERN.to_string())
+        .punsubscribe(valkey_keys::pubsub_cancel_pattern())
         .await;
     tracing::info!("cancel subscriber stopped");
 }

@@ -40,6 +40,7 @@ Read only docs relevant to the changed domain.
 | 4 | **Best practices check** — run the relevant audit items from `.add/best-practices.md` Part 3 against changed files: security (P1) items always; architecture/performance (P2) items if touching infra/handlers/Valkey/DashMap; quality (P3) items if touching shared utilities or tests |
 | 5 | Fix violations directly in code (P1 → P2 → P3 order) |
 | 6 | Verify via `cargo check`, `cargo test` |
+| 6a | Validate commit messages before push — run pre-push check from `.add/commit-fix.md` |
 | 7 | CDD feedback — run `.add/cdd-feedback.md` if a new pattern is confirmed (Operational classification) |
 | 8 | Same issue repeated 2+ times → run `.add/best-practices.md` Part 1 update workflow |
 
