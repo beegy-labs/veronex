@@ -359,7 +359,7 @@ veronexEmbed:
       cpu: 100m
       memory: 512Mi   # multilingual-e5-large ONNX ~280MB + runtime overhead
     limits:
-      cpu: "2"
+      cpu: "1"
       memory: 1Gi
 
   env: {}
