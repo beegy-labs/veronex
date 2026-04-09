@@ -69,11 +69,11 @@ veronex:
 
   resources:
     requests:
-      cpu: 250m
-      memory: 256Mi
+      cpu: 50m
+      memory: 128Mi
     limits:
-      cpu: "2"
-      memory: 1Gi
+      cpu: "1"
+      memory: 512Mi
 
   logLevel: "info"  # RUST_LOG level: error, warn, info, debug, trace
 
@@ -95,11 +95,11 @@ veronexAnalytics:
 
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 20m
+      memory: 64Mi
     limits:
-      cpu: "1"
-      memory: 512Mi
+      cpu: 500m
+      memory: 256Mi
 
   env: {}
 
@@ -135,11 +135,11 @@ veronexAgent:
   healthPort: 9091
   resources:
     requests:
-      cpu: 50m
+      cpu: 10m
       memory: 32Mi
     limits:
-      cpu: 200m
-      memory: 128Mi
+      cpu: 100m
+      memory: 64Mi
   env: {}
 
 veronexWeb:
@@ -195,11 +195,11 @@ veronexMcp:
 
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 20m
+      memory: 64Mi
     limits:
-      cpu: "1"
-      memory: 512Mi
+      cpu: 500m
+      memory: 256Mi
 
   autoscaling:
     enabled: false
