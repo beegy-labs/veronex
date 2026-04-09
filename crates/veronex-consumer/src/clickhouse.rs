@@ -1,6 +1,10 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::Value;
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ClickhouseClient {
     client: Client,
@@ -13,7 +17,10 @@ pub struct ClickhouseClient {
 impl ClickhouseClient {
     pub fn new(base_url: String, db: String, user: String, password: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(HTTP_TIMEOUT)
+                .build()
+                .expect("Failed to build HTTP client"),
             base_url,
             db,
             user,

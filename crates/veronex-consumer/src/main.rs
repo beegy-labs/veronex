@@ -73,6 +73,10 @@ async fn main() -> Result<()> {
 }
 
 async fn run_consumer_loop(consumer: StreamConsumer, ch: Arc<ClickhouseClient>) -> Result<()> {
+    // Register shutdown future once — handles SIGINT (ctrl_c) + SIGTERM (K8s).
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
+
     let mut stream = consumer.stream();
 
     let mut log_buf = handlers::logs::LogRows::default();
@@ -141,8 +145,8 @@ async fn run_consumer_loop(consumer: StreamConsumer, ch: Arc<ClickhouseClient>) 
                 }
             }
 
-            _ = signal::ctrl_c() => {
-                tracing::info!("Received SIGINT, shutting down");
+            _ = &mut shutdown => {
+                tracing::info!("Received shutdown signal, shutting down");
                 break;
             }
         }
@@ -170,9 +174,6 @@ async fn flush(
     trace_buf: &mut Vec<serde_json::Value>,
     pending: &mut HashMap<(String, i32), i64>,
 ) {
-    let inserts: &[(&str, &dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>)] = &[];
-    let _ = inserts; // unused, inserts done inline below
-
     macro_rules! try_insert {
         ($table:expr, $rows:expr) => {
             if !$rows.is_empty() {
@@ -207,4 +208,28 @@ async fn flush(
     log_buf.clear();
     metric_buf.clear();
     trace_buf.clear();
+}
+
+/// Resolves on SIGINT (Ctrl+C) or SIGTERM (K8s pod termination).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }
