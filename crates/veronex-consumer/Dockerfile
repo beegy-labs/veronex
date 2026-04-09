@@ -1,6 +1,6 @@
 FROM rust:1-alpine AS chef
 # cmake + make + perl: required for rdkafka cmake-build + ssl-vendored (OpenSSL from source)
-RUN apk add --no-cache musl-dev mold clang cmake make perl python3
+RUN apk add --no-cache musl-dev mold clang g++ cmake make perl python3 curl-dev zlib-dev zlib-static
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 
