@@ -139,7 +139,8 @@ services:
       S3_IMAGE_PUBLIC_URL: http://localhost:9010/veronex-images
       S3_REGION: us-east-1
       VESPA_URL: http://vespa:8080
-      VESPA_DEPLOYMENT_ID: ${VESPA_DEPLOYMENT_ID:-local-dev}
+      VESPA_ENVIRONMENT: ${VESPA_ENVIRONMENT:-local-dev}
+      VESPA_TENANT_ID: ${VESPA_TENANT_ID:-default}
       VALKEY_KEY_PREFIX: ${VALKEY_KEY_PREFIX:-}
       EMBED_URL: http://veronex-embed:3200
       KAFKA_BROKER: redpanda:9092

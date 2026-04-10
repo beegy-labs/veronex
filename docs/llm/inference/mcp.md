@@ -97,31 +97,31 @@ User query → embed (veronex-embed) → Vespa ANN → Top-K tools → LLM
 ### Vespa Document Structure
 
 ```
-tool_id      = "{deployment_id}:{service_id}:{server_id}:{tool_name}"
-deployment_id = VESPA_DEPLOYMENT_ID (deployment-level partition)
-service_id    = "global"  (per-account isolation — future work)
-embedding     = 1024-dim float32 (multilingual-e5-large via veronex-embed)
+tool_id     = "{environment}:{tenant_id}:{server_id}:{tool_name}"
+environment = VESPA_ENVIRONMENT (environment-level partition: prod, dev, local-dev)
+tenant_id   = VESPA_TENANT_ID  (tenant-level sub-partition, default: "default")
+embedding   = 1024-dim float32 (multilingual-e5-large via veronex-embed)
 ```
 
-### Multi-Deployment Isolation
+### Multi-Environment Isolation
 
-A single Vespa instance can serve multiple deployments (prod, staging, dev) simultaneously. Each deployment writes and reads under its own `deployment_id` partition:
+A single Vespa instance serves multiple environments (prod, dev, local-dev) simultaneously. Each environment writes and reads under its own `environment` partition:
 
 ```
-YQL: where deployment_id = "prod-v1" and service_id = "global"
+YQL: where environment = "prod" and tenant_id = "default"
      and ({targetHits: K}nearestNeighbor(embedding, qe))
 ```
 
-`deployment_id` is injected via `VESPA_DEPLOYMENT_ID` env var:
-- **Helm**: `vespa.deploymentId` → `veronex-deployment.yaml` env
-- **docker-compose**: `VESPA_DEPLOYMENT_ID=${VESPA_DEPLOYMENT_ID:-local-dev}`
+`environment` and `tenant_id` are injected via env vars:
+- **Helm**: `veronex.vespaEnvironment` / `veronex.vespaTenantId` → `VESPA_ENVIRONMENT` / `VESPA_TENANT_ID`
+- **docker-compose**: `VESPA_ENVIRONMENT=${VESPA_ENVIRONMENT:-local-dev}` / `VESPA_TENANT_ID=${VESPA_TENANT_ID:-default}`
 
 ### Indexing Lifecycle
 
 | Event | Action |
 |-------|--------|
-| MCP server registered / tools discovered | `McpToolIndexer.index_server_tools(deployment_id, "global", server_id, tools)` |
-| MCP server deleted | `McpToolIndexer.remove_server_tools(deployment_id, "global", server_id)` |
+| MCP server registered / tools discovered | `McpToolIndexer.index_server_tools(environment, tenant_id, server_id, tools)` |
+| MCP server deleted | `McpToolIndexer.remove_server_tools(environment, tenant_id, server_id)` |
 | Periodic refresh (25s) | Re-index if tool cache changes |
 
 ### Fallback
