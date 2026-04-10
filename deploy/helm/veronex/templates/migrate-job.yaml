@@ -100,11 +100,13 @@ spec:
                 secretKeyRef:
                   name: {{ $secretName }}
                   key: CLICKHOUSE_USER
+                  optional: true
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
                   key: CLICKHOUSE_PASSWORD
+                  optional: true
             {{- else }}
             - name: CLICKHOUSE_USER
               value: {{ include "veronex.clickhouseUser" . | quote }}

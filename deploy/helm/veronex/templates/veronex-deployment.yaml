@@ -87,7 +87,15 @@ spec:
             {{- end }}
             {{- if .Values.veronex.bootstrapSuperPass }}
             - name: BOOTSTRAP_SUPER_PASS
+              {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "veronex.secretName" . }}
+                  key: BOOTSTRAP_SUPER_PASS
+                  optional: true
+              {{- else }}
               value: {{ .Values.veronex.bootstrapSuperPass | quote }}
+              {{- end }}
             {{- end }}
             {{- if or .Values.otelCollector.enabled .Values.veronex.otel.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT

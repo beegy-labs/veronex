@@ -427,6 +427,7 @@ externalSecrets:
       clickhousePassword: ""   # e.g. "veronex/clickhouse-password" (optional — external CH)
       clickhouseUser: ""       # e.g. "veronex/clickhouse-user" (optional — external CH)
       veronexApiKey: ""        # e.g. "veronex/veronex-api-key" (optional — MCP server auth)
+      bootstrapSuperPass: ""   # e.g. "veronex/bootstrap-super-pass" (optional — initial admin password)
     refreshInterval: "1h"
 
   # Option 2: CSI Secrets Store Driver

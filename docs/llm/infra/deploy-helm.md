@@ -42,6 +42,38 @@ Disable subcharts to use pre-existing services:
 
 ### Secret Management
 
+> **Policy**: Every credential env var in this chart MUST support all four secret modes (chart-managed, ESO, CSI, existingSecret). Adding a new secret requires updating **all three** secret templates: `secret.yaml`, `external-secret.yaml`, `secret-provider-class.yaml`.
+
+#### Managed Secret Keys
+
+All keys stored in the shared K8s Secret (`<release>-veronex-secrets`):
+
+| Key | Required | Condition | Notes |
+|-----|----------|-----------|-------|
+| `JWT_SECRET` | ✓ | Always | Main API auth signing key |
+| `ANALYTICS_SECRET` | ✓ | Always | Analytics service HMAC key |
+| `DATABASE_URL` | ✓ | Always | PostgreSQL connection string |
+| `S3_ACCESS_KEY` | ✓ | Always | Object storage access key |
+| `S3_SECRET_KEY` | ✓ | Always | Object storage secret key |
+| `GEMINI_ENCRYPTION_KEY` | ✓ | Always | Provider credential encryption key |
+| `GEMINI_API_KEY` | Optional | `veronex.geminiApiKey` set | Gemini API access key |
+| `CLICKHOUSE_USER` | Optional | `clickhouse.enabled` or `externalClickhouse.host` | ClickHouse username |
+| `CLICKHOUSE_PASSWORD` | Optional | `clickhouse.enabled` or `externalClickhouse.host` | ClickHouse password |
+| `KAFKA_USERNAME` | Optional | SASL enabled | Redpanda/Kafka SASL username |
+| `KAFKA_PASSWORD` | Optional | SASL enabled | Redpanda/Kafka SASL password |
+| `VERONEX_API_KEY` | Optional | `veronexMcp.veronexApiKey` set | MCP server API key |
+| `BOOTSTRAP_SUPER_PASS` | Optional | `veronex.bootstrapSuperPass` set | Initial admin password |
+
+#### Adding New Secrets (required checklist)
+
+```
+1. secret.yaml          — add stringData entry (conditional if optional)
+2. external-secret.yaml — add optional remoteRef entry under eso.remoteRefs
+3. secret-provider-class.yaml — add to secretObjects AND parameters.objects (same condition)
+4. values.yaml          — add key under externalSecrets.eso.remoteRefs
+5. Deployment template  — use secretKeyRef when ESO/CSI/existingSecret active, plain value otherwise
+```
+
 Three modes for production secret injection (mutually exclusive):
 
 | Mode | Enable | How it works |
