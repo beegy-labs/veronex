@@ -24,10 +24,14 @@ pub struct AppConfig {
     pub clickhouse_user: Option<String>,
     pub clickhouse_password: Option<String>,
     pub clickhouse_db: Option<String>,
-    /// Vespa deployment isolation key — injected via `VESPA_DEPLOYMENT_ID`.
-    /// Partitions a shared Vespa instance per deployment (prod, staging, dev, ...).
+    /// Vespa environment isolation key — injected via `VESPA_ENVIRONMENT`.
+    /// Partitions a shared Vespa instance per environment (prod, dev, local-dev, ...).
+    /// Defaults to `"local-dev"` when unset.
+    pub vespa_environment: String,
+    /// Vespa tenant isolation key — injected via `VESPA_TENANT_ID`.
+    /// Sub-partitions a deployment's documents by logical tenant (e.g. org, team, workspace).
     /// Defaults to `"default"` when unset.
-    pub vespa_deployment_id: String,
+    pub vespa_tenant_id: String,
     /// Optional Valkey key prefix — injected via `VALKEY_KEY_PREFIX`.
     /// Namespaces all Valkey keys for multi-tenant / multi-deployment shared instances.
     /// Defaults to `""` (no prefix) when unset.
@@ -101,7 +105,9 @@ impl AppConfig {
         let clickhouse_user = std::env::var("CLICKHOUSE_USER").ok();
         let clickhouse_password = std::env::var("CLICKHOUSE_PASSWORD").ok();
         let clickhouse_db = std::env::var("CLICKHOUSE_DB").ok();
-        let vespa_deployment_id = std::env::var("VESPA_DEPLOYMENT_ID")
+        let vespa_environment = std::env::var("VESPA_ENVIRONMENT")
+            .unwrap_or_else(|_| "local-dev".to_string());
+        let vespa_tenant_id = std::env::var("VESPA_TENANT_ID")
             .unwrap_or_else(|_| "default".to_string());
         let valkey_key_prefix = std::env::var("VALKEY_KEY_PREFIX")
             .unwrap_or_default();
@@ -125,7 +131,8 @@ impl AppConfig {
             clickhouse_user,
             clickhouse_password,
             clickhouse_db,
-            vespa_deployment_id,
+            vespa_environment,
+            vespa_tenant_id,
             valkey_key_prefix,
         }
     }

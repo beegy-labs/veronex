@@ -11,9 +11,9 @@ use super::selector::EmbedClient;
 
 // ── Tool ID ───────────────────────────────────────────────────────────────────
 
-/// Stable document ID for a tool: `{deployment_id}:{service_id}:{server_id}:{tool_name}`.
-pub fn tool_doc_id(deployment_id: &str, service_id: &str, server_id: &str, tool_name: &str) -> String {
-    format!("{deployment_id}:{service_id}:{server_id}:{tool_name}")
+/// Stable document ID for a tool: `{environment}:{tenant_id}:{server_id}:{tool_name}`.
+pub fn tool_doc_id(environment: &str, tenant_id: &str, server_id: &str, tool_name: &str) -> String {
+    format!("{environment}:{tenant_id}:{server_id}:{tool_name}")
 }
 
 // ── Indexer ───────────────────────────────────────────────────────────────────
@@ -32,13 +32,13 @@ impl McpToolIndexer {
 
     /// Embed and upsert all tools for a server into Vespa.
     ///
-    /// `deployment_id` — deployment partition key (from `VESPA_DEPLOYMENT_ID`).
-    /// `service_id`    — account/tenant UUID string for multi-tenant isolation.
+    /// `environment` — environment partition key (from `VESPA_ENVIRONMENT`).
+    /// `tenant_id`    — account/tenant UUID string for multi-tenant isolation.
     /// `server_id`     — MCP server UUID string.
     pub async fn index_server_tools(
         &self,
-        deployment_id: &str,
-        service_id: &str,
+        environment: &str,
+        tenant_id: &str,
         server_id: Uuid,
         tools: &[McpTool],
     ) {
@@ -68,9 +68,9 @@ impl McpToolIndexer {
 
         for (tool, embedding) in tools.iter().zip(embeddings.into_iter()) {
             let doc = McpToolDoc {
-                tool_id:       tool_doc_id(deployment_id, service_id, &server_id_str, &tool.name),
-                deployment_id: deployment_id.to_owned(),
-                service_id:    service_id.to_owned(),
+                tool_id:       tool_doc_id(environment, tenant_id, &server_id_str, &tool.name),
+                environment: environment.to_owned(),
+                tenant_id:    tenant_id.to_owned(),
                 server_id:    server_id_str.clone(),
                 server_name:  tool.server_name.clone(),
                 tool_name:    tool.name.clone(),
@@ -92,9 +92,9 @@ impl McpToolIndexer {
     }
 
     /// Remove all Vespa documents for a server.
-    pub async fn remove_server_tools(&self, deployment_id: &str, service_id: &str, server_id: Uuid) {
+    pub async fn remove_server_tools(&self, environment: &str, tenant_id: &str, server_id: Uuid) {
         let server_id_str = server_id.to_string();
-        match self.vespa.delete_server(deployment_id, service_id, &server_id_str).await {
+        match self.vespa.delete_server(environment, tenant_id, &server_id_str).await {
             Ok(_) => info!(%server_id, "McpToolIndexer: server tools removed from Vespa"),
             Err(e) => warn!(%server_id, error = %e, "McpToolIndexer: delete_server failed"),
         }

@@ -22,6 +22,7 @@
 | Monorepo | `policies/monorepo.md` | project structure, backend/frontend layout |
 | Agents Customization | `policies/agents-customization.md` | AGENTS.md guide, LLM config |
 | Agents Customization Sync | `policies/agents-customization-sync.md` | sync behavior, migration guide, best practices, validation |
+| Vespa Isolation | `policies/vespa-isolation.md` | environment, tenant_id, schema, field filter, isolation hierarchy, ES vs Vespa |
 
 ---
 
@@ -210,6 +211,7 @@
 | Lab feature flag | `inference/lab-features.md` |
 | Context compression / multi-turn / handoff | `inference/context-compression.md` + `flows/context-compression.md` |
 | MCP integration | `inference/mcp.md` + `flows/mcp.md` |
+| Vespa isolation / environment partitioning | `policies/vespa-isolation.md` |
 | Any subsystem logic / control flow | `flows/{subsystem}.md` |
 | veronex-mcp server / add a tool | `infra/crate-structure.md` (veronex-mcp Layout) |
 | OTel pipeline | `infra/otel-pipeline.md` + `infra/otel-pipeline-ops.md` + `research/infrastructure/observability.md` |
