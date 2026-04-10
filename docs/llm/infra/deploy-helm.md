@@ -116,7 +116,8 @@ Set via `values.yaml` or `--set`. All optional — app falls back to built-in de
 | `veronex.loginRateLimit` | `LOGIN_RATE_LIMIT` | 10 | Max login attempts per IP per 5-min window. `0` = disabled |
 | `veronex.visionFallbackModel` | `VISION_FALLBACK_MODEL` | — | Model for vision requests on non-image providers (e.g. `llava:13b`) |
 | `veronex.mcpVectorTopK` | `MCP_VECTOR_TOP_K` | 8 | Vespa ANN top-K for MCP tool selection |
-| `vespa.deploymentId` | `VESPA_DEPLOYMENT_ID` | `"default"` | Vespa partition key — isolates this deployment from others sharing the same Vespa instance (e.g. `prod-v1`, `staging-v1`) |
+| `veronex.vespaEnvironment` | `VESPA_ENVIRONMENT` | `"prod"` | Vespa environment partition key — isolates documents per environment (prod, dev, local-dev) on a shared Vespa instance |
+| `veronex.vespaTenantId` | `VESPA_TENANT_ID` | `"default"` | Vespa tenant partition key — sub-partitions documents within an environment by team/org |
 | `veronex.valkeyKeyPrefix` | `VALKEY_KEY_PREFIX` | `""` | Valkey key namespace prefix — isolates deployments sharing a single Valkey instance. Not injected when empty. Example: `"prod:"` → keys become `"prod:veronex:queue:zset"` |
 
 Auto-injected (no values.yaml key needed):
@@ -138,25 +139,27 @@ Single-node Vespa for MCP tool ANN search. Enabled via `vespa.enabled=true` or v
 # Internal Vespa (chart-managed)
 helm install veronex . \
   --set vespa.enabled=true \
-  --set vespa.deploymentId=prod-v1 \
+  --set veronex.vespaEnvironment=prod \
+  --set veronex.vespaTenantId=default \
   --set embed.url=http://veronex-embed:3200
 
 # External Vespa (pre-existing)
 helm install veronex . \
   --set vespa.url=http://vespa.infra.svc:8080 \
-  --set vespa.deploymentId=prod-v1 \
+  --set veronex.vespaEnvironment=prod \
+  --set veronex.vespaTenantId=default \
   --set embed.url=http://veronex-embed:3200
 ```
 
-**Multi-deployment isolation**: `vespa.deploymentId` is injected as `VESPA_DEPLOYMENT_ID` and stored as `deployment_id` in every Vespa document. All queries filter on `deployment_id = "..."` — deployments sharing a single Vespa instance never see each other's documents.
+**Multi-environment isolation**: `environment` and `tenant_id` are stored in every Vespa document. All queries filter on both keys — environments and tenants sharing a single Vespa instance never see each other's documents.
 
-| Environment | `vespa.deploymentId` |
-|-------------|----------------------|
-| Production  | `prod-v1` |
-| Staging     | `staging-v1` |
-| Local dev   | `local-dev` (docker-compose default) |
+| Environment | `veronex.vespaEnvironment` | `veronex.vespaTenantId` |
+|-------------|----------------------------|--------------------------|
+| Production  | `prod` | `default` |
+| Dev         | `dev` | `default` |
+| Local dev   | `local-dev` (docker-compose default) | `default` |
 
-> Redeploying with the same `deploymentId` reuses the existing index. Changing it creates a new partition (old documents remain until manually purged).
+> Changing `vespaEnvironment` creates a new partition — old documents remain until manually purged.
 
 ### Ingress
 
