@@ -122,6 +122,13 @@ veronexConsumer:
 
   logLevel: "info"  # RUST_LOG level
 
+  # Kafka/Redpanda auth — matches otelCollector.kafka pattern
+  kafka:
+    securityProtocol: PLAINTEXT   # PLAINTEXT | SASL_PLAINTEXT | SASL_SSL
+    saslMechanism: "SCRAM-SHA-512"
+    saslUsername: ""
+    saslPassword: ""
+
   resources:
     requests:
       cpu: 10m

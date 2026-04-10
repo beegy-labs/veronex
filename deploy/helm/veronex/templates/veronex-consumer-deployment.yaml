@@ -29,6 +29,14 @@ spec:
               value: {{ .Values.veronexConsumer.logLevel | default "info" | quote }}
             - name: KAFKA_BROKER
               value: {{ include "veronex.redpandaBroker" . | quote }}
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: {{ .Values.veronexConsumer.kafka.securityProtocol | default "PLAINTEXT" | quote }}
+            - name: KAFKA_SASL_MECHANISM
+              value: {{ .Values.veronexConsumer.kafka.saslMechanism | default "SCRAM-SHA-512" | quote }}
+            - name: KAFKA_USERNAME
+              value: {{ .Values.veronexConsumer.kafka.saslUsername | default "" | quote }}
+            - name: KAFKA_PASSWORD
+              value: {{ .Values.veronexConsumer.kafka.saslPassword | default "" | quote }}
             - name: CLICKHOUSE_HTTP_URL
               value: {{ include "veronex.clickhouseUrl" . | quote }}
             - name: CLICKHOUSE_USER
