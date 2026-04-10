@@ -27,8 +27,16 @@ spec:
           args:
             - psql "$(DATABASE_URL)?sslmode=disable" -f /migrations/init.sql
           env:
+            {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "veronex.secretName" . }}
+                  key: DATABASE_URL
+            {{- else }}
             - name: DATABASE_URL
               value: {{ include "veronex.postgresUrl" . | quote }}
+            {{- end }}
           volumeMounts:
             - name: migrations
               mountPath: /migrations

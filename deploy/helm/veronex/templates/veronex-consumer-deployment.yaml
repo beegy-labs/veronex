@@ -33,7 +33,7 @@ spec:
               value: {{ .Values.veronexConsumer.kafka.securityProtocol | default "PLAINTEXT" | quote }}
             - name: KAFKA_SASL_MECHANISM
               value: {{ .Values.veronexConsumer.kafka.saslMechanism | default "SCRAM-SHA-512" | quote }}
-            {{- $secretName := .Values.externalSecrets.existingSecretName | default (printf "%s-veronex-secrets" .Release.Name) }}
+            {{- $secretName := include "veronex.secretName" . }}
             {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
             - name: KAFKA_USERNAME
               valueFrom:
@@ -55,7 +55,6 @@ spec:
             {{- end }}
             - name: CLICKHOUSE_HTTP_URL
               value: {{ include "veronex.clickhouseUrl" . | quote }}
-            {{- $secretName := .Values.externalSecrets.existingSecretName | default (printf "%s-veronex-secrets" .Release.Name) }}
             {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
             - name: CLICKHOUSE_USER
               valueFrom:
