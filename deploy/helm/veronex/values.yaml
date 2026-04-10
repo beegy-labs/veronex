@@ -422,6 +422,8 @@ externalSecrets:
       s3SecretKey: ""          # e.g. "veronex/s3-secret-key"
       geminiApiKey: ""         # e.g. "veronex/gemini-api-key" (optional)
       encryptionKey: ""        # e.g. "veronex/encryption-key" (optional)
+      kafkaUsername: ""        # e.g. "veronex/kafka-username" (optional — consumer SASL)
+      kafkaPassword: ""        # e.g. "veronex/kafka-password" (optional — consumer SASL)
     refreshInterval: "1h"
 
   # Option 2: CSI Secrets Store Driver
