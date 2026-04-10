@@ -101,13 +101,13 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
     bridge.tool_cache.cache_fetched_tools(server_id, tools.clone()).await;
 
     // Index tools into Vespa (non-blocking, non-fatal).
-    // service_id = "global" until per-account MCP server ownership is introduced.
     if let Some(ref indexer) = state.mcp_tool_indexer {
         let indexer = indexer.clone();
         let tools_snap = tools.clone();
-        let deployment_id = state.vespa_deployment_id.to_string();
+        let environment = state.vespa_environment.to_string();
+        let tenant_id = state.vespa_tenant_id.to_string();
         tokio::spawn(async move {
-            indexer.index_server_tools(&deployment_id, "global", server_id, &tools_snap).await;
+            indexer.index_server_tools(&environment, &tenant_id, server_id, &tools_snap).await;
         });
     }
 
@@ -452,9 +452,10 @@ pub async fn delete_mcp_server(
     // Remove from Vespa index (non-blocking, non-fatal).
     if let Some(ref indexer) = state.mcp_tool_indexer {
         let indexer = indexer.clone();
-        let deployment_id = state.vespa_deployment_id.to_string();
+        let environment = state.vespa_environment.to_string();
+        let tenant_id = state.vespa_tenant_id.to_string();
         tokio::spawn(async move {
-            indexer.remove_server_tools(&deployment_id, "global", id).await;
+            indexer.remove_server_tools(&environment, &tenant_id, id).await;
         });
     }
 

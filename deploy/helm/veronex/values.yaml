@@ -57,11 +57,15 @@ veronex:
   # MCP vector selector top-K results returned from Vespa ANN search. Default: 8
   mcpVectorTopK: ""
 
-  # Vespa deployment partition key for shared Vespa instances.
-  # Isolates this deployment's MCP tool documents from others (prod, staging, dev, ...).
-  # REQUIRED when multiple deployments share a single Vespa — override per environment.
-  # e.g. --set veronex.vespaDeploymentId=prod-v1
-  vespaDeploymentId: "default"
+  # Vespa environment partition key — isolates documents per environment on a shared Vespa instance.
+  # REQUIRED when multiple environments share a single Vespa — override per environment.
+  # e.g. --set veronex.vespaEnvironment=prod
+  vespaEnvironment: "prod"
+
+  # Vespa tenant partition key — sub-partitions documents within an environment by team/org.
+  # Default: "default" (single-tenant deployments).
+  # e.g. --set veronex.vespaTenantId=team-a
+  vespaTenantId: "default"
 
   otel:
     # gRPC endpoint (e.g. http://otel-collector:4317)

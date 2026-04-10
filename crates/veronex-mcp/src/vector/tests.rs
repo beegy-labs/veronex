@@ -25,8 +25,8 @@ async fn vespa_feed_ok() {
     let client = VespaClient::new(&server.uri());
     let doc = super::vespa_client::McpToolDoc {
         tool_id:       "test-deploy:svc:srv:tool".into(),
-        deployment_id: "test-deploy".into(),
-        service_id:    "svc".into(),
+        environment: "test-deploy".into(),
+        tenant_id:    "svc".into(),
         server_id:     "srv".into(),
         server_name:   "test_server".into(),
         tool_name:     "tool".into(),
@@ -48,7 +48,7 @@ async fn vespa_feed_server_error_returns_err() {
 
     let client = VespaClient::new(&server.uri());
     let doc = super::vespa_client::McpToolDoc {
-        tool_id: "d:s:r:t".into(), deployment_id: "d".into(), service_id: "s".into(),
+        tool_id: "d:s:r:t".into(), environment: "d".into(), tenant_id: "s".into(),
         server_id: "r".into(), server_name: "s".into(), tool_name: "t".into(),
         description: "d".into(), input_schema: "{}".into(), embedding: vec![0.0; 1024],
     };
@@ -71,8 +71,8 @@ async fn vespa_search_returns_hits() {
                         "relevance": 0.92,
                         "fields": {
                             "tool_id": "test-deploy:svc:srv:get_weather",
-                            "deployment_id": "test-deploy",
-                            "service_id": "svc",
+                            "environment": "test-deploy",
+                            "tenant_id": "svc",
                             "server_id": "srv",
                             "tool_name": "get_weather",
                             "description": "Get current weather",
@@ -84,8 +84,8 @@ async fn vespa_search_returns_hits() {
                         "relevance": 0.85,
                         "fields": {
                             "tool_id": "test-deploy:svc:srv:get_forecast",
-                            "deployment_id": "test-deploy",
-                            "service_id": "svc",
+                            "environment": "test-deploy",
+                            "tenant_id": "svc",
                             "server_id": "srv",
                             "tool_name": "get_forecast",
                             "description": "Get weather forecast",

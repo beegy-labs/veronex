@@ -127,9 +127,12 @@ pub struct AppState {
     /// Tool indexer — embeds and feeds tools to Vespa on server register/delete.
     /// `None` when VESPA_URL is not configured.
     pub mcp_tool_indexer: Option<Arc<McpToolIndexer>>,
-    /// Deployment-level Vespa partition key — from `VESPA_DEPLOYMENT_ID` env var.
-    /// Isolates this deployment's documents from others on a shared Vespa instance.
-    pub vespa_deployment_id: Arc<str>,
+    /// Environment-level Vespa partition key — from `VESPA_ENVIRONMENT` env var.
+    /// Isolates documents per environment (prod, dev, local-dev) on a shared Vespa instance.
+    pub vespa_environment: Arc<str>,
+    /// Tenant-level Vespa partition key — from `VESPA_TENANT_ID` env var.
+    /// Sub-partitions documents within a deployment by logical tenant (e.g. org, team).
+    pub vespa_tenant_id: Arc<str>,
     /// Instance ID of this API pod (UUID string).
     /// Used by service health endpoint to identify pods.
     pub instance_id: Arc<str>,
