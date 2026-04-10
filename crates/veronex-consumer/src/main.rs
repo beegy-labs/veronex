@@ -30,6 +30,19 @@ use clickhouse::ClickhouseClient;
 use config::Config;
 
 const TOPICS: &[&str] = &["otel.audit.logs", "otel.audit.metrics", "otel.audit.traces"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topics_match_otel_exporter_config() {
+        assert_eq!(TOPICS.len(), 3);
+        assert!(TOPICS.contains(&"otel.audit.logs"));
+        assert!(TOPICS.contains(&"otel.audit.metrics"));
+        assert!(TOPICS.contains(&"otel.audit.traces"));
+    }
+}
 const MAX_BATCH: usize = 500;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 

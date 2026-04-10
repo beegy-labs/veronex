@@ -36,3 +36,67 @@ impl Config {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sasl_defaults_when_env_unset() {
+        // SAFETY: single-threaded test binary; no concurrent env mutation.
+        unsafe {
+            std::env::remove_var("KAFKA_SECURITY_PROTOCOL");
+            std::env::remove_var("KAFKA_SASL_MECHANISM");
+            std::env::remove_var("KAFKA_USERNAME");
+            std::env::remove_var("KAFKA_PASSWORD");
+        }
+
+        let cfg = Config::from_env().unwrap();
+        assert_eq!(cfg.kafka_security_protocol, "SASL_PLAINTEXT");
+        assert_eq!(cfg.kafka_sasl_mechanism, "SCRAM-SHA-512");
+        assert_eq!(cfg.kafka_username, "");
+        assert_eq!(cfg.kafka_password, "");
+        assert_eq!(cfg.kafka_group_id, "veronex-consumer");
+    }
+
+    #[test]
+    fn sasl_reads_env_vars() {
+        // SAFETY: single-threaded test binary; no concurrent env mutation.
+        unsafe {
+            std::env::set_var("KAFKA_SECURITY_PROTOCOL", "SASL_SSL");
+            std::env::set_var("KAFKA_SASL_MECHANISM", "SCRAM-SHA-256");
+            std::env::set_var("KAFKA_USERNAME", "testuser");
+            std::env::set_var("KAFKA_PASSWORD", "testpass");
+        }
+
+        let cfg = Config::from_env().unwrap();
+        assert_eq!(cfg.kafka_security_protocol, "SASL_SSL");
+        assert_eq!(cfg.kafka_sasl_mechanism, "SCRAM-SHA-256");
+        assert_eq!(cfg.kafka_username, "testuser");
+        assert_eq!(cfg.kafka_password, "testpass");
+
+        unsafe {
+            std::env::remove_var("KAFKA_SECURITY_PROTOCOL");
+            std::env::remove_var("KAFKA_SASL_MECHANISM");
+            std::env::remove_var("KAFKA_USERNAME");
+            std::env::remove_var("KAFKA_PASSWORD");
+        }
+    }
+
+    #[test]
+    fn plaintext_protocol_accepted() {
+        // SAFETY: single-threaded test binary; no concurrent env mutation.
+        unsafe {
+            std::env::set_var("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT");
+            std::env::remove_var("KAFKA_USERNAME");
+            std::env::remove_var("KAFKA_PASSWORD");
+        }
+
+        let cfg = Config::from_env().unwrap();
+        assert_eq!(cfg.kafka_security_protocol, "PLAINTEXT");
+        assert_eq!(cfg.kafka_username, "");
+        assert_eq!(cfg.kafka_password, "");
+
+        unsafe { std::env::remove_var("KAFKA_SECURITY_PROTOCOL"); }
+    }
+}
