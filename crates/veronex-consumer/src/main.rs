@@ -29,7 +29,7 @@ mod otlp;
 use clickhouse::ClickhouseClient;
 use config::Config;
 
-const TOPICS: &[&str] = &["otel-logs", "otel-metrics", "otel-traces"];
+const TOPICS: &[&str] = &["otel.audit.logs", "otel.audit.metrics", "otel.audit.traces"];
 const MAX_BATCH: usize = 500;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -54,6 +54,10 @@ async fn main() -> Result<()> {
     let consumer: StreamConsumer = ClientConfig::new()
         .set("bootstrap.servers", &cfg.kafka_broker)
         .set("group.id", &cfg.kafka_group_id)
+        .set("security.protocol", &cfg.kafka_security_protocol)
+        .set("sasl.mechanisms", &cfg.kafka_sasl_mechanism)
+        .set("sasl.username", &cfg.kafka_username)
+        .set("sasl.password", &cfg.kafka_password)
         .set("enable.auto.commit", "false") // manual commit after INSERT
         .set("auto.offset.reset", "earliest")
         .set("enable.partition.eof", "false")
@@ -109,17 +113,17 @@ async fn run_consumer_loop(consumer: StreamConsumer, ch: ClickhouseClient) -> Re
 
                         if let Some(payload) = m.payload() {
                             match topic.as_str() {
-                                "otel-logs" => match handlers::logs::parse(payload) {
+                                "otel.audit.logs" => match handlers::logs::parse(payload) {
                                     Ok(rows) => log_buf.extend(rows),
-                                    Err(e)   => tracing::warn!("Failed to parse otel-logs: {e}"),
+                                    Err(e)   => tracing::warn!("Failed to parse otel.audit.logs: {e}"),
                                 },
-                                "otel-metrics" => match handlers::metrics::parse(payload) {
+                                "otel.audit.metrics" => match handlers::metrics::parse(payload) {
                                     Ok(rows) => metric_buf.extend(rows),
-                                    Err(e)   => tracing::warn!("Failed to parse otel-metrics: {e}"),
+                                    Err(e)   => tracing::warn!("Failed to parse otel.audit.metrics: {e}"),
                                 },
-                                "otel-traces" => match handlers::traces::parse(payload) {
+                                "otel.audit.traces" => match handlers::traces::parse(payload) {
                                     Ok(rows) => trace_buf.extend(rows),
-                                    Err(e)   => tracing::warn!("Failed to parse otel-traces: {e}"),
+                                    Err(e)   => tracing::warn!("Failed to parse otel.audit.traces: {e}"),
                                 },
                                 other => tracing::debug!("Unknown topic: {other}"),
                             }
