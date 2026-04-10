@@ -40,8 +40,16 @@ spec:
               value: "info"
             - name: VALKEY_URL
               value: {{ include "veronex.valkeyUrl" . | quote }}
+            {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "veronex.secretName" . }}
+                  key: DATABASE_URL
+            {{- else }}
             - name: DATABASE_URL
               value: {{ include "veronex.postgresUrl" . | quote }}
+            {{- end }}
             {{- range $k, $v := .Values.veronexAgent.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

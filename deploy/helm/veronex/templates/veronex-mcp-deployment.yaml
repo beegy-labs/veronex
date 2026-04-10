@@ -58,9 +58,19 @@ spec:
             - name: VERONEX_URL
               value: {{ .Values.veronexMcp.veronexUrl | quote }}
             {{- end }}
-            {{- if .Values.veronexMcp.veronexApiKey }}
+            {{- if or .Values.veronexMcp.veronexApiKey .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+            {{- $secretName := .Values.externalSecrets.existingSecretName | default (printf "%s-veronex-secrets" .Release.Name) }}
+            {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+            - name: VERONEX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: VERONEX_API_KEY
+                  optional: true
+            {{- else if .Values.veronexMcp.veronexApiKey }}
             - name: VERONEX_API_KEY
               value: {{ .Values.veronexMcp.veronexApiKey | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.veronexMcp.searxngUrl }}
             - name: SEARXNG_URL

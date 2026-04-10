@@ -87,7 +87,15 @@ spec:
             {{- end }}
             {{- if .Values.veronex.bootstrapSuperPass }}
             - name: BOOTSTRAP_SUPER_PASS
+              {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "veronex.secretName" . }}
+                  key: BOOTSTRAP_SUPER_PASS
+                  optional: true
+              {{- else }}
               value: {{ .Values.veronex.bootstrapSuperPass | quote }}
+              {{- end }}
             {{- end }}
             {{- if or .Values.otelCollector.enabled .Values.veronex.otel.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -117,10 +125,24 @@ spec:
             {{- if or .Values.clickhouse.enabled .Values.externalClickhouse.host }}
             - name: CLICKHOUSE_HTTP_URL
               value: {{ include "veronex.clickhouseUrl" . | quote }}
+            {{- $secretName := .Values.externalSecrets.existingSecretName | default (printf "%s-veronex-secrets" .Release.Name) }}
+            {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: CLICKHOUSE_USER
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: CLICKHOUSE_PASSWORD
+            {{- else }}
             - name: CLICKHOUSE_USER
               value: {{ include "veronex.clickhouseUser" . | quote }}
             - name: CLICKHOUSE_PASSWORD
               value: {{ include "veronex.clickhousePassword" . | quote }}
+            {{- end }}
             - name: CLICKHOUSE_DB
               value: {{ include "veronex.clickhouseDb" . | quote }}
             {{- end }}

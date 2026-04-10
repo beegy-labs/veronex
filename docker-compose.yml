@@ -341,6 +341,7 @@ services:
       dockerfile: crates/veronex-consumer/Dockerfile
     environment:
       KAFKA_BROKER: redpanda:9092
+      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
       CLICKHOUSE_HTTP_URL: http://clickhouse:8123
       CLICKHOUSE_DB: veronex
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-veronex}

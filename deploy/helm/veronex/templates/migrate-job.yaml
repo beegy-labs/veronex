@@ -27,8 +27,16 @@ spec:
           args:
             - psql "$(DATABASE_URL)?sslmode=disable" -f /migrations/init.sql
           env:
+            {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "veronex.secretName" . }}
+                  key: DATABASE_URL
+            {{- else }}
             - name: DATABASE_URL
               value: {{ include "veronex.postgresUrl" . | quote }}
+            {{- end }}
           volumeMounts:
             - name: migrations
               mountPath: /migrations
@@ -80,10 +88,33 @@ spec:
               | clickhouse-client \
                   --host={{ $chHost }} \
                   --port=9000 \
-                  --user={{ include "veronex.clickhouseUser" . }} \
-                  --password={{ include "veronex.clickhousePassword" . }} \
-                  --database={{ include "veronex.clickhouseDb" . }} \
+                  --user="${CLICKHOUSE_USER}" \
+                  --password="${CLICKHOUSE_PASSWORD}" \
+                  --database="${CLICKHOUSE_DB}" \
                   --multiquery
+          env:
+            {{- $secretName := .Values.externalSecrets.existingSecretName | default (printf "%s-veronex-secrets" .Release.Name) }}
+            {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: CLICKHOUSE_USER
+                  optional: true
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: CLICKHOUSE_PASSWORD
+                  optional: true
+            {{- else }}
+            - name: CLICKHOUSE_USER
+              value: {{ include "veronex.clickhouseUser" . | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              value: {{ include "veronex.clickhousePassword" . | quote }}
+            {{- end }}
+            - name: CLICKHOUSE_DB
+              value: {{ include "veronex.clickhouseDb" . | quote }}
           volumeMounts:
             - name: schema
               mountPath: /schema

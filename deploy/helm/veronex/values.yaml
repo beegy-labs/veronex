@@ -122,6 +122,13 @@ veronexConsumer:
 
   logLevel: "info"  # RUST_LOG level
 
+  # Kafka/Redpanda auth — matches otelCollector.kafka pattern
+  kafka:
+    securityProtocol: PLAINTEXT   # PLAINTEXT | SASL_PLAINTEXT | SASL_SSL
+    saslMechanism: "SCRAM-SHA-512"
+    saslUsername: ""
+    saslPassword: ""
+
   resources:
     requests:
       cpu: 10m
@@ -415,6 +422,12 @@ externalSecrets:
       s3SecretKey: ""          # e.g. "veronex/s3-secret-key"
       geminiApiKey: ""         # e.g. "veronex/gemini-api-key" (optional)
       encryptionKey: ""        # e.g. "veronex/encryption-key" (optional)
+      kafkaUsername: ""        # e.g. "veronex/kafka-username" (optional — consumer SASL)
+      kafkaPassword: ""        # e.g. "veronex/kafka-password" (optional — consumer SASL)
+      clickhousePassword: ""   # e.g. "veronex/clickhouse-password" (optional — external CH)
+      clickhouseUser: ""       # e.g. "veronex/clickhouse-user" (optional — external CH)
+      veronexApiKey: ""        # e.g. "veronex/veronex-api-key" (optional — MCP server auth)
+      bootstrapSuperPass: ""   # e.g. "veronex/bootstrap-super-pass" (optional — initial admin password)
     refreshInterval: "1h"
 
   # Option 2: CSI Secrets Store Driver
