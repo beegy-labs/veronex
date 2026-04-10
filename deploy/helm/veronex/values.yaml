@@ -424,6 +424,9 @@ externalSecrets:
       encryptionKey: ""        # e.g. "veronex/encryption-key" (optional)
       kafkaUsername: ""        # e.g. "veronex/kafka-username" (optional — consumer SASL)
       kafkaPassword: ""        # e.g. "veronex/kafka-password" (optional — consumer SASL)
+      clickhousePassword: ""   # e.g. "veronex/clickhouse-password" (optional — external CH)
+      clickhouseUser: ""       # e.g. "veronex/clickhouse-user" (optional — external CH)
+      veronexApiKey: ""        # e.g. "veronex/veronex-api-key" (optional — MCP server auth)
     refreshInterval: "1h"
 
   # Option 2: CSI Secrets Store Driver
