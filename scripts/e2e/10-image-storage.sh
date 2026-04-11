@@ -170,7 +170,6 @@ hdr "Image Inference — API key (/api/generate)"
 case "$API_IMG_CODE" in
   200) pass "API image inference → 200" ;;
   503) info "API image inference → 503 (no eligible provider)"; save_counts; exit 0 ;;
-  000) info "API image inference → 000 (timeout — parallel phase contention)"; save_counts; exit 0 ;;
   *)   fail "API image inference → $API_IMG_CODE"; save_counts; exit 0 ;;
 esac
 
