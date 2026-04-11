@@ -61,21 +61,13 @@ wait
 
 # SSE check
 SSE_RES=$(cat "$TMPDIR_MF/sse" 2>/dev/null || echo "")
-if echo "$SSE_RES" | grep -q "data:"; then
-  pass "OpenAI SSE streaming has data events"
-elif echo "$SSE_RES" | grep -q '"429"\|Too Many\|rate.limit'; then
-  info "SSE: no data events (429 rate limited — parallel phase contention)"
-else
-  fail "SSE: no data events"
-fi
+echo "$SSE_RES" | grep -q "data:" \
+  && pass "OpenAI SSE streaming has data events" \
+  || fail "SSE: no data events"
 
 for ep in chat generate tags show gemini test_completions test_chat test_generate; do
   c=$(tail -1 "$TMPDIR_MF/$ep" 2>/dev/null || echo "000")
-  case "$c" in
-    200) pass "$ep → 200" ;;
-    429) info "$ep → 429 (rate limited — fresh API key may not have taken effect yet)" ;;
-    *)   fail "$ep → $c" ;;
-  esac
+  [ "$c" = "200" ] && pass "$ep → 200" || fail "$ep → $c"
 done
 
 # ── stream:false response format validation (Ollama compat) ───────────────────
@@ -602,7 +594,6 @@ case "$COMPLETIONS_CODE" in
   200) pass "POST /v1/completions → 200" ;;
   501) pass "POST /v1/completions → 501 (stub — not yet implemented)" ;;
   503) info "POST /v1/completions → 503 (no providers)" ;;
-  429) info "POST /v1/completions → 429 (rate limited — parallel phase contention)" ;;
   *) fail "POST /v1/completions → $COMPLETIONS_CODE" ;;
 esac
 

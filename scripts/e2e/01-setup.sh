@@ -26,6 +26,11 @@ if [ "$SKIP_DB_RESET" = "0" ]; then
   docker compose exec -T valkey valkey-cli EVAL \
     "local count=0; for _,k in ipairs(redis.call('keys','veronex:*')) do count=count+redis.call('del',k) end; return count" 0 \
     > /dev/null 2>&1 || true
+  # Clear all Vespa mcp_tools documents to prevent disk-full (507) during feed tests.
+  VESPA_URL="${VESPA_URL:-http://localhost:8080}"
+  curl -s -X DELETE \
+    "${VESPA_URL}/document/v1/mcp_tools/mcp_tools/docid?cluster=content&selection=true" \
+    > /dev/null 2>&1 || true
   docker compose restart veronex > /dev/null 2>&1
   info "Waiting for veronex to start..."
   for i in $(seq 1 30); do

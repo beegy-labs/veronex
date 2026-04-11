@@ -991,12 +991,9 @@ FEED_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
     \"input_schema\":\"{}\",
     \"embedding\":{\"values\":$(python3 -c "import json; print(json.dumps([0.1]*1024))")}
   }}" 2>/dev/null || echo "000")
-case "$FEED_CODE" in
-  200) pass "Vespa document feed (POST) → 200" ;;
-  507) info "Vespa document feed (POST) → 507 (disk full — clear Vespa data to fix)"
-       FEED_CODE="skip" ;;
-  *)   fail "Vespa document feed (POST) → $FEED_CODE" ;;
-esac
+[ "$FEED_CODE" = "200" ] \
+  && pass "Vespa document feed (POST) → 200" \
+  || fail "Vespa document feed (POST) → $FEED_CODE"
 
 # ANN search — expect our test doc back
 if [ "$FEED_CODE" = "200" ]; then
