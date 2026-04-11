@@ -11,7 +11,7 @@
 
 use serde_json::{json, Value};
 
-use crate::otlp::{attrs_to_map, nano_str_to_secs};
+use crate::otlp::{attrs_to_map, nano_str_to_ms, nano_str_to_ns};
 
 #[derive(Default)]
 pub struct LogRows {
@@ -82,7 +82,8 @@ pub fn parse(payload: &[u8]) -> anyhow::Result<LogRows> {
                     .get("timeUnixNano")
                     .and_then(Value::as_str)
                     .unwrap_or("0");
-                let timestamp = nano_str_to_secs(time_ns);
+                let timestamp_ns = nano_str_to_ns(time_ns);
+                let timestamp_ms = nano_str_to_ms(time_ns);
 
                 let log_attrs = attrs_to_map(lr.get("attributes"));
                 let event_name = log_attrs
@@ -92,7 +93,7 @@ pub fn parse(payload: &[u8]) -> anyhow::Result<LogRows> {
 
                 // Unified raw store (all events, 7-day TTL)
                 out.otel_logs.push(json!({
-                    "Timestamp":          timestamp,
+                    "Timestamp":          timestamp_ns,
                     "TraceId":            lr.get("traceId").and_then(Value::as_str).unwrap_or(""),
                     "SpanId":             lr.get("spanId").and_then(Value::as_str).unwrap_or(""),
                     "SeverityText":       lr.get("severityText").and_then(Value::as_str).unwrap_or("INFO"),
@@ -110,7 +111,7 @@ pub fn parse(payload: &[u8]) -> anyhow::Result<LogRows> {
                 match event_name.as_str() {
                     "inference.completed" => {
                         out.inference_logs.push(json!({
-                            "event_time":        timestamp,
+                            "event_time":        timestamp_ms,
                             "api_key_id":        log_attrs.get("api_key_id").cloned().unwrap_or_default(),
                             "tenant_id":         log_attrs.get("tenant_id").cloned().unwrap_or_default(),
                             "request_id":        log_attrs.get("request_id").cloned().unwrap_or_default(),
@@ -130,7 +131,7 @@ pub fn parse(payload: &[u8]) -> anyhow::Result<LogRows> {
                     }
                     "audit.action" => {
                         out.audit_events.push(json!({
-                            "event_time":    timestamp,
+                            "event_time":    timestamp_ms,
                             "account_id":    log_attrs.get("account_id").cloned().unwrap_or_default(),
                             "account_name":  log_attrs.get("account_name").cloned().unwrap_or_default(),
                             "action":        log_attrs.get("action").cloned().unwrap_or_default(),
@@ -143,7 +144,7 @@ pub fn parse(payload: &[u8]) -> anyhow::Result<LogRows> {
                     }
                     "mcp.tool_call" => {
                         out.mcp_tool_calls.push(json!({
-                            "event_time":      timestamp,
+                            "event_time":      timestamp_ms,
                             "request_id":      log_attrs.get("request_id").cloned().unwrap_or_default(),
                             "api_key_id":      log_attrs.get("api_key_id").cloned().unwrap_or_default(),
                             "tenant_id":       log_attrs.get("tenant_id").cloned().unwrap_or_default(),
