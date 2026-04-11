@@ -13,8 +13,9 @@
 #   Phase 1 (sequential) : 01-setup
 #   Phase 2 (parallel)   : 03-inference  +  04-crud  05-security  09-metrics
 #                          10-image  12-mcp
-#   Phase 3 (parallel)   : 02-scheduler  06-api-surface  07-lifecycle  08-sdd-advanced
+#   Phase 3 (parallel)   : 02-scheduler  06-api-surface  08-sdd-advanced
 #     → Phase 3 starts only after 03-inference completes (AIMD state required)
+#   Phase 3.5 (sequential): 07-lifecycle  (restarts veronex — must not run in parallel)
 #   Phase 4 (sequential) : 13-frontend (Playwright UI tests)
 #     → runs after all backend phases complete
 #
@@ -221,17 +222,24 @@ done
 wait_all "${P2_WAIT_ARGS[@]}"
 
 # ── Phase 3: AIMD-dependent tests (parallel) ─────────────────────────────────
+# NOTE: 07-lifecycle.sh is excluded here because it restarts the veronex
+# container, which would break concurrent requests in 06-api-surface.sh.
 echo ""
 echo -e "${CYAN}${BOLD}[Phase 3] AIMD-dependent tests (parallel)${NC}"
 
 P3_WAIT_ARGS=()
 
-for phase in 02-scheduler.sh 06-api-surface.sh 07-lifecycle.sh 08-sdd-advanced.sh; do
+for phase in 02-scheduler.sh 06-api-surface.sh 08-sdd-advanced.sh; do
   _launch_bg "$phase"
   P3_WAIT_ARGS+=("$_BG_PID" "$phase")
 done
 
 wait_all "${P3_WAIT_ARGS[@]}"
+
+# ── Phase 3.5: Lifecycle test (sequential — restarts veronex) ─────────────────
+echo ""
+echo -e "${CYAN}${BOLD}[Phase 3.5] Lifecycle test (sequential — restarts veronex)${NC}"
+run_phase "07-lifecycle.sh"
 
 # ── Phase 4: Frontend E2E (Playwright) ───────────────────────────────────────
 echo ""

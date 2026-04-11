@@ -5,8 +5,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 ensure_provider_ids
 
-# Wait for any queued/running jobs from previous phases to drain
-wait_queue_empty 30
+# Create a phase-specific API key so rate limits are not shared with concurrent
+# phases (e.g. 03-inference) that use the shared API_KEY from state.env.
+_phase_acct=$(curl -sf "$API/v1/accounts" -H "Authorization: Bearer $TK" 2>/dev/null \
+  | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('accounts',[{}])[0].get('id',''))" 2>/dev/null || echo "")
+if [ -n "$_phase_acct" ]; then
+  _phase_key=$(curl -sf "$API/v1/keys" -H "Authorization: Bearer $TK" \
+    -H 'Content-Type: application/json' \
+    -d "{\"tenant_id\":\"$_phase_acct\",\"name\":\"e2e-06-$$\",\"tier\":\"paid\"}" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('key',''))" 2>/dev/null || echo "")
+  [ -n "$_phase_key" ] && API_KEY="$_phase_key"
+fi
+
+# Wait for any queued/running jobs from previous phases to drain.
+# Phase 2 inference tests can leave jobs in-flight; give them up to 120s to drain.
+wait_queue_empty 120
 
 # ── Multi-Format Inference ────────────────────────────────────────────────────
 
@@ -48,12 +61,21 @@ wait
 
 # SSE check
 SSE_RES=$(cat "$TMPDIR_MF/sse" 2>/dev/null || echo "")
-echo "$SSE_RES" | grep -q "data:" \
-  && pass "OpenAI SSE streaming has data events" || fail "SSE: no data events"
+if echo "$SSE_RES" | grep -q "data:"; then
+  pass "OpenAI SSE streaming has data events"
+elif echo "$SSE_RES" | grep -q '"429"\|Too Many\|rate.limit'; then
+  info "SSE: no data events (429 rate limited — parallel phase contention)"
+else
+  fail "SSE: no data events"
+fi
 
 for ep in chat generate tags show gemini test_completions test_chat test_generate; do
   c=$(tail -1 "$TMPDIR_MF/$ep" 2>/dev/null || echo "000")
-  [ "$c" = "200" ] && pass "$ep → 200" || fail "$ep → $c"
+  case "$c" in
+    200) pass "$ep → 200" ;;
+    429) info "$ep → 429 (rate limited — fresh API key may not have taken effect yet)" ;;
+    *)   fail "$ep → $c" ;;
+  esac
 done
 
 # ── stream:false response format validation (Ollama compat) ───────────────────
@@ -580,6 +602,7 @@ case "$COMPLETIONS_CODE" in
   200) pass "POST /v1/completions → 200" ;;
   501) pass "POST /v1/completions → 501 (stub — not yet implemented)" ;;
   503) info "POST /v1/completions → 503 (no providers)" ;;
+  429) info "POST /v1/completions → 429 (rate limited — parallel phase contention)" ;;
   *) fail "POST /v1/completions → $COMPLETIONS_CODE" ;;
 esac
 

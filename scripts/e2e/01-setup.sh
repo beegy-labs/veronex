@@ -9,6 +9,11 @@ source "$SCRIPT_DIR/_lib.sh"; load_state
 hdr "Phase 1: Infrastructure Setup"
 
 if [ "$SKIP_DB_RESET" = "0" ]; then
+  # Terminate active postgres connections to the veronex DB before DROP SCHEMA.
+  # This prevents lock contention when veronex has open connection pool connections.
+  docker compose exec -T postgres psql -U postgres -d postgres -c \
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='veronex' AND pid <> pg_backend_pid();" \
+    > /dev/null 2>&1 || true
   docker compose exec -T postgres psql -U veronex -d veronex -c \
     "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
   docker compose exec -T postgres psql -U veronex -d veronex \
