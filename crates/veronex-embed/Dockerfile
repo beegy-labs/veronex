@@ -12,7 +12,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/app/target,sharing=locked \
     cargo chef cook --release -p veronex-embed --recipe-path recipe.json
 
 COPY Cargo.toml Cargo.lock ./
