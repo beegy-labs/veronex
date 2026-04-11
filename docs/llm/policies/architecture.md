@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-03-28 | Classification: Constitutional
+> SSOT | **Last Updated**: 2026-04-11 | Classification: Constitutional
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision
@@ -121,6 +121,7 @@ Background loops:
     → provider health (Ollama/Gemini)
     → hw_metrics fetch (node-exporter direct) → Valkey cache (HwMetrics with gpu_vendor)
     → thermal.set_thresholds(gpu_vendor) + thermal.update(temp_c)
+    → infra service probes (postgresql/valkey/clickhouse/s3/vespa/embed) → veronex:svc:health:{instance_id} HASH
   run_sync_loop (base tick 30s, per-provider sync_interval ~300s):
     → per Ollama provider: /api/version + /api/tags + /api/ps + /api/show
     → model sync + VRAM probe + KV compute

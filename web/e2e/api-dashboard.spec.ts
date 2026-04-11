@@ -87,6 +87,13 @@ test.describe('API: Dashboard & Inference @smoke', () => {
       expect(svc.name).toBeTruthy()
       expect(['ok', 'degraded', 'unavailable']).toContain(svc.status)
     }
+
+    // Required services must always appear (postgresql, valkey probed unconditionally;
+    // embed is optional but always present when EMBED_URL is set in docker-compose)
+    const infraNames = body.infrastructure.map((s: { name: string }) => s.name)
+    expect(infraNames).toContain('postgresql')
+    expect(infraNames).toContain('valkey')
+    expect(infraNames).toContain('embed')
   })
 
   // ── Lab Settings ────────────────────────────────────────────────────────────

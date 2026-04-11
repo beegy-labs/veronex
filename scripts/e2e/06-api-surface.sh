@@ -203,6 +203,11 @@ try:
     # Verify pods have required fields
     for p in pods:
         assert p.get('id') and p.get('status') in ('online','offline'), f'bad pod: {p}'
+    # Verify expected infra services are present
+    infra_names = {s['name'] for s in infra}
+    required = {'postgresql', 'valkey', 'embed'}
+    missing = required - infra_names
+    assert not missing, f'missing services: {missing}'
     print('ok:' + ','.join(ok_parts))
 except Exception as ex:
     print(f'error:{ex}')
