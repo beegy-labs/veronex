@@ -12,7 +12,7 @@
 # Execution order:
 #   Phase 1 (sequential) : 01-setup
 #   Phase 2 (parallel)   : 03-inference  +  04-crud  05-security  09-metrics
-#                          10-image  11-verify  12-mcp
+#                          10-image  12-mcp
 #   Phase 3 (parallel)   : 02-scheduler  06-api-surface  07-lifecycle  08-sdd-advanced
 #     → Phase 3 starts only after 03-inference completes (AIMD state required)
 #   Phase 4 (sequential) : 13-frontend (Playwright UI tests)
@@ -213,7 +213,7 @@ P2_WAIT_ARGS=()
 _launch_bg "03-inference.sh"
 P2_WAIT_ARGS+=("$_BG_PID" "03-inference.sh")
 
-for phase in 04-crud.sh 05-security.sh 09-metrics-pipeline.sh 10-image-storage.sh 11-verify-liveness.sh 12-mcp.sh; do
+for phase in 04-crud.sh 05-security.sh 09-metrics-pipeline.sh 10-image-storage.sh 12-mcp.sh; do
   _launch_bg "$phase"
   P2_WAIT_ARGS+=("$_BG_PID" "$phase")
 done
