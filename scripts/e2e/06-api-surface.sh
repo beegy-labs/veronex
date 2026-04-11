@@ -204,8 +204,11 @@ try:
     for p in pods:
         assert p.get('id') and p.get('status') in ('online','offline'), f'bad pod: {p}'
     # Verify expected infra services are present
+    import os
     infra_names = {s['name'] for s in infra}
-    required = {'postgresql', 'valkey', 'embed'}
+    required = {'postgresql', 'valkey'}
+    if os.environ.get('EMBED_URL'):
+        required.add('embed')
     missing = required - infra_names
     assert not missing, f'missing services: {missing}'
     print('ok:' + ','.join(ok_parts))
