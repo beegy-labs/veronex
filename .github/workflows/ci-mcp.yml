@@ -117,8 +117,12 @@ jobs:
       - name: Update image tag
         run: |
           TAG="${{ needs.build.outputs.tag }}"
-          FILE="clusters/home/values/veronex-dev-values.yaml"
-          sed -i "/^mcp:/,/^[a-z]{{s/tag: .*/tag: \"${TAG}\"/}}" "$FILE"
+          case "${{ github.ref_name }}" in
+            main)    FILE="clusters/home/values/veronex-prod-values.yaml" ;;
+            develop) FILE="clusters/home/values/veronex-dev-values.yaml" ;;
+            *)       exit 0 ;;
+          esac
+          sed -i "/^mcp:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
 
       - name: Commit and push
         run: |
