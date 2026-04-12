@@ -1011,7 +1011,7 @@ pub async fn sync_provider(
                     } else {
                         num_parallel
                     };
-                    let initial = vram_slots.min(MAX_COMPUTE_CAP).saturating_sub(committed).max(1);
+                    let initial = vram_slots.min(MAX_COMPUTE_CAP).saturating_sub(committed).max(1).min(num_parallel);
                     vram_pool.set_max_concurrent(provider_id, &model.name, initial);
                 }
                 if stats.p95_latency_ms > 0.0 {
@@ -1170,7 +1170,8 @@ pub async fn sync_provider(
                     }
                     // LLM correction is increase-only: floor = current, ceil = current+2.
                     // AIMD is solely responsible for decreases; LLM can only nudge upward.
-                    let upper = num_parallel * 2;
+                    // SDD: max_concurrent must not exceed num_parallel.
+                    let upper = num_parallel;
                     let current = vram_pool.max_concurrent(provider_id, &mr.model);
                     let change_floor = current; // never decrease via LLM
                     let change_ceil = current.saturating_add(2);
