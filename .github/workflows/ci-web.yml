@@ -110,7 +110,7 @@ jobs:
   deploy:
     name: Update GitOps
     needs: build
-    if: needs.build.outputs.skipped != 'true'
+    if: needs.build.outputs.skipped != 'true' && github.ref_name == 'develop'
     runs-on: veronex-runner-set
     steps:
       - uses: actions/checkout@v4
