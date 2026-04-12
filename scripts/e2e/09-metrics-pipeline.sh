@@ -101,9 +101,9 @@ if [ "$METRICS_FOUND" = "0" ]; then
   fail "No metrics in ClickHouse after ${WAIT_SECS}s — pipeline broken"
   # Dump diagnostic info
   info "Checking Redpanda topic..."
-  TOPIC_COUNT=$(docker compose exec -T redpanda rpk topic consume otel-metrics -n 1 --fetch-max-wait 3s 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+  TOPIC_COUNT=$(docker compose exec -T redpanda rpk topic consume otel.audit.metrics -n 1 --fetch-max-wait 3s 2>/dev/null | wc -l | tr -d ' ' || echo "0")
   if [ "${TOPIC_COUNT:-0}" -gt 0 ] 2>/dev/null; then
-    info "Redpanda otel-metrics topic has data (OTel → Redpanda OK, veronex-consumer → ClickHouse broken)"
+    info "Redpanda otel.audit.metrics topic has data (OTel → Redpanda OK, veronex-consumer → ClickHouse broken)"
     CONSUMER_STATUS=$(docker compose ps veronex-consumer --format json 2>/dev/null \
       | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('State','unknown'))" 2>/dev/null || echo "unknown")
     info "veronex-consumer container state: $CONSUMER_STATUS"
@@ -265,18 +265,32 @@ PIPE_BODY=$(echo "$PIPE_RES" | sed '$d')
   && pass "GET /v1/dashboard/pipeline → 200" \
   || fail "GET /v1/dashboard/pipeline → $PIPE_CODE"
 if [ "$PIPE_CODE" = "200" ]; then
-  PIPE_FIELDS=$(echo "$PIPE_BODY" | python3 -c "
+  PIPE_CHECK=$(echo "$PIPE_BODY" | python3 -c "
 import sys, json
+EXPECTED_TOPICS = {'otel.audit.logs', 'otel.audit.metrics', 'otel.audit.traces'}
 try:
     d = json.loads(sys.stdin.read())
-    ok = all(k in d for k in ['kafka_consumer_lag', 'tpm', 'consumers'])
-    print('ok' if ok else 'missing:' + ','.join(k for k in ['kafka_consumer_lag','tpm','consumers'] if k not in d))
+    if 'topics' not in d or 'available' not in d:
+        print('missing_fields:' + ','.join(k for k in ['topics','available'] if k not in d))
+    else:
+        got_topics = {t['topic'] for t in d['topics']}
+        missing = EXPECTED_TOPICS - got_topics
+        if missing:
+            print('missing_topics:' + ','.join(sorted(missing)))
+        else:
+            lags = {t['topic']: t['lag'] for t in d['topics']}
+            print('ok|' + ' '.join(f\"{k}=lag:{v}\" for k,v in lags.items()))
 except Exception as e:
     print(f'parse_error:{e}')
 " 2>/dev/null || echo "parse_error")
-  [ "$PIPE_FIELDS" = "ok" ] \
-    && pass "Pipeline health fields present (kafka_consumer_lag, tpm, consumers)" \
-    || info "Pipeline health fields: $PIPE_FIELDS (Kafka/ClickHouse may not be running)"
+  PIPE_STATUS=$(echo "$PIPE_CHECK" | cut -d'|' -f1)
+  PIPE_DETAIL=$(echo "$PIPE_CHECK" | cut -d'|' -f2-)
+  case "$PIPE_STATUS" in
+    ok)             pass "Pipeline health topics: $PIPE_DETAIL" ;;
+    missing_fields) fail "Pipeline health response missing fields: $PIPE_DETAIL" ;;
+    missing_topics) fail "Pipeline health missing topics: $PIPE_DETAIL" ;;
+    *)              fail "Pipeline health parse error: $PIPE_CHECK" ;;
+  esac
 fi
 
 save_counts
