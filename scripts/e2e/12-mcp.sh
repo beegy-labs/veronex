@@ -983,7 +983,8 @@ FEED_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
   -H "Content-Type: application/json" \
   -d "{\"fields\":{
     \"tool_id\":\"e2e-test:e2e-srv:get_weather\",
-    \"service_id\":\"global\",
+    \"environment\":\"local-dev\",
+    \"tenant_id\":\"default\",
     \"server_id\":\"e2e-srv\",
     \"tool_name\":\"get_weather\",
     \"description\":\"Get current weather for a city\",
@@ -1000,7 +1001,7 @@ if [ "$FEED_CODE" = "200" ]; then
   SEARCH_COUNT=$(curl -s --max-time 10 \
     -X POST "$VESPA_URL/search/" \
     -H "Content-Type: application/json" \
-    -d "{\"yql\":\"select tool_id from mcp_tools where service_id contains 'global' and ({targetHits:4}nearestNeighbor(embedding, qe)) limit 4\",\"ranking\":\"semantic\",\"input.query(qe)\":{\"values\":$(python3 -c "import json; print(json.dumps([0.1]*1024))")}}" \
+    -d "{\"yql\":\"select tool_id from mcp_tools where environment contains 'local-dev' and ({targetHits:4}nearestNeighbor(embedding, qe)) limit 4\",\"ranking\":\"semantic\",\"input.query(qe)\":{\"values\":$(python3 -c "import json; print(json.dumps([0.1]*1024))")}}" \
     2>/dev/null \
     | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(len(d.get('root',{}).get('children',[])))" 2>/dev/null || echo "0")
   [ "${SEARCH_COUNT:-0}" -gt 0 ] 2>/dev/null \

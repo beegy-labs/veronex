@@ -13,20 +13,33 @@ import { TimezoneProvider } from '@/components/timezone-provider'
 import { LabSettingsProvider } from '@/components/lab-settings-provider'
 import { Nav404Provider } from '@/components/nav-404-context'
 import { NavigationProgressProvider } from '@/components/nav-progress'
+import { AppShell } from '@/components/layout/AppShell'
+import { HexLogo } from '@/components/nav-icons'
+import { TimeRangeProvider } from '@/components/time-range-context'
 import { serversQuery } from '@/lib/queries'
 import { STALE_TIME_FAST } from '@/lib/constants'
 
-function AppShell({ children }: { children: React.ReactNode }) {
+const NAV_COLLAPSED_KEY = 'nav-collapsed'
+
+function AuthShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const queryClient = useQueryClient()
   const isLoginPage = pathname === '/login'
   const isSetupPage = pathname === '/setup'
 
-  // Prefetch the server list as soon as the authenticated shell mounts so that
-  // dashboard's dependent per-server queries don't have to wait for it.
-  // isLoggedIn() reads a cookie synchronously — it is not React state, so it is
-  // intentionally omitted from the dependency array (pure read, no subscription).
+  const [collapsed, setCollapsed] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
+
+  // Restore collapsed state from localStorage
+  useEffect(() => {
+    if (localStorage.getItem(NAV_COLLAPSED_KEY) === 'true') setCollapsed(true)
+  }, [])
+
+  // Close mobile nav on route change
+  useEffect(() => { setMobileOpen(false) }, [pathname])
+
+  // Prefetch server list for authenticated shell
   useEffect(() => {
     if (!isLoginPage && !isSetupPage && isLoggedIn()) {
       queryClient.prefetchQuery(serversQuery())
@@ -34,13 +47,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryClient, isLoginPage, isSetupPage])
 
+  // Setup / auth redirect
   useEffect(() => {
     api.setupStatus().then(({ needs_setup }) => {
       if (needs_setup) {
-        // Setup not complete — only /setup is allowed
         if (!isSetupPage) router.replace('/setup')
       } else {
-        // Setup complete — /setup must not be accessible
         if (isSetupPage) {
           router.replace(isLoggedIn() ? '/' : '/login')
         } else if (!isLoginPage && !isLoggedIn()) {
@@ -48,12 +60,19 @@ function AppShell({ children }: { children: React.ReactNode }) {
         }
       }
     }).catch(() => {
-      // API unreachable — fall back to auth check (don't redirect to setup)
       if (!isSetupPage && !isLoginPage && !isLoggedIn()) {
         router.replace('/login')
       }
     })
   }, [isLoginPage, isSetupPage, router])
+
+  function toggleCollapsed() {
+    setCollapsed((v) => {
+      const next = !v
+      localStorage.setItem(NAV_COLLAPSED_KEY, String(next))
+      return next
+    })
+  }
 
   if (isLoginPage || isSetupPage) {
     return <>{children}</>
@@ -61,12 +80,23 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <NavigationProgressProvider>
-      <div className="flex h-full min-h-screen">
-        <Nav />
-        <main className="flex-1 overflow-auto p-4 pt-16 md:p-8">
-          {children}
-        </main>
-      </div>
+      <TimeRangeProvider>
+      <AppShell
+        mobileBrand={
+          <>
+            <HexLogo className="h-6 w-6 flex-shrink-0" />
+            <span className="text-sm font-semibold tracking-tight">Veronex</span>
+          </>
+        }
+        mobileOpen={mobileOpen}
+        onMobileToggle={() => setMobileOpen((v) => !v)}
+        onMobileClose={() => setMobileOpen(false)}
+        sidebarWidth={collapsed ? 'md:w-14' : 'md:w-56'}
+        sidebar={<Nav collapsed={collapsed} onToggle={toggleCollapsed} />}
+      >
+        {children}
+      </AppShell>
+      </TimeRangeProvider>
     </NavigationProgressProvider>
   )
 }
@@ -104,7 +134,7 @@ export default function RootLayout({
               <QueryClientProvider client={queryClient}>
                 <LabSettingsProvider>
                   <Nav404Provider>
-                    <AppShell>{children}</AppShell>
+                    <AuthShell>{children}</AuthShell>
                   </Nav404Provider>
                 </LabSettingsProvider>
               </QueryClientProvider>

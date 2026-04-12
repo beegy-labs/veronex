@@ -70,7 +70,7 @@ pub async fn get_service_health(
         }
     }
 
-    let svc_names = ["postgresql", "valkey", "clickhouse", "s3", "vespa"];
+    let svc_names = ["postgresql", "valkey", "clickhouse", "s3", "vespa", "embed"];
     let infrastructure: Vec<ServiceStatus> = svc_names.iter().filter_map(|name| {
         let probes = all_probes.get(*name)?;
         let ok_count = probes.iter().filter(|p| p.s == "ok").count();

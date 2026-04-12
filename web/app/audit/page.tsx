@@ -52,7 +52,7 @@ export default function AuditPage() {
   const pageItems = useMemo(() => events.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE), [events, safePage])
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto">
+    <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold">{t('audit.title')}</h1>

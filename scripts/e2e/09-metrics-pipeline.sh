@@ -101,7 +101,7 @@ if [ "$METRICS_FOUND" = "0" ]; then
   fail "No metrics in ClickHouse after ${WAIT_SECS}s — pipeline broken"
   # Dump diagnostic info
   info "Checking Redpanda topic..."
-  TOPIC_COUNT=$(docker compose exec -T redpanda rpk topic consume otel-metrics --num 1 --timeout 3s 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+  TOPIC_COUNT=$(docker compose exec -T redpanda rpk topic consume otel-metrics -n 1 --fetch-max-wait 3s 2>/dev/null | wc -l | tr -d ' ' || echo "0")
   if [ "${TOPIC_COUNT:-0}" -gt 0 ] 2>/dev/null; then
     info "Redpanda otel-metrics topic has data (OTel → Redpanda OK, veronex-consumer → ClickHouse broken)"
     CONSUMER_STATUS=$(docker compose ps veronex-consumer --format json 2>/dev/null \

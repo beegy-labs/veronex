@@ -79,6 +79,7 @@ pub async fn spawn_background_tasks(
         config.analytics_url.clone(),
         std::env::var("S3_ENDPOINT").ok(),
         std::env::var("VESPA_URL").ok(),
+        std::env::var("EMBED_URL").ok(),
     ));
 
     // ── Sync loop (unified: health + models + VRAM) ────────────────

@@ -191,20 +191,30 @@ async fn flush(
     pending: &mut HashMap<(String, i32), i64>,
 ) {
     macro_rules! try_insert {
-        ($table:expr, $rows:expr) => {
+        ($table:expr, $rows:expr) => {{
             if !$rows.is_empty() {
-                if let Err(e) = ch.insert($table, $rows).await {
-                    tracing::error!("INSERT into {} failed (will retry): {e}", $table);
-                    return; // abort flush — offsets not committed
+                let n = $rows.len();
+                match ch.insert($table, &$rows).await {
+                    Ok(_) => {}
+                    Err(clickhouse::InsertError::BadData(msg)) => {
+                        // HTTP 4xx: data is malformed — retrying won't help.
+                        // Discard rows and continue so the pipeline doesn't stall.
+                        tracing::error!("INSERT into {} bad data (discarding {n} rows): {}", $table, msg);
+                        $rows.clear();
+                    }
+                    Err(clickhouse::InsertError::Transient(e)) => {
+                        tracing::error!("INSERT into {} failed (will retry): {e}", $table);
+                        return; // abort flush — offsets not committed
+                    }
                 }
             }
-        };
+        }};
     }
 
-    try_insert!("otel_logs",         &log_buf.otel_logs);
-    try_insert!("inference_logs",    &log_buf.inference_logs);
-    try_insert!("audit_events",      &log_buf.audit_events);
-    try_insert!("mcp_tool_calls",    &log_buf.mcp_tool_calls);
+    try_insert!("otel_logs",         log_buf.otel_logs);
+    try_insert!("inference_logs",    log_buf.inference_logs);
+    try_insert!("audit_events",      log_buf.audit_events);
+    try_insert!("mcp_tool_calls",    log_buf.mcp_tool_calls);
     try_insert!("otel_metrics_gauge", metric_buf);
     try_insert!("otel_traces_raw",   trace_buf);
 

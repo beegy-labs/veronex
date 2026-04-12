@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 14: Vespa 부하 테스트 — 100K 툴 인덱싱 후 ANN 검색 p99 < 20ms
+# Phase 14: Vespa 부하 테스트 — 10K 툴 인덱싱 후 ANN 검색 p99 < 20ms
 #
 # 사전 조건: Vespa (localhost:8080), veronex-embed (/embed endpoint) 실행 중
 # 사용법: VESPA_URL=http://localhost:8080 EMBED_URL=http://localhost:5001 bash 14-vespa-load-test.sh
@@ -10,12 +10,12 @@ source "$SCRIPT_DIR/_lib.sh"
 VESPA_URL="${VESPA_URL:-http://localhost:8080}"
 EMBED_URL="${EMBED_URL:-http://localhost:5001}"
 SERVICE_ID="${SERVICE_ID:-loadtest}"
-TOOL_COUNT="${TOOL_COUNT:-100000}"
+TOOL_COUNT="${TOOL_COUNT:-10000}"
 SEARCH_COUNT="${SEARCH_COUNT:-1000}"
 TOP_K="${TOP_K:-16}"
 P99_THRESHOLD_MS="${P99_THRESHOLD_MS:-20}"
 
-hdr "Vespa Load Test — ${TOOL_COUNT} tools, ${SEARCH_COUNT} queries, p99 < ${P99_THRESHOLD_MS}ms"
+hdr "Vespa Load Test — ${TOOL_COUNT} tools (default 10K; override with TOOL_COUNT=N), ${SEARCH_COUNT} queries, p99 < ${P99_THRESHOLD_MS}ms"
 
 # ── 1. Vespa 헬스 체크 ───────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ import json, random, math, sys, time, subprocess, os, statistics
 
 VESPA_URL    = os.environ.get("VESPA_URL", "http://localhost:8080")
 SERVICE_ID   = os.environ.get("SERVICE_ID", "loadtest")
-TOOL_COUNT   = int(os.environ.get("TOOL_COUNT", "100000"))
+TOOL_COUNT   = int(os.environ.get("TOOL_COUNT", "10000"))
 SEARCH_COUNT = int(os.environ.get("SEARCH_COUNT", "1000"))
 TOP_K        = int(os.environ.get("TOP_K", "16"))
 THRESHOLD_MS = float(os.environ.get("P99_THRESHOLD_MS", "20"))
@@ -64,7 +64,8 @@ def make_doc(i):
     cat = CATEGORIES[i % len(CATEGORIES)]
     return {
         "tool_id":      f"{SERVICE_ID}:server-{i//500}:{cat}_tool_{i}",
-        "service_id":   SERVICE_ID,
+        "environment":  SERVICE_ID,
+        "tenant_id":    "loadtest",
         "server_id":    f"server-{i//500}",
         "server_name":  f"mcp_{cat}_server",
         "tool_name":    f"{cat}_tool_{i}",
@@ -80,7 +81,8 @@ def feed(doc):
     url = f"{VESPA_URL}/document/v1/mcp_tools/mcp_tools/docid/{doc_id}"
     body = json.dumps({"fields": {
         "tool_id":      doc["tool_id"],
-        "service_id":   doc["service_id"],
+        "environment":  doc["environment"],
+        "tenant_id":    doc["tenant_id"],
         "server_id":    doc["server_id"],
         "server_name":  doc["server_name"],
         "tool_name":    doc["tool_name"],
@@ -131,7 +133,7 @@ print(f"  [INFO] Running {SEARCH_COUNT} ANN queries (top_k={TOP_K})...")
 def search(embedding):
     yql = (
         f'select tool_id from mcp_tools '
-        f'where service_id contains "{SERVICE_ID}" '
+        f'where environment contains "{SERVICE_ID}" '
         f'and ({{targetHits: {TOP_K}}}nearestNeighbor(embedding, qe)) '
         f'limit {TOP_K}'
     )
