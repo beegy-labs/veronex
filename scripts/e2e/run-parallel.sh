@@ -87,12 +87,14 @@ if [ "${SKIP_SETUP:-0}" = "0" ]; then
 fi
 
 # ── Wave 1: Read-only / independent (parallel) ───────────────────────────────
-echo -e "\n${CYAN}${BOLD}── Wave 1 (parallel): security · metrics · frontend ──${NC}"
-_run_wave 05-security 09-metrics-pipeline 13-frontend
+echo -e "\n${CYAN}${BOLD}── Wave 1 (parallel): security · metrics ──${NC}"
+_run_wave 05-security 09-metrics-pipeline
 
 # ── Wave 2: Feature tests with isolated resources (parallel) ─────────────────
-echo -e "\n${CYAN}${BOLD}── Wave 2 (parallel): crud · api-surface · image-storage · mcp · vision-fallback · mcp-analytics ──${NC}"
-_run_wave 04-crud 06-api-surface 10-image-storage 12-mcp 15-vision-fallback 17-mcp-analytics
+# 13-frontend moved here (out of Wave 1) so Playwright audit tests don't race
+# with 05-security's heavy audit-event generation.
+echo -e "\n${CYAN}${BOLD}── Wave 2 (parallel): crud · api-surface · image-storage · mcp · vision-fallback · mcp-analytics · frontend ──${NC}"
+_run_wave 04-crud 06-api-surface 10-image-storage 12-mcp 15-vision-fallback 17-mcp-analytics 13-frontend
 
 # ── Wave 3: Inference pipeline + Vespa load test (sequential) ────────────────
 # 14-vespa-load-test is write-heavy (100K docs) — runs after agent re-index settles.
