@@ -202,13 +202,10 @@ pub async fn get_pipeline_health(
     let Some(ref redpanda_admin_url) = state.kafka_broker_admin_url else {
         return Json(PipelineHealthResponse { topics: vec![], available: false }).into_response();
     };
-    let Some(ref ch_url) = state.clickhouse_http_url else {
-        return Json(PipelineHealthResponse { topics: vec![], available: false }).into_response();
-    };
-
-    let ch_user = state.clickhouse_user.as_deref().unwrap_or("default");
-    let ch_pass = state.clickhouse_password.as_deref().unwrap_or("");
-    let ch_db   = state.clickhouse_db.as_deref().unwrap_or("veronex");
+    let ch_url   = state.clickhouse_http_url.as_deref().unwrap_or("");
+    let ch_user  = state.clickhouse_user.as_deref().unwrap_or("default");
+    let ch_pass  = state.clickhouse_password.as_deref().unwrap_or("");
+    let ch_db    = state.clickhouse_db.as_deref().unwrap_or("veronex");
 
     // ── 1. Redpanda Prometheus metrics → high-watermark per topic ──────────
     let metrics_url = format!("{redpanda_admin_url}/metrics");
@@ -227,90 +224,55 @@ pub async fn get_pipeline_health(
         let value = line.rsplit(' ').next()
             .and_then(|v| v.trim().parse::<f64>().ok())
             .map(|f| f as i64);
-        if let (Some(t), Some(v)) = (topic, value) && t.starts_with("otel-") {
+        if let (Some(t), Some(v)) = (topic, value) && t.starts_with("otel.") {
             high_watermarks.insert(t, v);
         }
     }
 
-    // ── 2. ClickHouse → consumer offsets + last_poll + errors ──────────────
-    let consumer_query = format!(
-        "SELECT \
-            table, \
-            arrayElement(assignments.topic, 1) AS topic, \
-            arrayElement(assignments.current_offset, 1) AS consumer_offset, \
-            last_poll_time, \
-            if(length(exceptions.text) > 0, \
-               substring(arrayElement(exceptions.text, length(exceptions.text)), 1, 200), \
-               '') AS last_error \
-         FROM system.kafka_consumers \
-         WHERE database='{ch_db}' \
-           AND table IN ('kafka_otel_logs', 'kafka_otel_metrics') \
-         FORMAT JSONEachRow"
-    );
-
-    let ch_consumer_resp = ch_get(&state.http_client, ch_url, ch_user, ch_pass, &consumer_query).await;
-
+    // ── 2. Redpanda Admin API → consumer offsets ──────────────────────────
     #[derive(serde::Deserialize)]
-    struct ChConsumerRow {
+    struct RpPartition {
         topic: String,
-        consumer_offset: i64,
-        last_poll_time: String,
-        last_error: String,
+        offset: i64,
     }
-
-    let mut consumer_map: HashMap<String, ChConsumerRow> = HashMap::new();
-    if let Some(resp) = ch_consumer_resp && let Ok(body) = resp.text().await {
-        for line in body.lines() {
-            if let Ok(row) = serde_json::from_str::<ChConsumerRow>(line) {
-                consumer_map.insert(row.topic.clone(), row);
-            }
-        }
-    }
-
-    // ── 3. ClickHouse → consumer count per topic ──────────────────────────
-    let consumer_count_query = format!(
-        "SELECT table, count() AS cnt \
-         FROM system.kafka_consumers \
-         WHERE database='{ch_db}' \
-           AND table IN ('kafka_otel_logs', 'kafka_otel_metrics') \
-         GROUP BY table \
-         FORMAT JSONEachRow"
-    );
-
-    let ch_count_resp = ch_get(&state.http_client, ch_url, ch_user, ch_pass, &consumer_count_query).await;
-
     #[derive(serde::Deserialize)]
-    struct ChCountRow {
-        table: String,
-        cnt: u32,
+    struct RpMember {
+        assignment: Vec<RpPartition>,
+    }
+    #[derive(serde::Deserialize)]
+    struct RpGroup {
+        members: Vec<RpMember>,
     }
 
-    let table_to_topic = [
-        ("kafka_otel_logs",    "otel-logs"),
-        ("kafka_otel_metrics", "otel-metrics"),
-    ];
-    let mut consumer_count_map: HashMap<&str, u32> = HashMap::new();
-    if let Some(resp) = ch_count_resp && let Ok(body) = resp.text().await {
-        for line in body.lines() {
-            if let Ok(row) = serde_json::from_str::<ChCountRow>(line)
-                && let Some(&topic) = table_to_topic.iter().find(|(t, _)| *t == row.table).map(|(_, tp)| tp)
-            {
-                consumer_count_map.insert(topic, row.cnt);
+    let group_url = format!("{redpanda_admin_url}/v1/groups/veronex-consumer");
+    let rp_group: Option<RpGroup> = match state.http_client.get(&group_url).send().await {
+        Ok(r) if r.status().is_success() => r.json::<RpGroup>().await.ok(),
+        _ => None,
+    };
+
+    // topic → committed offset (sum across partitions)
+    let mut consumer_map: HashMap<String, i64> = HashMap::new();
+    if let Some(group) = rp_group {
+        for member in group.members {
+            for p in member.assignment {
+                *consumer_map.entry(p.topic).or_default() += p.offset;
             }
         }
     }
 
-    // ── 4. ClickHouse → TPM ────────────────────────────────────────────────
+    let consumer_active: bool = !consumer_map.is_empty();
+
+    // ── 3. ClickHouse → TPM ────────────────────────────────────────────────
     let tpm_query = format!(
-        "SELECT 'otel-logs' AS topic, \
-                countIf(timestamp >= now() - INTERVAL 1 MINUTE) AS t1m, \
-                countIf(timestamp >= now() - INTERVAL 5 MINUTE) AS t5m \
+        "SELECT 'otel.audit.logs' AS topic, \
+                countIf(Timestamp >= now() - INTERVAL 1 MINUTE) AS t1m, \
+                countIf(Timestamp >= now() - INTERVAL 5 MINUTE) AS t5m \
          FROM {ch_db}.otel_logs \
          UNION ALL \
-         SELECT 'otel-metrics', \
-                countIf(timestamp >= now() - INTERVAL 1 MINUTE), \
-                countIf(timestamp >= now() - INTERVAL 5 MINUTE) \
-         FROM {ch_db}.otel_metrics \
+         SELECT 'otel.audit.metrics', \
+                countIf(ts >= now() - INTERVAL 1 MINUTE), \
+                countIf(ts >= now() - INTERVAL 5 MINUTE) \
+         FROM {ch_db}.otel_metrics_gauge \
          FORMAT JSONEachRow"
     );
 
@@ -332,31 +294,18 @@ pub async fn get_pipeline_health(
         }
     }
 
-    // ── 5. Assemble response ───────────────────────────────────────────────
-    let now = chrono::Utc::now();
+    // ── 4. Assemble response ───────────────────────────────────────────────
     let topics_config = [
-        ("otel-logs",    "kafka_otel_logs"),
-        ("otel-metrics", "kafka_otel_metrics"),
+        "otel.audit.logs",
+        "otel.audit.metrics",
+        "otel.audit.traces",
     ];
 
-    let topics: Vec<TopicPipelineStats> = topics_config.iter().map(|(topic, _table)| {
+    let topics: Vec<TopicPipelineStats> = topics_config.iter().map(|topic| {
         let log_end_offset = high_watermarks.get(*topic).copied().unwrap_or(0);
-
-        let (consumer_offset, last_poll_secs, is_active, last_error) = if let Some(row) = consumer_map.get(*topic) {
-            let last_poll_secs = chrono::NaiveDateTime::parse_from_str(&row.last_poll_time, "%Y-%m-%d %H:%M:%S")
-                .ok()
-                .map(|dt| now.signed_duration_since(dt.and_utc()).num_seconds())
-                .filter(|&s| s >= 0);
-            let err = if row.last_error.is_empty() { None } else { Some(row.last_error.clone()) };
-            let is_active = last_poll_secs.map(|s| s < 120).unwrap_or(false);
-            (row.consumer_offset, last_poll_secs, is_active, err)
-        } else {
-            (0, None, false, None)
-        };
-
+        let consumer_offset = consumer_map.get(*topic).copied().unwrap_or(0);
         let lag = (log_end_offset - consumer_offset).max(0);
         let (tpm_1m, tpm_5m) = tpm_map.get(*topic).copied().unwrap_or((0, 0));
-        let consumer_count = consumer_count_map.get(*topic).copied().unwrap_or(0);
 
         TopicPipelineStats {
             topic: topic.to_string(),
@@ -365,13 +314,13 @@ pub async fn get_pipeline_health(
             lag,
             tpm_1m,
             tpm_5m,
-            last_poll_secs,
-            is_active,
-            last_error,
-            consumer_count,
+            last_poll_secs: None,
+            is_active: consumer_active,
+            last_error: None,
+            consumer_count: if consumer_active { 1 } else { 0 },
         }
     }).collect();
 
-    let available = !metrics_text.is_empty() || !consumer_map.is_empty();
+    let available = !metrics_text.is_empty() || consumer_active;
     Json(PipelineHealthResponse { topics, available }).into_response()
 }

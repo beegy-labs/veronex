@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
         .set("sasl.username", &cfg.kafka_username)
         .set("sasl.password", &cfg.kafka_password)
         .set("enable.auto.commit", "false") // manual commit after INSERT
-        .set("auto.offset.reset", "earliest")
+        .set("auto.offset.reset", "latest")
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "10000")
         .set("max.poll.interval.ms", "300000")
