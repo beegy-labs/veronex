@@ -1,6 +1,6 @@
 # Infrastructure -- Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-03-28 (rev10: veronex-mcp, veronex-embed, scrape interval)
+> SSOT | **Last Updated**: 2026-04-11 (rev11: embed health probe added to health_checker + service health API)
 
 ## Task Guide
 
@@ -67,6 +67,7 @@ GEMINI_ENCRYPTION_KEY=<64-char hex>  # REQUIRED (≥32 chars; 256-bit recommende
 # BOOTSTRAP_SUPER_USER=<username>     # optional: pre-seed super account
 # BOOTSTRAP_SUPER_PASS=<password>     # optional: omit for first-run setup flow
 CORS_ALLOWED_ORIGINS=*                # prod: "https://app.example.com,https://admin.example.com"
+EMBED_URL=http://localhost:3200        # veronex-embed (optional — MCP vector search disabled when unset)
 S3_ENDPOINT=http://localhost:9010     # S3/MinIO (optional — omit to store messages in PostgreSQL only)
 S3_ACCESS_KEY=veronex                 # required when S3_ENDPOINT is set
 S3_SECRET_KEY=veronex123              # required when S3_ENDPOINT is set
@@ -136,6 +137,7 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 | `veronex:throttle:{provider_id}` | Thermal Hard throttle (TTL 360s) |
 | `veronex:hw:{provider_id}` | hw_metrics JSON (TTL ~60s) |
 | `veronex:heartbeat:{instance_id}` | Instance heartbeat (EX 30s, refreshed every 10s) |
+| `veronex:svc:health:{instance_id}` | Per-pod infra health HASH (postgresql/valkey/clickhouse/s3/vespa/embed → `{s,ms,t}` JSON, TTL 60s) |
 | `veronex:slots:{provider_id}:{model}` | Distributed slot counts HASH (`{instance_id}` → count, `__max__` → max) |
 | `veronex:slot_leases:{provider_id}:{model}` | Slot lease ZSET for crash recovery (score = expiry ts) |
 | `veronex:job:owner:{job_id}` | Job ownership key (EX 300s) |

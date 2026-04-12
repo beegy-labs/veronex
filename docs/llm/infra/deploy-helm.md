@@ -1,6 +1,6 @@
 # Deploy: Helm
 
-> SSOT | **Last Updated**: 2026-04-08 | Classification: Operational
+> SSOT | **Last Updated**: 2026-04-11 | Classification: Operational
 > Helm deployment configuration for Veronex services.
 
 ## Helm Deployment
@@ -163,9 +163,13 @@ Auto-injected (no values.yaml key needed):
 | `CLICKHOUSE_PASSWORD` | `veronex.clickhousePassword` helper | Same condition as above |
 | `CLICKHOUSE_DB` | `veronex.clickhouseDb` helper | Same condition as above |
 
-### Vespa (MCP Vector Selection)
+### Vespa + Embed (MCP Vector Selection)
 
 Single-node Vespa for MCP tool ANN search. Enabled via `vespa.enabled=true` or via external URL.
+
+When `vespa.enabled=true`, `veronex-embed` is automatically co-deployed (embedding sidecar, port 3200).
+`EMBED_URL` is auto-set to `http://{release}-veronex-embed:3200`; override with `embed.url` for external instances.
+The embed service is probed by the health checker (`GET EMBED_URL/health`) and reported via `GET /v1/dashboard/services`.
 
 ```bash
 # Internal Vespa (chart-managed)

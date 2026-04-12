@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useTimeRange } from '@/components/time-range-context'
 import { performanceQuery, usageBreakdownQuery, analyticsQuery } from '@/lib/queries'
 import {
   LineChart, Line, BarChart, Bar,
@@ -18,7 +19,7 @@ import StatsCard from '@/components/stats-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { usePageGuard } from '@/hooks/use-page-guard'
-import { TIME_LABEL_MAP, TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
+import { TIME_LABEL_MAP, TimeRangeSelector } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
 import { ModelLatencySection } from './components/model-latency-section'
@@ -30,7 +31,7 @@ export default function PerformancePage() {
   usePageGuard('performance')
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const [range, setRange] = useState<TimeRange>({ hours: 24 })
+  const { range, setRange } = useTimeRange()
   const hours = range.hours
 
   const { data, isLoading, error } = useQuery(performanceQuery(hours))

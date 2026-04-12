@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 
-use crate::otlp::{attrs_to_map, nano_str_to_secs};
+use crate::otlp::{attrs_to_map, nano_str_to_ns};
 
 pub fn parse(payload: &[u8]) -> anyhow::Result<Vec<Value>> {
     let root: Value = serde_json::from_slice(payload)?;
@@ -55,7 +55,7 @@ pub fn parse(payload: &[u8]) -> anyhow::Result<Vec<Value>> {
                         .get("timeUnixNano")
                         .and_then(Value::as_str)
                         .unwrap_or("0");
-                    let ts = nano_str_to_secs(time_ns);
+                    let ts = nano_str_to_ns(time_ns);
                     let value = dp.get("asDouble").and_then(Value::as_f64).unwrap_or(0.0);
                     let dp_attrs = attrs_to_map(dp.get("attributes"));
 

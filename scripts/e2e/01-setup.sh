@@ -9,6 +9,11 @@ source "$SCRIPT_DIR/_lib.sh"; load_state
 hdr "Phase 1: Infrastructure Setup"
 
 if [ "$SKIP_DB_RESET" = "0" ]; then
+  # Terminate active postgres connections to the veronex DB before DROP SCHEMA.
+  # This prevents lock contention when veronex has open connection pool connections.
+  docker compose exec -T postgres psql -U postgres -d postgres -c \
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='veronex' AND pid <> pg_backend_pid();" \
+    > /dev/null 2>&1 || true
   docker compose exec -T postgres psql -U veronex -d veronex -c \
     "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
   docker compose exec -T postgres psql -U veronex -d veronex \
@@ -20,6 +25,11 @@ if [ "$SKIP_DB_RESET" = "0" ]; then
   # Clear all Valkey keys (ZSET queue, demand counters, caches, etc.)
   docker compose exec -T valkey valkey-cli EVAL \
     "local count=0; for _,k in ipairs(redis.call('keys','veronex:*')) do count=count+redis.call('del',k) end; return count" 0 \
+    > /dev/null 2>&1 || true
+  # Clear all Vespa mcp_tools documents to prevent disk-full (507) during feed tests.
+  VESPA_URL="${VESPA_URL:-http://localhost:8080}"
+  curl -s -X DELETE \
+    "${VESPA_URL}/document/v1/mcp_tools/mcp_tools/docid?cluster=content&selection=true" \
     > /dev/null 2>&1 || true
   docker compose restart veronex > /dev/null 2>&1
   info "Waiting for veronex to start..."

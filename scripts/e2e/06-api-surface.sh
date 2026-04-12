@@ -5,8 +5,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 ensure_provider_ids
 
-# Wait for any queued/running jobs from previous phases to drain
-wait_queue_empty 30
+# Create a phase-specific API key so rate limits are not shared with concurrent
+# phases (e.g. 03-inference) that use the shared API_KEY from state.env.
+_phase_acct=$(curl -sf "$API/v1/accounts" -H "Authorization: Bearer $TK" 2>/dev/null \
+  | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('accounts',[{}])[0].get('id',''))" 2>/dev/null || echo "")
+if [ -n "$_phase_acct" ]; then
+  _phase_key=$(curl -sf "$API/v1/keys" -H "Authorization: Bearer $TK" \
+    -H 'Content-Type: application/json' \
+    -d "{\"tenant_id\":\"$_phase_acct\",\"name\":\"e2e-06-$$\",\"tier\":\"paid\"}" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('key',''))" 2>/dev/null || echo "")
+  [ -n "$_phase_key" ] && API_KEY="$_phase_key"
+fi
+
+# Wait for any queued/running jobs from previous phases to drain.
+# Phase 2 inference tests can leave jobs in-flight; give them up to 120s to drain.
+wait_queue_empty 120
 
 # ── Multi-Format Inference ────────────────────────────────────────────────────
 
@@ -49,7 +62,8 @@ wait
 # SSE check
 SSE_RES=$(cat "$TMPDIR_MF/sse" 2>/dev/null || echo "")
 echo "$SSE_RES" | grep -q "data:" \
-  && pass "OpenAI SSE streaming has data events" || fail "SSE: no data events"
+  && pass "OpenAI SSE streaming has data events" \
+  || fail "SSE: no data events"
 
 for ep in chat generate tags show gemini test_completions test_chat test_generate; do
   c=$(tail -1 "$TMPDIR_MF/$ep" 2>/dev/null || echo "000")
@@ -189,6 +203,14 @@ try:
     # Verify pods have required fields
     for p in pods:
         assert p.get('id') and p.get('status') in ('online','offline'), f'bad pod: {p}'
+    # Verify expected infra services are present
+    import os
+    infra_names = {s['name'] for s in infra}
+    required = {'postgresql', 'valkey'}
+    if os.environ.get('EMBED_URL'):
+        required.add('embed')
+    missing = required - infra_names
+    assert not missing, f'missing services: {missing}'
     print('ok:' + ','.join(ok_parts))
 except Exception as ex:
     print(f'error:{ex}')

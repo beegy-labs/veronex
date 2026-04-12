@@ -26,8 +26,9 @@ exporters:
   # veronex-consumer subscribes to all three topics and HTTP INSERTs into ClickHouse.
   kafka/metrics:
     brokers: [redpanda:9092]
-    topic: otel.audit.metrics
-    encoding: otlp_json
+    metrics:
+      topic: otel.audit.metrics
+      encoding: otlp_json
     timeout: 10s
     producer:
       compression: gzip
@@ -39,8 +40,9 @@ exporters:
 
   kafka/traces:
     brokers: [redpanda:9092]
-    topic: otel.audit.traces
-    encoding: otlp_json
+    traces:
+      topic: otel.audit.traces
+      encoding: otlp_json
     timeout: 10s
     producer:
       compression: gzip
@@ -52,8 +54,9 @@ exporters:
 
   kafka/logs:
     brokers: [redpanda:9092]
-    topic: otel.audit.logs
-    encoding: otlp_json
+    logs:
+      topic: otel.audit.logs
+      encoding: otlp_json
     timeout: 10s
     producer:
       compression: gzip

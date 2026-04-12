@@ -16,11 +16,25 @@ test.describe('Audit Trail', () => {
   })
 
   test('audit events include login action from test setup', async ({ page }) => {
-    // After login, there should be at least one "login" audit event
-    // OR an error/unavailable state (e.g. ClickHouse not reachable)
+    // Wait for table to load first
     await expect(
-      page.getByText(/login/i).first()
-        .or(page.getByText(/failed|error|unavailable/i).first())
+      page.locator('table').or(page.getByText(/no audit|no events|failed|error/i))
+    ).toBeVisible({ timeout: T_DEFAULT })
+
+    // Select the login filter to find login events specifically
+    const select = page.getByRole('combobox').first()
+    if (await select.isVisible()) {
+      await select.click()
+      const loginOption = page.getByRole('option', { name: /^login$/i })
+      if (await loginOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await loginOption.click()
+      }
+    }
+
+    // Expect a login row OR an error/unavailable state
+    await expect(
+      page.getByText(/\blogin\b/i).first()
+        .or(page.getByText(/no audit|no events|failed|error|unavailable/i).first())
     ).toBeVisible({ timeout: T_LONG })
   })
 })

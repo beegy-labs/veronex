@@ -212,40 +212,37 @@ ensure_auth() {
 # Fast-path: skips API calls when IDs are already loaded from state (after 01-setup).
 ensure_provider_ids() {
   local _providers _servers
-  if [ -z "${PROVIDER_ID_LOCAL:-}" ] || [ "${PROVIDER_ID_LOCAL}" = "None" ]; then
-    _providers=$(curl -sf "$API/v1/providers" -H "Authorization: Bearer $TK" 2>/dev/null || echo '{"providers":[]}')
-    PROVIDER_ID_LOCAL=$(echo "$_providers" | python3 -c "
+  # Always re-fetch provider/server IDs to avoid stale state across runs.
+  _providers=$(curl -sf "$API/v1/providers" -H "Authorization: Bearer $TK" 2>/dev/null || echo '{"providers":[]}')
+  PROVIDER_ID_LOCAL=$(echo "$_providers" | python3 -c "
 import sys,json
 d=json.loads(sys.stdin.read())
 for p in d.get('providers',[]):
     if p.get('provider_type')=='ollama' and 'local' in p.get('name','').lower():
         print(p['id']); break
 " 2>/dev/null || echo "")
-    PROVIDER_ID_REMOTE=$(echo "$_providers" | python3 -c "
+  PROVIDER_ID_REMOTE=$(echo "$_providers" | python3 -c "
 import sys,json
 d=json.loads(sys.stdin.read())
 for p in d.get('providers',[]):
     if p.get('provider_type')=='ollama' and 'local' not in p.get('name','').lower():
         print(p['id']); break
 " 2>/dev/null || echo "")
-  fi
-  if [ -z "${SERVER_ID_LOCAL:-}" ] || [ "${SERVER_ID_LOCAL}" = "None" ]; then
-    _servers=$(curl -sf "$API/v1/servers" -H "Authorization: Bearer $TK" 2>/dev/null || echo '{"servers":[]}')
-    SERVER_ID_LOCAL=$(echo "$_servers" | python3 -c "
+  _servers=$(curl -sf "$API/v1/servers" -H "Authorization: Bearer $TK" 2>/dev/null || echo '{"servers":[]}')
+  SERVER_ID_LOCAL=$(echo "$_servers" | python3 -c "
 import sys,json
 d=json.loads(sys.stdin.read())
 for s in d.get('servers',[]):
     if 'local' in s.get('name','').lower():
         print(s['id']); break
 " 2>/dev/null || echo "")
-    SERVER_ID_REMOTE=$(echo "$_servers" | python3 -c "
+  SERVER_ID_REMOTE=$(echo "$_servers" | python3 -c "
 import sys,json
 d=json.loads(sys.stdin.read())
 for s in d.get('servers',[]):
     if 'local' not in s.get('name','').lower():
         print(s['id']); break
 " 2>/dev/null || echo "")
-  fi
 }
 
 # ── State management ──────────────────────────────────────────────────────────
