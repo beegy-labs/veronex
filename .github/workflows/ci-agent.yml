@@ -36,12 +36,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Pre-pull base images from Gitea mirror
+      - name: Pre-pull base images
         run: |
-          docker pull gitea.girok.dev/mirror/rust:1-alpine3.23
-          docker tag  gitea.girok.dev/mirror/rust:1-alpine3.23 rust:1-alpine3.23
-          docker pull gitea.girok.dev/mirror/alpine:3.23
-          docker tag  gitea.girok.dev/mirror/alpine:3.23 alpine:3.23
+          docker pull rust:1-alpine3.23
+          docker pull alpine:3.23
 
       - name: Wait for Docker (DinD sidecar)
         run: |
