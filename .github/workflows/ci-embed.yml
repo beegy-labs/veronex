@@ -36,12 +36,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Pre-pull base images from Gitea mirror
+      - name: Pre-pull base images
         run: |
-          docker pull gitea.girok.dev/mirror/rust:1-slim
-          docker tag  gitea.girok.dev/mirror/rust:1-slim rust:1-slim
-          docker pull gitea.girok.dev/mirror/debian:trixie-slim
-          docker tag  gitea.girok.dev/mirror/debian:trixie-slim debian:trixie-slim
+          docker pull rust:1-slim
+          docker pull debian:trixie-slim
 
       - name: Wait for Docker (DinD sidecar)
         run: |
