@@ -402,6 +402,7 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
     <SidebarFrame
       collapsed={collapsed}
       onToggle={onToggle}
+      icon={<HexLogo className="h-7 w-7" />}
       brand={
         <div className="flex items-center gap-2.5">
           <HexLogo className="h-7 w-7 flex-shrink-0" />
