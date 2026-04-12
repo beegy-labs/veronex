@@ -29,10 +29,20 @@ jobs:
     name: Build Embed
     runs-on: arc-runner-set
     timeout-minutes: 60
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      skipped: ${{ steps.check_image.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: Pre-pull base images from Gitea mirror
+        run: |
+          docker pull gitea.girok.dev/mirror/rust:1-slim
+          docker tag  gitea.girok.dev/mirror/rust:1-slim rust:1-slim
+          docker pull gitea.girok.dev/mirror/debian:trixie-slim
+          docker tag  gitea.girok.dev/mirror/debian:trixie-slim debian:trixie-slim
+
       - name: Wait for Docker (DinD sidecar)
         run: |
           for i in $(seq 1 30); do
@@ -92,6 +102,38 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+
+  deploy:
+    name: Update GitOps
+    needs: build
+    if: needs.build.outputs.skipped != 'true' && github.ref_name == 'develop'
+    runs-on: veronex-runner-set
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: beegy-labs/platform-gitops
+          ref: develop
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Update image tag
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          FILE="clusters/home/values/veronex-dev-values.yaml"
+          sed -i "/^embed:/,/^[a-z]{{s/tag: .*/tag: \"${TAG}\"/}}" "$FILE"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(veronex): update embed image tag to ${{ needs.build.outputs.tag }}"
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1
 
   cleanup:
     name: Cleanup Old Images
