@@ -2,7 +2,7 @@ name: Build Runner Image
 
 on:
   push:
-    branches: [main]
+    branches: [develop, main]
     paths:
       - '.github/runner/Dockerfile'
       - '.github/workflows/build-runner.yml'
