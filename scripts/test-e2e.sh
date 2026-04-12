@@ -12,9 +12,10 @@
 # Execution order:
 #   Phase 1 (sequential) : 01-setup
 #   Phase 2 (parallel)   : 03-inference  +  04-crud  05-security  09-metrics
-#                          10-image  11-verify  12-mcp
-#   Phase 3 (parallel)   : 02-scheduler  06-api-surface  07-lifecycle  08-sdd-advanced
-#     → Phase 3 starts only after 03-inference completes (AIMD state required)
+#                          10-image  12-mcp
+#   Phase 3 (parallel)   : 02-scheduler  06-api-surface  08-sdd-advanced  10-image-storage
+#     → Phase 3 starts only after 03-inference completes (no inference contention)
+#   Phase 3.5 (sequential): 07-lifecycle  (restarts veronex — must not run in parallel)
 #   Phase 4 (sequential) : 13-frontend (Playwright UI tests)
 #     → runs after all backend phases complete
 #
@@ -213,25 +214,34 @@ P2_WAIT_ARGS=()
 _launch_bg "03-inference.sh"
 P2_WAIT_ARGS+=("$_BG_PID" "03-inference.sh")
 
-for phase in 04-crud.sh 05-security.sh 09-metrics-pipeline.sh 10-image-storage.sh 11-verify-liveness.sh 12-mcp.sh; do
+for phase in 04-crud.sh 05-security.sh 09-metrics-pipeline.sh 12-mcp.sh; do
   _launch_bg "$phase"
   P2_WAIT_ARGS+=("$_BG_PID" "$phase")
 done
 
 wait_all "${P2_WAIT_ARGS[@]}"
 
-# ── Phase 3: AIMD-dependent tests (parallel) ─────────────────────────────────
+# ── Phase 3: Post-inference tests (parallel) ──────────────────────────────────
+# Starts only after 03-inference completes (AIMD state ready, queue drained).
+# NOTE: 07-lifecycle.sh excluded — restarts veronex, breaks 06-api-surface.
+# NOTE: 10-image-storage.sh moved here from Phase 2 — vision model inference
+#       timed out (000) when competing with 03-inference's 12 concurrent requests.
 echo ""
-echo -e "${CYAN}${BOLD}[Phase 3] AIMD-dependent tests (parallel)${NC}"
+echo -e "${CYAN}${BOLD}[Phase 3] Post-inference tests (parallel)${NC}"
 
 P3_WAIT_ARGS=()
 
-for phase in 02-scheduler.sh 06-api-surface.sh 07-lifecycle.sh 08-sdd-advanced.sh; do
+for phase in 02-scheduler.sh 06-api-surface.sh 08-sdd-advanced.sh 10-image-storage.sh; do
   _launch_bg "$phase"
   P3_WAIT_ARGS+=("$_BG_PID" "$phase")
 done
 
 wait_all "${P3_WAIT_ARGS[@]}"
+
+# ── Phase 3.5: Lifecycle test (sequential — restarts veronex) ─────────────────
+echo ""
+echo -e "${CYAN}${BOLD}[Phase 3.5] Lifecycle test (sequential — restarts veronex)${NC}"
+run_phase "07-lifecycle.sh"
 
 # ── Phase 4: Frontend E2E (Playwright) ───────────────────────────────────────
 echo ""

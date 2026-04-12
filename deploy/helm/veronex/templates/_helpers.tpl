@@ -228,15 +228,15 @@ us-east-1
 {{- end }}
 
 {{/*
-Embedding service URL. Uses in-cluster veronex-embed when vespa.enabled=true
-and embed.url is not overridden.
+Embedding service URL.
+- embed.url set → use as-is (external embed)
+- vespa.enabled=true or vespa.url set, no embed.url → deploy in-cluster veronex-embed
 */}}
 {{- define "veronex.embedUrl" -}}
 {{- if .Values.embed.url -}}
 {{ .Values.embed.url }}
-{{- else if .Values.vespa.enabled -}}
+{{- else if or .Values.vespa.enabled .Values.vespa.url -}}
 http://{{ .Release.Name }}-veronex-embed:{{ .Values.veronexEmbed.service.port }}
-{{- else -}}
 {{- end -}}
 {{- end }}
 
