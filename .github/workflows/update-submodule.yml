@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   update:
-    runs-on: arc-runner-set
+    runs-on: veronex-runner-set
     steps:
       - uses: actions/checkout@v4
         with:

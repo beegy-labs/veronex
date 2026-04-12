@@ -27,7 +27,7 @@ concurrency:
 jobs:
   build:
     name: Build Consumer
-    runs-on: arc-runner-set
+    runs-on: veronex-runner-set
     timeout-minutes: 60
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
@@ -100,7 +100,7 @@ jobs:
     name: Update GitOps
     needs: build
     if: needs.build.outputs.skipped != 'true'
-    runs-on: arc-runner-set
+    runs-on: veronex-runner-set
     steps:
       - uses: actions/checkout@v4
         with:

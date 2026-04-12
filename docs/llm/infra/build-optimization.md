@@ -1,6 +1,6 @@
 # Build Performance Optimization
 
-> SSOT | **Last Updated**: 2026-03-10
+> SSOT | **Last Updated**: 2026-04-12
 
 ## Local Development
 
@@ -98,6 +98,46 @@ RUN --mount=type=cache,target=/app/.next/cache npm run build
 | `cargo check` (clean) | 10m 31s | 1m 41s | **6.3x** |
 | `cargo nextest` | — | 205 tests / 0.5s | — |
 | `vitest` | — | 42 tests / 2.4s | — |
+
+---
+
+## CI Runners
+
+### Runner Architecture
+
+| Runner | Manager | Purpose |
+|--------|---------|---------|
+| `arc-runner-set` | Terraform (bootstrap) | General-purpose — used only by `build-runner.yml` |
+| `veronex-runner-set` | ArgoCD | Veronex-specific — all other workflows |
+
+`arc-runner-set` is managed by Terraform to avoid chicken-and-egg with ArgoCD bootstrap.
+`veronex-runner-set` is managed by ArgoCD (added after ArgoCD exists), scales to zero via KEDA.
+
+### Custom Runner Image (`.github/runner/Dockerfile`)
+
+Built on top of `ghcr.io/actions/actions-runner:latest`, pre-baked with:
+
+| Tool | Purpose |
+|------|---------|
+| `build-essential`, `pkg-config` | C build toolchain |
+| `libssl-dev`, `libcurl4-openssl-dev` | Rust TLS/HTTP deps |
+| `clang`, `mold` | Fast linker (5x faster than ld) |
+| `cmake` | Native dependency builds |
+| Rust stable (rustup) | Cargo, rustc |
+
+Image pushed to `gitea.girok.dev/beegy-labs/veronex-runner:latest` on every push to `develop`/`main`.
+Max 5 images retained per branch (SHA-tagged older images pruned automatically).
+
+### Why Custom Runner
+
+ARC runner pods are ephemeral — every job starts a fresh pod.
+Default `actions-runner:latest` has no Rust or build tools, requiring ~74s apt-get + ~10s rustup per job.
+Custom image eliminates this entirely: `cargo test` starts immediately.
+
+### Workflow Assignment
+
+All `.github/workflows/*.yml` use `veronex-runner-set` **except**:
+- `build-runner.yml` → `arc-runner-set` (builds the veronex-runner image — circular dependency risk)
 
 ---
 
