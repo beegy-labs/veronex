@@ -23,7 +23,7 @@ on:
 jobs:
   cleanup:
     name: Cleanup ${{ inputs.image_name }} (${{ inputs.branch }})
-    runs-on: arc-runner-set
+    runs-on: veronex-runner-set
     steps:
       - name: Delete old images
         env:

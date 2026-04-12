@@ -16,7 +16,7 @@ concurrency:
 jobs:
   sync:
     name: Mirror to Gitea
-    runs-on: arc-runner-set
+    runs-on: veronex-runner-set
     timeout-minutes: 3
 
     steps:

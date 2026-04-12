@@ -9,7 +9,7 @@ on:
 jobs:
   validate:
     name: Validate PR
-    runs-on: arc-runner-set
+    runs-on: veronex-runner-set
     timeout-minutes: 10
 
     steps:
@@ -110,7 +110,7 @@ jobs:
 
   changes:
     name: Detect Changes
-    runs-on: arc-runner-set
+    runs-on: veronex-runner-set
     timeout-minutes: 5
     outputs:
       api: ${{ steps.filter.outputs.api }}
@@ -144,7 +144,7 @@ jobs:
     name: Test Web
     needs: changes
     if: needs.changes.outputs.web == 'true'
-    runs-on: arc-runner-set
+    runs-on: veronex-runner-set
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
