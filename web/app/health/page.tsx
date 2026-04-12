@@ -134,7 +134,7 @@ export default function HealthPage() {
   const agentPods = data?.agent_pods ?? []
 
   return (
-    <div className="p-6 space-y-4 max-w-3xl">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
