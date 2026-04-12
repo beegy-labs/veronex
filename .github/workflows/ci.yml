@@ -28,7 +28,7 @@ concurrency:
 jobs:
   build:
     name: Build API
-    runs-on: arc-runner-set
+    runs-on: veronex-runner-set
     timeout-minutes: 60
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
