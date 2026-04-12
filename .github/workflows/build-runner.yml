@@ -37,3 +37,14 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+  cleanup:
+    name: Cleanup old runner images
+    needs: build
+    uses: ./.github/workflows/cleanup-images.yml
+    with:
+      image_name: veronex-runner
+      branch: ${{ github.ref_name }}
+      keep: 5
+    secrets:
+      GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
