@@ -138,7 +138,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
-        run: SQLX_OFFLINE=true RUST_LOG=error cargo test --all
+        run: SQLX_OFFLINE=true RUST_LOG=error cargo nextest run --all
 
   test-web:
     name: Test Web
