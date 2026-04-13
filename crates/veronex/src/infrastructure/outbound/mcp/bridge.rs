@@ -126,7 +126,7 @@ impl McpBridgeAdapter {
         model: String,
         mut messages: Vec<Value>,
         base_tools: Option<Vec<Value>>,
-        _want_stream: bool,
+        want_stream: bool,
         conversation_id: Option<uuid::Uuid>,
         stop: Option<Value>,
         seed: Option<u32>,
@@ -205,7 +205,7 @@ impl McpBridgeAdapter {
         let mut final_tool_calls: Vec<Value> = Vec::new();
         let mut all_mcp_tool_calls: Vec<Value> = Vec::new();
         let mut rounds: u8 = 0;
-        let final_job_id: Option<JobId> = None;
+        let mut final_job_id: Option<JobId> = None;
 
         let mut first_job_id: Option<JobId> = None;
 
@@ -252,6 +252,13 @@ impl McpBridgeAdapter {
 
             if first_job_id.is_none() {
                 first_job_id = Some(job_id.clone());
+            } else if want_stream && rounds > 0 {
+                // Streaming fast-path: at least one MCP tool-call round completed,
+                // so this next job is almost certainly the final text response.
+                // Skip synchronous collection and hand the job_id to the SSE path
+                // so the client starts receiving tokens immediately.
+                final_job_id = Some(job_id);
+                break;
             } else {
                 intermediate_job_ids.push(job_id.0);
             }
