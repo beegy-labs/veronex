@@ -73,7 +73,11 @@ impl TokenStreamState {
                     let buf_len = self.think_buf.len();
                     let safe_len = (1..TAG.len().min(buf_len + 1))
                         .rev()
-                        .find(|&n| TAG.starts_with(&self.think_buf[buf_len - n..]))
+                        .find(|&n| {
+                            let start = buf_len - n;
+                            self.think_buf.is_char_boundary(start)
+                                && TAG.starts_with(&self.think_buf[start..])
+                        })
                         .map(|n| buf_len - n)
                         .unwrap_or(buf_len);
                     emitted.push_str(&self.think_buf[..safe_len]);
@@ -641,4 +645,73 @@ pub(super) fn strip_think_blocks(mut text: String) -> String {
     // Collapse leading/trailing whitespace introduced by removal
     let trimmed = text.trim();
     if trimmed.len() != text.len() { trimmed.to_string() } else { text }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TokenStreamState;
+
+    fn collect(tokens: &[&str]) -> String {
+        let mut ts = TokenStreamState::default();
+        tokens.iter().map(|t| ts.consume_text(t)).collect()
+    }
+
+    // ── Regression: multibyte characters must not panic ─────────────────────
+
+    #[test]
+    fn multibyte_korean_no_panic() {
+        // '안' is 3 bytes — previously caused panic at byte boundary 1
+        assert_eq!(collect(&["안녕하세요"]), "안녕하세요");
+    }
+
+    #[test]
+    fn multibyte_emoji_no_panic() {
+        // '😊' is 4 bytes — previously caused panic at byte boundary 2
+        assert_eq!(collect(&["Hello 😊"]), "Hello 😊");
+    }
+
+    #[test]
+    fn multibyte_split_across_tokens_no_panic() {
+        // Multibyte chars fed as separate token fragments
+        assert_eq!(collect(&["안", "녕"]), "안녕");
+    }
+
+    // ── Think-block filtering ────────────────────────────────────────────────
+
+    #[test]
+    fn think_block_stripped() {
+        assert_eq!(
+            collect(&["Hello <think>internal thoughts</think> world"]),
+            "Hello  world"
+        );
+    }
+
+    #[test]
+    fn think_block_split_across_tokens() {
+        assert_eq!(
+            collect(&["He", "llo <thi", "nk>thoughts<", "/think> world"]),
+            "Hello  world"
+        );
+    }
+
+    #[test]
+    fn no_think_block_passthrough() {
+        assert_eq!(collect(&["Hello world"]), "Hello world");
+    }
+
+    #[test]
+    fn think_block_with_korean_content() {
+        assert_eq!(
+            collect(&["안녕 <think>생각중</think> 세계"]),
+            "안녕  세계"
+        );
+    }
+
+    #[test]
+    fn emoji_near_think_tag_no_panic() {
+        assert_eq!(
+            collect(&["😊 <think>thinking</think> done"]),
+            "😊  done"
+        );
+    }
 }

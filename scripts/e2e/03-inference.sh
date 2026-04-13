@@ -328,4 +328,22 @@ if [ "$GP_OK" -gt 0 ]; then
 else
   info "Goodput test: 0 requests completed (queue may be saturated from parallel tests)"
 fi
+
+# ── Streaming + multibyte regression (runner.rs UTF-8 boundary) ──────────────
+# Verifies that SSE streaming completes without panic when the model emits
+# multibyte characters (Korean, emoji). Previously caused tokio worker crash.
+section "Streaming + multibyte characters"
+STREAM_RES=$(curl -sN --max-time 30 "$API/v1/chat/completions" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"stream\":true,\"messages\":[
+        {\"role\":\"system\",\"content\":\"Reply with exactly: 안녕 😊\"},
+        {\"role\":\"user\",\"content\":\"say hi\"}
+      ]}" 2>/dev/null || true)
+STREAM_CODE=$(echo "$STREAM_RES" | grep -c "data:" || echo 0)
+if [ "$STREAM_CODE" -gt 0 ]; then
+  pass "Streaming multibyte: SSE events received (no panic)"
+else
+  fail "Streaming multibyte: no SSE events — possible runner panic"
+fi
+
 save_counts
