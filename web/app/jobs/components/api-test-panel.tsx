@@ -11,11 +11,11 @@ import { BASE } from '@/lib/api'
 import { compressImage } from '@/lib/compress-image'
 import { PROVIDER_OLLAMA, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import type { OpenAIChunk, Run, ProviderOption, Endpoint, ConversationMessage, ConversationSession, TestMode } from '@/components/api-test-types'
-import { runsReducer, MAX_RUNS, MAX_CONV_SESSIONS } from '@/components/api-test-types'
-import { ApiTestForm } from '@/components/api-test-form'
-import { ApiTestRuns } from '@/components/api-test-runs'
-import { ApiTestConversation } from '@/components/api-test-conversation'
+import type { OpenAIChunk, Run, ProviderOption, Endpoint, ConversationMessage, ConversationSession, TestMode } from './api-test-types'
+import { runsReducer, MAX_RUNS, MAX_CONV_SESSIONS } from './api-test-types'
+import { ApiTestForm } from './api-test-form'
+import { ApiTestRuns } from './api-test-runs'
+import { ApiTestConversation } from './api-test-conversation'
 
 // ── ApiTestPanel ───────────────────────────────────────────────────────────────
 
@@ -67,10 +67,10 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   const availableOptions = useMemo((): ProviderOption[] => {
-    if (!providers) return [{ value: 'ollama', label: 'Ollama', isGemini: false }]
+    if (!providers) return [{ value: 'ollama', label: t('jobs.providerOllama'), isGemini: false }]
     const opts: ProviderOption[] = []
     if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_OLLAMA)) {
-      opts.push({ value: 'ollama', label: 'Ollama', isGemini: false })
+      opts.push({ value: 'ollama', label: t('jobs.providerOllama'), isGemini: false })
     }
     if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
       opts.push({ value: 'gemini-free', label: t('test.geminiFree'), isGemini: true })
@@ -78,7 +78,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
       opts.push({ value: 'gemini', label: t('test.gemini'), isGemini: true })
     }
-    return opts.length > 0 ? opts : [{ value: 'ollama', label: 'Ollama', isGemini: false }]
+    return opts.length > 0 ? opts : [{ value: 'ollama', label: t('jobs.providerOllama'), isGemini: false }]
   }, [providers, t, geminiEnabled])
 
   const isGeminiProvider = availableOptions.find((o) => o.value === providerType)?.isGemini ?? false

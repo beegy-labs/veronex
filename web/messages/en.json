@@ -130,6 +130,8 @@
     "createdAt": "Created",
     "internals": "Internals",
     "internalsEmpty": "No compression or vision data for this turn.",
+    "compressedBadge": "Compressed ({original}→{compressed} tok, {model})",
+    "visionBadge": "Vision: {model} ({imageCount} img, {tokens} tok)",
     "compression": "Compression",
     "compressionModel": "Model",
     "originalTokens": "Original",
@@ -305,6 +307,7 @@
     "providerOllama": "Ollama",
     "providerGemini": "Gemini",
     "allSources": "All Sources",
+    "sourceApi": "API",
     "sourceTest": "Test",
     "sourceAnalyzer": "Analyzer",
     "filters": "Filters",
@@ -774,7 +777,8 @@
     "clearConversation": "Clear",
     "newSession": "New Session",
     "noSessions": "No sessions yet.",
-    "turns": "turns"
+    "turns": "turns",
+    "endpointGemini": "/v1beta/models (Gemini)"
   },
   "apiDocs": {
     "title": "API Documentation",
@@ -972,6 +976,7 @@
     "enabled": "Enabled",
     "online": "Online",
     "offline": "Offline",
+    "editTitle": "Edit MCP Server",
     "deleteTitle": "Delete MCP Server",
     "stats": "Tool Call Statistics",
     "statsDesc": "Aggregated tool call metrics for all registered MCP servers.",
@@ -991,6 +996,13 @@
     "toolSchemaRefresh": "Tool Schema Refresh (s)",
     "maxToolsPerRequest": "Max Tools / Request",
     "maxRoutingCacheEntries": "Max Cache Entries",
-    "embeddingModel": "Embedding Model"
+    "embeddingModel": "Embedding Model",
+    "verifyConnection": "Verify",
+    "verifying": "Verifying…",
+    "connected": "Connected",
+    "verifyDuplicate": "This URL is already registered.",
+    "verifyNetwork": "Network error — check the URL.",
+    "verifyUnreachable": "Server is not reachable.",
+    "verifyFailed": "Verification failed."
   }
 }

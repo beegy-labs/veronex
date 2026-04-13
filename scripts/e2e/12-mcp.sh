@@ -77,6 +77,76 @@ VAL2_CODE=$(echo "$VAL2_RES" | tail -1)
   && pass "POST /v1/mcp/servers invalid slug → 400" \
   || fail "POST /v1/mcp/servers invalid slug → $VAL2_CODE (expected 400)"
 
+# Patch — update name, slug, url
+if [ -n "$MCP_ID" ]; then
+  NEW_SLUG="e2etestmcp${E2E_RUN_ID}v2"
+  NEW_NAME="e2e-test-mcp-${E2E_RUN_ID}-v2"
+  EDIT_RES=$(apatch "/v1/mcp/servers/$MCP_ID" \
+    "{\"name\":\"$NEW_NAME\",\"slug\":\"$NEW_SLUG\",\"url\":\"$MCP_REGISTER_URL\"}" \
+    2>/dev/null || echo "{}")
+  EDIT_SLUG=$(echo "$EDIT_RES" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('slug',''))" 2>/dev/null || echo "")
+  EDIT_NAME=$(echo "$EDIT_RES" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('name',''))" 2>/dev/null || echo "")
+  [ "$EDIT_SLUG" = "$NEW_SLUG" ] \
+    && pass "PATCH /v1/mcp/servers/:id slug → updated to $NEW_SLUG" \
+    || fail "PATCH /v1/mcp/servers/:id slug → got '$EDIT_SLUG' (expected '$NEW_SLUG')"
+  [ "$EDIT_NAME" = "$NEW_NAME" ] \
+    && pass "PATCH /v1/mcp/servers/:id name → updated to $NEW_NAME" \
+    || fail "PATCH /v1/mcp/servers/:id name → got '$EDIT_NAME' (expected '$NEW_NAME')"
+
+  # Verify slug appears in list
+  LIST_SLUG=$(aget "/v1/mcp/servers" 2>/dev/null \
+    | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); s=[x for x in d if x['id']=='$MCP_ID']; print(s[0]['slug'] if s else '')" 2>/dev/null || echo "")
+  [ "$LIST_SLUG" = "$NEW_SLUG" ] \
+    && pass "GET /v1/mcp/servers → slug persisted after edit" \
+    || fail "GET /v1/mcp/servers → slug='$LIST_SLUG' (expected '$NEW_SLUG')"
+
+  # Validation — invalid slug format on PATCH
+  BAD_PATCH_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH "$API/v1/mcp/servers/$MCP_ID" \
+    -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+    -d '{"slug":"Invalid-Slug"}' 2>/dev/null || echo "000")
+  [ "$BAD_PATCH_CODE" = "400" ] \
+    && pass "PATCH /v1/mcp/servers/:id invalid slug → 400" \
+    || fail "PATCH /v1/mcp/servers/:id invalid slug → $BAD_PATCH_CODE (expected 400)"
+
+  # Validation — duplicate slug conflict
+  # Register a second server then try to steal its slug
+  SLUG2="e2etestmcp${E2E_RUN_ID}dup"
+  DUP_ID=$(apost "/v1/mcp/servers" \
+    "{\"name\":\"dup-${E2E_RUN_ID}\",\"slug\":\"$SLUG2\",\"url\":\"$MCP_REGISTER_URL\"}" \
+    2>/dev/null | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('id',''))" 2>/dev/null || echo "")
+  if [ -n "$DUP_ID" ]; then
+    CONFLICT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH "$API/v1/mcp/servers/$MCP_ID" \
+      -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+      -d "{\"slug\":\"$SLUG2\"}" 2>/dev/null || echo "000")
+    [ "$CONFLICT_CODE" = "409" ] \
+      && pass "PATCH /v1/mcp/servers/:id duplicate slug → 409" \
+      || fail "PATCH /v1/mcp/servers/:id duplicate slug → $CONFLICT_CODE (expected 409)"
+    curl -s -o /dev/null -X DELETE "$API/v1/mcp/servers/$DUP_ID" -H "Authorization: Bearer $TK" 2>/dev/null || true
+  fi
+fi
+
+# Verify endpoint
+VERIFY_MISSING=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/v1/mcp/servers/verify" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d '{}' 2>/dev/null || echo "000")
+[ "$VERIFY_MISSING" = "400" ] \
+  && pass "POST /v1/mcp/servers/verify missing url → 400" \
+  || fail "POST /v1/mcp/servers/verify missing url → $VERIFY_MISSING (expected 400)"
+
+VERIFY_INVALID=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/v1/mcp/servers/verify" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d '{"url":"not-a-url"}' 2>/dev/null || echo "000")
+[ "$VERIFY_INVALID" = "400" ] \
+  && pass "POST /v1/mcp/servers/verify invalid url → 400" \
+  || fail "POST /v1/mcp/servers/verify invalid url → $VERIFY_INVALID (expected 400)"
+
+VERIFY_UNREACH=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/v1/mcp/servers/verify" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d '{"url":"http://127.0.0.1:19999"}' 2>/dev/null || echo "000")
+[ "$VERIFY_UNREACH" = "502" ] \
+  && pass "POST /v1/mcp/servers/verify unreachable → 502" \
+  || fail "POST /v1/mcp/servers/verify unreachable → $VERIFY_UNREACH (expected 502)"
+
 # Delete
 if [ -n "$MCP_ID" ]; then
   DEL_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$API/v1/mcp/servers/$MCP_ID" \

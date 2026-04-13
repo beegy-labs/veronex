@@ -130,6 +130,8 @@
     "createdAt": "作成日時",
     "internals": "内部データ",
     "internalsEmpty": "このターンには圧縮またはVisionデータがありません。",
+    "compressedBadge": "圧縮済み ({original}→{compressed} tok, {model})",
+    "visionBadge": "Vision: {model} ({imageCount}枚, {tokens} tok)",
     "compression": "圧縮",
     "compressionModel": "モデル",
     "originalTokens": "元のトークン",
@@ -309,6 +311,7 @@
     "tasks": "タスク",
     "conversations": "会話",
     "allSources": "全ソース",
+    "sourceApi": "API",
     "sourceTest": "テスト",
     "sourceAnalyzer": "アナライザー",
     "conversationId": "会話",
@@ -774,7 +777,8 @@
     "clearConversation": "クリア",
     "newSession": "新しいセッション",
     "noSessions": "セッションがありません。",
-    "turns": "ターン"
+    "turns": "ターン",
+    "endpointGemini": "/v1beta/models (Gemini)"
   },
   "apiDocs": {
     "title": "APIドキュメント",
@@ -972,6 +976,7 @@
     "enabled": "有効",
     "online": "オンライン",
     "offline": "オフライン",
+    "editTitle": "MCPサーバーを編集",
     "deleteTitle": "MCPサーバーを削除",
     "stats": "ツール呼び出し統計",
     "statsDesc": "登録されたすべてのMCPサーバーのツール呼び出し集計メトリクスです。",
@@ -991,6 +996,13 @@
     "toolSchemaRefresh": "ツールスキーマ更新 (秒)",
     "maxToolsPerRequest": "リクエストあたりの最大ツール数",
     "maxRoutingCacheEntries": "最大キャッシュエントリ数",
-    "embeddingModel": "埋め込みモデル"
+    "embeddingModel": "埋め込みモデル",
+    "verifyConnection": "接続確認",
+    "verifying": "確認中…",
+    "connected": "接続済み",
+    "verifyDuplicate": "このURLはすでに登録されています。",
+    "verifyNetwork": "ネットワークエラー — URLを確認してください。",
+    "verifyUnreachable": "サーバーに接続できません。",
+    "verifyFailed": "接続確認に失敗しました。"
   }
 }

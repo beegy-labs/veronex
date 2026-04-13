@@ -3,10 +3,13 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { dashboardJobsQuery, providersQuery } from '@/lib/queries'
-import { ConversationList } from '@/components/conversation-list'
+import { DASHBOARD_JOBS_QUERY_KEY } from '@/lib/queries/dashboard'
+import { CONVERSATIONS_QUERY_KEY } from '@/lib/queries/conversations'
+import { ConversationList } from './components/conversation-list'
 import type { RetryParams, ConversationDetail } from '@/lib/types'
-import JobTable from '@/components/job-table'
-import { ApiTestPanel } from '@/components/api-test-panel'
+import JobTable from './components/job-table'
+import dynamic from 'next/dynamic'
+const ApiTestPanel = dynamic(() => import('./components/api-test-panel').then(m => ({ default: m.ApiTestPanel })), { ssr: false })
 import { NetworkFlowTab } from '@/components/network-flow-tab'
 import { ChevronLeft, ChevronRight, Search, X, ListOrdered, SlidersHorizontal, ChevronDown, ChevronUp, MessageSquare, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -90,12 +93,12 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
         ) : (
           <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>
         )}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {/* Search */}
           <div className="relative flex items-center">
             <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <Input
-              className="pl-8 pr-8 w-52 h-9 text-sm"
+              className="pl-8 pr-8 w-36 sm:w-52 h-9 text-sm"
               placeholder={t('jobs.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -141,7 +144,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t('jobs.allSources')}</SelectItem>
-                <SelectItem value="api">API</SelectItem>
+                <SelectItem value="api">{t('jobs.sourceApi')}</SelectItem>
                 <SelectItem value="test">{t('jobs.sourceTest')}</SelectItem>
                 <SelectItem value="analyzer">{t('jobs.sourceAnalyzer')}</SelectItem>
               </SelectContent>
@@ -257,8 +260,8 @@ export default function JobsPage() {
   const [continueConversation, setContinueConversation] = useState<ConversationDetail | null>(null)
 
   const handleTurnComplete = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['dashboard-jobs'] })
-    queryClient.invalidateQueries({ queryKey: ['conversations'] })
+    queryClient.invalidateQueries({ queryKey: DASHBOARD_JOBS_QUERY_KEY })
+    queryClient.invalidateQueries({ queryKey: CONVERSATIONS_QUERY_KEY })
   }, [queryClient])
 
   const [activeTab, setActiveTab] = useState<'tasks' | 'conversations' | 'flow'>(() => {
@@ -315,7 +318,7 @@ export default function JobsPage() {
       </div>
 
       {/* ── Floating bottom panel (Gmail-style) ─────────────────────────────── */}
-      <div className="fixed bottom-0 right-6 z-50 w-[560px] shadow-2xl rounded-t-xl overflow-hidden border border-border bg-card">
+      <div className="fixed bottom-0 right-0 sm:right-6 z-50 w-full sm:w-[560px] shadow-2xl rounded-t-xl overflow-hidden border border-border bg-card">
         {/* Panel header — always visible */}
         <button
           type="button"
@@ -323,7 +326,7 @@ export default function JobsPage() {
           onClick={() => setPanelOpen((v) => !v)}
         >
           <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
-          <span className="text-sm font-medium flex-1 text-left">{t('jobs.testPanel') || '추론 테스트'}</span>
+          <span className="text-sm font-medium flex-1 text-left">{t('jobs.testPanel')}</span>
           {panelOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
         </button>
 
