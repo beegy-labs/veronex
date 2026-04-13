@@ -972,6 +972,7 @@
     "enabled": "有効",
     "online": "オンライン",
     "offline": "オフライン",
+    "editTitle": "MCPサーバーを編集",
     "deleteTitle": "MCPサーバーを削除",
     "stats": "ツール呼び出し統計",
     "statsDesc": "登録されたすべてのMCPサーバーのツール呼び出し集計メトリクスです。",

@@ -972,6 +972,7 @@
     "enabled": "활성화",
     "online": "온라인",
     "offline": "오프라인",
+    "editTitle": "MCP 서버 편집",
     "deleteTitle": "MCP 서버 삭제",
     "stats": "툴 호출 통계",
     "statsDesc": "등록된 모든 MCP 서버의 툴 호출 집계 메트릭입니다.",

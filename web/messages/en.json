@@ -972,6 +972,7 @@
     "enabled": "Enabled",
     "online": "Online",
     "offline": "Offline",
+    "editTitle": "Edit MCP Server",
     "deleteTitle": "Delete MCP Server",
     "stats": "Tool Call Statistics",
     "statsDesc": "Aggregated tool call metrics for all registered MCP servers.",

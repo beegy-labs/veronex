@@ -16,6 +16,22 @@ use super::error::{AppError, db_error};
 use super::provider_validation::validate_provider_url;
 use super::state::AppState;
 
+// ── Slug validation ────────────────────────────────────────────────────────────
+
+/// Validate MCP server slug: `[a-z][a-z0-9_]*`, max 64 chars.
+fn validate_slug(slug: &str) -> Result<(), AppError> {
+    if slug.is_empty()
+        || !slug.starts_with(|c: char| c.is_ascii_lowercase())
+        || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        return Err(AppError::BadRequest("slug must match [a-z][a-z0-9_]*".into()));
+    }
+    if slug.len() > 64 {
+        return Err(AppError::BadRequest("slug must be 64 characters or fewer".into()));
+    }
+    Ok(())
+}
+
 // ── Tool discovery helper ──────────────────────────────────────────────────────
 
 /// Fetch tools from MCP server, populate Valkey cache, and persist snapshot to DB.
@@ -131,6 +147,7 @@ pub struct PatchMcpServerRequest {
     pub is_enabled: Option<bool>,
     pub url: Option<String>,
     pub name: Option<String>,
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -270,15 +287,7 @@ pub async fn register_mcp_server(
     if name.len() > 128 {
         return Err(AppError::BadRequest("name must be 128 characters or fewer".into()));
     }
-    if slug.is_empty()
-        || !slug.starts_with(|c: char| c.is_ascii_lowercase())
-        || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-    {
-        return Err(AppError::BadRequest("slug must match [a-z][a-z0-9_]*".into()));
-    }
-    if slug.len() > 64 {
-        return Err(AppError::BadRequest("slug must be 64 characters or fewer".into()));
-    }
+    validate_slug(&slug)?;
     validate_provider_url(&url)?;
 
     if let Some(t) = req.timeout_secs && !(1..=300).contains(&t) {
@@ -349,12 +358,35 @@ pub async fn patch_mcp_server(
         validate_provider_url(new_url)?;
     }
 
+    let new_slug = if let Some(ref s) = req.slug {
+        let s = s.trim().to_string();
+        validate_slug(&s)?;
+        if s != row.slug {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM mcp_servers WHERE slug = $1 AND id != $2)"
+            )
+            .bind(&s)
+            .bind(id)
+            .fetch_one(&state.pg_pool)
+            .await
+            .map_err(db_error)?;
+            if exists {
+                return Err(AppError::Conflict("slug already in use".into()));
+            }
+        }
+        s
+    } else {
+        row.slug.clone()
+    };
+    let slug_changed = new_slug != row.slug;
+
     sqlx::query(
-        "UPDATE mcp_servers SET is_enabled = $1, url = $2, name = $3, updated_at = now() WHERE id = $4"
+        "UPDATE mcp_servers SET is_enabled = $1, url = $2, name = $3, slug = $4, updated_at = now() WHERE id = $5"
     )
         .bind(new_enabled)
         .bind(new_url)
         .bind(new_name)
+        .bind(&new_slug)
         .bind(id)
         .execute(&state.pg_pool)
         .await
@@ -364,12 +396,12 @@ pub async fn patch_mcp_server(
         if !new_enabled && row.is_enabled {
             bridge.session_manager.disconnect(id);
             bridge.tool_cache.remove_server(id);
-        } else if new_enabled && (!row.is_enabled || url_changed) {
-            if url_changed {
+        } else if new_enabled && (!row.is_enabled || url_changed || slug_changed) {
+            if url_changed || slug_changed {
                 bridge.session_manager.disconnect(id);
                 bridge.tool_cache.remove_server(id);
             }
-            if let Err(e) = bridge.session_manager.connect(id, &row.slug, new_url, row.timeout_secs as u16).await {
+            if let Err(e) = bridge.session_manager.connect(id, &new_slug, new_url, row.timeout_secs as u16).await {
                 tracing::warn!(%id, error = %e, "MCP patch: session connect failed");
             } else {
                 let state_clone = state.clone();
@@ -413,7 +445,7 @@ pub async fn patch_mcp_server(
     Ok(Json(McpServerResponse {
         id: McpId::from_uuid(row.id),
         name: new_name.to_string(),
-        slug: row.slug,
+        slug: new_slug,
         url: new_url.to_string(),
         is_enabled: new_enabled,
         timeout_secs: row.timeout_secs,
@@ -617,4 +649,44 @@ pub async fn get_mcp_stats(
     }).collect();
 
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_slug;
+
+    #[test]
+    fn valid_slugs() {
+        assert!(validate_slug("abc").is_ok());
+        assert!(validate_slug("my_server").is_ok());
+        assert!(validate_slug("a1b2c3").is_ok());
+        assert!(validate_slug("a").is_ok());
+        assert!(validate_slug(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn slug_must_start_with_lowercase() {
+        assert!(validate_slug("1abc").is_err());
+        assert!(validate_slug("_abc").is_err());
+        assert!(validate_slug("Abc").is_err());
+    }
+
+    #[test]
+    fn slug_disallows_uppercase_and_special_chars() {
+        assert!(validate_slug("myServer").is_err());
+        assert!(validate_slug("my-server").is_err());
+        assert!(validate_slug("my server").is_err());
+        assert!(validate_slug("my.server").is_err());
+    }
+
+    #[test]
+    fn slug_empty_rejected() {
+        assert!(validate_slug("").is_err());
+    }
+
+    #[test]
+    fn slug_max_length_64() {
+        assert!(validate_slug(&"a".repeat(64)).is_ok());
+        assert!(validate_slug(&"a".repeat(65)).is_err());
+    }
 }

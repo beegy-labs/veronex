@@ -6,7 +6,7 @@ import { mcpServersQuery, mcpStatsQuery, mcpSettingsQuery } from '@/lib/queries/
 import { api } from '@/lib/api'
 import { ApiHttpError } from '@/lib/types'
 import type { McpServer, McpServerStat, McpToolSummary, McpSettings, RegisterMcpServerRequest } from '@/lib/types'
-import { Plus, Trash2, Plug, BarChart2, ChevronRight, Wrench } from 'lucide-react'
+import { Plus, Trash2, Plug, BarChart2, ChevronRight, Wrench, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -108,6 +108,67 @@ function RegisterMcpModal({ onClose }: { onClose: () => void }) {
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate()} disabled={!canSubmit}>
             {mutation.isPending ? `${t('mcp.register')}…` : t('mcp.register')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+
+function EditMcpModal({ server, onClose }: { server: McpServer; onClose: () => void }) {
+  const { t } = useTranslation()
+  const [name, setName] = useState(server.name)
+  const [slug, setSlug] = useState(server.slug)
+  const [url, setUrl] = useState(server.url)
+  const queryClient = useQueryClient()
+
+  const mutation = useMutation({
+    mutationFn: () => api.patchMcpServer(server.id, {
+      name: name.trim(),
+      slug: slug.trim(),
+      url: url.trim(),
+    }),
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['mcp-servers'] }); onClose() },
+  })
+
+  const canSubmit = !!name.trim() && !!slug.trim() && !!url.trim() && !mutation.isPending
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t('mcp.editTitle')}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-mcp-name">{t('mcp.name')} <span className="text-destructive">*</span></Label>
+            <Input id="edit-mcp-name" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-mcp-slug">{t('mcp.slug')} <span className="text-destructive">*</span></Label>
+            <Input id="edit-mcp-slug" value={slug} onChange={(e) => setSlug(e.target.value)} />
+            <p className="text-xs text-muted-foreground">{t('mcp.slugHint')}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-mcp-url">{t('mcp.url')} <span className="text-destructive">*</span></Label>
+            <Input id="edit-mcp-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} />
+          </div>
+        </div>
+
+        {mutation.error && (
+          <p className="text-sm text-destructive">
+            {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
+          </p>
+        )}
+
+        <DialogFooter className="gap-3 flex-wrap">
+          <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
+          <Button onClick={() => mutation.mutate()} disabled={!canSubmit}>
+            {mutation.isPending ? `${t('common.save')}…` : t('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -390,6 +451,7 @@ export function McpTab() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [showRegister, setShowRegister] = useState(false)
+  const [editTarget, setEditTarget] = useState<McpServer | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<McpServer | null>(null)
   const [toolsTarget, setToolsTarget] = useState<McpServer | null>(null)
   const { hideSection } = useNav404()
@@ -479,16 +541,27 @@ export function McpTab() {
                   <McpToggleSwitch serverId={s.id} isEnabled={s.is_enabled} />
                 </TableCell>
                 <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
-                    aria-label={t('common.delete')}
-                    onClick={() => handleDelete(s)}
-                    disabled={deleteMutation.isPending}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                      aria-label={t('common.edit')}
+                      onClick={() => setEditTarget(s)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                      aria-label={t('common.delete')}
+                      onClick={() => handleDelete(s)}
+                      disabled={deleteMutation.isPending}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -501,6 +574,7 @@ export function McpTab() {
       <McpSettingsPanel />
 
       {showRegister && <RegisterMcpModal onClose={() => setShowRegister(false)} />}
+      {editTarget && <EditMcpModal server={editTarget} onClose={() => setEditTarget(null)} />}
       {toolsTarget && <McpToolsDialog server={toolsTarget} onClose={() => setToolsTarget(null)} />}
 
       {deleteTarget && (
