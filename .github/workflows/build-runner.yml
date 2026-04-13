@@ -38,6 +38,37 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
 
+  deploy:
+    name: Update runner image tag in platform-gitops
+    needs: build
+    runs-on: arc-runner-set
+    if: github.ref_name == 'develop' || github.ref_name == 'main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: beegy-labs/platform-gitops
+          ref: develop
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Update image tag
+        run: |
+          SHA="${{ github.sha }}"
+          sed -i "s|gitea.girok.dev/beegy-labs/veronex-runner:.*|gitea.girok.dev/beegy-labs/veronex-runner:${SHA}|g" \
+            platform/ci/veronex-runner/values.yaml
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add platform/ci/veronex-runner/values.yaml
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(veronex-runner): update runner image tag to ${{ github.sha }}"
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1
+
   cleanup:
     name: Cleanup old runner images
     needs: build
