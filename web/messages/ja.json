@@ -992,6 +992,13 @@
     "toolSchemaRefresh": "ツールスキーマ更新 (秒)",
     "maxToolsPerRequest": "リクエストあたりの最大ツール数",
     "maxRoutingCacheEntries": "最大キャッシュエントリ数",
-    "embeddingModel": "埋め込みモデル"
+    "embeddingModel": "埋め込みモデル",
+    "verifyConnection": "接続確認",
+    "verifying": "確認中…",
+    "connected": "接続済み",
+    "verifyDuplicate": "このURLはすでに登録されています。",
+    "verifyNetwork": "ネットワークエラー — URLを確認してください。",
+    "verifyUnreachable": "サーバーに接続できません。",
+    "verifyFailed": "接続確認に失敗しました。"
   }
 }

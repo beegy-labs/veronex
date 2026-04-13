@@ -992,6 +992,13 @@
     "toolSchemaRefresh": "Tool Schema Refresh (s)",
     "maxToolsPerRequest": "Max Tools / Request",
     "maxRoutingCacheEntries": "Max Cache Entries",
-    "embeddingModel": "Embedding Model"
+    "embeddingModel": "Embedding Model",
+    "verifyConnection": "Verify",
+    "verifying": "Verifying…",
+    "connected": "Connected",
+    "verifyDuplicate": "This URL is already registered.",
+    "verifyNetwork": "Network error — check the URL.",
+    "verifyUnreachable": "Server is not reachable.",
+    "verifyFailed": "Verification failed."
   }
 }

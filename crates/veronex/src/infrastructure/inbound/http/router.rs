@@ -163,6 +163,7 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/keys/{key_id}/mcp/{server_id}", delete(key_mcp_access_handlers::revoke_key_mcp_access))
         // MCP server management
         .route("/v1/mcp/servers", get(mcp_handlers::list_mcp_servers).post(mcp_handlers::register_mcp_server))
+        .route("/v1/mcp/servers/verify", post(mcp_handlers::verify_mcp_server))
         .route("/v1/mcp/servers/{id}", patch(mcp_handlers::patch_mcp_server).delete(mcp_handlers::delete_mcp_server))
         // MCP call statistics
         .route("/v1/mcp/stats", get(mcp_handlers::get_mcp_stats))

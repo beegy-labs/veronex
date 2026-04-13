@@ -271,6 +271,45 @@ pub async fn list_mcp_servers(
     Ok(Json(result))
 }
 
+/// `POST /v1/mcp/servers/verify` — probe connectivity to an MCP server URL.
+pub async fn verify_mcp_server(
+    _claims: RequireProviderManage,
+    State(state): State<AppState>,
+    Json(req): Json<serde_json::Value>,
+) -> impl axum::response::IntoResponse {
+    use std::time::Duration;
+
+    let url = match req.get("url").and_then(|v| v.as_str()) {
+        Some(u) if !u.is_empty() => u.trim().to_string(),
+        _ => return AppError::BadRequest("url is required".into()).into_response(),
+    };
+
+    if let Err(e) = validate_provider_url(&url) {
+        return e.into_response();
+    }
+
+    let health_url = format!("{}/health", url.trim_end_matches('/'));
+    match state
+        .http_client
+        .get(&health_url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            (StatusCode::OK, Json(serde_json::json!({"reachable": true}))).into_response()
+        }
+        Ok(r) => {
+            tracing::warn!(url = %url, status = %r.status(), "MCP verify probe returned unexpected status");
+            AppError::BadGateway(format!("MCP server returned status {}", r.status())).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(url = %url, error = %e, "MCP verify probe failed");
+            AppError::BadGateway("MCP server is not reachable at the given URL".into()).into_response()
+        }
+    }
+}
+
 /// `POST /v1/mcp/servers`
 pub async fn register_mcp_server(
     RequireProviderManage(claims): RequireProviderManage,

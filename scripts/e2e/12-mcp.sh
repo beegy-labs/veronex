@@ -125,6 +125,28 @@ if [ -n "$MCP_ID" ]; then
   fi
 fi
 
+# Verify endpoint
+VERIFY_MISSING=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/v1/mcp/servers/verify" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d '{}' 2>/dev/null || echo "000")
+[ "$VERIFY_MISSING" = "400" ] \
+  && pass "POST /v1/mcp/servers/verify missing url → 400" \
+  || fail "POST /v1/mcp/servers/verify missing url → $VERIFY_MISSING (expected 400)"
+
+VERIFY_INVALID=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/v1/mcp/servers/verify" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d '{"url":"not-a-url"}' 2>/dev/null || echo "000")
+[ "$VERIFY_INVALID" = "400" ] \
+  && pass "POST /v1/mcp/servers/verify invalid url → 400" \
+  || fail "POST /v1/mcp/servers/verify invalid url → $VERIFY_INVALID (expected 400)"
+
+VERIFY_UNREACH=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/v1/mcp/servers/verify" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d '{"url":"http://127.0.0.1:19999"}' 2>/dev/null || echo "000")
+[ "$VERIFY_UNREACH" = "502" ] \
+  && pass "POST /v1/mcp/servers/verify unreachable → 502" \
+  || fail "POST /v1/mcp/servers/verify unreachable → $VERIFY_UNREACH (expected 502)"
+
 # Delete
 if [ -n "$MCP_ID" ]; then
   DEL_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$API/v1/mcp/servers/$MCP_ID" \

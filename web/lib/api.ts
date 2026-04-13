@@ -345,6 +345,8 @@ export const api = {
   registerMcpServer: (body: RegisterMcpServerRequest) =>
     apiClient.post<{ id: string }>('/v1/mcp/servers', body),
 
+  verifyMcpServer: (url: string) => verifyEndpoint('/v1/mcp/servers/verify', url),
+
   patchMcpServer: (id: string, body: Partial<{ is_enabled: boolean; name: string; slug: string; url: string }>) =>
     apiClient.patch<McpServer>(`/v1/mcp/servers/${id}`, body),
 

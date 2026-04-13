@@ -992,6 +992,13 @@
     "toolSchemaRefresh": "도구 스키마 갱신 (초)",
     "maxToolsPerRequest": "요청당 최대 도구 수",
     "maxRoutingCacheEntries": "최대 캐시 항목 수",
-    "embeddingModel": "임베딩 모델"
+    "embeddingModel": "임베딩 모델",
+    "verifyConnection": "연결 확인",
+    "verifying": "확인 중…",
+    "connected": "연결됨",
+    "verifyDuplicate": "이미 등록된 URL입니다.",
+    "verifyNetwork": "네트워크 오류 — URL을 확인하세요.",
+    "verifyUnreachable": "서버에 연결할 수 없습니다.",
+    "verifyFailed": "연결 확인에 실패했습니다."
   }
 }
