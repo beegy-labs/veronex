@@ -130,6 +130,8 @@
     "createdAt": "作成日時",
     "internals": "内部データ",
     "internalsEmpty": "このターンには圧縮またはVisionデータがありません。",
+    "compressedBadge": "圧縮済み ({original}→{compressed} tok, {model})",
+    "visionBadge": "Vision: {model} ({imageCount}枚, {tokens} tok)",
     "compression": "圧縮",
     "compressionModel": "モデル",
     "originalTokens": "元のトークン",
@@ -309,6 +311,7 @@
     "tasks": "タスク",
     "conversations": "会話",
     "allSources": "全ソース",
+    "sourceApi": "API",
     "sourceTest": "テスト",
     "sourceAnalyzer": "アナライザー",
     "conversationId": "会話",
@@ -774,7 +777,8 @@
     "clearConversation": "クリア",
     "newSession": "新しいセッション",
     "noSessions": "セッションがありません。",
-    "turns": "ターン"
+    "turns": "ターン",
+    "endpointGemini": "/v1beta/models (Gemini)"
   },
   "apiDocs": {
     "title": "APIドキュメント",

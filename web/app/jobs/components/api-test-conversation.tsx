@@ -6,8 +6,8 @@ import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
 import { CopyButton } from '@/components/copy-button'
 import { renderWithMermaid } from '@/components/mermaid-block'
-import { MAX_CONV_SESSIONS } from '@/components/api-test-types'
-import type { ConversationMessage, ConversationSession, StreamStatus } from '@/components/api-test-types'
+import { MAX_CONV_SESSIONS } from './api-test-types'
+import type { ConversationMessage, ConversationSession, StreamStatus } from './api-test-types'
 
 interface ApiTestConversationProps {
   sessions: ConversationSession[]

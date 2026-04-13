@@ -130,6 +130,8 @@
     "createdAt": "생성 일시",
     "internals": "내부 데이터",
     "internalsEmpty": "이 턴에는 압축 또는 Vision 데이터가 없습니다.",
+    "compressedBadge": "압축됨 ({original}→{compressed} tok, {model})",
+    "visionBadge": "Vision: {model} ({imageCount}개 이미지, {tokens} tok)",
     "compression": "압축",
     "compressionModel": "모델",
     "originalTokens": "원본",
@@ -305,6 +307,7 @@
     "providerOllama": "Ollama",
     "providerGemini": "Gemini",
     "allSources": "전체 출처",
+    "sourceApi": "API",
     "sourceTest": "테스트",
     "sourceAnalyzer": "분석기",
     "filters": "필터",
@@ -774,7 +777,8 @@
     "clearConversation": "초기화",
     "newSession": "새 세션",
     "noSessions": "세션이 없습니다.",
-    "turns": "턴"
+    "turns": "턴",
+    "endpointGemini": "/v1beta/models (Gemini)"
   },
   "apiDocs": {
     "title": "API 문서",

@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { JobDetail, RetryParams, ChatMessage } from '@/lib/types'
 import { api } from '@/lib/api'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { RotateCcw, X, Loader2, Info, Wrench, ChevronDown, ChevronRight } from 'lucide-react'
 import {
@@ -15,20 +14,9 @@ import { useTranslation } from '@/i18n'
 import { fmtMsNullable, fmtTps, fmtCost6 } from '@/lib/chart-theme'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDatetime, fmtNumber } from '@/lib/date'
-import { STATUS_STYLES, ROLE_STYLES, STALE_TIME_FAST } from '@/lib/constants'
-
-function StatusBadge({ status }: { status: string }) {
-  const { t } = useTranslation()
-  const key = `jobs.statuses.${status}` as Parameters<typeof t>[0]
-  return (
-    <Badge
-      variant="outline"
-      className={`whitespace-nowrap ${STATUS_STYLES[status] ?? 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30'}`}
-    >
-      {t(key)}
-    </Badge>
-  )
-}
+import { ROLE_STYLES } from '@/lib/constants'
+import { jobDetailQuery, JOB_DETAIL_QUERY_KEY, DASHBOARD_JOBS_QUERY_KEY } from '@/lib/queries/dashboard'
+import { StatusBadge } from './status-badge'
 
 const formatDuration = fmtMsNullable
 
@@ -132,19 +120,14 @@ export function JobDetailModal({
   const { tz } = useTimezone()
   const queryClient = useQueryClient()
 
-  const { data, isLoading } = useQuery<JobDetail>({
-    queryKey: ['job-detail', jobId],
-    queryFn: () => api.jobDetail(jobId!),
-    enabled: !!jobId && open,
-    staleTime: STALE_TIME_FAST,
-  })
+  const { data, isLoading } = useQuery(jobDetailQuery(jobId, open))
 
   const cancelMutation = useMutation({
     mutationFn: () => api.cancelJob(jobId!),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['dashboard-jobs'] })
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_JOBS_QUERY_KEY })
       queryClient.invalidateQueries({ queryKey: ['recent-jobs'] })
-      queryClient.invalidateQueries({ queryKey: ['job-detail', jobId] })
+      queryClient.invalidateQueries({ queryKey: JOB_DETAIL_QUERY_KEY(jobId!) })
     },
   })
 

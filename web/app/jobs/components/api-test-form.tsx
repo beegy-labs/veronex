@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
 import { fmtCompact } from '@/lib/chart-theme'
-import type { ProviderOption, Endpoint, TestMode } from '@/components/api-test-types'
+import type { ProviderOption, Endpoint, TestMode } from './api-test-types'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import type { LabSettings } from '@/lib/types'
 
@@ -242,7 +242,7 @@ export function ApiTestForm({
               </>
             )}
             {isGeminiProvider && (
-              <SelectItem value="/v1beta/models">/v1beta/models (Gemini)</SelectItem>
+              <SelectItem value="/v1beta/models">{t('test.endpointGemini')}</SelectItem>
             )}
           </SelectContent>
         </Select>
