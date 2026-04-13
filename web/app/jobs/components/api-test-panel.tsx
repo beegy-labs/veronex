@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useReducer, useMemo, useCallback, useEffectEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { isLoggedIn, getAuthUser } from '@/lib/auth'
-import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
+import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery, globalModelSettingsQuery } from '@/lib/queries/providers'
 import type { RetryParams, ConversationDetail } from '@/lib/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
@@ -127,6 +127,11 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     enabled: isGeminiProvider,
   })
 
+  const { data: globalModelSettings } = useQuery({
+    ...globalModelSettingsQuery,
+    enabled: !isGeminiProvider,
+  })
+
   const modelContextWindows = useMemo<Record<string, number>>(() => {
     if (isGeminiProvider) return {}
     return Object.fromEntries(
@@ -137,14 +142,21 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   }, [isGeminiProvider, ollamaModelsData?.models])
 
   const availableModels = useMemo(() => {
-    if (!isGeminiProvider) return ollamaModelsData?.models.map((m) => m.model_name) ?? []
+    if (!isGeminiProvider) {
+      const disabledSet = new Set(
+        (globalModelSettings ?? []).filter((s) => !s.is_enabled).map((s) => s.model_name)
+      )
+      return (ollamaModelsData?.models ?? [])
+        .filter((m) => !disabledSet.has(m.model_name))
+        .map((m) => m.model_name)
+    }
     const allModels = geminiModelsData?.models.map((m) => m.model_name) ?? []
     if (providerType !== "gemini-free") return allModels
     const policyMap = new Map(
       (geminiPolicies ?? []).filter((p) => p.model_name !== '*').map((p) => [p.model_name, p])
     )
     return allModels.filter((name) => policyMap.get(name)?.available_on_free_tier === true)
-  }, [isGeminiProvider, providerType, geminiModelsData, geminiPolicies, ollamaModelsData?.models])
+  }, [isGeminiProvider, providerType, geminiModelsData, geminiPolicies, ollamaModelsData?.models, globalModelSettings])
 
   useEffect(() => {
     if (availableModels.length > 0 && !availableModels.includes(model)) {
