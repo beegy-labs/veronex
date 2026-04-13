@@ -1,7 +1,7 @@
 //! Shared SQL helpers used by both dashboard and usage query modules.
 
 use serde::Serialize;
-use crate::domain::value_objects::JobId;
+use crate::domain::value_objects::{ConvId, JobId};
 
 /// LATERAL JOIN for per-model pricing lookup.
 /// Used by usage breakdown, key model breakdown, and dashboard job queries.
@@ -156,7 +156,7 @@ pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, pro
         has_tool_calls,
         estimated_cost_usd: c.estimated_cost_usd,
         provider_name,
-        conversation_id: c.conversation_id.map(|id| id.to_string()),
+        conversation_id: c.conversation_id.map(|id| ConvId::from_uuid(id).to_string()),
     }
 }
 
