@@ -99,10 +99,6 @@ pub struct ChatMessage {
     /// Tool result message name (some clients send this).
     #[serde(default)]
     name: Option<String>,
-    /// Ollama-compatible image list (base64). Present when clients send per-message images
-    /// (e.g. multi-turn conversation mode in the test panel).
-    #[serde(default)]
-    images: Option<Vec<String>>,
 }
 
 impl ChatMessage {
@@ -160,13 +156,6 @@ impl ChatMessage {
         // Pass through tool_call_id for tool-result messages
         if let Some(id) = self.tool_call_id {
             msg["tool_call_id"] = serde_json::Value::String(id);
-        }
-
-        // Pass per-message images (multi-turn conversation mode).
-        if let Some(imgs) = self.images {
-            if !imgs.is_empty() {
-                msg["images"] = serde_json::json!(imgs);
-            }
         }
 
         msg
@@ -422,21 +411,13 @@ async fn ollama_chat_proxy(
     }
 
     let model_str = req.model.clone();
-    // Merge top-level images + content-array images + per-message images (conversation mode).
-    let mut ollama_messages = ollama_messages;
+    // Merge top-level images with images extracted from content array parts.
     let images = {
         let mut imgs = req.images.unwrap_or_default();
         imgs.append(&mut content_images);
-        // Also collect images embedded inside Ollama-format messages (multi-turn conversation).
-        for m in &ollama_messages {
-            if m.get("role").and_then(|r| r.as_str()) == Some("user") {
-                if let Some(arr) = m.get("images").and_then(|v| v.as_array()) {
-                    imgs.extend(arr.iter().filter_map(|v| v.as_str().map(String::from)));
-                }
-            }
-        }
         if imgs.is_empty() { None } else { Some(imgs) }
     };
+    let messages = serde_json::Value::Array(ollama_messages);
     // Forward tools in Ollama format (OpenAI tools array is already compatible with Ollama).
     let tools = req.tools.map(serde_json::Value::Array);
 
@@ -447,34 +428,23 @@ async fn ollama_chat_proxy(
         .and_then(|o| o.include_usage)
         .unwrap_or(false);
 
-    // For non-vision models with images: analyze via vision model, inject description into
-    // the last user message so the text model receives the image context.
+    // For non-vision models with images: analyze via vision model, inject description.
     let vision_analysis = if images.as_ref().is_some_and(|i| !i.is_empty()) {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-        let va = super::inference_helpers::analyze_images_for_context(
+        super::inference_helpers::analyze_images_for_context(
             &state.http_client,
             state.provider_registry.as_ref(),
             &model_str,
             images.as_deref().unwrap_or(&[]),
             &prompt,
             lab.vision_model.as_deref(),
-        ).await;
-        if let Some(ref va) = va {
-            if let Some(last_user) = ollama_messages.iter_mut().rev()
-                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-            {
-                let existing = last_user["content"].as_str().unwrap_or("").to_string();
-                last_user["content"] = serde_json::json!(
-                    format!("[Image Analysis]\n{}\n\n{existing}", va.analysis)
-                );
-            }
-        }
-        va
+        ).await
     } else {
         None
     };
-
-    let messages = serde_json::Value::Array(ollama_messages);
+    // Images are validated + compressed upstream (line ~311). If vision analysis ran, the
+    // description is already embedded in messages via the Ollama format conversion above.
+    // We don't need to re-inject here — the prompt var is used as display only.
 
     let job_id = match state
         .use_case
@@ -1009,7 +979,6 @@ async fn load_conversation_context(
                                 name: None,
                                 tool_calls: None,
                                 tool_call_id: None,
-                                images: None,
                             };
                             let current = std::mem::take(messages);
                             *messages = std::iter::once(summary_msg).chain(current).collect();
@@ -1033,7 +1002,6 @@ async fn load_conversation_context(
                         name: None,
                         tool_calls: None,
                         tool_call_id: None,
-                        images: None,
                     })
                     .collect();
 
