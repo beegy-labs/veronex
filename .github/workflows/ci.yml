@@ -37,11 +37,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Pre-pull base images
-        run: |
-          docker pull rust:1-alpine3.23
-          docker pull alpine:3.23
-
       - name: Wait for Docker (DinD sidecar)
         run: |
           for i in $(seq 1 30); do
