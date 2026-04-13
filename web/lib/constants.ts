@@ -178,6 +178,13 @@ export const SERVICE_STATUS_TEXT: Record<string, string> = {
   unavailable: 'text-status-error-fg',
 }
 
+/** Job source → Tailwind badge class. SSOT for source origin badges. */
+export const SOURCE_STYLES: Record<string, string> = {
+  test:     'bg-status-warning/15 text-status-warning-fg',
+  analyzer: 'bg-accent/15 text-accent-foreground',
+  api:      'bg-primary/10 text-primary',
+}
+
 /** Job status → Tailwind class mapping. SSOT for all status badges. */
 export const STATUS_STYLES: Record<string, string> = {
   completed: 'bg-status-success/15 text-status-success-fg border-status-success/30',

@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import type { Job, RetryParams } from '@/lib/types'
-import { Badge } from '@/components/ui/badge'
 import { Wrench } from 'lucide-react'
 import {
   TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -12,21 +11,9 @@ import { useTranslation } from '@/i18n'
 import { fmtMsNullable } from '@/lib/chart-theme'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDatetime } from '@/lib/date'
-import { JobDetailModal } from '@/components/job-detail-modal'
-import { STATUS_STYLES } from '@/lib/constants'
-
-function StatusBadge({ status }: { status: string }) {
-  const { t } = useTranslation()
-  const key = `jobs.statuses.${status}` as Parameters<typeof t>[0]
-  return (
-    <Badge
-      variant="outline"
-      className={`whitespace-nowrap ${STATUS_STYLES[status] ?? 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30'}`}
-    >
-      {t(key)}
-    </Badge>
-  )
-}
+import { JobDetailModal } from './job-detail-modal'
+import { STATUS_STYLES, SOURCE_STYLES } from '@/lib/constants'
+import { StatusBadge } from './status-badge'
 
 function truncateId(id: string) {
   return id.slice(0, 8) + '…'
@@ -101,11 +88,7 @@ export default function JobTable({
                 {job.request_path ?? <span className="opacity-40">—</span>}
               </TableCell>
               <TableCell>
-                <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
-                  job.source === 'test' ? 'bg-status-warning/15 text-status-warning-fg' :
-                  job.source === 'analyzer' ? 'bg-accent/15 text-accent-foreground' :
-                  'bg-primary/10 text-primary'
-                }`}>{job.source}</span>
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${SOURCE_STYLES[job.source] ?? SOURCE_STYLES.api}`}>{job.source}</span>
               </TableCell>
               <TableCell>
                 <div className="flex items-center gap-1.5">

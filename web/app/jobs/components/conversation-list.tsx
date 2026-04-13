@@ -14,6 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { StatusPill } from '@/components/status-pill'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { DataTable } from '@/components/data-table'
+import { SOURCE_STYLES } from '@/lib/constants'
 
 const PAGE_SIZE = 30
 
@@ -70,10 +72,10 @@ export function ConversationList({ onContinue }: ConversationListProps) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">{t('jobs.allProviders')}</SelectItem>
-              <SelectItem value="api">api</SelectItem>
-              <SelectItem value="test">test</SelectItem>
-              <SelectItem value="analyzer">analyzer</SelectItem>
+              <SelectItem value="all">{t('jobs.allSources')}</SelectItem>
+              <SelectItem value="api">{t('jobs.sourceApi')}</SelectItem>
+              <SelectItem value="test">{t('jobs.sourceTest')}</SelectItem>
+              <SelectItem value="analyzer">{t('jobs.sourceAnalyzer')}</SelectItem>
             </SelectContent>
           </Select>
           <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => refetch()} disabled={isFetching}>
@@ -95,16 +97,15 @@ export function ConversationList({ onContinue }: ConversationListProps) {
       )}
 
       {data && data.conversations.length > 0 && (
-        <div className="rounded-lg border border-border overflow-hidden">
-          <Table className="text-sm">
-            <TableHeader>
+        <DataTable minWidth="640px">
+          <TableHeader>
               <TableRow className="bg-muted/30">
-                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('jobs.conversationTitle')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('common.model')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('jobs.source')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground">{t('jobs.turnCount')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground">{t('jobs.totalTokens')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground">{t('jobs.lastActivity')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground whitespace-nowrap">{t('jobs.conversationTitle')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground whitespace-nowrap">{t('common.model')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground whitespace-nowrap">{t('jobs.source')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('jobs.turnCount')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('jobs.totalTokens')}</TableHead>
+                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('jobs.lastActivity')}</TableHead>
                 {onContinue && <TableHead className="px-4 py-2.5" />}
               </TableRow>
             </TableHeader>
@@ -125,11 +126,7 @@ export function ConversationList({ onContinue }: ConversationListProps) {
                   </TableCell>
                   <TableCell className="px-4 py-3 text-muted-foreground">{c.model_name || '—'}</TableCell>
                   <TableCell className="px-4 py-3">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
-                      c.source === 'test' ? 'bg-status-warning/15 text-status-warning-fg' :
-                      c.source === 'analyzer' ? 'bg-accent/15 text-accent-foreground' :
-                      'bg-primary/10 text-primary'
-                    }`}>{c.source}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${SOURCE_STYLES[c.source] ?? SOURCE_STYLES.api}`}>{c.source}</span>
                   </TableCell>
                   <TableCell className="px-4 py-3 text-right tabular-nums">{c.turn_count}</TableCell>
                   <TableCell className="px-4 py-3 text-right tabular-nums text-muted-foreground">
@@ -155,8 +152,7 @@ export function ConversationList({ onContinue }: ConversationListProps) {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
-        </div>
+        </DataTable>
       )}
 
       {/* Pagination */}
@@ -212,14 +208,20 @@ function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }
           )}
           {data?.compressed && (
             <span className="inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-mono text-primary">
-              Compressed ({data.compressed.original_tokens}→{data.compressed.compressed_tokens} tok,{' '}
-              {data.compressed.compression_model})
+              {t('conversations.compressedBadge', {
+                original: data.compressed.original_tokens,
+                compressed: data.compressed.compressed_tokens,
+                model: data.compressed.compression_model,
+              })}
             </span>
           )}
           {data?.vision_analysis && (
             <span className="inline-flex items-center gap-1 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-mono text-accent-foreground">
-              Vision: {data.vision_analysis.vision_model}
-              ({data.vision_analysis.image_count} img, {data.vision_analysis.analysis_tokens} tok)
+              {t('conversations.visionBadge', {
+                model: data.vision_analysis.vision_model,
+                imageCount: data.vision_analysis.image_count,
+                tokens: data.vision_analysis.analysis_tokens,
+              })}
             </span>
           )}
         </div>
@@ -243,12 +245,8 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
           {data && (
             <div className="flex items-center justify-between mt-1">
               <p className="text-xs text-muted-foreground">
-                <span className={`inline-block px-1.5 py-0.5 rounded font-mono mr-2 ${
-                  data.source === 'test' ? 'bg-status-warning/15 text-status-warning-fg' :
-                  data.source === 'analyzer' ? 'bg-accent/15 text-accent-foreground' :
-                  'bg-primary/10 text-primary'
-                }`}>{data.source}</span>
-                {data.model_name} · {data.turn_count} {t('jobs.turnCount')} · {fmtNumber(data.total_prompt_tokens + data.total_completion_tokens)} tokens
+                <span className={`inline-block px-1.5 py-0.5 rounded font-mono mr-2 ${SOURCE_STYLES[data.source] ?? SOURCE_STYLES.api}`}>{data.source}</span>
+                {data.model_name} · {data.turn_count} {t('jobs.turnCount')} · {fmtNumber(data.total_prompt_tokens + data.total_completion_tokens)} {t('common.tokensUnit')}
               </p>
               {onContinue && (
                 <Button type="button" size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={() => onContinue(data)}>

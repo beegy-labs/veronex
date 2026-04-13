@@ -9,8 +9,11 @@ export interface ConversationsQueryParams {
   search?: string
 }
 
+/** Invalidation prefix for all conversations queries. */
+export const CONVERSATIONS_QUERY_KEY = ['conversations'] as const
+
 export const conversationsQuery = (p: ConversationsQueryParams) => queryOptions({
-  queryKey: ['conversations', p.page, p.source, p.search] as const,
+  queryKey: [...CONVERSATIONS_QUERY_KEY, p.page, p.source, p.search] as const,
   queryFn: () => {
     const qs = new URLSearchParams({
       limit: String(p.pageSize),
