@@ -18,5 +18,8 @@ USER runner
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
 ENV PATH="/home/runner/.cargo/bin:${PATH}"
 
+# cargo-nextest: faster parallel test runner (pre-baked to avoid per-job install)
+RUN cargo install cargo-nextest --locked
+
 # Verify toolchain
-RUN rustc --version && cargo --version
+RUN rustc --version && cargo --version && cargo nextest --version
