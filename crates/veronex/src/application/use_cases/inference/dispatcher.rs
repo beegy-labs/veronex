@@ -83,24 +83,22 @@ async fn filter_candidates(
                 if !filtered.is_empty() { candidates = filtered; }
             }
 
-    // Stage 3: model selection (disabled models) — parallel lookups
+    // Stage 3: model selection (disabled models) — denylist semantics.
+    // Only providers where the model is EXPLICITLY disabled (is_enabled=false) are excluded.
+    // Models absent from provider_selected_models default to enabled (cold-start safe).
     if let Some(repo) = model_selection_repo {
         let futs: Vec<_> = candidates.iter()
             .map(|b| {
                 let id = b.id;
-                async move { (id, repo.list_enabled(id).await) }
+                async move { (id, repo.list_disabled(id).await) }
             })
             .collect();
         let results = futures::future::join_all(futs).await;
         let mut filtered = Vec::with_capacity(candidates.len());
         for (b, (_, res)) in candidates.into_iter().zip(results) {
             match res {
-                Ok(enabled) if !enabled.is_empty() => {
-                    if enabled.iter().any(|s| s == model) {
-                        filtered.push(b);
-                    } else {
-                        tracing::debug!(provider_id = %b.id, %model, "model disabled, skipping");
-                    }
+                Ok(disabled) if disabled.iter().any(|s| s == model) => {
+                    tracing::debug!(provider_id = %b.id, %model, "model explicitly disabled, skipping");
                 }
                 _ => filtered.push(b),
             }

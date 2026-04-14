@@ -23,6 +23,7 @@ use crate::domain::constants::MODEL_SELECTION_CACHE_TTL as TTL;
 pub struct CachingModelSelection {
     inner: Arc<dyn ProviderModelSelectionRepository>,
     cache: TtlCache<Uuid, Vec<String>>,
+    disabled_cache: TtlCache<Uuid, Vec<String>>,
 }
 
 impl CachingModelSelection {
@@ -30,6 +31,7 @@ impl CachingModelSelection {
         Self {
             inner,
             cache: TtlCache::new(TTL),
+            disabled_cache: TtlCache::new(TTL),
         }
     }
 }
@@ -39,6 +41,7 @@ impl ProviderModelSelectionRepository for CachingModelSelection {
     async fn upsert_models(&self, provider_id: Uuid, models: &[String]) -> Result<()> {
         let result = self.inner.upsert_models(provider_id, models).await;
         self.cache.invalidate(&provider_id).await;
+        self.disabled_cache.invalidate(&provider_id).await;
         result
     }
 
@@ -55,12 +58,19 @@ impl ProviderModelSelectionRepository for CachingModelSelection {
     ) -> Result<()> {
         let result = self.inner.set_enabled(provider_id, model_name, enabled).await;
         self.cache.invalidate(&provider_id).await;
+        self.disabled_cache.invalidate(&provider_id).await;
         result
     }
 
     async fn list_enabled(&self, provider_id: Uuid) -> Result<Vec<String>> {
         self.cache
             .get_or_insert(provider_id, self.inner.list_enabled(provider_id))
+            .await
+    }
+
+    async fn list_disabled(&self, provider_id: Uuid) -> Result<Vec<String>> {
+        self.disabled_cache
+            .get_or_insert(provider_id, self.inner.list_disabled(provider_id))
             .await
     }
 }
