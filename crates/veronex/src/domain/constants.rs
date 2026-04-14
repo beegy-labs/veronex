@@ -82,6 +82,14 @@ pub const QUEUE_ACTIVE: &str = "veronex:queue:active";
 /// Hash tracking re-enqueue attempt counts for lease-expired jobs.
 pub const QUEUE_ACTIVE_ATTEMPTS: &str = "veronex:queue:active:attempts";
 
+/// Counter prefix for "no eligible provider" retries per job.
+/// Key format: `{NO_PROVIDER_ATTEMPTS_PREFIX}:{job_id}`.
+pub const NO_PROVIDER_ATTEMPTS_PREFIX: &str = "veronex:queue:no_provider_attempts";
+
+/// Max consecutive "no eligible provider" cycles before a job is permanently failed.
+/// Each cycle = one dispatcher tick (~poll_interval). Default 3 tries ≈ ≤3s.
+pub const MAX_NO_PROVIDER_ATTEMPTS: i64 = 3;
+
 /// Lease TTL in ms. Workers must renew before expiry or job is reaped.
 pub const LEASE_TTL_MS: u64 = 90_000;
 

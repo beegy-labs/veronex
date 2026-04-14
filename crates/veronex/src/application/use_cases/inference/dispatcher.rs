@@ -26,6 +26,7 @@ use crate::domain::constants::{
     MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
     QUEUE_POLL_INTERVAL,
     LOCALITY_BONUS_MS, ZSET_PEEK_K, ZSET_PEEK_K_MAX,
+    NO_PROVIDER_ATTEMPTS_PREFIX, MAX_NO_PROVIDER_ATTEMPTS,
 };
 use crate::infrastructure::outbound::valkey_keys as vk_keys;
 use crate::application::ports::outbound::concurrency_port::VramPermit;
@@ -432,17 +433,35 @@ pub(super) async fn queue_dispatcher_loop(
             ).await;
 
             if candidates.is_empty() {
-                // No eligible provider → atomically remove from ZSET and fail
+                // No eligible provider — retry up to MAX_NO_PROVIDER_ATTEMPTS before failing.
+                // Leaves the job in ZSET so it is retried on the next dispatcher tick.
+                // This handles transient conditions: sync loop mid-run, providers momentarily
+                // offline, or a new model not yet indexed in provider_selected_models.
+                let attempt_key = format!("{NO_PROVIDER_ATTEMPTS_PREFIX}:{job_id_str}");
+                let attempts = valkey.incr_by(&attempt_key, 1).await.unwrap_or(MAX_NO_PROVIDER_ATTEMPTS);
+                if attempts < MAX_NO_PROVIDER_ATTEMPTS {
+                    tracing::debug!(%uuid, %model, attempts, "no candidates — will retry on next tick");
+                    continue;
+                }
+
+                // Exceeded retry limit — permanently fail.
                 let queue_active = vk_keys::queue_active();
                 let claimed = valkey.zset_claim(&job_id_str, &queue_active, model).await.unwrap_or(false);
                 if claimed {
                     valkey.active_lease_remove(&job_id_str).await
                         .unwrap_or_else(|e| tracing::warn!(%uuid, error = %e, "dispatcher: active_lease_remove failed"));
+                    let _ = valkey.kv_del(&attempt_key).await;
                     let vk_opt: Option<Arc<dyn ValkeyPort>> = Some(valkey.clone());
                     fail_job_no_provider(&jobs, &job_repo, &vk_opt, uuid, "no eligible provider for this model").await;
                     dispatched = true;
                 }
                 continue;
+            }
+
+            // Reset no-provider counter on successful candidate resolution.
+            {
+                let attempt_key = format!("{NO_PROVIDER_ATTEMPTS_PREFIX}:{job_id_str}");
+                let _ = valkey.kv_del(&attempt_key).await;
             }
 
             let claimed_provider = score_and_claim(
