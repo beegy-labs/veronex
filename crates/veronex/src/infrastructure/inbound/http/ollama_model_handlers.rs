@@ -42,6 +42,8 @@ pub struct OllamaModelDto {
     pub is_vision: bool,
     /// Maximum context window across all providers (0 = not yet profiled).
     pub max_ctx: u32,
+    /// False if the model is disabled on all providers carrying it.
+    pub is_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,7 +76,7 @@ pub async fn list_models(
         .map_err(|e| { tracing::error!("ollama list_models: {e}"); super::error::AppError::Internal(e) })?;
     let dtos: Vec<OllamaModelDto> = page_result.items
         .into_iter()
-        .map(|m| OllamaModelDto { is_vision: is_vision_model(&m.model_name), model_name: m.model_name, provider_count: m.provider_count, max_ctx: m.max_ctx.max(0) as u32 })
+        .map(|m| OllamaModelDto { is_vision: is_vision_model(&m.model_name), model_name: m.model_name, provider_count: m.provider_count, max_ctx: m.max_ctx.max(0) as u32, is_enabled: m.is_enabled })
         .collect();
     Ok(Json(serde_json::json!({
         "models": dtos,

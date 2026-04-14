@@ -147,7 +147,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         (globalModelSettings ?? []).filter((s) => !s.is_enabled).map((s) => s.model_name)
       )
       return (ollamaModelsData?.models ?? [])
-        .filter((m) => !disabledSet.has(m.model_name))
+        .filter((m) => m.is_enabled !== false && !disabledSet.has(m.model_name))
         .map((m) => m.model_name)
     }
     const allModels = geminiModelsData?.models.map((m) => m.model_name) ?? []

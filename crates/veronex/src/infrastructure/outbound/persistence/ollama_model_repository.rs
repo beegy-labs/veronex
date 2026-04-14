@@ -81,6 +81,7 @@ impl OllamaModelRepository for PostgresOllamaModelRepository {
             model_name: r.model_name,
             provider_count: r.provider_count,
             max_ctx: r.max_ctx.unwrap_or(0),
+            is_enabled: true, // routing uses all providers; per-provider filter applied at dispatch
         }).collect())
     }
 
@@ -98,17 +99,22 @@ impl OllamaModelRepository for PostgresOllamaModelRepository {
             model_name: String,
             provider_count: i64,
             max_ctx: Option<i32>,
+            is_enabled: bool,
         }
 
         let rows: Vec<Row> = sqlx::query_as(
             r#"
             SELECT om.model_name,
-                   COUNT(om.provider_id)          AS provider_count,
-                   MAX(mvp.max_ctx)               AS max_ctx
+                   COUNT(om.provider_id)                                         AS provider_count,
+                   MAX(mvp.max_ctx)                                              AS max_ctx,
+                   BOOL_OR(COALESCE(pms.is_enabled, true))                      AS is_enabled
             FROM ollama_models om
             LEFT JOIN model_vram_profiles mvp
                    ON mvp.provider_id = om.provider_id
                   AND mvp.model_name  = om.model_name
+            LEFT JOIN provider_selected_models pms
+                   ON pms.provider_id = om.provider_id
+                  AND pms.model_name  = om.model_name
             WHERE om.model_name ILIKE $1
             GROUP BY om.model_name
             ORDER BY om.model_name ASC
@@ -126,6 +132,7 @@ impl OllamaModelRepository for PostgresOllamaModelRepository {
                 model_name: r.model_name,
                 provider_count: r.provider_count,
                 max_ctx: r.max_ctx.unwrap_or(0),
+                is_enabled: r.is_enabled,
             }).collect(),
             total,
         })

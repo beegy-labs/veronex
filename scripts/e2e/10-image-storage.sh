@@ -68,6 +68,9 @@ curl -s --max-time 120 "$API/api/generate" \
 # Fire both image inference requests IMMEDIATELY (no sleep — Scale-In runs every 5s)
 info "Firing image tests immediately after warm-up..."
 
+# Record start time before firing — used to filter out concurrent jobs from other test scripts
+IMG_TEST_START=$(python3 -c "import datetime; print(datetime.datetime.utcnow().isoformat())")
+
 API_IMG_RES=""
 TEST_IMG_RES=""
 TMPDIR_IMG=$(mktemp -d)
@@ -186,21 +189,26 @@ sleep 4
 
 hdr "Image Storage Verification"
 
-API_JOB_ID=$(aget "/v1/dashboard/jobs?limit=5&source=api&model=$VISION_MODEL" 2>/dev/null | python3 -c "
+API_JOB_ID=$(aget "/v1/dashboard/jobs?limit=20&source=api&model=$VISION_MODEL" 2>/dev/null | python3 -c "
 import sys, json
 try:
+    # Filter jobs created after IMG_TEST_START to exclude concurrent no-image jobs from other scripts
+    start = '${IMG_TEST_START}'
     for j in json.loads(sys.stdin.read()).get('jobs', []):
-        print(j['id']); break
+        if j.get('created_at', '') >= start:
+            print(j['id']); break
 except: pass
 " 2>/dev/null || echo "")
 verify_image_job "$API_JOB_ID" "API image job"
 
 if [ "$TEST_IMG_CODE" = "200" ]; then
-  TEST_JOB_ID=$(aget "/v1/dashboard/jobs?limit=5&source=test&model=$VISION_MODEL" 2>/dev/null | python3 -c "
+  TEST_JOB_ID=$(aget "/v1/dashboard/jobs?limit=20&source=test&model=$VISION_MODEL" 2>/dev/null | python3 -c "
 import sys, json
 try:
+    start = '${IMG_TEST_START}'
     for j in json.loads(sys.stdin.read()).get('jobs', []):
-        print(j['id']); break
+        if j.get('created_at', '') >= start:
+            print(j['id']); break
 except: pass
 " 2>/dev/null || echo "")
   verify_image_job "$TEST_JOB_ID" "Test image job"
