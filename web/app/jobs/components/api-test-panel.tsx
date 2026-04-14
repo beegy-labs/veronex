@@ -420,12 +420,20 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
               try {
                 const chunk: OpenAIChunk = JSON.parse(data)
                 if (chunk.error?.message) throw new Error(chunk.error.message)
-                const content = chunk.choices?.[0]?.delta?.content
+                const delta = chunk.choices?.[0]?.delta
+                const content = delta?.content
                 if (content) {
                   fullText += content
                   setConversationSessions((prev) => prev.map((s) =>
-                    s.id === sid ? { ...s, streamingText: fullText } : s
+                    s.id === sid ? { ...s, streamingText: fullText, mcpToolCall: undefined } : s
                   ))
+                } else if (delta?.tool_calls) {
+                  const toolName = delta.tool_calls[0]?.function?.name
+                  if (toolName) {
+                    setConversationSessions((prev) => prev.map((s) =>
+                      s.id === sid ? { ...s, mcpToolCall: toolName } : s
+                    ))
+                  }
                 }
               } catch (err) {
                 if (err instanceof SyntaxError) continue
@@ -440,14 +448,14 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
 
       setConversationSessions((prev) => prev.map((s) =>
         s.id === sid
-          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'idle' }
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'idle', mcpToolCall: undefined }
           : s
       ))
       onTurnComplete?.()
     } catch (err) {
       setConversationSessions((prev) => prev.map((s) =>
         s.id === sid
-          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'error', errorMsg: err instanceof Error ? err.message : t('common.unknownError') }
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'error', errorMsg: err instanceof Error ? err.message : t('common.unknownError'), mcpToolCall: undefined }
           : s
       ))
       onTurnComplete?.()
@@ -669,6 +677,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
             streamingText={activeConvSession?.streamingText ?? ''}
             status={activeConvSession?.status ?? 'idle'}
             errorMsg={activeConvSession?.errorMsg ?? ''}
+            mcpToolCall={activeConvSession?.mcpToolCall}
             prompt={prompt}
             images={images}
             maxImages={maxImages}

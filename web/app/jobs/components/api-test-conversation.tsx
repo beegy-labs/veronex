@@ -1,7 +1,7 @@
 'use client'
 
 import { memo, useEffect, useRef, useCallback, useState } from 'react'
-import { Trash2, Square, Send, ImagePlus, X, Loader2, Plus } from 'lucide-react'
+import { Trash2, Square, Send, ImagePlus, X, Loader2, Plus, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
 import { CopyButton } from '@/components/copy-button'
@@ -16,6 +16,7 @@ interface ApiTestConversationProps {
   streamingText: string
   status: StreamStatus
   errorMsg: string
+  mcpToolCall?: string
   // Input area props
   prompt: string
   images: string[]
@@ -36,7 +37,7 @@ interface ApiTestConversationProps {
 
 export const ApiTestConversation = memo(function ApiTestConversation({
   sessions, activeSessionId,
-  messages, streamingText, status, errorMsg,
+  messages, streamingText, status, errorMsg, mcpToolCall,
   prompt, images, maxImages, isCompressing, isGeminiProvider, canRun,
   onNewSession, onCloseSession, onSelectSession,
   onPromptChange, onImageAdd, onImageRemove, onRun,
@@ -243,11 +244,21 @@ export const ApiTestConversation = memo(function ApiTestConversation({
               <div className="max-w-[80%] rounded-2xl rounded-tl-sm px-3 py-2 bg-muted text-foreground text-sm font-mono leading-relaxed">
                 {streamingText
                   ? renderWithMermaid(streamingText, true)
-                  : <span className="inline-flex gap-1 items-center text-muted-foreground">
-                      <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '300ms' }} />
+                  : (
+                    <span className="inline-flex flex-col gap-1">
+                      <span className="inline-flex gap-1 items-center text-muted-foreground">
+                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </span>
+                      {mcpToolCall && (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/70 font-mono">
+                          <Wrench className="h-3 w-3 shrink-0" />
+                          {mcpToolCall}
+                        </span>
+                      )}
                     </span>
+                  )
                 }
               </div>
             </div>
