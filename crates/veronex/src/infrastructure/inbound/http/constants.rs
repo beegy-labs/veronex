@@ -31,13 +31,12 @@ pub const SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
 /// too many open SSE streams. Exceeding this returns HTTP 429.
 pub const SSE_MAX_CONNECTIONS: u32 = 100;
 
-/// Hard timeout for SSE streams (3 minutes).
+/// Hard timeout for SSE streams (5 minutes).
 ///
 /// Force-closes zombie SSE connections that neither complete nor disconnect.
-/// This is a safety net — normal inference jobs complete well within this window.
-/// 180 s is sufficient for typical LLM inference; long-running jobs should use
-/// polling instead of keeping an SSE connection open.
-pub const SSE_TIMEOUT: Duration = Duration::from_secs(180);
+/// Vision models (e.g. qwen3-vl:8b) may require 60–120 s for cold-start model
+/// loading plus image processing, so 300 s provides sufficient headroom.
+pub const SSE_TIMEOUT: Duration = Duration::from_secs(300);
 
 // ── Input validation ──────────────────────────────────────────────────────────
 
@@ -94,13 +93,13 @@ pub const MODELS_CACHE_TTL: i64 = 3600;
 /// use `SSE_TIMEOUT` (3 min) instead.
 pub const JWT_ROUTER_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Timeout for the inference/API router (240 s).
+/// Timeout for the inference/API router (360 s).
 ///
 /// Covers non-streaming inference requests (synchronous chat completions,
-/// embeddings, Ollama passthrough). Set higher than `SSE_TIMEOUT` (180 s)
+/// embeddings, Ollama passthrough). Set higher than `SSE_TIMEOUT` (300 s)
 /// so SSE streams are killed by their own inner timeout first; this timeout
 /// only fires on hung non-streaming requests.
-pub const INFERENCE_ROUTER_TIMEOUT: Duration = Duration::from_secs(240);
+pub const INFERENCE_ROUTER_TIMEOUT: Duration = Duration::from_secs(360);
 
 /// Timeout for the dashboard queue-depth Valkey fetch (3 s).
 ///
