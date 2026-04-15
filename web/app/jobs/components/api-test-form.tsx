@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState, useCallback } from 'react'
-import { Send, ImagePlus, X, Loader2, AlertTriangle } from 'lucide-react'
+import { Send, Square, ImagePlus, X, Loader2, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
@@ -78,7 +78,9 @@ interface ApiTestFormProps {
   onEndpointChange: (v: Endpoint) => void
   onUseApiKeyChange: (v: boolean) => void
   onApiKeyValueChange: (v: string) => void
+  isStreaming: boolean
   onRun: () => void
+  onStop: () => void
 }
 
 export function ApiTestForm({
@@ -90,7 +92,7 @@ export function ApiTestForm({
   onModeChange, onProviderChange, onModelChange, onPromptChange,
   onImageAdd, onImageRemove,
   onEndpointChange, onUseApiKeyChange, onApiKeyValueChange,
-  onRun,
+  isStreaming, onRun, onStop,
 }: ApiTestFormProps) {
   const { t } = useTranslation()
   const { labSettings } = useLabSettings()
@@ -139,7 +141,7 @@ export function ApiTestForm({
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); onRun() }}
-      className={`space-y-4 pb-4 ${isDragging ? 'ring-2 ring-ring ring-offset-2 rounded-md' : ''}`}
+      className="space-y-4 pb-4"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -273,61 +275,10 @@ export function ApiTestForm({
 
       {/* Prompt + Image button + Run button — hidden in conversation mode (input moves to chat area) */}
       {mode !== 'conversation' && (
-        <>
-          <div className="flex gap-3 items-end">
-            <div className="flex-1 space-y-1.5">
-              <Label htmlFor="test-prompt">{t('test.prompt')}</Label>
-              <textarea
-                id="test-prompt"
-                value={prompt}
-                onChange={(e) => onPromptChange(e.target.value)}
-                rows={3}
-                placeholder={t('test.promptPlaceholder')}
-                className="flex min-h-[72px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-y"
-              />
-            </div>
-
-            <div className="flex flex-col gap-2 mb-0.5">
-              {!isGeminiProvider && (
-                <>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={handleFileChange}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    disabled={!canAddMore || isCompressing}
-                    aria-label={t('test.imageAttach')}
-                    title={t('test.imageAttach')}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    {isCompressing
-                      ? <Loader2 className="h-4 w-4 animate-spin" />
-                      : <ImagePlus className="h-4 w-4" />
-                    }
-                  </Button>
-                </>
-              )}
-
-              <Button
-                type="submit"
-                disabled={!canRun}
-                className="shrink-0"
-                aria-label={t('test.run')}
-              >
-                <Send className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-
+        <div className={`border border-border rounded-md${isDragging ? ' ring-2 ring-ring ring-offset-2' : ''}`}>
+          {/* Image thumbnails */}
           {images.length > 0 && (
-            <div className="flex flex-wrap gap-2">
+            <div className="px-4 pt-3 flex flex-wrap gap-2">
               {images.map((b64, i) => (
                 <div key={b64.slice(0, 16)} className="relative group">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -354,7 +305,71 @@ export function ApiTestForm({
               )}
             </div>
           )}
-        </>
+
+          {/* Textarea */}
+          <div className="px-4 pt-3 pb-0">
+            <textarea
+              id="test-prompt"
+              value={prompt}
+              onChange={(e) => onPromptChange(e.target.value)}
+              rows={3}
+              placeholder={t('test.promptPlaceholder')}
+              className="w-full border-0 bg-transparent px-0 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none resize-y"
+            />
+          </div>
+
+          {/* Bottom toolbar */}
+          <div className="px-4 pb-3 flex items-center gap-2 pt-2 border-t border-border/50">
+            {isStreaming ? (
+              <Button
+                type="button"
+                variant="destructive"
+                className="rounded-full px-5 h-8 text-sm font-medium"
+                onClick={onStop}
+              >
+                <Square className="h-3 w-3 mr-1.5" />
+                {t('test.stop')}
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                disabled={!canRun}
+                className="rounded-full px-5 h-8 text-sm font-medium"
+                aria-label={t('test.run')}
+              >
+                <Send className="h-3.5 w-3.5 mr-1.5" />
+                {t('test.run')}
+              </Button>
+            )}
+            {!isGeminiProvider && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={!canAddMore || isCompressing}
+                  aria-label={t('test.imageAttach')}
+                  title={t('test.imageAttach')}
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {isCompressing
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <ImagePlus className="h-4 w-4" />
+                  }
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Auth indicator */}

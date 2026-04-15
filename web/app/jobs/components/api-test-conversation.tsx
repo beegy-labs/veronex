@@ -24,6 +24,8 @@ interface ApiTestConversationProps {
   isCompressing: boolean
   isGeminiProvider: boolean
   canRun: boolean
+  useMcp: boolean
+  onUseMcpChange: (v: boolean) => void
   onNewSession: () => void
   onCloseSession: (id: number) => void
   onSelectSession: (id: number) => void
@@ -39,6 +41,7 @@ export const ApiTestConversation = memo(function ApiTestConversation({
   sessions, activeSessionId,
   messages, streamingText, status, errorMsg, mcpToolCall,
   prompt, images, maxImages, isCompressing, isGeminiProvider, canRun,
+  useMcp, onUseMcpChange,
   onNewSession, onCloseSession, onSelectSession,
   onPromptChange, onImageAdd, onImageRemove, onRun,
   onClear, onStop,
@@ -352,6 +355,19 @@ export const ApiTestConversation = memo(function ApiTestConversation({
                   }
                 </Button>
               </>
+            )}
+            {!isGeminiProvider && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => onUseMcpChange(!useMcp)}
+                title={useMcp ? 'MCP 비활성화' : 'MCP 활성화'}
+                className={`h-8 px-2 text-xs gap-1 ${useMcp ? 'text-muted-foreground hover:text-foreground' : 'text-muted-foreground/40 hover:text-muted-foreground'}`}
+              >
+                <Wrench className="h-3.5 w-3.5" />
+                MCP
+              </Button>
             )}
             <span className="ml-auto text-xs text-muted-foreground/50">⌘↵</span>
           </div>
