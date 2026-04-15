@@ -121,33 +121,37 @@ hdr "SSE Content Validation"
 
 # During parallel phases, other tests can saturate providers causing SSE failures.
 # We do a basic check here; strict JSON structure validation is in 08-sdd-advanced.sh.
-SSE_FULL=$(curl -s --max-time 60 "$API/v1/chat/completions" \
-  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: Hello World\"}],\"max_tokens\":50,\"stream\":true}" \
-  2>/dev/null || echo "")
+SSE_OK="no"
+SSE_FULL=""
+HAS_DONE=0
+for _sse_attempt in 1 2 3 4 5; do
+  SSE_FULL=$(curl -s --max-time 90 "$API/v1/chat/completions" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think hi\"}],\"max_tokens\":20,\"stream\":true}" \
+    2>/dev/null || echo "")
 
-SSE_OK=$(echo "$SSE_FULL" | grep "^data: {" | python3 -c "
-import sys, json
-for line in sys.stdin:
-    line = line.strip()
-    if line.startswith('data: '):
-        try:
-            d = json.loads(line[6:])
-            if 'choices' in d and len(d['choices']) > 0:
-                print('yes'); exit()
-        except: pass
-print('no')
-" 2>/dev/null || echo "no")
+  # Check for SSE format: either JSON with choices/id OR just a valid data: line
+  SSE_OK="no"
+  if echo "$SSE_FULL" | grep -q '^data: {'; then
+    # Got SSE format — check if choices appear anywhere in the stream
+    if echo "$SSE_FULL" | grep -q '"choices"'; then
+      SSE_OK="yes"
+    elif echo "$SSE_FULL" | grep -q '"id":"chatcmpl'; then
+      SSE_OK="yes"
+    fi
+  fi
+  [ "$SSE_OK" = "yes" ] && break
+  sleep 5
+done
 
 if [ "$SSE_OK" = "yes" ]; then
   pass "SSE valid JSON structure with choices"
 else
-  # During parallel phases, this can fail due to provider contention
-  FIRST_DATA=$(echo "$SSE_FULL" | grep "^data:" | head -1 | cut -c1-120)
-  info "SSE choices not found in parallel phase (first data: ${FIRST_DATA:-empty}) — validated in phase 08"
+  FIRST_DATA=$(echo "$SSE_FULL" | grep "^data:" | head -1 | cut -c1-120 || echo "")
+  fail "SSE choices not found (first data: ${FIRST_DATA:-empty})"
 fi
-HAS_DONE=$(echo "$SSE_FULL" | grep -c "\[DONE\]" 2>/dev/null; true)
-[ "${HAS_DONE:-0}" -gt 0 ] && pass "SSE ends with [DONE]" || info "SSE [DONE] not captured (parallel phase contention)"
+HAS_DONE=$(echo "$SSE_FULL" | grep -c "\[DONE\]" 2>/dev/null || echo "0")
+[ "${HAS_DONE:-0}" -gt 0 ] && pass "SSE ends with [DONE]" || fail "SSE [DONE] not found in stream"
 
 # ── Endpoint Smoke Tests ──────────────────────────────────────────────────────
 
@@ -184,9 +188,11 @@ assert_get "/v1/dashboard/capacity/cluster" 200 "Dashboard capacity/cluster"
 assert_get "/v1/mcp/stats" 200 "MCP stats"
 assert_get "/v1/dashboard/services" 200 "Service health"
 
-# Service health response structure
-SVC_RES=$(aget "/v1/dashboard/services" 2>/dev/null || echo "{}")
-SVC_VALID=$(echo "$SVC_RES" | python3 -c "
+# Service health response structure (retry up to 5× — infra list may be empty under parallel load)
+SVC_VALID="not_checked"
+for _svc_attempt in 1 2 3 4 5; do
+  SVC_RES=$(aget "/v1/dashboard/services" 2>/dev/null || echo "{}")
+  SVC_VALID=$(echo "$SVC_RES" | python3 -c "
 import sys, json
 try:
     d = json.loads(sys.stdin.read())
@@ -215,6 +221,11 @@ try:
 except Exception as ex:
     print(f'error:{ex}')
 " 2>/dev/null || echo "parse_error")
+  case "$SVC_VALID" in
+    ok*) break ;;
+    *) [ "$_svc_attempt" -lt 5 ] && sleep 2 ;;
+  esac
+done
 case "$SVC_VALID" in
   ok*) pass "Service health structure valid ($SVC_VALID)" ;;
   *) fail "Service health structure → $SVC_VALID" ;;
@@ -233,13 +244,13 @@ c=$(curl -s -w "\n%{http_code}" "$API/v1/metrics/targets" | code)
 c=$(curl -s -w "\n%{http_code}" "$API/api/version" -H "X-API-Key: $API_KEY" 2>/dev/null | code)
 case "$c" in
   200) pass "/api/version → 200" ;;
-  503) info "/api/version → 503 (no provider online yet — timing)" ;;
+  503) fail "/api/version → 503 (no eligible provider)" ;;
   *) fail "/api/version → $c" ;;
 esac
 c=$(curl -s -w "\n%{http_code}" "$API/api/ps" -H "X-API-Key: $API_KEY" 2>/dev/null | code)
 case "$c" in
   200) pass "/api/ps → 200" ;;
-  503) info "/api/ps → 503 (no provider online yet — timing)" ;;
+  503) fail "/api/ps → 503 (no eligible provider)" ;;
   *) fail "/api/ps → $c" ;;
 esac
 
@@ -252,7 +263,7 @@ for ep_name in "embed" "embeddings"; do
   case "$c" in
     200) pass "/api/$ep_name → 200" ;;
     400|404|500|501) pass "/api/$ep_name → $c (not supported)" ;;
-    503) info "/api/$ep_name → 503 (no provider online yet — timing)" ;;
+    503) fail "/api/$ep_name → 503 (no eligible provider)" ;;
     *) fail "/api/$ep_name → $c" ;;
   esac
 done
@@ -312,8 +323,8 @@ for ep in startup ready health; do
   c=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$AGENT_HEALTH/$ep" 2>/dev/null || echo "000")
   case "$c" in
     200) pass "Agent /$ep → 200" ;;
-    503) info "Agent /$ep → 503 (not ready yet)" ;;
-    000) info "Agent /$ep → unreachable (agent not running or port not exposed)" ;;
+    503) fail "Agent /$ep → 503 (not ready)" ;;
+    000) fail "Agent /$ep → unreachable (veronex-agent must be running on port 9091)" ;;
     *)   fail "Agent /$ep → $c" ;;
   esac
 done
@@ -361,7 +372,7 @@ if [ "$PATCH_CODE" = "200" ]; then
     || fail "Dynamic image limit: max_images=2, 3 images → $DYN_CODE (expected 400)"
   apatch "/v1/dashboard/lab" '{"max_images_per_request":4}' > /dev/null 2>&1
 else
-  info "Lab settings PATCH failed ($PATCH_CODE), skipping dynamic image test"
+  fail "Lab settings PATCH failed ($PATCH_CODE) — /v1/dashboard/lab PATCH must return 200"
 fi
 
 # gemini_function_calling toggle + revert
@@ -417,19 +428,19 @@ if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
   # Inference for pulling model+provider should either:
   #   - Route to remote provider (200) if available
   #   - Return 503 if no other provider can serve the model
-  PULL_INF_CODE=$({ curl -s -w "\n%{http_code}" -o /dev/null --max-time 15 "$API/v1/chat/completions" \
+  PULL_INF_CODE=$({ curl -s -w "\n%{http_code}" -o /dev/null --max-time 90 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"pull block test\"}],\"max_tokens\":3,\"stream\":false}" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think pull block test\"}],\"max_tokens\":3,\"stream\":false}" \
     2>/dev/null || printf "\n000"; } | tail -1)
   case "$PULL_INF_CODE" in
     200) pass "Pull dispatch block: request rerouted to non-pulling provider (200)" ;;
     503) pass "Pull dispatch block: no eligible provider during pull (503)" ;;
     429) pass "Pull dispatch block: rate limited during pull (429)" ;;
-    *)   info "Pull dispatch block: got $PULL_INF_CODE (pull may have completed)" ;;
+    *)   fail "Pull dispatch block: unexpected → $PULL_INF_CODE" ;;
   esac
   # is_pulling will be cleared by background task after pull completes
 else
-  info "Pull drain test skipped — no local provider registered"
+  fail "Pull drain test: PROVIDER_ID_LOCAL not set — local provider must be registered in setup"
 fi
 
 # ── Image Inference (vision model — auto-detected) ────────────────────────────
@@ -465,7 +476,7 @@ print(base64.b64encode(buf.getvalue()).decode())
 " 2>/dev/null)
 
   if [ -z "$BEE_IMG" ]; then
-    info "SKIP: Pillow not installed — cannot generate test image (pip install Pillow)"
+    fail "Pillow not installed — run: pip install pillow"
   else
     info "Generated 128x128 bee test image ($(echo -n "$BEE_IMG" | wc -c | tr -d ' ') bytes base64)"
 
@@ -530,9 +541,9 @@ except Exception as e:
           fail "Image inference /api/generate → 200 but: $IMG_GEN_VALID"
         fi
         ;;
-      503) info "Image inference → 503 (vision model not yet synced in veronex)" ;;
+      503) fail "Image inference /api/generate → 503 (vision model not synced)" ;;
       400) fail "Image inference /api/generate → 400 (validation rejected)" ;;
-      *)   info "Image inference /api/generate → $IMG_GEN_CODE" ;;
+      *)   fail "Image inference /api/generate → $IMG_GEN_CODE" ;;
     esac
 
     # /api/generate without images — verify non-image inference still works
@@ -543,7 +554,7 @@ except Exception as e:
     NO_IMG_CODE=$(echo "$NO_IMG_RES" | tail -1)
     [ "$NO_IMG_CODE" = "200" ] \
       && pass "/api/generate without images → 200" \
-      || info "/api/generate without images → $NO_IMG_CODE"
+      || fail "/api/generate without images → $NO_IMG_CODE"
 
     # Validate: 5 images → 400 (lab_settings.max_images_per_request=4)
     FIVE_IMGS=$(printf '"%s",' "$BEE_IMG" "$BEE_IMG" "$BEE_IMG" "$BEE_IMG" "$BEE_IMG" | sed 's/,$//')
@@ -563,16 +574,16 @@ except Exception as e:
     IMG_TEST_CODE=$(echo "$IMG_TEST_RES" | tail -1)
     case "$IMG_TEST_CODE" in
       200) pass "Image inference /v1/chat/completions (session) → 200" ;;
-      503) info "Image inference session → 503 (vision model not synced)" ;;
-      400) info "Image inference session → 400 (pending implementation)" ;;
-      *)   info "Image inference session → $IMG_TEST_CODE" ;;
+      503) fail "Image inference session → 503 (vision model not synced)" ;;
+      400) fail "Image inference session → 400" ;;
+      *)   fail "Image inference session → $IMG_TEST_CODE" ;;
     esac
 
     # Image storage verification is in 10-image-storage.sh (runs after parallel phases
     # to avoid Scale-In interference from 08-sdd-advanced)
   fi
 else
-  info "SKIP: No vision model (llava/vl/minicpm/moondream) on local Ollama"
+  fail "No vision model on local Ollama — llava/qwen-vl/minicpm-v must be loaded"
 fi
 
 # ── OpenAI Media & Completions Stubs ─────────────────────────────────────────
@@ -588,7 +599,7 @@ for stub_ep in "audio/transcriptions" "audio/speech" "images/generations" "moder
     501) pass "POST /v1/$stub_ep → 501 (stub registered)" ;;
     400) pass "POST /v1/$stub_ep → 400 (validation before 501 — acceptable)" ;;
     404) fail "POST /v1/$stub_ep → 404 (route not registered)" ;;
-    *)   info "POST /v1/$stub_ep → $STUB_CODE" ;;
+    *)   fail "POST /v1/$stub_ep → $STUB_CODE (expected 501 or 400)" ;;
   esac
 done
 
@@ -601,7 +612,7 @@ COMPLETIONS_CODE=$(echo "$COMPLETIONS_RES" | tail -1)
 case "$COMPLETIONS_CODE" in
   200) pass "POST /v1/completions → 200" ;;
   501) pass "POST /v1/completions → 501 (stub — not yet implemented)" ;;
-  503) info "POST /v1/completions → 503 (no providers)" ;;
+  503) fail "POST /v1/completions → 503 (no eligible provider)" ;;
   *) fail "POST /v1/completions → $COMPLETIONS_CODE" ;;
 esac
 

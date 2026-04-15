@@ -123,8 +123,8 @@ JOB_ROWS=$(pg_query "SELECT COUNT(*) FROM inference_jobs;" | tr -d ' ')
   || fail "No inference_jobs in DB"
 
 # Verify num_parallel column exists
-pg_query "SELECT id, name, num_parallel FROM llm_providers LIMIT 5;" \
-  && pass "num_parallel column present in llm_providers" || info "num_parallel check skipped"
+pg_query "SELECT id, name, num_parallel FROM llm_providers LIMIT 5;" 2>/dev/null \
+  && pass "num_parallel column present in llm_providers" || fail "num_parallel column missing from llm_providers"
 
 # ── Round 2: AIMD-Regulated Multi-Model Load ─────────────────────────────────
 

@@ -129,29 +129,33 @@ check_metric() {
   else
     # When the entire pipeline has no data, individual metric misses are info, not fail
     case "$metric_name" in
-      node_hwmon_*) info "$label: 0 rows (may not be available on this host)" ;;
+      node_hwmon_*) fail "$label: 0 rows (hwmon metrics must be available)" ;;
       node_memory_*|node_cpu_*)
-        # Linux-only metrics — only fail if a Linux node-exporter is reachable
         if [ "$NE_REMOTE_CODE" != "200" ]; then
-          info "$label: 0 rows (no Linux node-exporter reachable)"
-        elif [ "$METRICS_FOUND" = "0" ]; then
-          info "$label: 0 rows (pipeline not delivering yet)"
+          fail "$label: 0 rows — node-exporter must be reachable"
         else
-          fail "$label: 0 rows"
+          fail "$label: 0 rows — pipeline not delivering metrics"
         fi
         ;;
       *)
-        if [ "$METRICS_FOUND" = "0" ]; then
-          info "$label: 0 rows (pipeline not delivering yet)"
-        else
-          fail "$label: 0 rows"
-        fi
+        fail "$label: 0 rows — pipeline not delivering metrics"
         ;;
     esac
   fi
 }
 
 # Agent self-metrics (always sent via OTel regardless of OS)
+# Agent scrape interval is 60s by default — may need extra wait after general METRICS_FOUND
+# Poll up to 60s more for agent heartbeat metrics before giving up
+info "Waiting for agent self-metrics (veronex_agent_up / scrape_duration)..."
+AGENT_METRICS_FOUND=0
+for _i in $(seq 1 12); do
+  _ac=$(ch_query "SELECT count() FROM otel_metrics_gauge WHERE metric_name = 'veronex_agent_up' AND ts > now() - INTERVAL 10 MINUTE" | tr -d ' \r\n' || echo "0")
+  if [ "${_ac:-0}" -gt 0 ] 2>/dev/null; then
+    AGENT_METRICS_FOUND=1; break
+  fi
+  sleep 5
+done
 check_metric "veronex_agent_up" "Agent heartbeat" ""
 check_metric "veronex_agent_scrape_duration_seconds" "Agent scrape duration" ""
 
@@ -195,16 +199,12 @@ except Exception as e:
 
     case "$HIST_STATUS" in
       ok)        pass "Remote server history: $HIST_DETAIL" ;;
-      empty)     info "Remote server history: empty (metrics may not have arrived yet)" ;;
-      no_fields) info "Remote server history: no_fields (hardware metrics via live API only)" ;;
+      empty)     fail "Remote server history: empty — metrics pipeline must deliver data" ;;
+      no_fields) fail "Remote server history: no hardware fields in response" ;;
       *)         fail "Remote server history: $HIST_CHECK" ;;
     esac
   else
-    if [ "$METRICS_FOUND" = "0" ]; then
-      info "Remote server history API → $HIST_CODE (no metrics in pipeline yet)"
-    else
-      fail "Remote server history API → $HIST_CODE"
-    fi
+    fail "Remote server history API → $HIST_CODE (expected 200)"
   fi
 fi
 

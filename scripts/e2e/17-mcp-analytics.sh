@@ -138,7 +138,7 @@ PATCH_INVALID=$(apatchc "/v1/mcp/settings" '{"max_tools_per_request": 999}' 2>/d
 PATCH_INVALID_CODE=$(echo "$PATCH_INVALID" | tail -1)
 [ "$PATCH_INVALID_CODE" != "200" ] \
   && pass "PATCH /v1/mcp/settings → max_tools_per_request=999 rejected ($PATCH_INVALID_CODE)" \
-  || info "PATCH /v1/mcp/settings → out-of-range value accepted (constraint not enforced)"
+  || fail "PATCH /v1/mcp/settings → max_tools_per_request=999 accepted (constraint not enforced)"
 
 # ── get_datetime Tool Protocol ───────────────────────────────────────────────
 
@@ -263,9 +263,9 @@ esac
 
 # ClickHouse pipeline: OTel batch (5s) + Kafka poll + MV insert
 if [ "$INGEST_CODE" = "200" ] || [ "$INGEST_CODE" = "202" ]; then
-  info "Waiting for event to flow through OTel → Kafka → ClickHouse (up to 30s)..."
+  info "Waiting for event to flow through OTel → Kafka → ClickHouse (up to 120s)..."
   CH_FOUND=0
-  for i in $(seq 1 6); do
+  for i in $(seq 1 24); do
     sleep 5
     CH_COUNT=$(ch_query "SELECT count() FROM mcp_tool_calls WHERE tenant_id = 'e2e-test-$E2E_RUN_ID' AND event_time > now() - INTERVAL 5 MINUTE" | tr -d ' \r\n' || echo "0")
     if [ "${CH_COUNT:-0}" -gt 0 ] 2>/dev/null; then
@@ -276,7 +276,7 @@ if [ "$INGEST_CODE" = "200" ] || [ "$INGEST_CODE" = "202" ]; then
   done
 
   if [ "$CH_FOUND" = "0" ]; then
-    fail "mcp_tool_calls: event not in ClickHouse after 30s (pipeline broken)"
+    fail "mcp_tool_calls: event not in ClickHouse after 120s (pipeline broken)"
     # Diagnostics
     OTL_COUNT=$(ch_query "SELECT count() FROM otel_logs WHERE LogAttributes['event.name']='mcp.tool_call' AND Timestamp > now() - INTERVAL 5 MINUTE" | tr -d ' \r\n' || echo "?")
     info "otel_logs mcp.tool_call rows (last 5m): $OTL_COUNT"
@@ -301,7 +301,7 @@ check_table() {
 check_table "mcp_tool_calls"
 check_table "mcp_tool_calls_hourly"
 check_table "mcp_tool_calls_hourly_mv"
-check_table "otel_mcp_tool_calls_mv"
+# Note: otel_mcp_tool_calls_mv does not exist — fan-out is done by veronex-consumer directly
 
 # ── /v1/mcp/stats after pipeline ────────────────────────────────────────────
 

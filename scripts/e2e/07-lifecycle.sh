@@ -180,7 +180,7 @@ if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
   CANCEL_CODE=$(adelc "/v1/dashboard/jobs/$QCANCEL_JOB" | code)
   case "$CANCEL_CODE" in
     200|204) pass "Queued cancel API -> $CANCEL_CODE" ;;
-    *)       info "Queued cancel API -> $CANCEL_CODE" ;;
+    *)       fail "Queued cancel API -> $CANCEL_CODE" ;;
   esac
 
   sleep 1
@@ -190,7 +190,7 @@ if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
   if [ -z "$ZSET_AFTER" ] || [ "$ZSET_AFTER" = "(nil)" ]; then
     pass "Queued cancel: job removed from ZSET (ZREM confirmed)"
   else
-    info "Job still in ZSET (score=$ZSET_AFTER) — may have been re-enqueued"
+    fail "Job still in ZSET after cancel (score=$ZSET_AFTER) — ZREM did not execute"
   fi
 
   # Verify job status in DB
@@ -199,7 +199,7 @@ if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
     cancelled|Cancelled) pass "Queued cancel: job status = cancelled" ;;
     failed|Failed) pass "Queued cancel: job status = failed (cancel processed)" ;;
     completed|Completed) pass "Queued cancel: job completed before cancel reached it" ;;
-    *) info "Queued cancel: job status = $QCANCEL_STATUS" ;;
+    *) fail "Queued cancel: unexpected job status = $QCANCEL_STATUS" ;;
   esac
 
   # Verify demand counter decremented or consistent
@@ -210,7 +210,7 @@ if [ -n "$QCANCEL_JOB" ] && [ "$QCANCEL_JOB" != "None" ]; then
     info "Demand counter: before=$DEMAND_BEFORE after=$DEMAND_AFTER (other requests may have enqueued)"
   fi
 else
-  info "Queued cancel test skipped — no queued/running job found"
+  fail "Queued cancel test failed — no queued/running job found"
 fi
 
 # Cleanup: kill saturating requests (suppress "Terminated" messages)
@@ -321,7 +321,7 @@ if [ -n "$RECOVERY_JOB" ] && [ "$RECOVERY_JOB" != "None" ]; then
     && pass "Instance re-registered in veronex:instances after restart ($INST_COUNT member(s))" \
     || info "veronex:instances empty after restart (Valkey may not be configured)"
 else
-  info "Crash recovery test skipped — job submission failed"
+  fail "Crash recovery test failed — job submission failed"
 fi
 
 save_counts
