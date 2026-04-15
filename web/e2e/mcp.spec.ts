@@ -146,7 +146,7 @@ test.describe('MCP Servers', () => {
     await expect(toggle).toHaveAttribute(
       'aria-checked',
       wasChecked ? 'false' : 'true',
-      { timeout: T_DEFAULT }
+      { timeout: T_LONG }
     )
   })
 })

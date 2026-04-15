@@ -28,7 +28,7 @@ use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
 use super::handlers::{sanitize_sse_error, with_conversation_id};
 use super::inference_helpers::{validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
-use super::inference_helpers::{validate_and_compress_images, analyze_images_for_context};
+use super::inference_helpers::{validate_and_compress_images, analyze_images_for_context, is_vision_model};
 use super::middleware::infer_auth::InferCaller;
 use super::state::AppState;
 
@@ -196,12 +196,18 @@ pub async fn generate(
         )
             .into_response();
     }
+    // Vision/OCR models may receive images with no prompt — default to a neutral instruction.
+    let has_images = req.images.as_ref().map_or(false, |v| !v.is_empty());
     if req.prompt.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "prompt is required"})),
-        )
-            .into_response();
+        if has_images && is_vision_model(&req.model) {
+            req.prompt = "Describe this image.".to_string();
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "prompt is required"})),
+            )
+                .into_response();
+        }
     }
 
     // Validate + compress oversized images, then analyze non-vision images.
