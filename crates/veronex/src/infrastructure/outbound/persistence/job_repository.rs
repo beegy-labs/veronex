@@ -4,6 +4,16 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// Sentinel error: the `account_id` referenced by the JWT no longer exists in the DB.
+///
+/// Returned (wrapped in `anyhow::Error`) by `save()` when Postgres raises error code 23503
+/// (foreign_key_violation) on the `inference_jobs_account_id_fkey` constraint.
+/// Handlers detect this via `e.is::<AccountNotFoundError>()` and convert to HTTP 401,
+/// which triggers the frontend auth-guard to clear the stale JWT and redirect to login.
+#[derive(Debug, thiserror::Error)]
+#[error("account not found — JWT references a deleted account, please log in again")]
+pub struct AccountNotFoundError;
+
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{ApiFormat, JobSource, JobStatus, ProviderType};
@@ -184,7 +194,18 @@ impl JobRepository for PostgresJobRepository {
         .bind(job.mcp_loop_id)
         .execute(&self.pool)
         .await
-        .context("failed to save inference job")?;
+        .map_err(|e| {
+            // FK violation on account_id → the JWT references an account that no longer
+            // exists (e.g. after a DB reset). Return a sentinel so handlers can return 401.
+            if let sqlx::Error::Database(ref db_err) = e {
+                if db_err.code().as_deref() == Some("23503")
+                    && db_err.message().contains("account_id")
+                {
+                    return anyhow::Error::new(AccountNotFoundError);
+                }
+            }
+            anyhow::anyhow!("failed to save inference job: {e}")
+        })?;
 
         Ok(())
     }
