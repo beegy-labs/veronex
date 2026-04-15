@@ -98,6 +98,7 @@ async fn poll_node_exporter_metrics(
     provider: &LlmProvider,
     valkey_pool: &fred::clients::Pool,
     gpu_server_registry: &dyn GpuServerRegistry,
+    pg_pool: &sqlx::PgPool,
 ) {
     let Some(node_exporter_url) = resolve_node_exporter_url(provider, gpu_server_registry).await else {
         return;
@@ -151,6 +152,20 @@ async fn poll_node_exporter_metrics(
     // Cache full NodeMetrics per server for dashboard API (avoids live scraping).
     if let Some(server_id) = provider.server_id {
         store_node_metrics(valkey_pool, server_id, &node_metrics).await;
+
+        // Persist gpu_vendor to DB so E2E tests and dashboard queries can read it.
+        if !hw.gpu_vendor.is_empty() {
+            if let Err(e) = sqlx::query(
+                "UPDATE gpu_servers SET gpu_vendor = $1 WHERE id = $2 AND gpu_vendor != $1"
+            )
+            .bind(&hw.gpu_vendor)
+            .bind(server_id)
+            .execute(pg_pool)
+            .await
+            {
+                tracing::warn!(server_id = %server_id, error = %e, "failed to persist gpu_vendor");
+            }
+        }
     }
 }
 
@@ -461,6 +476,7 @@ pub async fn run_health_checker_loop(
             let thermal           = thermal.clone();
             let vram_pool         = vram_pool.clone();
             let metrics_sem       = metrics_sem.clone();
+            let pg_pool           = pg_pool.clone();
 
             set.spawn(async move {
                 let _permit = metrics_sem.acquire().await.expect("semaphore closed");
@@ -501,7 +517,7 @@ pub async fn run_health_checker_loop(
 
                 // 2. Hardware metrics (only when linked to a GpuServer)
                 if let Some(ref pool) = valkey_pool {
-                    poll_node_exporter_metrics(&provider, pool, gpu_server_registry.as_ref()).await;
+                    poll_node_exporter_metrics(&provider, pool, gpu_server_registry.as_ref(), &pg_pool).await;
 
                     // 3. Thermal throttle update from cached hw_metrics
                     if let Some(hw) = load_hw_metrics(pool, provider.id).await {
