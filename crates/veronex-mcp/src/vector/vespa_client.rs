@@ -184,13 +184,15 @@ impl VespaClient {
 
         // YQL: filter on environment + tenant_id + HNSW ANN.
         // Uses attribute equality (=) — correct for non-indexed string fields.
+        // Ranking is handled by the `semantic` rank profile (closeness-based);
+        // YQL `ORDER BY` does not accept rank-feature function calls — it only
+        // takes field references — so omit it here.
         let yql = format!(
             "select tool_id, environment, tenant_id, server_id, server_name, tool_name, description, input_schema \
              from mcp_tools \
              where environment = \"{}\" \
              and tenant_id = \"{}\" \
              and ({{targetHits: {top_k}}}nearestNeighbor(embedding, qe)) \
-             order by closeness(field, embedding) desc \
              limit {top_k}",
             environment, tenant_id
         );
