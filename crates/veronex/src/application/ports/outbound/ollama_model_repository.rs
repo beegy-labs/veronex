@@ -15,6 +15,8 @@ pub struct OllamaModelWithCount {
     pub provider_count: i64,
     /// Maximum context window across all providers carrying this model (0 = unknown).
     pub max_ctx: i32,
+    /// True if the model is enabled on at least one provider (per provider_selected_models).
+    pub is_enabled: bool,
 }
 
 /// Provider info for use in "which servers have this model?" responses.

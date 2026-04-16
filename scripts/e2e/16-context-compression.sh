@@ -74,7 +74,7 @@ LAB3=$(get_lab)
 COMP_MODEL3=$(echo "$LAB3" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); v=d.get('compression_model'); print('None' if v is None else v)" 2>/dev/null || echo "None")
 [ "$COMP_MODEL3" = "None" ] || [ -z "$COMP_MODEL3" ] && \
   pass "compression_model cleared to null" || \
-  info "compression_model null-clear: got '$COMP_MODEL3'"
+  fail "compression_model null-clear failed (got: '$COMP_MODEL3')"
 
 # ── Phase 16-C: Multi-turn eligibility gate ───────────────────────────────────
 
@@ -84,20 +84,21 @@ hdr "Multi-Turn Eligibility Gate"
 MODELS=$(aget "/v1/ollama/models" 2>/dev/null | python3 -c "
 import sys,json
 try:
-    ms = json.loads(sys.stdin.read())
+    d = json.loads(sys.stdin.read())
+    ms = d.get('models', d) if isinstance(d, dict) else d
     names = [m.get('model_name','') for m in ms if m.get('model_name')]
     print(' '.join(names[:8]))
 except: pass
 " 2>/dev/null || echo "")
 
 if [ -z "$MODELS" ]; then
-  info "No models available — skipping eligibility tests"
+  fail "No models available — at least one model must be loaded in Ollama"
 else
   # Set restrictive multiturn gate: require 100B+ params (nothing passes)
   patch_lab '{"multiturn_min_params":100,"multiturn_min_ctx":8192}' > /dev/null
 
   FIRST_MODEL=$(echo "$MODELS" | awk '{print $1}')
-  MULTI_RESP=$(curl -s -w "\n%{http_code}" --max-time 30 "$API/api/chat" \
+  MULTI_RESP=$(curl -s -w "\n%{http_code}" --max-time 90 "$API/api/chat" \
     -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
     -d "{\"model\":\"$FIRST_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":false,\"conversation_id\":\"00000000-0000-0000-0000-000000000001\"}" \
     2>/dev/null || printf "\n000")
@@ -112,38 +113,40 @@ else
   elif [ "$MULTI_CODE" = "400" ] || [ "$MULTI_CODE" = "422" ]; then
     pass "Eligibility gate rejected oversized constraint (HTTP $MULTI_CODE)"
   else
-    info "Eligibility gate response: HTTP $MULTI_CODE (env-dependent)"
+    fail "Eligibility gate unexpected response: HTTP $MULTI_CODE"
   fi
 
   # Restore permissive gate
   patch_lab '{"multiturn_min_params":1,"multiturn_min_ctx":1024}' > /dev/null
 
-  PERMISSIVE_RESP=$(curl -s -w "\n%{http_code}" --max-time 30 "$API/api/chat" \
+  PERMISSIVE_RESP=$(curl -s -w "\n%{http_code}" --max-time 90 "$API/api/chat" \
     -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
     -d "{\"model\":\"$FIRST_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"stream\":false}" \
     2>/dev/null || printf "\n000")
   PERMISSIVE_CODE=$(echo "$PERMISSIVE_RESP" | tail -1)
   [ "$PERMISSIVE_CODE" = "200" ] && \
     pass "Chat accepted with permissive multiturn gate (HTTP 200)" || \
-    info "Permissive gate: HTTP $PERMISSIVE_CODE (may be model unavailable)"
+    fail "Permissive gate: HTTP $PERMISSIVE_CODE (expected 200 — model loaded but inference failed)"
 fi
 
 # ── Phase 16-D: Conversation internals endpoint ───────────────────────────────
 
 hdr "Conversation Internals Endpoint"
 
-# Get a real conversation from the dashboard
-CONV_ID=$(aget "/v1/conversations?limit=1" 2>/dev/null | python3 -c "
+# Get a real conversation with turns from the dashboard
+CONV_ID=$(aget "/v1/conversations?limit=20" 2>/dev/null | python3 -c "
 import sys,json
 try:
     d=json.loads(sys.stdin.read())
     convs=d.get('conversations',[])
-    print(convs[0]['id'] if convs else '')
+    for c in convs:
+        if c.get('turn_count', 0) > 0:
+            print(c['id']); break
 except: pass
 " 2>/dev/null || echo "")
 
 if [ -z "$CONV_ID" ]; then
-  info "No conversations in DB — skipping internals endpoint test"
+  fail "No conversations in DB — prior inference tests must have created conversations"
 else
   # Get first job_id from this conversation
   JOB_ID=$(aget "/v1/conversations/$CONV_ID" 2>/dev/null | python3 -c "
@@ -156,7 +159,7 @@ except: pass
 " 2>/dev/null || echo "")
 
   if [ -z "$JOB_ID" ]; then
-    info "Conversation $CONV_ID has no turns — skipping internals test"
+    fail "Conversation $CONV_ID has no turns — conversation must have at least one turn"
   else
     INTERNALS_RESP=$(curl -s -w "\n%{http_code}" --max-time 10 \
       "$API/v1/conversations/$CONV_ID/turns/$JOB_ID/internals" \
@@ -172,20 +175,15 @@ except: pass
     elif [ "$INTERNALS_CODE" = "404" ]; then
       pass "Internals endpoint reachable (404 = S3 not configured or no compressed data)"
     elif [ "$INTERNALS_CODE" = "503" ]; then
-      info "Internals: S3/message_store not configured (HTTP 503)"
+      fail "Internals: S3/message_store not configured (HTTP 503) — MinIO must be running"
     elif [ "$INTERNALS_CODE" = "403" ]; then
       fail "Internals endpoint returned 403 — account_manage permission missing for test user"
     else
-      info "Internals endpoint: HTTP $INTERNALS_CODE"
+      fail "Internals endpoint: unexpected HTTP $INTERNALS_CODE"
     fi
   fi
 fi
 
 save_counts
 
-# ── Summary ───────────────────────────────────────────────────────────────────
-
-hdr "Phase 16 Summary"
-echo -e "  ${GREEN}PASS: $PASS_COUNT${NC}  ${RED}FAIL: $FAIL_COUNT${NC}"
-for m in "${FAIL_MSGS[@]:-}"; do [ -n "$m" ] && echo -e "  ${RED}[FAIL]${NC} $m"; done
 [ "$FAIL_COUNT" -eq 0 ]

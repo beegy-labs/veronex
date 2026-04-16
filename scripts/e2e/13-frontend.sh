@@ -31,7 +31,7 @@ case "$WEB_STATUS" in
     save_counts
     exit 0 ;;
   *)
-    info "veronex-web returned HTTP $WEB_STATUS — proceeding anyway" ;;
+    fail "veronex-web returned unexpected HTTP $WEB_STATUS — check web container logs" ;;
 esac
 
 # Check playwright is installed

@@ -191,6 +191,7 @@ impl ProviderModelSelectionRepository for MockModelSelectionRepo {
     async fn list(&self, _provider_id: Uuid) -> Result<Vec<ProviderSelectedModel>> { Ok(vec![]) }
     async fn set_enabled(&self, _provider_id: Uuid, _model_name: &str, _enabled: bool) -> Result<()> { Ok(()) }
     async fn list_enabled(&self, _provider_id: Uuid) -> Result<Vec<String>> { Ok(vec![]) }
+    async fn list_disabled(&self, _provider_id: Uuid) -> Result<Vec<String>> { Ok(vec![]) }
 }
 
 pub(crate) struct MockGlobalModelSettingsRepo;

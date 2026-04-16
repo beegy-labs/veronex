@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useReducer, useMemo, useCallback, useEffectEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { isLoggedIn, getAuthUser } from '@/lib/auth'
-import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
+import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery, globalModelSettingsQuery } from '@/lib/queries/providers'
 import type { RetryParams, ConversationDetail } from '@/lib/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
@@ -42,6 +42,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   const [endpoint, setEndpoint] = useState<Endpoint>('/v1/chat/completions')
   const [useApiKey, setUseApiKey] = useState(false)
   const [apiKeyValue, setApiKeyValue] = useState('')
+  const [useMcp, setUseMcp] = useState(true)
 
   // ── Mode ─────────────────────────────────────────────────────────────────────
   const [mode, setMode] = useState<TestMode>('single')
@@ -127,6 +128,11 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     enabled: isGeminiProvider,
   })
 
+  const { data: globalModelSettings } = useQuery({
+    ...globalModelSettingsQuery,
+    enabled: !isGeminiProvider,
+  })
+
   const modelContextWindows = useMemo<Record<string, number>>(() => {
     if (isGeminiProvider) return {}
     return Object.fromEntries(
@@ -137,14 +143,21 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   }, [isGeminiProvider, ollamaModelsData?.models])
 
   const availableModels = useMemo(() => {
-    if (!isGeminiProvider) return ollamaModelsData?.models.map((m) => m.model_name) ?? []
+    if (!isGeminiProvider) {
+      const disabledSet = new Set(
+        (globalModelSettings ?? []).filter((s) => !s.is_enabled).map((s) => s.model_name)
+      )
+      return (ollamaModelsData?.models ?? [])
+        .filter((m) => m.is_enabled !== false && !disabledSet.has(m.model_name))
+        .map((m) => m.model_name)
+    }
     const allModels = geminiModelsData?.models.map((m) => m.model_name) ?? []
     if (providerType !== "gemini-free") return allModels
     const policyMap = new Map(
       (geminiPolicies ?? []).filter((p) => p.model_name !== '*').map((p) => [p.model_name, p])
     )
     return allModels.filter((name) => policyMap.get(name)?.available_on_free_tier === true)
-  }, [isGeminiProvider, providerType, geminiModelsData, geminiPolicies, ollamaModelsData?.models])
+  }, [isGeminiProvider, providerType, geminiModelsData, geminiPolicies, ollamaModelsData?.models, globalModelSettings])
 
   useEffect(() => {
     if (availableModels.length > 0 && !availableModels.includes(model)) {
@@ -208,6 +221,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   ) {
     const decoder = new TextDecoder()
     let buf = ''
+    let sseEventType = ''
     try {
       while (true) {
         const { done, value } = await reader.read()
@@ -217,6 +231,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         buf = lines.pop() ?? ''
         for (const line of lines) {
           const trimmed = line.trimEnd()
+          if (trimmed === '') { sseEventType = ''; continue }
+          if (trimmed.startsWith('event:')) { sseEventType = trimmed.slice(6).trim(); continue }
           if (!trimmed.startsWith('data:')) continue
           const raw = trimmed.slice(5)
           const data = raw.startsWith(' ') ? raw.slice(1) : raw
@@ -226,6 +242,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
             readersRef.current.delete(runId)
             return
           }
+          if (sseEventType === 'error') throw new Error(data)
           try {
             const chunk: OpenAIChunk = JSON.parse(data)
             if (chunk.error?.message) throw new Error(chunk.error.message)
@@ -305,7 +322,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
 
   // ── Conversation handler ──────────────────────────────────────────────────────
   async function executeConversationTurn() {
-    if (!prompt.trim() || !model) return
+    if ((!prompt.trim() && images.length === 0) || !model) return
     if (!isLoggedIn()) return
 
     // Auto-create first session if none
@@ -339,10 +356,16 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       ? '/v1/chat/completions'
       : endpoint
 
-    const apiMessages = updatedMessages.map((m) => ({
+    // Images are not retained between turns in Ollama — each message is processed
+    // independently. The assistant's analysis from turn 1 already captures image
+    // context in text form. Re-sending historical images wastes bandwidth, inflates
+    // the payload (causing stream timeouts), and confuses the model.
+    // Only include images in the LAST (current) user message.
+    const lastIdx = updatedMessages.length - 1
+    const apiMessages = updatedMessages.map((m, idx) => ({
       role: m.role,
       content: m.content,
-      ...(m.images && m.images.length > 0 && { images: m.images }),
+      ...(idx === lastIdx && m.images && m.images.length > 0 && { images: m.images }),
     }))
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -359,6 +382,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       messages: apiMessages,
       provider_type: providerType,
       stream: true,
+      use_mcp: useMcp,
       ...(existingConvId && { conversation_id: existingConvId }),
     }
 
@@ -392,6 +416,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         convReadersRef.current.set(sid, reader)
         const decoder = new TextDecoder()
         let buf = ''
+        let sseEventType = ''
         try {
           outer: while (true) {
             const { done, value } = await reader.read()
@@ -401,19 +426,30 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
             buf = lines.pop() ?? ''
             for (const line of lines) {
               const trimmed = line.trimEnd()
+              if (trimmed === '') { sseEventType = ''; continue }
+              if (trimmed.startsWith('event:')) { sseEventType = trimmed.slice(6).trim(); continue }
               if (!trimmed.startsWith('data:')) continue
               const raw = trimmed.slice(5)
               const data = raw.startsWith(' ') ? raw.slice(1) : raw
               if (data === '[DONE]') break outer
+              if (sseEventType === 'error') throw new Error(data)
               try {
                 const chunk: OpenAIChunk = JSON.parse(data)
                 if (chunk.error?.message) throw new Error(chunk.error.message)
-                const content = chunk.choices?.[0]?.delta?.content
+                const delta = chunk.choices?.[0]?.delta
+                const content = delta?.content
                 if (content) {
                   fullText += content
                   setConversationSessions((prev) => prev.map((s) =>
-                    s.id === sid ? { ...s, streamingText: fullText } : s
+                    s.id === sid ? { ...s, streamingText: fullText, mcpToolCall: undefined } : s
                   ))
+                } else if (delta?.tool_calls) {
+                  const toolName = delta.tool_calls[0]?.function?.name
+                  if (toolName) {
+                    setConversationSessions((prev) => prev.map((s) =>
+                      s.id === sid ? { ...s, mcpToolCall: toolName } : s
+                    ))
+                  }
                 }
               } catch (err) {
                 if (err instanceof SyntaxError) continue
@@ -428,14 +464,14 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
 
       setConversationSessions((prev) => prev.map((s) =>
         s.id === sid
-          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'idle' }
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'idle', mcpToolCall: undefined }
           : s
       ))
       onTurnComplete?.()
     } catch (err) {
       setConversationSessions((prev) => prev.map((s) =>
         s.id === sid
-          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'error', errorMsg: err instanceof Error ? err.message : t('common.unknownError') }
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'error', errorMsg: err instanceof Error ? err.message : t('common.unknownError'), mcpToolCall: undefined }
           : s
       ))
       onTurnComplete?.()
@@ -461,7 +497,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   }
 
   async function executeRun(p: RunParams) {
-    if (!p.prompt.trim() || !p.model) return
+    if ((!p.prompt.trim() && !(p.images && p.images.length > 0)) || !p.model) return
     if (!isLoggedIn()) return
 
     if (runs.length >= MAX_RUNS) {
@@ -511,11 +547,20 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
         body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
       } else if (p.endpoint === '/api/generate') {
-        body = { model: p.model, prompt: p.prompt.trim(), stream: isStreaming }
+        body = {
+          model: p.model,
+          prompt: p.prompt.trim(),
+          stream: isStreaming,
+          ...(p.images && p.images.length > 0 && { images: p.images }),
+        }
       } else if (p.endpoint === '/api/chat') {
         body = {
           model: p.model,
-          messages: [{ role: 'user', content: p.prompt.trim() }],
+          messages: [{
+            role: 'user',
+            content: p.prompt.trim(),
+            ...(p.images && p.images.length > 0 && { images: p.images }),
+          }],
           stream: isStreaming,
         }
       } else {
@@ -612,9 +657,20 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         .filter((m) => m.role !== 'system')
         .reduce((acc, m) => acc + Math.ceil(m.content.length / 3.5), 0)
     : 0
-  const canRun = isLoggedIn() && !!prompt.trim() && !!model &&
+  const canRun = isLoggedIn() && (!!prompt.trim() || images.length > 0) && !!model &&
     (mode === 'single' || activeConvSession?.status !== 'streaming')
   const isAnyStreaming = runs.some((r) => r.status === 'streaming')
+  const isFormStreaming = mode === 'conversation'
+    ? activeConvSession?.status === 'streaming'
+    : isAnyStreaming
+
+  function handleFormStop() {
+    if (mode === 'conversation') {
+      handleConversationStop()
+    } else if (activeRunId !== null) {
+      handleStop(activeRunId)
+    }
+  }
 
   return (
     <Card>
@@ -646,7 +702,9 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
           onEndpointChange={setEndpoint}
           onUseApiKeyChange={setUseApiKey}
           onApiKeyValueChange={setApiKeyValue}
+          isStreaming={!!isFormStreaming}
           onRun={handleRun}
+          onStop={handleFormStop}
         />
 
         {mode === 'conversation' ? (
@@ -657,12 +715,15 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
             streamingText={activeConvSession?.streamingText ?? ''}
             status={activeConvSession?.status ?? 'idle'}
             errorMsg={activeConvSession?.errorMsg ?? ''}
+            mcpToolCall={activeConvSession?.mcpToolCall}
             prompt={prompt}
             images={images}
             maxImages={maxImages}
             isCompressing={isCompressing}
             isGeminiProvider={isGeminiProvider}
             canRun={canRun}
+            useMcp={useMcp}
+            onUseMcpChange={setUseMcp}
             onNewSession={handleNewConvSession}
             onCloseSession={handleCloseConvSession}
             onSelectSession={setActiveConvSessionId}

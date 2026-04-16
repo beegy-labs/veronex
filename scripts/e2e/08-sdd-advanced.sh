@@ -69,7 +69,7 @@ print('no')
     sleep 10
   fi
 done
-HAS_DONE=$(echo "$SSE_FULL" | grep -c "\[DONE\]" 2>/dev/null; true)
+HAS_DONE=$(echo "$SSE_FULL" | grep -c "\[DONE\]" 2>/dev/null || echo "0")
 if [ "$SSE_OK" = "yes" ]; then
   pass "SSE valid JSON with choices"
   [ "${HAS_DONE:-0}" -gt 0 ] && pass "SSE ends with [DONE]" || fail "SSE missing [DONE]"
@@ -123,7 +123,7 @@ done
 rm -rf "$TMPD"
 info "Stress results: OK=$OK_CNT Failed=$FAIL_CNT"
 [ "$OK_CNT" -gt 0 ] && pass "System survived overload ($OK_CNT/$BURST completed)" \
-  || info "No requests completed under stress (queue may be saturated or model loading after restart)"
+  || fail "No requests completed under stress (queue saturated or model unavailable)"
 
 # Wait for AIMD analyzer cycle + trigger manual sync
 info "Waiting 15s for AIMD analyzer cycles..."
@@ -237,7 +237,7 @@ for p in d.get('providers', []):
     info "Second model inference -> $MM_CODE (may not be synced or provider busy)"
   fi
 else
-  info "No suitable second model on local Ollama — multi-model test skipped"
+  fail "No suitable second model on local Ollama — multi-model residency test cannot run"
 fi
 
 # ── 2b. Demand Resync — Auto-Correction of Drifted Counter ────────────────
@@ -413,7 +413,7 @@ else
   # In E2E, the agent binary is not deployed — only the gateway + Ollama containers run.
   # Without the agent, servers.gpu_vendor remains NULL in DB, so threshold mapping cannot be verified.
   # To test: deploy veronex-agent alongside Ollama, or manually INSERT gpu_vendor into DB before test.
-  info "SKIP: gpu_vendor not populated — veronex-agent not running in E2E environment"
+  fail "gpu_vendor not populated — veronex-agent must run and push hardware metrics before this test"
 fi
 
 # §3: gpu_vendor -> thermal threshold auto-detection
@@ -436,7 +436,7 @@ else
   # The thermal threshold logic itself (thermal.rs) is fully implemented and uses
   # gpu_vendor to select AMD CPU (75/82/90°C) vs NVIDIA GPU (80/88/93°C) profiles.
   # Verified via code review; runtime verification requires agent hardware data.
-  info "SKIP: gpu_vendor threshold mapping — veronex-agent not running in E2E"
+  fail "gpu_vendor threshold mapping: no provider+server with gpu_vendor — veronex-agent must be running"
 fi
 
 # Verify perf_factor inference: all-normal -> full performance (1.0)
@@ -475,7 +475,7 @@ print('|'.join(issues) if issues else 'ok')
 
 case "$SAFETY_CHECK" in
   ok)   pass "VRAM safety margin: all providers have valid used ≤ total, available ≥ 0" ;;
-  skip) info "VRAM safety check skipped" ;;
+  skip) fail "VRAM safety check could not run (capacity response unparseable)" ;;
   *)    fail "VRAM safety issues: $SAFETY_CHECK" ;;
 esac
 

@@ -71,7 +71,7 @@ print('yes:' + ','.join(with_temp) if with_temp else 'no')
 case "$TEMP_PRESENT" in
   yes:*) pass "temp_c present for: ${TEMP_PRESENT#yes:}" ;;
   no)    info "temp_c not yet available (node-exporter may not be scraped yet)" ;;
-  *)     info "temp_c check skipped" ;;
+  *)     fail "temp_c check failed — capacity response missing or unparseable" ;;
 esac
 
 # ── Provider: num_parallel Field ──────────────────────────────────────────────
@@ -203,12 +203,12 @@ hdr "Individual Provider Sync"
 
 if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
   c=$(apostc "/v1/providers/$PROVIDER_ID_LOCAL/sync" "{}" | code)
-  case "$c" in 200|202) pass "Local provider sync → $c" ;; *) info "Local sync → $c" ;; esac
+  case "$c" in 200|202) pass "Local provider sync → $c" ;; *) fail "Local provider sync → $c (expected 200/202)" ;; esac
 fi
 
 if [ -n "${PROVIDER_ID_REMOTE:-}" ] && [ "$PROVIDER_ID_REMOTE" != "None" ]; then
   c=$(apostc "/v1/providers/$PROVIDER_ID_REMOTE/sync" "{}" | code)
-  case "$c" in 200|202) pass "Remote provider sync → $c" ;; *) info "Remote sync → $c" ;; esac
+  case "$c" in 200|202) pass "Remote provider sync → $c" ;; *) fail "Remote provider sync → $c (expected 200/202)" ;; esac
 fi
 
 # All-providers sync endpoint
@@ -238,11 +238,11 @@ if [ -n "${API_KEY_PAID:-}" ] && [ -n "${API_KEY_STANDARD:-}" ]; then
   _TIER_PAID=$(mktemp); _TIER_STD=$(mktemp)
   (curl -s --max-time 5 "$API/v1/inference" \
     -H "Authorization: Bearer $API_KEY_PAID" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"tier paid\"}],\"max_tokens\":3,\"stream\":false}" \
+    -d "{\"model\":\"$MODEL\",\"prompt\":\"/no_think tier paid\"}" \
     2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || true) > "$_TIER_PAID" &
   (curl -s --max-time 5 "$API/v1/inference" \
     -H "Authorization: Bearer $API_KEY_STANDARD" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"tier standard\"}],\"max_tokens\":3,\"stream\":false}" \
+    -d "{\"model\":\"$MODEL\",\"prompt\":\"/no_think tier standard\"}" \
     2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || true) > "$_TIER_STD" &
   wait 2>/dev/null
   PAID_JOB=$(tr -d '\n' < "$_TIER_PAID")
@@ -262,11 +262,11 @@ if [ -n "${API_KEY_PAID:-}" ] && [ -n "${API_KEY_STANDARD:-}" ]; then
       pass "Tier priority: paid + standard both accepted and completed"
     fi
   else
-    info "Tier priority test skipped — job_id not returned"
+    fail "Tier priority test failed — job_id not returned from inference endpoint"
   fi
   sleep 5
 else
-  info "Tier priority test skipped — API_KEY_PAID or API_KEY_STANDARD not in state"
+  fail "Tier priority test failed — API_KEY_PAID or API_KEY_STANDARD not in state"
 fi
 
 hdr "SDD §8: Scale-Out Trigger — demand > eligible_capacity × 0.80"
@@ -350,11 +350,11 @@ FIRST_SCORE=""
 SECOND_SCORE=""
 JOB1_ID=$(curl -s --max-time 3 "$API/v1/inference" \
   -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"age test A\"}],\"max_tokens\":5,\"stream\":false}" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"/no_think age test A\"}" \
   2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || echo "")
 JOB2_ID=$(curl -s --max-time 3 "$API/v1/inference" \
   -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"age test B\"}],\"max_tokens\":5,\"stream\":false}" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"/no_think age test B\"}" \
   2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null || echo "")
 if [ -n "$JOB1_ID" ] && [ -n "$JOB2_ID" ]; then
   FIRST_SCORE=$(valkey_zscore "veronex:queue:zset" "$JOB1_ID")
@@ -369,7 +369,7 @@ if [ -n "$JOB1_ID" ] && [ -n "$JOB2_ID" ]; then
     info "Jobs completed before ZSET score check (fast execution path)"
   fi
 else
-  info "Inference jobs not queued — ZSET score ordering skipped"
+  fail "Inference jobs not queued — ZSET score ordering test cannot run"
 fi
 # Drain any remaining requests
 sleep 5
@@ -390,7 +390,7 @@ if [ -n "$LOADED_MODEL" ]; then
   pass "Locality bonus applicable: model '$LOADED_MODEL' currently loaded — scoring will apply LOCALITY_BONUS_MS=20000"
   info "Locality bonus is applied at dispatch time (score - 20000ms offset for loaded model)"
 else
-  info "No model currently loaded — locality bonus test skipped"
+  fail "Locality bonus test failed — no model currently loaded in capacity"
 fi
 
 hdr "SDD §3: Thermal State Fields — Structure Completeness"

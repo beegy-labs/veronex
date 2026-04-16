@@ -7,7 +7,7 @@ use axum::response::sse::Event;
 use axum::response::IntoResponse;
 use axum::Json;
 use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
 use crate::domain::enums::AccountRole;
@@ -684,12 +684,25 @@ pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::respo
     }
 }
 
+/// Deserializer for `Option<Option<T>>` that distinguishes absent from null:
+/// - absent key  → `None`          (don't update this field)
+/// - `null` value → `Some(None)`   (clear the field to NULL)
+/// - value        → `Some(Some(v))` (set the field to v)
+fn deserialize_nullable<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
+
 #[derive(serde::Deserialize)]
 pub struct PatchLabSettingsBody {
     pub gemini_function_calling: Option<bool>,
     pub max_images_per_request: Option<i32>,
     pub max_image_b64_bytes: Option<i32>,
     pub context_compression_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nullable")]
     pub compression_model: Option<Option<String>>,
     pub context_budget_ratio: Option<f32>,
     pub compression_trigger_turns: Option<i32>,
@@ -698,6 +711,7 @@ pub struct PatchLabSettingsBody {
     pub multiturn_min_params: Option<i32>,
     pub multiturn_min_ctx: Option<i32>,
     pub multiturn_allowed_models: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_nullable")]
     pub vision_model: Option<Option<String>>,
     pub handoff_enabled: Option<bool>,
     pub handoff_threshold: Option<f32>,

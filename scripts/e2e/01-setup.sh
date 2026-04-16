@@ -18,10 +18,17 @@ if [ "$SKIP_DB_RESET" = "0" ]; then
     "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
   docker compose exec -T postgres psql -U veronex -d veronex \
     < "$(dirname "$0")/../../docker/postgres/init.sql" > /dev/null 2>&1
-  docker compose exec -T clickhouse clickhouse-client \
+  sed \
+    -e "s/__RETENTION_INFERENCE_DAYS__/${CLICKHOUSE_RETENTION_INFERENCE_DAYS:-90}/g" \
+    -e "s/__RETENTION_LOGS_DAYS__/${CLICKHOUSE_RETENTION_LOGS_DAYS:-7}/g" \
+    -e "s/__RETENTION_AUDIT_DAYS__/${CLICKHOUSE_RETENTION_AUDIT_DAYS:-90}/g" \
+    -e "s/__RETENTION_METRICS_DAYS__/${CLICKHOUSE_RETENTION_METRICS_DAYS:-14}/g" \
+    -e "s/__RETENTION_TRACES_DAYS__/${CLICKHOUSE_RETENTION_TRACES_DAYS:-7}/g" \
+    -e "s/__RETENTION_MCP_DAYS__/${CLICKHOUSE_RETENTION_MCP_DAYS:-90}/g" \
+    "$(dirname "$0")/../../docker/clickhouse/schema.sql" \
+  | docker compose exec -T clickhouse clickhouse-client \
     --user "${CLICKHOUSE_USER:-veronex}" --password "${CLICKHOUSE_PASSWORD:-veronex}" \
-    --database veronex \
-    < "$(dirname "$0")/../../docker/clickhouse/schema.sql" > /dev/null 2>&1
+    --database veronex > /dev/null 2>&1
   # Clear all Valkey keys (ZSET queue, demand counters, caches, etc.)
   docker compose exec -T valkey valkey-cli EVAL \
     "local count=0; for _,k in ipairs(redis.call('keys','veronex:*')) do count=count+redis.call('del',k) end; return count" 0 \

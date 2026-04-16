@@ -1,6 +1,12 @@
 export interface OpenAIChunk {
   id?: string
-  choices?: { delta?: { content?: string }; finish_reason?: string | null }[]
+  choices?: {
+    delta?: {
+      content?: string
+      tool_calls?: { function?: { name?: string; arguments?: string } }[]
+    }
+    finish_reason?: string | null
+  }[]
   error?: { message?: string }
 }
 
@@ -64,6 +70,7 @@ export interface ConversationSession {
   status: 'idle' | 'streaming' | 'error'
   errorMsg: string
   conversationId?: string  // server-assigned conversation ID (base62 UUID)
+  mcpToolCall?: string     // currently executing MCP tool name (cleared when content arrives)
 }
 
 export const MAX_CONV_SESSIONS = 10
