@@ -184,7 +184,7 @@ TOOLS_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/v1/chat/completions"
       }
     }],
     \"stream\": false,
-    \"max_tokens\": 32
+    \"max_tokens\": 256
   }" 2>/dev/null || printf "\n000")
 TOOLS_CODE=$(echo "$TOOLS_RES" | tail -1)
 case "$TOOLS_CODE" in
@@ -599,7 +599,7 @@ INF_RES=$(curl -s -w "\n%{http_code}" --max-time 90 "$API/v1/chat/completions" \
     \"model\": \"$MODEL\",
     \"messages\": [{\"role\": \"user\", \"content\": \"/no_think What is the weather in Seoul? Use the available tools.\"}],
     \"stream\": false,
-    \"max_tokens\": 128
+    \"max_tokens\": 512
   }" 2>/dev/null || printf "\n000")
 INF_CODE=$(echo "$INF_RES" | tail -1)
 INF_BODY=$(echo "$INF_RES" | sed '$d')
@@ -1108,7 +1108,7 @@ if [ "$FEED_CODE" = "200" ]; then
   # Catches regressions like an `ORDER BY closeness(...)` that Vespa rejects with
   # "Expected READ_FIELD or PROPREF, got CALL" (400 Bad Request), which would
   # cause every live MCP request to fall back to get_all() silently.
-  PROD_YQL='select tool_id, environment, tenant_id, server_id, server_name, tool_name, description, input_schema from mcp_tools where environment = "local-dev" and tenant_id = "default" and ({targetHits:4}nearestNeighbor(embedding, qe)) limit 4'
+  PROD_YQL='select tool_id, environment, tenant_id, server_id, server_name, tool_name, description, input_schema from mcp_tools where environment contains "local-dev" and tenant_id contains "default" and ({targetHits:4}nearestNeighbor(embedding, qe)) limit 4'
   PROD_RESP=$(curl -s -w "\n%{http_code}" --max-time 10 \
     -X POST "$VESPA_URL/search/" \
     -H "Content-Type: application/json" \
