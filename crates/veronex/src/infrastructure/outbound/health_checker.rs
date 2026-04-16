@@ -9,7 +9,7 @@ use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegis
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::outbound::capacity::thermal::{ThermalThrottleMap, ThrottleLevel};
-use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, store_node_metrics, fetch_node_metrics, HwMetrics};
+use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, fetch_node_metrics, HwMetrics};
 use crate::infrastructure::outbound::gemini::adapter::GEMINI_BASE_URL;
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -149,24 +149,12 @@ async fn poll_node_exporter_metrics(
 
     store_hw_metrics(valkey_pool, provider.id, &hw).await;
 
-    // Cache full NodeMetrics per server for dashboard API (avoids live scraping).
-    if let Some(server_id) = provider.server_id {
-        store_node_metrics(valkey_pool, server_id, &node_metrics).await;
-
-        // Persist gpu_vendor to DB so E2E tests and dashboard queries can read it.
-        if !hw.gpu_vendor.is_empty() {
-            if let Err(e) = sqlx::query(
-                "UPDATE gpu_servers SET gpu_vendor = $1 WHERE id = $2 AND gpu_vendor != $1"
-            )
-            .bind(&hw.gpu_vendor)
-            .bind(server_id)
-            .execute(pg_pool)
-            .await
-            {
-                tracing::warn!(server_id = %server_id, error = %e, "failed to persist gpu_vendor");
-            }
-        }
-    }
+    // Server-level NodeMetrics caching + gpu_vendor persistence are handled by
+    // `run_server_metrics_loop`, which iterates gpu_servers directly and runs
+    // independently of provider health. Doing it here too would duplicate the
+    // writes and create a race on gpu_vendor updates.
+    let _ = pg_pool;
+    let _ = node_metrics;
 }
 
 // ── Service health probes ──────────────────────────────────────────────────────

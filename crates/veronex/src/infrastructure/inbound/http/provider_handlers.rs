@@ -343,6 +343,13 @@ pub async fn register_provider(
 
     let registry = &state.provider_registry;
     if let Err(e) = registry.register(&provider).await {
+        // 23505 unique_violation on uq_llm_providers_ollama_url → duplicate URL.
+        let msg = format!("{e:#}");
+        if msg.contains("23505") || msg.contains("uq_llm_providers_ollama_url") {
+            return AppError::Conflict(
+                "a provider with this URL is already registered".into(),
+            ).into_response();
+        }
         tracing::error!(error = %e, "failed to register provider");
         return db_error(e).into_response();
     }
