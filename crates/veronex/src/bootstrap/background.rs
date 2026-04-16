@@ -11,7 +11,7 @@ use veronex::domain::value_objects::{FlowStats, JobStatusEvent};
 use veronex::infrastructure::outbound::capacity::analyzer::run_sync_loop;
 use veronex::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use veronex::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
-use veronex::infrastructure::outbound::health_checker::run_health_checker_loop;
+use veronex::infrastructure::outbound::health_checker::{run_health_checker_loop, run_server_metrics_loop};
 use veronex::infrastructure::outbound::provider_dispatch::ConcreteProviderDispatch;
 use veronex::infrastructure::outbound::session_grouping::run_session_grouping_loop;
 use veronex::domain::constants::STATS_TICK_INTERVAL;
@@ -80,6 +80,15 @@ pub async fn spawn_background_tasks(
         std::env::var("S3_ENDPOINT").ok(),
         std::env::var("VESPA_URL").ok(),
         std::env::var("EMBED_URL").ok(),
+    ));
+
+    // ── Server metrics scrape loop (independent of providers) ──────
+    tasks.spawn(run_server_metrics_loop(
+        repos.gpu_server_registry.clone(),
+        infra.valkey_pool.clone(),
+        infra.pg_pool.clone(),
+        veronex::domain::constants::HEALTH_CHECK_INTERVAL_SECS,
+        shutdown.child_token(),
     ));
 
     // ── Sync loop (unified: health + models + VRAM) ────────────────
