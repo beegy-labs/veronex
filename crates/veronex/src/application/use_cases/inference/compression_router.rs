@@ -125,7 +125,6 @@ mod tests {
             provider_type: ProviderType::Ollama,
             url: url.to_string(),
             api_key_encrypted: None,
-            is_active: true,
             total_vram_mb: 0,
             gpu_index: None,
             server_id: None,
