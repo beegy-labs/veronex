@@ -8,6 +8,7 @@ import { useTranslation } from '@/i18n'
 import { renderWithMermaid } from '@/components/mermaid-block'
 import { CopyButton } from '@/components/copy-button'
 import type { Run } from './api-test-types'
+import { STATUS_STYLES } from '@/lib/constants'
 
 interface ApiTestRunsProps {
   runs: Run[]
@@ -92,7 +93,7 @@ export const ApiTestRuns = memo(function ApiTestRuns({
 
           {activeRun.status === 'done' && (
             <div className="flex items-center justify-between">
-              <Badge variant="outline" className="whitespace-nowrap bg-status-success/15 text-status-success-fg border-status-success/30">
+              <Badge variant="outline" className={`whitespace-nowrap ${STATUS_STYLES['completed']}`}>
                 {t('test.complete')}
               </Badge>
               <Button

@@ -6,6 +6,7 @@ import {
 } from '@/components/ui/select'
 import { ollamaModelsQuery } from '@/lib/queries/providers'
 import { useTranslation } from '@/i18n'
+import { isModelEnabled } from '@/lib/models'
 
 interface CompressionModelSelectorProps {
   value: string | null
@@ -16,7 +17,7 @@ interface CompressionModelSelectorProps {
 export function CompressionModelSelector({ value, onChange, disabled }: CompressionModelSelectorProps) {
   const { t } = useTranslation()
   const { data } = useQuery(ollamaModelsQuery({ limit: 200 }))
-  const models = (data?.models ?? []).filter((m) => m.is_enabled !== false)
+  const models = (data?.models ?? []).filter(isModelEnabled)
 
   return (
     <Select

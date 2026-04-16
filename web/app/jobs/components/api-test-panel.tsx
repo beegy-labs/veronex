@@ -10,12 +10,16 @@ import { useTranslation } from '@/i18n'
 import { BASE } from '@/lib/api'
 import { compressImage } from '@/lib/compress-image'
 import { PROVIDER_OLLAMA, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
+import { isModelEnabled } from '@/lib/models'
+import { iterSseLines } from '@/lib/sse'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import type { OpenAIChunk, Run, ProviderOption, Endpoint, ConversationMessage, ConversationSession, TestMode } from './api-test-types'
 import { runsReducer, MAX_RUNS, MAX_CONV_SESSIONS } from './api-test-types'
 import { ApiTestForm } from './api-test-form'
 import { ApiTestRuns } from './api-test-runs'
 import { ApiTestConversation } from './api-test-conversation'
+
+const EMPTY_MESSAGES: ConversationMessage[] = []
 
 // ── ApiTestPanel ───────────────────────────────────────────────────────────────
 
@@ -148,7 +152,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         (globalModelSettings ?? []).filter((s) => !s.is_enabled).map((s) => s.model_name)
       )
       return (ollamaModelsData?.models ?? [])
-        .filter((m) => m.is_enabled !== false && !disabledSet.has(m.model_name))
+        .filter((m) => isModelEnabled(m) && !disabledSet.has(m.model_name))
         .map((m) => m.model_name)
     }
     const allModels = geminiModelsData?.models.map((m) => m.model_name) ?? []
@@ -214,47 +218,31 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   }, [])
 
   // ── SSE consumer ─────────────────────────────────────────────────────────────
-  async function consumeStream(
+  const consumeStream = useCallback(async (
     runId: number,
     reader: ReadableStreamDefaultReader<Uint8Array>,
     jobIdRef: { current: string | null },
-  ) {
-    const decoder = new TextDecoder()
-    let buf = ''
-    let sseEventType = ''
+  ) => {
     try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop() ?? ''
-        for (const line of lines) {
-          const trimmed = line.trimEnd()
-          if (trimmed === '') { sseEventType = ''; continue }
-          if (trimmed.startsWith('event:')) { sseEventType = trimmed.slice(6).trim(); continue }
-          if (!trimmed.startsWith('data:')) continue
-          const raw = trimmed.slice(5)
-          const data = raw.startsWith(' ') ? raw.slice(1) : raw
-          if (data === '[DONE]') {
-            dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
-            reader.cancel()
-            readersRef.current.delete(runId)
-            return
+      for await (const { eventType, data } of iterSseLines(reader)) {
+        if (data === '[DONE]') {
+          dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
+          reader.cancel()
+          readersRef.current.delete(runId)
+          return
+        }
+        if (eventType === 'error') throw new Error(data)
+        try {
+          const chunk: OpenAIChunk = JSON.parse(data)
+          if (chunk.error?.message) throw new Error(chunk.error.message)
+          if (chunk.id && !jobIdRef.current) {
+            jobIdRef.current = chunk.id.replace('chatcmpl-', '')
           }
-          if (sseEventType === 'error') throw new Error(data)
-          try {
-            const chunk: OpenAIChunk = JSON.parse(data)
-            if (chunk.error?.message) throw new Error(chunk.error.message)
-            if (chunk.id && !jobIdRef.current) {
-              jobIdRef.current = chunk.id.replace('chatcmpl-', '')
-            }
-            const content = chunk.choices?.[0]?.delta?.content
-            if (content) dispatch({ type: 'APPEND', id: runId, token: content })
-          } catch (err) {
-            if (err instanceof SyntaxError) continue
-            throw err
-          }
+          const content = chunk.choices?.[0]?.delta?.content
+          if (content) dispatch({ type: 'APPEND', id: runId, token: content })
+        } catch (err) {
+          if (err instanceof SyntaxError) continue
+          throw err
         }
       }
       dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
@@ -270,7 +258,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     } finally {
       readersRef.current.delete(runId)
     }
-  }
+  }, [onTurnComplete])
 
   // ── Image handlers ────────────────────────────────────────────────────────────
   const maxImages = labSettings?.max_images_per_request ?? DEFAULT_MAX_IMAGES
@@ -302,26 +290,29 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   }, [])
 
   // ── Conversation session management ──────────────────────────────────────────
-  function handleNewConvSession() {
+  const handleNewConvSession = useCallback(() => {
     if (conversationSessions.length >= MAX_CONV_SESSIONS) return
     const id = convNextIdRef.current++
     const newSess: ConversationSession = { id, messages: [], streamingText: '', status: 'idle', errorMsg: '' }
     setConversationSessions((prev) => [...prev, newSess])
     setActiveConvSessionId(id)
-  }
+  }, [conversationSessions.length])
 
-  function handleCloseConvSession(id: number) {
+  const handleCloseConvSession = useCallback((id: number) => {
     convReadersRef.current.get(id)?.cancel()
     convReadersRef.current.delete(id)
-    const remaining = conversationSessions.filter((s) => s.id !== id)
-    setConversationSessions(remaining)
-    if (activeConvSessionId === id) {
-      setActiveConvSessionId(remaining.length > 0 ? remaining[remaining.length - 1].id : null)
-    }
-  }
+    setConversationSessions((prev) => {
+      const remaining = prev.filter((s) => s.id !== id)
+      setActiveConvSessionId((cur) => cur === id
+        ? (remaining.length > 0 ? remaining[remaining.length - 1].id : null)
+        : cur
+      )
+      return remaining
+    })
+  }, [])
 
   // ── Conversation handler ──────────────────────────────────────────────────────
-  async function executeConversationTurn() {
+  const executeConversationTurn = useCallback(async () => {
     if ((!prompt.trim() && images.length === 0) || !model) return
     if (!isLoggedIn()) return
 
@@ -414,47 +405,31 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       if (resp.body) {
         const reader = resp.body.getReader()
         convReadersRef.current.set(sid, reader)
-        const decoder = new TextDecoder()
-        let buf = ''
-        let sseEventType = ''
         try {
-          outer: while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buf += decoder.decode(value, { stream: true })
-            const lines = buf.split('\n')
-            buf = lines.pop() ?? ''
-            for (const line of lines) {
-              const trimmed = line.trimEnd()
-              if (trimmed === '') { sseEventType = ''; continue }
-              if (trimmed.startsWith('event:')) { sseEventType = trimmed.slice(6).trim(); continue }
-              if (!trimmed.startsWith('data:')) continue
-              const raw = trimmed.slice(5)
-              const data = raw.startsWith(' ') ? raw.slice(1) : raw
-              if (data === '[DONE]') break outer
-              if (sseEventType === 'error') throw new Error(data)
-              try {
-                const chunk: OpenAIChunk = JSON.parse(data)
-                if (chunk.error?.message) throw new Error(chunk.error.message)
-                const delta = chunk.choices?.[0]?.delta
-                const content = delta?.content
-                if (content) {
-                  fullText += content
+          for await (const { eventType, data } of iterSseLines(reader)) {
+            if (data === '[DONE]') break
+            if (eventType === 'error') throw new Error(data)
+            try {
+              const chunk: OpenAIChunk = JSON.parse(data)
+              if (chunk.error?.message) throw new Error(chunk.error.message)
+              const delta = chunk.choices?.[0]?.delta
+              const content = delta?.content
+              if (content) {
+                fullText += content
+                setConversationSessions((prev) => prev.map((s) =>
+                  s.id === sid ? { ...s, streamingText: fullText, mcpToolCall: undefined } : s
+                ))
+              } else if (delta?.tool_calls) {
+                const toolName = delta.tool_calls[0]?.function?.name
+                if (toolName) {
                   setConversationSessions((prev) => prev.map((s) =>
-                    s.id === sid ? { ...s, streamingText: fullText, mcpToolCall: undefined } : s
+                    s.id === sid ? { ...s, mcpToolCall: toolName } : s
                   ))
-                } else if (delta?.tool_calls) {
-                  const toolName = delta.tool_calls[0]?.function?.name
-                  if (toolName) {
-                    setConversationSessions((prev) => prev.map((s) =>
-                      s.id === sid ? { ...s, mcpToolCall: toolName } : s
-                    ))
-                  }
                 }
-              } catch (err) {
-                if (err instanceof SyntaxError) continue
-                throw err
               }
+            } catch (err) {
+              if (err instanceof SyntaxError) continue
+              throw err
             }
           }
         } finally {
@@ -476,9 +451,9 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       ))
       onTurnComplete?.()
     }
-  }
+  }, [prompt, images, model, activeConvSessionId, conversationSessions, useApiKey, apiKeyValue, endpoint, providerType, useMcp, activeConvSession, onTurnComplete])
 
-  function handleConversationStop() {
+  const handleConversationStop = useCallback(() => {
     if (activeConvSessionId === null) return
     const sid = activeConvSessionId
     convReadersRef.current.get(sid)?.cancel()
@@ -488,7 +463,16 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         ? { ...s, messages: [...s.messages, { role: 'assistant', content: s.streamingText, model }], streamingText: '', status: 'idle' }
         : s
     ))
-  }
+  }, [activeConvSessionId, model])
+
+  const handleConvClear = useCallback(() => {
+    if (activeConvSessionId === null) return
+    setConversationSessions((prev) => prev.map((s) =>
+      s.id === activeConvSessionId
+        ? { ...s, messages: [], streamingText: '', status: 'idle', errorMsg: '' }
+        : s
+    ))
+  }, [activeConvSessionId])
 
   // ── Run handler ───────────────────────────────────────────────────────────────
   interface RunParams {
@@ -496,7 +480,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     endpoint: Endpoint; useApiKey: boolean; images?: string[]
   }
 
-  async function executeRun(p: RunParams) {
+  const executeRun = useCallback(async (p: RunParams) => {
     if ((!p.prompt.trim() && !(p.images && p.images.length > 0)) || !p.model) return
     if (!isLoggedIn()) return
 
@@ -606,9 +590,9 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         errorMsg: err instanceof Error ? err.message : t('common.unknownError'),
       })
     }
-  }
+  }, [runs, apiKeyValue, consumeStream])
 
-  function handleRun() {
+  const handleRun = useCallback(() => {
     if (mode === 'conversation') {
       executeConversationTurn()
       return
@@ -617,25 +601,27 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       prompt, model, providerType, endpoint, useApiKey,
       images: images.length > 0 ? [...images] : undefined,
     })
-  }
+  }, [mode, executeConversationTurn, executeRun, prompt, model, providerType, endpoint, useApiKey, images])
+  // Note: prompt/model/etc. are deps because they're read directly in single mode (passed to executeRun as RunParams)
 
-  function handleStop(runId: number) {
+  const handleStop = useCallback((runId: number) => {
     const reader = readersRef.current.get(runId)
     if (reader) { reader.cancel(); readersRef.current.delete(runId) }
     dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
-  }
+  }, [])
 
-  function handleCloseRun(runId: number) {
+  const handleCloseRun = useCallback((runId: number) => {
     const reader = readersRef.current.get(runId)
     if (reader) { reader.cancel(); readersRef.current.delete(runId) }
     dispatch({ type: 'REMOVE', id: runId })
-    if (activeRunId === runId) {
+    setActiveRunId((cur) => {
+      if (cur !== runId) return cur
       const remaining = runs.filter((r) => r.id !== runId)
-      setActiveRunId(remaining.length > 0 ? remaining[remaining.length - 1].id : null)
-    }
-  }
+      return remaining.length > 0 ? remaining[remaining.length - 1].id : null
+    })
+  }, [runs])
 
-  function handleRerun(run: Run) {
+  const handleRerun = useCallback((run: Run) => {
     setPrompt(run.prompt)
     setProviderType(run.provider_type)
     setModel(run.model)
@@ -649,7 +635,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       useApiKey: run.useApiKey,
       images: run.images,
     })
-  }
+  }, [executeRun])
 
   const activeConvSession = conversationSessions.find((s) => s.id === activeConvSessionId) ?? null
   const conversationTokenEstimate = activeConvSession
@@ -664,13 +650,13 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     ? activeConvSession?.status === 'streaming'
     : isAnyStreaming
 
-  function handleFormStop() {
+  const handleFormStop = useCallback(() => {
     if (mode === 'conversation') {
       handleConversationStop()
     } else if (activeRunId !== null) {
       handleStop(activeRunId)
     }
-  }
+  }, [mode, handleConversationStop, handleStop, activeRunId])
 
   return (
     <Card>
@@ -711,7 +697,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
           <ApiTestConversation
             sessions={conversationSessions}
             activeSessionId={activeConvSessionId}
-            messages={activeConvSession?.messages ?? []}
+            messages={activeConvSession?.messages ?? EMPTY_MESSAGES}
             streamingText={activeConvSession?.streamingText ?? ''}
             status={activeConvSession?.status ?? 'idle'}
             errorMsg={activeConvSession?.errorMsg ?? ''}
@@ -731,14 +717,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
             onImageAdd={handleImageAdd}
             onImageRemove={handleImageRemove}
             onRun={handleRun}
-            onClear={() => {
-              if (activeConvSessionId === null) return
-              setConversationSessions((prev) => prev.map((s) =>
-                s.id === activeConvSessionId
-                  ? { ...s, messages: [], streamingText: '', status: 'idle', errorMsg: '' }
-                  : s
-              ))
-            }}
+            onClear={handleConvClear}
             onStop={handleConversationStop}
           />
         ) : (

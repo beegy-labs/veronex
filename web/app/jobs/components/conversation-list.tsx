@@ -62,7 +62,7 @@ export function ConversationList({ onContinue }: ConversationListProps) {
               onKeyDown={(e) => { if (e.key === 'Enter') commitSearch(); if (e.key === 'Escape') clearSearch() }}
             />
             {search && (
-              <button type="button" className="absolute right-2.5 text-muted-foreground hover:text-foreground" onClick={clearSearch}>
+              <button type="button" aria-label={t('common.clearSearch')} className="absolute right-2.5 text-muted-foreground hover:text-foreground" onClick={clearSearch}>
                 <X className="h-3.5 w-3.5" />
               </button>
             )}
@@ -78,7 +78,7 @@ export function ConversationList({ onContinue }: ConversationListProps) {
               <SelectItem value="analyzer">{t('jobs.sourceAnalyzer')}</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => refetch()} disabled={isFetching}>
+          <Button variant="ghost" size="icon" aria-label={t('common.refresh')} className="h-9 w-9 shrink-0" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
           </Button>
         </div>
@@ -158,14 +158,14 @@ export function ConversationList({ onContinue }: ConversationListProps) {
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-end gap-2">
-          <Button variant="outline" size="icon" className="h-8 w-8"
+          <Button variant="outline" size="icon" aria-label={t('common.prevPage')} className="h-8 w-8"
             onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <span className="text-sm text-muted-foreground tabular-nums">
             {page + 1} / {totalPages}
           </span>
-          <Button variant="outline" size="icon" className="h-8 w-8"
+          <Button variant="outline" size="icon" aria-label={t('common.nextPage')} className="h-8 w-8"
             onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}>
             <ChevronRight className="h-4 w-4" />
           </Button>

@@ -778,7 +778,10 @@
     "newSession": "새 세션",
     "noSessions": "세션이 없습니다.",
     "turns": "턴",
-    "endpointGemini": "/v1beta/models (Gemini)"
+    "endpointGemini": "/v1beta/models (Gemini)",
+    "mcp": "MCP",
+    "mcpEnable": "MCP 활성화",
+    "mcpDisable": "MCP 비활성화"
   },
   "apiDocs": {
     "title": "API 문서",

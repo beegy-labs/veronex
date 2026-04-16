@@ -778,7 +778,10 @@
     "newSession": "New Session",
     "noSessions": "No sessions yet.",
     "turns": "turns",
-    "endpointGemini": "/v1beta/models (Gemini)"
+    "endpointGemini": "/v1beta/models (Gemini)",
+    "mcp": "MCP",
+    "mcpEnable": "Enable MCP",
+    "mcpDisable": "Disable MCP"
   },
   "apiDocs": {
     "title": "API Documentation",

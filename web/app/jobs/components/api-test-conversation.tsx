@@ -1,7 +1,9 @@
 'use client'
 
-import { memo, useEffect, useRef, useCallback, useState } from 'react'
-import { Trash2, Square, Send, ImagePlus, X, Loader2, Plus, Wrench } from 'lucide-react'
+import { memo, useEffect, useRef, useCallback } from 'react'
+import { useImageDrop } from '@/hooks/use-image-drop'
+import { ImageAttachButton } from './image-attach-button'
+import { Trash2, Square, Send, X, Loader2, Plus, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
 import { CopyButton } from '@/components/copy-button'
@@ -48,8 +50,6 @@ export const ApiTestConversation = memo(function ApiTestConversation({
 }: ApiTestConversationProps) {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [isDragging, setIsDragging] = useState(false)
 
   useEffect(() => {
     const el = scrollRef.current
@@ -58,11 +58,7 @@ export const ApiTestConversation = memo(function ApiTestConversation({
   }, [messages.length, streamingText])
 
   const canAddMore = images.length < maxImages && !isGeminiProvider && maxImages > 0
-
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) onImageAdd(e.target.files)
-    e.target.value = ''
-  }, [onImageAdd])
+  const { isDragging, handleDragOver, handleDragLeave, handleDrop } = useImageDrop(canAddMore, onImageAdd)
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -70,31 +66,6 @@ export const ApiTestConversation = memo(function ApiTestConversation({
       if (canRun) onRun()
     }
   }, [canRun, onRun])
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    if (canAddMore) setIsDragging(true)
-  }, [canAddMore])
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-  }, [])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-    if (!canAddMore) return
-    const files = e.dataTransfer.files
-    if (files.length > 0) {
-      const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'))
-      if (imageFiles.length > 0) {
-        const dt = new DataTransfer()
-        imageFiles.forEach((f) => dt.items.add(f))
-        onImageAdd(dt.files)
-      }
-    }
-  }, [canAddMore, onImageAdd])
 
   const turnCount = messages.filter((m) => m.role === 'user').length
   const hasContent = messages.length > 0 || status !== 'idle'
@@ -302,7 +273,7 @@ export const ApiTestConversation = memo(function ApiTestConversation({
               ))}
               {isCompressing && (
                 <div className="flex h-12 w-12 items-center justify-center rounded-md border border-dashed border-border">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label={t('test.imageCompressing')} />
                 </div>
               )}
             </div>
@@ -330,31 +301,11 @@ export const ApiTestConversation = memo(function ApiTestConversation({
               {t('test.run')}
             </Button>
             {!isGeminiProvider && (
-              <>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={handleFileChange}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  disabled={!canAddMore || isCompressing}
-                  aria-label={t('test.imageAttach')}
-                  title={t('test.imageAttach')}
-                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {isCompressing
-                    ? <Loader2 className="h-4 w-4 animate-spin" />
-                    : <ImagePlus className="h-4 w-4" />
-                  }
-                </Button>
-              </>
+              <ImageAttachButton
+                canAddMore={canAddMore}
+                isCompressing={isCompressing}
+                onImageAdd={onImageAdd}
+              />
             )}
             {!isGeminiProvider && (
               <Button
@@ -362,11 +313,11 @@ export const ApiTestConversation = memo(function ApiTestConversation({
                 variant="ghost"
                 size="sm"
                 onClick={() => onUseMcpChange(!useMcp)}
-                title={useMcp ? 'MCP 비활성화' : 'MCP 활성화'}
+                title={useMcp ? t('test.mcpDisable') : t('test.mcpEnable')}
                 className={`h-8 px-2 text-xs gap-1 ${useMcp ? 'text-muted-foreground hover:text-foreground' : 'text-muted-foreground/40 hover:text-muted-foreground'}`}
               >
                 <Wrench className="h-3.5 w-3.5" />
-                MCP
+                {t('test.mcp')}
               </Button>
             )}
             <span className="ml-auto text-xs text-muted-foreground/50">⌘↵</span>

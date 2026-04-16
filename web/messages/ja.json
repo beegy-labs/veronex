@@ -778,7 +778,10 @@
     "newSession": "新しいセッション",
     "noSessions": "セッションがありません。",
     "turns": "ターン",
-    "endpointGemini": "/v1beta/models (Gemini)"
+    "endpointGemini": "/v1beta/models (Gemini)",
+    "mcp": "MCP",
+    "mcpEnable": "MCPを有効化",
+    "mcpDisable": "MCPを無効化"
   },
   "apiDocs": {
     "title": "APIドキュメント",
