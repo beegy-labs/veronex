@@ -142,7 +142,7 @@ impl LlmProviderRegistry for MockProviderRegistry {
     async fn list_page(&self, _search: &str, _provider_type: Option<&str>, _limit: i64, _offset: i64) -> Result<(Vec<LlmProvider>, i64)> { Ok((vec![], 0)) }
     async fn get(&self, _id: Uuid) -> Result<Option<LlmProvider>> { Ok(None) }
     async fn update_status(&self, _id: Uuid, _status: LlmProviderStatus) -> Result<()> { Ok(()) }
-    async fn deactivate(&self, _id: Uuid) -> Result<()> { Ok(()) }
+    async fn delete(&self, _id: Uuid) -> Result<()> { Ok(()) }
     async fn update(&self, _provider: &LlmProvider) -> Result<()> { Ok(()) }
 }
 

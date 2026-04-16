@@ -145,7 +145,7 @@ mod tests {
         async fn list_page(&self, _: &str, _: Option<&str>, _: i64, _: i64) -> anyhow::Result<(Vec<LlmProvider>, i64)> { Ok((self.0.clone(), self.0.len() as i64)) }
         async fn get(&self, _: Uuid) -> anyhow::Result<Option<LlmProvider>> { Ok(None) }
         async fn update_status(&self, _: Uuid, _: LlmProviderStatus) -> anyhow::Result<()> { Ok(()) }
-        async fn deactivate(&self, _: Uuid) -> anyhow::Result<()> { Ok(()) }
+        async fn delete(&self, _: Uuid) -> anyhow::Result<()> { Ok(()) }
         async fn update(&self, _: &LlmProvider) -> anyhow::Result<()> { Ok(()) }
     }
 
