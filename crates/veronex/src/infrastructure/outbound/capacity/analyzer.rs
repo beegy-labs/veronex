@@ -1294,7 +1294,7 @@ pub async fn run_sync_loop(
         let all_providers = registry.list_all().await.unwrap_or_default();
         let ollama_providers: Vec<_> = all_providers
             .into_iter()
-            .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
+            .filter(|p| p.provider_type == ProviderType::Ollama)
             .collect();
 
         use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};

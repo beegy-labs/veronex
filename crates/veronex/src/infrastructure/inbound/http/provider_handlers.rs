@@ -154,8 +154,6 @@ pub struct UpdateProviderRequest {
     pub is_free_tier: Option<bool>,
     /// Ollama num_parallel setting.
     pub num_parallel: Option<i16>,
-    /// Enable or disable the provider for routing.
-    pub is_active: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,7 +162,6 @@ pub struct ProviderSummary {
     pub name: String,
     pub provider_type: String,
     pub url: String,
-    pub is_active: bool,
     pub total_vram_mb: i64,
     pub gpu_index: Option<i16>,
     pub server_id: Option<GpuServerId>,
@@ -186,7 +183,6 @@ impl From<LlmProvider> for ProviderSummary {
             name: b.name,
             provider_type,
             url: b.url,
-            is_active: b.is_active,
             total_vram_mb: b.total_vram_mb,
             gpu_index: b.gpu_index,
             server_id: b.server_id.map(GpuServerId::from_uuid),
@@ -306,23 +302,8 @@ pub async fn register_provider(
             if let Err(e) = validate_provider_url(url) {
                 return e.into_response();
             }
-            // Reject duplicate Ollama URL.
-            let count_result: Result<(i64,), _> = sqlx::query_as(
-                "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'ollama'",
-            )
-            .bind(url)
-            .fetch_one(&state.pg_pool)
-            .await;
-            match count_result {
-                Ok((count,)) if count > 0 => {
-                    return AppError::Conflict(
-                        "a provider with this URL is already registered".into(),
-                    )
-                    .into_response();
-                }
-                Err(e) => return db_error(e).into_response(),
-                _ => {}
-            }
+            // Duplicate URL is enforced by the `uq_llm_providers_ollama_url` unique
+            // partial index — a conflicting INSERT returns a 23505 violation below.
         }
         ProviderType::Gemini => {
             if req.api_key.as_deref().unwrap_or("").is_empty() {
@@ -338,7 +319,6 @@ pub async fn register_provider(
         provider_type,
         url: req.url.unwrap_or_default(),
         api_key_encrypted: req.api_key,
-        is_active: true,
         total_vram_mb: req.total_vram_mb.unwrap_or(0),
         gpu_index: req.gpu_index,
         server_id: req.server_id.map(|s| s.0),
@@ -438,14 +418,15 @@ pub async fn delete_provider(
     let name = provider.name.clone();
     let resource_type = provider.provider_type.resource_type();
 
-    match &state.provider_registry.deactivate(id).await {
+    let url = provider.url.clone();
+    match &state.provider_registry.delete(id).await {
         Ok(()) => {
             emit_audit(&state, &claims, "delete", resource_type, &pid.to_string(), &name,
-                &format!("Provider '{}' ({}) deactivated (soft-deleted, no longer routed)", name, pid)).await;
+                &format!("Provider '{}' ({}) deleted — url: {}", name, pid, url)).await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
-            tracing::error!(%id, error = %e, "failed to deactivate provider");
+            tracing::error!(%id, error = %e, "failed to delete provider");
             db_error(e).into_response()
         }
     }
@@ -469,6 +450,10 @@ pub async fn update_provider(
 
     let registry = &state.provider_registry;
 
+    // Snapshot old values for audit (rename / URL change tracking).
+    let old_name = provider.name.clone();
+    let old_url = provider.url.clone();
+
     if req.name.trim().is_empty() {
         return AppError::BadRequest("name must not be empty".into()).into_response();
     }
@@ -489,16 +474,29 @@ pub async fn update_provider(
     provider.server_id = req.server_id.map(|s| s.0);  // null clears the field
     if let Some(v) = req.is_free_tier { provider.is_free_tier = v; }
     if let Some(v) = req.num_parallel { provider.num_parallel = v; }
-    if let Some(v) = req.is_active { provider.is_active = v; }
 
     if let Err(e) = registry.update(&provider).await {
         tracing::error!(%id, error = %e, "update_provider: failed");
         return db_error(e).into_response();
     }
 
+    // Build an audit description that records what changed so history is traceable.
+    let mut changes: Vec<String> = Vec::new();
+    if old_name != provider.name {
+        changes.push(format!("name: '{}' → '{}'", old_name, provider.name));
+    }
+    if old_url != provider.url {
+        changes.push(format!("url: '{}' → '{}'", old_url, provider.url));
+    }
+    let change_note = if changes.is_empty() {
+        "configuration updated".to_string()
+    } else {
+        changes.join(", ")
+    };
+
     let resource_type = provider.provider_type.resource_type();
     emit_audit(&state, &claims, "update", resource_type, &pid.to_string(), &provider.name,
-        &format!("Provider '{}' ({}) configuration updated", provider.name, pid)).await;
+        &format!("Provider '{}' ({}) updated — {}", provider.name, pid, change_note)).await;
     tracing::info!(%id, "provider updated");
     (StatusCode::OK, Json(ProviderSummary::from(provider))).into_response()
 }
@@ -708,7 +706,6 @@ mod tests {
             provider_type: ProviderType::Ollama,
             url: "http://localhost:11434".to_string(),
             api_key_encrypted: None,
-            is_active: true,
             total_vram_mb: 8192,
             gpu_index: Some(0),
             server_id: None,
@@ -721,7 +718,6 @@ mod tests {
         assert_eq!(s.provider_type, "ollama");
         assert_eq!(s.status, "online");
         assert_eq!(s.url, "http://localhost:11434");
-        assert!(s.is_active);
         assert_eq!(s.gpu_index, Some(0));
     }
 
@@ -733,7 +729,6 @@ mod tests {
             provider_type: ProviderType::Gemini,
             url: String::new(),
             api_key_encrypted: Some("secret".to_string()),
-            is_active: true,
             total_vram_mb: 0,
             gpu_index: None,
             server_id: None,

@@ -216,7 +216,6 @@ pub struct LlmProvider {
     pub provider_type: ProviderType,
     pub url: String,
     pub api_key_encrypted: Option<String>,
-    pub is_active: bool,
     /// GPU VRAM capacity in MiB (manual). 0 = unknown → treat as unlimited for dispatch.
     pub total_vram_mb: i64,
     /// GPU index on this host (0-based). Correlates with node-exporter drm/hwmon metrics.
@@ -320,7 +319,6 @@ mod tests {
             provider_type: ProviderType::Ollama,
             url: "http://localhost:11434".to_string(),
             api_key_encrypted: None,
-            is_active: true,
             total_vram_mb: 24576,
             gpu_index: None,
             server_id: None,
@@ -365,7 +363,6 @@ mod tests {
         assert_eq!(deserialized.name, provider.name);
         assert_eq!(deserialized.provider_type, provider.provider_type);
         assert_eq!(deserialized.url, provider.url);
-        assert_eq!(deserialized.is_active, provider.is_active);
         assert_eq!(deserialized.status, provider.status);
     }
 

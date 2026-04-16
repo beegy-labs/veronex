@@ -130,7 +130,7 @@ pub async fn sync_all_providers(
         Ok(all) => {
             let ollama: Vec<_> = all
                 .into_iter()
-                .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
+                .filter(|p| p.provider_type == ProviderType::Ollama)
                 .collect();
             ollama
         }
