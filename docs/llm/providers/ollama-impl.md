@@ -131,12 +131,21 @@ When Ollama first loads a model into VRAM it emits an intermediate chunk with `d
 
 ---
 
+## Think Mode (Tool-Calling)
+
+`stream_chat()` sends `think: tools.is_some()`:
+- **Tools present** → `think: true`. Reasoning models (qwen3) need to deliberate
+  about which tool to call. With `think: false` the model stops prematurely (~28 tokens)
+  without emitting `tool_calls`. The runner's `<think>…</think>` filter strips
+  thinking blocks from SSE output so end users never see internal reasoning.
+- **No tools** → `think: false`. Faster direct answers, no extra token overhead.
+
 ## Token Count Accuracy
 
 | Scenario | `eval_count` value |
 |----------|--------------------|
-| `think: false` (all models) | Visible output tokens only (accurate) |
-| `think: true` (qwen3 default) | Thinking + output tokens (inflated) |
+| `think: false` (no tools) | Visible output tokens only (accurate) |
+| `think: true` (MCP tool requests) | Thinking + output tokens (inflated — thinking stripped by runner filter) |
 
 ---
 

@@ -17,8 +17,8 @@ dequeue next job
   ▼
 select_provider(model, provider_type, key_id)
   │
-  ├── registry.list_active(provider_type)
-  │     └── filter: is_active=true, provider_type matches
+  ├── registry.list_all() filtered by provider_type
+  │     └── filter: provider_type matches (no is_active — hard delete removes inactive)
   │
   ├── [API key?] filter by api_key_provider_access allowlist
   │     └── no rows for key → all providers allowed
