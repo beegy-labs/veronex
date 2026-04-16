@@ -27,8 +27,10 @@ pub trait LlmProviderRegistry: Send + Sync {
     /// Update the online/offline/degraded health status.
     async fn update_status(&self, id: Uuid, status: LlmProviderStatus) -> Result<()>;
 
-    /// Soft-delete: mark the provider as inactive so it is excluded from routing.
-    async fn deactivate(&self, id: Uuid) -> Result<()>;
+    /// Hard-delete: remove the provider row entirely.
+    /// Historical inference_jobs rows have their provider_id set to NULL
+    /// via ON DELETE SET NULL — job history is preserved.
+    async fn delete(&self, id: Uuid) -> Result<()>;
 
     /// Update mutable fields (name, url, api_key_encrypted, total_vram_mb,
     /// gpu_index, server_id).  Status and registered_at are unchanged.

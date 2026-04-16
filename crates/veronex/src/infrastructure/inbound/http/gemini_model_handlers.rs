@@ -126,7 +126,7 @@ pub async fn sync_status(RequireProviderManage(claims): RequireProviderManage, S
 
     let gemini_active: Vec<_> = providers
         .into_iter()
-        .filter(|p| p.is_active && matches!(p.provider_type, ProviderType::Gemini))
+        .filter(|p| matches!(p.provider_type, ProviderType::Gemini))
         .collect();
 
     let mut results = Vec::with_capacity(gemini_active.len());

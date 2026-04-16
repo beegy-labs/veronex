@@ -9,7 +9,7 @@ use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegis
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::outbound::capacity::thermal::{ThermalThrottleMap, ThrottleLevel};
-use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, store_node_metrics, fetch_node_metrics, HwMetrics};
+use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, fetch_node_metrics, HwMetrics};
 use crate::infrastructure::outbound::gemini::adapter::GEMINI_BASE_URL;
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -149,24 +149,12 @@ async fn poll_node_exporter_metrics(
 
     store_hw_metrics(valkey_pool, provider.id, &hw).await;
 
-    // Cache full NodeMetrics per server for dashboard API (avoids live scraping).
-    if let Some(server_id) = provider.server_id {
-        store_node_metrics(valkey_pool, server_id, &node_metrics).await;
-
-        // Persist gpu_vendor to DB so E2E tests and dashboard queries can read it.
-        if !hw.gpu_vendor.is_empty() {
-            if let Err(e) = sqlx::query(
-                "UPDATE gpu_servers SET gpu_vendor = $1 WHERE id = $2 AND gpu_vendor != $1"
-            )
-            .bind(&hw.gpu_vendor)
-            .bind(server_id)
-            .execute(pg_pool)
-            .await
-            {
-                tracing::warn!(server_id = %server_id, error = %e, "failed to persist gpu_vendor");
-            }
-        }
-    }
+    // Server-level NodeMetrics caching + gpu_vendor persistence are handled by
+    // `run_server_metrics_loop`, which iterates gpu_servers directly and runs
+    // independently of provider health. Doing it here too would duplicate the
+    // writes and create a race on gpu_vendor updates.
+    let _ = pg_pool;
+    let _ = node_metrics;
 }
 
 // ── Service health probes ──────────────────────────────────────────────────────
@@ -404,7 +392,7 @@ pub async fn run_health_checker_loop(
         // via POST /v1/gemini/sync-status to avoid unnecessary API quota usage.
         let active: Vec<_> = providers
             .into_iter()
-            .filter(|b| b.is_active && matches!(b.provider_type, ProviderType::Ollama))
+            .filter(|b| matches!(b.provider_type, ProviderType::Ollama))
             .collect();
 
         // ── Determine liveness ────────────────────────────────────────────────
@@ -622,4 +610,97 @@ pub async fn run_health_checker_loop(
     }
 
     tracing::info!("provider health checker stopped");
+}
+
+// ── Server metrics scrape loop (independent of providers) ─────────────────────
+
+/// Background loop that scrapes node-exporter for every registered GpuServer,
+/// independently of whether any LlmProvider is linked to it.
+///
+/// Why separate from the provider health_checker:
+/// - A GpuServer exists to host one-or-many LlmProviders, but the server's
+///   hardware liveness (RAM/CPU/GPU temp) is meaningful even when no provider
+///   is currently attached to it (e.g. newly registered server, or all
+///   providers temporarily deleted).
+/// - The Servers page should show live metrics for any server with a configured
+///   `node_exporter_url`, without depending on the provider table.
+pub async fn run_server_metrics_loop(
+    gpu_server_registry: Arc<dyn GpuServerRegistry>,
+    valkey_pool: Option<fred::clients::Pool>,
+    pg_pool: sqlx::PgPool,
+    interval_secs: u64,
+    shutdown: CancellationToken,
+) {
+    use crate::infrastructure::outbound::hw_metrics::store_node_metrics;
+
+    let interval = Duration::from_secs(interval_secs);
+
+    tracing::info!(interval_secs, "server metrics loop started");
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            _ = tokio::time::sleep(interval) => {}
+        }
+
+        let servers = match gpu_server_registry.list_all().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, "server metrics loop: failed to list gpu_servers");
+                continue;
+            }
+        };
+
+        let Some(ref pool) = valkey_pool else { continue };
+
+        for server in servers {
+            let Some(url) = server.node_exporter_url.as_ref().filter(|u| !u.is_empty()) else {
+                continue;
+            };
+
+            let (node_metrics, _snapshot) = match fetch_node_metrics(url, None, None).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!(
+                        server_id = %server.id,
+                        server_name = %server.name,
+                        error = %e,
+                        "server metrics loop: node-exporter fetch failed"
+                    );
+                    continue;
+                }
+            };
+
+            // Detect GPU vendor from DRM metrics (amdgpu exports DRM, NVIDIA does not).
+            let detected_vendor = if node_metrics.gpus.iter().any(|g| g.vram_total_mb.is_some()) {
+                "amd"
+            } else {
+                ""
+            };
+
+            // Cache full NodeMetrics for the Servers page.
+            store_node_metrics(pool, server.id, &node_metrics).await;
+
+            // Persist gpu_vendor when detected and not already correct.
+            if !detected_vendor.is_empty() {
+                if let Err(e) = sqlx::query(
+                    "UPDATE gpu_servers SET gpu_vendor = $1 WHERE id = $2 AND gpu_vendor != $1"
+                )
+                .bind(detected_vendor)
+                .bind(server.id)
+                .execute(&pg_pool)
+                .await
+                {
+                    tracing::warn!(
+                        server_id = %server.id,
+                        error = %e,
+                        "server metrics loop: failed to persist gpu_vendor"
+                    );
+                }
+            }
+        }
+    }
+
+    tracing::info!("server metrics loop stopped");
 }

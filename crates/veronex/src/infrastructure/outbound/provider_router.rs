@@ -157,7 +157,7 @@ pub async fn pick_best_provider(
     let all = registry.list_all().await?;
     let candidates: Vec<LlmProvider> = all
         .into_iter()
-        .filter(|b| b.is_active && &b.provider_type == pt)
+        .filter(|b| &b.provider_type == pt)
         .collect();
 
     if candidates.is_empty() {
@@ -495,7 +495,6 @@ mod tests {
             provider_type: crate::domain::enums::ProviderType::Ollama,
             url: "http://localhost:11434".into(),
             api_key_encrypted: None,
-            is_active: true,
             total_vram_mb,
             gpu_index: None,
             server_id: None,

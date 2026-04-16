@@ -16,7 +16,7 @@ use crate::domain::enums::LlmProviderStatus;
 /// Under load, hundreds of calls/second would otherwise hammer Postgres.
 /// A 5-second TTL makes the query once per TTL period instead of once per job.
 ///
-/// All mutating methods (`register`, `update_status`, `deactivate`, `update`)
+/// All mutating methods (`register`, `update_status`, `delete`, `update`)
 /// invalidate the cache immediately so stale data is never served after a write.
 pub struct CachingProviderRegistry {
     inner: Arc<dyn LlmProviderRegistry>,
@@ -72,8 +72,8 @@ impl LlmProviderRegistry for CachingProviderRegistry {
         result
     }
 
-    async fn deactivate(&self, id: Uuid) -> Result<()> {
-        let result = self.inner.deactivate(id).await;
+    async fn delete(&self, id: Uuid) -> Result<()> {
+        let result = self.inner.delete(id).await;
         self.invalidate().await;
         result
     }

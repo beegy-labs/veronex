@@ -81,7 +81,6 @@ export const ProviderSchema = z.object({
   name: z.string(),
   provider_type: ProviderTypeSchema,
   url: z.string(),
-  is_active: z.boolean(),
   total_vram_mb: z.number().int(),
   gpu_index: z.number().int().nullable(),
   server_id: z.string().uuid().nullable(),

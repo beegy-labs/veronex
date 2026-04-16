@@ -62,10 +62,10 @@ async fn filter_candidates(
 
     let all = registry.list_all().await.unwrap_or_default();
 
-    // Stage 1: active + type + tier (standby providers included — woken on demand)
+    // Stage 1: type + tier (standby providers included — woken on demand)
     let mut candidates: Vec<_> = all.into_iter()
         .filter(|b| {
-            b.is_active && b.provider_type == provider_type
+            b.provider_type == provider_type
                 && !matches!(gemini_tier, Some(GEMINI_TIER_FREE) if !b.is_free_tier)
         })
         .collect();

@@ -10,7 +10,6 @@ import type { Provider } from '@/lib/types'
 import { useTranslation } from '@/i18n'
 import { usePageGuard } from '@/hooks/use-page-guard'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import { PROVIDER_OLLAMA } from '@/lib/constants'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { EditModal, RegisterModal } from './components/modals'
 import { OllamaTab } from './components/ollama-tab'
@@ -43,15 +42,6 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteProvider(id),
     { invalidateKey: ['providers'], onSuccess: () => setDeleteTarget(null) },
-  )
-
-  const toggleActiveMutation = useApiMutation(
-    (b: Provider) => api.updateProvider(b.id, {
-      name: b.name,
-      is_active: !b.is_active,
-      ...(b.provider_type === PROVIDER_OLLAMA && { url: b.url, total_vram_mb: b.total_vram_mb, gpu_index: b.gpu_index, server_id: b.server_id }),
-    }),
-    { invalidateKey: ['providers'] },
   )
 
   const syncProviderMutation = useMutation({
@@ -99,8 +89,6 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
           onEdit={(b) => setEditingProvider(b)}
           onSync={(id) => syncProviderMutation.mutate(id)}
           syncPending={syncProviderMutation.isPending}
-          onToggleActive={(b) => toggleActiveMutation.mutate(b)}
-          toggleActivePending={toggleActiveMutation.isPending}
           onDelete={(id, name) => setDeleteTarget({ id, name })}
           deleteIsPending={deleteMutation.isPending}
         />
