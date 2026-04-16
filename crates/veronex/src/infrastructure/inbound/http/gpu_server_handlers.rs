@@ -217,6 +217,10 @@ pub async fn update_gpu_server(
     let id = gid.0;
     let server = get_gpu_server(&state, id).await?;
 
+    // Snapshot old values for audit.
+    let old_name = server.name.clone();
+    let old_url = server.node_exporter_url.clone();
+
     let updated = GpuServer {
         id: server.id,
         name: req
@@ -234,8 +238,24 @@ pub async fn update_gpu_server(
 
     state.gpu_server_registry.update(&updated).await.map_err(db_error)?;
 
+    // Record what changed so history is traceable.
+    let mut changes: Vec<String> = Vec::new();
+    if old_name != updated.name {
+        changes.push(format!("name: '{}' → '{}'", old_name, updated.name));
+    }
+    if old_url != updated.node_exporter_url {
+        let old_s = old_url.as_deref().unwrap_or("none");
+        let new_s = updated.node_exporter_url.as_deref().unwrap_or("none");
+        changes.push(format!("node_exporter_url: '{}' → '{}'", old_s, new_s));
+    }
+    let change_note = if changes.is_empty() {
+        "configuration updated".to_string()
+    } else {
+        changes.join(", ")
+    };
+
     emit_audit(&state, &claims, "update", "gpu_server", &id.to_string(), &updated.name,
-        &format!("GPU server '{}' ({}) configuration updated", updated.name, id)).await;
+        &format!("GPU server '{}' ({}) updated — {}", updated.name, id, change_note)).await;
     tracing::info!(%id, name = %updated.name, "gpu server updated");
     Ok(Json(GpuServerSummary::from(updated)))
 }
