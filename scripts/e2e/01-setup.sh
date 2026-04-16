@@ -71,6 +71,17 @@ for svc in postgres valkey clickhouse redpanda minio otel-collector veronex-mcp 
 done
 $INFRA_OK && pass "All infrastructure services running"
 
+# Verify required MinIO buckets exist. Missing buckets surface as
+# "service error" in the API's S3 calls (put_object / get_object),
+# blocking conversation persistence and MCP history fetch.
+for bkt in veronex-messages veronex-images; do
+  if docker compose exec -T minio mc ls "local/$bkt" >/dev/null 2>&1; then
+    pass "MinIO bucket '$bkt' exists"
+  else
+    fail "MinIO bucket '$bkt' missing (S3 put_object/get_object will fail — run minio-init)"
+  fi
+done
+
 # ── Phase 2: Authentication ───────────────────────────────────────────────────
 
 hdr "Phase 2: Authentication"

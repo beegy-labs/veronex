@@ -408,11 +408,18 @@ impl OllamaAdapter {
                 messages
             };
 
+            // Reasoning models (e.g. qwen3) require `think: true` to deliberate about
+            // which tool to call. With `think: false` the model stops after emitting a
+            // few tokens without producing `tool_calls` — observable as empty responses.
+            // The runner's `<think>…</think>` filter strips thinking blocks from SSE
+            // output, so end users never see the internal reasoning.
+            // Non-tool requests keep `think: false` for faster direct answers.
+            let think = tools.is_some();
             let mut body = serde_json::json!({
                 "model":    model,
                 "messages": messages,
                 "stream":   true,
-                "think":    false,
+                "think":    think,
                 "options":  options,
             });
 
