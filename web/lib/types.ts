@@ -297,7 +297,6 @@ export interface Provider {
   provider_type: ProviderType
   url: string
   timeout_secs?: number
-  is_active: boolean
   total_vram_mb: number
   /** GPU index on the host (0-based). Used to filter node-exporter metrics. */
   gpu_index: number | null
@@ -358,7 +357,6 @@ export interface UpdateProviderRequest {
   gpu_index?: number | null
   server_id?: string | null
   is_free_tier?: boolean
-  is_active?: boolean
 }
 
 export interface GeminiStatusResult {

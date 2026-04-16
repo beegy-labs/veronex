@@ -1,11 +1,10 @@
 'use client'
 
-import { useState, useMemo, useOptimistic, startTransition } from 'react'
+import { useState, useMemo } from 'react'
 import type { Provider } from '@/lib/types'
-import { Plus, Trash2, RefreshCw, Key, ShieldCheck, ListFilter, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Trash2, RefreshCw, Key, ListFilter, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   TableBody,
@@ -30,30 +29,6 @@ import { ApiKeyCell, ModelSelectionModal } from './modals'
 import { PAGE_SIZE } from './ollama-sections'
 import { GeminiStatusSyncSection, GeminiSyncSection } from './gemini-sections'
 
-// ── Gemini provider active toggle with optimistic update ───────────────────────
-
-function GeminiProviderActiveToggle({
-  provider,
-  onToggleActive,
-  toggleActivePending,
-}: {
-  provider: Provider
-  onToggleActive: (b: Provider) => void
-  toggleActivePending: boolean
-}) {
-  const { t } = useTranslation()
-  const [optimistic, setOptimistic] = useOptimistic(provider.is_active, (_, v: boolean) => v)
-  return (
-    <Switch
-      checked={optimistic}
-      onCheckedChange={(checked) => startTransition(() => { setOptimistic(checked); onToggleActive(provider) })}
-      disabled={toggleActivePending}
-      title={optimistic ? t('providers.disableProvider') : t('providers.enableProvider')}
-      aria-label={optimistic ? t('providers.disableProvider') : t('providers.enableProvider')}
-    />
-  )
-}
-
 // ── Tab: Gemini providers + policies ───────────────────────────────────────────
 
 export function GeminiTab({
@@ -64,8 +39,6 @@ export function GeminiTab({
   onEdit,
   onSync,
   syncPending,
-  onToggleActive,
-  toggleActivePending,
   onDelete,
   deleteIsPending,
 }: {
@@ -76,8 +49,6 @@ export function GeminiTab({
   onEdit: (b: Provider) => void
   onSync: (id: string) => void
   syncPending: boolean
-  onToggleActive: (b: Provider) => void
-  toggleActivePending: boolean
   onDelete: (id: string, name: string) => void
   deleteIsPending: boolean
 }) {
@@ -85,7 +56,6 @@ export function GeminiTab({
   const { tz } = useTimezone()
   const gemini = useMemo(() => getGeminiProviders(providers), [providers])
   const geminiCounts = useMemo(() => countByStatus(gemini), [gemini])
-  const activeCount = useMemo(() => gemini.filter(b => b.is_active).length, [gemini])
   const onlineCount = geminiCounts['online'] ?? 0
   const degradedCount = geminiCounts['degraded'] ?? 0
   const offlineCount = geminiCounts['offline'] ?? 0
@@ -108,13 +78,6 @@ export function GeminiTab({
             {providers ? (
               <div className="flex items-center gap-2 flex-wrap mt-1.5">
                 <StatusPill icon={<Key className="h-3 w-3 shrink-0" />} count={gemini.length} label={t('providers.servers.registered')} />
-                {activeCount > 0 && (
-                  <StatusPill
-                    icon={<ShieldCheck className="h-3 w-3 shrink-0" />}
-                    count={activeCount} label={t('common.active')}
-                    className="bg-primary/10 border border-primary/30 text-primary"
-                  />
-                )}
                 {onlineCount > 0 && (
                   <StatusPill
                     icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
@@ -202,7 +165,6 @@ export function GeminiTab({
                 <TableHead className="whitespace-nowrap">{t('providers.gemini.name')}</TableHead>
                 <TableHead className="whitespace-nowrap">{t('providers.gemini.apiKey')}</TableHead>
                 <TableHead className="whitespace-nowrap">{t('providers.gemini.freeTier')}</TableHead>
-                <TableHead className="whitespace-nowrap">{t('providers.gemini.activeToggle')}</TableHead>
                 <TableHead className="whitespace-nowrap">{t('providers.gemini.status')}</TableHead>
                 <TableHead className="whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
                 <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
@@ -210,7 +172,7 @@ export function GeminiTab({
             </TableHeader>
             <TableBody>
               {geminiPageItems.map((b) => (
-                <TableRow key={b.id} className={!b.is_active ? 'opacity-50' : ''}>
+                <TableRow key={b.id}>
                   <TableCell>
                     <div className="font-semibold text-text-bright">{b.name}</div>
                   </TableCell>
@@ -227,13 +189,6 @@ export function GeminiTab({
                         {t('providers.gemini.paid')}
                       </Badge>
                     )}
-                  </TableCell>
-                  <TableCell>
-                    <GeminiProviderActiveToggle
-                      provider={b}
-                      onToggleActive={onToggleActive}
-                      toggleActivePending={toggleActivePending}
-                    />
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={b.status} />
