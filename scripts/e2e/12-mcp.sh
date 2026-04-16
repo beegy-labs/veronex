@@ -630,9 +630,15 @@ except Exception as e:
       answer:*)
         if [ "$ONLINE" = "true" ]; then
           # ReAct loop completes: bridge calls tools internally, then LLM returns final text answer.
-          # Check if answer contains weather-related content (proof MCP was used).
           ANSWER_TEXT="${INF_CHECK#answer:}"
-          if echo "$ANSWER_TEXT" | grep -qiE "weather|temperature|seoul|°|celsius|rain|sun|cloud"; then
+          # Strict: when MCP server is online and the model has tools, we require
+          # a non-empty answer. An empty answer (finish_reason=stop with no content
+          # and no tool_calls) indicates the model failed to deliberate — a regression
+          # previously seen with qwen3 + `think:false` (eval_count=28, empty content).
+          ANSWER_TRIMMED=$(echo "$ANSWER_TEXT" | tr -d '[:space:]')
+          if [ -z "$ANSWER_TRIMMED" ]; then
+            fail "MCP inference → empty response with no tool_calls (model failed to deliberate — check think:true for tool requests)"
+          elif echo "$ANSWER_TEXT" | grep -qiE "weather|temperature|seoul|°|celsius|rain|sun|cloud"; then
             pass "MCP inference → ReAct loop completed (answer contains weather data)"
           else
             pass "MCP inference → ReAct loop completed (answer: ${ANSWER_TEXT:0:60})"
@@ -1097,6 +1103,25 @@ if [ "$FEED_CODE" = "200" ]; then
   [ "${SEARCH_COUNT:-0}" -gt 0 ] 2>/dev/null \
     && pass "Vespa ANN search → $SEARCH_COUNT hits" \
     || fail "Vespa ANN search → 0 hits (expected ≥1)"
+
+  # Production-format YQL validation — mirrors vespa_client.rs::search() exactly.
+  # Catches regressions like an `ORDER BY closeness(...)` that Vespa rejects with
+  # "Expected READ_FIELD or PROPREF, got CALL" (400 Bad Request), which would
+  # cause every live MCP request to fall back to get_all() silently.
+  PROD_YQL='select tool_id, environment, tenant_id, server_id, server_name, tool_name, description, input_schema from mcp_tools where environment = "local-dev" and tenant_id = "default" and ({targetHits:4}nearestNeighbor(embedding, qe)) limit 4'
+  PROD_RESP=$(curl -s -w "\n%{http_code}" --max-time 10 \
+    -X POST "$VESPA_URL/search/" \
+    -H "Content-Type: application/json" \
+    -d "{\"yql\":$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$PROD_YQL"),\"ranking\":\"semantic\",\"input.query(qe)\":{\"values\":$(python3 -c "import json; print(json.dumps([0.1]*1024))")}}" \
+    2>/dev/null || printf "\n000")
+  PROD_CODE=$(echo "$PROD_RESP" | tail -1)
+  case "$PROD_CODE" in
+    200) pass "Vespa production-format YQL accepted (matches vespa_client.rs)" ;;
+    400)
+      PROD_ERR=$(echo "$PROD_RESP" | sed '$d' | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print((d.get('root',{}).get('errors') or [{}])[0].get('message','')[:120])" 2>/dev/null || echo "")
+      fail "Vespa production-format YQL rejected → 400: $PROD_ERR (vespa_client.rs will 400 on every MCP request)" ;;
+    *)   fail "Vespa production-format YQL → HTTP $PROD_CODE" ;;
+  esac
 
   # Cleanup
   curl -s -X DELETE --max-time 5 \
