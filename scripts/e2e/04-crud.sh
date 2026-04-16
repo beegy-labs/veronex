@@ -172,7 +172,7 @@ print(p[0].get('num_parallel','?') if p else '?')
 elif [ "$TMP_CODE" = "409" ]; then
   pass "Temp provider duplicate URL rejected → 409 (expected when Ollama URL already registered)"
 elif [ "$TMP_CODE" = "502" ]; then
-  info "Temp provider Ollama unreachable → 502 (skip num_parallel CRUD)"
+  fail "Temp provider Ollama unreachable → 502 (num_parallel CRUD cannot run)"
 else
   fail "Create temp provider failed ($TMP_CODE)"
 fi
@@ -222,7 +222,7 @@ if [ "$TMP_SRV_CODE" = "201" ] && [ -n "$TMP_SRV_ID" ] && [ "$TMP_SRV_ID" != "No
 elif [ "$TMP_SRV_CODE" = "409" ]; then
   pass "Duplicate server URL rejected → 409"
 elif [ "$TMP_SRV_CODE" = "502" ]; then
-  info "Server node-exporter unreachable → 502 (skip server CRUD)"
+  fail "Server node-exporter unreachable → 502 (server CRUD cannot run)"
 else
   fail "Create temp server failed ($TMP_SRV_CODE)"
 fi
@@ -265,7 +265,7 @@ if [ -n "${API_KEY_ID_PAID:-}" ] && [ "$API_KEY_ID_PAID" != "None" ] && [ -n "${
   c=$(apatchc "/v1/keys/$API_KEY_ID_PAID/providers/$PROVIDER_ID_LOCAL" '{"is_allowed":true}' | code)
   [ "$c" = "200" ] && pass "Allow provider access → 200" || fail "Allow → $c"
 else
-  info "Skipping key provider access (no paid key or local provider)"
+  fail "Key provider access test skipped — API_KEY_ID_PAID or PROVIDER_ID_LOCAL not set"
 fi
 
 # ── Server/Provider Verify + Liveness ────────────────────────────────────────
@@ -294,11 +294,11 @@ c=$(apostc "/v1/providers/verify" '{"url":"ftp://example.com:11434"}' | code)
 [ "$c" = "400" ] && pass "Verify provider: ftp:// scheme → 400" || fail "Verify provider: ftp:// → $c (expected 400)"
 
 OLLAMA_URL="${OLLAMA_LOCAL:-http://host.docker.internal:11434}"
-if [ -n "${LOCAL_PROVIDER_ID:-}" ]; then
+if [ -n "${PROVIDER_ID_LOCAL:-}" ]; then
   c=$(apostc "/v1/providers/verify" "{\"url\":\"$OLLAMA_URL\"}" | code)
   [ "$c" = "409" ] && pass "Verify provider: duplicate URL → 409" || fail "Verify provider: duplicate URL → $c (expected 409)"
 else
-  info "SKIP: Verify provider duplicate — local provider not registered in setup"
+  fail "Verify provider duplicate: PROVIDER_ID_LOCAL not set — local provider not registered in setup"
 fi
 
 c=$(apostc "/v1/providers/verify" '{"url":"http://192.0.2.1:11434"}' | code)
@@ -320,12 +320,12 @@ c=$(apostc "/v1/servers" '{"name":"test-unreachable","node_exporter_url":"http:/
 
 hdr "Provider Registration Validation"
 
-if [ -n "${LOCAL_PROVIDER_ID:-}" ]; then
+if [ -n "${PROVIDER_ID_LOCAL:-}" ]; then
   c=$(apostc "/v1/providers" \
     "{\"name\":\"dup-test\",\"provider_type\":\"ollama\",\"url\":\"$OLLAMA_URL\"}" | code)
   [ "$c" = "409" ] && pass "Register provider: duplicate URL → 409" || fail "Register provider: duplicate URL → $c (expected 409)"
 else
-  info "SKIP: Register provider duplicate — local provider not registered in setup"
+  fail "Register provider duplicate: PROVIDER_ID_LOCAL not set — local provider not registered in setup"
 fi
 
 c=$(apostc "/v1/providers" \

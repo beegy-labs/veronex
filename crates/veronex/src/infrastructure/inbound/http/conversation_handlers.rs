@@ -277,12 +277,16 @@ pub async fn get_turn_internals(
     State(state): State<AppState>,
     Path((conv_id_str, job_id_str)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let conv_uuid = match Uuid::parse_str(&conv_id_str) {
+    let conv_uuid = match conv_id_str.parse::<ConvId>().map(|c| c.0)
+        .or_else(|_| Uuid::parse_str(&conv_id_str).map_err(|e| e.to_string()))
+    {
         Ok(id) => id,
         Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid conversation id"}))).into_response(),
     };
 
-    let job_id = match Uuid::parse_str(&job_id_str) {
+    let job_uuid = match job_id_str.parse::<JobId>().map(|j| j.0)
+        .or_else(|_| Uuid::parse_str(&job_id_str).map_err(|e| e.to_string()))
+    {
         Ok(id) => id,
         Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid job id"}))).into_response(),
     };
@@ -299,7 +303,7 @@ pub async fn get_turn_internals(
          ORDER BY created_at ASC
          LIMIT 1"
     )
-    .bind(&conv_id_str)
+    .bind(conv_uuid)
     .fetch_optional(&state.pg_pool)
     .await;
 
@@ -324,7 +328,7 @@ pub async fn get_turn_internals(
         None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "conversation record not found"}))).into_response(),
     };
 
-    let turn = match record.regular_turns().find(|t| t.job_id == job_id) {
+    let turn = match record.regular_turns().find(|t| t.job_id == job_uuid) {
         Some(t) => t,
         None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "turn not found"}))).into_response(),
     };
@@ -345,7 +349,7 @@ pub async fn get_turn_internals(
     });
 
     (StatusCode::OK, Json(TurnInternalsResponse {
-        job_id: job_id.to_string(),
+        job_id: job_uuid.to_string(),
         compressed,
         vision_analysis,
     })).into_response()

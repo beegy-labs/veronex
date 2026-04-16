@@ -26,6 +26,7 @@ use crate::domain::constants::{
     MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
     QUEUE_POLL_INTERVAL,
     LOCALITY_BONUS_MS, ZSET_PEEK_K, ZSET_PEEK_K_MAX,
+    NO_PROVIDER_ATTEMPTS_PREFIX, MAX_NO_PROVIDER_ATTEMPTS,
 };
 use crate::infrastructure::outbound::valkey_keys as vk_keys;
 use crate::application::ports::outbound::concurrency_port::VramPermit;
@@ -83,24 +84,22 @@ async fn filter_candidates(
                 if !filtered.is_empty() { candidates = filtered; }
             }
 
-    // Stage 3: model selection (disabled models) — parallel lookups
+    // Stage 3: model selection (disabled models) — denylist semantics.
+    // Only providers where the model is EXPLICITLY disabled (is_enabled=false) are excluded.
+    // Models absent from provider_selected_models default to enabled (cold-start safe).
     if let Some(repo) = model_selection_repo {
         let futs: Vec<_> = candidates.iter()
             .map(|b| {
                 let id = b.id;
-                async move { (id, repo.list_enabled(id).await) }
+                async move { (id, repo.list_disabled(id).await) }
             })
             .collect();
         let results = futures::future::join_all(futs).await;
         let mut filtered = Vec::with_capacity(candidates.len());
         for (b, (_, res)) in candidates.into_iter().zip(results) {
             match res {
-                Ok(enabled) if !enabled.is_empty() => {
-                    if enabled.iter().any(|s| s == model) {
-                        filtered.push(b);
-                    } else {
-                        tracing::debug!(provider_id = %b.id, %model, "model disabled, skipping");
-                    }
+                Ok(disabled) if disabled.iter().any(|s| s == model) => {
+                    tracing::debug!(provider_id = %b.id, %model, "model explicitly disabled, skipping");
                 }
                 _ => filtered.push(b),
             }
@@ -434,17 +433,35 @@ pub(super) async fn queue_dispatcher_loop(
             ).await;
 
             if candidates.is_empty() {
-                // No eligible provider → atomically remove from ZSET and fail
+                // No eligible provider — retry up to MAX_NO_PROVIDER_ATTEMPTS before failing.
+                // Leaves the job in ZSET so it is retried on the next dispatcher tick.
+                // This handles transient conditions: sync loop mid-run, providers momentarily
+                // offline, or a new model not yet indexed in provider_selected_models.
+                let attempt_key = format!("{NO_PROVIDER_ATTEMPTS_PREFIX}:{job_id_str}");
+                let attempts = valkey.incr_by(&attempt_key, 1).await.unwrap_or(MAX_NO_PROVIDER_ATTEMPTS);
+                if attempts < MAX_NO_PROVIDER_ATTEMPTS {
+                    tracing::debug!(%uuid, %model, attempts, "no candidates — will retry on next tick");
+                    continue;
+                }
+
+                // Exceeded retry limit — permanently fail.
                 let queue_active = vk_keys::queue_active();
                 let claimed = valkey.zset_claim(&job_id_str, &queue_active, model).await.unwrap_or(false);
                 if claimed {
                     valkey.active_lease_remove(&job_id_str).await
                         .unwrap_or_else(|e| tracing::warn!(%uuid, error = %e, "dispatcher: active_lease_remove failed"));
+                    let _ = valkey.kv_del(&attempt_key).await;
                     let vk_opt: Option<Arc<dyn ValkeyPort>> = Some(valkey.clone());
                     fail_job_no_provider(&jobs, &job_repo, &vk_opt, uuid, "no eligible provider for this model").await;
                     dispatched = true;
                 }
                 continue;
+            }
+
+            // Reset no-provider counter on successful candidate resolution.
+            {
+                let attempt_key = format!("{NO_PROVIDER_ATTEMPTS_PREFIX}:{job_id_str}");
+                let _ = valkey.kv_del(&attempt_key).await;
             }
 
             let claimed_provider = score_and_claim(

@@ -425,7 +425,7 @@ export default function ServersPage() {
 
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteServer(id),
-    { invalidateKey: ['servers'] },
+    { invalidateKey: ['servers'], onSuccess: () => setDeleteTarget(null) },
   )
 
   const handleRegister = useCallback(() => setShowRegister(true), [])

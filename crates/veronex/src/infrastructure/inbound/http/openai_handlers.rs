@@ -263,6 +263,10 @@ pub struct ChatCompletionRequest {
     /// When absent, a new conversation is created if the response includes tool_calls or MCP.
     #[serde(default)]
     pub conversation_id: Option<String>,
+    /// When false, disables MCP agentic loop for this request even if MCP is globally enabled.
+    /// Defaults to true. Useful for pure inference calls that should not trigger tool-call rounds.
+    #[serde(default)]
+    pub use_mcp: Option<bool>,
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -335,8 +339,17 @@ pub async fn chat_completions(
             // If an MCP bridge is configured and has active server sessions,
             // run the agentic MCP loop instead of the plain Ollama proxy.
             // API key callers must have at least one MCP grant — if not, bypass to plain proxy.
-            let has_images = req.images.as_ref().is_some_and(|i| !i.is_empty());
-            if !has_images {
+            // Skip MCP only when the current request contains images — image analysis is
+            // inline passthrough. Vision models WITHOUT images still go through MCP normally
+            // so they can call tools (e.g. weather, search).
+            // Also skip if caller explicitly sets use_mcp: false.
+            let has_any_images = req.images.as_ref().is_some_and(|i| !i.is_empty())
+                || req.messages.iter().any(|m| {
+                    m.images.as_ref().is_some_and(|i| !i.is_empty())
+                        || matches!(&m.content, Some(MessageContent::Parts(parts)) if parts.iter().any(|p| p.part_type == "image_url"))
+                });
+            let skip_mcp = has_any_images || !req.use_mcp.unwrap_or(true);
+            if !skip_mcp {
                 if let Some(ref bridge) = state.mcp_bridge {
                     if bridge.should_intercept() {
                         let has_access = match caller.api_key_id() {
@@ -394,7 +407,12 @@ async fn ollama_chat_proxy(
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
 
     // Extract last user content as display prompt (required by InferenceJob).
-    let prompt = extract_last_user_prompt(&ollama_messages).to_string();
+    // When the user sends image(s) with no text, auto-fill a default prompt so the
+    // domain Prompt value object doesn't reject an empty string.
+    let prompt = {
+        let raw = extract_last_user_prompt(&ollama_messages);
+        if raw.is_empty() { "Describe this image in detail.".to_string() } else { raw.to_string() }
+    };
 
     // Phase 5: compress long input inline if it exceeds budget (conversation turns only)
     if conversation_id.is_some() {
@@ -422,15 +440,22 @@ async fn ollama_chat_proxy(
     }
 
     let model_str = req.model.clone();
-    // Merge top-level images + content-array images + per-message images (conversation mode).
+    // Collect images: top-level field + OpenAI image_url content parts from the LAST user message only.
+    // Per-message images from conversation history are already embedded in the ollama_messages JSON
+    // via into_ollama_value(); re-collecting them would cause the Ollama adapter to re-inject all
+    // historical images into the final message on every turn, confusing the model.
     let mut ollama_messages = ollama_messages;
     let images = {
         let mut imgs = req.images.unwrap_or_default();
         imgs.append(&mut content_images);
-        // Also collect images embedded inside Ollama-format messages (multi-turn conversation).
-        for m in &ollama_messages {
-            if m.get("role").and_then(|r| r.as_str()) == Some("user") {
-                if let Some(arr) = m.get("images").and_then(|v| v.as_array()) {
+        // For single-turn requests (no conversation_id), also pick up per-message images from the
+        // last user message so that a message-format image payload (images field in the message)
+        // is forwarded correctly to the Ollama adapter.
+        if conversation_id.is_none() {
+            if let Some(last_user) = ollama_messages.iter().rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            {
+                if let Some(arr) = last_user.get("images").and_then(|v| v.as_array()) {
                     imgs.extend(arr.iter().filter_map(|v| v.as_str().map(String::from)));
                 }
             }
@@ -507,8 +532,7 @@ async fn ollama_chat_proxy(
         Ok(id) => id,
         Err(e) => {
             tracing::error!("chat_completions(ollama): submit failed: {e}");
-            use super::error::AppError;
-            return AppError::from(e).into_response();
+            return super::error::AppError::from(e).into_response();
         }
     };
 
@@ -1072,6 +1096,15 @@ async fn load_conversation_context(
     .bind(caller.source().as_str())
     .execute(&state.pg_pool)
     .await {
+        // FK violation on account_id: the JWT references a deleted account → return 401
+        if let sqlx::Error::Database(ref db_err) = e {
+            if db_err.code().as_deref() == Some("23503") && db_err.message().contains("account_id") {
+                tracing::warn!(conversation_id = %cid, "openai: account not found — JWT stale, returning 401");
+                return Err(super::error::AppError::Unauthorized(
+                    "session expired — please log in again".into(),
+                ).into_response());
+            }
+        }
         tracing::warn!(conversation_id = %cid, error = %e, "openai: failed to upsert conversation record");
     }
 
@@ -1159,8 +1192,7 @@ async fn legacy_queue_chat(
         Ok(id) => id,
         Err(e) => {
             tracing::error!("chat_completions: submit failed: {e}");
-            use super::error::AppError;
-            return AppError::from(e).into_response();
+            return super::error::AppError::from(e).into_response();
         }
     };
 

@@ -42,7 +42,7 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
 
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteProvider(id),
-    { invalidateKey: ['providers'] },
+    { invalidateKey: ['providers'], onSuccess: () => setDeleteTarget(null) },
   )
 
   const toggleActiveMutation = useApiMutation(

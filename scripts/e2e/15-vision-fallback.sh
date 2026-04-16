@@ -21,9 +21,9 @@ hdr "Vision Fallback — non-vision model auto image analysis"
 VISION_MODEL=$(get_vision_model)
 
 if [ -z "$VISION_MODEL" ]; then
-  info "SKIP: No vision model available (need qwen3-vl:8b or similar)"
+  fail "No vision model available — qwen3-vl:8b or similar must be loaded in Ollama"
   save_counts
-  exit 0
+  exit 1
 fi
 info "Vision fallback model: $VISION_MODEL"
 
@@ -32,9 +32,9 @@ info "Vision fallback model: $VISION_MODEL"
 TEXT_MODEL=$(get_text_model)
 
 if [ -z "$TEXT_MODEL" ]; then
-  info "SKIP: No text-only model available"
+  fail "No text-only model available — a non-vision model must be loaded in Ollama"
   save_counts
-  exit 0
+  exit 1
 fi
 info "Text model (non-vision): $TEXT_MODEL"
 
@@ -62,9 +62,9 @@ img.save(out, format='JPEG', quality=85)
 print(f"Generated: {out} ({os.path.getsize(out)} bytes)")
 PYEOF
   if [ ! -f "$FIXTURE" ]; then
-    info "SKIP: Pillow not installed (pip install pillow)"
+    fail "Pillow not installed — run: pip install pillow"
     save_counts
-    exit 0
+    exit 1
   fi
 else
   info "Using cached fixture: $FIXTURE"
@@ -108,7 +108,7 @@ GEN_BODY=$(echo "$GEN_RES" | sed '$d')
 
 case "$GEN_CODE" in
   200) pass "generate with image → 200" ;;
-  503) info "SKIP: No eligible provider (503)"; save_counts; exit 0 ;;
+  503) fail "generate with image → 503 (no eligible provider)"; save_counts; exit 1 ;;
   *)   fail "generate with image → $GEN_CODE"; save_counts; exit 1 ;;
 esac
 
@@ -122,6 +122,20 @@ except: print('')
 if [ -n "$GEN_TEXT" ]; then
   pass "generate: non-empty response (vision fallback worked)"
   info "Response (truncated): ${GEN_TEXT:0:120}"
+  # Verify response actually reflects image content (Python code snippet)
+  CONTENT_OK=$(echo "$GEN_TEXT" | python3 -c "
+import sys
+text = sys.stdin.read().lower()
+keywords = ['function', 'add', 'return', 'def', 'python', 'code', 'print', 'result']
+found = [k for k in keywords if k in text]
+print('yes' if found else 'no')
+print(','.join(found))
+" 2>/dev/null | head -1 || echo "no")
+  if [ "$CONTENT_OK" = "yes" ]; then
+    pass "generate: response reflects image content (code-related keywords found)"
+  else
+    fail "generate: response does not mention image content — vision fallback may not have run"
+  fi
 else
   fail "generate: empty response — vision fallback may have failed"
 fi
@@ -167,6 +181,15 @@ except: print('')
   if [ -n "$CHAT_TEXT" ]; then
     pass "chat: non-empty response (vision fallback worked)"
     info "Response (truncated): ${CHAT_TEXT:0:120}"
+    CHAT_CONTENT_OK=$(echo "$CHAT_TEXT" | python3 -c "
+import sys
+text = sys.stdin.read().lower()
+keywords = ['function', 'add', 'return', 'def', 'python', 'code', 'print', 'result']
+print('yes' if any(k in text for k in keywords) else 'no')
+" 2>/dev/null || echo "no")
+    [ "$CHAT_CONTENT_OK" = "yes" ] \
+      && pass "chat: response reflects image content (code-related keywords found)" \
+      || fail "chat: response does not mention image content — vision fallback may not have run"
   else
     fail "chat: empty response"
   fi
@@ -190,7 +213,7 @@ if [ -z "$JOB_ID" ]; then
   fail "Could not find fallback job in dashboard"
 else
   IMG_KEYS=""
-  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     DETAIL=$(agetc "/v1/dashboard/jobs/$JOB_ID")
     DETAIL_CODE=$(echo "$DETAIL" | code)
     DETAIL_BODY=$(echo "$DETAIL" | body)
@@ -208,7 +231,7 @@ print(len(keys))
   if [ "${IMG_KEYS:-0}" -gt 0 ]; then
     pass "S3 upload: image_keys=$IMG_KEYS (image preserved despite fallback)"
   else
-    info "S3 upload: image_keys empty after 30s — async upload may be delayed under load"
+    fail "S3 upload: image_keys empty after 60s"
   fi
 fi
 

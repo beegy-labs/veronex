@@ -80,6 +80,7 @@ CREATE TABLE gpu_servers (
     id                UUID         PRIMARY KEY DEFAULT uuidv7(),
     name              VARCHAR(255) NOT NULL,
     node_exporter_url TEXT,
+    gpu_vendor        VARCHAR(32)  NOT NULL DEFAULT '',
     registered_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 

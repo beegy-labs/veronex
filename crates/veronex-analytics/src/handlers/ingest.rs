@@ -189,8 +189,7 @@ pub struct IngestMcpToolCallRequest {
 /// `POST /internal/ingest/mcp`
 ///
 /// Converts an [`IngestMcpToolCallRequest`] into an OTel LogRecord and emits it
-/// via OTLP HTTP -> OTel Collector -> Redpanda [otel-logs] -> ClickHouse.
-/// The `otel_mcp_tool_calls_mv` materialized view extracts it into `mcp_tool_calls`.
+/// via OTLP HTTP -> OTel Collector -> Redpanda [otel-logs] -> veronex-consumer -> `mcp_tool_calls`.
 pub async fn ingest_mcp_tool_call(
     State(state): State<AppState>,
     Json(req): Json<IngestMcpToolCallRequest>,

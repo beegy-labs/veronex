@@ -14,9 +14,9 @@ hdr "Image Storage & Provider Name (post-parallel)"
 VISION_MODEL=$(get_vision_model)
 
 if [ -z "$VISION_MODEL" ]; then
-  info "SKIP: No vision model on local Ollama"
+  fail "No vision model on local Ollama — a vision model (llava/qwen-vl/minicpm-v) must be loaded"
   save_counts
-  exit 0
+  exit 1
 fi
 info "Vision model: $VISION_MODEL"
 
@@ -35,9 +35,9 @@ print(base64.b64encode(buf.getvalue()).decode())
 " 2>/dev/null || echo "")
 
 if [ -z "$BEE_IMG" ]; then
-  info "SKIP: Pillow not installed"
+  fail "Pillow not installed — run: pip install pillow"
   save_counts
-  exit 0
+  exit 1
 fi
 
 # ── Ensure providers are active (Scale-In recovery) ─────────────────────────
@@ -68,6 +68,9 @@ curl -s --max-time 120 "$API/api/generate" \
 # Fire both image inference requests IMMEDIATELY (no sleep — Scale-In runs every 5s)
 info "Firing image tests immediately after warm-up..."
 
+# Record start time before firing — used to filter out concurrent jobs from other test scripts
+IMG_TEST_START=$(python3 -c "import datetime; print(datetime.datetime.utcnow().isoformat())")
+
 API_IMG_RES=""
 TEST_IMG_RES=""
 TMPDIR_IMG=$(mktemp -d)
@@ -85,7 +88,9 @@ TMPDIR_IMG=$(mktemp -d)
 wait
 
 API_IMG_CODE=$(tail -1 "$TMPDIR_IMG/api" 2>/dev/null || echo "000")
+API_IMG_BODY=$(sed '$d' "$TMPDIR_IMG/api" 2>/dev/null || echo "")
 TEST_IMG_CODE=$(tail -1 "$TMPDIR_IMG/test" 2>/dev/null || echo "000")
+TEST_IMG_BODY=$(sed '$d' "$TMPDIR_IMG/test" 2>/dev/null || echo "")
 rm -rf "$TMPDIR_IMG"
 
 # ── Helper function ──────────────────────────────────────────────────────────
@@ -97,9 +102,9 @@ verify_image_job() {
     return
   fi
 
-  # Poll for image_keys (async upload)
+  # Poll for job completion + image_keys (async upload; longer wait under parallel load)
   local img_body=""
-  for attempt in 1 2 3 4 5; do
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
     local detail_res
     detail_res=$(agetc "/v1/dashboard/jobs/$job_id")
     local detail_code
@@ -107,14 +112,16 @@ verify_image_job() {
     img_body=$(echo "$detail_res" | body)
     [ "$detail_code" != "200" ] && { fail "$label: job detail → $detail_code"; return; }
 
-    local has_keys
-    has_keys=$(echo "$img_body" | python3 -c "
+    local ready
+    ready=$(echo "$img_body" | python3 -c "
 import sys, json
 d = json.loads(sys.stdin.read())
-print('yes' if (d.get('image_keys') or []) else 'no')
+status = d.get('status','')
+has_keys = bool(d.get('image_keys') or [])
+print('yes' if status == 'completed' and has_keys else 'no')
 " 2>/dev/null || echo "no")
-    [ "$has_keys" = "yes" ] && break
-    sleep 2
+    [ "$ready" = "yes" ] && break
+    sleep 3
   done
 
   local parsed
@@ -151,7 +158,7 @@ print(f'{status}|{len(keys)}|{len(urls)}|{pname or \"\"}|{thumb}')
   if [ -n "$prov_name" ]; then
     pass "$label: provider_name=$prov_name"
   else
-    info "$label: provider_name not set"
+    fail "$label: provider_name not set in job record"
   fi
 
   if [ -n "$thumb_url" ]; then
@@ -159,7 +166,7 @@ print(f'{status}|{len(keys)}|{len(urls)}|{pname or \"\"}|{thumb}')
     tcode=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$thumb_url" 2>/dev/null || echo "000")
     [ "$tcode" = "200" ] \
       && pass "$label: thumbnail → 200" \
-      || info "$label: thumbnail → $tcode (MinIO public policy needed)"
+      || fail "$label: thumbnail → $tcode"
   fi
 }
 
@@ -169,38 +176,67 @@ hdr "Image Inference — API key (/api/generate)"
 
 case "$API_IMG_CODE" in
   200) pass "API image inference → 200" ;;
-  503) info "API image inference → 503 (no eligible provider)"; save_counts; exit 0 ;;
+  503) fail "API image inference → 503 (no eligible provider)"; save_counts; exit 1 ;;
   *)   fail "API image inference → $API_IMG_CODE"; save_counts; exit 0 ;;
 esac
+
+if [ "$API_IMG_CODE" = "200" ]; then
+  API_IMG_TEXT=$(echo "$API_IMG_BODY" | python3 -c "
+import sys, json
+try: print(json.loads(sys.stdin.read()).get('response', ''))
+except: print('')
+" 2>/dev/null || echo "")
+  [ -n "$API_IMG_TEXT" ] \
+    && pass "API image: non-empty response text" \
+    || fail "API image: empty response — model may not have processed the image"
+  info "API response: ${API_IMG_TEXT:0:100}"
+fi
 
 hdr "Image Inference — Session auth (/v1/chat/completions)"
 
 case "$TEST_IMG_CODE" in
   200) pass "Test image inference → 200" ;;
-  503) info "Test image inference → 503" ;;
-  *)   info "Test image inference → $TEST_IMG_CODE" ;;
+  503) fail "Test image inference → 503 (no eligible provider)" ;;
+  *)   fail "Test image inference → $TEST_IMG_CODE" ;;
 esac
 
-# Wait for async image uploads
-sleep 4
+if [ "$TEST_IMG_CODE" = "200" ]; then
+  TEST_IMG_TEXT=$(echo "$TEST_IMG_BODY" | python3 -c "
+import sys, json
+try: print(json.loads(sys.stdin.read()).get('choices',[{}])[0].get('message',{}).get('content',''))
+except: print('')
+" 2>/dev/null || echo "")
+  [ -n "$TEST_IMG_TEXT" ] \
+    && pass "Test image: non-empty response text" \
+    || fail "Test image: empty response — model may not have processed the image"
+  info "Test response: ${TEST_IMG_TEXT:0:100}"
+fi
+
+# Wait for async image uploads (extra time under parallel load)
+sleep 8
 
 hdr "Image Storage Verification"
 
-API_JOB_ID=$(aget "/v1/dashboard/jobs?limit=5&source=api&model=$VISION_MODEL" 2>/dev/null | python3 -c "
+API_JOB_ID=$(aget "/v1/dashboard/jobs?limit=20&source=api&model=$VISION_MODEL" 2>/dev/null | python3 -c "
 import sys, json
 try:
+    # Filter jobs created after IMG_TEST_START to exclude concurrent no-image jobs from other scripts
+    start = '${IMG_TEST_START}'
     for j in json.loads(sys.stdin.read()).get('jobs', []):
-        print(j['id']); break
+        if j.get('created_at', '') >= start:
+            print(j['id']); break
 except: pass
 " 2>/dev/null || echo "")
 verify_image_job "$API_JOB_ID" "API image job"
 
 if [ "$TEST_IMG_CODE" = "200" ]; then
-  TEST_JOB_ID=$(aget "/v1/dashboard/jobs?limit=5&source=test&model=$VISION_MODEL" 2>/dev/null | python3 -c "
+  TEST_JOB_ID=$(aget "/v1/dashboard/jobs?limit=20&source=test&model=$VISION_MODEL" 2>/dev/null | python3 -c "
 import sys, json
 try:
+    start = '${IMG_TEST_START}'
     for j in json.loads(sys.stdin.read()).get('jobs', []):
-        print(j['id']); break
+        if j.get('created_at', '') >= start:
+            print(j['id']); break
 except: pass
 " 2>/dev/null || echo "")
   verify_image_job "$TEST_JOB_ID" "Test image job"

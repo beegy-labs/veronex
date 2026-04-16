@@ -155,7 +155,7 @@ if [ -n "$TPM_KEY" ] && [ "$TPM_KEY" != "None" ]; then
   elif [ "$TPM_C1" = "200" ] && [ "$TPM_C2" = "200" ]; then
     info "TPM limit not triggered (tokens may not have exceeded 50) — req1=$TPM_C1 req2=$TPM_C2"
   elif [ "$TPM_C1" = "000" ] || [ "$TPM_C2" = "000" ]; then
-    info "TPM test skipped — connection failed during parallel run (req1=$TPM_C1 req2=$TPM_C2)"
+    fail "TPM test failed — connection error during parallel run (req1=$TPM_C1 req2=$TPM_C2)"
   else
     fail "TPM test unexpected — req1=$TPM_C1 req2=$TPM_C2"
   fi
@@ -329,7 +329,7 @@ hdr "Login Rate Limit (IP-based)"
 # Read LOGIN_RATE_LIMIT from container env via a running process env (or use compose config)
 CONTAINER_LIMIT=$(docker compose exec -T veronex sh -c 'echo ${LOGIN_RATE_LIMIT:-10}' 2>/dev/null | tr -d '\r\n' || echo "10")
 if [ "${CONTAINER_LIMIT:-10}" = "0" ]; then
-  info "LOGIN_RATE_LIMIT=0 — rate limiting disabled in this environment (skipping limit test)"
+  fail "LOGIN_RATE_LIMIT=0 — rate limiting is disabled; set LOGIN_RATE_LIMIT > 0 to enforce login lockout"
   # Still verify that unlimited login works (no false 429)
   c=$(rawpostc "/v1/auth/login" "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" | code)
   [ "$c" = "200" ] && pass "Login allowed when rate limit disabled → 200" \

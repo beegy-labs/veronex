@@ -132,6 +132,7 @@ pub fn is_vision_model(model_name: &str) -> bool {
         || lower.contains("llava") || lower.contains("moondream")
         || lower.contains("cogvlm") || lower.contains("bakllava")
         || lower.contains("minicpm-v") || lower.contains("vision")
+        || lower.contains("ocr") // OCR models (e.g. glm-ocr) require direct image input
 }
 
 /// For non-vision models that receive images, analyze each image via the

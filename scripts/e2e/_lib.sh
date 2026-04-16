@@ -8,7 +8,8 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 pass() { echo -e "  ${GREEN}[PASS]${NC} $1"; PASS_COUNT=$((PASS_COUNT+1)); }
 fail() { echo -e "  ${RED}[FAIL]${NC} $1"; FAIL_COUNT=$((FAIL_COUNT+1)); FAIL_MSGS+=("$1"); }
 info() { echo -e "  ${YELLOW}[INFO]${NC} $1"; }
-hdr()  { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
+hdr()     { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
+section() { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
 
 PASS_COUNT=${PASS_COUNT:-0}; FAIL_COUNT=${FAIL_COUNT:-0}; FAIL_MSGS=()
 

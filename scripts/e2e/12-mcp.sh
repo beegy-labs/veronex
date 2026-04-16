@@ -218,7 +218,7 @@ except Exception as e:
 " 2>/dev/null || echo "parse_error")
   [ "$TOOLS_VALID" = "ok" ] \
     && pass "/v1/chat/completions tools → valid choices structure" \
-    || info "/v1/chat/completions tools → $TOOLS_VALID"
+    || fail "/v1/chat/completions tools → $TOOLS_VALID"
 fi
 
 # ── MCP Valkey Key Namespace ──────────────────────────────────────────────────
@@ -561,9 +561,9 @@ INT_ID=$(echo "$INT_REG" | python3 -c "import sys,json; print(json.loads(sys.std
   && pass "MCP integration: registered veronex-mcp server (id: $INT_ID)" \
   || { fail "MCP integration: failed to register server (resp: $INT_REG)"; save_counts; exit 0; }
 
-# 2. Wait for server to become online (veronex-agent heartbeat, up to 15s)
+# 2. Wait for server to become online (veronex-agent heartbeat, up to 75s — agent polls every 60s)
 ONLINE="false"
-for i in $(seq 1 6); do
+for i in $(seq 1 25); do
   sleep 3
   LIST_RES=$(aget "/v1/mcp/servers" 2>/dev/null || echo "[]")
   ONLINE=$(echo "$LIST_RES" | python3 -c "
@@ -582,7 +582,7 @@ print(s.get('tool_count',0))
 done
 [ "$ONLINE" = "true" ] \
   && pass "MCP integration: server online (tool_count=$TOOL_COUNT)" \
-  || info "MCP integration: server not yet online after 18s (agent may not be running)"
+  || fail "MCP integration: server not online after 75s — veronex-agent must be running (agent polls every 60s)"
 
 # 2.5. Grant MCP access to the API key before inference
 if [ -n "$INT_ID" ] && [ -n "$API_KEY_ID_PAID" ]; then
@@ -681,7 +681,7 @@ except: print('parse_error')
       && pass "MCP disable: inference after disable has no tool_calls" \
       || fail "MCP disable: inference still has tool_calls after disable"
   else
-    info "MCP disable: inference → $DIS_CODE (skipping tool_call check)"
+    fail "MCP disable: inference → $DIS_CODE (expected 200 to verify tool_call suppression)"
   fi
 fi
 
@@ -814,7 +814,7 @@ if [ -z "$TEST_KEY_ID" ] || [ "$TEST_KEY_ID" = "None" ]; then
 fi
 
 if [ -z "$TEST_KEY_ID" ] || [ "$TEST_KEY_ID" = "None" ]; then
-  info "API Key MCP Access: no key available — skipping"
+  fail "API Key MCP Access: no API key available — key must exist to test MCP access"
 else
   LIST_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/keys/$TEST_KEY_ID/mcp" \
     -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
@@ -830,7 +830,7 @@ print(servers[0]['id'] if servers else '')
 " 2>/dev/null || echo "")
 
   if [ -z "$GRANT_SERVER_ID" ]; then
-    info "API Key MCP Access: no MCP servers registered — skipping grant/revoke"
+    fail "API Key MCP Access: no MCP servers registered — grant/revoke test cannot run"
   else
     # Grant
     GRANT_RES=$(curl -s -w "\n%{http_code}" "$API/v1/keys/$TEST_KEY_ID/mcp" \
@@ -906,7 +906,7 @@ CONV_ID=$(echo "$CONV_R1" | python3 -c "import sys,json; print(json.loads(sys.st
 if [ -n "$CONV_ID" ]; then
   pass "Conversation created (id: ${CONV_ID:0:20}...)"
 elif [ -z "$CONV_R1" ]; then
-  info "Conversation creation: curl timeout — skipping conversation tests"
+  fail "Conversation creation: curl timeout — inference endpoint unresponsive"
 else
   fail "Conversation creation failed"
 fi
@@ -983,11 +983,31 @@ except Exception as e: print(f'error:{e}')
     && pass "Conversation source='api' for API key request" \
     || fail "Expected source=api, got source=$CONV_SOURCE"
 
-  # ── DB: source column check ───────────────────────────────────────────────
-  DB_SOURCE=$(pg_query "SELECT source FROM conversations ORDER BY created_at DESC LIMIT 1;" | tr -d ' \r')
-  [ "$DB_SOURCE" = "api" ] \
-    && pass "DB conversations.source='api'" \
-    || fail "DB conversations.source='$DB_SOURCE' (expected 'api')"
+  # ── DB: source column check (by specific conversation id) ───────────────────
+  # CONV_ID is in public base62 format (conv_xxx) — decode to UUID for DB query
+  CONV_UUID=$(python3 -c "
+import sys
+s = '$CONV_ID'
+if s.startswith('conv_'):
+    encoded = s[5:]
+    # base62 decode: digits + uppercase + lowercase
+    CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+    n = 0
+    for c in encoded:
+        n = n * 62 + CHARS.index(c)
+    import uuid
+    print(str(uuid.UUID(int=n)))
+else:
+    print(s)
+" 2>/dev/null || echo "")
+  if [ -n "$CONV_UUID" ]; then
+    DB_SOURCE=$(pg_query "SELECT source FROM conversations WHERE id = '$CONV_UUID';" 2>/dev/null | tr -d ' \r' || echo "")
+    [ "$DB_SOURCE" = "api" ] \
+      && pass "DB conversations.source='api'" \
+      || fail "DB conversations.source='$DB_SOURCE' (expected 'api')"
+  else
+    fail "DB conversations.source check: could not decode conv_id to UUID"
+  fi
 
   # ── turn count: 2 turns (not split into separate conversations) ──────────
   CONV_TURNS=$(echo "$CONV_DETAIL" | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read()).get('turns',[])))" 2>/dev/null || echo "0")
@@ -1007,10 +1027,10 @@ VESPA_CONFIG_URL="${VESPA_CONFIG_URL:-http://localhost:19071}"
 VESPA_CFG_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$VESPA_CONFIG_URL/ApplicationStatus" 2>/dev/null || echo "000")
 case "$VESPA_CFG_CODE" in
   200) pass "Vespa config server healthy ($VESPA_CONFIG_URL)" ;;
-  000) info "Vespa config server unreachable — vector selection tests skipped"
-       save_counts; exit 0 ;;
-  *)   info "Vespa config server → HTTP $VESPA_CFG_CODE — skipping vector tests"
-       save_counts; exit 0 ;;
+  000) fail "Vespa config server unreachable at $VESPA_CONFIG_URL — Vespa must be running"
+       save_counts; exit 1 ;;
+  *)   fail "Vespa config server → HTTP $VESPA_CFG_CODE (expected 200)"
+       save_counts; exit 1 ;;
 esac
 
 # 2. Application deployed (mcp_tools schema active)

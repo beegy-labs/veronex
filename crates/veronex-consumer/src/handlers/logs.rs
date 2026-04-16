@@ -146,7 +146,7 @@ pub fn parse(payload: &[u8]) -> anyhow::Result<LogRows> {
                         out.mcp_tool_calls.push(json!({
                             "event_time":      timestamp_ms,
                             "request_id":      log_attrs.get("request_id").cloned().unwrap_or_default(),
-                            "api_key_id":      log_attrs.get("api_key_id").cloned().unwrap_or_default(),
+                            "api_key_id":      log_attrs.get("api_key_id").map(String::as_str).unwrap_or("00000000-0000-0000-0000-000000000000"),
                             "tenant_id":       log_attrs.get("tenant_id").cloned().unwrap_or_default(),
                             "server_id":       log_attrs.get("server_id").cloned().unwrap_or_default(),
                             "server_slug":     log_attrs.get("server_slug").cloned().unwrap_or_default(),

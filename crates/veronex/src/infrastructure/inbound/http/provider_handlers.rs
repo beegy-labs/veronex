@@ -607,6 +607,8 @@ pub async fn sync_provider_models(
 /// `POST /v1/providers/{id}/sync` — unified sync for a single provider.
 ///
 /// Combines health check + model sync + VRAM probing + LLM analysis.
+/// Runs in the background and returns 202 immediately to avoid the JWT router
+/// 30-second timeout (LLM analysis can exceed 30s under load).
 pub async fn sync_single_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -624,39 +626,46 @@ pub async fn sync_single_provider(
     }
 
     let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
+    let pid_str = pid.to_string();
 
-    match crate::infrastructure::outbound::capacity::analyzer::sync_provider(
-        &state.http_client,
-        provider.id,
-        &provider.name,
-        &provider.url,
-        provider.total_vram_mb,
-        provider.num_parallel.max(1) as u32,
-        &settings.analyzer_model,
-        &*state.capacity_repo,
-        &*state.vram_pool,
-        state.valkey_pool.as_ref(),
-        &*state.provider_registry,
-        &*state.ollama_model_repo,
-        &*state.model_selection_repo,
-        &*state.vram_budget_repo,
-        None,
+    tokio::spawn(async move {
+        match crate::infrastructure::outbound::capacity::analyzer::sync_provider(
+            &state.http_client,
+            provider.id,
+            &provider.name,
+            &provider.url,
+            provider.total_vram_mb,
+            provider.num_parallel.max(1) as u32,
+            &settings.analyzer_model,
+            &*state.capacity_repo,
+            &*state.vram_pool,
+            state.valkey_pool.as_ref(),
+            &*state.provider_registry,
+            &*state.ollama_model_repo,
+            &*state.model_selection_repo,
+            &*state.vram_budget_repo,
+            None,
+        )
+        .await
+        {
+            Ok(()) => {
+                emit_audit(
+                    &state, &claims, "sync", "ollama_provider", &pid_str,
+                    &provider.name, &format!("Provider '{}' synced", provider.name),
+                )
+                .await;
+            }
+            Err(e) => {
+                tracing::warn!(%id, error = %e, "background sync_provider failed");
+            }
+        }
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "message": "provider sync triggered" })),
     )
-    .await
-    {
-        Ok(()) => {
-            emit_audit(
-                &state, &claims, "sync", "ollama_provider", &pid.to_string(),
-                &provider.name, &format!("Provider '{}' synced", provider.name),
-            )
-            .await;
-            (StatusCode::OK, Json(serde_json::json!({"synced": true}))).into_response()
-        }
-        Err(e) => {
-            tracing::warn!(%id, error = %e, "sync_provider failed");
-            AppError::ServiceUnavailable("provider sync failed".into()).into_response()
-        }
-    }
+        .into_response()
 }
 
 /// `POST /v1/providers/sync` — unified sync for all active Ollama providers.

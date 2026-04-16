@@ -16,7 +16,7 @@ interface CompressionModelSelectorProps {
 export function CompressionModelSelector({ value, onChange, disabled }: CompressionModelSelectorProps) {
   const { t } = useTranslation()
   const { data } = useQuery(ollamaModelsQuery({ limit: 200 }))
-  const models = data?.models ?? []
+  const models = (data?.models ?? []).filter((m) => m.is_enabled !== false)
 
   return (
     <Select

@@ -641,6 +641,16 @@ pub async fn sync_provider(
         }
     }
 
+    // 0b. Restore AIMD max_concurrent from DB (VramPool is in-memory; learned limits are lost on restart).
+    // Only seeds entries that are still 0 (unlimited = uninitialised) to avoid overwriting live AIMD state.
+    if let Ok(profiles) = capacity_repo.list_by_provider(provider_id).await {
+        for p in profiles {
+            if p.max_concurrent > 0 && vram_pool.max_concurrent(provider_id, &p.model_name) == 0 {
+                vram_pool.set_max_concurrent(provider_id, &p.model_name, p.max_concurrent as u32);
+            }
+        }
+    }
+
     // 1. Health check: GET /api/version
     let health_ok = client
         .get(format!("{ollama_url}/api/version"))
@@ -1017,6 +1027,10 @@ pub async fn sync_provider(
                 if stats.p95_latency_ms > 0.0 {
                     vram_pool.set_baseline_p95_ms(provider_id, &model.name, stats.p95_latency_ms as u32);
                 }
+            } else if current_limit == 0 {
+                // Cold start: no data yet (brand-new model). Initialize max_concurrent to
+                // num_parallel (top-down CDD spec) so AIMD has a starting point to decrease from.
+                vram_pool.set_max_concurrent(provider_id, &model.name, num_parallel);
             }
         } else if stats.sample_count >= 3 && !governor_active {
             // Governor active → suppress AIMD increase/decrease (fair-share cap is the final value)
