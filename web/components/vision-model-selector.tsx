@@ -6,6 +6,7 @@ import {
 } from '@/components/ui/select'
 import { ollamaModelsQuery } from '@/lib/queries/providers'
 import { useTranslation } from '@/i18n'
+import { isModelEnabled } from '@/lib/models'
 
 interface VisionModelSelectorProps {
   value: string | null
@@ -17,7 +18,7 @@ export function VisionModelSelector({ value, onChange, disabled }: VisionModelSe
   const { t } = useTranslation()
   const { data } = useQuery(ollamaModelsQuery({ limit: 200 }))
   // Show all models but mark vision-capable ones; fallback to all if none have is_vision flag
-  const models = (data?.models ?? []).filter((m) => m.is_enabled !== false)
+  const models = (data?.models ?? []).filter(isModelEnabled)
   const visionModels = models.filter((m) => m.is_vision)
   const displayModels = visionModels.length > 0 ? visionModels : models
 

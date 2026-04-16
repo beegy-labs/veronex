@@ -1,7 +1,9 @@
 'use client'
 
-import { useRef, useState, useCallback } from 'react'
-import { Send, Square, ImagePlus, X, Loader2, AlertTriangle } from 'lucide-react'
+import { memo } from 'react'
+import { useImageDrop } from '@/hooks/use-image-drop'
+import { ImageAttachButton } from './image-attach-button'
+import { Send, Square, X, Loader2, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
@@ -83,7 +85,7 @@ interface ApiTestFormProps {
   onStop: () => void
 }
 
-export function ApiTestForm({
+export const ApiTestForm = memo(function ApiTestForm({
   mode, providerType, model, prompt,
   images, maxImages, isCompressing, conversationTokenEstimate, modelContextWindows,
   availableOptions, availableModels, isGeminiProvider,
@@ -96,47 +98,13 @@ export function ApiTestForm({
 }: ApiTestFormProps) {
   const { t } = useTranslation()
   const { labSettings } = useLabSettings()
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [isDragging, setIsDragging] = useState(false)
 
   const multiturnWarnings = (mode === 'conversation' && model && labSettings)
     ? getMultiturnWarnings(model, labSettings, conversationTokenEstimate, modelContextWindows)
     : []
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    if (e.target.files && e.target.files.length > 0) {
-      onImageAdd(e.target.files)
-    }
-    // Reset so the same file can be re-selected
-    e.target.value = ''
-  }
-
   const canAddMore = images.length < maxImages && !isGeminiProvider && maxImages > 0
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    if (canAddMore) setIsDragging(true)
-  }, [canAddMore])
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-  }, [])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-    if (!canAddMore) return
-    const files = e.dataTransfer.files
-    if (files.length > 0) {
-      const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'))
-      if (imageFiles.length > 0) {
-        const dt = new DataTransfer()
-        imageFiles.forEach((f) => dt.items.add(f))
-        onImageAdd(dt.files)
-      }
-    }
-  }, [canAddMore, onImageAdd])
+  const { isDragging, handleDragOver, handleDragLeave, handleDrop } = useImageDrop(canAddMore, onImageAdd)
 
   return (
     <form
@@ -196,7 +164,7 @@ export function ApiTestForm({
             </SelectTrigger>
             <SelectContent>
               {availableModels.map((m) => (
-                <SelectItem key={m} value={m}>{m}</SelectItem>
+                <SelectItem key={m} value={m} className="text-xs font-mono">{m}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -236,11 +204,11 @@ export function ApiTestForm({
         >
           <SelectTrigger id="test-endpoint" aria-label={t('test.endpoint')}><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="/v1/chat/completions">/v1/chat/completions</SelectItem>
+            <SelectItem value="/v1/chat/completions" className="text-xs font-mono">/v1/chat/completions</SelectItem>
             {!isGeminiProvider && (
               <>
-                <SelectItem value="/api/chat">/api/chat</SelectItem>
-                <SelectItem value="/api/generate">/api/generate</SelectItem>
+                <SelectItem value="/api/chat" className="text-xs font-mono">/api/chat</SelectItem>
+                <SelectItem value="/api/generate" className="text-xs font-mono">/api/generate</SelectItem>
               </>
             )}
             {isGeminiProvider && (
@@ -342,31 +310,11 @@ export function ApiTestForm({
               </Button>
             )}
             {!isGeminiProvider && (
-              <>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={handleFileChange}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  disabled={!canAddMore || isCompressing}
-                  aria-label={t('test.imageAttach')}
-                  title={t('test.imageAttach')}
-                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {isCompressing
-                    ? <Loader2 className="h-4 w-4 animate-spin" />
-                    : <ImagePlus className="h-4 w-4" />
-                  }
-                </Button>
-              </>
+              <ImageAttachButton
+                canAddMore={canAddMore}
+                isCompressing={isCompressing}
+                onImageAdd={onImageAdd}
+              />
             )}
           </div>
         </div>
@@ -380,4 +328,4 @@ export function ApiTestForm({
       )}
     </form>
   )
-}
+})
