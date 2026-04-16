@@ -312,6 +312,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   }, [])
 
   // ── Conversation handler ──────────────────────────────────────────────────────
+  const activeConvSession = conversationSessions.find((s) => s.id === activeConvSessionId) ?? null
+
   const executeConversationTurn = useCallback(async () => {
     if ((!prompt.trim() && images.length === 0) || !model) return
     if (!isLoggedIn()) return
@@ -637,7 +639,6 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     })
   }, [executeRun])
 
-  const activeConvSession = conversationSessions.find((s) => s.id === activeConvSessionId) ?? null
   const conversationTokenEstimate = activeConvSession
     ? activeConvSession.messages
         .filter((m) => m.role !== 'system')
