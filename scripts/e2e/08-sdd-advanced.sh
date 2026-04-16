@@ -403,7 +403,7 @@ esac
 # Verify thermal auto-detection per gpu_vendor
 # AMD providers use CPU thresholds (75/82/90°C), NVIDIA use GPU (80/88/93°C)
 # Check that providers have gpu_vendor info in DB
-GPU_VENDORS=$(pg_query "SELECT s.name, s.gpu_vendor FROM gpu_servers s JOIN llm_providers p ON p.server_id = s.id WHERE p.is_active = true;" || echo "")
+GPU_VENDORS=$(pg_query "SELECT s.name, s.gpu_vendor FROM gpu_servers s JOIN llm_providers p ON p.server_id = s.id;" || echo "")
 if [ -n "$GPU_VENDORS" ]; then
   info "GPU vendors: $GPU_VENDORS"
   pass "Per-provider thermal thresholds configured via gpu_vendor auto-detection"
@@ -419,7 +419,7 @@ fi
 # §3: gpu_vendor -> thermal threshold auto-detection
 # AMD APU: normal_below=75, soft_at=82, hard_at=90 (CPU profile)
 # NVIDIA:  normal_below=80, soft_at=88, hard_at=93 (GPU profile)
-GPU_THRESHOLD_CHECK=$(pg_query "SELECT s.name, s.gpu_vendor, CASE WHEN s.gpu_vendor = 'nvidia' THEN 'GPU(80/88/93)' ELSE 'CPU(75/82/90)' END AS expected_profile FROM gpu_servers s JOIN llm_providers p ON p.server_id = s.id WHERE p.is_active = true;" || echo "")
+GPU_THRESHOLD_CHECK=$(pg_query "SELECT s.name, s.gpu_vendor, CASE WHEN s.gpu_vendor = 'nvidia' THEN 'GPU(80/88/93)' ELSE 'CPU(75/82/90)' END AS expected_profile FROM gpu_servers s JOIN llm_providers p ON p.server_id = s.id;" || echo "")
 if [ -n "$GPU_THRESHOLD_CHECK" ]; then
   info "GPU vendor -> thermal profile mapping:"
   echo "$GPU_THRESHOLD_CHECK" | while IFS='|' read -r sname vendor profile; do
