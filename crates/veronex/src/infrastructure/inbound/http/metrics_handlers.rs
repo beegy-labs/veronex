@@ -74,7 +74,7 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
     };
 
     for p in providers {
-        if p.provider_type != ProviderType::Ollama || !p.is_active {
+        if p.provider_type != ProviderType::Ollama {
             continue;
         }
         let mut labels = HashMap::new();

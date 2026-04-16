@@ -10,7 +10,7 @@ use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::domain::services::encryption::{decrypt_or_legacy, encrypt};
 
 /// Column list shared by all SELECT queries on llm_providers.
-const PROVIDER_COLS: &str = "id, name, provider_type, url, api_key_encrypted, is_active, total_vram_mb, gpu_index, server_id, is_free_tier, num_parallel, status, registered_at";
+const PROVIDER_COLS: &str = "id, name, provider_type, url, api_key_encrypted, total_vram_mb, gpu_index, server_id, is_free_tier, num_parallel, status, registered_at";
 
 pub struct PostgresProviderRegistry {
     pool: PgPool,
@@ -48,7 +48,6 @@ fn row_to_provider(row: &sqlx::postgres::PgRow, master_key: &[u8; 32]) -> Result
     let provider_type_str: String = row.try_get("provider_type").context("provider_type")?;
     let url: String = row.try_get("url").context("url")?;
     let api_key_raw: Option<String> = row.try_get("api_key_encrypted").context("api_key_encrypted")?;
-    let is_active: bool = row.try_get("is_active").context("is_active")?;
     let total_vram_mb: i64 = row.try_get("total_vram_mb").context("total_vram_mb")?;
     let gpu_index: Option<i16> = row.try_get("gpu_index").context("gpu_index")?;
     let server_id: Option<Uuid> = row.try_get("server_id").context("server_id")?;
@@ -71,7 +70,6 @@ fn row_to_provider(row: &sqlx::postgres::PgRow, master_key: &[u8; 32]) -> Result
         provider_type: provider_type_str.parse::<ProviderType>().map_err(|e| anyhow::anyhow!(e))?,
         url,
         api_key_encrypted,
-        is_active,
         total_vram_mb,
         gpu_index,
         server_id,
@@ -119,17 +117,16 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
 
         sqlx::query(
             "INSERT INTO llm_providers
-                 (id, name, provider_type, url, api_key_encrypted, is_active,
+                 (id, name, provider_type, url, api_key_encrypted,
                   total_vram_mb, gpu_index, server_id,
                   is_free_tier, num_parallel, status, registered_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(provider.id)
         .bind(&provider.name)
         .bind(provider.provider_type.as_str())
         .bind(&provider.url)
         .bind(&encrypted_key)
-        .bind(provider.is_active)
         .bind(provider.total_vram_mb)
         .bind(provider.gpu_index)
         .bind(provider.server_id)
@@ -145,7 +142,7 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
     }
 
     async fn list_active(&self) -> Result<Vec<LlmProvider>> {
-        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers WHERE is_active = true AND status = 'online' ORDER BY registered_at ASC LIMIT 10000");
+        let sql = format!("SELECT {PROVIDER_COLS} FROM llm_providers WHERE status = 'online' ORDER BY registered_at ASC LIMIT 10000");
         let rows = sqlx::query(&sql)
         .fetch_all(&self.pool)
         .await
@@ -220,12 +217,12 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         Ok(())
     }
 
-    async fn deactivate(&self, id: Uuid) -> Result<()> {
-        sqlx::query("UPDATE llm_providers SET is_active = false WHERE id = $1")
+    async fn delete(&self, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM llm_providers WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await
-            .context("failed to deactivate provider")?;
+            .context("failed to delete provider")?;
 
         Ok(())
     }
@@ -282,9 +279,8 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
                  gpu_index = $5,
                  server_id = $6,
                  is_free_tier = $7,
-                 num_parallel = $8,
-                 is_active = $9
-             WHERE id = $10",
+                 num_parallel = $8
+             WHERE id = $9",
         )
         .bind(&provider.name)
         .bind(&provider.url)
@@ -294,7 +290,6 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .bind(provider.server_id)
         .bind(provider.is_free_tier)
         .bind(provider.num_parallel)
-        .bind(provider.is_active)
         .bind(provider.id)
         .execute(&self.pool)
         .await

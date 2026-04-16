@@ -297,12 +297,17 @@ async fn leader_sweep(valkey: &Pool, pg: &PgPool) -> anyhow::Result<()> {
         return Ok(()); // Another agent is leader this cycle.
     }
 
-    // Find orphan jobs: running/pending for inactive providers, older than 5 minutes.
+    // Find orphan jobs: RUNNING jobs whose provider was hard-deleted
+    // (FK ON DELETE SET NULL clears provider_id), older than 5 minutes.
+    //
+    // NOTE: pending jobs always have provider_id=NULL before dispatch — they
+    // are NOT orphans. Only running jobs are expected to have a non-NULL
+    // provider_id, so a NULL here means the provider was deleted mid-run.
     let result = sqlx::query(
         "UPDATE inference_jobs SET status = 'failed', failure_reason = 'server_crash', \
          completed_at = NOW() \
-         WHERE status IN ('pending', 'running') \
-         AND provider_id NOT IN (SELECT id FROM llm_providers WHERE is_active = true) \
+         WHERE status = 'running' \
+         AND provider_id IS NULL \
          AND created_at < NOW() - INTERVAL '5 minutes'",
     )
     .execute(pg)

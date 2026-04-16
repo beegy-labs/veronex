@@ -1,7 +1,30 @@
 -- ============================================================
 -- Veronex complete database schema (consolidated init)
--- Last updated: 2026-04-06
+-- Last updated: 2026-04-16
 -- ============================================================
+
+-- ── Idempotent schema migrations ─────────────────────────────────────────────
+-- Applied before CREATE TABLE statements below. On fresh installs every ALTER
+-- is a no-op (nothing to alter); on existing DBs these transition the schema
+-- so subsequent CREATE TABLE statements error out (table already exists) and
+-- psql (without ON_ERROR_STOP) continues past them, leaving the migrated
+-- schema in place.
+DROP INDEX IF EXISTS idx_llm_providers_is_active;
+ALTER TABLE IF EXISTS llm_providers DROP COLUMN IF EXISTS is_active;
+ALTER TABLE IF EXISTS gpu_servers ADD COLUMN IF NOT EXISTS gpu_vendor VARCHAR(32) NOT NULL DEFAULT '';
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.referential_constraints
+         WHERE constraint_name = 'inference_jobs_provider_id_fkey'
+           AND delete_rule != 'SET NULL'
+    ) THEN
+        ALTER TABLE inference_jobs DROP CONSTRAINT inference_jobs_provider_id_fkey;
+        ALTER TABLE inference_jobs
+            ADD CONSTRAINT inference_jobs_provider_id_fkey
+            FOREIGN KEY (provider_id) REFERENCES llm_providers(id) ON DELETE SET NULL;
+    END IF;
+END$$;
 
 -- ── Accounts ──────────────────────────────────────────────────────────────────
 
@@ -92,7 +115,6 @@ CREATE TABLE llm_providers (
     provider_type     VARCHAR(32) NOT NULL,
     url               TEXT        NOT NULL DEFAULT '',
     api_key_encrypted TEXT,
-    is_active         BOOLEAN     NOT NULL DEFAULT true,
     total_vram_mb     BIGINT      NOT NULL DEFAULT 0,
     status            VARCHAR(32) NOT NULL DEFAULT 'offline',
     registered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -102,7 +124,6 @@ CREATE TABLE llm_providers (
     num_parallel      SMALLINT    NOT NULL DEFAULT 4
 );
 
-CREATE INDEX idx_llm_providers_is_active ON llm_providers(is_active);
 CREATE INDEX idx_llm_providers_status    ON llm_providers(status);
 CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
 
@@ -150,7 +171,7 @@ CREATE TABLE inference_jobs (
     cached_tokens        INTEGER,
     source               VARCHAR(8)  NOT NULL DEFAULT 'api',
     account_id           UUID        REFERENCES accounts(id),
-    provider_id          UUID        REFERENCES llm_providers(id),
+    provider_id          UUID        REFERENCES llm_providers(id) ON DELETE SET NULL,
     api_format           TEXT        NOT NULL DEFAULT 'openai_compat',
     request_path         TEXT,
     conversation_id      UUID        REFERENCES conversations(id) ON DELETE SET NULL,

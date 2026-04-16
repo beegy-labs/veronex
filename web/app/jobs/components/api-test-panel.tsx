@@ -70,13 +70,13 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   const availableOptions = useMemo((): ProviderOption[] => {
     if (!providers) return [{ value: 'ollama', label: t('jobs.providerOllama'), isGemini: false }]
     const opts: ProviderOption[] = []
-    if (providers.some((b) => b.is_active && b.provider_type === PROVIDER_OLLAMA)) {
+    if (providers.some((b) => b.provider_type === PROVIDER_OLLAMA)) {
       opts.push({ value: 'ollama', label: t('jobs.providerOllama'), isGemini: false })
     }
-    if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
+    if (geminiEnabled && providers.some((b) => b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
       opts.push({ value: 'gemini-free', label: t('test.geminiFree'), isGemini: true })
     }
-    if (geminiEnabled && providers.some((b) => b.is_active && b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
+    if (geminiEnabled && providers.some((b) => b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
       opts.push({ value: 'gemini', label: t('test.gemini'), isGemini: true })
     }
     return opts.length > 0 ? opts : [{ value: 'ollama', label: t('jobs.providerOllama'), isGemini: false }]

@@ -167,7 +167,7 @@ pub async fn analyze_images_for_context(
     let providers = provider_registry.list_all().await.ok()?;
     let ollama_urls: Vec<String> = providers
         .into_iter()
-        .filter(|p| p.is_active && p.provider_type == crate::domain::enums::ProviderType::Ollama)
+        .filter(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama)
         .map(|p| p.url)
         .collect();
 
