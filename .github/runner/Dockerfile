@@ -17,10 +17,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Without the binary on PATH, `cargo nextest run` (and any cargo invocation
 # in PR Validation) fails with "sccache rustc -vV never executed (os error 2)".
 # Pre-bake into the runner image so jobs don't pay install latency.
+# Arch-aware so the same Dockerfile builds on amd64 CI runners and arm64 hosts.
 ARG SCCACHE_VERSION=0.8.2
-RUN curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+ARG TARGETARCH
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) SCCACHE_ARCH=x86_64 ;; \
+      arm64) SCCACHE_ARCH=aarch64 ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}-unknown-linux-musl.tar.gz" \
       | tar -xz -C /tmp && \
-    mv "/tmp/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/bin/ && \
+    mv "/tmp/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}-unknown-linux-musl/sccache" /usr/local/bin/ && \
     chmod +x /usr/local/bin/sccache
 
 # Rust stable (pre-baked so CI jobs skip rustup download)
