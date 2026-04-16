@@ -43,7 +43,6 @@ pub struct LlmProvider {
   pub provider_type: ProviderType,       // Ollama | Gemini
   pub url: String,                       // "http://host:11434" (Ollama) | "" (Gemini)
   pub api_key_encrypted: Option<String>,
-  pub is_active: bool,
   pub total_vram_mb: i64,               // 0 = unlimited
   pub gpu_index: Option<i16>,           // 0-based GPU index on host
   pub server_id: Option<Uuid>,          // FK -> gpu_servers (Gemini = NULL)
@@ -63,7 +62,6 @@ CREATE TABLE llm_providers (
   provider_type     VARCHAR(32)  NOT NULL,   -- 'ollama' | 'gemini'
   url               TEXT         NOT NULL DEFAULT '',
   api_key_encrypted TEXT,
-  is_active         BOOLEAN      NOT NULL DEFAULT true,
   total_vram_mb     BIGINT       NOT NULL DEFAULT 0,
   gpu_index         SMALLINT,
   server_id         UUID REFERENCES gpu_servers(id) ON DELETE SET NULL,
@@ -83,7 +81,7 @@ CREATE TABLE llm_providers (
 POST   /v1/providers                   RegisterProviderRequest -> RegisterProviderResponse
 GET    /v1/providers                   -> Vec<ProviderSummary>
 PATCH  /v1/providers/{id}             UpdateProviderRequest -> 200
-DELETE /v1/providers/{id}             -> 204
+DELETE /v1/providers/{id}             -> 204 (hard delete; inference_jobs.provider_id SET NULL)
 POST   /v1/providers/{id}/sync          -> { status, models_synced, vram_updated }
        Unified: health check + model sync + VRAM probe (Ollama only)
 
@@ -136,7 +134,6 @@ pub struct UpdateProviderRequest {
   pub total_vram_mb: Option<i64>,
   pub gpu_index: Option<Option<i16>>,   // Some(None) -> clears FK
   pub server_id: Option<Option<Uuid>>,  // Some(None) -> clears FK
-  pub is_active: Option<bool>,
   pub is_free_tier: Option<bool>,
 }
 ```
@@ -150,7 +147,7 @@ SQL for PATCH: `COALESCE($3, api_key_encrypted)` preserves existing key when `ap
 `CachingProviderRegistry` wraps `PostgresProviderRegistry` with a 5-second TTL in-memory cache. This prevents hundreds of Postgres queries/second from `queue_dispatcher_loop` calling `list_all()` on every job dequeue.
 
 - **`list_all()`**: shared read lock fast path; write lock + DB query on miss. Double-checked locking prevents thundering herd.
-- **Mutating methods** (`register`, `update_status`, `update`, `deactivate`): forward to inner + invalidate cache.
+- **Mutating methods** (`register`, `update_status`, `update`, `delete`): forward to inner + invalidate cache.
 - **Read-only methods** (`list_active`, `get`): forward directly (called infrequently, no cache needed).
 
 → Automatic allocation flow: `ollama-allocation.md`

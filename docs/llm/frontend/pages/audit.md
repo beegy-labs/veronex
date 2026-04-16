@@ -81,7 +81,7 @@ Response: `AuditEvent[]`. Current page requests `limit=200`, `offset=0`. Filters
 | `resource_id` | `string` | |
 | `resource_name` | `string` | Falls back to `resource_id` when empty |
 | `ip_address` | `string` | Shown as `'--'` when empty |
-| `details` | `string` | |
+| `details` | `string` | For update events, includes old→new deltas: e.g. `"name: 'old' → 'new', url: 'http://a' → 'http://b'"`. Delete events include the removed resource's URL. |
 
 ## TanStack Query Config
 
