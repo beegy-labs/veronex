@@ -269,6 +269,7 @@ pub fn ollama_model_ctx(provider_id: Uuid, model_name: &str) -> String {
     format!("{}veronex:ollama:ctx:{provider_id}:{model_name}", p())
 }
 
+
 // ── MCP tool cache ───────────────────────────────────────────────────────────
 
 /// Cached tool schema for a single MCP server (JSON-serialized `Vec<McpTool>`).
