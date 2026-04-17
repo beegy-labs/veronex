@@ -448,16 +448,18 @@ async fn ollama_chat_proxy(
     let images = {
         let mut imgs = req.images.unwrap_or_default();
         imgs.append(&mut content_images);
-        // For single-turn requests (no conversation_id), also pick up per-message images from the
-        // last user message so that a message-format image payload (images field in the message)
-        // is forwarded correctly to the Ollama adapter.
-        if conversation_id.is_none() {
-            if let Some(last_user) = ollama_messages.iter().rev()
-                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-            {
-                if let Some(arr) = last_user.get("images").and_then(|v| v.as_array()) {
-                    imgs.extend(arr.iter().filter_map(|v| v.as_str().map(String::from)));
-                }
+        // Pick up per-message images from the LATEST user message in this turn —
+        // this is what the frontend actually sends (images attached to the message
+        // currently being submitted). Older turns' images are ignored: the frontend
+        // strips them from history, and Ollama does not retain images across turns
+        // anyway (the assistant's prior analysis already captures image context
+        // as text). Runs for every turn including multi-turn conversations so that
+        // non-vision models always get a chance at vision fallback.
+        if let Some(last_user) = ollama_messages.iter().rev()
+            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+        {
+            if let Some(arr) = last_user.get("images").and_then(|v| v.as_array()) {
+                imgs.extend(arr.iter().filter_map(|v| v.as_str().map(String::from)));
             }
         }
         if imgs.is_empty() { None } else { Some(imgs) }
