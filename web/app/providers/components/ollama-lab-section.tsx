@@ -1,11 +1,10 @@
 'use client'
 
 import { useState, useOptimistic, startTransition } from 'react'
-import { FlaskConical } from 'lucide-react'
+import { Sliders } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { Badge } from '@/components/ui/badge'
 import { useTranslation } from '@/i18n'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { VisionModelSelector } from '@/components/vision-model-selector'
@@ -42,11 +41,8 @@ export function OllamaLabSection() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <FlaskConical className="h-4 w-4 text-accent-power" />
+        <Sliders className="h-4 w-4 text-accent-gpu" />
         <h2 className="text-base font-semibold text-text-bright">{t('providers.ollama.labTitle')}</h2>
-        <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-status-warning/15 text-status-warning-fg border-status-warning/30 uppercase">
-          Lab
-        </Badge>
       </div>
       <p className="text-xs text-muted-foreground">{t('providers.ollama.labDesc')}</p>
 
