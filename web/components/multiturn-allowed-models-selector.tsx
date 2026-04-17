@@ -1,14 +1,12 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import { ollamaModelsQuery } from '@/lib/queries/providers'
 import { useTranslation } from '@/i18n'
-import { isModelEnabled } from '@/lib/models'
+import { useEnabledOllamaModels } from '@/hooks/use-enabled-ollama-models'
 
 interface Props {
   selected: string[]
@@ -28,8 +26,7 @@ export function MultiturnAllowedModelsSelector({
 }: Props) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
-  const { data, isLoading } = useQuery(ollamaModelsQuery({ limit: 200 }))
-  const models = useMemo(() => (data?.models ?? []).filter(isModelEnabled), [data])
+  const { models, isLoading } = useEnabledOllamaModels()
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()

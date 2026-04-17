@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useMemo, useEffect, useRef, useOptimistic } from 'react'
+import { useState, useEffect, useRef, useOptimistic } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { OllamaSyncJob } from '@/lib/types'
-import { ollamaSyncStatusQuery, ollamaModelsQuery, globalModelSettingsQuery } from '@/lib/queries'
+import { ollamaSyncStatusQuery, ollamaModelsQuery } from '@/lib/queries'
+import { useGlobalDisabledSet } from '@/hooks/use-enabled-ollama-models'
 import { withJitter } from '@/lib/constants'
 import { RotateCcw, Search, Cpu, Server, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -64,12 +65,10 @@ export function OllamaSyncSection() {
 
   const { data: ollamaModelsData } = useQuery(ollamaModelsQuery({ search: debouncedSearch, page, limit: MODEL_LIMIT }))
 
-  const { data: globalSettings } = useQuery(globalModelSettingsQuery)
-
-  const globalDisabledSet = useMemo(
-    () => new Set<string>((globalSettings ?? []).filter(s => !s.is_enabled).map(s => s.model_name)),
-    [globalSettings]
-  )
+  // This section is where operators *manage* the global disable set, so it must
+  // still show disabled models (with a "disabled" badge). Re-uses the shared
+  // derivation so the list stays consistent with every picker.
+  const { disabledSet: globalDisabledSet } = useGlobalDisabledSet()
 
   const canManageModels = hasPermission('model_manage')
 

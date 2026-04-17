@@ -1,12 +1,10 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { ollamaModelsQuery } from '@/lib/queries/providers'
 import { useTranslation } from '@/i18n'
-import { isModelEnabled } from '@/lib/models'
+import { useEnabledOllamaModels } from '@/hooks/use-enabled-ollama-models'
 
 interface CompressionModelSelectorProps {
   value: string | null
@@ -16,8 +14,7 @@ interface CompressionModelSelectorProps {
 
 export function CompressionModelSelector({ value, onChange, disabled }: CompressionModelSelectorProps) {
   const { t } = useTranslation()
-  const { data } = useQuery(ollamaModelsQuery({ limit: 200 }))
-  const models = (data?.models ?? []).filter(isModelEnabled)
+  const { models } = useEnabledOllamaModels()
 
   return (
     <Select
