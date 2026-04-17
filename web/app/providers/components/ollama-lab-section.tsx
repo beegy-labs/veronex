@@ -1,62 +1,20 @@
 'use client'
 
-import { useState, useEffect, useOptimistic, startTransition } from 'react'
+import { useState, useOptimistic, startTransition } from 'react'
 import { FlaskConical } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useTranslation } from '@/i18n'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { VisionModelSelector } from '@/components/vision-model-selector'
 import { CompressionModelSelector } from '@/components/compression-model-selector'
+import { MultiturnAllowedModelsSelector } from '@/components/multiturn-allowed-models-selector'
 import { DEFAULT_MAX_IMAGES, MAX_IMAGES_LIMIT } from '@/lib/constants'
 import { api } from '@/lib/api'
-import type { LabSettings } from '@/lib/types'
 
-function AllowedModelsInput({ labSettings, labLoading, setLabLoading, refetchLabSettings }: {
-  labSettings: LabSettings | null
-  labLoading: boolean
-  setLabLoading: (v: boolean) => void
-  refetchLabSettings: () => void
-}) {
-  const { t } = useTranslation()
-  const [val, setVal] = useState((labSettings?.multiturn_allowed_models ?? []).join(', '))
-  const [dirty, setDirty] = useState(false)
-  useEffect(() => {
-    setVal((labSettings?.multiturn_allowed_models ?? []).join(', '))
-    setDirty(false)
-  }, [labSettings?.multiturn_allowed_models])
-
-  async function save() {
-    setLabLoading(true)
-    try {
-      const models = val.split(',').map(s => s.trim()).filter(Boolean)
-      await api.patchLabSettings({ multiturn_allowed_models: models })
-      await refetchLabSettings()
-      setDirty(false)
-    } catch { } finally { setLabLoading(false) }
-  }
-
-  return (
-    <div className="flex gap-1.5">
-      <Input
-        className="h-8 text-xs flex-1 font-mono"
-        placeholder={t('common.labAllowedModelsPlaceholder')}
-        value={val}
-        disabled={labLoading || labSettings === null}
-        onChange={(e) => { setVal(e.target.value); setDirty(true) }}
-        onKeyDown={(e) => { if (e.key === 'Enter' && dirty) save() }}
-      />
-      {dirty && (
-        <Button size="sm" className="h-8 text-xs px-3" onClick={save} disabled={labLoading}>
-          {t('common.save')}
-        </Button>
-      )}
-    </div>
-  )
-}
+const BYTES_PER_MB = 1024 * 1024
 
 export function OllamaLabSection() {
   const { t } = useTranslation()
@@ -68,6 +26,18 @@ export function OllamaLabSection() {
   const [optHandoffEnabled, setOptHandoffEnabled] = useOptimistic(
     labSettings?.handoff_enabled ?? false
   )
+
+  async function patch<K extends keyof import('@/lib/types').PatchLabSettings>(
+    key: K, value: import('@/lib/types').PatchLabSettings[K],
+  ) {
+    setLabLoading(true)
+    try {
+      await api.patchLabSettings({ [key]: value } as import('@/lib/types').PatchLabSettings)
+      await refetchLabSettings()
+    } catch { } finally { setLabLoading(false) }
+  }
+
+  const disabled = labLoading || labSettings === null
 
   return (
     <div className="space-y-4">
@@ -85,41 +55,48 @@ export function OllamaLabSection() {
         <CardContent className="p-4 space-y-4">
           <h3 className="text-sm font-semibold">{t('providers.ollama.labImageSection')}</h3>
 
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium">{t('common.maxImagesPerRequest')}</p>
-              <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{t('common.maxImagesPerRequestDesc')}</p>
-            </div>
+          <Row
+            label={t('common.maxImagesPerRequest')}
+            desc={t('common.maxImagesPerRequestDesc')}
+          >
             <Input
-              type="number"
-              min={0}
-              max={MAX_IMAGES_LIMIT}
+              type="number" min={0} max={MAX_IMAGES_LIMIT}
               className="w-24 h-8 text-xs text-center"
               value={labSettings?.max_images_per_request ?? DEFAULT_MAX_IMAGES}
-              disabled={labLoading || labSettings === null}
-              onChange={async (e) => {
-                const val = parseInt(e.target.value, 10)
-                if (isNaN(val) || val < 0 || val > MAX_IMAGES_LIMIT) return
-                setLabLoading(true)
-                try {
-                  await api.patchLabSettings({ max_images_per_request: val })
-                  await refetchLabSettings()
-                } catch { } finally { setLabLoading(false) }
+              disabled={disabled}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10)
+                if (isNaN(v) || v < 0 || v > MAX_IMAGES_LIMIT) return
+                patch('max_images_per_request', v)
               }}
             />
-          </div>
+          </Row>
+
+          <Row
+            label={t('providers.ollama.labMaxImageBytes')}
+            desc={t('providers.ollama.labMaxImageBytesDesc')}
+            suffix="MB"
+          >
+            <Input
+              type="number" min={0.1} max={32} step={0.1}
+              className="w-24 h-8 text-xs text-center"
+              value={((labSettings?.max_image_b64_bytes ?? 2 * BYTES_PER_MB) / BYTES_PER_MB).toFixed(1)}
+              disabled={disabled}
+              onChange={(e) => {
+                const mb = parseFloat(e.target.value)
+                if (isNaN(mb) || mb <= 0 || mb > 32) return
+                patch('max_image_b64_bytes', Math.round(mb * BYTES_PER_MB))
+              }}
+            />
+          </Row>
 
           <div className="space-y-1.5">
             <p className="text-xs font-medium">{t('common.labVisionModel')}</p>
             <p className="text-[11px] text-muted-foreground leading-snug">{t('common.labVisionModelDesc')}</p>
             <VisionModelSelector
               value={labSettings?.vision_model ?? null}
-              disabled={labLoading || labSettings === null}
-              onChange={async (v) => {
-                setLabLoading(true)
-                try { await api.patchLabSettings({ vision_model: v }); await refetchLabSettings() }
-                catch { } finally { setLabLoading(false) }
-              }}
+              disabled={disabled}
+              onChange={(v) => patch('vision_model', v)}
             />
           </div>
         </CardContent>
@@ -130,69 +107,128 @@ export function OllamaLabSection() {
         <CardContent className="p-4 space-y-4">
           <h3 className="text-sm font-semibold">{t('common.labCompression')}</h3>
 
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-medium">{t('common.labCompressionEnabled')}</p>
+          <Row label={t('common.labCompressionEnabled')}>
             <Switch
               checked={optCompressionEnabled}
-              disabled={labLoading || labSettings === null}
+              disabled={disabled}
               onCheckedChange={(checked) => {
                 startTransition(async () => {
                   setOptCompressionEnabled(checked)
-                  setLabLoading(true)
-                  try { await api.patchLabSettings({ context_compression_enabled: checked }); await refetchLabSettings() }
-                  catch { } finally { setLabLoading(false) }
+                  await patch('context_compression_enabled', checked)
                 })
               }}
             />
-          </div>
+          </Row>
 
           <div className="space-y-1.5">
             <p className="text-xs font-medium">{t('common.labCompressionModel')}</p>
+            <p className="text-[11px] text-muted-foreground leading-snug">{t('providers.ollama.labCompressionModelDesc')}</p>
             <CompressionModelSelector
               value={labSettings?.compression_model ?? null}
-              disabled={labLoading || labSettings === null}
-              onChange={async (v) => {
-                setLabLoading(true)
-                try { await api.patchLabSettings({ compression_model: v }); await refetchLabSettings() }
-                catch { } finally { setLabLoading(false) }
-              }}
+              disabled={disabled}
+              onChange={(v) => patch('compression_model', v)}
             />
           </div>
 
-          <div className="flex items-center justify-between gap-3 pt-2 border-t border-border/50">
-            <p className="text-xs font-medium">{t('common.labHandoffEnabled')}</p>
-            <Switch
-              checked={optHandoffEnabled}
-              disabled={labLoading || labSettings === null}
-              onCheckedChange={(checked) => {
-                startTransition(async () => {
-                  setOptHandoffEnabled(checked)
-                  setLabLoading(true)
-                  try { await api.patchLabSettings({ handoff_enabled: checked }); await refetchLabSettings() }
-                  catch { } finally { setLabLoading(false) }
-                })
-              }}
-            />
-          </div>
-
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-medium">{t('common.labHandoffThreshold')}</p>
+          <Row
+            label={t('providers.ollama.labContextBudgetRatio')}
+            desc={t('providers.ollama.labContextBudgetRatioDesc')}
+          >
             <Input
-              type="number"
-              min={0.1}
-              max={1}
-              step={0.05}
+              type="number" min={0.1} max={1} step={0.05}
               className="w-24 h-8 text-xs text-center"
-              value={labSettings?.handoff_threshold ?? 0.8}
-              disabled={labLoading || labSettings === null}
-              onChange={async (e) => {
+              value={labSettings?.context_budget_ratio ?? 0.6}
+              disabled={disabled}
+              onChange={(e) => {
                 const v = parseFloat(e.target.value)
                 if (isNaN(v) || v < 0.1 || v > 1) return
-                setLabLoading(true)
-                try { await api.patchLabSettings({ handoff_threshold: v }); await refetchLabSettings() }
-                catch { } finally { setLabLoading(false) }
+                patch('context_budget_ratio', v)
               }}
             />
+          </Row>
+
+          <Row
+            label={t('providers.ollama.labCompressionTriggerTurns')}
+            desc={t('providers.ollama.labCompressionTriggerTurnsDesc')}
+          >
+            <Input
+              type="number" min={1} max={20}
+              className="w-24 h-8 text-xs text-center"
+              value={labSettings?.compression_trigger_turns ?? 1}
+              disabled={disabled}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10)
+                if (isNaN(v) || v < 1 || v > 20) return
+                patch('compression_trigger_turns', v)
+              }}
+            />
+          </Row>
+
+          <Row
+            label={t('providers.ollama.labRecentVerbatim')}
+            desc={t('providers.ollama.labRecentVerbatimDesc')}
+          >
+            <Input
+              type="number" min={0} max={20}
+              className="w-24 h-8 text-xs text-center"
+              value={labSettings?.recent_verbatim_window ?? 1}
+              disabled={disabled}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10)
+                if (isNaN(v) || v < 0 || v > 20) return
+                patch('recent_verbatim_window', v)
+              }}
+            />
+          </Row>
+
+          <Row
+            label={t('providers.ollama.labCompressionTimeout')}
+            desc={t('providers.ollama.labCompressionTimeoutDesc')}
+            suffix="s"
+          >
+            <Input
+              type="number" min={1} max={300}
+              className="w-24 h-8 text-xs text-center"
+              value={labSettings?.compression_timeout_secs ?? 10}
+              disabled={disabled}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10)
+                if (isNaN(v) || v < 1 || v > 300) return
+                patch('compression_timeout_secs', v)
+              }}
+            />
+          </Row>
+
+          <div className="pt-3 border-t border-border/50 space-y-4">
+            <Row label={t('common.labHandoffEnabled')}>
+              <Switch
+                checked={optHandoffEnabled}
+                disabled={disabled}
+                onCheckedChange={(checked) => {
+                  startTransition(async () => {
+                    setOptHandoffEnabled(checked)
+                    await patch('handoff_enabled', checked)
+                  })
+                }}
+              />
+            </Row>
+
+            <Row
+              label={t('common.labHandoffThreshold')}
+              desc={t('providers.ollama.labHandoffThresholdDesc')}
+            >
+              <Input
+                type="number" min={0.1} max={1} step={0.05}
+                className="w-24 h-8 text-xs text-center"
+                value={labSettings?.handoff_threshold ?? 0.85}
+                disabled={disabled}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value)
+                  if (isNaN(v) || v < 0.1 || v > 1) return
+                  patch('handoff_threshold', v)
+                }}
+              />
+            </Row>
           </div>
         </CardContent>
       </Card>
@@ -202,55 +238,74 @@ export function OllamaLabSection() {
         <CardContent className="p-4 space-y-4">
           <h3 className="text-sm font-semibold">{t('common.labMultiturnReqs')}</h3>
 
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-medium">{t('common.labMultiturnMinParams')}</p>
+          <Row
+            label={t('common.labMultiturnMinParams')}
+            desc={t('providers.ollama.labMultiturnMinParamsDesc')}
+            suffix="B"
+          >
             <Input
-              type="number"
-              min={0}
-              max={1000}
+              type="number" min={0} max={1000}
               className="w-24 h-8 text-xs text-center"
               value={labSettings?.multiturn_min_params ?? 7}
-              disabled={labLoading || labSettings === null}
-              onChange={async (e) => {
-                const val = parseInt(e.target.value, 10)
-                if (isNaN(val) || val < 0) return
-                setLabLoading(true)
-                try { await api.patchLabSettings({ multiturn_min_params: val }); await refetchLabSettings() }
-                catch { } finally { setLabLoading(false) }
+              disabled={disabled}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10)
+                if (isNaN(v) || v < 0) return
+                patch('multiturn_min_params', v)
               }}
             />
-          </div>
+          </Row>
 
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-medium">{t('common.labMultiturnMinCtx')}</p>
+          <Row
+            label={t('common.labMultiturnMinCtx')}
+            desc={t('providers.ollama.labMultiturnMinCtxDesc')}
+          >
             <Input
-              type="number"
-              min={0}
+              type="number" min={0}
               className="w-28 h-8 text-xs text-center"
               value={labSettings?.multiturn_min_ctx ?? 16384}
-              disabled={labLoading || labSettings === null}
-              onChange={async (e) => {
-                const val = parseInt(e.target.value, 10)
-                if (isNaN(val) || val < 0) return
-                setLabLoading(true)
-                try { await api.patchLabSettings({ multiturn_min_ctx: val }); await refetchLabSettings() }
-                catch { } finally { setLabLoading(false) }
+              disabled={disabled}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10)
+                if (isNaN(v) || v < 0) return
+                patch('multiturn_min_ctx', v)
               }}
             />
-          </div>
+          </Row>
 
           <div className="space-y-1.5">
             <p className="text-xs font-medium">{t('common.labMultiturnAllowedModels')}</p>
-            <p className="text-[11px] text-muted-foreground leading-snug">{t('common.labMultiturnAllowedModelsDesc')}</p>
-            <AllowedModelsInput
-              labSettings={labSettings}
-              labLoading={labLoading}
-              setLabLoading={setLabLoading}
-              refetchLabSettings={refetchLabSettings}
+            <p className="text-[11px] text-muted-foreground leading-snug">{t('providers.ollama.labMultiturnAllowedModelsDesc')}</p>
+            <MultiturnAllowedModelsSelector
+              selected={labSettings?.multiturn_allowed_models ?? []}
+              disabled={disabled}
+              minParams={labSettings?.multiturn_min_params}
+              minCtx={labSettings?.multiturn_min_ctx}
+              onChange={(next) => patch('multiturn_allowed_models', next)}
             />
           </div>
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+function Row({ label, desc, suffix, children }: {
+  label: string
+  desc?: string
+  suffix?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-medium">{label}</p>
+        {desc && <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{desc}</p>}
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        {children}
+        {suffix && <span className="text-[11px] text-muted-foreground">{suffix}</span>}
+      </div>
     </div>
   )
 }
