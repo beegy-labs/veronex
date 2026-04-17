@@ -137,7 +137,7 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `tools` | `Option<Value>` | in-memory only during dispatch, not persisted |
 | `has_tool_calls` | `bool` | `TRUE` when model emitted tool/function calls — lightweight flag for list view |
 | `api_key_id` | `Option<Uuid>` | FK → api_keys (ON DELETE SET NULL) |
-| `provider_id` | `Option<Uuid>` | FK → llm_providers, set at dispatch time |
+| `provider_id` | `Option<Uuid>` | FK → llm_providers (ON DELETE SET NULL), set at dispatch time |
 | `conversation_id` | `Option<String>` | X-Conversation-ID header; see `session-grouping.md` |
 | `latency_ms` | `Option<i32>` | `started_at` → `completed_at` (excludes queue wait) |
 | `ttft_ms` | `Option<i32>` | Time To First Token |

@@ -74,6 +74,11 @@ $INFRA_OK && pass "All infrastructure services running"
 # Verify required MinIO buckets exist. Missing buckets surface as
 # "service error" in the API's S3 calls (put_object / get_object),
 # blocking conversation persistence and MCP history fetch.
+# The `minio` container has `mc` preinstalled but no alias set; configure
+# one using the root credentials baked into the compose env.
+MC_USER="${MINIO_ROOT_USER:-veronex}"
+MC_PASS="${MINIO_ROOT_PASSWORD:-veronex123}"
+docker compose exec -T minio sh -c "mc alias set local http://localhost:9000 $MC_USER $MC_PASS" >/dev/null 2>&1 || true
 for bkt in veronex-messages veronex-images; do
   if docker compose exec -T minio mc ls "local/$bkt" >/dev/null 2>&1; then
     pass "MinIO bucket '$bkt' exists"

@@ -245,7 +245,7 @@ if [ -n "$AIMD_FINAL" ]; then
   # max_concurrent가 num_parallel 미만이면 AIMD가 실제로 학습해 하향 조정한 것
   NP_MAX=$(aget "/v1/providers" 2>/dev/null | python3 -c "
 import sys,json; p=json.load(sys.stdin).get('providers',[])
-nps=[x.get('num_parallel',4) for x in p if x.get('is_active')]
+nps=[x.get('num_parallel',4) for x in p]
 print(max(nps) if nps else 4)
 " 2>/dev/null || echo "4")
   AIMD_MC=$(aget "/v1/dashboard/capacity" 2>/dev/null | python3 -c "
