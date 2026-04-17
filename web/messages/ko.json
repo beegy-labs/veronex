@@ -484,7 +484,10 @@
       "networkError": "API 서버에 연결할 수 없습니다 — 네트워크를 확인하세요",
       "unreachableError": "Ollama 서버에 연결할 수 없습니다 — URL과 포트를 확인하세요",
       "duplicateUrl": "이미 등록된 URL입니다",
-      "verifyFirst": "등록 전 연결을 확인하세요"
+      "verifyFirst": "등록 전 연결을 확인하세요",
+      "labTitle": "Ollama Lab",
+      "labDesc": "Ollama 경로에만 적용되는 실험 기능 (비전 폴백, 컨텍스트 압축, 멀티턴 요건).",
+      "labImageSection": "이미지 입력"
     },
     "capacity": {
       "title": "동시성 제어",
