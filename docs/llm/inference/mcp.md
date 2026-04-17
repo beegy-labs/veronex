@@ -108,8 +108,9 @@ embedding   = 1024-dim float32 (multilingual-e5-large via veronex-embed)
 A single Vespa instance serves multiple environments (prod, dev, local-dev) simultaneously. Each environment writes and reads under its own `environment` partition:
 
 ```
-YQL: where environment = "prod" and tenant_id = "default"
+YQL: where environment contains "prod" and tenant_id contains "default"
      and ({targetHits: K}nearestNeighbor(embedding, qe))
+Note: string attributes use `contains`, not `=` (= is for numeric fields).
 ```
 
 `environment` and `tenant_id` are injected via env vars:

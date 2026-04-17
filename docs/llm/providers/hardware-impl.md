@@ -39,7 +39,7 @@ GPU vendor is inferred from **DRM metric presence** — amdgpu kernel driver exp
 | DRM GPU metrics present (`node_drm_*`) | `"amd"` | CPU (75/82/90°C) — covers AMD discrete + Ryzen AI APU |
 | No DRM GPU metrics | `""` (empty) | CPU (default) |
 
-The `gpu_vendor` field is set in `health_checker` (not from sysfs vendor IDs), cached in Valkey (`HwMetrics`), and used to call `thermal.set_thresholds()` every 30s cycle.
+The `gpu_vendor` field is set by `run_server_metrics_loop` — an independent background loop that iterates `gpu_servers` directly (not via providers). This loop caches `NodeMetrics` in Valkey per server and persists `gpu_vendor` to DB. Server liveness is decoupled from provider routing state, so the Servers page shows live metrics even when no provider is linked.
 
 **Note**: NVIDIA GPU thermal profile (`GPU`: 80/88/93°C) is defined but currently unreachable — NVIDIA does not expose DRM metrics via node-exporter. NVIDIA support requires nvidia-smi integration (future).
 
