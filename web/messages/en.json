@@ -484,7 +484,10 @@
       "networkError": "Cannot reach the API server — check your network",
       "unreachableError": "Ollama server is unreachable — verify the URL and port",
       "duplicateUrl": "This URL is already registered",
-      "verifyFirst": "Verify connection before registering"
+      "verifyFirst": "Verify connection before registering",
+      "labTitle": "Ollama Lab",
+      "labDesc": "Experimental features that only apply to the Ollama path (vision fallback, context compression, multi-turn gates).",
+      "labImageSection": "Image Input"
     },
     "capacity": {
       "title": "Concurrency Control",

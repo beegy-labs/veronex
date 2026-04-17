@@ -34,6 +34,7 @@ import { extractHost, StatusBadge } from './shared'
 import { OllamaProviderModelsModal } from './modals'
 import type { Provider } from '@/lib/types'
 import { PAGE_SIZE, OllamaSyncSection, OllamaCapacitySection } from './ollama-sections'
+import { OllamaLabSection } from './ollama-lab-section'
 
 // ── Tab: Ollama providers ───────────────────────────────────────────────────────
 
@@ -59,15 +60,16 @@ export function OllamaTab({
   const { t } = useTranslation()
 
   // Persist active sub-tab via URL hash
-  const [activeTab, setActiveTab] = useState<'providers' | 'capacity'>(() => {
+  const [activeTab, setActiveTab] = useState<'providers' | 'capacity' | 'lab'>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.slice(1)
       if (hash === 'capacity') return 'capacity'
+      if (hash === 'lab') return 'lab'
     }
     return 'providers'
   })
   const handleTabChange = useCallback((v: string) => {
-    const tab = v as 'providers' | 'capacity'
+    const tab = v as 'providers' | 'capacity' | 'lab'
     setActiveTab(tab)
     window.history.replaceState(null, '', tab === 'providers' ? window.location.pathname + window.location.search : `#${tab}`)
   }, [])
@@ -78,6 +80,7 @@ export function OllamaTab({
         <TabsList>
           <TabsTrigger value="providers">{t('nav.ollama')}</TabsTrigger>
           <TabsTrigger value="capacity">{t('nav.capacity')}</TabsTrigger>
+          <TabsTrigger value="lab">{t('providers.ollama.labTitle')}</TabsTrigger>
         </TabsList>
 
         {/* ── 프로바이더 목록 탭 ────────────────────────────────────────────────── */}
@@ -97,6 +100,11 @@ export function OllamaTab({
         {/* ── 동시성 제어 탭 ────────────────────────────────────────────────────── */}
         <TabsContent value="capacity" className="mt-6">
           <OllamaCapacitySection />
+        </TabsContent>
+
+        {/* ── Ollama Lab 탭 ────────────────────────────────────────────────────── */}
+        <TabsContent value="lab" className="mt-6">
+          <OllamaLabSection />
         </TabsContent>
       </Tabs>
     </div>
