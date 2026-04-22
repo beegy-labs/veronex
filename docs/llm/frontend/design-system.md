@@ -100,9 +100,11 @@ Token flow for new tokens: Layer 1 -> Layer 2 -> Layer 0 -> Layer 3.
 
 | Policy | Rule |
 |--------|------|
+| Color — single source | All colors in `web/app/tokens.css`. Change = Layer 1 (palette) + Layer 2 (semantic) only. Touching `.tsx` to change a color = policy violation |
 | Color — inline style | Use `tokens.*` from `web/lib/design-tokens.ts` — never raw `'var(--theme-*)'` strings |
-| Color — Tailwind class | Use semantic utilities: `bg-status-success`, `text-status-warning-fg` — never `gray-*`/`slate-*` |
+| Color — Tailwind class | Use semantic utilities: `bg-status-success`, `text-status-warning-fg` — never `gray-*`/`slate-*`/`emerald-*`/`zinc-*` raw scales or `bg-[#123]` arbitrary values |
 | Color — hardcoded hex | Zero tolerance in TSX. Exception: `redoc-wrapper.tsx` (3rd-party theme API) |
+| Dark mode selector | `[data-theme='dark'], .dark` dual selector (shadcn/third-party compatibility) |
 | Token names | `status-warning` / `status-warning-fg` — NOT `status-warn` |
 | SVG / Recharts | `fill={tokens.*}` (JSX expression) — never `fill="var(--theme-*)"` string attribute |
 | Headings | `text-2xl font-bold tracking-tight` |
