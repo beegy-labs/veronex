@@ -1,9 +1,10 @@
 # Code Patterns: Rust -- 2026 Reference
 
-> SSOT | **Last Updated**: 2026-04-07 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Last code-review audit: 2026-04-07 — 6 rounds, confirmed clean.
-> Rust Edition 2024 · Axum 0.8 · sqlx 0.8
+> Rust Edition 2024 · tokio 1.47 LTS (pin) · Axum 0.8 · sqlx 0.8 · OpenTelemetry 0.31
 > Frontend patterns -> `policies/patterns-frontend.md`
+> Rust test patterns -> `policies/testing-strategy.md § Rust Testing Trophy`
 
 ## Axum 0.8 Handler Signature
 
@@ -41,7 +42,7 @@ pub async fn delete_thing(
 
 → Full ID encoding policy: `policies/id-encoding.md`
 
-## AppError (thiserror v2)
+## AppError (thiserror v2) + Problem Details (RFC 9457)
 
 `thiserror` errors + `IntoResponse` impl; handlers use `?`.
 Full definition: `infrastructure/inbound/http/error.rs`
@@ -62,6 +63,51 @@ pub enum AppError {
   Internal(anyhow::Error), // 500
 }
 ```
+
+### Error Crate Allocation (strict boundaries)
+
+| Location | Crate | Rule |
+|----------|-------|------|
+| Domain layer | `thiserror` domain enums only | No `anyhow`; errors are part of the contract |
+| Application layer | `thiserror` use-case enums | Map from repository errors into domain-speak |
+| Infrastructure adapters | `anyhow::Result` internal | Convert to `AppError` only at the inbound HTTP edge |
+| `main.rs` / `bootstrap.rs` | `anyhow::Result` | Top-level startup / signal handling |
+
+Never import `anyhow` into `domain/` or `application/`. Never expose `anyhow::Error` from a public API boundary.
+
+### Problem Details Response Body (RFC 9457)
+
+All 4xx and 5xx responses serialize to `application/problem+json`:
+
+```rust
+#[derive(serde::Serialize)]
+struct ProblemDetails<'a> {
+    #[serde(rename = "type")] typ: &'a str,    // URI — defaults to "about:blank"
+    title: &'a str,                            // short, stable summary
+    status: u16,
+    detail: Option<String>,                    // human-readable, safe to show
+    instance: Option<String>,                  // request-specific, e.g. trace id
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, title, detail) = match &self { /* ... */ };
+        let body = ProblemDetails {
+            typ: "about:blank",
+            title,
+            status: status.as_u16(),
+            detail: Some(detail),
+            instance: tracing::Span::current().field("trace_id").map(String::from),
+        };
+        (status, [(CONTENT_TYPE, "application/problem+json")], Json(body)).into_response()
+    }
+}
+```
+
+Rules:
+- `detail` must never contain internal paths, SQL fragments, or upstream error messages. Sanitize.
+- `instance` carries the current trace id when tracing is active — makes client-reported bugs traceable to spans.
+- `Internal(anyhow::Error)` maps to `title: "Internal Server Error"` with a generic `detail`. Log the full chain via `tracing::error!`.
 
 ## sqlx -- Compile-Time SQL
 
@@ -119,15 +165,73 @@ pub trait ApiKeyRepository: Send + Sync {
 
 ## tracing + OpenTelemetry
 
+Minimum: OpenTelemetry Rust ≥ 0.30 (Metrics SDK graduated stable at 0.30). Current codebase runs **0.31**. All `opentelemetry*` crates use the **same minor version** — mixed-version pins cause runtime type mismatches.
+
+### Workspace Version Rule
+
+```toml
+# [workspace.dependencies]  — bump all four together when upgrading
+opentelemetry           = "0.31"
+opentelemetry_sdk       = "0.31"
+opentelemetry-otlp      = { version = "0.31", features = ["grpc-tonic", "tls-roots"] }
+tracing-opentelemetry   = "0.32"   # matches OTel 0.31 at time of writing
+```
+
+Upgrade rule: bump all four on the same PR, verify exporters still connect, and update this doc with the new minor.
+
+### Span Naming — OTel Semantic Convention
+
+| Span kind | Name format | Example |
+|-----------|-------------|---------|
+| HTTP server | `{METHOD} {route_template}` | `POST /v1/providers` |
+| HTTP client | `{METHOD}` + attribute `http.url` | `POST` with `http.url="http://ollama/api/chat"` |
+| DB query | `{operation} {table}` | `SELECT llm_providers` |
+| Message queue | `{op} {destination}` | `publish otel-metrics` |
+
+Use literal route templates (`{id}` placeholder), never concrete values — prevents high-cardinality span names.
+
+### Handler Instrumentation
+
 ```rust
-#[instrument(skip(state), fields(provider_id = %id))]
+#[instrument(
+    skip(state),
+    fields(provider_id = %id, http.route = "/v1/providers/:id"),
+    name = "GET /v1/providers/:id",
+)]
 pub async fn get_provider(
   State(state): State<AppState>, Path(id): Path<Uuid>,
 ) -> Result<Json<ProviderSummary>, AppError> { ... }
-// Propagate span into spawned tasks
+```
+
+### Span Propagation into Spawned Tasks
+
+```rust
 let span = tracing::info_span!("run_job", job_id = %job_id);
 tokio::spawn(async move { run_job(state, job_id).await }.instrument(span));
 ```
+
+Spawned tasks without `.instrument(span)` lose trace context → appear as orphan spans in the backend. **Every `tokio::spawn` in a request handler MUST propagate a span**.
+
+### Resource Attributes (required on every service)
+
+```rust
+Resource::new([
+    KeyValue::new("service.name",           env!("CARGO_PKG_NAME")),
+    KeyValue::new("service.version",        env!("CARGO_PKG_VERSION")),
+    KeyValue::new("deployment.environment", env::var("DEPLOY_ENV").unwrap_or_else(|_| "dev".into())),
+])
+```
+
+### Metric Instrument Selection
+
+| Instrument | Use |
+|------------|-----|
+| `Counter<u64>` | Monotonic rates — requests, errors, tokens emitted |
+| `UpDownCounter<i64>` | In-flight gauges — active connections, queue depth |
+| `Histogram<f64>` | Latency, size distributions (request/response bytes) |
+| `Gauge<f64>` (async) | Periodically-sampled values — VRAM used, temp |
+
+Never use `Counter` for a value that can decrease. Never use `Histogram` for a single value that should be a gauge.
 
 ## Mutex Rules — `std` vs `tokio`
 
@@ -321,6 +425,43 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 | `GEMINI_HEALTH_TIMEOUT` | 10s | Gemini API key validation |
 | `NODE_EXPORTER_METRICS_TIMEOUT` | 5s | node-exporter metrics scrape |
 
+## Tower Layer Order — `ServiceBuilder` SSOT
+
+All routers compose layers via `tower::ServiceBuilder` in this exact order. Top executes first on the request path.
+
+```rust
+use tower::ServiceBuilder;
+use tower_http::{
+    trace::TraceLayer,
+    catch_panic::CatchPanicLayer,
+    timeout::TimeoutLayer,
+    cors::CorsLayer,
+    compression::CompressionLayer,
+    decompression::RequestDecompressionLayer,
+    sensitive_headers::SetSensitiveRequestHeadersLayer,
+};
+
+Router::new()
+    .route("/v1/providers", post(create_provider))
+    .layer(
+        ServiceBuilder::new()
+            .layer(SetSensitiveRequestHeadersLayer::from_shared(SENSITIVE.into())) // 1. redact before logging
+            .layer(TraceLayer::new_for_http())                                     // 2. start span after redaction
+            .layer(CatchPanicLayer::new())                                         // 3. convert panics to 500
+            .layer(TimeoutLayer::new(JWT_ROUTER_TIMEOUT))                          // 4. cap total duration
+            .layer(CorsLayer::permissive())                                        // 5. preflight first-class
+            .layer(RequestDecompressionLayer::new())                               // 6. decompress request body
+            .layer(CompressionLayer::new())                                        // 7. compress response body
+            // 8+. auth / rate-limit / per-key concurrency
+    );
+```
+
+Invariants:
+- `SetSensitiveRequestHeadersLayer` MUST precede `TraceLayer` — logs otherwise leak Authorization.
+- `TimeoutLayer` MUST precede auth — unauthenticated slow senders should not hold handler slots.
+- Never use `axum::middleware::from_fn` when a tower layer exists — `from_fn` clones the handler's `AppState` per request.
+- Streaming routes (SSE, chunked) live in a separate `Router` without `TimeoutLayer` (see next section).
+
 ## TimeoutLayer — `tower_http` over `tower`
 
 Use `tower_http::timeout::TimeoutLayer` (returns `408 Request Timeout` automatically) instead of `tower::timeout::TimeoutLayer` (requires a `HandleErrorLayer` wrapper).
@@ -404,6 +545,33 @@ if current >= MAX { counter.fetch_sub(1, Ordering::Relaxed); return 429; }
 let _guard = InFlightGuard { counter: counter.clone() };
 ```
 Use `Semaphore::try_acquire_owned()` — the permit is the guard; no custom RAII needed.
+
+## tokio — LTS Pin + Manual Runtime Builder
+
+Pin to **tokio 1.47** (LTS until 2026-09; next LTS 1.52 EOL 2027-09). Never use `#[tokio::main]` in production binaries — tune the runtime explicitly:
+
+```toml
+# Cargo.toml
+tokio = { version = "~1.47", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+```
+
+```rust
+// main.rs
+fn main() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(num_cpus::get())
+        .max_blocking_threads(512)             // blocks: sqlx fallback, tracing-appender, DNS
+        .thread_name("veronex-worker")
+        .enable_all()
+        .build()?;
+    rt.block_on(async_main())
+}
+```
+
+Rules:
+- Always provide `thread_name` — observability tools group by thread name.
+- `max_blocking_threads` sized for the sum of pool backlogs (DB + blocking FS + DNS).
+- Never call `.block_on()` from an async context — use `tokio::task::block_in_place` only at adapter edges.
 
 ## Background Tasks -- JoinSet + CancellationToken
 
