@@ -1,6 +1,6 @@
 # Code Patterns: Frontend — 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-26 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Next.js 16 · React 19 · TanStack Query v5 · Tailwind v4 · Zod
 > Rust patterns -> `policies/patterns.md`
 
@@ -431,6 +431,7 @@ If a color change requires touching `.tsx`, the policy has been violated somewhe
 | SVG fill/stroke | `fill={tokens.status.info}` (JSX expression) | `fill="var(--theme-status-info)"` string |
 | Chart gradient stopColor | `stopColor={tokens.brand.primary}` | `stopColor="var(--theme-primary)"` |
 | Recharts fill/stroke | `fill={tokens.status.success}` | `fill="var(--theme-status-success)"` |
+| 3rd-party CSS overrides | Dedicated `.css` file (e.g. `swagger-overrides.css`) + `import './swagger-overrides.css'` | Inline `<style>{`...`}</style>` blocks in `.tsx` |
 
 ### `tokens` module structure (`web/lib/design-tokens.ts`)
 
