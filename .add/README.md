@@ -1,6 +1,6 @@
 # ADD — Workflow Index
 
-> ADD (Agent Decision Document) | **Last Updated**: 2026-03-28
+> ADD (Agent Decision Document) | **Last Updated**: 2026-04-22
 > Execution workflows for Claude Code. CDD = `docs/llm/` | SDD = `.specs/`
 
 ## Trigger → Workflow Map
@@ -9,6 +9,7 @@
 |---------|----------|
 | Code review, optimization, review of files | [`code-review.md`](code-review.md) |
 | Frontend-only review | [`frontend-review.md`](frontend-review.md) |
+| Writing/updating a frontend test (any layer) | [`frontend-test.md`](frontend-test.md) |
 | New feature / SDD spec active | [`feature-addition.md`](feature-addition.md) |
 | Refactor requested / structural issue | [`refactor.md`](refactor.md) |
 | Bug report / test failure | [`bug-fix.md`](bug-fix.md) |
@@ -19,7 +20,7 @@
 | CDD feedback after task completion | → see [`best-practices.md`](best-practices.md) Part 1 |
 | Commit message CI failure | [`commit-fix.md`](commit-fix.md) |
 | Security review / OWASP audit | [`best-practices.md`](best-practices.md) Part 4 |
-| E2E test suite execution | [`e2e-test.md`](e2e-test.md) |
+| Backend / infrastructure E2E suite execution | [`e2e-test.md`](e2e-test.md) |
 | Uncertainty / ambiguous requirements | [`escalation.md`](escalation.md) |
 
 ## Shared Constants (referenced by all workflows)
@@ -44,7 +45,9 @@ No O(N) DB scans, sequential awaits, or unbounded memory growth at these scales.
 | Rust lint | `cargo clippy --all-targets` | Before commit |
 | Rust tests | `cargo nextest run --workspace` | Before commit |
 | Frontend compile | `npx tsc --noEmit` | After every TSX/TS change |
-| Frontend unit | `npx vitest run` | Before commit |
+| Frontend unit (jsdom) | `npx vitest run --project unit` | Before commit |
+| Frontend component (browser) | `npx vitest run --project component` | Before commit when touching components |
+| Frontend integration (API) | `npx vitest run --project integration` | Before commit when touching API/schemas |
 | Frontend E2E | `npx playwright test` | Before PR |
 
 ### CDD Sync Routing
@@ -77,6 +80,7 @@ Quick reference:
 | `escalation.md` | Decision table — escalate vs. proceed |
 | `code-review.md` | Full review workflow (Rust + frontend), P1/P2/P3 severity definitions |
 | `frontend-review.md` | Frontend-only review scope, parallel agent structure (Reuse/Quality/Efficiency) |
+| `frontend-test.md` | Frontend Testing Trophy (5-Layer) — layer selection + behavior-driven rules |
 | `feature-addition.md` | New feature workflow (also covers `implementation.md` triggers) |
 | `implementation.md` | Redirect → `feature-addition.md` |
 | `refactor.md` | Structural refactor workflow |

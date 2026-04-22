@@ -32,7 +32,8 @@ User requests a new frontend page, feature, or domain UI.
 | 8 | Add nav entry to `web/components/nav.tsx` if needed |
 | 9 | Add i18n keys: `en.json` → `ko.json` → `ja.json` simultaneously |
 | 10 | Run `npx tsc --noEmit` — zero errors |
-| 11 | Run frontend review: `.add/frontend-review.md` |
+| 11 | Write tests per `.add/frontend-test.md` — pick layer via checklist; never duplicate across layers |
+| 12 | Run frontend review: `.add/frontend-review.md` |
 
 ## Rules
 
