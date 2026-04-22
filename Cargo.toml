@@ -25,6 +25,7 @@ incremental = false
 
 [profile.ci]
 inherits = "release"
-lto = "thin"
-codegen-units = 4
+lto = false
+codegen-units = 16
 incremental = false
+strip = true
