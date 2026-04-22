@@ -27,7 +27,7 @@ concurrency:
 jobs:
   build:
     name: Build Embed
-    runs-on: veronex-runner-set
+    runs-on: rust-runners
     timeout-minutes: 60
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
@@ -118,7 +118,7 @@ jobs:
     name: Update GitOps
     needs: build
     if: needs.build.outputs.skipped != 'true' && github.ref_name == 'develop'
-    runs-on: veronex-runner-set
+    runs-on: rust-runners
     steps:
       - uses: actions/checkout@v4
         with:
