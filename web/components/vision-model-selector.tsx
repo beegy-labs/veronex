@@ -1,12 +1,10 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import { ollamaModelsQuery } from '@/lib/queries/providers'
 import { useTranslation } from '@/i18n'
-import { isModelEnabled } from '@/lib/models'
+import { useEnabledOllamaModels } from '@/hooks/use-enabled-ollama-models'
 
 interface VisionModelSelectorProps {
   value: string | null
@@ -16,9 +14,8 @@ interface VisionModelSelectorProps {
 
 export function VisionModelSelector({ value, onChange, disabled }: VisionModelSelectorProps) {
   const { t } = useTranslation()
-  const { data } = useQuery(ollamaModelsQuery({ limit: 200 }))
-  // Show all models but mark vision-capable ones; fallback to all if none have is_vision flag
-  const models = (data?.models ?? []).filter(isModelEnabled)
+  const { models } = useEnabledOllamaModels()
+  // Prefer vision-capable models; if metadata unavailable, fall back to the full list.
   const visionModels = models.filter((m) => m.is_vision)
   const displayModels = visionModels.length > 0 ? visionModels : models
 

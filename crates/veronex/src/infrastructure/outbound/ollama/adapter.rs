@@ -54,6 +54,7 @@ async fn lookup_ctx(pool: &fred::clients::Pool, provider_id: uuid::Uuid, model: 
         .map(|n| n as u32)
 }
 
+
 impl OllamaAdapter {
     #[allow(clippy::expect_used)]
     pub fn new(base_url: impl Into<String>) -> Self {
@@ -151,7 +152,6 @@ impl InferenceProviderPort for OllamaAdapter {
                 "model":   job.model_name.as_str(),
                 "prompt":  job.prompt.as_str(),
                 "stream":  false,
-                "think":   false,
                 "options": options,
             }))
             .send()
@@ -237,7 +237,6 @@ impl OllamaAdapter {
                 "model":   model,
                 "prompt":  prompt,
                 "stream":  true,
-                "think":   false,
                 "options": options,
             });
             if let Some(imgs) = images {
@@ -408,18 +407,13 @@ impl OllamaAdapter {
                 messages
             };
 
-            // Reasoning models (e.g. qwen3) require `think: true` to deliberate about
-            // which tool to call. With `think: false` the model stops after emitting a
-            // few tokens without producing `tool_calls` — observable as empty responses.
-            // The runner's `<think>…</think>` filter strips thinking blocks from SSE
-            // output, so end users never see the internal reasoning.
-            // Non-tool requests keep `think: false` for faster direct answers.
-            let think = tools.is_some();
+            // MCP ReAct is provider-agnostic: we forward `tools` and collect
+            // `tool_calls`. Ollama-specific reasoning/thinking switches belong
+            // to Ollama's own model templates — we don't set `think` here.
             let mut body = serde_json::json!({
                 "model":    model,
                 "messages": messages,
                 "stream":   true,
-                "think":    think,
                 "options":  options,
             });
 

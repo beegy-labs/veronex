@@ -388,6 +388,40 @@ if [ -n "$LAB_GEMINI" ] && [ "$LAB_GEMINI" != "None" ]; then
   pass "Lab toggle gemini_function_calling + revert OK"
 fi
 
+# Policy field round-trips (PATCH → GET → verify persistence → revert)
+# new_val and original are JSON-valid strings (quoted if string, bare if number/bool/array).
+assert_lab_roundtrip() {
+  local field="$1"; local new_val="$2"; local parse_expr="$3"
+  local original=$(aget "/v1/dashboard/lab" 2>/dev/null | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+print(json.dumps(d.get('$field')))
+" 2>/dev/null || echo "null")
+  apatch "/v1/dashboard/lab" "{\"$field\":$new_val}" > /dev/null 2>&1
+  local got=$(aget "/v1/dashboard/lab" 2>/dev/null | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+$parse_expr
+" 2>/dev/null || echo "")
+  apatch "/v1/dashboard/lab" "{\"$field\":$original}" > /dev/null 2>&1
+  [ "$got" = "ok" ] && pass "Lab field $field round-trip" || fail "Lab field $field round-trip (got: '$got')"
+}
+
+assert_lab_roundtrip "max_image_b64_bytes" "524288" \
+  "print('ok' if d.get('max_image_b64_bytes') == 524288 else d.get('max_image_b64_bytes'))"
+assert_lab_roundtrip "context_budget_ratio" "0.42" \
+  "v = d.get('context_budget_ratio'); print('ok' if v is not None and abs(v - 0.42) < 0.001 else v)"
+assert_lab_roundtrip "compression_trigger_turns" "3" \
+  "print('ok' if d.get('compression_trigger_turns') == 3 else d.get('compression_trigger_turns'))"
+assert_lab_roundtrip "recent_verbatim_window" "2" \
+  "print('ok' if d.get('recent_verbatim_window') == 2 else d.get('recent_verbatim_window'))"
+assert_lab_roundtrip "compression_timeout_secs" "17" \
+  "print('ok' if d.get('compression_timeout_secs') == 17 else d.get('compression_timeout_secs'))"
+assert_lab_roundtrip "multiturn_allowed_models" '["test-model-a","test-model-b"]' \
+  "v = d.get('multiturn_allowed_models', []); print('ok' if v == ['test-model-a','test-model-b'] else v)"
+assert_lab_roundtrip "vision_model" '"qwen3-vl:8b"' \
+  "print('ok' if d.get('vision_model') == 'qwen3-vl:8b' else d.get('vision_model'))"
+
 
 # Per-key usage
 KEY_LIST=$(aget "/v1/keys" 2>/dev/null || echo '{"keys":[]}')
