@@ -3,14 +3,14 @@
 import { useState, useRef, useEffect, useReducer, useMemo, useCallback, useEffectEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { isLoggedIn, getAuthUser } from '@/lib/auth'
-import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery, globalModelSettingsQuery } from '@/lib/queries/providers'
+import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
 import type { RetryParams, ConversationDetail } from '@/lib/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { BASE } from '@/lib/api'
 import { compressImage } from '@/lib/compress-image'
 import { PROVIDER_OLLAMA, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
-import { isModelEnabled } from '@/lib/models'
+import { useEnabledOllamaModels } from '@/hooks/use-enabled-ollama-models'
 import { iterSseLines } from '@/lib/sse'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import type { OpenAIChunk, Run, ProviderOption, Endpoint, ConversationMessage, ConversationSession, TestMode } from './api-test-types'
@@ -132,10 +132,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     enabled: isGeminiProvider,
   })
 
-  const { data: globalModelSettings } = useQuery({
-    ...globalModelSettingsQuery,
-    enabled: !isGeminiProvider,
-  })
+  const { models: enabledOllamaModels } = useEnabledOllamaModels()
 
   const modelContextWindows = useMemo<Record<string, number>>(() => {
     if (isGeminiProvider) return {}
@@ -148,12 +145,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
 
   const availableModels = useMemo(() => {
     if (!isGeminiProvider) {
-      const disabledSet = new Set(
-        (globalModelSettings ?? []).filter((s) => !s.is_enabled).map((s) => s.model_name)
-      )
-      return (ollamaModelsData?.models ?? [])
-        .filter((m) => isModelEnabled(m) && !disabledSet.has(m.model_name))
-        .map((m) => m.model_name)
+      return enabledOllamaModels.map((m) => m.model_name)
     }
     const allModels = geminiModelsData?.models.map((m) => m.model_name) ?? []
     if (providerType !== "gemini-free") return allModels
@@ -161,7 +153,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       (geminiPolicies ?? []).filter((p) => p.model_name !== '*').map((p) => [p.model_name, p])
     )
     return allModels.filter((name) => policyMap.get(name)?.available_on_free_tier === true)
-  }, [isGeminiProvider, providerType, geminiModelsData, geminiPolicies, ollamaModelsData?.models, globalModelSettings])
+  }, [isGeminiProvider, providerType, geminiModelsData, geminiPolicies, enabledOllamaModels])
 
   useEffect(() => {
     if (availableModels.length > 0 && !availableModels.includes(model)) {

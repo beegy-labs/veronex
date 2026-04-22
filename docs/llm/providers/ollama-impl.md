@@ -72,7 +72,7 @@ This per-request override ensures each model uses its natural context window reg
 
 Request:
 ```json
-{ "model": "qwen3:8b", "prompt": "...", "stream": true, "think": false, "options": {"num_ctx": 32768} }
+{ "model": "qwen3:8b", "prompt": "...", "stream": true, "options": {"num_ctx": 32768} }
 ```
 
 Response struct:
@@ -101,7 +101,6 @@ Request:
     {"role": "user",   "content": "..."}
   ],
   "stream": true,
-  "think": false,
   "options": {"num_ctx": 32768}
 }
 ```
@@ -109,7 +108,7 @@ Request:
 Response struct:
 ```rust
 struct ChatChunk {
-  message: Option<ChatChunkMessage>,  // { content: Option<String> }
+  message: Option<ChatChunkMessage>,  // { content: Option<String>, tool_calls: Option<Value> }
   done: bool,
   done_reason: Option<String>,
   prompt_eval_count: Option<u32>,
@@ -119,33 +118,24 @@ struct ChatChunk {
 
 ---
 
-## `think: false`
-
-Disables extended thinking (qwen3 and similar). Without it, thinking tokens (`<think>...</think>`) inflate `eval_count` and appear in the token stream. Non-thinking models silently ignore the field.
-
----
-
 ## `done_reason: "load"` Handling
 
 When Ollama first loads a model into VRAM it emits an intermediate chunk with `done_reason: "load"`. Both `stream_generate()` and `stream_chat()` skip these chunks and keep reading. Without this fix, the stream terminates prematurely with empty output.
 
 ---
 
-## Think Mode (Tool-Calling)
+## Think Parameter — Not Used
 
-`stream_chat()` sends `think: tools.is_some()`:
-- **Tools present** → `think: true`. Reasoning models (qwen3) need to deliberate
-  about which tool to call. With `think: false` the model stops prematurely (~28 tokens)
-  without emitting `tool_calls`. The runner's `<think>…</think>` filter strips
-  thinking blocks from SSE output so end users never see internal reasoning.
-- **No tools** → `think: false`. Faster direct answers, no extra token overhead.
+The adapter does NOT set Ollama's `think` field on any request. Reasoning /
+thinking behavior is a property of the Ollama model's own template — letting
+Ollama decide per model keeps veronex's ReAct loop provider-agnostic and
+avoids forcing a global policy that mis-fits some models
+(e.g. `qwen3-coder` rejects `think:true` with HTTP 400; `qwen3` produces
+empty output with `think:false` + large tool context).
 
-## Token Count Accuracy
-
-| Scenario | `eval_count` value |
-|----------|--------------------|
-| `think: false` (no tools) | Visible output tokens only (accurate) |
-| `think: true` (MCP tool requests) | Thinking + output tokens (inflated — thinking stripped by runner filter) |
+The runner's `<think>…</think>` filter still strips any reasoning blocks
+that models emit, so tokens counts may be inflated but the SSE content
+never leaks internal reasoning to the client.
 
 ---
 
