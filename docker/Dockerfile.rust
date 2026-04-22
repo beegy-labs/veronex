@@ -1,0 +1,129 @@
+# Unified Rust workspace build — all 6 binaries in one pass.
+# Usage: docker build --target <crate-name> -f docker/Dockerfile.rust .
+#
+# Targets: veronex, veronex-agent, veronex-mcp, veronex-embed,
+#          veronex-consumer, veronex-analytics
+
+FROM rust:1-alpine3.23 AS chef
+
+# Superset of all crate build dependencies:
+#   musl-dev mold clang        — base toolchain + fast linker
+#   g++ cmake make perl        — rdkafka native build (consumer)
+#   python3                    — OpenSSL configure (consumer)
+#   curl-dev zlib-dev zlib-static — static linking deps (consumer)
+#   protoc                     — protobuf codegen (analytics)
+#   pkg-config                 — general native dep discovery
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk add musl-dev mold clang g++ cmake make perl python3 \
+            curl-dev zlib-dev zlib-static protoc pkg-config
+
+# cargo-chef (pre-built binary — avoids 1-2min source compilation)
+ARG CARGO_CHEF_VERSION=0.1.77
+RUN wget -qO /usr/local/bin/cargo-chef \
+    "https://github.com/LukeMathWalker/cargo-chef/releases/download/v${CARGO_CHEF_VERSION}/cargo-chef-x86_64-unknown-linux-musl" \
+    && chmod +x /usr/local/bin/cargo-chef
+
+# sccache (pre-built binary)
+ARG SCCACHE_VERSION=0.8.2
+ARG TARGETARCH
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) SCCACHE_ARCH=x86_64 ;; \
+      arm64) SCCACHE_ARCH=aarch64 ;; \
+      *) echo "unsupported: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    wget -qO- "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}-unknown-linux-musl.tar.gz" \
+      | tar -xz -C /tmp \
+    && mv "/tmp/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}-unknown-linux-musl/sccache" /usr/local/bin/ \
+    && chmod +x /usr/local/bin/sccache
+
+WORKDIR /app
+
+# --- Planner: compute dependency recipe from lock file ---
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+COPY workspace-hack/ ./workspace-hack/
+RUN cargo chef prepare --recipe-path recipe.json
+
+# --- Builder: compile deps then workspace ---
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+
+# Cook workspace deps (cached by sccache + Docker layer cache)
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=secret,id=sccache_env \
+    [ -f /run/secrets/sccache_env ] && . /run/secrets/sccache_env; \
+    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
+    cargo chef cook --profile ci --workspace --recipe-path recipe.json
+
+# Copy full source
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+COPY workspace-hack/ ./workspace-hack/
+
+# Build all workspace binaries in one pass
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    --mount=type=secret,id=sccache_env \
+    [ -f /run/secrets/sccache_env ] && . /run/secrets/sccache_env; \
+    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
+    SQLX_OFFLINE=true \
+    cargo build --profile ci \
+      -p veronex \
+      -p veronex-agent \
+      -p veronex-mcp \
+      -p veronex-embed \
+      -p veronex-consumer \
+      -p veronex-analytics && \
+    # Copy binaries out of cache mount (cache mount contents don't persist in layer)
+    mkdir -p /out && \
+    cp /app/target/ci/veronex /out/ && \
+    cp /app/target/ci/veronex-agent /out/ && \
+    cp /app/target/ci/veronex-mcp /out/ && \
+    cp /app/target/ci/veronex-embed /out/ && \
+    cp /app/target/ci/veronex-consumer /out/ && \
+    cp /app/target/ci/veronex-analytics /out/ && \
+    sccache --show-stats
+
+# --- Runtime images (one per target) ---
+FROM alpine:3.23 AS veronex
+RUN --mount=type=cache,target=/var/cache/apk apk add ca-certificates
+WORKDIR /app
+COPY --from=builder /out/veronex ./
+EXPOSE 3000
+CMD ["./veronex"]
+
+FROM alpine:3.23 AS veronex-agent
+RUN --mount=type=cache,target=/var/cache/apk apk add ca-certificates
+WORKDIR /app
+COPY --from=builder /out/veronex-agent ./
+CMD ["./veronex-agent"]
+
+FROM alpine:3.23 AS veronex-mcp
+RUN --mount=type=cache,target=/var/cache/apk apk add ca-certificates
+WORKDIR /app
+COPY --from=builder /out/veronex-mcp ./
+EXPOSE 3100
+CMD ["./veronex-mcp"]
+
+FROM alpine:3.23 AS veronex-embed
+RUN --mount=type=cache,target=/var/cache/apk apk add ca-certificates
+WORKDIR /app
+COPY --from=builder /out/veronex-embed ./
+EXPOSE 3200
+CMD ["./veronex-embed"]
+
+FROM alpine:3.23 AS veronex-consumer
+RUN --mount=type=cache,target=/var/cache/apk apk add ca-certificates
+WORKDIR /app
+COPY --from=builder /out/veronex-consumer ./
+CMD ["./veronex-consumer"]
+
+FROM alpine:3.23 AS veronex-analytics
+RUN --mount=type=cache,target=/var/cache/apk apk add ca-certificates
+WORKDIR /app
+COPY --from=builder /out/veronex-analytics ./
+EXPOSE 3003
+CMD ["./veronex-analytics"]

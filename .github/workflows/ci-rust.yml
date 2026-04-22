@@ -1,13 +1,14 @@
-name: CI MCP
+name: CI Rust
 
 on:
   push:
     branches: [develop, main]
     paths:
-      - 'crates/veronex-mcp/**'
+      - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/ci-mcp.yml'
+      - 'docker/Dockerfile.rust'
+      - '.github/workflows/ci-rust.yml'
   workflow_dispatch:
     inputs:
       force_build:
@@ -18,7 +19,6 @@ on:
 
 env:
   REGISTRY: gitea.girok.dev
-  IMAGE_NAME: beegy-labs/veronex-mcp
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,9 +26,9 @@ concurrency:
 
 jobs:
   build:
-    name: Build MCP
+    name: Build Rust Workspace
     runs-on: platform-rust-runners
-    timeout-minutes: 60
+    timeout-minutes: 30
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       skipped: ${{ steps.check_image.outputs.exists }}
@@ -36,6 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+
       - name: Wait for Docker (DinD sidecar)
         run: |
           for i in $(seq 1 30); do
@@ -45,6 +46,7 @@ jobs:
           done
           echo "Docker daemon not available after 60s"
           exit 1
+
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -57,12 +59,12 @@ jobs:
         run: |
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           case "${{ github.ref_name }}" in
-            main)    TAG="${SHORT_SHA}";         TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" ;;
-            develop) TAG="develop-${SHORT_SHA}"; TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop" ;;
-            *)       TAG="develop-${SHORT_SHA}"; TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}" ;;
+            main)    TAG="${SHORT_SHA}";         PREFIX="" ;;
+            develop) TAG="develop-${SHORT_SHA}"; PREFIX="develop-" ;;
+            *)       TAG="develop-${SHORT_SHA}"; PREFIX="develop-" ;;
           esac
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "prefix=${PREFIX}" >> $GITHUB_OUTPUT
 
       - name: Check if image exists
         id: check_image
@@ -71,19 +73,16 @@ jobs:
         run: |
           if [ "${{ inputs.force_build }}" = "true" ]; then
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Force build requested, skipping image check"
             exit 0
           fi
           TAG="${{ steps.meta.outputs.tag }}"
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: token ${GITEA_TOKEN}" \
-            "https://${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex-mcp/${TAG}")
+            "https://${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex/${TAG}")
           if [ "$RESPONSE" = "200" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Image ${TAG} already exists, skipping build"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Image ${TAG} not found, proceeding with build"
           fi
 
       - name: Prepare sccache env
@@ -101,24 +100,42 @@ jobs:
             echo "export CARGO_INCREMENTAL=0"
           } > /tmp/sccache.env
 
-      - uses: docker/build-push-action@v5
+      # Build all 6 binaries in one pass, push 6 images
+      - name: Build and push all crate images
         if: steps.check_image.outputs.exists != 'true'
-        with:
-          context: .
-          file: ./crates/veronex-mcp/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-          secret-files: |
-            sccache_env=/tmp/sccache.env
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          CRATES="veronex veronex-agent veronex-mcp veronex-embed veronex-consumer veronex-analytics"
 
+          # First build: compiles everything (cached by sccache + BuildKit layers)
+          echo "::group::Building workspace (all crates)"
+          docker buildx build \
+            --file docker/Dockerfile.rust \
+            --target veronex \
+            --tag ${{ env.REGISTRY }}/beegy-labs/veronex:${TAG} \
+            --secret id=sccache_env,src=/tmp/sccache.env \
+            --push \
+            .
+          echo "::endgroup::"
+
+          # Remaining targets reuse the cached builder layer — near-instant
+          for CRATE in veronex-agent veronex-mcp veronex-embed veronex-consumer veronex-analytics; do
+            echo "::group::Pushing ${CRATE}"
+            docker buildx build \
+              --file docker/Dockerfile.rust \
+              --target ${CRATE} \
+              --tag ${{ env.REGISTRY }}/beegy-labs/${CRATE}:${TAG} \
+              --secret id=sccache_env,src=/tmp/sccache.env \
+              --push \
+              .
+            echo "::endgroup::"
+          done
 
   deploy:
     name: Update GitOps
     needs: build
     if: needs.build.outputs.skipped != 'true' && github.ref_name == 'develop'
-    runs-on: platform-rust-runners
+    runs-on: arc-runner-set
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,7 +143,7 @@ jobs:
           ref: develop
           token: ${{ secrets.GH_PAT }}
 
-      - name: Update image tag
+      - name: Update all image tags
         run: |
           TAG="${{ needs.build.outputs.tag }}"
           case "${{ github.ref_name }}" in
@@ -134,7 +151,14 @@ jobs:
             develop) FILE="clusters/home/values/veronex-dev-values.yaml" ;;
             *)       exit 0 ;;
           esac
+
+          # Update each crate's image tag
+          sed -i "/^api:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+          sed -i "/^agent:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
           sed -i "/^mcp:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+          sed -i "/^embed:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+          sed -i "/^consumer:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+          sed -i "/^analytics:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
 
       - name: Commit and push
         run: |
@@ -142,7 +166,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --quiet && exit 0
-          git commit -m "chore(veronex): update mcp image tag to ${{ needs.build.outputs.tag }}"
+          git commit -m "chore(veronex): update all rust image tags to ${{ needs.build.outputs.tag }}"
           for i in 1 2 3; do
             git push && exit 0
             git pull --rebase
@@ -153,9 +177,12 @@ jobs:
     name: Cleanup Old Images
     needs: build
     if: github.ref_name == 'develop' || github.ref_name == 'main'
+    strategy:
+      matrix:
+        image: [veronex, veronex-agent, veronex-mcp, veronex-embed, veronex-consumer, veronex-analytics]
     uses: ./.github/workflows/cleanup-images.yml
     with:
-      image_name: veronex-mcp
+      image_name: ${{ matrix.image }}
       branch: ${{ github.ref_name }}
       keep: 5
     secrets:
