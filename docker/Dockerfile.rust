@@ -15,7 +15,7 @@ FROM rust:1-alpine3.23 AS chef
 #   pkg-config                 — general native dep discovery
 RUN --mount=type=cache,target=/var/cache/apk \
     apk add musl-dev mold clang g++ cmake make perl python3 \
-            curl-dev zlib-dev zlib-static protoc pkg-config
+            curl-dev zlib-dev zlib-static protoc pkgconf
 
 # cargo-chef (pre-built binary — avoids 1-2min source compilation)
 ARG CARGO_CHEF_VERSION=0.1.77
