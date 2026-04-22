@@ -7,6 +7,7 @@ on:
       - 'crates/veronex-embed/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'crates/veronex-embed/Dockerfile'
       - '.github/workflows/ci-embed.yml'
   workflow_dispatch:
     inputs:
@@ -28,7 +29,7 @@ jobs:
   build:
     name: Build Embed
     runs-on: platform-rust-runners
-    timeout-minutes: 60
+    timeout-minutes: 30
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       skipped: ${{ steps.check_image.outputs.exists }}
@@ -40,10 +41,8 @@ jobs:
         run: |
           for i in $(seq 1 30); do
             docker info >/dev/null 2>&1 && exit 0
-            echo "Waiting for Docker daemon... ($i/30)"
             sleep 2
           done
-          echo "Docker daemon not available after 60s"
           exit 1
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -71,7 +70,6 @@ jobs:
         run: |
           if [ "${{ inputs.force_build }}" = "true" ]; then
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Force build requested, skipping image check"
             exit 0
           fi
           TAG="${{ steps.meta.outputs.tag }}"
@@ -80,10 +78,8 @@ jobs:
             "https://${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex-embed/${TAG}")
           if [ "$RESPONSE" = "200" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Image ${TAG} already exists, skipping build"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Image ${TAG} not found, proceeding with build"
           fi
 
       - name: Prepare sccache env
@@ -108,24 +104,22 @@ jobs:
           file: ./crates/veronex-embed/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
           secret-files: |
             sccache_env=/tmp/sccache.env
-
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
 
   deploy:
     name: Update GitOps
     needs: build
     if: needs.build.outputs.skipped != 'true' && github.ref_name == 'develop'
-    runs-on: platform-rust-runners
+    runs-on: arc-runner-set
     steps:
       - uses: actions/checkout@v4
         with:
           repository: beegy-labs/platform-gitops
           ref: develop
           token: ${{ secrets.GH_PAT }}
-
       - name: Update image tag
         run: |
           TAG="${{ needs.build.outputs.tag }}"
@@ -135,7 +129,6 @@ jobs:
             *)       exit 0 ;;
           esac
           sed -i "/^embed:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
-
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
