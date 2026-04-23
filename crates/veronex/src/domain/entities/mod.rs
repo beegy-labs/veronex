@@ -18,8 +18,7 @@ use uuid::Uuid;
 use super::enums::{
     ApiFormat, FinishReason, JobSource, JobStatus, LlmProviderStatus, ProviderType,
 };
-use super::value_objects::{JobId, ModelName, Prompt};
-use crate::application::ports::outbound::message_store::VisionAnalysis;
+use super::value_objects::{JobId, ModelName, Prompt, VisionAnalysis};
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]

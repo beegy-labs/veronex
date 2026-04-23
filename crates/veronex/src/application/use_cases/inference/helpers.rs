@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tracing::Instrument;
 
 use dashmap::DashMap;
 use tokio::sync::broadcast;
@@ -79,10 +80,13 @@ pub(super) fn schedule_cleanup(
     delay: std::time::Duration,
 ) {
     let jobs = jobs.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(delay).await;
-        jobs.remove(&uuid);
-    });
+    tokio::spawn(
+        async move {
+            tokio::time::sleep(delay).await;
+            jobs.remove(&uuid);
+        }
+        .instrument(tracing::info_span!("veronex.inference.helpers.spawn")),
+    );
 }
 
 // ── Observability event ─────────────────────────────────────────────────────

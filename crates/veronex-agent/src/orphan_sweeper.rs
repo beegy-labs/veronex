@@ -182,11 +182,20 @@ async fn sweep_once(
     Ok(())
 }
 
+/// Upper bound on the processing queue snapshot per sweep. Scoped to the
+/// 10K-provider target: with ≤10 in-flight jobs per provider the worst-case
+/// is ~100K — we cap the per-sweep batch at PROCESSING_BATCH_MAX to keep the
+/// memory footprint and Postgres update volume bounded. Any overflow is
+/// picked up by the next sweep cycle.
+const PROCESSING_BATCH_MAX: i64 = 10_000;
+
 /// Clean up orphaned jobs for a confirmed-dead instance.
 async fn cleanup_instance(valkey: &Pool, pg: &PgPool, instance_id: &str) {
     // Find jobs owned by this dead instance from Valkey processing list.
+    // Bounded to PROCESSING_BATCH_MAX to avoid unbounded memory growth at
+    // scale; residual items are swept on the next cycle.
     let processing: Vec<String> = valkey
-        .lrange("veronex:queue:processing", 0, -1)
+        .lrange("veronex:queue:processing", 0, PROCESSING_BATCH_MAX - 1)
         .await
         .unwrap_or_default();
 
@@ -207,16 +216,7 @@ async fn cleanup_instance(valkey: &Pool, pg: &PgPool, instance_id: &str) {
             Err(_) => continue,
         };
 
-        let result = sqlx::query(
-            "UPDATE inference_jobs SET status = 'failed', failure_reason = 'server_crash', \
-             completed_at = NOW() WHERE id = $1 AND status IN ('pending', 'running') \
-             RETURNING status",
-        )
-        .bind(uuid)
-        .fetch_optional(pg)
-        .await;
-
-        match result {
+        match crate::persistence::fail_orphaned_job(pg, uuid).await {
             Ok(Some(_)) => {
                 cleaned_running += 1;
                 // Clean up Valkey state.
@@ -233,21 +233,9 @@ async fn cleanup_instance(valkey: &Pool, pg: &PgPool, instance_id: &str) {
 
     // Also catch jobs that might not be in the processing list but are in DB
     // with this instance as owner (belt-and-suspenders).
-    let db_result = sqlx::query_scalar::<_, i64>(
-        "WITH updated AS ( \
-            UPDATE inference_jobs SET status = 'failed', failure_reason = 'server_crash', \
-            completed_at = NOW() WHERE status = 'running' \
-            AND instance_id = $1 \
-            AND started_at < NOW() - INTERVAL '2 minutes' \
-            RETURNING 1 \
-         ) SELECT COUNT(*) FROM updated",
-    )
-    .bind(instance_id)
-    .fetch_one(pg)
-    .await;
-
-    let db_cleaned = match db_result {
-        Ok(count) => count as u32,
+    let db_cleaned = match crate::persistence::fail_running_jobs_for_instance(pg, instance_id).await
+    {
+        Ok(count) => count,
         Err(e) => {
             // instance_id column may not exist — that's OK, skip.
             tracing::debug!(error = %e, "orphan sweeper: DB instance_id sweep skipped");
@@ -303,20 +291,12 @@ async fn leader_sweep(valkey: &Pool, pg: &PgPool) -> anyhow::Result<()> {
     // NOTE: pending jobs always have provider_id=NULL before dispatch — they
     // are NOT orphans. Only running jobs are expected to have a non-NULL
     // provider_id, so a NULL here means the provider was deleted mid-run.
-    let result = sqlx::query(
-        "UPDATE inference_jobs SET status = 'failed', failure_reason = 'server_crash', \
-         completed_at = NOW() \
-         WHERE status = 'running' \
-         AND provider_id IS NULL \
-         AND created_at < NOW() - INTERVAL '5 minutes'",
-    )
-    .execute(pg)
-    .await;
+    let result = crate::persistence::fail_orphan_provider_jobs(pg).await;
 
     match result {
-        Ok(res) if res.rows_affected() > 0 => {
+        Ok(count) if count > 0 => {
             tracing::info!(
-                count = res.rows_affected(),
+                count,
                 "leader sweep: failed orphaned jobs from inactive providers"
             );
             // Counters will be reconciled by the stats ticker (every 60 ticks).

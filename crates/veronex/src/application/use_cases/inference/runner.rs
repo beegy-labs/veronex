@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tracing::Instrument;
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -295,22 +296,25 @@ async fn finalize_job(
                 if let Some(handle) = jobs.get(&uuid).and_then(|e| e.compression_handle.clone()) {
                     let store_arc = store.clone();
                     let valkey_arc = Some(vk.clone());
-                    tokio::spawn(async move {
-                        let lab = handle.lab_settings.get().await.unwrap_or_default();
-                        if !lab.context_compression_enabled {
-                            return;
+                    tokio::spawn(
+                        async move {
+                            let lab = handle.lab_settings.get().await.unwrap_or_default();
+                            if !lab.context_compression_enabled {
+                                return;
+                            }
+                            let route = compression_router::decide(handle.registry.as_ref(), &lab).await;
+                            let model = lab.compression_model.clone()
+                                .unwrap_or_else(|| "qwen2.5:3b".to_string());
+                            let timeout = lab.compression_timeout_secs as u64;
+                            if let Some(params) = route.into_params(model, timeout) {
+                                context_compressor::compress_turn(
+                                    &params, uuid, owner_id, date, conv_id,
+                                    store_arc, valkey_arc,
+                                ).await;
+                            }
                         }
-                        let route = compression_router::decide(handle.registry.as_ref(), &lab).await;
-                        let model = lab.compression_model.clone()
-                            .unwrap_or_else(|| "qwen2.5:3b".to_string());
-                        let timeout = lab.compression_timeout_secs as u64;
-                        if let Some(params) = route.into_params(model, timeout) {
-                            context_compressor::compress_turn(
-                                &params, uuid, owner_id, date, conv_id,
-                                store_arc, valkey_arc,
-                            ).await;
-                        }
-                    });
+                        .instrument(tracing::info_span!("veronex.inference.runner.spawn")),
+                    );
                 }
             }
         }

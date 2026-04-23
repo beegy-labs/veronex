@@ -12,6 +12,7 @@
 //! After Lua removal, the Rust caller re-enqueues to QUEUE_ZSET with model from DB.
 
 use std::collections::HashSet;
+use tracing::Instrument;
 use std::sync::Arc;
 
 use fred::prelude::*;
@@ -180,11 +181,14 @@ async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
                 let pool = pool.clone();
                 let s_owned = s.clone();
                 let qp = queue_processing.clone();
-                tokio::spawn(async move {
-                    let _ = pool
-                        .lrem::<i64, _, _>(&qp, 1, &s_owned)
-                        .await;
-                });
+                tokio::spawn(
+                    async move {
+                        let _ = pool
+                            .lrem::<i64, _, _>(&qp, 1, &s_owned)
+                            .await;
+                    }
+                    .instrument(tracing::info_span!("veronex.pubsub.reaper.spawn")),
+                );
                 None
             }
         })

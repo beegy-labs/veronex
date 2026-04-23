@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use serde_json::{Value, json};
 use tracing::debug;
+use tracing::Instrument;
 
 use super::Tool;
 use crate::geo;
@@ -404,9 +405,12 @@ async fn get_raw(state: &WeatherState, cache_key: &str, lat: f64, lng: f64) -> R
         if entry.is_in_grace() {
             let state2 = state.clone();
             let key2 = cache_key.to_string();
-            tokio::spawn(async move {
-                let _ = do_fetch(&state2, &key2, lat, lng).await;
-            });
+            tokio::spawn(
+                async move {
+                    let _ = do_fetch(&state2, &key2, lat, lng).await;
+                }
+                .instrument(tracing::info_span!("veronex-mcp.tools.weather.spawn")),
+            );
             return Ok(entry);
         }
     }

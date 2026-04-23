@@ -1,4 +1,5 @@
 use axum::extract::{Request, State};
+use tracing::Instrument;
 use axum::middleware::Next;
 use axum::response::Response;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
@@ -81,11 +82,14 @@ pub async fn jwt_auth(
     {
         let repo = state.session_repo.clone();
         let jti = claims.jti;
-        tokio::spawn(async move {
-            if let Err(e) = repo.update_last_used(&jti).await {
-                tracing::warn!(jti = %jti, "session last_used_at update failed: {e}");
+        tokio::spawn(
+            async move {
+                if let Err(e) = repo.update_last_used(&jti).await {
+                    tracing::warn!(jti = %jti, "session last_used_at update failed: {e}");
+                }
             }
-        });
+            .instrument(tracing::info_span!("veronex.middleware.jwt_auth.spawn")),
+        );
     }
 
     req.extensions_mut().insert(claims);

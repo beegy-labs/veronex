@@ -5,6 +5,7 @@
 //!   Steps ④①②③⑤: STANDBY recovery, Scale-Out, Preload, Evict, Scale-In
 
 use std::collections::{HashMap, HashSet};
+use tracing::Instrument;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -394,23 +395,26 @@ async fn planner_tick(
         let preload_key_c = preload_key.clone();
         let decision_key_c = decision_key.clone();
 
-        tokio::spawn(async move {
-            let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
-                &http_c, &url, &model_c, provider_id, &vram_c, np,
-            ).await;
-            // Release locks
-            if let Err(e) = valkey_c.kv_del(&preload_key_c).await {
-                tracing::warn!(error = %e, "placement: failed to release preload lock");
+        tokio::spawn(
+            async move {
+                let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
+                    &http_c, &url, &model_c, provider_id, &vram_c, np,
+                ).await;
+                // Release locks
+                if let Err(e) = valkey_c.kv_del(&preload_key_c).await {
+                    tracing::warn!(error = %e, "placement: failed to release preload lock");
+                }
+                if let Err(e) = valkey_c.kv_del(&decision_key_c).await {
+                    tracing::warn!(error = %e, "placement: failed to release decision lock after preload");
+                }
+    
+                if success {
+                    vram_c.mark_model_loaded(provider_id, &model_c, 0); // weight will be updated by sync loop
+                    tracing::info!(%provider_id, model = %model_c, "Scale-Out preload completed");
+                }
             }
-            if let Err(e) = valkey_c.kv_del(&decision_key_c).await {
-                tracing::warn!(error = %e, "placement: failed to release decision lock after preload");
-            }
-
-            if success {
-                vram_c.mark_model_loaded(provider_id, &model_c, 0); // weight will be updated by sync loop
-                tracing::info!(%provider_id, model = %model_c, "Scale-Out preload completed");
-            }
-        });
+            .instrument(tracing::info_span!("veronex.placement_planner.spawn")),
+        );
 
         tracing::info!(%model, provider_id = %server.id, "Scale-Out triggered — preloading");
     }
@@ -482,17 +486,20 @@ async fn planner_tick(
             let valkey_c = valkey.clone();
             let preload_key_c = preload_key.clone();
 
-            tokio::spawn(async move {
-                let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
-                    &http_c, &url, &model_c, provider_id, &vram_c, np,
-                ).await;
-                if let Err(e) = valkey_c.kv_del(&preload_key_c).await {
-                    tracing::warn!(error = %e, "placement: failed to release preload lock");
+            tokio::spawn(
+                async move {
+                    let success = crate::infrastructure::outbound::ollama::preloader::preload_model(
+                        &http_c, &url, &model_c, provider_id, &vram_c, np,
+                    ).await;
+                    if let Err(e) = valkey_c.kv_del(&preload_key_c).await {
+                        tracing::warn!(error = %e, "placement: failed to release preload lock");
+                    }
+                    if success {
+                        vram_c.mark_model_loaded(provider_id, &model_c, 0);
+                    }
                 }
-                if success {
-                    vram_c.mark_model_loaded(provider_id, &model_c, 0);
-                }
-            });
+                .instrument(tracing::info_span!("veronex.placement_planner.spawn")),
+            );
 
             tracing::debug!(provider_id = %p.id, %model, "Preload triggered for queued model");
             break; // one preload per model per cycle
