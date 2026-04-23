@@ -2,6 +2,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::entities::GeminiRateLimitPolicy;
@@ -59,6 +60,7 @@ fn default_true() -> bool {
 /// `GET /v1/gemini/policies` — list all Gemini rate-limit policies.
 ///
 /// Returns one row per model name. The `"*"` row is the global fallback.
+#[instrument(skip(state), name = "GET /v1/gemini/policies")]
 pub async fn list_gemini_policies(RequireProviderManage(_claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<Vec<GeminiPolicySummary>>> {
     let policies = state.gemini_policy_repo.list_all().await.map_err(|e| db_error(e))?;
     let summaries: Vec<GeminiPolicySummary> = policies.into_iter().map(Into::into).collect();
@@ -75,6 +77,7 @@ pub async fn list_gemini_policies(RequireProviderManage(_claims): RequireProvide
 /// PUT /v1/gemini/policies/gemini-2.5-flash
 /// { "rpm_limit": 10, "rpd_limit": 250 }
 /// ```
+#[instrument(skip_all, name = "PUT /v1/gemini/policies/:model")]
 pub async fn upsert_gemini_policy(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,

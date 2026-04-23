@@ -121,6 +121,7 @@ impl From<crate::domain::errors::DomainError> for AppError {
             }
             DomainError::QueueFull(msg) => Self::ServiceUnavailable(msg),
             DomainError::Configuration(msg) => Self::Internal(anyhow::anyhow!(msg)),
+            DomainError::Crypto(msg) => Self::Internal(anyhow::anyhow!("crypto: {msg}")),
             // AccountNotFoundError inside Internal → JWT references a deleted account → 401.
             // The frontend auth-guard receives 401 and clears the stale token, redirecting to login.
             DomainError::Internal(ref inner) if inner.is::<AccountNotFoundError>() => {

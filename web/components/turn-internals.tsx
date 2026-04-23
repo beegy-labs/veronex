@@ -3,9 +3,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Eye, Zap, Loader2 } from 'lucide-react'
-import { api } from '@/lib/api'
 import { useTranslation } from '@/i18n'
-import { STALE_TIME_SLOW } from '@/lib/constants'
+import { turnInternalsQuery } from '@/lib/queries/conversations'
 import { fmtCompact } from '@/lib/chart-theme'
 
 interface TurnInternalsProps {
@@ -17,12 +16,7 @@ export function TurnInternals({ convId, jobId }: TurnInternalsProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['turn-internals', convId, jobId],
-    queryFn: () => api.turnInternals(convId, jobId),
-    enabled: open,
-    staleTime: STALE_TIME_SLOW,
-  })
+  const { data, isLoading, isError } = useQuery(turnInternalsQuery(convId, jobId, open))
 
   const hasData = data && (data.compressed || data.vision_analysis)
 

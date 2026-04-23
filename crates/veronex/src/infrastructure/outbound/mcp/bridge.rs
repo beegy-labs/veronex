@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument, warn, Instrument};
 use uuid::Uuid;
 use chrono;
 
@@ -1091,24 +1091,28 @@ impl McpBridgeAdapter {
     ) {
         let outcome = outcome.to_string();
         if let Some(repo) = self.analytics_repo.clone() {
-            tokio::spawn(async move {
-                repo.ingest_mcp_tool_call(McpToolCallEvent {
-                    event_time: chrono::Utc::now(),
-                    request_id,
-                    api_key_id,
-                    tenant_id,
-                    server_id,
-                    server_slug,
-                    tool_name,
-                    namespaced_name,
-                    outcome,
-                    cache_hit,
-                    latency_ms,
-                    result_bytes,
-                    cap_charged,
-                    loop_round,
-                }).await;
-            });
+            tokio::spawn(
+                async move {
+                    repo.ingest_mcp_tool_call(McpToolCallEvent {
+                        event_time: chrono::Utc::now(),
+                        request_id,
+                        api_key_id,
+                        tenant_id,
+                        server_id,
+                        server_slug,
+                        tool_name,
+                        namespaced_name,
+                        outcome,
+                        cache_hit,
+                        latency_ms,
+                        result_bytes,
+                        cap_charged,
+                        loop_round,
+                    })
+                    .await;
+                }
+                .instrument(tracing::debug_span!("mcp.analytics.ingest_tool_call")),
+            );
         }
     }
 }

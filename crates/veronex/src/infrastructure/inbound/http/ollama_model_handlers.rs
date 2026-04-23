@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use tracing::Instrument;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -163,87 +164,90 @@ pub async fn sync_all_providers(
     let ollama_sync_job_repo = state.ollama_sync_job_repo.clone();
     let model_selection_repo = state.model_selection_repo.clone();
 
-    tokio::spawn(async move {
-        let client = http_client;
-
-        for provider in providers {
-            let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
-
-            let result = async {
-                let json: serde_json::Value = client
-                    .get(&url)
-                    .send()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("cannot reach ollama: {e}"))?
-                    .error_for_status()
-                    .map_err(|e| anyhow::anyhow!("ollama returned error: {e}"))?
-                    .json()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("failed to parse ollama response: {e}"))?;
-
-                let models: Vec<String> = json["models"]
-                    .as_array()
-                    .map_or(&[] as &[_], |v| v)
-                    .iter()
-                    .filter_map(|m| m["name"].as_str().map(String::from))
-                    .collect();
-
-                ollama_model_repo
-                    .sync_provider_models(provider.id, &models)
-                    .await?;
-
-                anyhow::Ok(models)
-            }
-            .await;
-
-            let progress_entry = match result {
-                Ok(models) => {
-                    // Upsert model selections (is_enabled defaults to true for new rows).
-                    if let Err(e) = model_selection_repo.upsert_models(provider.id, &models).await {
-                        tracing::warn!(provider_id = %provider.id, "upsert model selections failed (non-fatal): {e}");
+    tokio::spawn(
+        async move {
+            let client = http_client;
+    
+            for provider in providers {
+                let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
+    
+                let result = async {
+                    let json: serde_json::Value = client
+                        .get(&url)
+                        .send()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("cannot reach ollama: {e}"))?
+                        .error_for_status()
+                        .map_err(|e| anyhow::anyhow!("ollama returned error: {e}"))?
+                        .json()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("failed to parse ollama response: {e}"))?;
+    
+                    let models: Vec<String> = json["models"]
+                        .as_array()
+                        .map_or(&[] as &[_], |v| v)
+                        .iter()
+                        .filter_map(|m| m["name"].as_str().map(String::from))
+                        .collect();
+    
+                    ollama_model_repo
+                        .sync_provider_models(provider.id, &models)
+                        .await?;
+    
+                    anyhow::Ok(models)
+                }
+                .await;
+    
+                let progress_entry = match result {
+                    Ok(models) => {
+                        // Upsert model selections (is_enabled defaults to true for new rows).
+                        if let Err(e) = model_selection_repo.upsert_models(provider.id, &models).await {
+                            tracing::warn!(provider_id = %provider.id, "upsert model selections failed (non-fatal): {e}");
+                        }
+                        tracing::info!(
+                            provider_id = %provider.id,
+                            name = %provider.name,
+                            count = models.len(),
+                            "ollama provider synced"
+                        );
+                        serde_json::json!({
+                            "provider_id": provider.id,
+                            "name": provider.name,
+                            "models": models,
+                            "error": null
+                        })
                     }
-                    tracing::info!(
-                        provider_id = %provider.id,
-                        name = %provider.name,
-                        count = models.len(),
-                        "ollama provider synced"
-                    );
-                    serde_json::json!({
-                        "provider_id": provider.id,
-                        "name": provider.name,
-                        "models": models,
-                        "error": null
-                    })
+                    Err(e) => {
+                        tracing::warn!(
+                            provider_id = %provider.id,
+                            name = %provider.name,
+                            "ollama provider sync failed: {e}"
+                        );
+                        serde_json::json!({
+                            "provider_id": provider.id,
+                            "name": provider.name,
+                            "models": [],
+                            "error": "sync failed"
+                        })
+                    }
+                };
+    
+                if let Err(e) = ollama_sync_job_repo
+                    .update_progress(job_id, progress_entry)
+                    .await
+                {
+                    tracing::error!(%job_id, "failed to update sync job progress: {e}");
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        provider_id = %provider.id,
-                        name = %provider.name,
-                        "ollama provider sync failed: {e}"
-                    );
-                    serde_json::json!({
-                        "provider_id": provider.id,
-                        "name": provider.name,
-                        "models": [],
-                        "error": "sync failed"
-                    })
-                }
-            };
-
-            if let Err(e) = ollama_sync_job_repo
-                .update_progress(job_id, progress_entry)
-                .await
-            {
-                tracing::error!(%job_id, "failed to update sync job progress: {e}");
             }
+    
+            if let Err(e) = ollama_sync_job_repo.complete(job_id).await {
+                tracing::error!(%job_id, "failed to mark sync job completed: {e}");
+            }
+    
+            tracing::info!(%job_id, "ollama global sync completed");
         }
-
-        if let Err(e) = ollama_sync_job_repo.complete(job_id).await {
-            tracing::error!(%job_id, "failed to mark sync job completed: {e}");
-        }
-
-        tracing::info!(%job_id, "ollama global sync completed");
-    });
+        .instrument(tracing::info_span!("veronex.ollama_model_handlers.spawn")),
+    );
 
     emit_audit(&state, &claims, "trigger", "ollama_sync",
         &job_id.to_string(), "global",
@@ -338,11 +342,14 @@ pub async fn pull_model(
     let base_url = provider.url.clone();
     let model_c = model.clone();
 
-    tokio::spawn(async move {
-        crate::infrastructure::outbound::ollama::preloader::pull_and_reset(
-            &client, &base_url, &model_c, provider_id, &vram_c,
-        ).await;
-    });
+    tokio::spawn(
+        async move {
+            crate::infrastructure::outbound::ollama::preloader::pull_and_reset(
+                &client, &base_url, &model_c, provider_id, &vram_c,
+            ).await;
+        }
+        .instrument(tracing::info_span!("veronex.ollama_model_handlers.spawn")),
+    );
 
     emit_audit(&state, &claims, "trigger", "ollama_pull",
         &provider_id.to_string(), &model,

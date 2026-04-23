@@ -263,6 +263,24 @@ impl ProviderUrl {
     }
 }
 
+// ── Vision analysis ──────────────────────────────────────────────────────────
+
+/// Result of the vision pre-processing call for an image-bearing turn.
+///
+/// Stored in `TurnRecord` / `InferenceJob` before inference runs so that future
+/// compression can preserve the image context as text rather than losing it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisionAnalysis {
+    /// Image analysis text produced by the vision model (~200 tokens).
+    pub analysis: String,
+    /// Model used for analysis (e.g. "llava:7b").
+    pub vision_model: String,
+    /// Number of images analyzed.
+    pub image_count: u32,
+    /// Token count of the analysis output.
+    pub analysis_tokens: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

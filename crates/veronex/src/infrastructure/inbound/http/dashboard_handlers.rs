@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing::Instrument;
 use std::convert::Infallible;
 
 use axum::extract::{Extension, Path, Query, State};
@@ -790,13 +791,16 @@ pub async fn trigger_session_grouping(
 
     let pg_pool = state.pg_pool.clone();
     let cutoff  = body.before_date;
-    tokio::spawn(async move {
-        let _permit = permit; // held until the task completes
-        match group_sessions_before(&pg_pool, cutoff).await {
-            Ok(n)  => tracing::info!(grouped = n, cutoff = ?cutoff, "manual session grouping complete"),
-            Err(e) => tracing::warn!("manual session grouping failed: {e}"),
+    tokio::spawn(
+        async move {
+            let _permit = permit; // held until the task completes
+            match group_sessions_before(&pg_pool, cutoff).await {
+                Ok(n)  => tracing::info!(grouped = n, cutoff = ?cutoff, "manual session grouping complete"),
+                Err(e) => tracing::warn!("manual session grouping failed: {e}"),
+            }
         }
-    });
+        .instrument(tracing::info_span!("veronex.dashboard_handlers.spawn")),
+    );
 
     emit_audit(&state, &claims, "trigger", "session_grouping",
         "session_grouping", "session_grouping",

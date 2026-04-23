@@ -41,6 +41,10 @@ pub enum DomainError {
     #[error("configuration error: {0}")]
     Configuration(String),
 
+    // ── Crypto (encrypt / decrypt / key derivation) ──────────────────────
+    #[error("crypto error: {0}")]
+    Crypto(String),
+
     // ── Conflict ─────────────────────────────────────────────────────────
     #[error("conflict: {0}")]
     Conflict(String),
