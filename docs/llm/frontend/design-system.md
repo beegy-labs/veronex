@@ -1,6 +1,6 @@
 # Web -- Brand, Design System & Core
 
-> SSOT | **Last Updated**: 2026-03-25
+> SSOT | **Last Updated**: 2026-04-22
 
 Related files:
 - [design-system-i18n.md](design-system-i18n.md) -- i18n, timezone, date formatting
@@ -100,9 +100,12 @@ Token flow for new tokens: Layer 1 -> Layer 2 -> Layer 0 -> Layer 3.
 
 | Policy | Rule |
 |--------|------|
+| Color — single source | All colors in `web/app/tokens.css`. Change = Layer 1 (palette) + Layer 2 (semantic) only. Touching `.tsx` to change a color = policy violation |
 | Color — inline style | Use `tokens.*` from `web/lib/design-tokens.ts` — never raw `'var(--theme-*)'` strings |
-| Color — Tailwind class | Use semantic utilities: `bg-status-success`, `text-status-warning-fg` — never `gray-*`/`slate-*` |
-| Color — hardcoded hex | Zero tolerance in TSX. Exception: `redoc-wrapper.tsx` (3rd-party theme API) |
+| Color — Tailwind class | Use semantic utilities: `bg-status-success`, `text-status-warning-fg` — never `gray-*`/`slate-*`/`emerald-*`/`zinc-*` raw scales or `bg-[#123]` arbitrary values |
+| Color — hardcoded hex | Zero tolerance in TSX. Exception: `redoc-wrapper.tsx` (3rd-party theme API — Redoc requires static hex via JS object, does not support CSS variables) |
+| 3rd-party CSS overrides | Put in a dedicated `.css` file (e.g. `swagger-overrides.css`) and `import` it. Never use `<style>{`...`}</style>` inline blocks in `.tsx` |
+| Dark mode selector | `[data-theme='dark'], .dark` dual selector (shadcn/third-party compatibility) |
 | Token names | `status-warning` / `status-warning-fg` — NOT `status-warn` |
 | SVG / Recharts | `fill={tokens.*}` (JSX expression) — never `fill="var(--theme-*)"` string attribute |
 | Headings | `text-2xl font-bold tracking-tight` |
