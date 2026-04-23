@@ -1,6 +1,6 @@
 # ADD — Workflow Index
 
-> ADD (Agent Decision Document) | **Last Updated**: 2026-03-28
+> ADD (Agent Decision Document) | **Last Updated**: 2026-04-22
 > Execution workflows for Claude Code. CDD = `docs/llm/` | SDD = `.specs/`
 
 ## Trigger → Workflow Map
@@ -9,6 +9,10 @@
 |---------|----------|
 | Code review, optimization, review of files | [`code-review.md`](code-review.md) |
 | Frontend-only review | [`frontend-review.md`](frontend-review.md) |
+| Backend-only review (Rust) | [`backend-review.md`](backend-review.md) |
+| Writing/updating a backend test (any layer) | [`backend-test.md`](backend-test.md) |
+| New backend handler / domain / adapter | [`backend-feature.md`](backend-feature.md) |
+| Writing/updating a frontend test (any layer) | [`frontend-test.md`](frontend-test.md) |
 | New feature / SDD spec active | [`feature-addition.md`](feature-addition.md) |
 | Refactor requested / structural issue | [`refactor.md`](refactor.md) |
 | Bug report / test failure | [`bug-fix.md`](bug-fix.md) |
@@ -19,7 +23,7 @@
 | CDD feedback after task completion | → see [`best-practices.md`](best-practices.md) Part 1 |
 | Commit message CI failure | [`commit-fix.md`](commit-fix.md) |
 | Security review / OWASP audit | [`best-practices.md`](best-practices.md) Part 4 |
-| E2E test suite execution | [`e2e-test.md`](e2e-test.md) |
+| Backend / infrastructure E2E suite execution | [`e2e-test.md`](e2e-test.md) |
 | Uncertainty / ambiguous requirements | [`escalation.md`](escalation.md) |
 
 ## Shared Constants (referenced by all workflows)
@@ -43,8 +47,12 @@ No O(N) DB scans, sequential awaits, or unbounded memory growth at these scales.
 | Rust compile | `cargo check --workspace` | After every Rust change |
 | Rust lint | `cargo clippy --all-targets` | Before commit |
 | Rust tests | `cargo nextest run --workspace` | Before commit |
+| Rust deps audit | `cargo deny check` | Before PR |
+| Rust mutation (PR diff) | `cargo mutants --in-diff origin/develop --timeout 30` | In CI per PR |
 | Frontend compile | `npx tsc --noEmit` | After every TSX/TS change |
-| Frontend unit | `npx vitest run` | Before commit |
+| Frontend unit (jsdom) | `npx vitest run --project unit` | Before commit |
+| Frontend component (browser) | `npx vitest run --project component` | Before commit when touching components |
+| Frontend integration (API) | `npx vitest run --project integration` | Before commit when touching API/schemas |
 | Frontend E2E | `npx playwright test` | Before PR |
 
 ### CDD Sync Routing
@@ -72,11 +80,18 @@ Quick reference:
 | File | SSOT for |
 |------|----------|
 | `README.md` (this file) | Scale targets, verification commands, CDD sync routing — shared by all workflows |
-| `best-practices.md` | "Where to write what" routing, Part 2 refactor checklist, Part 3 frontend audit greps |
+| `best-practices.md` | "Where to write what" routing, Part 1 update workflow, Part 2 refactor workflow |
+| `audit-frontend.md` | P1/P2/P3 frontend grep audit blocks |
+| `audit-backend.md` | P1/P2/P3/P4 Rust (backend) grep audit blocks |
+| `audit-security.md` | P0/P1/P2 LLM gateway security greps (OWASP API + LLM 2025) |
 | `skills.md` | Tech stack inventory, version changelog |
 | `escalation.md` | Decision table — escalate vs. proceed |
 | `code-review.md` | Full review workflow (Rust + frontend), P1/P2/P3 severity definitions |
 | `frontend-review.md` | Frontend-only review scope, parallel agent structure (Reuse/Quality/Efficiency) |
+| `backend-review.md` | Backend-only (Rust) review scope, parallel agent structure (Reuse/Quality/Efficiency), architecture non-goals |
+| `backend-feature.md` | New Rust handler / domain / adapter workflow |
+| `backend-test.md` | Rust Testing Trophy (5-Layer) — layer selection + behavior-driven rules |
+| `frontend-test.md` | Frontend Testing Trophy (5-Layer) — layer selection + behavior-driven rules |
 | `feature-addition.md` | New feature workflow (also covers `implementation.md` triggers) |
 | `implementation.md` | Redirect → `feature-addition.md` |
 | `refactor.md` | Structural refactor workflow |

@@ -1,6 +1,6 @@
 # Frontend Review
 
-> ADD Execution — Frontend Optimization & Policy Enforcement | **Last Updated**: 2026-03-25
+> ADD Execution — Frontend Optimization & Policy Enforcement | **Last Updated**: 2026-04-22
 
 ## Trigger
 
@@ -23,6 +23,19 @@ User requests frontend code review, optimization, design token audit, i18n audit
 
 > Checklist details (4-layer arch, design tokens, i18n, performance, TypeScript, a11y, fix priority) → `docs/llm/policies/patterns-frontend.md`
 
+## Architecture Non-Goals (reject on sight)
+
+Do NOT propose or accept any of the following during review:
+
+- New directories named `atoms/`, `molecules/`, `organisms/`, or `templates/`
+- Atomic Design vocabulary in file names, component names, or review comments
+- Renaming 4-Layer terms to Atomic equivalents
+- Hardcoded hex / Tailwind raw color scales (`gray-*`/`emerald-*`/`zinc-*`/`bg-[#123]`) in `.tsx`
+- Color definitions anywhere outside `web/app/tokens.css` (including inline `var(--theme-*)` strings)
+- Single dark-mode selector (`.dark` only or `[data-theme='dark']` only) — must be both
+
+Rationale: `patterns-frontend/architecture.md § 4-Layer Component Architecture / Non-Goals` and `§ Design Token System / Single Source of Truth`.
+
 ---
 
 ## Execution Steps
@@ -41,6 +54,8 @@ User requests frontend code review, optimization, design token audit, i18n audit
 ### Agent Scope
 
 **Reuse agent** — checks that existing abstractions are used instead of reinvented:
+- Single-importer shared component: any file in `web/components/` imported by exactly one route → flag for move to `app/{route}/components/` (→ `patterns-frontend.md` § 4-Layer Component Architecture / Violations)
+- Color defined outside `tokens.css`: any new `--*-color` variable or hex value anywhere except `web/app/tokens.css` → reject (→ `patterns-frontend.md` § Design Token System / Single Source of Truth)
 - `DataTable` used for all tables (never raw Card+Table boilerplate) (→ `design-system.md` § Task Guide)
 - `ConfirmDialog` for destructive actions (never `confirm()` native dialog) (→ `design-system-components-patterns.md` § ConfirmDialog)
 - `CopyButton`, `StatusPill`, `StatsCard`, `ProgressBar`, `TimeRangeSelector` — check for hand-rolled equivalents (→ `design-system-components.md`)
@@ -67,6 +82,10 @@ User requests frontend code review, optimization, design token audit, i18n audit
 - `refetchInterval` uses `withJitter(REFETCH_INTERVAL_FAST)` — never bare constant (prevents tab polling storms) (→ `patterns-frontend.md` § TanStack Query v5 / `withJitter()`)
 - `PUBLIC_PATHS` updated for any new unauthenticated route (→ `design-system-components.md` § Auth Guard)
 - 4-layer architecture: page logic in `app/*/page.tsx`, feature UI in `app/*/components/`, shared in `components/`, foundation in `lib/` (→ `patterns-frontend.md` § 4-Layer Component Architecture)
+- Tests are behavior-driven: no `querySelector`, no CSS-class queries, no React-internal assertions, no full-DOM snapshots, no mock-call-count as primary assertion (→ `testing-strategy.md` § Behavior-Driven Tests)
+- Testing Library query priority: `getByRole` > `getByLabelText` > `getByText` > `getByTestId` — drop only with comment explaining why (→ `testing-strategy.md` § Testing Library Query Priority)
+- Layout / focus / CSS / scroll assertions are NOT in jsdom unit tests — those belong in Vitest Browser Mode component tests (→ `testing-strategy.md` § Layer Responsibility)
+- Test layer fits the change: internal function change breaks only Unit; schema change breaks only Integration; user-flow change breaks only E2E (→ `testing-strategy.md` § Test Purity Principle)
 - E2E tests: constants from `helpers/constants.ts`, `try/finally` resource cleanup (→ `patterns-frontend.md` § E2E Test Patterns)
 
 **Efficiency agent** — checks rendering and data performance:

@@ -154,7 +154,8 @@
 
 /* Light mode (default) — "Platinum Signal" */
 :root,
-[data-theme='light'] {
+[data-theme='light'],
+.light {
   --theme-bg-page:     var(--light-bg-page);
   --theme-bg-card:     var(--light-bg-card);
   --theme-bg-elevated: var(--light-bg-elevated);
@@ -204,7 +205,8 @@
 }
 
 /* Dark mode — "Obsidian Verde" */
-[data-theme='dark'] {
+[data-theme='dark'],
+.dark {
   --theme-bg-page:     var(--dark-bg-page);
   --theme-bg-card:     var(--dark-bg-card);
   --theme-bg-elevated: var(--dark-bg-elevated);
