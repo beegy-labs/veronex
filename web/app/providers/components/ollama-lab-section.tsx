@@ -33,7 +33,14 @@ export function OllamaLabSection() {
     try {
       await api.patchLabSettings({ [key]: value } as import('@/lib/types').PatchLabSettings)
       await refetchLabSettings()
-    } catch { } finally { setLabLoading(false) }
+    } catch (e) {
+      const { ApiHttpError } = await import('@/lib/types')
+      if (e instanceof ApiHttpError) {
+        console.error('lab settings patch failed', { key, status: e.status, message: e.message })
+      } else {
+        console.error('lab settings patch failed', { key, error: e })
+      }
+    } finally { setLabLoading(false) }
   }
 
   const disabled = labLoading || labSettings === null

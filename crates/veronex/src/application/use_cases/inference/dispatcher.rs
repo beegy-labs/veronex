@@ -525,26 +525,29 @@ pub(super) async fn queue_dispatcher_loop(
                     let (ka_stop_tx, mut ka_stop_rx) = tokio::sync::oneshot::channel::<()>();
                     let vk_ka = vk_c.clone();
                     let job_id_ka = job_id_str.clone();
-                    tokio::spawn(async move {
-                        let interval = std::time::Duration::from_secs(
-                            crate::domain::constants::LEASE_RENEW_INTERVAL_SECS,
-                        );
-                        loop {
-                            tokio::select! {
-                                biased;
-                                _ = &mut ka_stop_rx => break,
-                                _ = tokio::time::sleep(interval) => {
-                                    let deadline = (chrono::Utc::now().timestamp_millis() as u64)
-                                        + crate::domain::constants::LEASE_TTL_MS;
-                                    match vk_ka.active_lease_renew(&job_id_ka, deadline).await {
-                                        Ok(false) => break, // already removed (completed or reaped)
-                                        Ok(true) => {}
-                                        Err(e) => tracing::warn!(job_id = %job_id_ka, "lease renew failed: {e}"),
+                    tokio::spawn(
+                        async move {
+                            let interval = std::time::Duration::from_secs(
+                                crate::domain::constants::LEASE_RENEW_INTERVAL_SECS,
+                            );
+                            loop {
+                                tokio::select! {
+                                    biased;
+                                    _ = &mut ka_stop_rx => break,
+                                    _ = tokio::time::sleep(interval) => {
+                                        let deadline = (chrono::Utc::now().timestamp_millis() as u64)
+                                            + crate::domain::constants::LEASE_TTL_MS;
+                                        match vk_ka.active_lease_renew(&job_id_ka, deadline).await {
+                                            Ok(false) => break, // already removed (completed or reaped)
+                                            Ok(true) => {}
+                                            Err(e) => tracing::warn!(job_id = %job_id_ka, "lease renew failed: {e}"),
+                                        }
                                     }
                                 }
                             }
                         }
-                    });
+                        .instrument(tracing::debug_span!("dispatcher.keepalive")),
+                    );
     
                     match run_job(
                         jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,

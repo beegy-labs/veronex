@@ -182,11 +182,20 @@ async fn sweep_once(
     Ok(())
 }
 
+/// Upper bound on the processing queue snapshot per sweep. Scoped to the
+/// 10K-provider target: with ≤10 in-flight jobs per provider the worst-case
+/// is ~100K — we cap the per-sweep batch at PROCESSING_BATCH_MAX to keep the
+/// memory footprint and Postgres update volume bounded. Any overflow is
+/// picked up by the next sweep cycle.
+const PROCESSING_BATCH_MAX: i64 = 10_000;
+
 /// Clean up orphaned jobs for a confirmed-dead instance.
 async fn cleanup_instance(valkey: &Pool, pg: &PgPool, instance_id: &str) {
     // Find jobs owned by this dead instance from Valkey processing list.
+    // Bounded to PROCESSING_BATCH_MAX to avoid unbounded memory growth at
+    // scale; residual items are swept on the next cycle.
     let processing: Vec<String> = valkey
-        .lrange("veronex:queue:processing", 0, -1)
+        .lrange("veronex:queue:processing", 0, PROCESSING_BATCH_MAX - 1)
         .await
         .unwrap_or_default();
 

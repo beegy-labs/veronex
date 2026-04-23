@@ -4,6 +4,7 @@ use axum::middleware;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::compression::CompressionLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
@@ -351,13 +352,15 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
         .route("/v1/auth/refresh", post(auth_handlers::refresh))
         .route("/v1/auth/reset-password", post(auth_handlers::reset_password))
         // JWT-protected admin routes — 30 s timeout (SSE-free CRUD only)
+        // CompressionLayer is safe here: no streaming endpoints in this subtree.
         .merge(
             build_jwt_router()
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
                     jwt_auth,
                 ))
-                .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, JWT_ROUTER_TIMEOUT)),
+                .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, JWT_ROUTER_TIMEOUT))
+                .layer(CompressionLayer::new()),
         )
         // Dashboard SSE — JWT auth but no timeout (stream runs until client disconnects)
         .merge(

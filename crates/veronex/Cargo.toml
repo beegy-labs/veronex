@@ -8,7 +8,7 @@ edition = "2024"
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "net", "time", "signal", "fs"] }
 tower = { version = "0.5", features = ["timeout", "limit"] }
-tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "compression-gzip", "compression-br"] }
 pin-project-lite = "0.2"
 
 # Serialization

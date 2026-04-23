@@ -261,9 +261,13 @@ async fn async_main() -> Result<()> {
                                             let indexer = indexer.clone();
                                             let environment = state_clone.vespa_environment.to_string();
                                             let tenant_id = state_clone.vespa_tenant_id.to_string();
-                                            tokio::spawn(async move {
-                                                indexer.index_server_tools(&environment, &tenant_id, server_id, &tools).await;
-                                            });
+                                            use tracing::Instrument as _;
+                                            tokio::spawn(
+                                                async move {
+                                                    indexer.index_server_tools(&environment, &tenant_id, server_id, &tools).await;
+                                                }
+                                                .instrument(tracing::debug_span!("mcp.tool_indexer.index_server")),
+                                            );
                                         }
                                     }
                                 }
