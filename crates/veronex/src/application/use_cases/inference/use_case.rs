@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use tracing::Instrument;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -337,20 +338,23 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             let store = store.clone();
             let repo = self.job_repo.clone();
             let jid = job_id.clone();
-            tokio::spawn(async move {
-                let mut keys = Vec::new();
-                for (i, b64) in images.iter().enumerate() {
-                    match store.put_base64(jid.0, i, b64).await {
-                        Ok((fk, tk)) => { keys.push(fk); keys.push(tk); }
-                        Err(e) => tracing::warn!(job_id = %jid.0, "image upload failed: {e}"),
+            tokio::spawn(
+                async move {
+                    let mut keys = Vec::new();
+                    for (i, b64) in images.iter().enumerate() {
+                        match store.put_base64(jid.0, i, b64).await {
+                            Ok((fk, tk)) => { keys.push(fk); keys.push(tk); }
+                            Err(e) => tracing::warn!(job_id = %jid.0, "image upload failed: {e}"),
+                        }
+                    }
+                    if !keys.is_empty() {
+                        if let Err(e) = repo.update_image_keys(&jid, keys).await {
+                            tracing::warn!(job_id = %jid.0, "failed to update image_keys: {e}");
+                        }
                     }
                 }
-                if !keys.is_empty() {
-                    if let Err(e) = repo.update_image_keys(&jid, keys).await {
-                        tracing::warn!(job_id = %jid.0, "failed to update image_keys: {e}");
-                    }
-                }
-            });
+                .instrument(tracing::info_span!("veronex.inference.use_case.spawn")),
+            );
         }
 
         let cancel_notify = Arc::new(Notify::new());

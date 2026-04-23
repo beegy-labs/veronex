@@ -1,4 +1,5 @@
 use mimalloc::MiMalloc;
+use tracing::Instrument;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -224,37 +225,40 @@ async fn main() -> Result<()> {
     if state.mcp_bridge.is_some() {
         let state_clone = state.clone();
         let cancel_clone = shutdown.clone();
-        tokio::spawn(async move {
-            use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
-            // Initial discovery on startup
-            for server_id in state_clone.mcp_bridge.as_ref().map(|b| b.session_manager.server_ids()).unwrap_or_default() {
-                discover_tools_startup(&state_clone, server_id).await;
-            }
-            // Periodic refresh
-            let mut interval = tokio::time::interval(MCP_TOOL_REFRESH_INTERVAL);
-            interval.tick().await; // skip the immediate tick
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        if let Some(ref b) = state_clone.mcp_bridge {
-                            for server_id in b.session_manager.server_ids() {
-                                if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await {
-                                    if let Some(ref indexer) = state_clone.mcp_tool_indexer {
-                                        let indexer = indexer.clone();
-                                        let environment = state_clone.vespa_environment.to_string();
-                                        let tenant_id = state_clone.vespa_tenant_id.to_string();
-                                        tokio::spawn(async move {
-                                            indexer.index_server_tools(&environment, &tenant_id, server_id, &tools).await;
-                                        });
+        tokio::spawn(
+            async move {
+                use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
+                // Initial discovery on startup
+                for server_id in state_clone.mcp_bridge.as_ref().map(|b| b.session_manager.server_ids()).unwrap_or_default() {
+                    discover_tools_startup(&state_clone, server_id).await;
+                }
+                // Periodic refresh
+                let mut interval = tokio::time::interval(MCP_TOOL_REFRESH_INTERVAL);
+                interval.tick().await; // skip the immediate tick
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            if let Some(ref b) = state_clone.mcp_bridge {
+                                for server_id in b.session_manager.server_ids() {
+                                    if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await {
+                                        if let Some(ref indexer) = state_clone.mcp_tool_indexer {
+                                            let indexer = indexer.clone();
+                                            let environment = state_clone.vespa_environment.to_string();
+                                            let tenant_id = state_clone.vespa_tenant_id.to_string();
+                                            tokio::spawn(async move {
+                                                indexer.index_server_tools(&environment, &tenant_id, server_id, &tools).await;
+                                            });
+                                        }
                                     }
                                 }
                             }
                         }
+                        _ = cancel_clone.cancelled() => break,
                     }
-                    _ = cancel_clone.cancelled() => break,
                 }
             }
-        });
+            .instrument(tracing::info_span!("veronex.main.spawn")),
+        );
     }
 
     // Capture for shutdown deregister (state is moved into build_app).

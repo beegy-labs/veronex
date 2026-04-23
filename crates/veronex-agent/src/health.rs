@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
+use tracing::Instrument;
 
 use crate::HealthState;
 
@@ -34,7 +35,8 @@ pub async fn serve(port: u16, state: Arc<HealthState>) -> anyhow::Result<()> {
         let (mut stream, _) = listener.accept().await?;
         let state = state.clone();
 
-        tokio::spawn(async move {
+        tokio::spawn(
+            async move {
             let mut buf = [0u8; 256];
             let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await;
             let req = String::from_utf8_lossy(&buf);
@@ -51,6 +53,8 @@ pub async fn serve(port: u16, state: Arc<HealthState>) -> anyhow::Result<()> {
 
             let _ = stream.write_all(response).await;
             let _ = stream.shutdown().await;
-        });
+            }
+            .instrument(tracing::info_span!("agent.health_request")),
+        );
     }
 }

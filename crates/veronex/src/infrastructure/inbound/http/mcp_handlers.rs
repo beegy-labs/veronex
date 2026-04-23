@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use tracing::Instrument;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -122,9 +123,12 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
         let tools_snap = tools.clone();
         let environment = state.vespa_environment.to_string();
         let tenant_id = state.vespa_tenant_id.to_string();
-        tokio::spawn(async move {
-            indexer.index_server_tools(&environment, &tenant_id, server_id, &tools_snap).await;
-        });
+        tokio::spawn(
+            async move {
+                indexer.index_server_tools(&environment, &tenant_id, server_id, &tools_snap).await;
+            }
+            .instrument(tracing::info_span!("veronex.mcp_handlers.spawn")),
+        );
     }
 
     tracing::info!(%server_id, count = tools.len(), "MCP: tools discovered and persisted");
@@ -354,9 +358,12 @@ pub async fn register_mcp_server(
             tracing::warn!(%id, error = %e, "MCP register: session connect failed");
         } else {
             let state_clone = state.clone();
-            tokio::spawn(async move {
-                discover_and_persist_tools(&state_clone, id).await;
-            });
+            tokio::spawn(
+                async move {
+                    discover_and_persist_tools(&state_clone, id).await;
+                }
+                .instrument(tracing::info_span!("veronex.mcp_handlers.spawn")),
+            );
         }
     }
 
@@ -444,9 +451,12 @@ pub async fn patch_mcp_server(
                 tracing::warn!(%id, error = %e, "MCP patch: session connect failed");
             } else {
                 let state_clone = state.clone();
-                tokio::spawn(async move {
-                    discover_and_persist_tools(&state_clone, id).await;
-                });
+                tokio::spawn(
+                    async move {
+                        discover_and_persist_tools(&state_clone, id).await;
+                    }
+                    .instrument(tracing::info_span!("veronex.mcp_handlers.spawn")),
+                );
             }
         }
     }
@@ -525,9 +535,12 @@ pub async fn delete_mcp_server(
         let indexer = indexer.clone();
         let environment = state.vespa_environment.to_string();
         let tenant_id = state.vespa_tenant_id.to_string();
-        tokio::spawn(async move {
-            indexer.remove_server_tools(&environment, &tenant_id, id).await;
-        });
+        tokio::spawn(
+            async move {
+                indexer.remove_server_tools(&environment, &tenant_id, id).await;
+            }
+            .instrument(tracing::info_span!("veronex.mcp_handlers.spawn")),
+        );
     }
 
     emit_audit(&state, &claims, "delete", "mcp_server", &mid.to_string(), &name,

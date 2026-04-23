@@ -5,6 +5,7 @@
 //! visibility and crash recovery.
 
 use std::sync::Arc;
+use tracing::Instrument;
 
 use fred::prelude::*;
 use uuid::Uuid;
@@ -149,30 +150,36 @@ impl VramPoolPort for DistributedVramPool {
         let iid = instance_id.clone();
         let lid = lease_id.clone();
         let kv = kv_mb;
-        tokio::spawn(async move {
-            let _: Result<i64, _> = pool
-                .eval(
-                    LUA_VRAM_ACQUIRE,
-                    vec![vk, lk],
-                    vec![iid, lid, LEASE_DURATION_SECS.to_string(), kv.to_string()],
-                )
-                .await;
-        });
+        tokio::spawn(
+            async move {
+                let _: Result<i64, _> = pool
+                    .eval(
+                        LUA_VRAM_ACQUIRE,
+                        vec![vk, lk],
+                        vec![iid, lid, LEASE_DURATION_SECS.to_string(), kv.to_string()],
+                    )
+                    .await;
+            }
+            .instrument(tracing::info_span!("veronex.capacity.distributed_vram_pool.spawn")),
+        );
 
         // On drop: decrement local + async release Valkey lease.
         let (release_tx, release_rx) = tokio::sync::oneshot::channel::<u64>();
         let pool = self.pool.clone();
-        tokio::spawn(async move {
-            if let Ok(released_kv) = release_rx.await {
-                let _: Result<i64, _> = pool
-                    .eval(
-                        LUA_VRAM_RELEASE,
-                        vec![vram_key, leases_key],
-                        vec![instance_id, lease_id, released_kv.to_string()],
-                    )
-                    .await;
+        tokio::spawn(
+            async move {
+                if let Ok(released_kv) = release_rx.await {
+                    let _: Result<i64, _> = pool
+                        .eval(
+                            LUA_VRAM_RELEASE,
+                            vec![vram_key, leases_key],
+                            vec![instance_id, lease_id, released_kv.to_string()],
+                        )
+                        .await;
+                }
             }
-        });
+            .instrument(tracing::info_span!("veronex.capacity.distributed_vram_pool.spawn")),
+        );
 
         Some(VramPermit::combined(kv_mb, reserved_kv, active_count, release_tx, prov_active))
     }

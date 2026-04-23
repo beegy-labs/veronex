@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::Instrument;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -633,38 +634,41 @@ pub async fn sync_single_provider(
     let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
     let pid_str = pid.to_string();
 
-    tokio::spawn(async move {
-        match crate::infrastructure::outbound::capacity::analyzer::sync_provider(
-            &state.http_client,
-            provider.id,
-            &provider.name,
-            &provider.url,
-            provider.total_vram_mb,
-            provider.num_parallel.max(1) as u32,
-            &settings.analyzer_model,
-            &*state.capacity_repo,
-            &*state.vram_pool,
-            state.valkey_pool.as_ref(),
-            &*state.provider_registry,
-            &*state.ollama_model_repo,
-            &*state.model_selection_repo,
-            &*state.vram_budget_repo,
-            None,
-        )
-        .await
-        {
-            Ok(()) => {
-                emit_audit(
-                    &state, &claims, "sync", "ollama_provider", &pid_str,
-                    &provider.name, &format!("Provider '{}' synced", provider.name),
-                )
-                .await;
-            }
-            Err(e) => {
-                tracing::warn!(%id, error = %e, "background sync_provider failed");
+    tokio::spawn(
+        async move {
+            match crate::infrastructure::outbound::capacity::analyzer::sync_provider(
+                &state.http_client,
+                provider.id,
+                &provider.name,
+                &provider.url,
+                provider.total_vram_mb,
+                provider.num_parallel.max(1) as u32,
+                &settings.analyzer_model,
+                &*state.capacity_repo,
+                &*state.vram_pool,
+                state.valkey_pool.as_ref(),
+                &*state.provider_registry,
+                &*state.ollama_model_repo,
+                &*state.model_selection_repo,
+                &*state.vram_budget_repo,
+                None,
+            )
+            .await
+            {
+                Ok(()) => {
+                    emit_audit(
+                        &state, &claims, "sync", "ollama_provider", &pid_str,
+                        &provider.name, &format!("Provider '{}' synced", provider.name),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    tracing::warn!(%id, error = %e, "background sync_provider failed");
+                }
             }
         }
-    });
+        .instrument(tracing::info_span!("veronex.provider_handlers.spawn")),
+    );
 
     (
         StatusCode::ACCEPTED,

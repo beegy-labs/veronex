@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tracing::Instrument;
 
 use dashmap::DashMap;
 use tokio::sync::{broadcast, Notify};
@@ -254,53 +255,56 @@ pub(super) fn spawn_job_direct(
     instance_id: Arc<str>,
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
 ) {
-    tokio::spawn(async move {
-        let (adapter, provider_id, is_free) = match provider_dispatch
-            .pick_and_build(&job.provider_type, job.model_name.as_str(), gemini_tier.as_deref())
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(job_id = %uuid, "no provider: {e}");
-                fail_job_no_provider(&jobs, &job_repo, &valkey, uuid, &e.to_string()).await;
+    tokio::spawn(
+        async move {
+            let (adapter, provider_id, is_free) = match provider_dispatch
+                .pick_and_build(&job.provider_type, job.model_name.as_str(), gemini_tier.as_deref())
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(job_id = %uuid, "no provider: {e}");
+                    fail_job_no_provider(&jobs, &job_repo, &valkey, uuid, &e.to_string()).await;
+                    return;
+                }
+            };
+    
+            if !circuit_breaker.is_allowed(provider_id) {
+                tracing::warn!(job_id = %uuid, "direct spawn skipped — circuit open");
                 return;
             }
-        };
-
-        if !circuit_breaker.is_allowed(provider_id) {
-            tracing::warn!(job_id = %uuid, "direct spawn skipped — circuit open");
-            return;
-        }
-        match thermal.get_level(provider_id) {
-            ThrottleLevel::Hard | ThrottleLevel::Cooldown => { tracing::warn!(job_id = %uuid, "direct spawn skipped — hard/cooldown throttle"); return; }
-            ThrottleLevel::Soft if vram_pool.provider_active_requests(provider_id) > 0 => {
-                tracing::debug!(job_id = %uuid, "direct spawn skipped — soft throttle"); return;
+            match thermal.get_level(provider_id) {
+                ThrottleLevel::Hard | ThrottleLevel::Cooldown => { tracing::warn!(job_id = %uuid, "direct spawn skipped — hard/cooldown throttle"); return; }
+                ThrottleLevel::Soft if vram_pool.provider_active_requests(provider_id) > 0 => {
+                    tracing::debug!(job_id = %uuid, "direct spawn skipped — soft throttle"); return;
+                }
+                _ => {}
             }
-            _ => {}
-        }
-
-        let permit = match vram_pool.try_reserve(provider_id, job.model_name.as_str()) {
-            Some(p) => p,
-            None => { tracing::warn!(job_id = %uuid, "direct spawn skipped — VRAM unavailable"); return; }
-        };
-
-        match run_job(
-            jobs, adapter, job_repo, message_store, valkey, observability, model_manager,
-            provider_dispatch, uuid, job, Some(provider_id), is_free,
-            event_tx, instance_id, cancel_notifiers,
-        ).await {
-            Ok(Some(latency_ms)) => {
-                circuit_breaker.on_success(provider_id);
-                circuit_breaker.record_latency(provider_id, latency_ms as u64);
+    
+            let permit = match vram_pool.try_reserve(provider_id, job.model_name.as_str()) {
+                Some(p) => p,
+                None => { tracing::warn!(job_id = %uuid, "direct spawn skipped — VRAM unavailable"); return; }
+            };
+    
+            match run_job(
+                jobs, adapter, job_repo, message_store, valkey, observability, model_manager,
+                provider_dispatch, uuid, job, Some(provider_id), is_free,
+                event_tx, instance_id, cancel_notifiers,
+            ).await {
+                Ok(Some(latency_ms)) => {
+                    circuit_breaker.on_success(provider_id);
+                    circuit_breaker.record_latency(provider_id, latency_ms as u64);
+                }
+                Ok(None) => {} // cancelled or ownership lost
+                Err(e) => {
+                    tracing::error!(job_id = %uuid, "inference job failed: {e}");
+                    circuit_breaker.on_failure(provider_id);
+                }
             }
-            Ok(None) => {} // cancelled or ownership lost
-            Err(e) => {
-                tracing::error!(job_id = %uuid, "inference job failed: {e}");
-                circuit_breaker.on_failure(provider_id);
-            }
+            drop(permit);
         }
-        drop(permit);
-    });
+        .instrument(tracing::info_span!("veronex.inference.dispatcher.spawn")),
+    );
 }
 
 // ── Queue dispatcher loop ───────────────────────────────────────────────────
@@ -513,60 +517,63 @@ pub(super) async fn queue_dispatcher_loop(
                 instance_id.clone(), cancel_notifiers.clone(),
             );
 
-            tokio::spawn(async move {
-                let _permit = permit;
-
-                // Keepalive: renew lease every LEASE_RENEW_INTERVAL_SECS
-                let (ka_stop_tx, mut ka_stop_rx) = tokio::sync::oneshot::channel::<()>();
-                let vk_ka = vk_c.clone();
-                let job_id_ka = job_id_str.clone();
-                tokio::spawn(async move {
-                    let interval = std::time::Duration::from_secs(
-                        crate::domain::constants::LEASE_RENEW_INTERVAL_SECS,
-                    );
-                    loop {
-                        tokio::select! {
-                            biased;
-                            _ = &mut ka_stop_rx => break,
-                            _ = tokio::time::sleep(interval) => {
-                                let deadline = (chrono::Utc::now().timestamp_millis() as u64)
-                                    + crate::domain::constants::LEASE_TTL_MS;
-                                match vk_ka.active_lease_renew(&job_id_ka, deadline).await {
-                                    Ok(false) => break, // already removed (completed or reaped)
-                                    Ok(true) => {}
-                                    Err(e) => tracing::warn!(job_id = %job_id_ka, "lease renew failed: {e}"),
+            tokio::spawn(
+                async move {
+                    let _permit = permit;
+    
+                    // Keepalive: renew lease every LEASE_RENEW_INTERVAL_SECS
+                    let (ka_stop_tx, mut ka_stop_rx) = tokio::sync::oneshot::channel::<()>();
+                    let vk_ka = vk_c.clone();
+                    let job_id_ka = job_id_str.clone();
+                    tokio::spawn(async move {
+                        let interval = std::time::Duration::from_secs(
+                            crate::domain::constants::LEASE_RENEW_INTERVAL_SECS,
+                        );
+                        loop {
+                            tokio::select! {
+                                biased;
+                                _ = &mut ka_stop_rx => break,
+                                _ = tokio::time::sleep(interval) => {
+                                    let deadline = (chrono::Utc::now().timestamp_millis() as u64)
+                                        + crate::domain::constants::LEASE_TTL_MS;
+                                    match vk_ka.active_lease_renew(&job_id_ka, deadline).await {
+                                        Ok(false) => break, // already removed (completed or reaped)
+                                        Ok(true) => {}
+                                        Err(e) => tracing::warn!(job_id = %job_id_ka, "lease renew failed: {e}"),
+                                    }
                                 }
                             }
                         }
+                    });
+    
+                    match run_job(
+                        jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,
+                        pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
+                    ).await {
+                        Ok(Some(latency_ms)) => {
+                            cb_c.on_success(pid);
+                            cb_c.record_latency(pid, latency_ms as u64);
+                        }
+                        Ok(None) => {} // cancelled or ownership lost
+                        Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
                     }
-                });
-
-                match run_job(
-                    jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,
-                    pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
-                ).await {
-                    Ok(Some(latency_ms)) => {
-                        cb_c.on_success(pid);
-                        cb_c.record_latency(pid, latency_ms as u64);
+    
+                    let _ = ka_stop_tx.send(());
+    
+                    // Remove from active ZSET (replaces list_remove on QUEUE_PROCESSING)
+                    if let Err(e) = vk_c.active_lease_remove(&job_id_str).await {
+                        tracing::warn!(%uuid, error = %e, "dispatcher: failed to remove job from active queue");
                     }
-                    Ok(None) => {} // cancelled or ownership lost
-                    Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
+                    // Clean up attempts counter
+                    let attempts_key = crate::domain::constants::QUEUE_ACTIVE_ATTEMPTS;
+                    let _ = vk_c.kv_del(&format!("{attempts_key}:{job_id_str}")).await;
+    
+                    if let Err(e) = vk_c.kv_del(&owner_key).await {
+                        tracing::warn!(%uuid, error = %e, "dispatcher: failed to delete job owner key");
+                    }
                 }
-
-                let _ = ka_stop_tx.send(());
-
-                // Remove from active ZSET (replaces list_remove on QUEUE_PROCESSING)
-                if let Err(e) = vk_c.active_lease_remove(&job_id_str).await {
-                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to remove job from active queue");
-                }
-                // Clean up attempts counter
-                let attempts_key = crate::domain::constants::QUEUE_ACTIVE_ATTEMPTS;
-                let _ = vk_c.kv_del(&format!("{attempts_key}:{job_id_str}")).await;
-
-                if let Err(e) = vk_c.kv_del(&owner_key).await {
-                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to delete job owner key");
-                }
-            });
+                .instrument(tracing::info_span!("veronex.inference.dispatcher.spawn")),
+            );
 
             dispatched = true;
             break;
