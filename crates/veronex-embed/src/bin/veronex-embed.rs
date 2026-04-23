@@ -106,8 +106,21 @@ async fn models_handler(State(state): State<AppState>) -> impl IntoResponse {
     })
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let worker_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .max_blocking_threads(64)
+        .thread_name("veronex-embed-worker")
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    rt.block_on(async_main());
+}
+
+async fn async_main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

@@ -25,9 +25,25 @@ use veronex::infrastructure::inbound::http::state::AppState;
 use veronex::infrastructure::outbound::persistence::database;
 
 // ── Entry point ────────────────────────────────────────────────────
+//
+// Manual runtime builder per patterns/async.md § tokio — LTS Pin.
+// `#[tokio::main]` hides worker-count and blocking-pool sizing, which are
+// load-bearing tuning knobs for a 10K-provider API server.
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let worker_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .max_blocking_threads(512)
+        .thread_name("veronex-worker")
+        .enable_all()
+        .build()?;
+    rt.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     init_tracing();
 
     let config = bootstrap::AppConfig::from_env();
