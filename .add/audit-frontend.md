@@ -53,11 +53,36 @@ grep -rn "onSuccess.*invalidate\|onSuccess.*queryClient" web/app web/components 
 
 # → design-system-components-patterns.md § ConfirmDialog
 grep -rn "\bconfirm(" web/app web/components --include="*.tsx"
+
+# → patterns-frontend.md § 4-Layer Component Architecture / Non-Goals — Atomic Design rejected
+find web/components web/app -type d \( -name atoms -o -name molecules -o -name organisms -o -name templates \) 2>/dev/null
+
+# → patterns-frontend.md § Design Token System / Single Source of Truth — colors only in tokens.css
+grep -rln "^\s*--[a-z][a-z0-9-]*-color\|^\s*--palette-\|^\s*--theme-" web/ --include="*.css" --include="*.tsx" | grep -v "tokens.css\|globals.css"
+
+# → patterns-frontend.md § Design Token System / Dark-mode selector — must be dual
+grep -n "data-theme='dark'\]\|data-theme=\"dark\"\]" web/app/tokens.css | grep -v "\.dark"
+
+# → patterns-frontend.md § Design Token System — Tailwind arbitrary color values
+grep -rn "bg-\[#\|text-\[#\|border-\[#\|fill-\[#\|stroke-\[#" web/app web/components --include="*.tsx"
 ```
 
 ### P2 — Architecture & Performance (run if touching infra/handlers/queries)
 
 ```bash
+# → patterns-frontend.md § 4-Layer Component Architecture / Violations — single-importer shared
+# Shared component imported by exactly one ROUTE = candidate to move to feature.
+# Excludes layout.tsx importers (those are globally shared via layout wrap).
+# Use quote-delimited match to avoid \b false-positives on sibling names (e.g. nav vs nav-404-context).
+for f in web/components/*.tsx; do
+  name=$(basename "$f" .tsx)
+  routes=$(grep -rlE "from ['\"](@/components|\./|\.\./)${name}['\"]" web/app --include="*.tsx" 2>/dev/null \
+    | grep -v '/layout\.tsx$' \
+    | awk -F/ '{print $3}' | sort -u)
+  count=$(echo "$routes" | grep -v '^$' | wc -l)
+  [ "$count" = "1" ] && echo "single-importer: $f → $routes (move to app/$routes/components/ unless name is intentionally generic)"
+done
+
 # → patterns-frontend.md § TanStack Query v5 / Query Timing Constants
 grep -rn "staleTime:\s*[0-9]" web/lib/queries web/app web/components --include="*.ts" --include="*.tsx"
 

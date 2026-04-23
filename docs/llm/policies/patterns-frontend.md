@@ -1,6 +1,6 @@
 # Code Patterns: Frontend — 2026 Reference
 
-> SSOT | **Last Updated**: 2026-03-26 | Classification: Operational | Exception: >200 lines (pattern registry)
+> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational | Exception: >200 lines (pattern registry)
 > Next.js 16 · React 19 · TanStack Query v5 · Tailwind v4 · Zod
 > Rust patterns -> `policies/patterns.md`
 
@@ -397,7 +397,30 @@ Not needed for simple property access or single-value derivations.
 
 ## Design Token System (4-Layer Architecture)
 
-Token flow: `tokens.css palette` → `tokens.css semantic (--theme-*)` → `@theme inline (Tailwind utilities)` → components
+Token flow: `@property` → `tokens.css palette` → `tokens.css semantic (--theme-*)` → `@theme inline (Tailwind utilities)` → components
+
+### Single Source of Truth
+
+**All colors live in `web/app/tokens.css`. Zero exceptions.** Color changes touch exactly two layers:
+
+| To change | Edit |
+|-----------|------|
+| A brand/raw color value | Layer 1 (`--palette-*`) only |
+| What a semantic role maps to | Layer 2 (`--theme-*`) only |
+| Add a new theme (e.g. brand X) | Layer 1 + Layer 2 only — **zero component code changes** |
+
+If a color change requires touching `.tsx`, the policy has been violated somewhere — fix the violation, not the symptom.
+
+### 4 Layers
+
+| Layer | Purpose | Rule |
+|-------|---------|------|
+| 0. `@property --theme-*` | Type-safe `<color>` syntax + enables CSS color transitions | Register every `--theme-*` token here first |
+| 1. `--palette-*` | Raw hex / OKLCH values | **Never reference from TSX — private to tokens.css** |
+| 2. `--theme-*` | Semantic tokens switched via `[data-theme='dark'], .dark` | Theme switching happens here and nowhere else |
+| 3. `@theme inline { --color-* }` | Tailwind v4 utility generation | Produces `bg-status-success`, `text-status-warning-fg` |
+
+**Dark-mode selector**: use `[data-theme='dark'], .dark` dual selector for shadcn/third-party compatibility. Never rely on only one.
 
 ### Layer usage by context
 
@@ -408,6 +431,7 @@ Token flow: `tokens.css palette` → `tokens.css semantic (--theme-*)` → `@the
 | SVG fill/stroke | `fill={tokens.status.info}` (JSX expression) | `fill="var(--theme-status-info)"` string |
 | Chart gradient stopColor | `stopColor={tokens.brand.primary}` | `stopColor="var(--theme-primary)"` |
 | Recharts fill/stroke | `fill={tokens.status.success}` | `fill="var(--theme-status-success)"` |
+| 3rd-party CSS overrides | Dedicated `.css` file (e.g. `swagger-overrides.css`) + `import './swagger-overrides.css'` | Inline `<style>{`...`}</style>` blocks in `.tsx` |
 
 ### `tokens` module structure (`web/lib/design-tokens.ts`)
 
@@ -466,6 +490,21 @@ import { tokens } from '@/lib/design-tokens'
 <span className="text-emerald-400" />                        // ✗ bypasses theme
 <span style={{ color: '#065f46' }} />                        // ✗ hardcoded hex
 ```
+
+### Adding a New Theme (procedure)
+
+```
+1. Layer 1 → add `--palette-{brand}-*` raw values (hex or OKLCH)
+2. Layer 2 → add `[data-theme='{brand}'], .{brand} { --theme-*: ... }` block
+3. Layer 0 / Layer 3 → no changes (automatic propagation)
+4. web/components/theme-provider.tsx → add '{brand}' to theme option union
+```
+
+Component code is untouched. If any `.tsx` needs a change to support the new theme, the offending component is violating the single-source rule — fix the component, not the theme.
+
+### OKLCH migration (Tailwind v4 default)
+
+Tailwind v4 ships OKLCH palettes by default. Layer 1 values may be written in hex or OKLCH interchangeably; prefer OKLCH for wide-gamut (P3) displays. The semantic layer (Layer 2) and all component code remain color-space-agnostic.
 
 ---
 
@@ -688,7 +727,27 @@ export function usePageGuard(menuId: string): void
 | 3. Shared components | `components/` + `components/ui/` | Reusable across pages — no business logic |
 | 4. Foundation | `lib/` · `hooks/` · `lib/queries/` | Types, API, formatters, tokens, query factories |
 
-Violations: shared logic in feature dirs, or page-specific logic in `components/`.
+### Violations (all are P1)
+
+| Violation | Fix |
+|-----------|-----|
+| Shared logic in feature dirs | Extract to `components/` or `lib/` |
+| Page-specific logic in `components/` | Move to `app/{route}/components/` |
+| Cross-route import (`app/A/` imports `app/B/components/`) | Lift shared dep to `components/` or duplicate per route |
+| **Single-importer shared component** (file in `components/` imported by exactly one route) | Move down to `app/{route}/components/` |
+
+### Non-Goals (do not propose these)
+
+Atomic Design is **explicitly rejected** for this codebase:
+
+| Rejected | Reason |
+|----------|--------|
+| `components/atoms/`, `components/molecules/`, `components/organisms/`, `components/templates/` | Conflicts with App Router colocation; Vercel + shadcn/ui 2026 standard is `components/ui/` primitives + `app/{route}/components/` feature folders |
+| Using terms "atom/molecule/organism" in PR reviews, commits, or docs | Classification is ambiguous (is a `Button` atom or molecule?) — produces unproductive boundary debates |
+| Global `organisms/` folder | Organisms are typically route-specific → global location creates orphan files on route deletion and blurs ownership |
+| Renaming 4-Layer terminology to Atomic terms | Training data overwhelmingly uses `app/route/components/` pattern → keeps LLM generation accuracy high |
+
+If new structure is needed, extend 4-Layer (add sub-folders like `app/{route}/components/modals/`), do not introduce a parallel taxonomy.
 
 ---
 

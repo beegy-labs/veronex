@@ -12,6 +12,7 @@
 | Backend-only review (Rust) | [`backend-review.md`](backend-review.md) |
 | Writing/updating a backend test (any layer) | [`backend-test.md`](backend-test.md) |
 | New backend handler / domain / adapter | [`backend-feature.md`](backend-feature.md) |
+| Writing/updating a frontend test (any layer) | [`frontend-test.md`](frontend-test.md) |
 | New feature / SDD spec active | [`feature-addition.md`](feature-addition.md) |
 | Refactor requested / structural issue | [`refactor.md`](refactor.md) |
 | Bug report / test failure | [`bug-fix.md`](bug-fix.md) |
@@ -49,7 +50,9 @@ No O(N) DB scans, sequential awaits, or unbounded memory growth at these scales.
 | Rust deps audit | `cargo deny check` | Before PR |
 | Rust mutation (PR diff) | `cargo mutants --in-diff origin/develop --timeout 30` | In CI per PR |
 | Frontend compile | `npx tsc --noEmit` | After every TSX/TS change |
-| Frontend unit | `npx vitest run` | Before commit |
+| Frontend unit (jsdom) | `npx vitest run --project unit` | Before commit |
+| Frontend component (browser) | `npx vitest run --project component` | Before commit when touching components |
+| Frontend integration (API) | `npx vitest run --project integration` | Before commit when touching API/schemas |
 | Frontend E2E | `npx playwright test` | Before PR |
 
 ### CDD Sync Routing
@@ -88,6 +91,7 @@ Quick reference:
 | `backend-review.md` | Backend-only (Rust) review scope, parallel agent structure (Reuse/Quality/Efficiency), architecture non-goals |
 | `backend-feature.md` | New Rust handler / domain / adapter workflow |
 | `backend-test.md` | Rust Testing Trophy (5-Layer) — layer selection + behavior-driven rules |
+| `frontend-test.md` | Frontend Testing Trophy (5-Layer) — layer selection + behavior-driven rules |
 | `feature-addition.md` | New feature workflow (also covers `implementation.md` triggers) |
 | `implementation.md` | Redirect → `feature-addition.md` |
 | `refactor.md` | Structural refactor workflow |

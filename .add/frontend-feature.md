@@ -1,6 +1,6 @@
 # Frontend Feature Addition
 
-> ADD Execution — New Page / Feature | **Last Updated**: 2026-03-30
+> ADD Execution — New Page / Feature | **Last Updated**: 2026-04-22
 
 ## Trigger
 
@@ -32,7 +32,8 @@ User requests a new frontend page, feature, or domain UI.
 | 8 | Add nav entry to `web/components/nav.tsx` if needed |
 | 9 | Add i18n keys: `en.json` → `ko.json` → `ja.json` simultaneously |
 | 10 | Run `npx tsc --noEmit` — zero errors |
-| 11 | Run frontend review: `.add/frontend-review.md` |
+| 11 | Write tests per `.add/frontend-test.md` — pick layer via checklist; never duplicate across layers |
+| 12 | Run frontend review: `.add/frontend-review.md` |
 
 ## Rules
 
@@ -45,8 +46,10 @@ User requests a new frontend page, feature, or domain UI.
 | Optimistic UI | `useOptimistic` on toggle/switch mutations |
 | i18n | All user-facing strings via `t()` — no hardcoded strings |
 | Feature components | Page-specific components in `app/{route}/components/` — never in `components/` |
-| Shared components | Only generic, reusable components go in `components/` |
+| Shared components | Only generic, reusable components go in `components/`. Single-importer shared = move to feature |
 | 4-layer | Pages → Feature components → Shared components → Foundation (lib/hooks/queries) |
+| Color | All colors via `tokens.css` SSOT. Change = Layer 1 + Layer 2 only. Zero color edits in `.tsx` |
+| No Atomic Design | Do not create `components/atoms/`, `molecules/`, `organisms/`, `templates/`. Do not use atom/molecule/organism in names or reviews. See `patterns-frontend.md § Non-Goals` |
 
 ## Output Checklist
 

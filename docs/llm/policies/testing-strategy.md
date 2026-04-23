@@ -2,42 +2,53 @@
 
 > SSOT | **Last Updated**: 2026-04-22 | Classification: Operational
 
-## Methodology: Testing Trophy + Contract Testing
+## Methodology: Testing Trophy (5-Layer, 2026)
 
-Integration-test focused, no duplication, clear layer responsibility separation.
+Behavior-driven, integration-heavy, zero cross-layer duplication. *"Write tests. Not too many. Mostly integration."* — Kent C. Dodds.
 
 ### Layer Responsibility (No Duplication)
 
-| Layer | Verifies | Tool | Anti-Pattern |
-|-------|----------|------|-------------|
-| **Static** | Types, lint | TypeScript, Clippy | Don't test what types already catch |
-| **Unit** | Pure function logic | cargo test, vitest | No HTTP/DB verification |
-| **Integration** | API contracts (schema) | OpenAPI validation, vitest | No overlap with E2E paths |
-| **E2E** | User flows | bash e2e, Playwright | No individual function verification |
+| Layer | Verifies | Tool | Environment | Anti-Pattern |
+|-------|----------|------|-------------|--------------|
+| **1. Static** | Types, lint | TypeScript, Clippy, ESLint | — | Testing what the type system already catches |
+| **2. Unit** | Pure function / hook logic | vitest + jsdom, cargo test, proptest | Node | HTTP/DB verification; mocking your way around integration concerns |
+| **3. Component** | Single-component render + user interaction | **Vitest Browser Mode**, Playwright Component Testing | Real browser | jsdom for visual / layout-dependent behavior; testing implementation details |
+| **4. Integration** | API contracts (schema), cross-module wiring | vitest + OpenAPI validation, wiremock | Node + mock server | Duplicating E2E user flows |
+| **5. E2E** | End-to-end user flows | Playwright, bash e2e | Real browser + real backend | Asserting on individual function return values |
 
-### Decision Checklist (Before Writing Tests)
+**Frontend stack**: Unit in jsdom, Component in Vitest Browser Mode, E2E in Playwright. jsdom is restricted to pure logic — any test that asserts on layout, focus, scrolling, or CSS must run in a real browser.
+
+### Decision Checklist (Before Writing a Test)
 
 ```
-1. Caught by types?              → Yes → No test needed
-2. Pure function?                → Yes → Unit (proptest preferred)
-3. External dependency?          → Yes → Integration (mock/schema)
-4. User flow?                    → Yes → E2E (minimal only)
-5. Already verified at another layer? → Yes → Don't write it
+1. Caught by types?                      → Yes → No test needed
+2. Pure function or hook logic?          → Yes → Unit (proptest for pure, RTL renderHook for hooks)
+3. Single component render/interaction?  → Yes → Component (Vitest Browser Mode)
+4. API contract / cross-module wiring?   → Yes → Integration (schema validation or wiremock)
+5. Multi-page user flow?                 → Yes → E2E (minimal set only)
+6. Already verified at another layer?    → Yes → Don't write it
 ```
 
 ---
 
 ## Test Purity Principle
 
-**"Function change → only unit breaks → E2E unchanged"**
+**"A change in one layer must break tests in that layer only."**
 
-| Change Type | Unit | Integration | E2E |
-|------------|------|------------|-----|
-| Internal function logic | FAIL | PASS | PASS |
-| API response schema | PASS | FAIL | FAIL |
-| User flow | PASS | PASS | FAIL |
+| Change Type | Unit | Component | Integration | E2E |
+|-------------|------|-----------|-------------|-----|
+| Internal function / hook logic | FAIL | PASS | PASS | PASS |
+| Component markup / interaction | PASS | FAIL | PASS | PASS |
+| API response schema | PASS | PASS | FAIL | FAIL |
+| Multi-page user flow | PASS | PASS | PASS | FAIL |
 
-If E2E breaks on internal function change → **test design flaw** (layer violation).
+Cross-layer failures = **layer violation** = test design flaw. Fix the tests, not the code.
+
+---
+
+## Frontend Testing
+
+Frontend-specific rules (behavior-driven, Testing Library query priority, `getByRole` performance exception, forbidden queries) are in **[`testing-strategy-frontend.md`](testing-strategy-frontend.md)**.
 
 ---
 
@@ -69,11 +80,14 @@ All crates in `crates/` MUST have at least Unit + Handler (if they expose HTTP) 
 
 ### TypeScript (Web)
 
-| Tool | Purpose | Config |
-|------|---------|--------|
-| vitest | Unit + Integration | `maxWorkers: N`, `fileParallelism: true` (v4+) |
-| Playwright | E2E | `fullyParallel: true`, CI workers=4 |
-| vitest-openapi | API schema validation | OpenAPI spec based |
+| Tool | Purpose | Layer | Config |
+|------|---------|-------|--------|
+| vitest (jsdom) | Pure function + hook logic | Unit | `environment: 'jsdom'` project |
+| **vitest Browser Mode** | Single-component render + interaction | **Component** | `browser: { enabled: true, provider: 'playwright' }` project |
+| vitest-openapi | API schema validation | Integration | OpenAPI spec based |
+| Playwright | Multi-page user flows | E2E | `fullyParallel: true`, CI workers=4 |
+
+**jsdom is forbidden for layout / visual / focus / scroll / CSS assertions.** Any such test must be a Component test in Browser Mode. Rationale: jsdom does not implement CSSOM, layout, or real focus traversal — tests that appear to pass in jsdom may reflect jsdom bugs rather than application behavior.
 
 ### vitest v4 Notes
 
@@ -160,6 +174,13 @@ Some data is intentionally **kept after E2E tests for manual verification**.
 
 - [Testing Trophy — Kent C. Dodds](https://kentcdodds.com/blog/the-testing-trophy-and-testing-classifications)
 - [Write tests. Not too many. Mostly integration. — Kent C. Dodds](https://kentcdodds.com/blog/write-tests)
+- [Avoid Testing Implementation Details — Kent C. Dodds](https://kentcdodds.com/blog/testing-implementation-details)
+- [Why I Won't Use jsdom — Kent C. Dodds / Epic Web](https://www.epicweb.dev/why-i-won-t-use-jsdom)
+- [Vitest Browser Mode](https://vitest.dev/guide/browser/why)
+- [Testing Library — Query Priority](https://testing-library.com/docs/queries/about/#priority)
+- [Testing Library — Guiding Principles](https://testing-library.com/docs/guiding-principles)
+- [Playwright Component Testing](https://playwright.dev/docs/test-components)
+- [Next.js Testing with Vitest](https://nextjs.org/docs/app/guides/testing/vitest)
 - [Rust Testing Patterns 2026](https://dasroot.net/posts/2026/03/rust-testing-patterns-reliable-releases/)
 - [Rust Integration Tests 2026](https://oneuptime.com/blog/post/2026-01-26-rust-integration-tests/view)
 - [proptest](https://docs.rs/proptest)
