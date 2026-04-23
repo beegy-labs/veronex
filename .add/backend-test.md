@@ -4,114 +4,104 @@
 
 ## Trigger
 
-- New Rust handler / domain service / repository / adapter
-- Rust bug reported
-- Pre-commit / pre-PR verification
-- Refactor that must remain behavior-compatible
+New Rust handler / domain service / repo / adapter; bug; pre-PR; refactor.
 
 ## Read Before Execution
 
-| Doc | Path | When |
-|-----|------|------|
-| Testing SSOT | `docs/llm/policies/testing-strategy.md § Rust Testing Trophy` | Always — layer responsibility, purity, behavior-driven rules |
-| Rust patterns | `docs/llm/policies/patterns.md` | Always |
-| Architecture | `docs/llm/policies/architecture.md` | Layer boundaries |
+| Doc | When |
+|-----|------|
+| `docs/llm/policies/testing-strategy.md § Rust Testing Trophy` | Always |
+| `docs/llm/policies/patterns.md` | Always |
+| `docs/llm/policies/architecture.md` | Layer boundaries |
 
 ## Layer Selection
 
-Run through the checklist in order. Stop at the first Yes — do not double-cover.
+Stop at the first Yes — do not double-cover.
 
 | # | Question | Layer | Command |
 |---|----------|-------|---------|
-| 1 | Already caught by `cargo check` / `cargo clippy -D warnings` / types? | Static | `cargo clippy --workspace -- -D warnings` |
-| 2 | Pure function / domain logic / validator / parser / normalizer? | **Unit** | `cargo nextest run -p <crate> --lib` |
-| 3 | Real Postgres / Valkey / Kafka / MCP server needed? | **Integration** | `cargo nextest run -p <crate> --test '*'` (with `testcontainers`) |
-| 4 | Outbound HTTP to Ollama / Gemini / MCP? | **Integration** | `wiremock` inside a `#[tokio::test]` |
-| 5 | Axum handler request → response contract? | **Handler** | `tower::ServiceExt::oneshot` in `#[tokio::test]` |
-| 6 | Cross-service / cross-crate flow through docker-compose stack? | **E2E** | `bash scripts/e2e/NN-<name>.sh` |
-| 7 | Already verified at another layer? | — | Do not write the test |
+| 1 | Caught by types / `clippy -D warnings`? | Static | `cargo clippy --workspace -- -D warnings` |
+| 2 | Pure function / domain / validator / parser? | Unit | `cargo nextest run -p <crate> --lib` |
+| 3 | Real Postgres / Valkey / Kafka / MCP needed? | Integration | `cargo nextest run -p <crate> --test '*'` (testcontainers) |
+| 4 | Outbound HTTP (Ollama / Gemini / MCP)? | Integration | `wiremock` in `#[tokio::test]` |
+| 5 | Axum handler request → response contract? | Handler | `tower::ServiceExt::oneshot` in `#[tokio::test]` |
+| 6 | Cross-service flow through docker-compose? | E2E | `bash scripts/e2e/NN-<name>.sh` |
+| 7 | Already verified at another layer? | — | Don't write it |
 
-## Test Writing Rules
+## Writing Rules
 
-All layers follow behavior-driven testing.
-
-| Rule | Applies to | Detail |
-|------|-----------|--------|
-| Behavior-driven | All | Assert on returned values, HTTP response shape, persisted rows, emitted events — never on internal struct state or mock call counts |
-| Handler test form | Handler | `tower::ServiceExt::oneshot` + `axum::body::to_bytes`. No `reqwest`, no `TcpListener`, no real HTTP server |
-| Real DB/Queue | Integration | `testcontainers-rs` — never mock Postgres / Valkey / Kafka |
-| HTTP client mocking | Integration | `wiremock` — assert on the request shape emitted by the adapter |
-| Property-based | Unit | `proptest` for any pure function with non-trivial input space |
-| Snapshot scope | Unit / Handler | `insta` only for stable-shape outputs (OpenAPI spec, migration order, error bodies). No whole-struct Debug snapshots |
-| No private backdoors | All | Never add `pub(crate)` solely to enable a test — refactor to a public port instead |
-| Async tests | Handler / Integration | `#[tokio::test]` with `flavor = "multi_thread"` for concurrency tests |
-| Fixtures | All | Seed data via explicit insert helpers in `tests/support/`, not global `static` state |
-
-## Execution Steps
-
-| Step | Action |
+| Rule | Detail |
 |------|--------|
-| 1 | Classify the change → pick the Layer via the selection checklist |
-| 2 | Read existing tests in the same crate to match style |
-| 3 | Write the test using the form required by the layer |
-| 4 | Run the single layer: `cargo nextest run -p <crate> --lib` (Unit) / `cargo nextest run -p <crate> --test '*'` (Integration/Handler) |
+| Behavior-driven | Assert on returned values, HTTP response, persisted rows — not struct state or mock call counts |
+| Handler form | `tower::ServiceExt::oneshot` + `axum::body::to_bytes`. No `reqwest`, no real HTTP server |
+| Real systems | `testcontainers-rs` for DB/queue; never mock Postgres / Valkey |
+| HTTP mock | `wiremock` — assert on request shape emitted by adapter |
+| Property-based | `proptest` on pure fns with non-trivial input space |
+| Snapshots | `insta` only for stable outputs (OpenAPI spec, migration order, error bodies) |
+| No backdoors | Never add `pub(crate)` solely for a test — expose via a public port instead |
+| Async | `#[tokio::test(flavor = "multi_thread")]` for concurrency tests |
+| Fixtures | Explicit insert helpers in `tests/support/`, not global `static` state |
+
+## Steps
+
+| # | Action |
+|---|--------|
+| 1 | Pick layer via checklist |
+| 2 | Read neighboring tests in same crate to match style |
+| 3 | Write using the layer's required form |
+| 4 | Run the single layer with `--project` / `-p` scope |
 | 5 | Verify purity: rename an internal helper — only Unit tests should fail |
-| 6 | For E2E: run `bash scripts/e2e/NN-<name>.sh` locally before pushing |
+| 6 | E2E: run `bash scripts/e2e/NN-<name>.sh` before pushing |
 
-## Test Purity Verification
+## Purity Verification
 
-Any PR that adds or changes a test must satisfy:
+- Internal fn rename → only Unit fails
+- DB schema change → only Integration fails
+- HTTP response shape change → only Handler fails
+- Cross-service flow change → only E2E fails
 
-- Internal function rename → only Unit tests fail
-- DB schema change → only Integration tests fail
-- HTTP response shape change → only Handler tests fail
-- Cross-service flow change → only E2E tests fail
-
-Cross-layer failures from a single-concern change = **test design flaw** → rewrite before merging.
+Cross-layer failures from a single-concern change = **test design flaw** → rewrite.
 
 ## Forbidden Patterns
 
 | Pattern | Reason |
 |---------|--------|
-| `reqwest` against a locally-spawned Axum server for unit/handler tests | Use `tower::ServiceExt::oneshot` — faster, deterministic, no port bind |
-| Mocked Postgres / Valkey via in-memory fake | Use `testcontainers-rs` with real Postgres / Valkey |
-| `#[should_panic]` as the primary assertion | Assert on the returned `Err` variant instead |
-| `assert!(result.is_ok())` | Use `assert_eq!(result.unwrap(), expected)` or pattern-match the `Ok(x)` value |
-| `dbg!` / `println!` left in committed tests | Test pollution |
-| Whole-struct `#[derive(Debug)]` snapshots | Hides intent; brittle on unrelated field changes |
-| `assert!(mock.calls() == N)` as primary assertion | Use `wiremock::Mock::expect(N)` only when the adapter's contract requires exactly N calls; for everything else, assert on side effects |
-| Opening a `pub(crate)` visibility solely for a test | Refactor to expose the behavior via a public port |
-| Hardcoded `thread::sleep(Duration::from_secs(1))` waits | Use `tokio::time::timeout` + deterministic signals |
+| `reqwest` against a local Axum server in unit/handler tests | Use `oneshot` — deterministic, no port bind |
+| In-memory fake Postgres / Valkey | Use `testcontainers-rs` |
+| `#[should_panic]` as primary assertion | Assert on `Err` variant |
+| `assert!(result.is_ok())` | Pattern-match or `unwrap` to a concrete value |
+| `dbg!` / `println!` left committed | Test pollution |
+| Whole-struct `Debug` snapshot | Hides intent; brittle |
+| `assert!(mock.calls() == N)` as primary | Use `wiremock::Mock::expect(N)` only when contract requires; assert on side effects otherwise |
+| `pub(crate)` opened only for a test | Refactor to a public port |
+| Hardcoded `thread::sleep` waits | Use `tokio::time::timeout` + signals |
 
-## Crate-Level Coverage Requirements
+## Crate Coverage Requirements
 
-| Crate | Layers required | Rationale |
-|-------|-----------------|-----------|
-| `veronex` (API + scheduler) | Unit + Integration + Handler + E2E | Core service, full surface |
-| `veronex-mcp` | Unit + Integration (wiremock) + Handler | MCP server library |
-| `veronex-agent` | Unit + Integration (wiremock for OTLP) | Outbound only; no inbound HTTP |
-| `veronex-analytics` | Unit + Integration + Handler | ClickHouse-backed API |
-| `veronex-consumer` | Unit + Integration (testcontainers Kafka + ClickHouse) | OTLP parse + persist |
-| `veronex-embed` | Unit + Handler | Stateless embedding service |
+| Crate | Layers required |
+|-------|-----------------|
+| `veronex` | Unit + Integration + Handler + E2E |
+| `veronex-mcp` | Unit + Integration (wiremock) + Handler |
+| `veronex-agent` | Unit + Integration (wiremock for OTLP) |
+| `veronex-analytics` | Unit + Integration + Handler |
+| `veronex-consumer` | Unit + Integration (testcontainers Kafka + ClickHouse) |
+| `veronex-embed` | Unit + Handler |
 
-## Proptest Targets (mandatory for 10K scale)
+## Mandatory Proptest Targets
 
-These modules MUST have at least one `proptest`:
-
-- Any ID encoder/decoder (round-trip property)
+- ID encoder/decoder (round-trip)
 - URL normalizer / SSRF validator (idempotency + allowed-only-if-parsed)
 - Duration / size / rate parser
 - Domain enum parser (`parse_db_enum`)
-- Any UTF-8 safe truncation helper (length bound + UTF-8 validity)
+- UTF-8 safe truncation (length bound + UTF-8 validity)
 
-## Output Checklist
+## Checklist
 
-- [ ] Correct layer selected via checklist
+- [ ] Correct layer selected
 - [ ] Behavior-driven assertions only
-- [ ] Handler test uses `oneshot` (not `reqwest`)
-- [ ] Integration test uses `testcontainers-rs` / `wiremock` (not mocks)
-- [ ] Purity verified: internal rename doesn't cross layers
-- [ ] `cargo nextest run -p <crate>` passes
-- [ ] `cargo clippy --workspace -- -D warnings` passes
+- [ ] Handler uses `oneshot`
+- [ ] Integration uses `testcontainers-rs` / `wiremock`
+- [ ] Purity verified
+- [ ] `cargo nextest run -p <crate>` + `clippy -D warnings` pass
 - [ ] Proptest added where mandated
-- [ ] No `pub(crate)` test backdoors introduced
+- [ ] No `pub(crate)` test backdoors

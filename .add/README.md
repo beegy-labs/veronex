@@ -77,7 +77,10 @@ Quick reference:
 | File | SSOT for |
 |------|----------|
 | `README.md` (this file) | Scale targets, verification commands, CDD sync routing — shared by all workflows |
-| `best-practices.md` | "Where to write what" routing, Part 2 refactor checklist, Part 3 frontend audit greps |
+| `best-practices.md` | "Where to write what" routing, Part 1 update workflow, Part 2 refactor workflow |
+| `audit-frontend.md` | P1/P2/P3 frontend grep audit blocks |
+| `audit-backend.md` | P1/P2/P3/P4 Rust (backend) grep audit blocks |
+| `audit-security.md` | P0/P1/P2 LLM gateway security greps (OWASP API + LLM 2025) |
 | `skills.md` | Tech stack inventory, version changelog |
 | `escalation.md` | Decision table — escalate vs. proceed |
 | `code-review.md` | Full review workflow (Rust + frontend), P1/P2/P3 severity definitions |
