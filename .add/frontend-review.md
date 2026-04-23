@@ -34,7 +34,7 @@ Do NOT propose or accept any of the following during review:
 - Color definitions anywhere outside `web/app/tokens.css` (including inline `var(--theme-*)` strings)
 - Single dark-mode selector (`.dark` only or `[data-theme='dark']` only) — must be both
 
-Rationale: `patterns-frontend.md § 4-Layer Component Architecture / Non-Goals` and `§ Design Token System / Single Source of Truth`.
+Rationale: `patterns-frontend/architecture.md § 4-Layer Component Architecture / Non-Goals` and `§ Design Token System / Single Source of Truth`.
 
 ---
 

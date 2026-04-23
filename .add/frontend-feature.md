@@ -49,7 +49,7 @@ User requests a new frontend page, feature, or domain UI.
 | Shared components | Only generic, reusable components go in `components/`. Single-importer shared = move to feature |
 | 4-layer | Pages → Feature components → Shared components → Foundation (lib/hooks/queries) |
 | Color | All colors via `tokens.css` SSOT. Change = Layer 1 + Layer 2 only. Zero color edits in `.tsx` |
-| No Atomic Design | Do not create `components/atoms/`, `molecules/`, `organisms/`, `templates/`. Do not use atom/molecule/organism in names or reviews. See `patterns-frontend.md § Non-Goals` |
+| No Atomic Design | Do not create `components/atoms/`, `molecules/`, `organisms/`, `templates/`. Do not use atom/molecule/organism in names or reviews. See `patterns-frontend/architecture.md § 4-Layer Component Architecture / Non-Goals` |
 
 ## Output Checklist
 
