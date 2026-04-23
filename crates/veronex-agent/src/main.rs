@@ -35,6 +35,7 @@ mod health;
 mod heartbeat;
 mod orphan_sweeper;
 mod otlp;
+mod persistence;
 mod scraper;
 mod shard;
 

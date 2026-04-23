@@ -4,34 +4,36 @@ use aes_gcm::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
+use crate::domain::errors::DomainError;
+
 /// Encrypt plaintext with AES-256-GCM.
 /// Returns base64-encoded `nonce || ciphertext` string.
-pub fn encrypt(plaintext: &str, master_key: &[u8; 32]) -> anyhow::Result<String> {
+pub fn encrypt(plaintext: &str, master_key: &[u8; 32]) -> Result<String, DomainError> {
     let cipher = Aes256Gcm::new(master_key.into());
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher
         .encrypt(&nonce, plaintext.as_bytes())
-        .map_err(|e| anyhow::anyhow!("encryption failed: {e}"))?;
+        .map_err(|e| DomainError::Crypto(format!("encryption failed: {e}")))?;
     let mut combined = nonce.to_vec();
     combined.extend_from_slice(&ciphertext);
     Ok(BASE64.encode(&combined))
 }
 
 /// Decrypt base64-encoded `nonce || ciphertext` with AES-256-GCM.
-pub fn decrypt(encoded: &str, master_key: &[u8; 32]) -> anyhow::Result<String> {
+pub fn decrypt(encoded: &str, master_key: &[u8; 32]) -> Result<String, DomainError> {
     let combined = BASE64
         .decode(encoded)
-        .map_err(|e| anyhow::anyhow!("base64 decode failed: {e}"))?;
+        .map_err(|e| DomainError::Crypto(format!("base64 decode failed: {e}")))?;
     if combined.len() < 12 {
-        anyhow::bail!("ciphertext too short");
+        return Err(DomainError::Crypto("ciphertext too short".into()));
     }
     let (nonce_bytes, ciphertext) = combined.split_at(12);
     let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
     let cipher = Aes256Gcm::new(master_key.into());
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
-        .map_err(|e| anyhow::anyhow!("decryption failed: {e}"))?;
-    String::from_utf8(plaintext).map_err(|e| anyhow::anyhow!("invalid UTF-8: {e}"))
+        .map_err(|e| DomainError::Crypto(format!("decryption failed: {e}")))?;
+    String::from_utf8(plaintext).map_err(|e| DomainError::Crypto(format!("invalid UTF-8: {e}")))
 }
 
 /// Minimum byte length of a valid AES-256-GCM blob: 12-byte nonce + 16-byte auth tag.
@@ -74,8 +76,6 @@ pub fn decrypt_or_legacy(encoded: &str, master_key: &[u8; 32]) -> (String, bool)
 }
 
 // ── Password hashing ──────────────────────────────────────────────────────────
-
-use crate::domain::errors::DomainError;
 
 /// Hash a password with Argon2id.
 pub fn hash_password(password: &str) -> Result<String, DomainError> {

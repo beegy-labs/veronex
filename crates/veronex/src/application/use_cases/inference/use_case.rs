@@ -199,7 +199,7 @@ impl InferenceUseCaseImpl {
         }.boxed()
     }
 
-    pub async fn recover_pending_jobs(&self) -> anyhow::Result<()> {
+    pub async fn recover_pending_jobs(&self) -> std::result::Result<(), crate::domain::errors::DomainError> {
         let Some(ref valkey) = self.valkey else { return Ok(()); };
 
         // Drain legacy QUEUE_JOBS list (jobs mis-routed there by old reaper code).
