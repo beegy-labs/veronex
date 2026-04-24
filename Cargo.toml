@@ -8,6 +8,20 @@ members = [
     "crates/veronex-embed",
     "workspace-hack",
 ]
+# Default build target — selected by `cargo build` / `cargo chef cook` when no
+# `--workspace`, `-p`, or `--bin` flag is supplied. `veronex-embed` is
+# intentionally excluded: its transitive dep `ort-sys v2.x` ships no prebuilt
+# binary for `x86_64-unknown-linux-musl`, so it cannot build in the Alpine/musl
+# unified Dockerfile. The embed crate has its own glibc-based Dockerfile
+# (`crates/veronex-embed/Dockerfile`) and is still reachable via `-p veronex-embed`.
+default-members = [
+    "crates/veronex",
+    "crates/veronex-analytics",
+    "crates/veronex-agent",
+    "crates/veronex-consumer",
+    "crates/veronex-mcp",
+    "workspace-hack",
+]
 resolver = "2"
 
 [profile.dev]
