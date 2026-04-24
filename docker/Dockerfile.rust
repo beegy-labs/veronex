@@ -49,20 +49,25 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
-# Cook workspace deps (cached by sccache + Docker layer cache)
+# Cook workspace deps (cached by sccache + Docker layer cache).
+# No --workspace / --bin flags: cargo honours `[workspace.default-members]` in
+# the root Cargo.toml, which excludes `veronex-embed` (ort-sys has no musl
+# prebuilt binaries). Embed is built in its own glibc-based Dockerfile.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=secret,id=sccache_env \
     [ -f /run/secrets/sccache_env ] && . /run/secrets/sccache_env; \
     RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
-    cargo chef cook --profile ci --workspace --recipe-path recipe.json
+    cargo chef cook --profile ci --recipe-path recipe.json
 
 # Copy full source
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY workspace-hack/ ./workspace-hack/
 
-# Build workspace binaries in one pass (embed excluded — ort-sys requires glibc)
+# Build default-members binaries in one pass. Which crates build is declared
+# declaratively in `[workspace.default-members]` of root Cargo.toml (SSOT);
+# embed is excluded there because ort-sys requires glibc.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
@@ -70,12 +75,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     [ -f /run/secrets/sccache_env ] && . /run/secrets/sccache_env; \
     RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
     SQLX_OFFLINE=true \
-    cargo build --profile ci \
-      -p veronex \
-      -p veronex-agent \
-      -p veronex-mcp \
-      -p veronex-consumer \
-      -p veronex-analytics && \
+    cargo build --profile ci && \
     mkdir -p /out && \
     cp /app/target/ci/veronex /out/ && \
     cp /app/target/ci/veronex-agent /out/ && \
