@@ -11,7 +11,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-veronex} -d veronex"]
@@ -250,6 +250,7 @@ services:
       # analyze_image tool — route through Veronex gateway instead of calling Ollama directly
       VERONEX_URL: http://veronex:3000
       VERONEX_API_KEY: ${VERONEX_API_KEY:-}
+      ANALYZE_IMAGE_MODEL: ${ANALYZE_IMAGE_MODEL:-qwen3-vl:8b}
     ports:
       - "3100:3100"
     depends_on:
