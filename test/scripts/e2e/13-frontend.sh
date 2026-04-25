@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"; ensure_auth
 
 WEB_URL="${WEB_URL:-http://localhost:3000}"
-WEB_DIR="$(cd "$SCRIPT_DIR/../../web" && pwd)"
+WEB_DIR="$REPO_ROOT/web"
 PW_WORKERS="${PW_WORKERS:-1}"
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
@@ -74,12 +74,11 @@ for _pw_attempt in 1 2; do
   (
     cd "$WEB_DIR"
     # Clear login rate-limit keys before each attempt
-    _REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR/../..")"
-    _RLKEYS=$(docker compose -f "$_REPO_ROOT/docker-compose.yml" exec -T valkey \
+    _RLKEYS=$(docker compose -f "$REPO_ROOT/docker-compose.yml" exec -T valkey \
       valkey-cli KEYS 'veronex:login_attempts:*' 2>/dev/null | tr -d '\r')
     if [ -n "$_RLKEYS" ]; then
       # shellcheck disable=SC2086
-      docker compose -f "$_REPO_ROOT/docker-compose.yml" exec -T valkey \
+      docker compose -f "$REPO_ROOT/docker-compose.yml" exec -T valkey \
         valkey-cli del $_RLKEYS > /dev/null 2>&1 || true
     fi
     PLAYWRIGHT_BASE_URL="$WEB_URL" \

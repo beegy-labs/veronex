@@ -8,7 +8,7 @@
 #   3. The text model responds with content derived from the image.
 #   4. The image is still stored in S3 (image_keys populated).
 #
-# Test image is generated on first run and cached as scripts/e2e/test-fixture.jpg.
+# Test image is generated on first run and cached as test/scripts/e2e/test-fixture.jpg.
 # The file is gitignored — only generated when absent.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

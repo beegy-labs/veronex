@@ -17,7 +17,7 @@ if [ "$SKIP_DB_RESET" = "0" ]; then
   docker compose exec -T postgres psql -U veronex -d veronex -c \
     "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" > /dev/null 2>&1
   docker compose exec -T postgres psql -U veronex -d veronex \
-    < "$(dirname "$0")/../../docker/postgres/init.sql" > /dev/null 2>&1
+    < "$REPO_ROOT/docker/postgres/init.sql" > /dev/null 2>&1
   sed \
     -e "s/__RETENTION_INFERENCE_DAYS__/${CLICKHOUSE_RETENTION_INFERENCE_DAYS:-90}/g" \
     -e "s/__RETENTION_LOGS_DAYS__/${CLICKHOUSE_RETENTION_LOGS_DAYS:-7}/g" \
@@ -25,7 +25,7 @@ if [ "$SKIP_DB_RESET" = "0" ]; then
     -e "s/__RETENTION_METRICS_DAYS__/${CLICKHOUSE_RETENTION_METRICS_DAYS:-14}/g" \
     -e "s/__RETENTION_TRACES_DAYS__/${CLICKHOUSE_RETENTION_TRACES_DAYS:-7}/g" \
     -e "s/__RETENTION_MCP_DAYS__/${CLICKHOUSE_RETENTION_MCP_DAYS:-90}/g" \
-    "$(dirname "$0")/../../docker/clickhouse/schema.sql" \
+    "$REPO_ROOT/docker/clickhouse/schema.sql" \
   | docker compose exec -T clickhouse clickhouse-client \
     --user "${CLICKHOUSE_USER:-veronex}" --password "${CLICKHOUSE_PASSWORD:-veronex}" \
     --database veronex > /dev/null 2>&1
@@ -263,6 +263,47 @@ if [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ]; then
   save_var API_KEY_STANDARD "$STD_KEY"
 else
   fail "Could not find account for API key creation"
+fi
+
+# ── Phase 7.5: Wire veronex-mcp.analyze_image to the actual environment ──────
+# Two prerequisites must reach veronex-mcp at container start (env-only, no
+# hot reload):
+#   1. VERONEX_API_KEY     — the paid key we just minted, used as `X-API-Key`
+#                            against the Veronex gateway.
+#   2. ANALYZE_IMAGE_MODEL — the actual vision model name registered on a
+#                            Veronex provider. The default `qwen3-vl:8b` may
+#                            not match what's installed (e.g. `qwen3-vl-8k:latest`).
+# Recreating with both env vars set lets 12-mcp exercise the real path.
+if [ -n "$API_KEY" ] && [ "$API_KEY" != "None" ]; then
+  VISION_MODEL=$(aget "/v1/ollama/models" 2>/dev/null | python3 -c "
+import sys,json
+try:
+    d=json.loads(sys.stdin.read())
+    ms=d if isinstance(d,list) else d.get('models',[])
+    vm=next((m for m in ms if isinstance(m,dict) and m.get('is_vision')), None)
+    print(vm.get('model_name','') if vm else '')
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+  if [ -z "$VISION_MODEL" ]; then
+    info "No vision model detected — analyze_image will SKIP in 12-mcp"
+    VISION_MODEL="qwen3-vl:8b"  # harmless default; 12-mcp guard will SKIP
+  else
+    info "Vision model detected: $VISION_MODEL"
+  fi
+  if VERONEX_API_KEY="$API_KEY" ANALYZE_IMAGE_MODEL="$VISION_MODEL" \
+      docker compose -f "$REPO_ROOT/docker-compose.yml" \
+        up -d --force-recreate --no-deps veronex-mcp > /dev/null 2>&1; then
+    # Wait for /health to come back so 12-mcp doesn't race the recreate
+    for _ in $(seq 1 20); do
+      curl -sf http://localhost:3100/health > /dev/null 2>&1 && break
+      sleep 1
+    done
+    pass "veronex-mcp recreated with VERONEX_API_KEY + ANALYZE_IMAGE_MODEL=$VISION_MODEL"
+    save_var ANALYZE_IMAGE_MODEL "$VISION_MODEL"
+  else
+    fail "veronex-mcp recreate with VERONEX_API_KEY/ANALYZE_IMAGE_MODEL failed"
+  fi
 fi
 
 # ── Phase 8: Wait for providers to come online ────────────────────────────────

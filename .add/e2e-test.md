@@ -12,7 +12,7 @@
 
 ```bash
 docker compose up -d          # All services running
-bash scripts/e2e/01-setup.sh  # Infra + auth + provider registration
+bash test/scripts/e2e/01-setup.sh  # Infra + auth + provider registration
 ```
 
 ## Execution
@@ -56,7 +56,7 @@ for s in 01-setup 02-scheduler 03-inference 04-crud 05-security 06-api-surface \
          11-verify-liveness 12-mcp 13-frontend 15-vision-fallback \
          16-context-compression 17-mcp-analytics; do
   echo "=== $s ==="
-  RESULT=$(bash scripts/e2e/$s.sh 2>&1)
+  RESULT=$(bash test/scripts/e2e/$s.sh 2>&1)
   PASS=$(echo "$RESULT" | grep -c "\[PASS\]")
   FAIL=$(echo "$RESULT" | grep -c "\[FAIL\]")
   echo "  PASS: $PASS  FAIL: $FAIL"
@@ -67,7 +67,7 @@ done
 ## Parallel Runner
 
 ```bash
-bash scripts/e2e/run-parallel.sh
+bash test/scripts/e2e/run-parallel.sh
 ```
 
 | Wave | Scripts | Mode | Notes |
@@ -79,13 +79,13 @@ bash scripts/e2e/run-parallel.sh
 
 Skip setup (when state already exists):
 ```bash
-SKIP_SETUP=1 bash scripts/e2e/run-parallel.sh
+SKIP_SETUP=1 bash test/scripts/e2e/run-parallel.sh
 ```
 
 Each script is individually runnable standalone — `ensure_auth` self-bootstraps auth when no state file exists:
 ```bash
-bash scripts/e2e/05-security.sh   # runs without 01-setup.sh
-bash scripts/e2e/12-mcp.sh        # creates unique slug via E2E_RUN_ID=$$
+bash test/scripts/e2e/05-security.sh   # runs without 01-setup.sh
+bash test/scripts/e2e/12-mcp.sh        # creates unique slug via E2E_RUN_ID=$$
 ```
 
 ## Script Ownership
