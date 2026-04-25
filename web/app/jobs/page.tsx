@@ -252,7 +252,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function JobsPage() {
-  usePageGuard('jobs')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [panelOpen, setPanelOpen] = useState(false)

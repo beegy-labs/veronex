@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::value_objects::{ApiKeyId, McpId};
-use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSettingsManage;
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireMcpManage;
 use crate::infrastructure::outbound::valkey_keys;
 use super::audit_helpers::emit_audit;
 use super::error::AppError;
@@ -60,7 +60,7 @@ struct McpServerRow {
 /// GET /v1/keys/{key_id}/mcp — List MCP server access for a key.
 /// Returns all MCP servers with their allowed status for this key.
 pub async fn list_key_mcp_access(
-    RequireSettingsManage(_): RequireSettingsManage,
+    RequireMcpManage(_): RequireMcpManage,
     State(state): State<AppState>,
     Path(kid): Path<ApiKeyId>,
 ) -> Result<Json<Vec<McpAccessEntry>>, AppError> {
@@ -93,7 +93,7 @@ pub async fn list_key_mcp_access(
 
 /// POST /v1/keys/{key_id}/mcp — Grant a key access to an MCP server.
 pub async fn grant_key_mcp_access(
-    RequireSettingsManage(claims): RequireSettingsManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Path(kid): Path<ApiKeyId>,
     Json(body): Json<GrantMcpAccessBody>,
@@ -140,7 +140,7 @@ pub async fn grant_key_mcp_access(
 
 /// DELETE /v1/keys/{key_id}/mcp/{server_id} — Revoke a key's access to an MCP server.
 pub async fn revoke_key_mcp_access(
-    RequireSettingsManage(claims): RequireSettingsManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Path((kid, mid)): Path<(ApiKeyId, McpId)>,
 ) -> Result<StatusCode, AppError> {

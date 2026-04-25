@@ -412,7 +412,7 @@ const ServersTable = memo(function ServersTable({
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ServersPage() {
-  usePageGuard('servers')
+  usePageGuard('provider_manage')
   const { t } = useTranslation()
 
   const [showRegister, setShowRegister] = useState(false)

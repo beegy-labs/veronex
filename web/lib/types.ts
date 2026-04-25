@@ -500,7 +500,6 @@ export interface RoleSummary {
   id: string
   name: string
   permissions: string[]
-  menus: string[]
   is_system: boolean
   account_count: number
   created_at: string
@@ -519,7 +518,6 @@ export interface Account {
   roles: RoleInfo[]
   role_name: string
   permissions: string[]
-  menus: string[]
   department: string | null
   position: string | null
   is_active: boolean
@@ -557,7 +555,6 @@ export interface LoginResponse {
   username: string
   role: string
   permissions: string[]
-  menus: string[]
 }
 
 export interface SessionRecord {
