@@ -25,7 +25,7 @@ Stop at the first Yes — do not double-cover.
 | 3 | Real Postgres / Valkey / Kafka / MCP needed? | Integration | `cargo nextest run -p <crate> --test '*'` (testcontainers) |
 | 4 | Outbound HTTP (Ollama / Gemini / MCP)? | Integration | `wiremock` in `#[tokio::test]` |
 | 5 | Axum handler request → response contract? | Handler | `tower::ServiceExt::oneshot` in `#[tokio::test]` |
-| 6 | Cross-service flow through docker-compose? | E2E | `bash scripts/e2e/NN-<name>.sh` |
+| 6 | Cross-service flow through docker-compose? | E2E | `bash test/scripts/e2e/NN-<name>.sh` |
 | 7 | Already verified at another layer? | — | Don't write it |
 
 ## Writing Rules
@@ -51,7 +51,7 @@ Stop at the first Yes — do not double-cover.
 | 3 | Write using the layer's required form |
 | 4 | Run the single layer with `--project` / `-p` scope |
 | 5 | Verify purity: rename an internal helper — only Unit tests should fail |
-| 6 | E2E: run `bash scripts/e2e/NN-<name>.sh` before pushing |
+| 6 | E2E: run `bash test/scripts/e2e/NN-<name>.sh` before pushing |
 
 ## Purity Verification
 

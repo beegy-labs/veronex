@@ -7,7 +7,7 @@ import { usePageGuard } from '@/hooks/use-page-guard'
 import { NetworkFlowTab } from '@/components/network-flow-tab'
 
 export default function FlowPage() {
-  usePageGuard('flow')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
 
   const { data: providersData } = useQuery(providersQuery())

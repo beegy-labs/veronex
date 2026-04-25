@@ -11,7 +11,7 @@ import { BASE_API_URL as API_URL } from '@/lib/constants'
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function ApiDocsPage() {
-  usePageGuard('api_docs')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
 
   const docs = [

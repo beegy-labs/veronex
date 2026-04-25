@@ -135,29 +135,29 @@ fi
 
 hdr "Rate Limiting (TPM)"
 
+# Use rate_limit_tpm=1 so any non-empty response from the model busts the
+# limit on the first request; the second request must then 429 deterministically.
 TPM_RES=$(apost "/v1/keys" \
-  "{\"tenant_id\":\"$USERNAME\",\"name\":\"tpm-test\",\"rate_limit_tpm\":50,\"rate_limit_rpm\":100,\"tier\":\"paid\"}" || echo "")
+  "{\"tenant_id\":\"$USERNAME\",\"name\":\"tpm-test\",\"rate_limit_tpm\":1,\"rate_limit_rpm\":100,\"tier\":\"paid\"}" || echo "")
 TPM_KEY=$(echo "$TPM_RES" | jv '["key"]' || echo "")
 TPM_KEY_ID=$(echo "$TPM_RES" | jv '["id"]' || echo "")
 if [ -n "$TPM_KEY" ] && [ "$TPM_KEY" != "None" ]; then
-  # First request: consume tokens with a large max_tokens response
+  # First request: any non-trivial completion consumes >1 token → counter saturated
   TPM_C1=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
     -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write a long essay about AI\"}],\"max_tokens\":80,\"stream\":false}" \
     2>/dev/null || true)
-  # Second request: should hit TPM limit
+  # Second request: should hit TPM limit deterministically
   TPM_C2=$(curl -s -w "%{http_code}" -o /dev/null --max-time 60 "$API/v1/chat/completions" \
     -H "Authorization: Bearer $TPM_KEY" -H "Content-Type: application/json" \
     -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Write another long essay about ML\"}],\"max_tokens\":80,\"stream\":false}" \
     2>/dev/null || true)
   if [ "$TPM_C2" = "429" ]; then
     pass "TPM limit enforced — req1=$TPM_C1 req2=$TPM_C2 (429)"
-  elif [ "$TPM_C1" = "200" ] && [ "$TPM_C2" = "200" ]; then
-    info "TPM limit not triggered (tokens may not have exceeded 50) — req1=$TPM_C1 req2=$TPM_C2"
   elif [ "$TPM_C1" = "000" ] || [ "$TPM_C2" = "000" ]; then
-    fail "TPM test failed — connection error during parallel run (req1=$TPM_C1 req2=$TPM_C2)"
+    fail "TPM test failed — connection error (req1=$TPM_C1 req2=$TPM_C2)"
   else
-    fail "TPM test unexpected — req1=$TPM_C1 req2=$TPM_C2"
+    fail "TPM test unexpected — req1=$TPM_C1 req2=$TPM_C2 (expected req2=429 with rate_limit_tpm=1)"
   fi
   adel "/v1/keys/$TPM_KEY_ID" > /dev/null 2>&1
 else
@@ -226,13 +226,159 @@ if [ "$RBAC_CODE" = "200" ] || [ "$RBAC_CODE" = "201" ]; then
       [ "$c" = "403" ] && pass "RBAC: viewer → key create = 403" || info "RBAC: key create = $c"
       # viewer has no role_manage → /roles POST blocked
       c=$(curl -s -w "\n%{http_code}" "$API/v1/roles" -H "Authorization: Bearer $RBAC_TK2" \
-        -H "Content-Type: application/json" -d '{"name":"blocked","permissions":[],"menus":[]}' | code)
+        -H "Content-Type: application/json" -d '{"name":"blocked","permissions":[]}' | code)
       [ "$c" = "403" ] && pass "RBAC: viewer → role create = 403" || info "RBAC: role create = $c"
+      # viewer has no mcp_manage → /v1/mcp/servers blocked (regression: previously
+      # this leaked because the route was gated on settings_manage while nav.tsx
+      # only required the providers menu — see PR #76)
+      c=$(curl -s -w "\n%{http_code}" "$API/v1/mcp/servers" -H "Authorization: Bearer $RBAC_TK2" | code)
+      [ "$c" = "403" ] && pass "RBAC: viewer → /v1/mcp/servers = 403" || fail "RBAC: viewer /v1/mcp/servers = $c (expected 403)"
+      c=$(curl -s -w "\n%{http_code}" "$API/v1/mcp/settings" -H "Authorization: Bearer $RBAC_TK2" | code)
+      [ "$c" = "403" ] && pass "RBAC: viewer → /v1/mcp/settings = 403" || fail "RBAC: viewer /v1/mcp/settings = $c (expected 403)"
     fi
   fi
   adel "/v1/accounts/$RBAC_ACCT_ID" > /dev/null 2>&1
 else
   fail "RBAC account creation failed ($RBAC_CODE)"
+fi
+
+# ── RBAC positive case: mcp_manage-only role can read /v1/mcp/* ───────────────
+# Verifies the new RequireMcpManage extractor matches the route-permission SSOT
+# in web/lib/route-permissions.ts: a delegated role with only mcp_manage should
+# read MCP server list without needing settings_manage or provider_manage.
+hdr "RBAC: mcp_manage delegation"
+MCP_ROLE_RES=$(apostc "/v1/roles" '{"name":"e2e-mcp-only","permissions":["mcp_manage","dashboard_view"]}')
+MCP_ROLE_CODE=$(echo "$MCP_ROLE_RES" | code)
+MCP_ROLE_ID=$(echo "$MCP_ROLE_RES" | body | jv '["id"]' 2>/dev/null || echo "")
+if { [ "$MCP_ROLE_CODE" = "200" ] || [ "$MCP_ROLE_CODE" = "201" ]; } && [ -n "$MCP_ROLE_ID" ]; then
+  pass "Create mcp_manage-only role → $MCP_ROLE_CODE"
+  MCP_USER="e2e-mcp-$(python3 -c 'import uuid;print(str(uuid.uuid4())[:8])')"
+  MCP_ACCT_RES=$(apostc "/v1/accounts" \
+    "{\"username\":\"$MCP_USER\",\"password\":\"TestPass123!\",\"name\":\"McpOnly\",\"role_ids\":[\"$MCP_ROLE_ID\"]}")
+  MCP_ACCT_CODE=$(echo "$MCP_ACCT_RES" | code)
+  MCP_ACCT_ID=$(echo "$MCP_ACCT_RES" | body | jv '["id"]' 2>/dev/null || echo "")
+  if { [ "$MCP_ACCT_CODE" = "200" ] || [ "$MCP_ACCT_CODE" = "201" ]; } && [ -n "$MCP_ACCT_ID" ]; then
+    MCP_LOGIN=$(curl -si "$API/v1/auth/login" -H 'Content-Type: application/json' \
+      -d "{\"username\":\"$MCP_USER\",\"password\":\"TestPass123!\"}" 2>/dev/null)
+    MCP_TK=$(echo "$MCP_LOGIN" | sed -n 's/.*veronex_access_token=\([^;]*\).*/\1/p' | head -1)
+    if [ -n "$MCP_TK" ]; then
+      c=$(curl -s -w "\n%{http_code}" "$API/v1/mcp/servers" -H "Authorization: Bearer $MCP_TK" | code)
+      [ "$c" = "200" ] && pass "RBAC: mcp_manage → /v1/mcp/servers = 200" || fail "RBAC: mcp_manage /v1/mcp/servers = $c (expected 200)"
+      # mcp_manage holder still cannot create LLM providers (no provider_manage)
+      c=$(curl -s -w "\n%{http_code}" "$API/v1/providers" -H "Authorization: Bearer $MCP_TK" \
+        -H "Content-Type: application/json" -d '{"name":"blocked","provider_type":"ollama","url":"http://blocked"}' | code)
+      [ "$c" = "403" ] && pass "RBAC: mcp_manage → provider create = 403 (axes are independent)" \
+        || fail "RBAC: mcp_manage provider create = $c (expected 403)"
+    else
+      fail "mcp_manage login token missing"
+    fi
+    adel "/v1/accounts/$MCP_ACCT_ID" > /dev/null 2>&1
+  else
+    fail "mcp_manage account creation failed ($MCP_ACCT_CODE)"
+  fi
+  adel "/v1/roles/$MCP_ROLE_ID" > /dev/null 2>&1
+else
+  fail "Create mcp_manage role failed ($MCP_ROLE_CODE)"
+fi
+
+# ── Schema cleanup: roles.menus column removed (PR #76) ───────────────────────
+# Cover the four exit points from the legacy `menus` axis:
+#   (a) DB column drop                — `\d roles` shows no menus column
+#   (b) /v1/roles response            — no `menus` key on each role
+#   (c) /v1/auth/login response       — no `menus` key on top level
+#   (d) GET /v1/accounts/{id}         — no `menus` key on AccountSummary
+#   (e) JWT access-token claims       — no `menus` claim
+#   (f) super role auto-grant         — migration backfilled `mcp_manage`
+#   (g) Backward-compat               — client sending `"menus":[]` is accepted, response omits it
+
+# (a) DB column drop
+MENUS_COL=$(docker compose exec -T postgres psql -U veronex -d veronex -tAc \
+  "SELECT 1 FROM information_schema.columns WHERE table_name='roles' AND column_name='menus'" 2>/dev/null | tr -d '[:space:]')
+[ -z "$MENUS_COL" ] && pass "Schema: roles.menus column dropped from DB" \
+  || fail "Schema: roles.menus column still present in DB"
+
+# (b) /v1/roles list response
+ROLES_LIST=$(aget "/v1/roles" 2>/dev/null || echo "[]")
+if echo "$ROLES_LIST" | python3 -c "import sys,json; sys.exit(0 if all('menus' not in r for r in json.loads(sys.stdin.read())) else 1)" 2>/dev/null; then
+  pass "Schema: /v1/roles response has no \`menus\` field"
+else
+  fail "Schema: /v1/roles response still carries legacy \`menus\` field"
+fi
+
+# (c) /v1/auth/login response
+LOGIN_BODY=$(curl -s "$API/v1/auth/login" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" 2>/dev/null || echo '{}')
+if echo "$LOGIN_BODY" | python3 -c "import sys,json; sys.exit(0 if 'menus' not in json.loads(sys.stdin.read()) else 1)" 2>/dev/null; then
+  pass "Schema: /v1/auth/login response has no \`menus\` field"
+else
+  fail "Schema: /v1/auth/login response still carries legacy \`menus\` field"
+fi
+
+# (d) GET /v1/accounts/{id} (AccountSummary)
+SELF_ACCT_ID=$(docker compose exec -T postgres psql -U veronex -d veronex -tAc \
+  "SELECT id FROM accounts WHERE username='$USERNAME' LIMIT 1" 2>/dev/null | tr -d '[:space:]')
+if [ -n "$SELF_ACCT_ID" ]; then
+  ACCT_SUMMARY=$(aget "/v1/accounts/$SELF_ACCT_ID" 2>/dev/null || echo '{}')
+  if echo "$ACCT_SUMMARY" | python3 -c "import sys,json; sys.exit(0 if 'menus' not in json.loads(sys.stdin.read()) else 1)" 2>/dev/null; then
+    pass "Schema: GET /v1/accounts/{id} (AccountSummary) has no \`menus\` field"
+  else
+    fail "Schema: GET /v1/accounts/{id} still carries legacy \`menus\` field"
+  fi
+else
+  fail "Schema: could not resolve account id for $USERNAME"
+fi
+
+# (e) JWT access-token claims — decode payload (base64url) and check for `menus`
+# Auth API issues the access token via the `veronex_access_token` Set-Cookie
+# header (httpOnly), not in the response body — match the cookie-based flow
+# used elsewhere in this suite.
+LOGIN_FULL=$(curl -si "$API/v1/auth/login" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" 2>/dev/null || echo '')
+ACCESS_TK=$(echo "$LOGIN_FULL" | sed -n 's/.*veronex_access_token=\([^;]*\).*/\1/p' | head -1)
+if [ -n "$ACCESS_TK" ]; then
+  CLAIMS=$(echo "$ACCESS_TK" | python3 -c "
+import sys,base64,json
+tok=sys.stdin.read().strip()
+parts=tok.split('.')
+if len(parts) < 2:
+    print('{}')
+else:
+    p=parts[1]
+    p += '=' * (-len(p) % 4)
+    try:
+        print(base64.urlsafe_b64decode(p).decode('utf-8'))
+    except: print('{}')
+" 2>/dev/null || echo '{}')
+  if echo "$CLAIMS" | python3 -c "import sys,json; sys.exit(0 if 'menus' not in json.loads(sys.stdin.read()) else 1)" 2>/dev/null; then
+    pass "Schema: JWT access-token claims have no \`menus\` field"
+  else
+    fail "Schema: JWT access-token claims still carry legacy \`menus\` field"
+  fi
+else
+  fail "Schema: could not extract access_token from login response"
+fi
+
+# (f) super role auto-grant of mcp_manage (migration effect)
+SUPER_HAS_MCP=$(docker compose exec -T postgres psql -U veronex -d veronex -tAc \
+  "SELECT 'mcp_manage'=ANY(permissions) FROM roles WHERE name='super' LIMIT 1" 2>/dev/null | tr -d '[:space:]')
+[ "$SUPER_HAS_MCP" = "t" ] && pass "Migration: super role auto-grants \`mcp_manage\`" \
+  || fail "Migration: super role missing \`mcp_manage\` (got: $SUPER_HAS_MCP)"
+
+# (g) Backward-compat: legacy clients may still send `"menus":[]` in role create/update
+COMPAT_RES=$(apostc "/v1/roles" '{"name":"e2e-compat-menus","permissions":["dashboard_view"],"menus":["foo","bar"]}')
+COMPAT_CODE=$(echo "$COMPAT_RES" | code)
+COMPAT_BODY=$(echo "$COMPAT_RES" | body)
+COMPAT_ID=$(echo "$COMPAT_BODY" | jv '["id"]' 2>/dev/null || echo "")
+if { [ "$COMPAT_CODE" = "200" ] || [ "$COMPAT_CODE" = "201" ]; } && [ -n "$COMPAT_ID" ]; then
+  pass "Backward-compat: POST /v1/roles with legacy \`menus\` body accepted → $COMPAT_CODE"
+  if echo "$COMPAT_BODY" | python3 -c "import sys,json; sys.exit(0 if 'menus' not in json.loads(sys.stdin.read()) else 1)" 2>/dev/null; then
+    pass "Backward-compat: response from legacy-body create has no \`menus\` field"
+  else
+    fail "Backward-compat: response leaked legacy \`menus\` field"
+  fi
+  adel "/v1/roles/$COMPAT_ID" > /dev/null 2>&1
+else
+  fail "Backward-compat: POST /v1/roles with legacy body rejected → $COMPAT_CODE"
 fi
 
 # ── Role & Permission CRUD ────────────────────────────────────────────────────
@@ -243,14 +389,14 @@ hdr "Role & Permission CRUD"
 assert_get "/v1/roles" 200 "List roles"
 
 # Create a test role with limited permissions
-ROLE_RES=$(apostc "/v1/roles" '{"name":"e2e-test-role","permissions":["dashboard_view"],"menus":["dashboard"]}')
+ROLE_RES=$(apostc "/v1/roles" '{"name":"e2e-test-role","permissions":["dashboard_view"]}')
 ROLE_CODE=$(echo "$ROLE_RES" | code)
 ROLE_ID=$(echo "$ROLE_RES" | body | jv '["id"]' 2>/dev/null || echo "")
 [ "$ROLE_CODE" = "200" ] || [ "$ROLE_CODE" = "201" ] && pass "Create role → $ROLE_CODE" || fail "Create role → $ROLE_CODE"
 
 # Update role
 if [ -n "$ROLE_ID" ] && [ "$ROLE_ID" != "None" ]; then
-  c=$(apatchc "/v1/roles/$ROLE_ID" '{"permissions":["dashboard_view","api_test"],"menus":["dashboard","test"]}' | code)
+  c=$(apatchc "/v1/roles/$ROLE_ID" '{"permissions":["dashboard_view","api_test"]}' | code)
   [ "$c" = "200" ] || [ "$c" = "204" ] && pass "Update role → $c" || fail "Update role → $c"
 fi
 
@@ -267,7 +413,7 @@ if [ -n "$SUPER_ROLE_ID" ]; then
 fi
 
 # N:N role assignment — create account with multiple roles
-ROLE2_RES=$(apostc "/v1/roles" '{"name":"e2e-key-role","permissions":["key_manage"],"menus":["keys"]}')
+ROLE2_RES=$(apostc "/v1/roles" '{"name":"e2e-key-role","permissions":["key_manage"]}')
 ROLE2_ID=$(echo "$ROLE2_RES" | body | jv '["id"]' 2>/dev/null || echo "")
 
 if [ -n "$ROLE_ID" ] && [ "$ROLE_ID" != "None" ] && [ -n "$ROLE2_ID" ] && [ "$ROLE2_ID" != "None" ]; then
@@ -317,10 +463,6 @@ if [ -n "$ROLE2_ID" ] && [ "$ROLE2_ID" != "None" ]; then
   c=$(adelc "/v1/roles/$ROLE2_ID" | code)
   [ "$c" = "204" ] && pass "Delete role2 → 204" || fail "Delete role2 → $c"
 fi
-
-# ZSET queue: MAX_QUEUE_PER_MODEL enforcement (SDD: per-model cap 2000)
-# Practical test: verify 429 is returned when inference is requested with no providers
-info "SDD MAX_QUEUE_PER_MODEL=2000, MAX_QUEUE_SIZE=10000 — enforced via Lua atomic enqueue"
 
 # ── Login Rate Limit ──────────────────────────────────────────────────────────
 

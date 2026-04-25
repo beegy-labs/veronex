@@ -906,24 +906,10 @@
       "audit_view": "Audit Log",
       "settings_manage": "Settings",
       "role_manage": "Role Management",
-      "model_manage": "Model Management"
-    },
-    "menu": {
-      "dashboard": "Dashboard",
-      "flow": "Network Flow",
-      "jobs": "Jobs",
-      "performance": "Performance",
-      "usage": "Usage",
-      "test": "Test",
-      "providers": "Providers",
-      "servers": "Servers",
-      "keys": "API Keys",
-      "accounts": "Accounts",
-      "audit": "Audit Log",
-      "api_docs": "API Docs"
+      "model_manage": "Model Management",
+      "mcp_manage": "MCP Management"
     },
     "permissionCount": "{{count}} permissions",
-    "menuCount": "{{count}} menus",
     "assignedUsers": "{{count}} users"
   },
   "audit": {

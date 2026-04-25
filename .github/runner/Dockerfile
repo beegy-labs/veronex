@@ -11,7 +11,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
     mold \
     cmake \
+    ca-certificates \
+    curl \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
+
+# Node.js — required when this image is used as a container for jobs that call
+# `actions/checkout@v4` (and other JS-based actions). The action expects a
+# Node binary at `/__e/node20/bin/node`; without it, every job using this
+# image as `container:` dies with `OCI runtime exec failed: stat
+# /__e/node20/bin/node: no such file or directory`. NodeSource provides
+# binaries pinned to Node 20 LTS to match GHA's expectation.
+ARG NODE_MAJOR=20
+RUN mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | \
+      gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+      > /etc/apt/sources.list.d/nodesource.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/* && \
+    node --version && npm --version
 
 # sccache — required because .env sets RUSTC_WRAPPER=sccache globally.
 # Without the binary on PATH, `cargo nextest run` (and any cargo invocation

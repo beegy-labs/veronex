@@ -91,7 +91,6 @@ const fixtures = {
     roles: [{ id: '880e8400-e29b-41d4-a716-446655440001', name: 'viewer' }],
     role_name: 'viewer',
     permissions: ['dashboard_view'],
-    menus: ['dashboard'],
     department: null,
     position: null,
     is_active: true,
@@ -511,7 +510,6 @@ describe('API Schema: Roles', () => {
     id: '880e8400-e29b-41d4-a716-446655440001',
     name: 'viewer',
     permissions: ['dashboard_view'],
-    menus: ['dashboard', 'jobs'],
     is_system: true,
     account_count: 3,
     created_at: '2026-01-01T00:00:00Z',
@@ -546,7 +544,6 @@ describe('API Schema: Login Response', () => {
     username: 'admin',
     role: 'super',
     permissions: ['dashboard_view', 'api_test', 'provider_manage'],
-    menus: ['dashboard', 'flow', 'jobs'],
   }
 
   it('validates login response', () => {
@@ -554,7 +551,7 @@ describe('API Schema: Login Response', () => {
   })
 
   it('validates login response with empty permissions', () => {
-    expect(LoginResponseSchema.safeParse({ ...loginResponse, permissions: [], menus: [] }).success).toBe(true)
+    expect(LoginResponseSchema.safeParse({ ...loginResponse, permissions: [] }).success).toBe(true)
   })
 
   it('rejects login response missing ok field', () => {

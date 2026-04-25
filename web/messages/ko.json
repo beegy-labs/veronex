@@ -906,24 +906,10 @@
       "audit_view": "감사 로그",
       "settings_manage": "설정",
       "role_manage": "역할 관리",
-      "model_manage": "모델 관리"
-    },
-    "menu": {
-      "dashboard": "대시보드",
-      "flow": "네트워크 플로우",
-      "jobs": "작업",
-      "performance": "성능",
-      "usage": "사용량",
-      "test": "테스트",
-      "providers": "프로바이더",
-      "servers": "서버",
-      "keys": "API 키",
-      "accounts": "계정",
-      "audit": "감사 로그",
-      "api_docs": "API 문서"
+      "model_manage": "모델 관리",
+      "mcp_manage": "MCP 관리"
     },
     "permissionCount": "{{count}}개 권한",
-    "menuCount": "{{count}}개 메뉴",
     "assignedUsers": "{{count}}명 사용자"
   },
   "audit": {

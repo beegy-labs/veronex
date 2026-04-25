@@ -37,7 +37,7 @@ const ACTION_COLORS: Record<string, 'default' | 'secondary' | 'destructive' | 'o
 }
 
 export default function AuditPage() {
-  usePageGuard('audit')
+  usePageGuard('audit_view')
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const [action, setAction] = useState<string>('all')

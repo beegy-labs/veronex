@@ -30,7 +30,7 @@ import { ModelLatencyChart } from './components/model-latency-chart'
 
 /* ─── page ────────────────────────────────────────────────── */
 export default function UsagePage() {
-  usePageGuard('usage')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
   const { range, setRange } = useTimeRange()
   const hours = range.hours

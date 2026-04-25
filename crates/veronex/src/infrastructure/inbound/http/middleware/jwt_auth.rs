@@ -12,6 +12,10 @@ use crate::infrastructure::inbound::http::state::AppState;
 use crate::infrastructure::outbound::valkey_keys;
 
 /// JWT claims payload.
+///
+/// Frontend nav/page visibility is derived from `permissions` (see
+/// `web/lib/route-permissions.ts`). The legacy `menus` claim is no longer
+/// honoured — older tokens that still carry it are ignored on read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Subject = account UUID.
@@ -23,9 +27,6 @@ pub struct Claims {
     /// Role-based permissions (e.g. ["dashboard_view", "provider_manage"]).
     #[serde(default)]
     pub permissions: Vec<String>,
-    /// Visible menu IDs (e.g. ["dashboard", "providers", "servers"]).
-    #[serde(default)]
-    pub menus: Vec<String>,
     /// Role name (e.g. "super", "viewer").
     #[serde(default)]
     pub role_name: String,
@@ -193,6 +194,7 @@ define_require_permission!(RequireAuditView,      "audit_view");
 define_require_permission!(RequireSettingsManage, "settings_manage");
 define_require_permission!(RequireRoleManage,     "role_manage");
 define_require_permission!(RequireModelManage,    "model_manage");
+define_require_permission!(RequireMcpManage,      "mcp_manage");
 
 #[cfg(test)]
 mod tests {

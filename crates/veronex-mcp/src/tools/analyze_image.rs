@@ -1,12 +1,14 @@
-//! `analyze_image` tool — vision analysis via qwen3-vl:8b through Veronex gateway.
+//! `analyze_image` tool — vision analysis via a Veronex-hosted vision model.
 //!
 //! Accepts a base64-encoded image and returns a text description.
 //! Calls `/api/generate` on the Veronex API (not Ollama directly) so requests
 //! go through the scheduler, AIMD, and routing layers.
 //!
 //! Env:
-//!   `VERONEX_URL`     — Veronex base URL (default: `http://veronex:3000`)
-//!   `VERONEX_API_KEY` — API key for auth (required; tool returns error if unset)
+//!   `VERONEX_URL`          — Veronex base URL (default: `http://veronex:3000`)
+//!   `VERONEX_API_KEY`      — API key for auth (required; tool returns error if unset)
+//!   `ANALYZE_IMAGE_MODEL`  — vision model name registered on a Veronex provider
+//!                            (default: `qwen3-vl:8b`)
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -14,7 +16,7 @@ use tracing::{debug, warn};
 
 use super::Tool;
 
-const MODEL: &str = "qwen3-vl:8b";
+const DEFAULT_MODEL: &str = "qwen3-vl:8b";
 const DEFAULT_PROMPT: &str = "Describe this image in detail.";
 const TIMEOUT_SECS: u64 = 120;
 
@@ -22,6 +24,7 @@ pub struct AnalyzeImageTool {
     http: reqwest::Client,
     veronex_url: String,
     api_key: Option<String>,
+    model: String,
 }
 
 impl AnalyzeImageTool {
@@ -31,13 +34,17 @@ impl AnalyzeImageTool {
         let veronex_url = veronex_url.trim_end_matches('/').to_string();
         let api_key = std::env::var("VERONEX_API_KEY").ok()
             .filter(|k| !k.is_empty());
+        let model = std::env::var("ANALYZE_IMAGE_MODEL")
+            .ok()
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         tracing::info!(
             url = %veronex_url,
-            model = MODEL,
+            model = %model,
             auth = api_key.is_some(),
             "analyze_image: ready"
         );
-        Self { http, veronex_url, api_key }
+        Self { http, veronex_url, api_key, model }
     }
 
     async fn analyze(&self, image_b64: &str, prompt: &str) -> Result<String, String> {
@@ -47,14 +54,14 @@ impl AnalyzeImageTool {
         let url = format!("{}/api/generate", self.veronex_url);
 
         let body = json!({
-            "model":   MODEL,
+            "model":   self.model,
             "prompt":  prompt,
             "images":  [image_b64],
             "stream":  false,
             "options": { "temperature": 0.0 }
         });
 
-        debug!(model = MODEL, prompt = %prompt, "analyze_image: calling Veronex gateway");
+        debug!(model = %self.model, prompt = %prompt, "analyze_image: calling Veronex gateway");
 
         let resp = self.http
             .post(&url)
@@ -81,7 +88,7 @@ impl AnalyzeImageTool {
             .to_string();
 
         if text.is_empty() {
-            warn!(model = MODEL, "analyze_image: empty response");
+            warn!(model = %self.model, "analyze_image: empty response");
             return Err("Empty response from vision model".to_string());
         }
 
@@ -141,7 +148,7 @@ impl Tool for AnalyzeImageTool {
 
         Ok(json!({
             "description": description,
-            "model":       MODEL
+            "model":       self.model,
         }))
     }
 }

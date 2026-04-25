@@ -9,7 +9,6 @@ pub struct Role {
     pub id: Uuid,
     pub name: String,
     pub permissions: Vec<String>,
-    pub menus: Vec<String>,
     pub is_system: bool,
     pub created_at: DateTime<Utc>,
 }

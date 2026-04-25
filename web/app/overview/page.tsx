@@ -12,7 +12,7 @@ import { usePageGuard } from '@/hooks/use-page-guard'
 import { DashboardTab } from './components/dashboard-tab'
 
 export default function OverviewPage() {
-  usePageGuard('dashboard')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
 
   // Single aggregated query for stats + perf(24h) + capacity + queue + lab
