@@ -133,12 +133,13 @@ jobs:
     needs: changes
     if: needs.changes.outputs.api == 'true'
     runs-on: arc-runner-set
-    # Rust toolchain is pre-baked in the veronex-runner image. Single runner
-    # pool (arc-runner-set) executes; this job runs inside the Rust container
-    # so the runner image stays lightweight. Bumping the tag re-pulls a new
-    # image to the node cache; subsequent jobs are instant.
+    # Rust toolchain is pre-baked in the veronex-runner image. Externalized
+    # to a repo variable (vars.VERONEX_RUNNER_IMAGE) so image upgrades are a
+    # one-line `gh variable set` instead of a code change. `env.*` is NOT
+    # available in container.image (documented GHA limitation), so we use
+    # `vars.*` which IS supported.
     container:
-      image: gitea.girok.dev/beegy-labs/veronex-runner:7a66609eb7dddf14389e3acd99e4e33bc1051ba5
+      image: ${{ vars.VERONEX_RUNNER_IMAGE }}
       options: --user 0:0
     timeout-minutes: 30
     steps:
