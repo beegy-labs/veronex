@@ -159,9 +159,10 @@ On any Vespa/embed error → falls back to `tool_cache.get_all()` (all registere
 
 ## API Endpoints
 
-MCP server management requires JWT Bearer auth (`settings_manage` permission).
-ACL management requires `settings_manage` permission.
-`/v1/mcp/targets` is internal-network only (no auth).
+MCP server management and per-key ACL management both require JWT Bearer auth
+with the **`mcp_manage`** permission (added in rev 7 of `auth/jwt-sessions.md`
+to decouple MCP delegation from the broader `settings_manage` /
+`provider_manage` axes). `/v1/mcp/targets` is internal-network only (no auth).
 
 | Method | Path | Description |
 |--------|------|-------------|

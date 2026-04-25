@@ -28,7 +28,7 @@ import { tokens } from '@/lib/design-tokens'
 
 /* ─── page ────────────────────────────────────────────────── */
 export default function PerformancePage() {
-  usePageGuard('performance')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const { range, setRange } = useTimeRange()

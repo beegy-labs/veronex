@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::value_objects::McpId;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::{RequireProviderManage, RequireSettingsManage};
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireMcpManage;
 use crate::infrastructure::outbound::valkey_keys;
 
 use super::audit_helpers::emit_audit;
@@ -211,7 +211,7 @@ impl sqlx::FromRow<'_, sqlx::postgres::PgRow> for McpServerRow {
 
 /// `GET /v1/mcp/servers`
 pub async fn list_mcp_servers(
-    RequireSettingsManage(_): RequireSettingsManage,
+    RequireMcpManage(_): RequireMcpManage,
     State(state): State<AppState>,
 ) -> HandlerResult<Json<Vec<McpServerResponse>>> {
     let rows: Vec<McpServerRow> = sqlx::query_as(
@@ -277,7 +277,7 @@ pub async fn list_mcp_servers(
 
 /// `POST /v1/mcp/servers/verify` — probe connectivity to an MCP server URL.
 pub async fn verify_mcp_server(
-    _claims: RequireProviderManage,
+    _claims: RequireMcpManage,
     State(state): State<AppState>,
     Json(req): Json<serde_json::Value>,
 ) -> impl axum::response::IntoResponse {
@@ -316,7 +316,7 @@ pub async fn verify_mcp_server(
 
 /// `POST /v1/mcp/servers`
 pub async fn register_mcp_server(
-    RequireProviderManage(claims): RequireProviderManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Json(req): Json<RegisterMcpServerRequest>,
 ) -> HandlerResult<impl IntoResponse> {
@@ -377,7 +377,7 @@ pub async fn register_mcp_server(
 
 /// `PATCH /v1/mcp/servers/:id`
 pub async fn patch_mcp_server(
-    RequireProviderManage(claims): RequireProviderManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Path(mid): Path<McpId>,
     Json(req): Json<PatchMcpServerRequest>,
@@ -507,7 +507,7 @@ pub async fn patch_mcp_server(
 
 /// `DELETE /v1/mcp/servers/:id`
 pub async fn delete_mcp_server(
-    RequireProviderManage(claims): RequireProviderManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Path(mid): Path<McpId>,
 ) -> HandlerResult<StatusCode> {
@@ -600,7 +600,7 @@ pub struct PatchMcpSettingsRequest {
 
 /// `GET /v1/mcp/settings`
 pub async fn get_mcp_settings(
-    RequireSettingsManage(_): RequireSettingsManage,
+    RequireMcpManage(_): RequireMcpManage,
     State(state): State<AppState>,
 ) -> HandlerResult<Json<McpSettingsResponse>> {
     let s = state.mcp_settings_repo.get().await.map_err(AppError::Internal)?;
@@ -616,7 +616,7 @@ pub async fn get_mcp_settings(
 
 /// `PATCH /v1/mcp/settings`
 pub async fn patch_mcp_settings(
-    RequireSettingsManage(claims): RequireSettingsManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Json(body): Json<PatchMcpSettingsRequest>,
 ) -> HandlerResult<Json<McpSettingsResponse>> {

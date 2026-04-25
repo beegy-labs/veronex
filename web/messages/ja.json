@@ -906,24 +906,10 @@
       "audit_view": "監査ログ",
       "settings_manage": "設定",
       "role_manage": "ロール管理",
-      "model_manage": "モデル管理"
-    },
-    "menu": {
-      "dashboard": "ダッシュボード",
-      "flow": "ネットワークフロー",
-      "jobs": "ジョブ",
-      "performance": "パフォーマンス",
-      "usage": "使用量",
-      "test": "テスト",
-      "providers": "プロバイダー",
-      "servers": "サーバー",
-      "keys": "APIキー",
-      "accounts": "アカウント",
-      "audit": "監査ログ",
-      "api_docs": "APIドキュメント"
+      "model_manage": "モデル管理",
+      "mcp_manage": "MCP管理"
     },
     "permissionCount": "{{count}}個の権限",
-    "menuCount": "{{count}}個のメニュー",
     "assignedUsers": "{{count}}人のユーザー"
   },
   "audit": {

@@ -48,7 +48,6 @@ export default async function globalSetup() {
     { name: 'veronex_role',        value: encodeURIComponent(body.role) },
     { name: 'veronex_account_id',  value: encodeURIComponent(body.account_id) },
     { name: 'veronex_permissions', value: encodeURIComponent(JSON.stringify(body.permissions ?? [])) },
-    { name: 'veronex_menus',       value: encodeURIComponent(JSON.stringify(body.menus ?? [])) },
   ].map(c => ({ ...c, domain: 'localhost', path: '/', expires, httpOnly: false, secure: false, sameSite: 'Strict' as const }))
 
   fs.writeFileSync(AUTH_FILE, JSON.stringify({

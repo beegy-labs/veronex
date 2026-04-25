@@ -329,10 +329,10 @@ export const api = {
   roles: () =>
     apiClient.get<RoleSummary[]>('/v1/roles'),
 
-  createRole: (body: { name: string; permissions: string[]; menus: string[] }) =>
+  createRole: (body: { name: string; permissions: string[] }) =>
     apiClient.post<RoleSummary>('/v1/roles', body),
 
-  updateRole: (id: string, body: { name?: string; permissions?: string[]; menus?: string[] }) =>
+  updateRole: (id: string, body: { name?: string; permissions?: string[] }) =>
     apiClient.patch<void>(`/v1/roles/${id}`, body),
 
   deleteRole: (id: string) =>

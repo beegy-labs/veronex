@@ -5,7 +5,7 @@ import { useTranslation } from '@/i18n'
 import { usePageGuard } from '@/hooks/use-page-guard'
 
 export default function McpPage() {
-  usePageGuard('providers')
+  usePageGuard('mcp_manage')
   const { t } = useTranslation()
 
   return (

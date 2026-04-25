@@ -387,7 +387,7 @@ function KeyActiveSwitch({ keyId, isActive }: { keyId: string; isActive: boolean
 }
 
 export default function KeysPage() {
-  usePageGuard('keys')
+  usePageGuard('key_manage')
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const [showCreate, setShowCreate] = useState(false)

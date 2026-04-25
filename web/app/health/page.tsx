@@ -109,7 +109,7 @@ function PodGroup({
 }
 
 export default function HealthPage() {
-  usePageGuard('dashboard')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
   const { data, isLoading, error } = useQuery(serviceHealthQuery)
   const { data: pipeline, isLoading: pipelineLoading } = useQuery(pipelineHealthQuery)

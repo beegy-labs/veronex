@@ -2,20 +2,23 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { hasMenu, isLoggedIn } from '@/lib/auth'
+import { hasPermission, isLoggedIn } from '@/lib/auth'
+import type { Permission } from '@/lib/generated/Permission'
 
 /**
- * Redirect to dashboard if the current user does not have access to the given menu.
- * No-op for users with the `super` role (all menus accessible).
+ * Redirect to dashboard when the current user lacks the permission required
+ * by this page. The permission must match the `Require*` extractor used by
+ * the page's API endpoints (see `web/lib/route-permissions.ts`). Super-role
+ * accounts bypass the check.
  *
- * Usage: `usePageGuard('audit')` at the top of a page component.
+ * Usage: `usePageGuard('audit_view')` at the top of a page component.
  */
-export function usePageGuard(menuId: string): void {
+export function usePageGuard(permission: Permission): void {
   const router = useRouter()
   useEffect(() => {
     if (!isLoggedIn()) return // auth-guard handles login redirect
-    if (!hasMenu(menuId)) {
+    if (!hasPermission(permission)) {
       router.replace('/overview')
     }
-  }, [menuId, router])
+  }, [permission, router])
 }

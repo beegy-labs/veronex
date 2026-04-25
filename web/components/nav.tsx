@@ -12,7 +12,8 @@ import {
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
 import { useTranslation } from '@/i18n'
-import { getAuthUser, hasMenu } from '@/lib/auth'
+import { getAuthUser, hasPermission } from '@/lib/auth'
+import type { Permission } from '@/lib/generated/Permission'
 import { redirectToLogin } from '@/lib/auth-guard'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone } from '@/components/timezone-provider'
@@ -32,7 +33,9 @@ type NavLink = {
   href: string
   labelKey: string
   icon: React.ComponentType<{ className?: string }>
-  menuId?: string
+  /** Permission required to view the page. Same as the strictest `Require*`
+   *  extractor on the page's API endpoints — see `lib/route-permissions.ts`. */
+  permission: Permission
   section?: string
 }
 
@@ -41,7 +44,7 @@ type NavGroupChild = {
   labelKey: string
   icon: React.ComponentType<{ className?: string }>
   section?: string
-  menuId?: string
+  permission: Permission
 }
 
 type NavGroup = {
@@ -51,7 +54,9 @@ type NavGroup = {
   icon: React.ComponentType<{ className?: string }>
   basePath: string
   children: NavGroupChild[]
-  menuId?: string
+  /** Group is visible if its permission is granted. Children may have
+   *  stricter permissions and are filtered independently. */
+  permission: Permission
 }
 
 type NavItem = NavLink | NavGroup
@@ -65,30 +70,30 @@ const navItems: NavItem[] = [
     labelKey: 'nav.monitor',
     icon: LayoutDashboard,
     basePath: '/overview',
-    menuId: 'dashboard',
+    permission: 'dashboard_view',
     children: [
-      { href: '/overview',     labelKey: 'nav.dashboard',   icon: LayoutDashboard, menuId: 'dashboard' },
-      { href: '/usage',        labelKey: 'nav.usage',       icon: BarChart2,       menuId: 'usage' },
-      { href: '/performance',  labelKey: 'nav.performance', icon: Gauge,           menuId: 'performance' },
+      { href: '/overview',     labelKey: 'nav.dashboard',   icon: LayoutDashboard, permission: 'dashboard_view' },
+      { href: '/usage',        labelKey: 'nav.usage',       icon: BarChart2,       permission: 'dashboard_view' },
+      { href: '/performance',  labelKey: 'nav.performance', icon: Gauge,           permission: 'dashboard_view' },
     ],
   },
-  { type: 'link', href: '/health',  labelKey: 'nav.health',  icon: Activity,  menuId: 'dashboard' },
-  { type: 'link', href: '/jobs',    labelKey: 'nav.jobs',    icon: List,      menuId: 'jobs' },
-  { type: 'link', href: '/keys',    labelKey: 'nav.keys',    icon: Key,       menuId: 'keys' },
-  { type: 'link', href: '/servers', labelKey: 'nav.servers', icon: HardDrive, menuId: 'servers' },
+  { type: 'link', href: '/health',  labelKey: 'nav.health',  icon: Activity,  permission: 'dashboard_view' },
+  { type: 'link', href: '/jobs',    labelKey: 'nav.jobs',    icon: List,      permission: 'dashboard_view' },
+  { type: 'link', href: '/keys',    labelKey: 'nav.keys',    icon: Key,       permission: 'key_manage' },
+  { type: 'link', href: '/servers', labelKey: 'nav.servers', icon: HardDrive, permission: 'provider_manage' },
   {
     type: 'group',
     id: 'providers',
     labelKey: 'nav.providers',
     icon: Server,
     basePath: '/providers',
-    menuId: 'providers',
+    permission: 'provider_manage',
     children: [
-      { href: '/providers?s=ollama', labelKey: 'nav.ollama', icon: OllamaIcon, section: 'ollama', menuId: 'providers' },
-      { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini', menuId: 'providers' },
+      { href: '/providers?s=ollama', labelKey: 'nav.ollama', icon: OllamaIcon, section: 'ollama', permission: 'provider_manage' },
+      { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini', permission: 'provider_manage' },
     ],
   },
-  { type: 'link', href: '/mcp', labelKey: 'nav.mcp', icon: Plug, menuId: 'providers', section: 'mcp' },
+  { type: 'link', href: '/mcp', labelKey: 'nav.mcp', icon: Plug, permission: 'mcp_manage', section: 'mcp' },
 ]
 
 // ── Nav props ───────────────────────────────────────────────────────────────────
@@ -180,14 +185,14 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
   // ── Nav items (filtered + rendered) ──────────────────────────────────────────
 
   const visibleItems = navItems
-    .filter(item => !item.menuId || hasMenu(item.menuId))
+    .filter(item => hasPermission(item.permission))
     .filter(item => !('section' in item) || !item.section || !nav404.has(item.section))
     .map(item => {
       if (item.type === 'group') {
         return {
           ...item,
           children: item.children
-            .filter(c => !c.menuId || hasMenu(c.menuId))
+            .filter(c => hasPermission(c.permission))
             .filter(c => !c.section || !nav404.has(c.section))
             .filter(c =>
               item.id !== 'providers' || c.section !== 'gemini' || (labSettings?.gemini_function_calling ?? false)
@@ -298,7 +303,7 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
     <div className="py-3 px-2 space-y-2">
       {authUser && !collapsed && (
         <div className="px-1 space-y-0.5">
-          {hasMenu('accounts') && (
+          {hasPermission('account_manage') && (
             <Link
               href="/accounts"
               className={cn(
@@ -312,7 +317,7 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
               {t('accounts.title')}
             </Link>
           )}
-          {hasMenu('audit') && (
+          {hasPermission('audit_view') && (
             <Link
               href="/audit"
               className={cn(

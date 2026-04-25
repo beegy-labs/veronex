@@ -5,7 +5,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::enums::{ALL_MENUS, ALL_PERMISSIONS};
+use crate::domain::enums::ALL_PERMISSIONS;
 use crate::domain::value_objects::RoleId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireRoleManage;
 use crate::infrastructure::inbound::http::state::AppState;
@@ -22,7 +22,6 @@ pub struct RoleSummary {
     pub id: RoleId,
     pub name: String,
     pub permissions: Vec<String>,
-    pub menus: Vec<String>,
     pub is_system: bool,
     pub account_count: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -32,6 +31,9 @@ pub struct RoleSummary {
 pub struct CreateRoleRequest {
     pub name: String,
     pub permissions: Vec<String>,
+    /// Legacy field — accepted but ignored. Menu visibility is derived from
+    /// `permissions` on the frontend (see `web/lib/route-permissions.ts`).
+    #[serde(default)]
     pub menus: Vec<String>,
 }
 
@@ -39,6 +41,8 @@ pub struct CreateRoleRequest {
 pub struct UpdateRoleRequest {
     pub name: Option<String>,
     pub permissions: Option<Vec<String>>,
+    /// Legacy field — accepted but ignored. See `CreateRoleRequest::menus`.
+    #[serde(default)]
     pub menus: Option<Vec<String>>,
 }
 
@@ -53,23 +57,14 @@ fn validate_permissions(perms: &[String]) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_menus(menus: &[String]) -> Result<(), AppError> {
-    for m in menus {
-        if !ALL_MENUS.contains(&m.as_str()) {
-            return Err(AppError::BadRequest(format!("invalid menu: {m}")));
-        }
-    }
-    Ok(())
-}
-
 // ── GET /v1/roles ───────────────────────────────────────────────────────────
 
 pub async fn list_roles(
     RequireRoleManage(_claims): RequireRoleManage,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RoleSummary>>, AppError> {
-    let rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, Vec<String>, bool, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, permissions, menus, is_system, created_at FROM roles ORDER BY created_at ASC LIMIT $1"
+    let rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, bool, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, name, permissions, is_system, created_at FROM roles ORDER BY created_at ASC LIMIT $1"
     )
     .bind(MAX_ROLES)
     .fetch_all(&state.pg_pool)
@@ -92,9 +87,9 @@ pub async fn list_roles(
 
     let count_map: std::collections::HashMap<Uuid, i64> = count_rows.into_iter().collect();
 
-    let result = rows.into_iter().map(|(id, name, permissions, menus, is_system, created_at)| {
+    let result = rows.into_iter().map(|(id, name, permissions, is_system, created_at)| {
         let account_count = count_map.get(&id).copied().unwrap_or(0);
-        RoleSummary { id: RoleId::from_uuid(id), name, permissions, menus, is_system, account_count, created_at }
+        RoleSummary { id: RoleId::from_uuid(id), name, permissions, is_system, account_count, created_at }
     }).collect();
 
     Ok(Json(result))
@@ -112,18 +107,16 @@ pub async fn create_role(
         return Err(AppError::BadRequest("role name must be 1-64 characters".into()));
     }
     validate_permissions(&req.permissions)?;
-    validate_menus(&req.menus)?;
 
     let id = Uuid::now_v7();
     let now = chrono::Utc::now();
 
     sqlx::query(
-        "INSERT INTO roles (id, name, permissions, menus, is_system, created_at) VALUES ($1, $2, $3, $4, FALSE, $5)"
+        "INSERT INTO roles (id, name, permissions, is_system, created_at) VALUES ($1, $2, $3, FALSE, $4)"
     )
     .bind(id)
     .bind(&name)
     .bind(&req.permissions)
-    .bind(&req.menus)
     .bind(now)
     .execute(&state.pg_pool)
     .await
@@ -140,7 +133,7 @@ pub async fn create_role(
         &format!("Role '{}' created with permissions: {:?}", name, req.permissions)).await;
 
     Ok((StatusCode::CREATED, Json(RoleSummary {
-        id: RoleId::from_uuid(id), name, permissions: req.permissions, menus: req.menus,
+        id: RoleId::from_uuid(id), name, permissions: req.permissions,
         is_system: false, account_count: 0, created_at: now,
     })))
 }
@@ -169,11 +162,8 @@ pub async fn update_role(
     if let Some(ref perms) = req.permissions {
         validate_permissions(perms)?;
     }
-    if let Some(ref menus) = req.menus {
-        validate_menus(menus)?;
-    }
 
-    if req.name.is_none() && req.permissions.is_none() && req.menus.is_none() {
+    if req.name.is_none() && req.permissions.is_none() {
         return Ok(StatusCode::NO_CONTENT);
     }
 
@@ -191,14 +181,12 @@ pub async fn update_role(
     sqlx::query(
         "UPDATE roles \
          SET name        = COALESCE($2, name), \
-             permissions = COALESCE($3, permissions), \
-             menus       = COALESCE($4, menus) \
+             permissions = COALESCE($3, permissions) \
          WHERE id = $1",
     )
     .bind(rid.0)
     .bind(name.as_deref())
     .bind(req.permissions.as_deref())
-    .bind(req.menus.as_deref())
     .execute(&state.pg_pool)
         .await
         .map_err(|e| {
@@ -277,14 +265,4 @@ mod tests {
         assert!(validate_permissions(&["not_a_real_permission".to_string()]).is_err());
     }
 
-    #[test]
-    fn validate_menus_accepts_known() {
-        let known = ALL_MENUS[0].to_string();
-        assert!(validate_menus(&[known]).is_ok());
-    }
-
-    #[test]
-    fn validate_menus_rejects_unknown() {
-        assert!(validate_menus(&["nonexistent_menu".to_string()]).is_err());
-    }
 }
