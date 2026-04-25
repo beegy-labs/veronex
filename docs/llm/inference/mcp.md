@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol) Integration
 
-> SSOT | **Last Updated**: 2026-04-08
+> SSOT | **Last Updated**: 2026-04-25
 
 Veronex acts as an **MCP client** — it connects to external MCP servers and
 executes their tools on behalf of LLM inference loops.
@@ -64,6 +64,23 @@ The caller (`openai_handlers.rs`) additionally checks:
 
 ACL filtering happens inside `run_loop()` after interception — API-key callers with
 no granted servers receive an empty tool list (default deny).
+
+---
+
+## Session Lifecycle
+
+Sessions are per-replica (the `Mcp-Session-Id` header is not shared across pods).
+
+| Phase | Trigger | Effect |
+|-------|---------|--------|
+| Startup | `main.rs` reads `mcp_servers WHERE is_enabled = true` and calls `session_manager.connect()` for each | Session stored in `DashMap<server_id, SessionEntry>` |
+| Per-request 404 | `with_session()` sees `SESSION_EXPIRED_MARKER` | Per-server mutex + re-init + retry once |
+| **Periodic reconcile (25 s)** | `reconcile_mcp_sessions()` in the refresh loop | Reconnects any enabled server missing a session, then runs `discover_tools_startup()` to populate L1 + Vespa |
+
+Without the reconcile step, a transient boot-time `connect()` failure (gateway
+cold-start race, brief upstream outage) leaves `should_intercept()` false for
+the lifetime of the pod — every chat completion silently bypasses MCP. The
+periodic reconcile makes the bridge self-healing without a pod restart.
 
 ---
 
@@ -145,6 +162,7 @@ On any Vespa/embed error → falls back to `tool_cache.get_all()` (all registere
 | Concurrent calls | `buffered(8)` — max 8 tool calls in-flight per round |
 | Max tools per request | `MAX_TOOLS_PER_REQUEST = 32` — context window cap |
 | Loop detection | Same `(tool, args_hash)` ×3 triggers early break |
+| Session self-heal | `reconcile_mcp_sessions()` reconnects missing sessions every 25 s — see Session Lifecycle |
 
 ---
 
