@@ -8,24 +8,24 @@
 
 ```bash
 # Full run — already-passed phases are skipped automatically
-./scripts/test-e2e.sh
+./test/scripts/test-e2e.sh
 
 # Run a single phase (by number or name)
-./scripts/test-e2e.sh 05
-./scripts/test-e2e.sh 05-security
+./test/scripts/test-e2e.sh 05
+./test/scripts/test-e2e.sh 05-security
 
 # Re-run from phase 05 onwards (clears checkpoints 05+)
-./scripts/test-e2e.sh --from 05
+./test/scripts/test-e2e.sh --from 05
 
 # Clear all checkpoints and run everything fresh
-./scripts/test-e2e.sh --reset
+./test/scripts/test-e2e.sh --reset
 
 # Ignore checkpoints for this run (still writes new ones on pass)
-./scripts/test-e2e.sh --no-cache
+./test/scripts/test-e2e.sh --no-cache
 
 # Override environment variables
-MODEL=qwen3:8b CONCURRENT=8 ./scripts/test-e2e.sh
-SKIP_DB_RESET=1 ./scripts/test-e2e.sh
+MODEL=qwen3:8b CONCURRENT=8 ./test/scripts/test-e2e.sh
+SKIP_DB_RESET=1 ./test/scripts/test-e2e.sh
 ```
 
 **Checkpoints** persist in `~/.cache/veronex-e2e/` (override with `E2E_CHECKPOINT_DIR`).

@@ -390,22 +390,19 @@ CREATE TABLE roles (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(64) NOT NULL UNIQUE,
     permissions TEXT[]      NOT NULL DEFAULT '{}',
-    menus       TEXT[]      NOT NULL DEFAULT '{}',
     is_system   BOOLEAN     NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-INSERT INTO roles (name, permissions, menus, is_system) VALUES (
+INSERT INTO roles (name, permissions, is_system) VALUES (
     'super',
-    ARRAY['dashboard_view','api_test','provider_manage','key_manage','account_manage','audit_view','settings_manage','role_manage','model_manage'],
-    ARRAY['dashboard','flow','jobs','performance','usage','test','providers','servers','keys','accounts','audit','api_docs'],
+    ARRAY['dashboard_view','api_test','provider_manage','key_manage','account_manage','audit_view','settings_manage','role_manage','model_manage','mcp_manage'],
     TRUE
 );
 
-INSERT INTO roles (name, permissions, menus, is_system) VALUES (
+INSERT INTO roles (name, permissions, is_system) VALUES (
     'viewer',
     ARRAY['dashboard_view'],
-    ARRAY['dashboard','flow','jobs','performance','usage','api_docs'],
     TRUE
 );
 
@@ -521,3 +518,17 @@ CREATE INDEX idx_accounts_username_trgm         ON accounts USING GIN (username 
 CREATE INDEX idx_api_keys_name_trgm             ON api_keys USING GIN (name gin_trgm_ops);
 CREATE INDEX idx_gpu_servers_name_trgm          ON gpu_servers USING GIN (name gin_trgm_ops);
 CREATE INDEX idx_provider_selected_models_lookup ON provider_selected_models (provider_id, model_name);
+
+-- ── Idempotent upgrades (run safely on every helm pre-upgrade) ───────────────
+-- Add `mcp_manage` to existing super role + drop legacy `roles.menus` column.
+-- Frontend nav visibility is now derived from permissions, not menus
+-- (see `web/lib/route-permissions.ts`).
+DO $$
+BEGIN
+    UPDATE roles
+       SET permissions = ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['mcp_manage']))
+     WHERE name = 'super'
+       AND NOT ('mcp_manage' = ANY(permissions));
+END $$;
+
+ALTER TABLE roles DROP COLUMN IF EXISTS menus;

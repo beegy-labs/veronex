@@ -61,12 +61,7 @@ function AccountActiveToggle({ account }: { account: Account }) {
 const ALL_PERMISSIONS = [
   'dashboard_view', 'api_test', 'provider_manage',
   'key_manage', 'account_manage', 'audit_view', 'settings_manage',
-  'role_manage', 'model_manage',
-] as const
-
-const ALL_MENUS = [
-  'dashboard', 'flow', 'jobs', 'performance', 'usage', 'test',
-  'providers', 'servers', 'keys', 'accounts', 'audit', 'api_docs',
+  'role_manage', 'model_manage', 'mcp_manage',
 ] as const
 
 // ── Sessions modal ────────────────────────────────────────────────────────────
@@ -312,14 +307,14 @@ function RoleEditorModal({
   const isSystem = role?.is_system ?? false
   const [name, setName] = useState(role?.name ?? '')
   const [perms, setPerms] = useState<string[]>(role?.permissions ?? [])
-  const [menus, setMenus] = useState<string[]>(role?.menus ?? [])
 
   const mutation = useApiMutation(
     async (_: void) => {
+      // Menu visibility derives from permissions (see lib/route-permissions.ts).
       if (isNew) {
-        await api.createRole({ name, permissions: perms, menus })
+        await api.createRole({ name, permissions: perms })
       } else if (role) {
-        await api.updateRole(role.id, { name: name !== role.name ? name : undefined, permissions: perms, menus })
+        await api.updateRole(role.id, { name: name !== role.name ? name : undefined, permissions: perms })
       }
     },
     { invalidateKey: ['roles'], onSuccess: () => onClose() },
@@ -327,9 +322,6 @@ function RoleEditorModal({
 
   function togglePerm(p: string) {
     setPerms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])
-  }
-  function toggleMenu(m: string) {
-    setMenus(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m])
   }
 
   return (
@@ -359,23 +351,6 @@ function RoleEditorModal({
                     disabled={isSystem}
                   />
                   <span>{t(`roles.perm.${p}` as Parameters<typeof t>[0])}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* Menus section */}
-          <div className="space-y-1.5">
-            <Label>{t('roles.menus')}</Label>
-            <div className="grid grid-cols-3 gap-2 rounded-md border p-3">
-              {ALL_MENUS.map(m => (
-                <label key={m} className="flex items-center gap-2 text-sm cursor-pointer">
-                  <Checkbox
-                    checked={menus.includes(m)}
-                    onCheckedChange={() => toggleMenu(m)}
-                    disabled={isSystem}
-                  />
-                  <span>{t(`roles.menu.${m}` as Parameters<typeof t>[0])}</span>
                 </label>
               ))}
             </div>
@@ -448,7 +423,7 @@ function EditRolesModal({
                   {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {t('roles.permissionCount', { count: r.permissions.length })} · {t('roles.menuCount', { count: r.menus.length })}
+                  {t('roles.permissionCount', { count: r.permissions.length })}
                 </div>
               </div>
             </label>
@@ -550,7 +525,7 @@ function RolesTab() {
                   ))}
                 </div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{t('roles.menuCount', { count: r.menus.length })} · {t('roles.assignedUsers', { count: r.account_count })}</span>
+                  <span>{t('roles.assignedUsers', { count: r.account_count })}</span>
                   {!r.is_system && (
                     <div className="flex items-center gap-0.5">
                       <Button
@@ -601,7 +576,7 @@ function RolesTab() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AccountsPage() {
-  usePageGuard('accounts')
+  usePageGuard('account_manage')
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const canManageRoles = hasPermission('role_manage')

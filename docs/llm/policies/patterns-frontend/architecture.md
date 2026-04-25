@@ -43,15 +43,15 @@ export const serverMetricsHistoryQuery = (serverId: string) => queryOptions({
 
 ## Page Guard (`usePageGuard`)
 
-Menu-based access control at page level. Redirects to `/overview` if user lacks the required menu permission. Super-admin bypasses all checks.
+Permission-based access control at page level. Redirects to `/overview` if user lacks the required permission. Super-admin bypasses all checks. The permission supplied here MUST match the strictest `Require<Permission>` extractor on the page's API endpoints — the `web/lib/route-permissions.ts` SSOT and the regression test at `web/lib/__tests__/route-permissions.test.ts` enforce this.
 
 ```typescript
 // web/hooks/use-page-guard.ts
-export function usePageGuard(menuId: string): void
-// Usage: usePageGuard('audit') at top of page component
+export function usePageGuard(permission: Permission): void
+// Usage: usePageGuard('audit_view') at top of page component
 ```
 
-`hasMenu()` reads from JWT claims `menus` array (set during login from merged role menus).
+`hasPermission()` reads from JWT claims `permissions` array (merged across all roles assigned to the account). Nav items in `web/components/nav.tsx` declare `permission: Permission` and are filtered by the same predicate, so a sidebar entry never appears for a page whose API will return 403.
 
 ---
 

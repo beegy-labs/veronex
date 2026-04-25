@@ -130,7 +130,7 @@ function ProvidersSectionReader() {
 }
 
 export default function ProvidersPage() {
-  usePageGuard('providers')
+  usePageGuard('provider_manage')
   const { t } = useTranslation()
   return (
     <Suspense fallback={<div className="p-2 text-sm text-muted-foreground">{t('common.loading')}</div>}>

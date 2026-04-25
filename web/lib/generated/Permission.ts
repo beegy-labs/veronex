@@ -3,4 +3,4 @@
 /**
  * Permission identifiers stored in `roles.permissions TEXT[]`.
  */
-export type Permission = "dashboard_view" | "api_test" | "provider_manage" | "key_manage" | "account_manage" | "audit_view" | "settings_manage" | "role_manage" | "model_manage";
+export type Permission = "dashboard_view" | "api_test" | "provider_manage" | "key_manage" | "account_manage" | "audit_view" | "settings_manage" | "role_manage" | "model_manage" | "mcp_manage";

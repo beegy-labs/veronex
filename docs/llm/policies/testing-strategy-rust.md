@@ -15,7 +15,7 @@ Rust backends use a 5-layer structure tuned for typed pure cores + async I/O bou
 | **2. Unit** | Pure function + domain logic | `#[test]`, `#[tokio::test]`, **proptest**, **insta** | Process | HTTP / DB; mocks standing in for real external effects |
 | **3. Integration** | Adapter × real external system | **testcontainers-rs** (Postgres/Valkey/Kafka), **wiremock** (HTTP) | Containers | Duplicating E2E flows; asserting on adapter internals |
 | **4. Handler** | Axum handler contract (request → response) | `tower::ServiceExt::oneshot` + `axum::body::to_bytes` | Process | Real HTTP server; going through `reqwest` |
-| **5. E2E** | Cross-service flows, full docker-compose | `scripts/e2e/*.sh` bash, later `just e2e` | Full stack | Asserting on individual function return values |
+| **5. E2E** | Cross-service flows, full docker-compose | `test/scripts/e2e/*.sh` bash, later `just e2e` | Full stack | Asserting on individual function return values |
 
 ## Rust Test Purity
 

@@ -133,22 +133,26 @@ jobs:
     needs: changes
     if: needs.changes.outputs.api == 'true'
     runs-on: arc-runner-set
-    # Rust toolchain is pre-baked in the veronex-runner image. Externalized
-    # to a repo variable (vars.VERONEX_RUNNER_IMAGE) so image upgrades are a
-    # one-line `gh variable set` instead of a code change. `env.*` is NOT
-    # available in container.image (documented GHA limitation), so we use
-    # `vars.*` which IS supported.
-    container:
-      image: ${{ vars.VERONEX_RUNNER_IMAGE }}
-      options: --user 0:0
+    # Runs directly on the arc-runner pod (no `container:`). The pre-baked
+    # Rust image (`vars.VERONEX_RUNNER_IMAGE`) was unusable as a container
+    # because it lacked Node.js — `actions/checkout@v4` could not exec
+    # `/__e/node20/bin/node`. The Dockerfile now installs Node.js (see
+    # `.github/runner/Dockerfile`); once the image is rebuilt and the repo
+    # var is bumped, this job can move back to `container:` form for
+    # faster, cache-warm runs. Until then, set up Rust at step level.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev libcurl4-openssl-dev clang mold
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
         env:
-          # PR tests use Swatinem/rust-cache (target/) — disable sccache
-          # wrapper (not needed; also robust when image lacks binary).
           RUSTC_WRAPPER: ""
           CARGO_INCREMENTAL: "1"
         run: SQLX_OFFLINE=true RUST_LOG=error cargo nextest run --all

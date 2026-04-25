@@ -112,7 +112,6 @@ export const AccountSchema = z.object({
   roles: z.array(RoleInfoSchema),
   role_name: z.string(),
   permissions: z.array(z.string()),
-  menus: z.array(z.string()),
   department: z.string().nullable(),
   position: z.string().nullable(),
   is_active: z.boolean(),
@@ -277,7 +276,6 @@ export const RoleSummarySchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   permissions: z.array(z.string()),
-  menus: z.array(z.string()),
   is_system: z.boolean(),
   account_count: z.number().int(),
   created_at: z.string(),
@@ -293,7 +291,6 @@ export const LoginResponseSchema = z.object({
   username: z.string(),
   role: z.string(),
   permissions: z.array(z.string()),
-  menus: z.array(z.string()),
 })
 
 // ── Error ───────────────────────────────────────────────────────────────────

@@ -65,7 +65,6 @@ pub struct AccountSummary {
     pub roles: Vec<RoleInfo>,
     pub role_name: String,
     pub permissions: Vec<String>,
-    pub menus: Vec<String>,
     pub department: Option<String>,
     pub position: Option<String>,
     pub is_active: bool,
@@ -90,8 +89,8 @@ pub struct ResetLinkResponse {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, AppError> {
-    let role_rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, Vec<String>, bool)>(
-        "SELECT r.id, r.name, r.permissions, r.menus, r.is_system
+    let role_rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, bool)>(
+        "SELECT r.id, r.name, r.permissions, r.is_system
          FROM roles r
          JOIN account_roles ar ON ar.role_id = r.id
          WHERE ar.account_id = $1
@@ -103,20 +102,17 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
     .map_err(|e| AppError::Internal(anyhow::anyhow!("role lookup: {e}")))?;
 
     let mut all_perms = std::collections::BTreeSet::new();
-    let mut all_menus = std::collections::BTreeSet::new();
     let mut is_super = false;
     let mut roles = Vec::new();
 
-    for (id, name, perms, menus, is_system) in &role_rows {
+    for (id, name, perms, is_system) in &role_rows {
         if *is_system && name == "super" { is_super = true; }
         roles.push(RoleInfo { id: RoleId::from_uuid(*id), name: name.clone() });
         for p in perms { all_perms.insert(p.clone()); }
-        for m in menus { all_menus.insert(m.clone()); }
     }
 
     if is_super {
         all_perms = crate::domain::enums::ALL_PERMISSIONS.iter().map(|s| s.to_string()).collect();
-        all_menus = crate::domain::enums::ALL_MENUS.iter().map(|s| s.to_string()).collect();
     }
 
     let role_name = if is_super {
@@ -133,7 +129,6 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
         roles,
         role_name,
         permissions: all_perms.into_iter().collect(),
-        menus: all_menus.into_iter().collect(),
         department: a.department,
         position: a.position,
         is_active: a.is_active,

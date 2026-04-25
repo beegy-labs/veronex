@@ -495,15 +495,32 @@ except Exception as e:
   && pass "veronex-mcp web_search(Korean) → returned results (multilingual)" \
   || info "veronex-mcp web_search(Korean) → $SEARCH_KO_CHECK (SearXNG may be unavailable)"
 
-# 7.8. tools/call analyze_image — routes through Veronex gateway (requires VERONEX_API_KEY + qwen3-vl:8b)
-# A 1x1 white PNG in base64 (minimal valid image)
-TEST_IMG_B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
-ANALYZE_RES=$(curl -s --max-time 130 "$MCP_TEST_URL" \
-  -H "Content-Type: application/json" \
-  -d "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_image\",\"arguments\":{\"image\":\"$TEST_IMG_B64\",\"prompt\":\"What color is this image?\"}}}" \
-  2>/dev/null || echo "{}")
-ANALYZE_CHECK=$(echo "$ANALYZE_RES" | python3 -c "
-import sys,json
+# 7.8. tools/call analyze_image — routes through Veronex gateway.
+# Prereq: veronex-mcp must hold a Veronex API key AND know which vision model
+# to call. 01-setup recreates the container with both env vars set so the only
+# remaining environmental gap is a Veronex provider with no registered vision
+# model — in which case this is a real test failure (the env claims a model
+# but the gateway can't dispatch).
+HAS_API_KEY=$(docker compose exec -T veronex-mcp sh -c 'echo -n "${VERONEX_API_KEY:-}"' 2>/dev/null | tr -d '\r\n')
+EXPECTED_MODEL=$(docker compose exec -T veronex-mcp sh -c 'echo -n "${ANALYZE_IMAGE_MODEL:-qwen3-vl:8b}"' 2>/dev/null | tr -d '\r\n')
+if [ -z "$HAS_API_KEY" ]; then
+  skip "veronex-mcp analyze_image — VERONEX_API_KEY not set in veronex-mcp container (run 01-setup first)"
+else
+  # Use a real JPEG fixture — vision models return empty output for trivial
+  # 1×1 inputs, which would mask real failures behind a flake.
+  TEST_FIXTURE="$SCRIPT_DIR/test-fixture.jpg"
+  if [ ! -f "$TEST_FIXTURE" ]; then
+    fail "veronex-mcp analyze_image — missing test fixture: $TEST_FIXTURE"
+    save_counts
+    exit 0
+  fi
+  TEST_IMG_B64=$(base64 < "$TEST_FIXTURE" | tr -d '\n')
+  ANALYZE_RES=$(curl -s --max-time 130 "$MCP_TEST_URL" \
+    -H "Content-Type: application/json" \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_image\",\"arguments\":{\"image\":\"$TEST_IMG_B64\",\"prompt\":\"What color is this image?\"}}}" \
+    2>/dev/null || echo "{}")
+  ANALYZE_CHECK=$(EXPECTED="$EXPECTED_MODEL" python3 -c "
+import sys,json,os
 d=json.loads(sys.stdin.read())
 r=d.get('result',{})
 is_err=r.get('isError',True)
@@ -515,13 +532,15 @@ else:
         data=json.loads(text)
         desc=data.get('description','')
         model=data.get('model','')
-        print('ok' if desc and model == 'qwen3-vl:8b' else f'missing_fields:desc={bool(desc)},model={model}')
+        expected=os.environ.get('EXPECTED','')
+        print('ok' if desc and model == expected else f'missing_fields:desc={bool(desc)},model={model},expected={expected}')
     except Exception as e:
         print(f'parse_err:{e}:{text[:60]}')
-" 2>/dev/null || echo "parse_error")
-[ "$ANALYZE_CHECK" = "ok" ] \
-  && pass "veronex-mcp analyze_image → description returned via Veronex gateway (qwen3-vl:8b)" \
-  || info "veronex-mcp analyze_image → $ANALYZE_CHECK (requires VERONEX_API_KEY + qwen3-vl:8b loaded)"
+" <<< "$ANALYZE_RES" 2>/dev/null || echo "parse_error")
+  [ "$ANALYZE_CHECK" = "ok" ] \
+    && pass "veronex-mcp analyze_image → description returned via Veronex gateway ($EXPECTED_MODEL)" \
+    || fail "veronex-mcp analyze_image → $ANALYZE_CHECK"
+fi
 
 # 8. tools/call get_weather — unknown city returns isError=true (no network needed)
 ERR_RES=$(curl -s --max-time 10 "$MCP_TEST_URL" \
@@ -653,12 +672,26 @@ except Exception as e:
   *)   fail "MCP inference → $INF_CODE" ;;
 esac
 
-# 4. Verify Valkey heartbeat key exists for registered server
+# 4. Verify Valkey heartbeat key exists for registered server.
+# Heartbeat keys are keyed by raw UUID (what /v1/mcp/targets returns and what
+# veronex-agent writes), not by the typed `mcp_*` ID returned by
+# POST /v1/mcp/servers. Resolve the UUID first.
 if [ -n "$INT_ID" ]; then
-  HB_VAL=$(valkey_get "veronex:mcp:heartbeat:$INT_ID")
-  [ -n "$HB_VAL" ] \
-    && pass "MCP heartbeat: Valkey key present for server $INT_ID" \
-    || info "MCP heartbeat: no Valkey key yet (agent scrape pending)"
+  INT_UUID=$(docker compose exec -T postgres psql -U veronex -d veronex -tAc \
+    "SELECT id FROM mcp_servers WHERE slug='$INT_SLUG' LIMIT 1" 2>/dev/null | tr -d '[:space:]')
+  if [ -z "$INT_UUID" ]; then
+    fail "MCP heartbeat: could not resolve UUID for slug=$INT_SLUG"
+  else
+    HB_VAL=""
+    for _ in $(seq 1 50); do
+      HB_VAL=$(valkey_get "veronex:mcp:heartbeat:$INT_UUID")
+      [ -n "$HB_VAL" ] && break
+      sleep 3
+    done
+    [ -n "$HB_VAL" ] \
+      && pass "MCP heartbeat: Valkey key present for server $INT_UUID" \
+      || fail "MCP heartbeat: no Valkey key after 150s for $INT_UUID — agent scrape not landing"
+  fi
 fi
 
 # 5. Disable server — inference should proceed without MCP tools

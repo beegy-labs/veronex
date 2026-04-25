@@ -2,12 +2,12 @@
 # ── Veronex E2E Integration Test ─────────────────────────────────────────────
 #
 # Usage:
-#   ./scripts/test-e2e.sh                    # Full run — skips already-passed phases
-#   ./scripts/test-e2e.sh 05                 # Run single phase (05-security)
-#   ./scripts/test-e2e.sh --from 05          # Clear checkpoints 05+, run from 05
-#   ./scripts/test-e2e.sh --reset            # Clear all checkpoints, full run
-#   ./scripts/test-e2e.sh --no-cache         # Ignore checkpoints, run all
-#   SKIP_DB_RESET=1 ./scripts/test-e2e.sh
+#   ./test/scripts/test-e2e.sh                    # Full run — skips already-passed phases
+#   ./test/scripts/test-e2e.sh 05                 # Run single phase (05-security)
+#   ./test/scripts/test-e2e.sh --from 05          # Clear checkpoints 05+, run from 05
+#   ./test/scripts/test-e2e.sh --reset            # Clear all checkpoints, full run
+#   ./test/scripts/test-e2e.sh --no-cache         # Ignore checkpoints, run all
+#   SKIP_DB_RESET=1 ./test/scripts/test-e2e.sh
 #
 # Execution order:
 #   Phase 1 (sequential) : 01-setup
@@ -16,6 +16,7 @@
 #   Phase 3 (parallel)   : 02-scheduler  06-api-surface  08-sdd-advanced  10-image-storage
 #     → Phase 3 starts only after 03-inference completes (no inference contention)
 #   Phase 3.5 (sequential): 07-lifecycle  (restarts veronex — must not run in parallel)
+#   Phase 3.6 (sequential): 19-mcp-coldstart (restarts veronex+veronex-mcp)
 #   Phase 4 (sequential) : 13-frontend (Playwright UI tests)
 #     → runs after all backend phases complete
 #
@@ -179,11 +180,16 @@ if [ -n "$ONLY_PHASE" ]; then
 
   # Print mini-summary
   cf="$CKPT/$(_phase_id "$phase").counts"
-  pass=0; fail=0
+  pass=0; fail=0; skip=0
   [ -f "$cf" ] && { pass=$(grep "^PASS_COUNT=" "$cf" | awk -F= '{s+=$2} END{print s+0}');
-                    fail=$(grep "^FAIL_COUNT=" "$cf" | awk -F= '{s+=$2} END{print s+0}'); }
+                    fail=$(grep "^FAIL_COUNT=" "$cf" | awk -F= '{s+=$2} END{print s+0}');
+                    skip=$(grep "^SKIP_COUNT=" "$cf" | awk -F= '{s+=$2} END{print s+0}'); }
   echo ""
-  echo -e "  ${GREEN}PASS: $pass${NC}  ${RED}FAIL: $fail${NC}"
+  if [ "$skip" -gt 0 ]; then
+    echo -e "  ${GREEN}PASS: $pass${NC}  ${RED}FAIL: $fail${NC}  ${YELLOW}SKIP: $skip${NC}"
+  else
+    echo -e "  ${GREEN}PASS: $pass${NC}  ${RED}FAIL: $fail${NC}"
+  fi
   exit "$fail"
 fi
 
@@ -243,20 +249,27 @@ echo ""
 echo -e "${CYAN}${BOLD}[Phase 3.5] Lifecycle test (sequential — restarts veronex)${NC}"
 run_phase "07-lifecycle.sh"
 
+# ── Phase 3.6: MCP cold-start self-heal (sequential — restarts veronex) ──────
+echo ""
+echo -e "${CYAN}${BOLD}[Phase 3.6] MCP cold-start self-heal (sequential — restarts veronex+veronex-mcp)${NC}"
+run_phase "19-mcp-coldstart.sh"
+
 # ── Phase 4: Frontend E2E (Playwright) ───────────────────────────────────────
 echo ""
 echo -e "${CYAN}${BOLD}[Phase 4] Frontend E2E (Playwright)${NC}"
 run_phase "13-frontend.sh"
 
 # ── Aggregate results ─────────────────────────────────────────────────────────
-TOTAL_PASS=0; TOTAL_FAIL=0; ALL_FAIL_MSGS=()
+TOTAL_PASS=0; TOTAL_FAIL=0; TOTAL_SKIP=0; ALL_FAIL_MSGS=(); ALL_SKIP_MSGS=()
 for cf in "${ALL_PHASE_COUNTS[@]}"; do
   [ -f "$cf" ] || continue
   while IFS= read -r line; do
     case "$line" in
       PASS_COUNT=*) TOTAL_PASS=$((TOTAL_PASS + ${line#PASS_COUNT=})) ;;
       FAIL_COUNT=*) TOTAL_FAIL=$((TOTAL_FAIL + ${line#FAIL_COUNT=})) ;;
+      SKIP_COUNT=*) TOTAL_SKIP=$((TOTAL_SKIP + ${line#SKIP_COUNT=})) ;;
       FAIL_MSG=*)   ALL_FAIL_MSGS+=("${line#FAIL_MSG=}") ;;
+      SKIP_MSG=*)   ALL_SKIP_MSGS+=("${line#SKIP_MSG=}") ;;
     esac
   done < "$cf"
 done
@@ -272,13 +285,25 @@ echo -e "  Round 1 (cold start) : ${GREEN}OK=${R1_OK:-?}${NC}  Queued=${R1_Q:-?}
 echo -e "  Round 2 (AIMD)       : ${GREEN}OK=${R2_OK:-?}${NC}  Queued=${R2_Q:-?}  Failed=${R2_F:-?}"
 echo -e "  AIMD limit           : ${AIMD_LIMIT:-unknown}"
 echo ""
-echo -e "  ${GREEN}PASS: $TOTAL_PASS${NC}  ${RED}FAIL: $TOTAL_FAIL${NC}"
+if [ "$TOTAL_SKIP" -gt 0 ]; then
+  echo -e "  ${GREEN}PASS: $TOTAL_PASS${NC}  ${RED}FAIL: $TOTAL_FAIL${NC}  ${YELLOW}SKIP: $TOTAL_SKIP${NC}"
+else
+  echo -e "  ${GREEN}PASS: $TOTAL_PASS${NC}  ${RED}FAIL: $TOTAL_FAIL${NC}"
+fi
 
 if [ "$TOTAL_FAIL" -gt 0 ]; then
   echo ""
   echo -e "  ${RED}Failed assertions:${NC}"
   for msg in "${ALL_FAIL_MSGS[@]}"; do
     echo -e "    ${RED}- $msg${NC}"
+  done
+fi
+
+if [ "$TOTAL_SKIP" -gt 0 ]; then
+  echo ""
+  echo -e "  ${YELLOW}Skipped (environmental prerequisite missing):${NC}"
+  for msg in "${ALL_SKIP_MSGS[@]}"; do
+    echo -e "    ${YELLOW}- $msg${NC}"
   done
 fi
 
