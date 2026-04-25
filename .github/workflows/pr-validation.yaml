@@ -132,7 +132,14 @@ jobs:
     name: Test API
     needs: changes
     if: needs.changes.outputs.api == 'true'
-    runs-on: platform-rust-runners
+    runs-on: arc-runner-set
+    # Rust toolchain is pre-baked in the veronex-runner image. Single runner
+    # pool (arc-runner-set) executes; this job runs inside the Rust container
+    # so the runner image stays lightweight. Bumping the tag re-pulls a new
+    # image to the node cache; subsequent jobs are instant.
+    container:
+      image: gitea.girok.dev/beegy-labs/veronex-runner:7a66609eb7dddf14389e3acd99e4e33bc1051ba5
+      options: --user 0:0
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -140,7 +147,7 @@ jobs:
       - name: Run tests
         env:
           # PR tests use Swatinem/rust-cache (target/) — disable sccache
-          # wrapper (not needed; also robust when runner image lacks binary).
+          # wrapper (not needed; also robust when image lacks binary).
           RUSTC_WRAPPER: ""
           CARGO_INCREMENTAL: "1"
         run: SQLX_OFFLINE=true RUST_LOG=error cargo nextest run --all

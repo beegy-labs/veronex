@@ -28,8 +28,18 @@ concurrency:
 jobs:
   build:
     name: Build Embed
-    runs-on: platform-rust-runners
+    runs-on: arc-runner-set
     timeout-minutes: 30
+    env:
+      # See ci-rust.yml — same sccache pass-through pattern. Compile lives
+      # inside the embed Dockerfile, runner only orchestrates buildx.
+      SCCACHE_BUCKET: sccache
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: us-east-1
+      SCCACHE_S3_USE_SSL: "false"
+      SCCACHE_S3_KEY_PREFIX: veronex/
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       skipped: ${{ steps.check_image.outputs.exists }}
