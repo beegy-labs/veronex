@@ -7,11 +7,30 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 pass() { echo -e "  ${GREEN}[PASS]${NC} $1"; PASS_COUNT=$((PASS_COUNT+1)); }
 fail() { echo -e "  ${RED}[FAIL]${NC} $1"; FAIL_COUNT=$((FAIL_COUNT+1)); FAIL_MSGS+=("$1"); }
+# `info` is for in-test breadcrumbs that don't represent a verdict (e.g. the
+# value of a counter, what a phase is about to do). It must NEVER be used to
+# silently downgrade a check that should have failed — use `skip` for that.
 info() { echo -e "  ${YELLOW}[INFO]${NC} $1"; }
+# `skip` is for assertions that cannot be evaluated because a prerequisite is
+# missing (vision model not loaded, optional service not deployed, etc.). It
+# is loud — uses YELLOW prefix `[SKIP]`, increments SKIP_COUNT, and is surfaced
+# in the per-phase summary so coverage gaps are visible at a glance.
+skip() { echo -e "  ${YELLOW}[SKIP]${NC} $1"; SKIP_COUNT=$((SKIP_COUNT+1)); SKIP_MSGS+=("$1"); }
 hdr()     { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
 section() { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
 
 PASS_COUNT=${PASS_COUNT:-0}; FAIL_COUNT=${FAIL_COUNT:-0}; FAIL_MSGS=()
+SKIP_COUNT=${SKIP_COUNT:-0}; SKIP_MSGS=()
+
+# ── Repo-root resolution ─────────────────────────────────────────────────────
+# Phase scripts now live at `test/scripts/e2e/`, so relative paths like
+# `../../docker/postgres/init.sql` no longer work. Use REPO_ROOT for any path
+# that needs to resolve back to the project root.
+if [ -z "${REPO_ROOT:-}" ]; then
+  _LIB_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(git -C "$_LIB_SH_DIR" rev-parse --show-toplevel 2>/dev/null || (cd "$_LIB_SH_DIR/../../.." && pwd))"
+  export REPO_ROOT
+fi
 
 # ── Configuration ────────────────────────────────────────────────────────────
 API="${API_URL:-http://localhost:3001}"
@@ -256,9 +275,15 @@ save_counts() {
   local cf="${E2E_COUNTS_FILE:-$E2E_STATE.counts}"
   echo "PASS_COUNT=$PASS_COUNT" >> "$cf"
   echo "FAIL_COUNT=$FAIL_COUNT" >> "$cf"
+  echo "SKIP_COUNT=${SKIP_COUNT:-0}" >> "$cf"
   if [ ${#FAIL_MSGS[@]} -gt 0 ]; then
     for msg in "${FAIL_MSGS[@]}"; do
       echo "FAIL_MSG=$msg" >> "$cf"
+    done
+  fi
+  if [ ${#SKIP_MSGS[@]} -gt 0 ]; then
+    for msg in "${SKIP_MSGS[@]}"; do
+      echo "SKIP_MSG=$msg" >> "$cf"
     done
   fi
 }
