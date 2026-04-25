@@ -56,10 +56,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /app
 COPY --from=builder /app/veronex-embed ./
 
-# Pre-bake the embedding model into the image at build time so the container
-# starts immediately without downloading from HuggingFace at runtime.
+# Model is downloaded at first request via fastembed's HuggingFace Hub client.
+# Cache lives at FASTEMBED_CACHE_PATH; mount a PersistentVolume there in K8s so
+# downloads persist across pod restarts (first pod warm-up ~30-60s from HF,
+# subsequent starts instant). Baking the ~2GB model into the image was dropped
+# because the resulting layer exceeded the Gitea registry push threshold.
 ENV FASTEMBED_CACHE_PATH=/app/models
-RUN PRELOAD_ONLY=1 ./veronex-embed
+RUN mkdir -p /app/models
 
 EXPOSE 3200
 CMD ["./veronex-embed"]
