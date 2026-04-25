@@ -236,7 +236,10 @@ async fn async_main() -> Result<()> {
     };
 
     // ── MCP tool refresh loop ──────────────────────────────────────
-    // Periodically refresh tool cache for all connected MCP servers.
+    // Periodically refresh tool cache for all connected MCP servers,
+    // and reconnect any enabled server whose session is missing — so a
+    // transient boot failure (gateway cold-start, pod-readiness race) does
+    // not leave MCP dead until the next pod restart.
     // Interval (25s) keeps L2 Valkey entry alive before its 35s TTL.
     if state.mcp_bridge.is_some() {
         let state_clone = state.clone();
@@ -248,13 +251,14 @@ async fn async_main() -> Result<()> {
                 for server_id in state_clone.mcp_bridge.as_ref().map(|b| b.session_manager.server_ids()).unwrap_or_default() {
                     discover_tools_startup(&state_clone, server_id).await;
                 }
-                // Periodic refresh
+                // Periodic refresh + missing-session reconnect
                 let mut interval = tokio::time::interval(MCP_TOOL_REFRESH_INTERVAL);
                 interval.tick().await; // skip the immediate tick
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
                             if let Some(ref b) = state_clone.mcp_bridge {
+                                reconcile_mcp_sessions(&state_clone, b).await;
                                 for server_id in b.session_manager.server_ids() {
                                     if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await {
                                         if let Some(ref indexer) = state_clone.mcp_tool_indexer {
@@ -364,6 +368,57 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {}
         _ = terminate => {}
+    }
+}
+
+// ── MCP session reconciler ──────────────────────────────────────────
+
+/// Connect any enabled MCP server that does not currently have an active session.
+/// Idempotent — safe to call on every refresh tick. Lets the bridge self-heal from
+/// transient boot/network failures without requiring a pod restart.
+async fn reconcile_mcp_sessions(
+    state: &AppState,
+    bridge: &Arc<veronex::infrastructure::outbound::mcp::McpBridgeAdapter>,
+) {
+    use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
+
+    let active: std::collections::HashSet<uuid::Uuid> = bridge
+        .session_manager
+        .server_ids()
+        .into_iter()
+        .collect();
+
+    #[derive(sqlx::FromRow)]
+    struct McpServerRow {
+        id: uuid::Uuid,
+        slug: String,
+        url: String,
+        timeout_secs: i16,
+    }
+    let rows: Vec<McpServerRow> = sqlx::query_as(
+        "SELECT id, slug, url, timeout_secs FROM mcp_servers WHERE is_enabled = true",
+    )
+    .fetch_all(&state.pg_pool)
+    .await
+    .unwrap_or_default();
+
+    for row in rows {
+        if active.contains(&row.id) {
+            continue;
+        }
+        match bridge
+            .session_manager
+            .connect(row.id, &row.slug, &row.url, row.timeout_secs as u16)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(id = %row.id, slug = %row.slug, "MCP session reconnected");
+                discover_tools_startup(state, row.id).await;
+            }
+            Err(e) => {
+                tracing::warn!(id = %row.id, error = %e, "MCP reconnect failed");
+            }
+        }
     }
 }
 
