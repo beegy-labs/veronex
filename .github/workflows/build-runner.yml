@@ -54,15 +54,15 @@ jobs:
         run: |
           SHA="${{ github.sha }}"
           sed -i "s|gitea.girok.dev/beegy-labs/veronex-runner:.*|gitea.girok.dev/beegy-labs/veronex-runner:${SHA}|g" \
-            platform/ci/rust-runner/values.yaml
+            platform/ci/veronex-runner/values.yaml
 
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add platform/ci/rust-runner/values.yaml
+          git add platform/ci/veronex-runner/values.yaml
           git diff --cached --quiet && exit 0
-          git commit -m "chore(rust-runner): update runner image tag to ${{ github.sha }}"
+          git commit -m "chore(veronex-runner): update runner image tag to ${{ github.sha }}"
           for i in 1 2 3; do
             git push && exit 0
             git pull --rebase
