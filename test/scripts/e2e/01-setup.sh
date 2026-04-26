@@ -62,7 +62,7 @@ R=$(curl -sf "$API/readyz" 2>/dev/null || echo "")
 
 # Verify all infrastructure services are running
 INFRA_OK=true
-for svc in postgres valkey clickhouse redpanda minio otel-collector veronex-mcp veronex-embed; do
+for svc in postgres valkey clickhouse redpanda garage otel-collector veronex-mcp veronex-embed; do
   STATUS=$(docker compose ps "$svc" --format "{{.Status}}" 2>/dev/null | head -1)
   case "$STATUS" in
     *healthy*|*Up*) ;;
@@ -71,19 +71,14 @@ for svc in postgres valkey clickhouse redpanda minio otel-collector veronex-mcp 
 done
 $INFRA_OK && pass "All infrastructure services running"
 
-# Verify required MinIO buckets exist. Missing buckets surface as
-# "service error" in the API's S3 calls (put_object / get_object),
-# blocking conversation persistence and MCP history fetch.
-# The `minio` container has `mc` preinstalled but no alias set; configure
-# one using the root credentials baked into the compose env.
-MC_USER="${MINIO_ROOT_USER:-veronex}"
-MC_PASS="${MINIO_ROOT_PASSWORD:-veronex123}"
-docker compose exec -T minio sh -c "mc alias set local http://localhost:9000 $MC_USER $MC_PASS" >/dev/null 2>&1 || true
+# Verify the two veronex S3 buckets exist on Garage. Garage stores buckets
+# in cluster metadata, so a missing bucket here surfaces as a 404 on the
+# first put_object call (conversation persistence + image upload).
 for bkt in veronex-messages veronex-images; do
-  if docker compose exec -T minio mc ls "local/$bkt" >/dev/null 2>&1; then
-    pass "MinIO bucket '$bkt' exists"
+  if docker compose exec -T garage /garage bucket info "$bkt" >/dev/null 2>&1; then
+    pass "Garage bucket '$bkt' exists"
   else
-    fail "MinIO bucket '$bkt' missing (S3 put_object/get_object will fail — run minio-init)"
+    fail "Garage bucket '$bkt' missing (S3 put_object will fail — re-run garage-init)"
   fi
 done
 

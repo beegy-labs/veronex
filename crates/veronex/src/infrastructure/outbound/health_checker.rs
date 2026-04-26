@@ -238,16 +238,23 @@ async fn check_and_store_services(
         }
     }
 
-    // S3/MinIO: GET {endpoint}/minio/health/live
+    // S3-compatible health probe — vendor-agnostic.
+    // Different implementations expose different health paths
+    // (MinIO: /minio/health/live, Garage: admin :3903/health). Hitting the
+    // S3 API root with an unauth GET is enough to confirm the daemon is
+    // reachable: AWS/MinIO/Garage all respond with an HTTP status (typically
+    // 403 ListBuckets-needs-auth, 405 method-not-allowed, or 200), and a
+    // network/timeout failure surfaces as Err. Treat any response in
+    // 1xx-4xx as alive; only 5xx and transport errors are "error".
     if let Some(endpoint) = s3_endpoint {
         let probe = {
             let start = std::time::Instant::now();
-            let res = client.get(format!("{}/minio/health/live", endpoint.trim_end_matches('/')))
+            let res = client.get(endpoint.trim_end_matches('/').to_string())
                 .timeout(SERVICE_PROBE_TIMEOUT)
                 .send().await;
             let ms = start.elapsed().as_millis() as u32;
             let s = match res {
-                Ok(r) if r.status().is_success() => "ok",
+                Ok(r) if !r.status().is_server_error() => "ok",
                 _ => "error",
             };
             SvcProbe { s, ms, t: now_ms }

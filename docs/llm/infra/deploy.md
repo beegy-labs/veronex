@@ -37,8 +37,8 @@
 | valkey | valkey/valkey:9.0.3-alpine | **6380** | Queue (Lua priority pop), rate limiting, JWT revocation |
 | clickhouse | clickhouse-server:26.1 | 8123, 9000 | Analytics read layer |
 | redpanda | redpandadata/redpanda:v25.3.9 | 9092 | Single message bus (Kafka-compatible) |
-| minio | minio/minio:latest | **9010**, **9011** | S3-compatible object store |
-| minio-init | minio/mc (init container) | -- | Creates `veronex-messages` + `veronex-images` buckets and sets download policy on images bucket. Runs once on startup |
+| garage | dxflrs/garage:v1.0.1 | **3900** (S3 API), **3902** (web/anonymous), **3903** (admin) | S3-compatible object store (replaces MinIO; AGPLv3, Rust) |
+| garage-init | dxflrs/garage (init container) | -- | Applies single-node layout, creates `veronex-messages` + `veronex-images` buckets, imports the `S3_ACCESS_KEY`/`S3_SECRET_KEY` pair, allows anonymous web GET on images bucket. Runs once on startup |
 | veronex | local build | **3001**->3000 | Rust API server |
 | veronex-analytics | local build | internal 3003 | Analytics (OTel write + ClickHouse read) |
 | veronex-web | local build | **3000** | Next.js admin dashboard |
@@ -68,12 +68,12 @@ GEMINI_ENCRYPTION_KEY=<64-char hex>  # REQUIRED (≥32 chars; 256-bit recommende
 # BOOTSTRAP_SUPER_PASS=<password>     # optional: omit for first-run setup flow
 CORS_ALLOWED_ORIGINS=*                # prod: "https://app.example.com,https://admin.example.com"
 EMBED_URL=http://localhost:3200        # veronex-embed (optional — MCP vector search disabled when unset)
-S3_ENDPOINT=http://localhost:9010     # S3/MinIO (optional — omit to store messages in PostgreSQL only)
+S3_ENDPOINT=http://localhost:3900     # S3 (Garage) API port — Sigv4 (optional — omit to store messages in PostgreSQL only)
 S3_ACCESS_KEY=veronex                 # required when S3_ENDPOINT is set
 S3_SECRET_KEY=veronex123              # required when S3_ENDPOINT is set
 S3_BUCKET=veronex-messages
 S3_IMAGE_BUCKET=veronex-images       # separate bucket for inference job images (WebP); default: veronex-images
-S3_IMAGE_PUBLIC_URL=http://localhost:9010/veronex-images  # public URL base for image thumbnails served to browser; required when S3_ENDPOINT set
+S3_IMAGE_PUBLIC_URL=http://localhost:3902/veronex-images  # Garage web port (anonymous GET); required when S3_ENDPOINT set
 S3_REGION=us-east-1
 CAPACITY_ANALYZER_OLLAMA_URL=http://localhost:11434
 SESSION_GROUPING_INTERVAL_SECS=86400 # session grouping loop interval (default: 86400 = 24h)

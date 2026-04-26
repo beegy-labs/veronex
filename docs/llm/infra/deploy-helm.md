@@ -34,7 +34,7 @@ Disable subcharts to use pre-existing services:
 |----------|-------------|------------------------|
 | `postgresql` | `postgresql.enabled=false` | `externalPostgresql.{host,port,username,password,database}` |
 | `valkey` | `valkey.enabled=false` | `externalValkey.{host,port,password}` |
-| `minio` | `minio.enabled=false` | `externalMinio.{endpoint,accessKey,secretKey,bucket,region}` |
+| `garage` | `garage.enabled=false` | `externalS3.{endpoint,accessKey,secretKey,bucket,region}` (replaces MinIO; Garage AGPLv3) |
 | `clickhouse` | `clickhouse.enabled=false` | `externalClickhouse.{host,port,username,password,database}` |
 | `redpanda` | `redpandaEnabled=false` | `externalRedpanda.brokers` |
 

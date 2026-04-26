@@ -126,7 +126,7 @@ Present on both `Job` and `JobDetail`. The human-readable name of the provider (
 
 ### `image_keys: string[] | null` / `image_urls: string[] | null`
 
-Present on `JobDetail` only. `image_keys` are S3 object keys (`images/{job_id}/{index}.webp`). `image_urls` are constructed from `image_keys` + `S3_IMAGE_PUBLIC_URL` env var (e.g. `http://localhost:9010/veronex-images/{key}`). UI renders a thumbnail gallery in the job detail modal when present. Stored as `TEXT[]` column on `inference_jobs`.
+Present on `JobDetail` only. `image_keys` are S3 object keys (`images/{job_id}/{index}.webp`). `image_urls` are constructed from `image_keys` + `S3_IMAGE_PUBLIC_URL` env var (e.g. `http://localhost:3902/veronex-images/{key}` for the local Garage web port). UI renders a thumbnail gallery in the job detail modal when present. Stored as `TEXT[]` column on `inference_jobs`.
 
 ---
 
