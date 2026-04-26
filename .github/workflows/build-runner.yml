@@ -1,5 +1,19 @@
 name: Build Runner Image
 
+# This workflow only builds + pushes the runner OCI image. Pod rollout is
+# NOT automated here: ARC (`arc-runner-set`) is provisioned by Terraform
+# (`platform-gitops/bootstrap/terraform/modules/arc-controller/`), not
+# ArgoCD, to avoid a circular dependency. To roll a freshly-built image
+# to runner pods, update `arc_runner_image` in
+# `platform-gitops/bootstrap/terraform/variables.tf` (or pass
+# `TF_VAR_arc_runner_image=…`) and `terraform apply` the bootstrap module.
+#
+# The previous `deploy` job sed-edited `platform/ci/{rust,veronex}-runner/
+# values.yaml` in `platform-gitops` and relied on ArgoCD auto-sync, but
+# that chart was retired in `platform-gitops@d622b0e2` ("drop
+# platform-rust-runners scale set, single arc-runner-set"); the GitOps
+# update step has had no live target since then and was removed here.
+
 on:
   push:
     branches: [develop, main]
@@ -37,37 +51,6 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
-
-  deploy:
-    name: Update runner image tag in platform-gitops
-    needs: build
-    runs-on: arc-runner-set
-    if: github.ref_name == 'develop' || github.ref_name == 'main'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: beegy-labs/platform-gitops
-          ref: develop
-          token: ${{ secrets.GH_PAT }}
-
-      - name: Update image tag
-        run: |
-          SHA="${{ github.sha }}"
-          sed -i "s|gitea.girok.dev/beegy-labs/veronex-runner:.*|gitea.girok.dev/beegy-labs/veronex-runner:${SHA}|g" \
-            platform/ci/veronex-runner/values.yaml
-
-      - name: Commit and push
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add platform/ci/veronex-runner/values.yaml
-          git diff --cached --quiet && exit 0
-          git commit -m "chore(veronex-runner): update runner image tag to ${{ github.sha }}"
-          for i in 1 2 3; do
-            git push && exit 0
-            git pull --rebase
-          done
-          exit 1
 
   cleanup:
     name: Cleanup old runner images
