@@ -65,37 +65,49 @@ services:
       timeout: 5s
       retries: 10
 
-  minio:
-    image: minio/minio:latest
+  # ── S3-compatible object storage ──────────────────────────────────────────
+  # Replaces MinIO (BSL since RELEASE.2025-04-22) with Garage (AGPLv3, Rust).
+  # Garage is a strict S3 subset — Veronex only uses put/get/create_bucket
+  # with force_path_style=true, which Garage supports natively.
+  garage:
+    image: dxflrs/garage:v1.0.1
     ports:
-      - "9010:9000"   # S3 API
-      - "9011:9001"   # Web console (http://localhost:9011)
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-veronex}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-veronex123}
+      - "3900:3900"   # S3 API (Sigv4)
+      - "3902:3902"   # Web (anonymous GET → backs S3_IMAGE_PUBLIC_URL)
+      - "3903:3903"   # Admin API
     volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9001"
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      # `garage status` returns 0 once the RPC is reachable. Layout is
+      # finalized by garage-init below; the api/web ports become useful
+      # only after that — services that talk S3 should depend on garage-init.
+      test: ["CMD", "/garage", "status"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
 
-  minio-init:
-    image: minio/minio:latest
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}
-        mc mb --ignore-existing local/veronex-messages
-        mc mb --ignore-existing local/veronex-images
-        mc anonymous set download local/veronex-images
+  garage-init:
+    # Garage's official image is distroless — no /bin/sh, can't run a script.
+    # Use an alpine sidecar that downloads the matching garage binary and
+    # runs the bootstrap script. The garage_meta volume must be mounted so
+    # the CLI can read the node key (RPC auth) — sharing it via the same
+    # volume is the supported pattern (see Garage docs: "running garage CLI
+    # against an existing cluster requires access to metadata_dir").
+    image: alpine:3.20
+    entrypoint: ["/bin/sh"]
+    command: ["/init.sh"]
+    volumes:
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      - ./docker/garage/init.sh:/init.sh:ro
+      - garage_meta:/var/lib/garage/meta
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-veronex}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-veronex123}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-GK7665726f6e65780000000000}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-0000000000000000000000000000000000000000000000000000000000000001}
+      GARAGE_VERSION: v1.0.1
     depends_on:
-      minio:
+      garage:
         condition: service_healthy
     restart: "no"
 
@@ -130,13 +142,16 @@ services:
       # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       # Capacity analyzer Ollama URL — defaults to OLLAMA_URL when unset.
       # CAPACITY_ANALYZER_OLLAMA_URL: http://host.docker.internal:11434
-      # S3 / MinIO — conversation context object storage
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-veronex}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-veronex123}
+      # S3 (Garage) — conversation context + image object storage.
+      # API on :3900 (Sigv4, all internal access); web on :3902 (anonymous
+      # GET, backs S3_IMAGE_PUBLIC_URL → matches what the Veronex client
+      # returns to browsers for image previews).
+      S3_ENDPOINT: http://garage:3900
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-GK7665726f6e65780000000000}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-0000000000000000000000000000000000000000000000000000000000000001}
       S3_BUCKET: veronex-messages
       S3_IMAGE_BUCKET: veronex-images
-      S3_IMAGE_PUBLIC_URL: http://localhost:9010/veronex-images
+      S3_IMAGE_PUBLIC_URL: http://localhost:3902/veronex-images
       S3_REGION: us-east-1
       VESPA_URL: http://vespa:8080
       VESPA_ENVIRONMENT: ${VESPA_ENVIRONMENT:-local-dev}
@@ -159,8 +174,8 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
-      minio:
-        condition: service_healthy
+      garage-init:
+        condition: service_completed_successfully
       vespa-init:
         condition: service_completed_successfully
 
@@ -391,5 +406,6 @@ volumes:
   valkey_data:
   clickhouse_data:
   redpanda_data:
-  minio_data:
+  garage_meta:
+  garage_data:
   vespa_data:

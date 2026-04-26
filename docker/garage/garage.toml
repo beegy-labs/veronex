@@ -1,0 +1,31 @@
+metadata_dir = "/var/lib/garage/meta"
+data_dir     = "/var/lib/garage/data"
+db_engine    = "lmdb"
+
+# Single-node dev cluster — no replication.
+replication_factor = 1
+
+# Cluster RPC. The dev secret is intentionally world-readable; do not reuse in prod.
+rpc_bind_addr   = "[::]:3901"
+rpc_public_addr = "garage:3901"
+rpc_secret      = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[s3_api]
+s3_region     = "us-east-1"
+api_bind_addr = "[::]:3900"
+# Required for AWS Sigv4 + path-style; matches `force_path_style(true)` in
+# crates/veronex/src/bootstrap/repositories.rs.
+root_domain   = ".s3.garage.local"
+
+# Anonymous-readable bucket exposure for veronex-images (S3_IMAGE_PUBLIC_URL).
+# Web port serves GETs without Sigv4 — equivalent to MinIO's
+# `mc anonymous set download` semantics.
+[s3_web]
+bind_addr   = "[::]:3902"
+root_domain = ".web.garage.local"
+index       = "index.html"
+
+[admin]
+api_bind_addr = "[::]:3903"
+admin_token   = "garage-dev-admin-token-change-me"
+metrics_token = "garage-dev-metrics-token-change-me"

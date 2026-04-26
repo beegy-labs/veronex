@@ -60,7 +60,7 @@ The health checker (30s loop) also probes core infrastructure services and store
 | PostgreSQL | `SELECT 1` | 3s |
 | Valkey | `PING` | instant |
 | ClickHouse | `GET {ANALYTICS_URL}/health` | 3s |
-| S3/MinIO | `GET {S3_ENDPOINT}/minio/health/live` | 3s |
+| S3/Garage | `GET {S3_ENDPOINT}/health` | 3s |
 | Vespa | `GET {VESPA_URL}/state/v1/health` | 3s |
 
 Vespa probe runs only when `VESPA_URL` env var is set. `check_and_store_services(vespa_url: Option<&str>)`.
