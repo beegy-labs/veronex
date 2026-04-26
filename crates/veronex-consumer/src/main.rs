@@ -47,12 +47,14 @@ const MAX_BATCH: usize = 500;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 fn main() -> Result<()> {
-    let worker_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2);
+    // available_parallelism() returns the host CPU count, ignoring the cgroup
+    // CPU limit — on a 16-core node this allocates 16 worker threads + 128
+    // blocking threads regardless of the pod's 500m CPU request. Stack +
+    // per-thread state alone push us past a 256Mi memory cap. Cap workers at
+    // 2 (matches 500m CPU) and trim blocking-thread pool for I/O-bound work.
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(worker_threads)
-        .max_blocking_threads(128)
+        .worker_threads(2)
+        .max_blocking_threads(8)
         .thread_name("veronex-consumer-worker")
         .enable_all()
         .build()?;
@@ -88,6 +90,20 @@ async fn async_main() -> Result<()> {
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "10000")
         .set("max.poll.interval.ms", "300000")
+        // Memory-bound the librdkafka prefetch queue. Defaults
+        // (queued.max.messages.kbytes=1GiB per partition, queued.min.messages
+        // =100k) overflow any reasonable pod cap when subscribed to multiple
+        // partitioned topics. With 3 topics x N partitions and these caps:
+        //   - per-partition queue: <= 4 MiB
+        //   - per-fetch response: <= 4 MiB
+        // Worst-case prefetch memory: ~ partitions x 4 MiB. For 18 partitions
+        // (3 topics x 6) ≈ 72 MiB — well inside a 256Mi pod limit alongside
+        // Tokio runtime, ClickHouse client, and the MAX_BATCH=500 buffers.
+        .set("queued.max.messages.kbytes", "4096")    // 4 MiB per partition
+        .set("queued.min.messages", "1000")           // prefetch target (was 100k)
+        .set("fetch.message.max.bytes", "524288")     // 512 KiB max single message
+        .set("fetch.max.bytes", "4194304")            // 4 MiB max per fetch response
+        .set("receive.message.max.bytes", "8388608")  // 8 MiB max protocol payload
         .create()
         .context("Failed to create Kafka consumer")?;
 
