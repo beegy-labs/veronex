@@ -1,4 +1,10 @@
 FROM node:22-alpine AS builder
+
+# Optional npm registry override (homelab CI). Empty default = npmjs.org.
+#   NPM_REGISTRY=https://npm.girok.dev/ → Verdaccio pull-through cache
+ARG NPM_REGISTRY=""
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY:-https://registry.npmjs.org/}
+
 WORKDIR /app
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
