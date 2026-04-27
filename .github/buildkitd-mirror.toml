@@ -1,0 +1,47 @@
+# BuildKit per-registry mirror config for in-cluster CI.
+#
+# Loaded by `docker/setup-buildx-action@v3` via `buildkitd-config:`.
+# Effect: `FROM <upstream>/<image>` in any Dockerfile silently routes
+# through the corresponding `image-*.girok.dev` host (Cilium Gateway →
+# URLRewrite → Gitea `mirror/...` namespace). Developer keeps writing
+# the upstream URL; the only build-time rewrite happens here.
+#
+# SSOT for which images are reachable: `mirrors/images/mirror-list.txt`
+# in `platform-gitops`. An image not enumerated there returns 404 from
+# Gitea — that's the intended policy enforcement.
+#
+# Subdomain → Gitea path mapping mirrors `mirror-images.yml`:
+#   docker.io/*           → mirror/<orig>           via image-dockerhub
+#   ghcr.io/*             → mirror/ghcr/<orig>      via image-ghcr
+#   quay.io/*             → mirror/quay/<orig>      via image-quay
+#   registry.k8s.io/*     → mirror/k8s/<orig>       via image-k8s
+#   gcr.io/*              → mirror/gcr/<orig>       via image-gcr
+#   cr.fluentbit.io/*     → mirror/fluentbit/<orig> via image-fluentbit
+#   docker.gitea.com/*    → mirror/gitea/<orig>     via image-gitea-registry
+#   docker.redpanda.com/* → mirror/redpanda/<orig>  via image-redpanda-registry
+#
+# See ADR `platform-gitops/docs/llm/decisions/image-mirror-rewrite.md`.
+
+[registry."docker.io"]
+  mirrors = ["image-dockerhub.girok.dev"]
+
+[registry."ghcr.io"]
+  mirrors = ["image-ghcr.girok.dev"]
+
+[registry."quay.io"]
+  mirrors = ["image-quay.girok.dev"]
+
+[registry."registry.k8s.io"]
+  mirrors = ["image-k8s.girok.dev"]
+
+[registry."gcr.io"]
+  mirrors = ["image-gcr.girok.dev"]
+
+[registry."cr.fluentbit.io"]
+  mirrors = ["image-fluentbit.girok.dev"]
+
+[registry."docker.gitea.com"]
+  mirrors = ["image-gitea-registry.girok.dev"]
+
+[registry."docker.redpanda.com"]
+  mirrors = ["image-redpanda-registry.girok.dev"]
