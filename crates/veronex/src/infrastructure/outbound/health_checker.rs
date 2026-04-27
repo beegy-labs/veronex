@@ -238,16 +238,26 @@ async fn check_and_store_services(
         }
     }
 
-    // S3/MinIO: GET {endpoint}/minio/health/live
+    // S3 (Garage / AWS S3 / MinIO): HEAD {endpoint}/
+    //
+    // We don't care which S3-compatible backend is on the other end — we
+    // only need to know "is something answering HTTP". Treat any non-5xx
+    // response as "service alive" (a 403/404 just means the request was
+    // rejected, but the daemon is running and routable). Network errors
+    // (timeout, connect refused, DNS) → "error".
+    //
+    // Previous probe hit `/minio/health/live` (MinIO-only); after the
+    // 2026-04 Garage migration that path returns 403 from Garage, marking
+    // S3 perpetually "unavailable" even though writes succeed.
     if let Some(endpoint) = s3_endpoint {
         let probe = {
             let start = std::time::Instant::now();
-            let res = client.get(format!("{}/minio/health/live", endpoint.trim_end_matches('/')))
+            let res = client.head(endpoint.trim_end_matches('/'))
                 .timeout(SERVICE_PROBE_TIMEOUT)
                 .send().await;
             let ms = start.elapsed().as_millis() as u32;
             let s = match res {
-                Ok(r) if r.status().is_success() => "ok",
+                Ok(r) if r.status().as_u16() < 500 => "ok",
                 _ => "error",
             };
             SvcProbe { s, ms, t: now_ms }
