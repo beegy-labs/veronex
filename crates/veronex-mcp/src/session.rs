@@ -18,6 +18,27 @@ use crate::types::McpToolResult;
 /// Using a const prevents silent breakage if the message text changes in either place.
 pub(crate) const SESSION_EXPIRED_MARKER: &str = "session expired";
 
+/// True when the error chain points at a reqwest transport-level failure
+/// (DNS lookup, TCP connect, TLS handshake, broken pipe, idle-pool stale
+/// connection that was reset by the upstream gateway, etc.). These deserve
+/// a one-shot session re-init + retry just like a 404 — the session URL
+/// is still correct, only the underlying TCP connection died.
+///
+/// The detection is by string match on the error chain because `anyhow`
+/// erases the source type. reqwest's `Display` on these error classes
+/// contains stable phrases — verified across 0.11.x / 0.12.x.
+pub(crate) fn is_transport_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let s = cause.to_string();
+        s.contains("error sending request")
+            || s.contains("connection closed")
+            || s.contains("connection reset")
+            || s.contains("broken pipe")
+            || s.contains("operation timed out")
+            || s.contains("dns error")
+    })
+}
+
 // ── Session entry ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -83,8 +104,10 @@ impl McpSessionManager {
     /// Get the active session, re-initializing transparently on 404.
     ///
     /// `f` receives `(&McpHttpClient, &McpSession)` and returns a `Result<T>`.
-    /// If the call returns a session-expired error, the session is re-initialized
-    /// and the call is retried once.
+    /// If the call returns a session-expired error OR a reqwest transport
+    /// error (TCP reset, DNS hiccup, idle-pool stale connection killed by
+    /// the upstream gateway), the session is re-initialized and the call
+    /// is retried once.
     pub async fn with_session<F, Fut, T>(
         &self,
         server_id: Uuid,
@@ -105,8 +128,20 @@ impl McpSessionManager {
 
         match f(Arc::clone(&client), entry.session.clone()).await {
             Ok(v) => Ok(v),
-            Err(e) if e.to_string().contains(SESSION_EXPIRED_MARKER) => {
-                warn!(server_id = %server_id, "MCP session expired — re-initializing");
+            Err(e) if e.to_string().contains(SESSION_EXPIRED_MARKER)
+                || is_transport_error(&e) =>
+            {
+                let reason = if e.to_string().contains(SESSION_EXPIRED_MARKER) {
+                    "session expired (404)"
+                } else {
+                    "transport error"
+                };
+                warn!(
+                    server_id = %server_id,
+                    reason,
+                    error = %e,
+                    "MCP call failed — re-initializing session and retrying once"
+                );
 
                 // Acquire per-server lock before re-init. Concurrent tasks that hit 404 at
                 // the same time will queue here; only the first does the actual re-init.
@@ -198,5 +233,40 @@ impl McpSessionManager {
             async move { client.call_tool(&session, &tool_name, &arguments).await }
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_transport_error_matches_reqwest_phrases() {
+        // Top-level reqwest::Error::Display string for a connect failure.
+        let e = anyhow::anyhow!("error sending request for url (https://x/)");
+        assert!(is_transport_error(&e));
+    }
+
+    #[test]
+    fn is_transport_error_matches_dns_in_chain() {
+        let inner = std::io::Error::other("dns error: NXDOMAIN");
+        let e: anyhow::Error = anyhow::Error::new(inner).context("MCP call");
+        assert!(is_transport_error(&e));
+    }
+
+    #[test]
+    fn is_transport_error_skips_protocol_errors() {
+        // Logical / protocol errors should NOT trigger a transport retry —
+        // those are real failures the caller must surface.
+        let e = anyhow::anyhow!("MCP tool returned schema-validation error");
+        assert!(!is_transport_error(&e));
+    }
+
+    #[test]
+    fn is_transport_error_does_not_fire_on_session_expired() {
+        // Session-expired (404) has its own retry path; transport-error
+        // detection must not also fire for it (avoids double-retry).
+        let e = anyhow::anyhow!("MCP {SESSION_EXPIRED_MARKER} (404) for https://x/");
+        assert!(!is_transport_error(&e));
     }
 }
