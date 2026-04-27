@@ -1,12 +1,6 @@
 # syntax=docker/dockerfile:1.7
 FROM rust:1-slim AS chef
 
-# Optional cargo cache (homelab CI). See docker/Dockerfile.rust for details.
-ARG CARGO_REPLACE_WITH=""
-ARG CARGO_GIROK_INDEX=""
-ENV CARGO_SOURCE_CRATES_IO_REPLACE_WITH=${CARGO_REPLACE_WITH}
-ENV CARGO_REGISTRIES_GIROK_CACHE_INDEX=${CARGO_GIROK_INDEX}
-
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
