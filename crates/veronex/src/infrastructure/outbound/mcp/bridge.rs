@@ -624,7 +624,12 @@ impl McpBridgeAdapter {
             }
             Ok(Err(e)) => {
                 self.circuit_breaker.record_failure(server_id);
-                warn!(tool = %namespaced, error = %e, "MCP tool call error");
+                // anyhow::Error::Display only shows the top-level message —
+                // for reqwest transport errors that hides the actual cause
+                // (e.g. "dns error", "connection reset"). Walk the source
+                // chain so the operator can diagnose live.
+                let causes: Vec<String> = e.chain().map(|c| c.to_string()).collect();
+                warn!(tool = %namespaced, error = %e, causes = ?causes, "MCP tool call error");
                 // Do not forward internal error details to LLM context — already logged above
                 ("{\"error\": \"MCP tool call failed\"}".into(), "error", None)
             }
