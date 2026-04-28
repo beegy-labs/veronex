@@ -70,7 +70,7 @@ pub struct InferenceUseCaseImpl {
     /// MCP lifecycle phase feature flag — when `true`, runner invokes
     /// `provider.ensure_ready` (Phase 1) before `stream_tokens` (Phase 2).
     /// Default `false` preserves implicit auto-load via `stream_tokens`.
-    /// SDD: `.specs/veronex/inference-lifecycle-sod.md` §7.
+    /// SDD: `.specs/veronex/history/inference-lifecycle-sod.md` §7.
     mcp_lifecycle_phase_enabled: bool,
 }
 

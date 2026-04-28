@@ -220,12 +220,52 @@ Rules:
   `LifecycleOutcome::AlreadyLoaded` immediately.
 - Concurrent `ensure_ready(M)` per `(provider, model)` coalesces on a
   `DashMap<String, Arc<LoadInFlight>>` slot:
-  - leader runs the probe + `tokio::select!` over (probe future, stall detector,
-    hard cap)
+  - leader runs the probe + `tokio::select!` over (probe future, `/api/ps`
+    poller, stall detector, observability log, hard cap)
   - followers `Notify::notified().await` then read a `OnceCell` for the result
   - returns `LoadCompleted{duration_ms}` (leader) or `LoadCoalesced{waited_ms}` (follower)
 - Errors typed as `LifecycleError` (LoadTimeout / Stalled / ProviderError /
   CircuitOpen / ResourcesExhausted) — the runner branches on cause without
   string-matching `anyhow::Error`.
 
-SDD: `.specs/veronex/inference-lifecycle-sod.md`. Flow: `flows/model-lifecycle.md`.
+### Sentinel-zero stall semantics — long-running probe pattern
+
+When the underlying probe is a **single request-response** with no streamed
+progress (e.g. ollama's `POST /api/generate`), the natural "wall-clock since
+slot creation" stall detector misfires on every long load. The fix:
+
+```rust
+pub struct LoadInFlight {
+    started_at: Instant,
+    last_progress_at: Arc<AtomicU64>,   // SENTINEL 0 = no progress yet
+    notify: Arc<Notify>,
+    result: OnceCell<...>,
+}
+
+// Stall future inside the leader's tokio::select!:
+let stall_fut = async {
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    interval.tick().await; // skip immediate
+    loop {
+        interval.tick().await;
+        if slot.last_progress_at.load(Acquire) == 0 {
+            continue; // silent-load phase — no signal yet, NOT stalled
+        }
+        if gap_ms() >= STALL_INTERVAL_MS { return Stalled { ... } }
+    }
+};
+```
+
+A separate observer (e.g. `/api/ps` polling) is the **only** writer to
+`last_progress_at` until the probe completes. When the probe HTTP eventually
+returns, it does a belt-and-suspenders `record_progress()`. Critically, the
+probe is **never cancelled** by stall/hard-cap winning the select — closing
+the connection signals the upstream to abort the load (`ollama#8006`).
+
+`MissedTickBehavior::Delay` on all interval-driven arms guarantees ≥ interval
+spacing between consecutive ticks, even when an individual HTTP query takes
+close to the full interval — prevents cascading bursts on a struggling
+upstream.
+
+SDD: `.specs/veronex/history/inference-lifecycle-sod.md`. Flow: `flows/model-lifecycle.md`.

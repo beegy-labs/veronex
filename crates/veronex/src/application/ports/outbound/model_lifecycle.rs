@@ -11,7 +11,7 @@
 //! provider (idempotent in-flight dedup) and update the VramPool SSOT on
 //! load completion / failure.
 //!
-//! SDD reference: `.specs/veronex/inference-lifecycle-sod.md`.
+//! SDD reference: `.specs/veronex/history/inference-lifecycle-sod.md`.
 
 use async_trait::async_trait;
 

@@ -330,7 +330,7 @@ pub const REAPER_QUEUE_INTERVAL: Duration = Duration::from_secs(60);
 //
 // Feature flag for the Phase-1 lifecycle step in the runner. When enabled,
 // `runner.process_job` invokes `provider.ensure_ready(model)` before
-// `provider.stream_tokens(job)`. SDD: `.specs/veronex/inference-lifecycle-sod.md`.
+// `provider.stream_tokens(job)`. SDD: `.specs/veronex/history/inference-lifecycle-sod.md`.
 
 /// Env var name for the lifecycle phase feature flag.
 pub const MCP_LIFECYCLE_PHASE_FLAG_ENV: &str = "MCP_LIFECYCLE_PHASE";

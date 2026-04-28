@@ -1,7 +1,7 @@
 //! Ollama model lifecycle: load probe + in-flight coalescing + stall detection.
 //!
 //! This module implements the Phase-1 path of the inference SoD split (SDD:
-//! `.specs/veronex/inference-lifecycle-sod.md`). It is plumbed into
+//! `.specs/veronex/history/inference-lifecycle-sod.md`). It is plumbed into
 //! `OllamaAdapter` as a `ModelLifecyclePort` implementation.
 //!
 //! ## Why this is non-trivial

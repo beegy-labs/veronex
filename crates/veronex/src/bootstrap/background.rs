@@ -157,7 +157,7 @@ pub async fn spawn_background_tasks(
     }
 
     // ── MCP lifecycle phase feature flag ────────────────────────────
-    // SDD: `.specs/veronex/inference-lifecycle-sod.md` §7.1b. Default off
+    // SDD: `.specs/veronex/history/inference-lifecycle-sod.md` §7.1b. Default off
     // — flipped to `on` after live verification on dev cluster.
     let mcp_lifecycle_phase_enabled = std::env::var(
         veronex::domain::constants::MCP_LIFECYCLE_PHASE_FLAG_ENV,

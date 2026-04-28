@@ -57,7 +57,7 @@ pub enum DomainError {
 // ── Lifecycle (model load/unload) ───────────────────────────────────────────
 //
 // Surfaced by `ModelLifecyclePort::ensure_ready` and related operations.
-// SDD reference: `.specs/veronex/inference-lifecycle-sod.md`.
+// SDD reference: `.specs/veronex/history/inference-lifecycle-sod.md`.
 
 #[derive(Debug, Clone, Error)]
 pub enum LifecycleError {
