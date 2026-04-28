@@ -1,6 +1,6 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-04-07
+> SSOT | **Last Updated**: 2026-04-28
 
 ## Task Guide
 
@@ -116,10 +116,16 @@ pub const MAX_QUEUE_PER_MODEL: u64 = 2_000;    // per-model cap → 429
 Client → inference route → submit(prompt, model, ...) → Pending → ZADD queue:zset (score=now_ms-tier_bonus)
 
 queue_dispatcher_loop (ZRANGE peek → Rust scoring → Lua ZREM claim → ZADD queue:active score=deadline_ms):
-  → keepalive task renews lease every 30s → run_job() → stream_tokens()
+  → keepalive task renews lease every 30s → run_job():
+       Phase 1 (MCP_LIFECYCLE_PHASE=on): provider.ensure_ready(model)  ← see flows/model-lifecycle.md
+       Phase 2: provider.stream_tokens(&job)
   → Completed: finalize() writes metrics to Postgres + ConversationRecord to S3
   → ObservabilityPort → veronex-analytics → OTel → Redpanda → ClickHouse
 ```
+
+Phase 1 fails → `failure_reason = "lifecycle_failed"`, no Phase 2 attempt,
+running counter decremented, schedule_cleanup fires. Flag default `false`
+preserves pre-Tier-C behaviour (implicit auto-load via `stream_tokens`).
 
 ## Entity
 
@@ -145,7 +151,7 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `cancelled_at` | `Option<DateTime>` | set by cancel(); NULL for non-cancelled jobs |
 | `image_keys` | `Option<Vec<String>>` | S3 object keys for attached images (WebP); stored as `TEXT[]` in DB |
 | `mcp_loop_id` | `Option<Uuid>` | groups jobs in one MCP agentic loop |
-| `failure_reason` | `Option<String>` | machine-readable failure cause: `queue_full`, `no_eligible_provider`, `queue_wait_exceeded`, `provider_error`, `token_budget_exceeded`, `lease_expired_max_attempts`, `lease_expired_reenqueue_failed` |
+| `failure_reason` | `Option<String>` | machine-readable failure cause: `queue_full`, `no_eligible_provider`, `queue_wait_exceeded`, `provider_error`, `token_budget_exceeded`, `lease_expired_max_attempts`, `lease_expired_reenqueue_failed`, `lifecycle_failed` |
 | `account_id` | `Option<Uuid>` | account that submitted via Test Run |
 
 **S3 ConversationRecord** (`conversations/{owner_id}/{YYYY-MM-DD}/{job_id}.json.zst`):

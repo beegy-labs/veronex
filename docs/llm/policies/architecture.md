@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-04-11 | Classification: Constitutional
+> SSOT | **Last Updated**: 2026-04-28 | Classification: Constitutional
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision
@@ -100,6 +100,13 @@ Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → ZADD queue:z
            → concurrency limit (AIMD-learned max_concurrent)
            → vram_pool.try_reserve() → VramPermit or skip to next in window
          → tokio::spawn run_job(permit)
+           → ─ Phase 1 lifecycle (MCP_LIFECYCLE_PHASE=on):
+                provider.ensure_ready(model) ← LlmProviderPort
+                  warm hit / coalesce on LoadInFlight slot / cold-load probe
+                  → updates VramPool SSOT, surfaces LifecycleError on fail
+                  See flows/model-lifecycle.md.
+              ─ Phase 2 inference:
+                provider.stream_tokens(&job)
            → OllamaAdapter | GeminiAdapter → SSE tokens
            → permit dropped (auto) → KV cache returned, weight stays
            → ObservabilityPort → veronex-analytics → ClickHouse
@@ -164,8 +171,10 @@ Background loops:
 
 | Port | Adapter | Notes |
 |------|---------|-------|
-| `InferenceProviderPort` | `OllamaAdapter`, `GeminiAdapter` | SSE streaming |
-| `ProviderDispatchPort` | `ConcreteProviderDispatch` | Provider selection, adapter build, Gemini rate-limit counters |
+| `InferenceProviderPort` | `OllamaAdapter`, `GeminiAdapter` | Phase 2 — SSE streaming inference |
+| `ModelLifecyclePort` | `OllamaAdapter`, `GeminiAdapter` (no-op) | Phase 1 — `ensure_ready` / `instance_state` / `evict` (Tier B) |
+| `LlmProviderPort` (super-trait) | blanket impl over `InferenceProviderPort + ModelLifecyclePort` | Single trait object drives both phases (`make_adapter` returns `Arc<dyn LlmProviderPort>`) |
+| `ProviderDispatchPort` | `ConcreteProviderDispatch` (carries `vram_pool`) | Provider selection, adapter build with `with_vram_pool`, Gemini rate-limit counters |
 | `LlmProviderRegistry` | `CachingProviderRegistry` → `PostgresProviderRegistry` | 5s TTL decorator |
 | `GpuServerRegistry` | `PostgresGpuServerRegistry` | Server + node-exporter |
 | `JobRepository` | `PostgresJobRepository` | UPSERT on conflict |

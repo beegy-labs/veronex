@@ -73,6 +73,7 @@ When a rule references `patterns.md § X`, use this table to locate the full tex
 | Test Code Conventions | `patterns/tooling.md` |
 | UTF-8 Safe Truncation | `patterns/tooling.md` |
 | MCP Integration Patterns | `patterns/mcp.md` |
+| Lifecycle Port Pattern (Phase 1 ↔ Phase 2 SoD) | `patterns/async.md` |
 
 ## Quarterly Audit Commands
 

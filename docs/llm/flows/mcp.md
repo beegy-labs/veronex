@@ -1,6 +1,6 @@
 # MCP Agentic Loop Flow
 
-> **Last Updated**: 2026-03-28
+> **Last Updated**: 2026-04-28
 
 ---
 
@@ -141,11 +141,18 @@ JWT session    │  None                   │  All active servers accessible
 |-----------|-------|----------|
 | Max rounds | 5 | Hard loop limit |
 | Loop detect threshold | 3 | Same (tool, args_hash) ×3 → break |
-| Per-round timeout | 45s | `COLLECT_ROUND_TIMEOUT` |
+| First-token timeout | 240s | `FIRST_TOKEN_TIMEOUT` — covers 200K-context cold load (PR #90) |
+| Stream-idle timeout | 45s | `STREAM_IDLE_TIMEOUT` — token-to-token gap on warm model |
+| Round total timeout | 360s | `ROUND_TOTAL_TIMEOUT` — aligned with `INFERENCE_ROUTER_TIMEOUT` |
 | Max concurrent tool calls | 8 | `buffered(8)` in execute_calls |
 | Max tool result size | 32 KB | Truncated before injection |
 | Max tools per request | 32 | Context window protection |
 | Result cache TTL | 300s | Idempotent tool calls |
+
+> Phased timeouts (PR #90) replace the prior single 45 s round timer. With
+> `MCP_LIFECYCLE_PHASE=on`, Phase 1 (`ensure_ready`) absorbs cold-load timing
+> as its own observable span (see `flows/model-lifecycle.md`); the bridge
+> phased timeouts remain as defense-in-depth.
 
 ---
 

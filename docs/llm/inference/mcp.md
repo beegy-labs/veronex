@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol) Integration
 
-> SSOT | **Last Updated**: 2026-04-25
+> SSOT | **Last Updated**: 2026-04-28
 
 Veronex acts as an **MCP client** — it connects to external MCP servers and
 executes their tools on behalf of LLM inference loops.
@@ -154,6 +154,26 @@ On any Vespa/embed error → falls back to `tool_cache.get_all()` (all registere
 | Selection language (DELETE) | `==` | Selection language uses `==` for both numeric and string |
 
 Regression test: `vespa_search_uses_contains_for_string_attributes` in `crates/veronex-mcp/src/vector/tests.rs`. Reverting to `=` makes wiremock body-match miss → test fails deterministically.
+
+### Phase 1 Lifecycle / Phase 2 Inference
+
+Behind feature flag `MCP_LIFECYCLE_PHASE` (default `false`), `runner::run_job`
+splits provider work into two distinct phases — see `flows/model-lifecycle.md`
+for the full state machine.
+
+| Phase | Method | Effect |
+|-------|--------|--------|
+| 1 — Lifecycle | `provider.ensure_ready(model)` | Probes load (warm hit / coalesce / cold-load via zero-prompt `POST /api/generate`); updates VramPool |
+| 2 — Inference | `provider.stream_tokens(&job)` | Token streaming, only after Phase 1 success |
+
+`LlmProviderPort: InferenceProviderPort + ModelLifecyclePort` (blanket impl in
+`application/ports/outbound/inference_provider.rs`) lets call sites hold one
+trait object and drive both phases. `OllamaAdapter` implements both;
+`GeminiAdapter` ships a no-op `ModelLifecyclePort` (cloud — `AlreadyLoaded`).
+
+When the flag is **off**, behaviour is byte-identical to pre-Tier-C — implicit
+auto-load remains inside `stream_tokens`. Bridge phased timeouts (PR #90)
+stay as defense-in-depth on both paths. SDD: `.specs/veronex/inference-lifecycle-sod.md`.
 
 ### Verification (2026-04-28)
 

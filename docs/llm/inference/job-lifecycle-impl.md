@@ -1,7 +1,8 @@
 # Jobs — Repository Patterns & Cancellation
 
-> SSOT | **Last Updated**: 2026-03-28
+> SSOT | **Last Updated**: 2026-04-28
 > Core lifecycle, entity, ZSET queue: `inference/job-lifecycle.md`
+> Phase 1 ↔ Phase 2 model lifecycle: `flows/model-lifecycle.md`
 
 ---
 

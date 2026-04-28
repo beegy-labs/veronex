@@ -20,7 +20,16 @@ Manage VRAM as a **global pool** per provider. Instead of fixed per-model slots,
 - Model **not loaded** → deduct **weight + KV cache** (Ollama auto-loads)
 - On completion → release **KV cache only** (weight stays in VRAM)
 
-**Model lifecycle**: VramPool + `OLLAMA_KEEP_ALIVE=-1` manages model retention. `OllamaModelManager` is disabled — its `ensure_loaded(max_loaded=1)` sends `keep_alive=0` which physically unloads other models, destroying multi-model co-residence.
+**Model lifecycle**: VramPool + provider `keep_alive` window (default `OLLAMA_KEEP_ALIVE=10m` per low-power policy; lifecycle probes use `LIFECYCLE_KEEP_ALIVE=30m`) manages model retention. `OllamaModelManager` is disabled — its `ensure_loaded(max_loaded=1)` sends `keep_alive=0` which physically unloads other models, destroying multi-model co-residence.
+
+**Phase 1 entry point** (`MCP_LIFECYCLE_PHASE=on`, see `flows/model-lifecycle.md`):
+- `OllamaAdapter::ensure_ready(model)` is the SSOT for "is model loaded on
+  this provider". Warm hit → `VramPool::loaded_model_names` lookup; cold miss
+  → zero-prompt `/api/generate` probe → on success, adapter calls
+  `VramPool::record_loaded(provider_id, model)` so subsequent dispatches
+  observe the model present.
+- `OllamaAdapter::evict(model, reason)` is the eviction entry point and updates
+  VramPool symmetrically.
 
 ---
 
@@ -728,7 +737,7 @@ POST /v1/dashboard/capacity/sync → 202 | 409
 ```bash
 OLLAMA_MAX_LOADED_MODELS=0        # auto (3 × GPU count)
 OLLAMA_NUM_PARALLEL=4             # concurrent inference slots per model
-OLLAMA_KEEP_ALIVE=-1              # disable auto-unload (VramPool manages lifecycle)
+OLLAMA_KEEP_ALIVE=10m             # low-power policy — auto-unload on idle (VramPool tracks state)
 OLLAMA_GPU_OVERHEAD=5368709120    # 5GB reserved (CUDA/driver)
 OLLAMA_FLASH_ATTENTION=1          # Flash Attention (required for KV quant)
 OLLAMA_KV_CACHE_TYPE=q8_0         # KV cache quantization (50% VRAM saving)

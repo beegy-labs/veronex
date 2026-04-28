@@ -184,3 +184,48 @@ A separate task counts broadcast events (`pending` -> incoming, terminal -> comp
 
 `queued`/`running` sourced from DashMap (`get_live_counts()`) with DB fallback (single indexed query) when DashMap is empty (e.g. after restart). Not Valkey LLEN -- pops too fast for accurate reads.
 
+## Lifecycle Port Pattern (Phase 1 ↔ Phase 2 SoD)
+
+Outbound ports for long-running side effects (model load that may exceed 160s
+on 200K-context models) split into two traits and combine via super-trait:
+
+```rust
+#[async_trait]
+pub trait InferenceProviderPort: Send + Sync {
+    async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult>;
+    fn stream_tokens(&self, job: &InferenceJob)
+        -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>>;
+}
+
+#[async_trait]
+pub trait ModelLifecyclePort: Send + Sync {
+    async fn ensure_ready(&self, model: &str)
+        -> Result<LifecycleOutcome, LifecycleError>;
+    async fn instance_state(&self, model: &str) -> ModelInstanceState;
+    async fn evict(&self, model: &str, reason: EvictionReason)
+        -> Result<(), LifecycleError>;
+}
+
+pub trait LlmProviderPort: InferenceProviderPort + ModelLifecyclePort {}
+impl<T> LlmProviderPort for T
+    where T: InferenceProviderPort + ModelLifecyclePort + ?Sized {}
+```
+
+Rules:
+- One adapter implements **both** ports — concrete type satisfies the super-trait
+  via the blanket impl. No double `Arc`.
+- Composition root holds `Arc<dyn LlmProviderPort>` so call sites dispatch
+  either super-trait method without owning two trait objects.
+- Cloud / no-VRAM adapters provide a no-op `ModelLifecyclePort` returning
+  `LifecycleOutcome::AlreadyLoaded` immediately.
+- Concurrent `ensure_ready(M)` per `(provider, model)` coalesces on a
+  `DashMap<String, Arc<LoadInFlight>>` slot:
+  - leader runs the probe + `tokio::select!` over (probe future, stall detector,
+    hard cap)
+  - followers `Notify::notified().await` then read a `OnceCell` for the result
+  - returns `LoadCompleted{duration_ms}` (leader) or `LoadCoalesced{waited_ms}` (follower)
+- Errors typed as `LifecycleError` (LoadTimeout / Stalled / ProviderError /
+  CircuitOpen / ResourcesExhausted) — the runner branches on cause without
+  string-matching `anyhow::Error`.
+
+SDD: `.specs/veronex/inference-lifecycle-sod.md`. Flow: `flows/model-lifecycle.md`.
