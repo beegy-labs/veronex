@@ -121,7 +121,7 @@ impl OllamaAdapter {
 
 // ── ModelLifecyclePort impl ─────────────────────────────────────────────────
 //
-// SDD: `.specs/veronex/inference-lifecycle-sod.md` §6.
+// SDD: `.specs/veronex/history/inference-lifecycle-sod.md` §6.
 //
 // Phase-1 path. `runner.rs` invokes `ensure_ready(model)` before
 // `InferenceProviderPort::stream_tokens(job)`. Concurrent same-model calls on

@@ -41,7 +41,7 @@ impl GeminiAdapter {
 //
 // Gemini is a cloud API — no local VRAM lifecycle. All lifecycle calls
 // short-circuit so the runner's Phase-1 step is uniform across providers.
-// SDD: `.specs/veronex/inference-lifecycle-sod.md` §6.1 (Gemini no-op row).
+// SDD: `.specs/veronex/history/inference-lifecycle-sod.md` §6.1 (Gemini no-op row).
 
 #[async_trait]
 impl ModelLifecyclePort for GeminiAdapter {

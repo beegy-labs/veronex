@@ -488,7 +488,7 @@ pub(super) async fn run_job(
     }).await;
 
     // ── Phase 1: Lifecycle (ensure model loaded) ───────────────────────
-    // SDD: .specs/veronex/inference-lifecycle-sod.md §7.1a.
+    // SDD: .specs/veronex/history/inference-lifecycle-sod.md §7.1a.
     // Behind `MCP_LIFECYCLE_PHASE` flag (default off). When on, drives an
     // explicit `ensure_ready` probe on the provider so cold-load timing is
     // observable as its own span / metric instead of being conflated with

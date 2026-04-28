@@ -288,7 +288,7 @@ pub struct VisionAnalysis {
 // the sync_loop background task. State transitions are constrained to the
 // closure documented on `ModelInstanceState::can_transition_to`.
 //
-// SDD reference: `.specs/veronex/inference-lifecycle-sod.md`.
+// SDD reference: `.specs/veronex/history/inference-lifecycle-sod.md`.
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

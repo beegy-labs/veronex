@@ -173,7 +173,7 @@ trait object and drive both phases. `OllamaAdapter` implements both;
 
 When the flag is **off**, behaviour is byte-identical to pre-Tier-C — implicit
 auto-load remains inside `stream_tokens`. Bridge phased timeouts (PR #90)
-stay as defense-in-depth on both paths. SDD: `.specs/veronex/inference-lifecycle-sod.md`.
+stay as defense-in-depth on both paths. SDD: `.specs/veronex/history/inference-lifecycle-sod.md`.
 
 ### Verification (2026-04-28)
 

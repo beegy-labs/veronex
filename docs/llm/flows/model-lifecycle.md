@@ -4,7 +4,7 @@
 
 `runner::run_job` splits provider work into two distinct phases. Phase 1
 (`ensure_ready`) is observable in its own span/metric; Phase 2 (`stream_tokens`)
-runs only after Phase 1 reports success. SDD: `.specs/veronex/inference-lifecycle-sod.md`.
+runs only after Phase 1 reports success. SDD: `.specs/veronex/history/inference-lifecycle-sod.md` (archived 2026-04-28 after live verify).
 
 ---
 
@@ -56,13 +56,32 @@ runner::run_job (post-VRAM reserve, pre-stream_tokens)
         │     ├── slot occupied → wait on Notify → LoadCoalesced{waited_ms}
         │     └── slot empty    → become leader → run probe
         │
-        ├── 3. Probe (leader only)
-        │     POST /api/generate { model, prompt: "", num_predict: 0,
-        │                          keep_alive: "30m" }
-        │     monitored by tokio::select! over:
-        │       ├── probe future
-        │       ├── stall detector  (last_progress_at idle > 60s → poison)
-        │       └── hard cap        (LIFECYCLE_LOAD_TIMEOUT 600s)
+        ├── 3. Probe (leader only) — concurrent observers via tokio::select!
+        │     ┌── probe_fut       POST /api/generate { num_predict:0,
+        │     │                                        keep_alive:"30m" }
+        │     │                     reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)
+        │     │                     wins on success → LoadCompleted{duration_ms}
+        │     │                     wins on error   → ProviderError
+        │     │
+        │     ├── ps_poller       GET /api/ps every 5s (MissedTickBehavior::Delay)
+        │     │                     entry must satisfy size_vram > 0 AND
+        │     │                     names_match(model, entry.name)
+        │     │                     (`:latest` defaulting handled both ways)
+        │     │                     match → record_progress() (slot.last_progress_at)
+        │     │
+        │     ├── stall_fut       polls every 5s, no-op while last_progress_at == 0
+        │     │                     once first /api/ps confirm: fires when
+        │     │                     now − last_progress_at > 60s (post-load HTTP hang)
+        │     │
+        │     ├── progress_log    info!(model, elapsed_s, first_progress) every 30s
+        │     │                     (operator visibility on multi-minute loads)
+        │     │
+        │     └── hard_cap        sleep LIFECYCLE_LOAD_TIMEOUT + 5s → LoadTimeout
+        │
+        │     **Probe is NEVER cancelled** when stall/hard_cap wins the select.
+        │     Closing the connection mid-load triggers ollama
+        │     `client connection closed before server finished loading`
+        │     (ollama#8006). Only `reqwest::timeout` may terminate the probe.
         │
         ├── 4. Resolve slot
         │     OnceCell stores Result<LifecycleOutcome, LifecycleError>
@@ -84,11 +103,31 @@ runner::run_job (post-VRAM reserve, pre-stream_tokens)
 
 | Variant | When |
 |---------|------|
-| `LoadTimeout(s)` | hard-cap fired (LIFECYCLE_LOAD_TIMEOUT) |
-| `Stalled(s)` | no progress for LIFECYCLE_STALL_INTERVAL (60s) |
+| `LoadTimeout(s)` | hard-cap fired (LIFECYCLE_LOAD_TIMEOUT 600s) |
+| `Stalled(s)` | post-`/api/ps`-confirm HTTP hang — `last_progress_at` non-zero **and** gap > LIFECYCLE_STALL_INTERVAL (60s). No-op while sentinel zero (cold-load silent phase) |
 | `ProviderError(msg)` | probe HTTP returned non-2xx, or transport error |
 | `CircuitOpen` | per-provider CB rejected before HTTP |
 | `ResourcesExhausted(msg)` | VramPool refused reservation (defensive — runner already gated) |
+
+### Stall semantics — the sentinel `last_progress_at == 0`
+
+ollama's `POST /api/generate` is a **single request-response** — there is no
+streamed progress during silent cold-load (verified [ollama-python#439](https://github.com/ollama/ollama-python/issues/439)).
+On 200K-context models a load is 163 s of zero bytes on the wire (measured on
+AI Max+ 395 / ROCm 7.2). A naive "stall = N seconds without bytes" detector
+therefore misfires on every cold load.
+
+`LoadInFlight::new()` initialises `last_progress_at = 0` (sentinel meaning
+"no progress signal observed yet"). `stall_fut` is a no-op while the sentinel
+holds; only the `ps_poller` arm above transitions it to a real wall-clock
+timestamp on first `/api/ps` confirmation. Stall is then redefined as
+**post-load HTTP hang detection** — "ollama claims model loaded but probe HTTP
+is not returning". Initial silent-load duration is bounded only by
+`reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)` and the `hard_cap` arm.
+
+Production verified 2026-04-28: `outcome=LoadCompleted { duration_ms: 180862 }`
+on a 180 s 200K-context cold load (SDD `.specs/veronex/history/inference-lifecycle-sod.md`
+§9.5). Pre-fix code failed the same path at 60 s with `Stalled`.
 
 ---
 

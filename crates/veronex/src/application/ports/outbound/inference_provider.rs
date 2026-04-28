@@ -17,7 +17,7 @@ use crate::domain::value_objects::StreamToken;
 /// is retained as defense-in-depth but should not be relied upon for correct
 /// timing — cold-load on 200K-context models can exceed 160 s and conflate
 /// load-failure with inference-failure observability. See SDD
-/// `.specs/veronex/inference-lifecycle-sod.md`.
+/// `.specs/veronex/history/inference-lifecycle-sod.md`.
 #[async_trait]
 pub trait InferenceProviderPort: Send + Sync {
     /// Non-streaming inference — returns when the full response is ready.
@@ -35,7 +35,7 @@ pub trait InferenceProviderPort: Send + Sync {
 /// hold `Arc<dyn LlmProviderPort>` and can call methods of either super-trait
 /// without owning two trait objects.
 ///
-/// SDD: `.specs/veronex/inference-lifecycle-sod.md` §3.1.
+/// SDD: `.specs/veronex/history/inference-lifecycle-sod.md` §3.1.
 pub trait LlmProviderPort: InferenceProviderPort + ModelLifecyclePort {}
 
 impl<T> LlmProviderPort for T where T: InferenceProviderPort + ModelLifecyclePort + ?Sized {}
