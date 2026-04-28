@@ -254,6 +254,7 @@ pub(super) fn spawn_job_direct(
     event_tx: broadcast::Sender<JobStatusEvent>,
     instance_id: Arc<str>,
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
+    mcp_lifecycle_phase_enabled: bool,
 ) {
     tokio::spawn(
         async move {
@@ -289,7 +290,7 @@ pub(super) fn spawn_job_direct(
             match run_job(
                 jobs, adapter, job_repo, message_store, valkey, observability, model_manager,
                 provider_dispatch, uuid, job, Some(provider_id), is_free,
-                event_tx, instance_id, cancel_notifiers,
+                event_tx, instance_id, cancel_notifiers, mcp_lifecycle_phase_enabled,
             ).await {
                 Ok(Some(latency_ms)) => {
                     circuit_breaker.on_success(provider_id);
@@ -329,6 +330,7 @@ pub(super) async fn queue_dispatcher_loop(
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
     global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
     shutdown: CancellationToken,
+    mcp_lifecycle_phase_enabled: bool,
 ) {
     tracing::info!("queue dispatcher started — ZSET scoring (locality + age × perf_factor)");
 
@@ -552,6 +554,7 @@ pub(super) async fn queue_dispatcher_loop(
                     match run_job(
                         jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,
                         pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
+                        mcp_lifecycle_phase_enabled,
                     ).await {
                         Ok(Some(latency_ms)) => {
                             cb_c.on_success(pid);

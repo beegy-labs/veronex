@@ -8,7 +8,8 @@ use futures::Stream;
 
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
+use crate::application::ports::outbound::inference_provider::{InferenceProviderPort, LlmProviderPort};
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::{InferenceJob, InferenceResult, LlmProvider};
@@ -435,7 +436,11 @@ fn validate_provider_url(url_str: &str) -> Result<()> {
 /// Validates the provider URL against SSRF-dangerous targets before constructing
 /// the adapter. Providers with blocked URLs are logged and return an error adapter
 /// that yields a descriptive failure on every call.
-pub fn make_adapter(cfg: &LlmProvider, valkey: Option<&fred::clients::Pool>) -> Arc<dyn InferenceProviderPort> {
+pub fn make_adapter(
+    cfg: &LlmProvider,
+    valkey: Option<&fred::clients::Pool>,
+    vram_pool: Option<Arc<dyn VramPoolPort>>,
+) -> Arc<dyn LlmProviderPort> {
     match cfg.provider_type {
         ProviderType::Ollama => {
             if let Err(e) = validate_provider_url(&cfg.url) {
@@ -447,10 +452,14 @@ pub fn make_adapter(cfg: &LlmProvider, valkey: Option<&fred::clients::Pool>) -> 
                 );
                 return Arc::new(BlockedAdapter(e.to_string()));
             }
-            match valkey {
-                Some(pool) => Arc::new(OllamaAdapter::with_ctx_cache(&cfg.url, pool.clone(), cfg.id)),
-                None => Arc::new(OllamaAdapter::new(&cfg.url)),
+            let mut adapter = match valkey {
+                Some(pool) => OllamaAdapter::with_ctx_cache(&cfg.url, pool.clone(), cfg.id),
+                None => OllamaAdapter::new(&cfg.url),
+            };
+            if let Some(pool) = vram_pool {
+                adapter = adapter.with_vram_pool(pool);
             }
+            Arc::new(adapter)
         }
         ProviderType::Gemini => {
             // Gemini uses a fixed Google API host; URL validation is N/A.
@@ -477,6 +486,36 @@ impl InferenceProviderPort for BlockedAdapter {
         Box::pin(async_stream::stream! {
             yield Err(anyhow::anyhow!("provider blocked: {}", msg));
         })
+    }
+}
+
+#[async_trait]
+impl crate::application::ports::outbound::model_lifecycle::ModelLifecyclePort for BlockedAdapter {
+    async fn ensure_ready(
+        &self,
+        _model: &str,
+    ) -> std::result::Result<
+        crate::application::ports::outbound::model_lifecycle::LifecycleOutcome,
+        crate::domain::errors::LifecycleError,
+    > {
+        Err(crate::domain::errors::LifecycleError::ProviderError(
+            format!("provider blocked: {}", self.0),
+        ))
+    }
+
+    async fn instance_state(
+        &self,
+        _model: &str,
+    ) -> crate::domain::value_objects::ModelInstanceState {
+        crate::domain::value_objects::ModelInstanceState::NotLoaded
+    }
+
+    async fn evict(
+        &self,
+        _model: &str,
+        _reason: crate::domain::value_objects::EvictionReason,
+    ) -> std::result::Result<(), crate::domain::errors::LifecycleError> {
+        Ok(())
     }
 }
 

@@ -156,6 +156,25 @@ pub async fn spawn_background_tasks(
         });
     }
 
+    // ── MCP lifecycle phase feature flag ────────────────────────────
+    // SDD: `.specs/veronex/inference-lifecycle-sod.md` §7.1b. Default off
+    // — flipped to `on` after live verification on dev cluster.
+    let mcp_lifecycle_phase_enabled = std::env::var(
+        veronex::domain::constants::MCP_LIFECYCLE_PHASE_FLAG_ENV,
+    )
+    .ok()
+    .and_then(|v| match v.to_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Some(true),
+        "0" | "false" | "off" | "no" => Some(false),
+        _ => None,
+    })
+    .unwrap_or(veronex::domain::constants::MCP_LIFECYCLE_PHASE_DEFAULT);
+    tracing::info!(
+        enabled = mcp_lifecycle_phase_enabled,
+        env = veronex::domain::constants::MCP_LIFECYCLE_PHASE_FLAG_ENV,
+        "mcp lifecycle phase"
+    );
+
     // ── Provider dispatch + inference use case ─────────────────────
     let provider_dispatch = Arc::new(ConcreteProviderDispatch::new(
         repos.provider_registry.clone(),
@@ -163,6 +182,7 @@ pub async fn spawn_background_tasks(
         Some(repos.model_selection_repo.clone()),
         Some(repos.ollama_model_repo.clone()),
         infra.valkey_pool.clone(),
+        Some(repos.vram_pool.clone()),
     ));
 
     let use_case_impl = Arc::new(InferenceUseCaseImpl::new(
@@ -183,6 +203,7 @@ pub async fn spawn_background_tasks(
         Some(repos.global_model_settings_repo.clone()),
         infra.instance_id.clone(),
         Some(repos.lab_settings_repo.clone()),
+        mcp_lifecycle_phase_enabled,
     ));
 
     if let Err(e) = use_case_impl.recover_pending_jobs().await {

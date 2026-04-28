@@ -67,6 +67,11 @@ pub struct InferenceUseCaseImpl {
     /// Compression resources injected into every JobEntry at submit time.
     /// `None` when neither lab_settings_repo nor registry are available.
     compression_handle: Option<Arc<CompressionHandle>>,
+    /// MCP lifecycle phase feature flag — when `true`, runner invokes
+    /// `provider.ensure_ready` (Phase 1) before `stream_tokens` (Phase 2).
+    /// Default `false` preserves implicit auto-load via `stream_tokens`.
+    /// SDD: `.specs/veronex/inference-lifecycle-sod.md` §7.
+    mcp_lifecycle_phase_enabled: bool,
 }
 
 impl InferenceUseCaseImpl {
@@ -89,6 +94,7 @@ impl InferenceUseCaseImpl {
         global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
         instance_id: Arc<str>,
         lab_settings_repo: Option<Arc<dyn LabSettingsRepository>>,
+        mcp_lifecycle_phase_enabled: bool,
     ) -> Self {
         let compression_handle = lab_settings_repo.map(|lab| {
             Arc::new(CompressionHandle {
@@ -104,6 +110,7 @@ impl InferenceUseCaseImpl {
             global_model_settings_repo,
             instance_id, cancel_notifiers: Arc::new(DashMap::new()),
             compression_handle,
+            mcp_lifecycle_phase_enabled,
         }
     }
 
@@ -191,11 +198,12 @@ impl InferenceUseCaseImpl {
             self.model_selection_repo.clone(), self.global_model_settings_repo.clone(),
         );
         let msg_store = self.message_store.clone();
+        let lifecycle_flag = self.mcp_lifecycle_phase_enabled;
         tracing::info!("multi-provider queue dispatcher started");
         async move {
             queue_dispatcher_loop(
                 jobs, registry, job_repo, msg_store, valkey, obs, mm, vram, thermal,
-                cb, pd, ev, iid, cn, omr, msr, gmsr, shutdown,
+                cb, pd, ev, iid, cn, omr, msr, gmsr, shutdown, lifecycle_flag,
             ).await;
         }.boxed()
     }
@@ -418,6 +426,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                         self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                         uuid, job, gemini_tier, self.event_tx.clone(),
                         self.instance_id.clone(), self.cancel_notifiers.clone(),
+                        self.mcp_lifecycle_phase_enabled,
                     );
                 }
             }
@@ -429,6 +438,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                 uuid, job, gemini_tier, self.event_tx.clone(),
                 self.instance_id.clone(), self.cancel_notifiers.clone(),
+                self.mcp_lifecycle_phase_enabled,
             );
         }
 
@@ -455,6 +465,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             self.valkey.clone(), self.observability.clone(), self.model_manager.clone(),
             self.provider_dispatch.clone(), uuid, job, Some(pid), is_free,
             self.event_tx.clone(), self.instance_id.clone(), self.cancel_notifiers.clone(),
+            self.mcp_lifecycle_phase_enabled,
         ).await?;
         Ok(())
     }

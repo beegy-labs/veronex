@@ -4,6 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
 
+use crate::application::ports::outbound::model_lifecycle::ModelLifecyclePort;
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::value_objects::StreamToken;
 
@@ -28,3 +29,13 @@ pub trait InferenceProviderPort: Send + Sync {
         job: &InferenceJob,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>>;
 }
+
+/// Combined provider trait — every concrete adapter must implement BOTH the
+/// inference and lifecycle ports. The blanket impl below means callers only
+/// hold `Arc<dyn LlmProviderPort>` and can call methods of either super-trait
+/// without owning two trait objects.
+///
+/// SDD: `.specs/veronex/inference-lifecycle-sod.md` §3.1.
+pub trait LlmProviderPort: InferenceProviderPort + ModelLifecyclePort {}
+
+impl<T> LlmProviderPort for T where T: InferenceProviderPort + ModelLifecyclePort + ?Sized {}
