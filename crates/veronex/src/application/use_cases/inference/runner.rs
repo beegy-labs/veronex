@@ -914,4 +914,316 @@ mod tests {
             "😊  done"
         );
     }
+
+    // ── Tier B — persist_partial_conversation ───────────────────────────────
+    //
+    // SDD §6.4: `.specs/veronex/inference-mcp-streaming-first.md`. These tests
+    // lock the cancel-resilient S3 write contract — every code path that exits
+    // `run_job` with accumulated tokens must have its `ts` flushed to S3
+    // ConversationRecord (CDD-defined SSOT) exactly once, racing-safe.
+
+    use super::persist_partial_conversation;
+    use crate::application::ports::outbound::message_store::{
+        ConversationRecord, ConversationTurn, MessageStore,
+    };
+    use crate::domain::entities::InferenceJob;
+    use crate::domain::enums::{ApiFormat, JobStatus, JobSource, ProviderType};
+    use crate::domain::value_objects::{JobId, ModelName, Prompt};
+    use chrono::NaiveDate;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+    use uuid::Uuid;
+
+    /// In-memory `MessageStore` mock — records every `put_conversation` call
+    /// for assertion. Stored records are also retrievable via `get_conversation`
+    /// so RMW append-turn flows work in tests.
+    struct MockMessageStore {
+        puts: Arc<Mutex<Vec<(Uuid, Uuid, ConversationRecord)>>>,
+    }
+
+    impl MockMessageStore {
+        fn new() -> Self {
+            Self { puts: Arc::new(Mutex::new(Vec::new())) }
+        }
+
+        fn put_count(&self) -> usize {
+            self.puts.lock().unwrap().len()
+        }
+
+        fn last_record(&self) -> Option<ConversationRecord> {
+            self.puts.lock().unwrap().last().map(|(_, _, r)| {
+                ConversationRecord {
+                    turns: r.turns.clone(),
+                }
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MessageStore for MockMessageStore {
+        async fn put_conversation(
+            &self,
+            owner_id: Uuid,
+            _date: NaiveDate,
+            conversation_id: Uuid,
+            record: &ConversationRecord,
+        ) -> anyhow::Result<()> {
+            // Clone via JSON roundtrip (ConversationRecord is not `Clone`).
+            let snap: ConversationRecord =
+                serde_json::from_str(&serde_json::to_string(record)?)?;
+            self.puts.lock().unwrap().push((owner_id, conversation_id, snap));
+            Ok(())
+        }
+
+        async fn get_conversation(
+            &self,
+            _owner_id: Uuid,
+            _date: NaiveDate,
+            _conversation_id: Uuid,
+        ) -> anyhow::Result<Option<ConversationRecord>> {
+            // Simulate empty backend — every test starts with a fresh record.
+            Ok(None)
+        }
+    }
+
+    fn make_job(mcp_loop_id: Option<Uuid>) -> InferenceJob {
+        InferenceJob {
+            id: JobId(Uuid::now_v7()),
+            account_id: Some(Uuid::now_v7()),
+            api_key_id: None,
+            provider_id: None,
+            provider_type: ProviderType::Ollama,
+            model_name: ModelName::new("qwen3-coder-next-200k:latest").unwrap(),
+            status: JobStatus::Running,
+            source: JobSource::Test,
+            prompt: Prompt::new("test").unwrap(),
+            prompt_preview: Some("test".into()),
+            messages: None,
+            tools: None,
+            api_format: ApiFormat::OpenaiCompat,
+            request_path: None,
+            conversation_id: Some(Uuid::now_v7()),
+            mcp_loop_id,
+            result_text: None,
+            tool_calls_json: None,
+            error: None,
+            failure_reason: None,
+            latency_ms: None,
+            ttft_ms: None,
+            queue_time_ms: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            cancelled_at: None,
+            images: None,
+            image_keys: None,
+            messages_hash: None,
+            messages_prefix_hash: None,
+            stop: None,
+            seed: None,
+            response_format: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            max_tokens: None,
+            vision_analysis: None,
+            created_at: chrono::Utc::now(),
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
+    fn flag() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
+    #[tokio::test]
+    async fn cancel_after_first_tool_call_persists_to_s3() {
+        let store: Arc<dyn MessageStore> = Arc::new(MockMessageStore::new());
+        let store_concrete = store.clone();
+        let job = make_job(None);
+        let mut ts = TokenStreamState::default();
+        ts.tool_calls.push(serde_json::json!({"name":"web_search","args":{"q":"micron"}}));
+        // text intentionally empty — model only emitted tool_calls before cancel.
+        let f = flag();
+
+        persist_partial_conversation(
+            &Some(store), &f, &job, &ts, &None, "test prompt",
+        ).await;
+
+        let mock = unsafe {
+            // Get back to the concrete type for assertions
+            &*(Arc::as_ptr(&store_concrete) as *const MockMessageStore)
+        };
+        assert_eq!(mock.put_count(), 1, "S3 PUT must fire on tool_calls-only state");
+
+        let rec = mock.last_record().unwrap();
+        let turn = match &rec.turns[0] {
+            ConversationTurn::Regular(t) => t,
+            _ => panic!("expected Regular turn"),
+        };
+        assert!(turn.tool_calls.is_some(), "tool_calls must be persisted");
+        assert!(turn.result.is_none(), "result must be None when text empty");
+        assert!(f.load(std::sync::atomic::Ordering::Acquire), "flag must be set");
+    }
+
+    #[tokio::test]
+    async fn cancel_after_partial_text_persists_text_to_s3() {
+        let mock = Arc::new(MockMessageStore::new());
+        let store: Arc<dyn MessageStore> = mock.clone();
+        let job = make_job(None);
+        let mut ts = TokenStreamState::default();
+        ts.text.push_str("partial answer fragment");
+        let f = flag();
+
+        persist_partial_conversation(
+            &Some(store), &f, &job, &ts, &None, "test prompt",
+        ).await;
+
+        assert_eq!(mock.put_count(), 1);
+        let rec = mock.last_record().unwrap();
+        let turn = match &rec.turns[0] {
+            ConversationTurn::Regular(t) => t,
+            _ => panic!(),
+        };
+        assert_eq!(turn.result.as_deref(), Some("partial answer fragment"));
+        assert!(turn.tool_calls.is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_before_any_token_skips_s3_write() {
+        let mock = Arc::new(MockMessageStore::new());
+        let store: Arc<dyn MessageStore> = mock.clone();
+        let job = make_job(None);
+        let ts = TokenStreamState::default(); // empty
+        let f = flag();
+
+        persist_partial_conversation(
+            &Some(store), &f, &job, &ts, &None, "test prompt",
+        ).await;
+
+        assert_eq!(mock.put_count(), 0, "must not write empty record");
+        // Note: flag IS set because compare_exchange runs before the empty check.
+        // That's correct — it prevents subsequent finalize from re-attempting.
+    }
+
+    #[tokio::test]
+    async fn lifecycle_failed_path_skips_s3_write_when_no_tokens() {
+        // Equivalent contract to "cancel_before_any_token" but represents the
+        // T6 lifecycle_failed entry point (also no tokens collected).
+        let mock = Arc::new(MockMessageStore::new());
+        let store: Arc<dyn MessageStore> = mock.clone();
+        let mut job = make_job(None);
+        job.failure_reason = Some("lifecycle_failed".into());
+        let ts = TokenStreamState::default();
+        let f = flag();
+
+        persist_partial_conversation(
+            &Some(store), &f, &job, &ts, &None, "test prompt",
+        ).await;
+
+        assert_eq!(mock.put_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn provider_stream_error_persists_partial_state() {
+        // T5 — provider returned Err mid-stream after some tokens accumulated.
+        let mock = Arc::new(MockMessageStore::new());
+        let store: Arc<dyn MessageStore> = mock.clone();
+        let job = make_job(None);
+        let mut ts = TokenStreamState::default();
+        ts.text.push_str("some text before error");
+        ts.tool_calls.push(serde_json::json!({"name":"web_search"}));
+        let f = flag();
+
+        persist_partial_conversation(
+            &Some(store), &f, &job, &ts, &None, "test prompt",
+        ).await;
+
+        assert_eq!(mock.put_count(), 1);
+        let rec = mock.last_record().unwrap();
+        let turn = rec.turns[0].as_regular_mut_or_panic();
+        assert_eq!(turn.result.as_deref(), Some("some text before error"));
+        assert!(turn.tool_calls.is_some());
+    }
+
+    #[tokio::test]
+    async fn parallel_cancel_and_finalize_writes_s3_exactly_once() {
+        // SDD §6.2 invariant — `Arc<AtomicBool>` + compare_exchange guarantees
+        // exactly-one S3 PUT under racing finalize ↔ cancel paths.
+        let mock = Arc::new(MockMessageStore::new());
+        let store: Arc<dyn MessageStore> = mock.clone();
+        let job = make_job(None);
+        let mut ts = TokenStreamState::default();
+        ts.text.push_str("answer");
+        let f = flag();
+
+        let store_a = Some(store.clone());
+        let store_b = Some(store);
+        let f_a = f.clone();
+        let f_b = f.clone();
+        let job_a = job.clone();
+        let job_b = job.clone();
+        let ts_a = ts_clone(&ts);
+        let ts_b = ts_clone(&ts);
+
+        tokio::join!(
+            persist_partial_conversation(&store_a, &f_a, &job_a, &ts_a, &None, "p"),
+            persist_partial_conversation(&store_b, &f_b, &job_b, &ts_b, &None, "p"),
+        );
+
+        assert_eq!(mock.put_count(), 1, "exactly-one write under race");
+        assert!(f.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn mcp_loop_jobs_skip_runner_persist() {
+        // Bridge owns S3 write for MCP-loop jobs. Runner-side helper must
+        // skip them entirely so we don't get a duplicate per-round turn.
+        let mock = Arc::new(MockMessageStore::new());
+        let store: Arc<dyn MessageStore> = mock.clone();
+        let job = make_job(Some(Uuid::now_v7())); // MCP loop
+        let mut ts = TokenStreamState::default();
+        ts.text.push_str("some text");
+        let f = flag();
+
+        persist_partial_conversation(
+            &Some(store), &f, &job, &ts, &None, "test",
+        ).await;
+
+        assert_eq!(mock.put_count(), 0, "MCP-loop jobs must not be written by runner");
+    }
+
+    /// `TokenStreamState` is not `Clone`; `tokio::join` requires owned values
+    /// per task. Hand-clone the small set of fields the helper actually reads.
+    fn ts_clone(orig: &TokenStreamState) -> TokenStreamState {
+        TokenStreamState {
+            token_count: orig.token_count,
+            text: orig.text.clone(),
+            think_buf: orig.think_buf.clone(),
+            in_think: orig.in_think,
+            last_owner_refresh: orig.last_owner_refresh,
+            tool_calls: orig.tool_calls.clone(),
+            prompt_tokens: orig.prompt_tokens,
+            completion_tokens: orig.completion_tokens,
+            cached_tokens: orig.cached_tokens,
+            ttft_ms: orig.ttft_ms,
+        }
+    }
+
+    /// Helper: panic with a clear message if the turn is not Regular.
+    /// Defined here because `as_regular_mut` returns `Option`; tests want
+    /// fail-loud unwrap with a descriptive message.
+    trait AsRegularMutOrPanic {
+        fn as_regular_mut_or_panic(&self) -> &crate::application::ports::outbound::message_store::TurnRecord;
+    }
+
+    impl AsRegularMutOrPanic for ConversationTurn {
+        fn as_regular_mut_or_panic(&self) -> &crate::application::ports::outbound::message_store::TurnRecord {
+            match self {
+                ConversationTurn::Regular(t) => t,
+                _ => panic!("expected Regular turn, got Handoff"),
+            }
+        }
+    }
 }
