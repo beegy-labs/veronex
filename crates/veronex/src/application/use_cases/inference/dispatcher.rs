@@ -377,6 +377,7 @@ pub(super) async fn queue_dispatcher_loop(
                             assigned_provider_id: None,
                             vision_analysis: None,
                             compression_handle: None,
+                            persisted_to_s3: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                         });
                         (j, None, None)
                     }
