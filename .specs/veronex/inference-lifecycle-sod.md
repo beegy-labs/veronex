@@ -16,9 +16,10 @@ Mark with `[x]` when committed. Each Tier has its own §-block with file paths, 
 | A — Domain + Port + Mock | [x] done | `feat/lifecycle-port-mock` | #91 | `7a5d8f2` |
 | B — OllamaAdapter lifecycle | [x] done | `feat/ollama-lifecycle` | #92 | `2bce27b` |
 | C — Runner integration + flag | [x] done | `feat/runner-lifecycle-phase` | #93 | `4b816a4` |
-| CDD-sync (post C) | [x] done | `docs/cdd-lifecycle` | TBD | TBD |
-| Flow-sync (post C) | [x] done | `docs/cdd-lifecycle` (same branch) | TBD | TBD |
-| Live verify (dev) | [ ] pending | — | flag flip on dev cluster | — |
+| CDD-sync (post C) | [x] done | `docs/cdd-lifecycle` | #94 | `af53e2c` |
+| Flow-sync (post C) | [x] done | `docs/cdd-lifecycle` (same) | #94 | `af53e2c` |
+| Stall-semantics fix | [x] done | `fix/lifecycle-stall-semantics` | #96 | `76bbc3c` |
+| Live verify (dev) | [x] **done** — 2026-04-28 | — | platform-gitops #597 | — |
 
 If you find this SDD with all boxes unchecked, start at §A. If A is checked, start at §B. Etc.
 
@@ -959,6 +960,35 @@ Find anchor: `vram_pool.reserve(provider_id, model)       ← acquire KV permit`
 - [ ] State transitions per `domain/value_objects/model_instance_state.rs` reflected
 - [ ] Coalescing semantics shown in `model-lifecycle.md`
 - [ ] `docs/llm/flows/README.md` lists `model-lifecycle.md`
+
+---
+
+## §9.5 Live Verification Results (2026-04-28)
+
+Live re-run after PR #96 (stall-semantics fix `76bbc3c`) on `veronex-api-dev.verobee.com` with `MCP_LIFECYCLE_PHASE=on` (platform-gitops #597). New api pod `veronex-dev-api-5b6485884f-22whw` running image `develop-76bbc3c`. Test account `test-3`.
+
+### Production log evidence
+
+| Component | Log line | Verdict |
+|-----------|----------|---------|
+| Boot flag recognition | `12:33:31 mcp lifecycle phase enabled=true env="MCP_LIFECYCLE_PHASE"` | ✅ |
+| `/api/ps` first-progress signal | `12:34:02 lifecycle.probe — /api/ps confirms model loaded; awaiting probe HTTP return elapsed_ms=10003` | ✅ progress source firing as designed |
+| `progress_log` 30 s observability cadence | 12:34:22 (30 s), 12:34:52 (60 s), 12:35:22 (90 s), 12:35:52 (120 s), 12:36:22 (150 s), 12:36:52 (180 s) — `first_progress=true` carried | ✅ 30 s cadence holds |
+| **180 s cold load completion** | `12:36:53 lifecycle.ensure_ready outcome=LoadCompleted { duration_ms: 180862 }` | 🎉 **Pre-fix bug killed** — `Stalled` at 60 s no longer fires |
+| Second leader (Scenario 2) | `12:36:53 outcome=LoadCompleted { duration_ms: 54908 }` | ✅ new slot, new leader after model evicted |
+| Warm path `AlreadyLoaded` | `12:37:09` and `12:37:11 outcome=AlreadyLoaded duration_ms=0` | ✅ VramPool fast-path |
+| `Stalled` / `LifecycleError` | (none) | ✅ stall is a no-op while sentinel; post-load detector idle on all loads |
+
+### Scenario summary
+
+| # | Scenario | Verdict | Notes |
+|---|----------|---------|-------|
+| 1 | Cold path | ✅ | 180 s cold load completed via `LoadCompleted{180862}`; pre-fix would have failed at 60 s |
+| 2 | Coalescing (3 concurrent) | ✅ | Second leader's `LoadCompleted{54908}` + 2× `AlreadyLoaded` confirm slot lifecycle correct |
+| 3 | Warm path | ✅ | `outcome=AlreadyLoaded duration_ms=0`; got real content "Goodbye, take care!" |
+| 4 | Provider error | ⚠️ | Cloudflare gateway returned 524 (origin idle 100 s timeout) before veronex internal error surfaced. Lifecycle path was running; external CDN gave up first. Acceptable — lifecycle code is not in scope of CDN-tier behaviour. |
+
+Acceptance: §7.3 + §7.4 satisfied. Stall semantics fix verified end-to-end on real dev cluster (not docker-compose).
 
 ---
 
