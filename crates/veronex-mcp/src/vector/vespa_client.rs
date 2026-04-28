@@ -183,15 +183,18 @@ impl VespaClient {
         let url = format!("{}/search/", self.base_url);
 
         // YQL: filter on environment + tenant_id + HNSW ANN.
-        // Uses attribute equality (=) — correct for non-indexed string fields.
+        // String-attribute exact match must use `contains`. Vespa's `=` is a
+        // numeric range operator — feeding a string value with hyphen (e.g.
+        // `local-dev`) makes the parser read `-` as a sign character and emit
+        // `Illegal embedded sign character`.
         // Ranking is handled by the `semantic` rank profile (closeness-based);
         // YQL `ORDER BY` does not accept rank-feature function calls — it only
         // takes field references — so omit it here.
         let yql = format!(
             "select tool_id, environment, tenant_id, server_id, server_name, tool_name, description, input_schema \
              from mcp_tools \
-             where environment = \"{}\" \
-             and tenant_id = \"{}\" \
+             where environment contains \"{}\" \
+             and tenant_id contains \"{}\" \
              and ({{targetHits: {top_k}}}nearestNeighbor(embedding, qe)) \
              limit {top_k}",
             environment, tenant_id
