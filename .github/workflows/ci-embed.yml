@@ -117,10 +117,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           secret-files: |
             sccache_env=/tmp/sccache.env
-          # Crate index + tarballs from in-cluster Kellnr pull-through cache.
-          build-args: |
-            CARGO_REPLACE_WITH=girok-cache
-            CARGO_GIROK_INDEX=sparse+https://cargo.girok.dev/api/v1/crates/
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
 

@@ -123,15 +123,6 @@ jobs:
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
 
-          # Cargo source replacement → Kellnr (https://cargo.girok.dev) so
-          # crate index + tarballs come from the in-cluster pull-through cache
-          # instead of crates.io on every cold build. Empty defaults in the
-          # Dockerfile keep upstream behavior for external builders.
-          CARGO_CACHE_ARGS=(
-            --build-arg CARGO_REPLACE_WITH=girok-cache
-            --build-arg CARGO_GIROK_INDEX=sparse+https://cargo.girok.dev/api/v1/crates/
-          )
-
           # First build: compiles everything (cached by sccache + BuildKit layers)
           echo "::group::Building workspace (all crates)"
           docker buildx build \
@@ -139,7 +130,6 @@ jobs:
             --target veronex \
             --tag ${{ env.REGISTRY }}/beegy-labs/veronex:${TAG} \
             --secret id=sccache_env,src=/tmp/sccache.env \
-            "${CARGO_CACHE_ARGS[@]}" \
             --push \
             .
           echo "::endgroup::"
@@ -152,7 +142,6 @@ jobs:
               --target ${CRATE} \
               --tag ${{ env.REGISTRY }}/beegy-labs/${CRATE}:${TAG} \
               --secret id=sccache_env,src=/tmp/sccache.env \
-              "${CARGO_CACHE_ARGS[@]}" \
               --push \
               .
             echo "::endgroup::"

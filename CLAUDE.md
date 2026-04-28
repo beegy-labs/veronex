@@ -20,3 +20,4 @@ Read [.ai/README.md](.ai/README.md) — project overview, navigation, domain doc
 | ------ | -------- |
 | Code review / optimization | `.add/code-review.md` |
 | Doc sync | `.add/doc-sync.md` |
+| Dockerfile / docker workflow authoring | `.add/dockerfile-authoring.md` |
