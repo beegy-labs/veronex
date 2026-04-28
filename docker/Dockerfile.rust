@@ -54,6 +54,9 @@ COPY --from=planner /app/recipe.json recipe.json
 # No --workspace / --bin flags: cargo honours `[workspace.default-members]` in
 # the root Cargo.toml, which excludes `veronex-embed` (ort-sys has no musl
 # prebuilt binaries). Embed is built in its own glibc-based Dockerfile.
+# `cargo chef cook` builds dependency crates only; veronex-mcp's build.rs
+# (the GeoNames download) runs in the next step (cargo build), so the
+# `data/` cache mount belongs there, not here.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=secret,id=sccache_env \
@@ -69,9 +72,13 @@ COPY workspace-hack/ ./workspace-hack/
 # Build default-members binaries in one pass. Which crates build is declared
 # declaratively in `[workspace.default-members]` of root Cargo.toml (SSOT);
 # embed is excluded there because ort-sys requires glibc.
+# `crates/veronex-mcp/data` is mounted as a BuildKit cache so the GeoNames
+# (cities1000.txt + admin1) downloads in build.rs survive across image
+# rebuilds — first miss ~20s, subsequent 0s.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
+    --mount=type=cache,target=/app/crates/veronex-mcp/data,sharing=locked \
     --mount=type=secret,id=sccache_env \
     [ -f /run/secrets/sccache_env ] && . /run/secrets/sccache_env; \
     RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \

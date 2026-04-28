@@ -141,6 +141,19 @@ jobs:
     # var is bumped, this job can move back to `container:` form for
     # faster, cache-warm runs. Until then, set up Rust at step level.
     timeout-minutes: 30
+    env:
+      # sccache shares the in-cluster Garage S3 pool with ci-rust/ci-embed.
+      # `RUSTC_WRAPPER=sccache` + `CARGO_INCREMENTAL=0` is the canonical 2026
+      # combo for self-hosted runners; incremental compilation is incompatible
+      # with sccache and ephemeral runners (see DeepWiki sccache docs +
+      # xxchan blog "Stupidly effective ways to optimize Rust compile time").
+      SCCACHE_BUCKET: sccache
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: us-east-1
+      SCCACHE_S3_USE_SSL: "true"
+      SCCACHE_S3_KEY_PREFIX: veronex-test/
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Install build deps
@@ -150,12 +163,34 @@ jobs:
             pkg-config libssl-dev libcurl4-openssl-dev clang mold
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@nextest
+      - name: Install sccache
+        run: |
+          SCCACHE_VERSION=0.8.2
+          curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C /tmp
+          sudo mv "/tmp/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/bin/
+          sccache --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          # sccache owns the compile-artifact cache via S3; double-caching
+          # `target/` via the Action layer wastes restore time and disk.
+          cache-targets: false
+      - name: Cache GeoNames data
+        uses: actions/cache@v4
+        with:
+          # `crates/veronex-mcp/build.rs` downloads cities1000.txt + admin1
+          # from download.geonames.org. Persisting this dir between runs
+          # eliminates ~9.7 MB egress + ~20 s wall time per build. Bump the
+          # key suffix when GeoNames format/source changes.
+          path: crates/veronex-mcp/data
+          key: geonames-cities1000-v1
       - name: Run tests
         env:
-          RUSTC_WRAPPER: ""
-          CARGO_INCREMENTAL: "1"
-        run: SQLX_OFFLINE=true RUST_LOG=error cargo nextest run --all
+          RUSTC_WRAPPER: sccache
+          CARGO_INCREMENTAL: "0"
+        run: |
+          SQLX_OFFLINE=true RUST_LOG=error cargo nextest run --all
+          sccache --show-stats
 
   test-web:
     name: Test Web
