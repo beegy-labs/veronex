@@ -178,15 +178,41 @@ struct PsResponse {
 struct PsEntry {
     #[serde(default)]
     name: String,
+    /// VRAM bytes currently allocated for this model. ollama lists a model in
+    /// `/api/ps` only when load completes, but `size_vram == 0` is treated
+    /// defensively as "not yet allocated" so we never record progress for
+    /// a model that is listed but not actually resident.
+    #[serde(default)]
+    size_vram: u64,
 }
 
-/// Single `GET /api/ps` query — returns the names of models currently resident
-/// on the provider. Errors are non-fatal for the lifecycle path: the caller
-/// (`run_ps_poller`) treats any error as "no signal this tick".
+/// Compare a query model identifier (as passed by the caller) to an
+/// `/api/ps` response entry name. ollama defaults a missing tag to `:latest`
+/// (`server/images.go::ParseModelPath`) so `qwen3-coder-next-200k` and
+/// `qwen3-coder-next-200k:latest` denote the same model. Either side may
+/// arrive without a tag; canonicalise both before string-equality.
+fn names_match(query_model: &str, ps_name: &str) -> bool {
+    let q_with_tag: std::borrow::Cow<'_, str> = if query_model.contains(':') {
+        std::borrow::Cow::Borrowed(query_model)
+    } else {
+        std::borrow::Cow::Owned(format!("{query_model}:latest"))
+    };
+    let p_with_tag: std::borrow::Cow<'_, str> = if ps_name.contains(':') {
+        std::borrow::Cow::Borrowed(ps_name)
+    } else {
+        std::borrow::Cow::Owned(format!("{ps_name}:latest"))
+    };
+    q_with_tag.as_ref() == p_with_tag.as_ref()
+}
+
+/// Single `GET /api/ps` query — returns entries (name + size_vram) for models
+/// currently resident on the provider. Errors are non-fatal for the lifecycle
+/// path: the caller (`run_probe_with_stall`'s `ps_poller` arm) treats any
+/// error as "no signal this tick".
 async fn query_loaded_models(
     client: &reqwest::Client,
     base_url: &str,
-) -> Result<Vec<String>, anyhow::Error> {
+) -> Result<Vec<PsEntry>, anyhow::Error> {
     let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
     let resp = client
         .get(&url)
@@ -204,7 +230,7 @@ async fn query_loaded_models(
         .json()
         .await
         .with_context(|| "query_loaded_models: deserialize PsResponse")?;
-    Ok(body.models.into_iter().map(|m| m.name).collect())
+    Ok(body.models)
 }
 
 // ── Probe runner ─────────────────────────────────────────────────────────────
@@ -270,15 +296,25 @@ pub(super) async fn run_probe_with_stall(
     };
 
     // ── (2) /api/ps poller — the sole progress signal source. ──
+    //
+    // `MissedTickBehavior::Delay` guarantees ≥ LIFECYCLE_PS_POLL_INTERVAL spacing
+    // between consecutive ticks even when an individual `/api/ps` query takes
+    // close to the full interval (its own 5s `reqwest::timeout`). Default
+    // `Burst` would otherwise issue back-to-back queries until "caught up",
+    // adding pointless load on a struggling ollama.
     let ps_poller = async {
         let mut interval = tokio::time::interval(LIFECYCLE_PS_POLL_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Skip the immediate-fire first tick — ps wouldn't show a model that
         // ollama has only just been asked to load.
         interval.tick().await;
         loop {
             interval.tick().await;
             match query_loaded_models(client, base_url).await {
-                Ok(loaded) if loaded.iter().any(|m| m == model) => {
+                Ok(loaded) if loaded
+                    .iter()
+                    .any(|e| e.size_vram > 0 && names_match(model, &e.name)) =>
+                {
                     if !slot.has_first_progress() {
                         // First confirmation — log once for observability so
                         // operators see when ollama actually finished load.
@@ -298,6 +334,7 @@ pub(super) async fn run_probe_with_stall(
     // ── (3) Stall detector — fires only AFTER first progress confirmation. ──
     let stall_fut = async {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
         loop {
             interval.tick().await;
@@ -316,6 +353,7 @@ pub(super) async fn run_probe_with_stall(
     // ── (4) Periodic observability — emits "still loading, T=Xs" on long loads. ──
     let progress_log = async {
         let mut interval = tokio::time::interval(LIFECYCLE_PROGRESS_LOG_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
         loop {
             interval.tick().await;
@@ -376,10 +414,28 @@ mod tests {
             .await;
     }
 
-    /// Mount a `/api/ps` mock that returns the given model names.
+    /// Mount a `/api/ps` mock that returns the given model names with non-zero
+    /// `size_vram` (so the strict resident check passes).
     async fn ps_returns(server: &MockServer, models: &[&str]) {
         let body = serde_json::json!({
-            "models": models.iter().map(|n| serde_json::json!({"name": n})).collect::<Vec<_>>(),
+            "models": models.iter()
+                .map(|n| serde_json::json!({"name": n, "size_vram": 1_000_000_000u64}))
+                .collect::<Vec<_>>(),
+        });
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/api/ps"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    /// Mount a `/api/ps` mock that lists the model with `size_vram == 0` —
+    /// simulates ollama listing a not-yet-resident model. Strict mode rejects.
+    async fn ps_returns_zero_vram(server: &MockServer, models: &[&str]) {
+        let body = serde_json::json!({
+            "models": models.iter()
+                .map(|n| serde_json::json!({"name": n, "size_vram": 0u64}))
+                .collect::<Vec<_>>(),
         });
         Mock::given(matchers::method("GET"))
             .and(matchers::path("/api/ps"))
@@ -480,5 +536,43 @@ mod tests {
         );
         // Progress log cadence >= ps poll cadence — prevents log spam.
         assert!(LIFECYCLE_PROGRESS_LOG_INTERVAL >= LIFECYCLE_PS_POLL_INTERVAL);
+    }
+
+    /// Both directions of the `:latest` defaulting — "qwen3" ↔ "qwen3:latest"
+    /// match (ollama defaults missing tag to `:latest`); explicit non-`latest`
+    /// tags do not collide with `:latest`.
+    #[test]
+    fn names_match_handles_latest_default_in_both_directions() {
+        assert!(names_match("qwen3", "qwen3:latest"));
+        assert!(names_match("qwen3:latest", "qwen3"));
+        assert!(names_match("qwen3:latest", "qwen3:latest"));
+        assert!(names_match("qwen3:8b", "qwen3:8b"));
+
+        assert!(!names_match("qwen3", "qwen3:8b"));
+        assert!(!names_match("qwen3:8b", "qwen3:latest"));
+        assert!(!names_match("qwen3:8b", "qwen3:8b-q4"));
+        assert!(!names_match("a", "b"));
+    }
+
+    /// Defensive: ollama listing a model with `size_vram == 0` (not actually
+    /// resident yet) must NOT count as a progress signal.
+    #[tokio::test]
+    async fn ps_listing_with_zero_vram_does_not_record_progress() {
+        let server = MockServer::start().await;
+        // Probe takes 8 s; /api/ps lists the model immediately but with
+        // size_vram = 0. Stall must still NOT fire (no real progress signal),
+        // and probe_fut must win the select.
+        ok_after(&server, 8_000).await;
+        ps_returns_zero_vram(&server, &["any"]).await;
+        let client = reqwest::Client::new();
+        let slot = LoadInFlight::new();
+        let r = tokio::time::timeout(
+            Duration::from_secs(15),
+            run_probe_with_stall(&client, &server.uri(), "any", &slot),
+        )
+        .await
+        .expect("must not exceed test timeout")
+        .expect("must complete via probe_fut, not stall");
+        assert!(matches!(r, LifecycleOutcome::LoadCompleted { .. }));
     }
 }
