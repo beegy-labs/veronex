@@ -514,37 +514,56 @@ We do NOT need to parse the response body — HTTP 200 is sufficient because:
 
 ### §6.2c Stall detection algorithm — exact pseudo-code
 
-Runs as a tokio task in parallel with the probe HTTP call. Both share the `LoadInFlight` slot.
+> **Production note (2026-04-28)**: ollama's `/api/generate` is a single
+> request-response with **no streamed progress** during the silent cold-load
+> phase. A naive "stall = N seconds without bytes from the probe socket"
+> detector therefore misfires on every cold load (200K context = 163 s of
+> silence). Stall semantics must be redefined as **"loaded per /api/ps but
+> probe HTTP not returning"** — i.e. post-load HTTP hang, not initial silence.
+
+Runs as a `tokio::select!` arm next to the probe HTTP call. The select! also
+includes a `/api/ps` poller that drives the progress signal and a periodic
+observability log. All four observers share the `LoadInFlight` slot.
 
 ```
-spawn_stall_monitor(slot, model):
-  loop:
-    sleep LIFECYCLE_PROGRESS_POLL                    // 5s
-    if slot.result is set:
-      return                                          // probe finished, exit monitor
-    
-    let now_ms = unix_ms_now()
-    let last_progress = slot.last_progress_at.load(SeqCst)
-    let no_progress_ms = now_ms - last_progress
-    
-    // Check ollama-side progress via /api/ps
-    let ps = fetch_ps()  // GET /api/ps (5s reqwest timeout)
-    let model_now_listed = ps.models.contains(model)
-    
-    if model_now_listed:
-      // ollama has at least started loading — update progress
-      slot.last_progress_at.store(now_ms, SeqCst)
-      no_progress_ms = 0
-    
-    if no_progress_ms >= LIFECYCLE_STALL_INTERVAL_MS: // 60_000
-      slot.result.set(Err(Stalled { last_progress_ms: no_progress_ms }))
-      slot.notify.notify_waiters()
-      return  // abort; probe HTTP will eventually return but we've already errored
+LoadInFlight {
+  started_at:        Instant,
+  notify:            Arc<Notify>,
+  last_progress_at:  Arc<AtomicU64>,         // SENTINEL 0 = no progress yet
+  result:            OnceCell<...>,
+}
+
+run_probe_with_stall(client, base_url, model, slot):
+  probe_fut       = POST /api/generate { num_predict:0, keep_alive:"30m" }
+                    // reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)
+  ps_poller       = loop every LIFECYCLE_PS_POLL_INTERVAL (5s):
+                      ps = GET /api/ps
+                      if ps.models.contains(model):
+                        slot.last_progress_at.store(now_ms, Release)
+                    // never returns; runs until select winner fires
+  stall_fut       = loop every 5s:
+                      if slot.last_progress_at == 0:
+                        continue                   // initial silent phase, NOT stalled
+                      gap = now_ms - slot.last_progress_at
+                      if gap >= LIFECYCLE_STALL_INTERVAL_MS (60_000):
+                        return Stalled { last_progress_ms: gap }
+  progress_log    = loop every LIFECYCLE_PROGRESS_LOG_INTERVAL (30s):
+                      tracing::info!(elapsed_s, has_first_progress, "still loading")
+  hard_cap        = sleep LIFECYCLE_LOAD_TIMEOUT + 5s
+                      → LoadTimeout { elapsed_ms, max_ms }
+
+  tokio::select! { biased
+    r = probe_fut       → r
+    e = stall_fut       → Err(e)
+    _ = hard_cap        → Err(LoadTimeout)
+    _ = ps_poller       → unreachable (infinite loop)
+    _ = progress_log    → unreachable (infinite loop)
+  }
 ```
 
-Race semantics:
-- If probe finishes before stall fires → `slot.result` set by probe, monitor exits via early return
-- If stall fires first → `slot.result` set by monitor; probe HTTP keeps running but its result will be ignored (`set` is idempotent — first writer wins)
+**Critical invariant — the sentinel `last_progress_at == 0`**: On `LoadInFlight::new()`, `last_progress_at` is initialised to `0`, **not** to `started_at`. While 0, `stall_fut` returns immediately (no-op). It transitions to a real wall-clock timestamp on the first `/api/ps` confirmation. This is what makes the detector compatible with multi-minute cold loads — it cannot misfire during the silent loading phase.
+
+Probe abort discipline: the probe HTTP request is **never cancelled** by `stall_fut` or `hard_cap` resolving the select first. Cancelling the connection makes ollama abort the load (`client connection closed before server finished loading, aborting load`); only `reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)` is allowed to terminate the probe. The probe runs to completion or its own timeout; the `LifecycleError` returned by stall/hard-cap merely propagates up to `OllamaAdapter::ensure_ready`, which writes the result and notifies waiters.
 
 ### §6.2d `preloader.rs` extraction — current → new
 
@@ -560,9 +579,10 @@ Both call sites pass different `keep_alive` strings.
 ### §6.3 Constants (add to `lifecycle.rs`)
 
 ```rust
-const LIFECYCLE_LOAD_TIMEOUT: Duration = Duration::from_secs(600);   // hard cap (200K = 163s measured)
-const LIFECYCLE_STALL_INTERVAL: Duration = Duration::from_secs(60);  // no-progress abort
-const LIFECYCLE_PROGRESS_POLL: Duration = Duration::from_secs(5);    // /api/ps progress check (during probe only)
+const LIFECYCLE_LOAD_TIMEOUT: Duration = Duration::from_secs(600);   // hard cap (200K = 163s measured, 4× headroom)
+const LIFECYCLE_STALL_INTERVAL: Duration = Duration::from_secs(60);  // post-/api/ps-confirm hang detector
+const LIFECYCLE_PS_POLL_INTERVAL: Duration = Duration::from_secs(5); // /api/ps progress signal cadence
+const LIFECYCLE_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(30); // observability "still loading" log
 const LIFECYCLE_KEEP_ALIVE: &str = "30m";                            // burst window
 ```
 
