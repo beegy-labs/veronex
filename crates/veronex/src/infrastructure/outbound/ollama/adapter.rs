@@ -1,18 +1,26 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use dashmap::DashMap;
 use futures::Stream;
 use futures::StreamExt as _;
 use serde::Deserialize;
 
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::application::ports::outbound::model_lifecycle::{
+    LifecycleOutcome, ModelLifecyclePort,
+};
 use crate::domain::constants::{MAX_LINE_BUFFER, PROVIDER_REQUEST_TIMEOUT};
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
-use crate::domain::value_objects::StreamToken;
+use crate::domain::errors::LifecycleError;
+use crate::domain::value_objects::{EvictionReason, ModelInstanceState, StreamToken};
 use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;
+use crate::infrastructure::outbound::ollama::lifecycle::{run_probe_with_stall, LoadInFlight};
 
 pub struct OllamaAdapter {
     base_url: String,
@@ -21,6 +29,13 @@ pub struct OllamaAdapter {
     valkey: Option<fred::clients::Pool>,
     /// Provider UUID — used as part of the Valkey cache key.
     provider_id: uuid::Uuid,
+    /// VramPool SSOT — used for `is_loaded` lookup + state updates after load.
+    /// `None` in tests / static router; `ensure_ready` short-circuits to a
+    /// no-op (probe still runs so `stream_tokens` works) when not configured.
+    vram_pool: Option<Arc<dyn VramPoolPort>>,
+    /// Per-(model) load-in-flight slots. Concurrent `ensure_ready(M)` calls
+    /// coalesce on the same `LoadInFlight` so only one HTTP probe runs.
+    in_flight_loads: Arc<DashMap<String, Arc<LoadInFlight>>>,
 }
 
 // ── Context length helper ───────────────────────────────────────────────────────
@@ -66,6 +81,8 @@ impl OllamaAdapter {
                 .expect("failed to build HTTP client"),
             valkey: None,
             provider_id: uuid::Uuid::nil(),
+            vram_pool: None,
+            in_flight_loads: Arc::new(DashMap::new()),
         }
     }
 
@@ -84,7 +101,125 @@ impl OllamaAdapter {
                 .expect("failed to build HTTP client"),
             valkey: Some(valkey),
             provider_id,
+            vram_pool: None,
+            in_flight_loads: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Builder: attach `VramPoolPort` so `ensure_ready` can consult and update
+    /// the SSOT. Without it, every `ensure_ready` must drive a probe.
+    pub fn with_vram_pool(mut self, pool: Arc<dyn VramPoolPort>) -> Self {
+        self.vram_pool = Some(pool);
+        self
+    }
+
+    /// Returns the provider UUID this adapter is bound to.
+    pub fn provider_id(&self) -> uuid::Uuid {
+        self.provider_id
+    }
+}
+
+// ── ModelLifecyclePort impl ─────────────────────────────────────────────────
+//
+// SDD: `.specs/veronex/inference-lifecycle-sod.md` §6.
+//
+// Phase-1 path. `runner.rs` invokes `ensure_ready(model)` before
+// `InferenceProviderPort::stream_tokens(job)`. Concurrent same-model calls on
+// this adapter instance coalesce on the in-flight slot.
+
+#[async_trait]
+impl ModelLifecyclePort for OllamaAdapter {
+    async fn ensure_ready(&self, model: &str) -> Result<LifecycleOutcome, LifecycleError> {
+        // 1. SSOT lookup — VramPool is authoritative; no parallel /api/ps cache.
+        if let Some(pool) = &self.vram_pool {
+            // `loaded_model_names` is per-provider; allocates a Vec but bounded by
+            // OLLAMA_MAX_LOADED_MODELS (typically 2). Cheap enough for the hot path.
+            if pool
+                .loaded_model_names(self.provider_id)
+                .iter()
+                .any(|m| m == model)
+            {
+                return Ok(LifecycleOutcome::AlreadyLoaded);
+            }
+        }
+
+        // 2. In-flight coalesce — concurrent same-model callers wait on one probe.
+        if let Some(existing) = self.in_flight_loads.get(model).map(|e| e.value().clone()) {
+            let waited_start = Instant::now();
+            existing.notify.notified().await;
+            let waited_ms = waited_start.elapsed().as_millis() as u64;
+            return existing
+                .result
+                .get()
+                .cloned()
+                .unwrap_or(Err(LifecycleError::Stalled {
+                    last_progress_ms: existing.no_progress_ms(),
+                }))
+                .map(|_| LifecycleOutcome::LoadCoalesced { waited_ms });
+        }
+
+        // 3. Acquire slot, drive probe with concurrent stall detection.
+        let slot = Arc::new(LoadInFlight::new());
+        self.in_flight_loads
+            .insert(model.to_string(), slot.clone());
+        let result = run_probe_with_stall(&self.client, &self.base_url, model, &slot).await;
+
+        // 4. Notify waiters (set + remove are idempotent — first writer wins).
+        let _ = slot.result.set(result.clone());
+        slot.notify.notify_waiters();
+        self.in_flight_loads.remove(model);
+
+        // 5. SSOT update on success. weight_mb=0 placeholder — sync_loop will
+        //    reconcile actual weight from /api/ps on its next pass. Acceptable
+        //    because routing decisions cache miss within one sync cycle (30s)
+        //    are bounded; the next request hits the warm /api/ps view.
+        if let (Ok(_), Some(pool)) = (&result, &self.vram_pool) {
+            pool.mark_model_loaded(self.provider_id, model, 0);
+        }
+
+        result
+    }
+
+    async fn instance_state(&self, model: &str) -> ModelInstanceState {
+        if let Some(pool) = &self.vram_pool {
+            if pool
+                .loaded_model_names(self.provider_id)
+                .iter()
+                .any(|m| m == model)
+            {
+                return ModelInstanceState::Loaded {
+                    loaded_at: std::time::SystemTime::now(),
+                    weight_bytes: 0,
+                };
+            }
+        }
+        if self.in_flight_loads.contains_key(model) {
+            return ModelInstanceState::Loading {
+                started_at: std::time::SystemTime::now(),
+                last_progress_at: std::time::SystemTime::now(),
+            };
+        }
+        ModelInstanceState::NotLoaded
+    }
+
+    async fn evict(&self, model: &str, _reason: EvictionReason) -> Result<(), LifecycleError> {
+        if let Some(pool) = &self.vram_pool {
+            pool.mark_model_unloaded(self.provider_id, model);
+        }
+        // Operator-driven evict via ollama: `keep_alive: 0` on a zero-token probe.
+        let url = format!("{}/api/generate", self.base_url.trim_end_matches('/'));
+        self.client
+            .post(&url)
+            .json(&serde_json::json!({
+                "model": model,
+                "prompt": "",
+                "num_predict": 0,
+                "keep_alive": 0,
+            }))
+            .send()
+            .await
+            .map_err(|e| LifecycleError::ProviderError(format!("evict: {e}")))?;
+        Ok(())
     }
 }
 

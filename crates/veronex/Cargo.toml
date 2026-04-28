@@ -81,3 +81,4 @@ workspace-hack = { path = "../../workspace-hack" }
 
 [dev-dependencies]
 proptest = "1"
+wiremock = "0.6"

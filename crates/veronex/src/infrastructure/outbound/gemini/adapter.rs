@@ -8,10 +8,14 @@ use futures::StreamExt as _;
 use serde::{Deserialize, Serialize};
 
 use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::application::ports::outbound::model_lifecycle::{
+    LifecycleOutcome, ModelLifecyclePort,
+};
 use crate::domain::constants::{MAX_LINE_BUFFER, PROVIDER_REQUEST_TIMEOUT};
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
-use crate::domain::value_objects::StreamToken;
+use crate::domain::errors::LifecycleError;
+use crate::domain::value_objects::{EvictionReason, ModelInstanceState, StreamToken};
 
 pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 
@@ -30,6 +34,30 @@ impl GeminiAdapter {
                 .build()
                 .expect("failed to build HTTP client"),
         }
+    }
+}
+
+// ── ModelLifecyclePort impl (no-op for cloud provider) ──────────────────────
+//
+// Gemini is a cloud API — no local VRAM lifecycle. All lifecycle calls
+// short-circuit so the runner's Phase-1 step is uniform across providers.
+// SDD: `.specs/veronex/inference-lifecycle-sod.md` §6.1 (Gemini no-op row).
+
+#[async_trait]
+impl ModelLifecyclePort for GeminiAdapter {
+    async fn ensure_ready(&self, _model: &str) -> Result<LifecycleOutcome, LifecycleError> {
+        Ok(LifecycleOutcome::AlreadyLoaded)
+    }
+
+    async fn instance_state(&self, _model: &str) -> ModelInstanceState {
+        ModelInstanceState::Loaded {
+            loaded_at: std::time::SystemTime::now(),
+            weight_bytes: 0,
+        }
+    }
+
+    async fn evict(&self, _model: &str, _reason: EvictionReason) -> Result<(), LifecycleError> {
+        Ok(())
     }
 }
 
