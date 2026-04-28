@@ -50,8 +50,20 @@ pub const MAX_TOOLS_PER_REQUEST: usize = 32;
 const LOOP_DETECT_THRESHOLD: u8 = 3;
 /// Result cache TTL (seconds).
 const RESULT_CACHE_TTL_SECS: i64 = 300;
-/// Per-round token collection timeout. Bounds worst-case hang at MAX_ROUNDS × this value.
-const COLLECT_ROUND_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(45);
+/// First-token wait. Covers ollama cold load + KV cache pre-allocation + first-token compute.
+///
+/// Sized for 200K-context models (qwen3-coder-next-200k:latest) on Strix Halo / AI Max+ 395:
+/// measured `load_duration` ≈ 163 s for the full 200K KV alloc + warmup. 240 s leaves a 47 s
+/// safety buffer for variance. Warm-state requests return in <100 ms regardless.
+const FIRST_TOKEN_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(240);
+
+/// Per-token stream idle. Fires only when the model hangs mid-response (true stall).
+/// Generation gap on warm models is sub-second; 45 s is a generous safety margin.
+const STREAM_IDLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(45);
+
+/// Hard cap per round. Aligns with `INFERENCE_ROUTER_TIMEOUT` so the route layer never
+/// fires before the bridge has chosen its own outcome.
+const ROUND_TOTAL_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(360);
 /// Maximum bytes of a single MCP tool result injected into the messages array.
 /// Prevents OOM from malicious/misconfigured servers at high concurrency.
 const MAX_TOOL_RESULT_BYTES: usize = 32_768;
@@ -280,16 +292,32 @@ impl McpBridgeAdapter {
             // Streaming is handled after the loop completes by re-submitting
             // the final content through the SSE path if want_stream=true.
 
-            let round_result = match tokio::time::timeout(
-                COLLECT_ROUND_TIMEOUT,
-                collect_round(state, &job_id),
-            )
-            .await
-            {
+            // `collect_round` owns the phased timeout (FIRST_TOKEN/STREAM_IDLE/ROUND_TOTAL).
+            // The outer `tokio::time::timeout` was removed — a single 45 s wrapper used
+            // to mean cold-load on a 200K-context model (measured 163 s on Strix Halo)
+            // would silently break and return empty content to the client.
+            let round_result = match collect_round(state, &job_id).await {
                 Ok(r) => r,
-                Err(_) => {
-                    warn!(round = rounds, "MCP collect_round timed out — breaking loop");
-                    break;
+                Err(e) => {
+                    warn!(round = rounds, model = %model, error = %e, "MCP round failed");
+                    let code = match &e {
+                        RoundError::FirstTokenTimeout => "model_loading",
+                        RoundError::StreamIdleTimeout => "stream_stalled",
+                        RoundError::TotalTimeout      => "round_timeout",
+                        RoundError::Stream(_)         => "stream_error",
+                    };
+                    // Surface the failure to the client with a clear message + code instead
+                    // of swallowing it. The client knows whether to retry (cold-load) or
+                    // give up (hung / stream error).
+                    return Some(McpLoopResult {
+                        content: format!("Error: {e} (code={code})"),
+                        tool_calls: Vec::new(),
+                        prompt_tokens: total_prompt_tokens,
+                        completion_tokens: total_completion_tokens,
+                        finish_reason: code.to_string(),
+                        rounds,
+                        final_job_id: None,
+                    });
                 }
             };
             total_prompt_tokens = total_prompt_tokens.saturating_add(round_result.prompt_tokens);
@@ -838,47 +866,101 @@ struct RoundResult {
 }
 
 /// Collect all tokens from a submitted job into a `RoundResult`.
-async fn collect_round(state: &AppState, job_id: &JobId) -> RoundResult {
+/// Failure modes from `collect_round`. Each variant maps to a distinct user-facing
+/// error so the client can decide its retry strategy (cold-load vs hung vs network).
+#[derive(Debug)]
+enum RoundError {
+    /// No first token received within `FIRST_TOKEN_TIMEOUT` — model is still cold-loading
+    /// or unreachable. Client retry usually succeeds because the load completes in
+    /// the background and the next request hits a warm model.
+    FirstTokenTimeout,
+    /// Tokens started but the gap between tokens exceeded `STREAM_IDLE_TIMEOUT` —
+    /// the model is genuinely hung. Retry will likely re-trigger the same hang.
+    StreamIdleTimeout,
+    /// The full round budget (`ROUND_TOTAL_TIMEOUT`) was exhausted even though
+    /// tokens were flowing. Defends against pathological streams.
+    TotalTimeout,
+    /// Non-timeout stream error (provider 5xx, network drop, …).
+    Stream(String),
+}
+
+impl std::fmt::Display for RoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FirstTokenTimeout => write!(
+                f,
+                "model is still loading (first-token timeout {}s exceeded). Retry in a moment.",
+                FIRST_TOKEN_TIMEOUT.as_secs()
+            ),
+            Self::StreamIdleTimeout => write!(
+                f,
+                "inference stream stalled (no token for {}s). Provider may be hung.",
+                STREAM_IDLE_TIMEOUT.as_secs()
+            ),
+            Self::TotalTimeout => write!(
+                f,
+                "round exceeded total budget {}s. Possible runaway generation.",
+                ROUND_TOTAL_TIMEOUT.as_secs()
+            ),
+            Self::Stream(e) => write!(f, "inference stream error: {e}"),
+        }
+    }
+}
+
+async fn collect_round(state: &AppState, job_id: &JobId) -> Result<RoundResult, RoundError> {
     let mut token_stream = state.use_case.stream(job_id);
     let mut content = String::new();
     let mut tool_calls: Vec<Value> = Vec::new();
     let mut prompt_tokens: u32 = 0;
     let mut completion_tokens: u32 = 0;
     let mut finish_reason = "stop".to_string();
+    let mut received_any_token = false;
+    let round_start = Instant::now();
 
-    while let Some(result) = token_stream.next().await {
-        match result {
-            // is_final checked first: a final token with tool_calls must still break the loop.
-            Ok(token) if token.is_final => {
-                prompt_tokens = token.prompt_tokens.unwrap_or(0);
-                completion_tokens = token.completion_tokens.unwrap_or(completion_tokens);
-                finish_reason = token.finish_reason.unwrap_or_else(|| {
-                    if tool_calls.is_empty() { "stop".into() } else { "tool_calls".into() }
-                });
-                break;
-            }
-            Ok(token) if token.tool_calls.is_some() => {
-                if let Some(calls) = token.tool_calls.as_ref().and_then(|v| v.as_array()) {
-                    for (i, c) in calls.iter().enumerate() {
-                        if validate_tool_call(c) {
-                            tool_calls.push(convert_ollama_tool_call(i, c));
+    loop {
+        // Hard cap defends against unbounded streams.
+        if round_start.elapsed() >= ROUND_TOTAL_TIMEOUT {
+            return Err(RoundError::TotalTimeout);
+        }
+        // Phased timeout: long for the first token (covers cold load), tight after.
+        let phase_timeout = if received_any_token {
+            STREAM_IDLE_TIMEOUT
+        } else {
+            FIRST_TOKEN_TIMEOUT
+        };
+
+        match tokio::time::timeout(phase_timeout, token_stream.next()).await {
+            Ok(Some(Ok(token))) => {
+                received_any_token = true;
+                if token.is_final {
+                    // is_final is checked first — a final token with tool_calls still ends the round.
+                    prompt_tokens = token.prompt_tokens.unwrap_or(prompt_tokens);
+                    completion_tokens = token.completion_tokens.unwrap_or(completion_tokens);
+                    finish_reason = token.finish_reason.unwrap_or_else(|| {
+                        if tool_calls.is_empty() { "stop".into() } else { "tool_calls".into() }
+                    });
+                    break;
+                }
+                if token.tool_calls.is_some() {
+                    if let Some(calls) = token.tool_calls.as_ref().and_then(|v| v.as_array()) {
+                        for (i, c) in calls.iter().enumerate() {
+                            if validate_tool_call(c) {
+                                tool_calls.push(convert_ollama_tool_call(i, c));
+                            }
                         }
                     }
-                }
-            }
-            Ok(token) => {
-                if !token.value.is_empty() {
+                } else if !token.value.is_empty() {
                     content.push_str(&token.value);
                 }
             }
-            Err(e) => {
-                warn!("MCP collect_round: stream error: {e}");
-                break;
-            }
+            Ok(Some(Err(e))) => return Err(RoundError::Stream(e.to_string())),
+            Ok(None) => break, // stream ended cleanly
+            Err(_) if !received_any_token => return Err(RoundError::FirstTokenTimeout),
+            Err(_) => return Err(RoundError::StreamIdleTimeout),
         }
     }
 
-    RoundResult { content, tool_calls, prompt_tokens, completion_tokens, finish_reason }
+    Ok(RoundResult { content, tool_calls, prompt_tokens, completion_tokens, finish_reason })
 }
 
 /// Convert an Ollama tool_call to OpenAI format, preserving index as ID.
@@ -1330,5 +1412,68 @@ mod tests {
     fn extract_last_user_prompt_missing_content_field_returns_empty() {
         let msgs = vec![serde_json::json!({"role": "user"})];
         assert_eq!(extract_last_user_prompt(&msgs), "");
+    }
+
+    // ── RoundError display + code mapping ─────────────────────────────────────
+    //
+    // Tier-3 fix: replaces the silent `COLLECT_ROUND_TIMEOUT` break that returned
+    // empty content. RoundError must carry an actionable message and a stable
+    // code so clients can decide retry strategy.
+
+    #[test]
+    fn round_error_first_token_mentions_seconds() {
+        let s = RoundError::FirstTokenTimeout.to_string();
+        assert!(s.contains("first-token timeout"), "msg = {s}");
+        assert!(s.contains(&FIRST_TOKEN_TIMEOUT.as_secs().to_string()), "msg = {s}");
+    }
+
+    #[test]
+    fn round_error_stream_idle_distinct_from_first_token() {
+        let s = RoundError::StreamIdleTimeout.to_string();
+        assert!(s.contains("stalled"), "msg = {s}");
+        assert!(s.contains(&STREAM_IDLE_TIMEOUT.as_secs().to_string()), "msg = {s}");
+    }
+
+    #[test]
+    fn round_error_total_timeout_aligned_with_route() {
+        let s = RoundError::TotalTimeout.to_string();
+        assert!(s.contains("total budget"), "msg = {s}");
+        assert!(s.contains(&ROUND_TOTAL_TIMEOUT.as_secs().to_string()), "msg = {s}");
+    }
+
+    #[test]
+    fn round_error_stream_passes_through_provider_message() {
+        let s = RoundError::Stream("ollama 502 bad gateway".into()).to_string();
+        assert!(s.contains("ollama 502 bad gateway"), "msg = {s}");
+    }
+
+    // ── Timeout constants — sanity invariants ─────────────────────────────────
+
+    #[test]
+    fn first_token_covers_measured_200k_cold_load() {
+        // Measured: ollama load_duration ≈ 163 s for qwen3-coder-next-200k:latest
+        // (Strix Halo / AI Max+ 395, 200K KV cache q8_0). FIRST_TOKEN_TIMEOUT must
+        // exceed this with safety buffer.
+        const MEASURED_200K_COLD_LOAD_SECS: u64 = 163;
+        assert!(
+            FIRST_TOKEN_TIMEOUT.as_secs() > MEASURED_200K_COLD_LOAD_SECS,
+            "FIRST_TOKEN_TIMEOUT ({}s) does not cover measured 200K cold load ({}s)",
+            FIRST_TOKEN_TIMEOUT.as_secs(),
+            MEASURED_200K_COLD_LOAD_SECS,
+        );
+    }
+
+    #[test]
+    fn round_total_does_not_exceed_route_layer() {
+        // INFERENCE_ROUTER_TIMEOUT in inbound::http::constants is 360 s. Bridge must
+        // surface its own outcome before the tower-http layer fires a 408.
+        assert!(ROUND_TOTAL_TIMEOUT.as_secs() <= 360);
+    }
+
+    #[test]
+    fn stream_idle_shorter_than_first_token() {
+        // Once tokens are flowing, the appropriate timeout is much tighter — a hung
+        // model should be detected fast.
+        assert!(STREAM_IDLE_TIMEOUT < FIRST_TOKEN_TIMEOUT);
     }
 }
