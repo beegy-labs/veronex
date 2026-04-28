@@ -7,7 +7,7 @@ use futures::StreamExt as _;
 use tokio::sync::{broadcast, Notify};
 use uuid::Uuid;
 
-use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::application::ports::outbound::inference_provider::LlmProviderPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::message_store::{ConversationRecord, MessageStore};
 use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
@@ -428,7 +428,7 @@ async fn finalize_job(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_job(
     jobs: Arc<DashMap<Uuid, JobEntry>>,
-    provider: Arc<dyn InferenceProviderPort>,
+    provider: Arc<dyn LlmProviderPort>,
     job_repo: Arc<dyn JobRepository>,
     message_store: Option<Arc<dyn MessageStore>>,
     valkey: Option<Arc<dyn ValkeyPort>>,
@@ -442,6 +442,7 @@ pub(super) async fn run_job(
     event_tx: broadcast::Sender<JobStatusEvent>,
     instance_id: Arc<str>,
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
+    mcp_lifecycle_phase_enabled: bool,
 ) -> Result<Option<u32>> {
     // ── Setup ──────────────────────────────────────────────────────────
     if job.provider_type == ProviderType::Ollama
@@ -486,7 +487,57 @@ pub(super) async fn run_job(
         latency_ms: None,
     }).await;
 
-    // ── Stream tokens ──────────────────────────────────────────────────
+    // ── Phase 1: Lifecycle (ensure model loaded) ───────────────────────
+    // SDD: .specs/veronex/inference-lifecycle-sod.md §7.1a.
+    // Behind `MCP_LIFECYCLE_PHASE` flag (default off). When on, drives an
+    // explicit `ensure_ready` probe on the provider so cold-load timing is
+    // observable as its own span / metric instead of being conflated with
+    // first-token wait inside stream_tokens.
+    if mcp_lifecycle_phase_enabled {
+        let lifecycle_started = std::time::Instant::now();
+        match provider.ensure_ready(job.model_name.as_str()).await {
+            Ok(outcome) => {
+                tracing::info!(
+                    %uuid,
+                    model = %job.model_name.as_str(),
+                    ?outcome,
+                    duration_ms = lifecycle_started.elapsed().as_millis() as u64,
+                    "lifecycle.ensure_ready"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    %uuid,
+                    model = %job.model_name.as_str(),
+                    error = %e,
+                    duration_ms = lifecycle_started.elapsed().as_millis() as u64,
+                    "lifecycle.ensure_ready failed"
+                );
+                let job_id = crate::domain::value_objects::JobId(uuid);
+                if let Err(re) = job_repo
+                    .fail_with_reason(&job_id, "lifecycle_failed", Some(&e.to_string()))
+                    .await
+                {
+                    tracing::warn!(%uuid, "failed to persist lifecycle failure: {re}");
+                }
+                if let Some(mut entry) = jobs.get_mut(&uuid) {
+                    entry.status = JobStatus::Failed;
+                    entry.job.status = JobStatus::Failed;
+                    entry.job.error = Some(e.to_string());
+                    entry.job.failure_reason = Some("lifecycle_failed".into());
+                    entry.done = true;
+                    let notify = entry.notify.clone();
+                    drop(entry);
+                    notify.notify_one();
+                }
+                decr_running(&valkey).await;
+                schedule_cleanup(&jobs, uuid, JOB_CLEANUP_DELAY);
+                return Ok(None);
+            }
+        }
+    }
+
+    // ── Phase 2: Inference (stream tokens) ─────────────────────────────
     let cancel_notify = jobs.get(&uuid)
         .map(|e| e.cancel_notify.clone())
         .unwrap_or_else(|| Arc::new(Notify::new()));

@@ -13,11 +13,11 @@ Mark with `[x]` when committed. Each Tier has its own §-block with file paths, 
 
 | Tier | Status | Branch | PR | Commit |
 | ---- | ------ | ------ | -- | ------ |
-| A — Domain + Port + Mock | [ ] not started | `feat/lifecycle-port-mock` (TBD) | — | — |
-| B — OllamaAdapter lifecycle | [ ] blocked on A | `feat/ollama-lifecycle` (TBD) | — | — |
-| C — Runner integration + flag | [ ] blocked on B | `feat/runner-lifecycle-phase` (TBD) | — | — |
-| CDD-sync (post C) | [ ] blocked on C | `docs/cdd-lifecycle` (TBD) | — | — |
-| Flow-sync (post C) | [ ] blocked on C | (same as CDD-sync) | — | — |
+| A — Domain + Port + Mock | [x] done | `feat/lifecycle-port-mock` | #91 | `3641b91` |
+| B — OllamaAdapter lifecycle | [x] done | `feat/ollama-lifecycle` | #92 | `70c1d18` |
+| C — Runner integration + flag | [x] done | `feat/runner-lifecycle-phase` | TBD | TBD |
+| CDD-sync (post C) | [ ] blocked on C live verify | `docs/cdd-lifecycle` (TBD) | — | — |
+| Flow-sync (post C) | [ ] blocked on C live verify | (same as CDD-sync) | — | — |
 
 If you find this SDD with all boxes unchecked, start at §A. If A is checked, start at §B. Etc.
 

@@ -326,6 +326,20 @@ pub const REAPER_SLOT_INTERVAL: Duration = Duration::from_secs(30);
 /// Interval between orphaned-job queue reap passes.
 pub const REAPER_QUEUE_INTERVAL: Duration = Duration::from_secs(60);
 
+// ── MCP lifecycle phase flag ────────────────────────────────────────────────
+//
+// Feature flag for the Phase-1 lifecycle step in the runner. When enabled,
+// `runner.process_job` invokes `provider.ensure_ready(model)` before
+// `provider.stream_tokens(job)`. SDD: `.specs/veronex/inference-lifecycle-sod.md`.
+
+/// Env var name for the lifecycle phase feature flag.
+pub const MCP_LIFECYCLE_PHASE_FLAG_ENV: &str = "MCP_LIFECYCLE_PHASE";
+
+/// Default value when the env var is absent or unparseable. Default `false`
+/// preserves pre-Tier-C behaviour (implicit auto-load via `stream_tokens`)
+/// until live verification on dev.
+pub const MCP_LIFECYCLE_PHASE_DEFAULT: bool = false;
+
 #[cfg(test)]
 mod tests {
     use super::*;
