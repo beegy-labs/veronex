@@ -164,78 +164,274 @@ This is purely a frontend change and inherits the back-end Axis A.
 
 ## §5 Tier A — MCP entry forces SSE streaming + heartbeat
 
-> Goal: `mcp_ollama_chat` returns SSE response regardless of client's `stream` field. Final event carries the full bundled completion for legacy compatibility.
-> Estimate: ~250 LoC. Branch: `feat/mcp-streaming-first`.
+> Goal: `mcp_ollama_chat` returns SSE response regardless of client's `stream` field. **OpenAI-compatible** chunk format (verified via [OpenAI streaming-events ref](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) and [OpenAI streaming guide](https://developers.openai.com/api/docs/guides/streaming-responses)).
+> Estimate: ~350 LoC. Branch: `feat/mcp-streaming-first`. Reuses existing veronex SSE infrastructure (`flows/streaming.md`).
 
 ### §5.1 Files to modify
 
 | File | Action |
 | ---- | ------ |
-| `crates/veronex/src/infrastructure/inbound/http/openai_handlers.rs` | `chat_completions`: when `should_intercept()` → call new `mcp_ollama_chat_stream`; deprecate `mcp_ollama_chat` non-stream path |
-| `crates/veronex/src/infrastructure/inbound/http/openai_handlers.rs` | new `mcp_ollama_chat_stream(state, caller, req, conversation_id) -> impl IntoResponse` — returns SSE stream |
-| `crates/veronex/src/infrastructure/outbound/mcp/bridge.rs` | `run_loop` already returns `RunLoopResult` per round; expose a `run_loop_streaming` that emits a `tokio::sync::mpsc::Receiver<RunLoopEvent>` per round + final |
-| `crates/veronex/src/infrastructure/outbound/mcp/events.rs` (new) | `enum RunLoopEvent { ToolCall, ToolResult, ContentDelta, RoundComplete, Done }` |
+| `crates/veronex/src/infrastructure/inbound/http/openai_handlers.rs` | `chat_completions`: when `should_intercept()` → unconditionally call `mcp_ollama_chat_stream` (drops the existing `stream:bool` switch in this branch only) |
+| `crates/veronex/src/infrastructure/inbound/http/openai_handlers.rs` | NEW `mcp_ollama_chat_stream(state, caller, req, conversation_id) -> Sse<...>` |
+| `crates/veronex/src/infrastructure/outbound/mcp/bridge.rs` | NEW `run_loop_streaming(...) -> mpsc::Receiver<RunLoopEvent>` next to existing `run_loop` (existing kept for non-streaming callers; deprecated when MCP path migrates) |
+| `crates/veronex/src/infrastructure/outbound/mcp/events.rs` (NEW) | `pub enum RunLoopEvent { … }` (exact variants in §5.1d) |
+| `crates/veronex/src/infrastructure/inbound/http/openai_sse_types.rs` | add `CompletionChunk::tool_call_delta(index, id, name, arguments_chunk)` constructor — already-existing `DeltaContent` extended; **no breaking change** to existing types |
+| `crates/veronex/src/infrastructure/inbound/http/handlers.rs` | reuse existing `try_acquire_sse()` / `with_sse_timeout()` / `SseDropGuard` (no new helpers — see `flows/streaming.md`) |
 
-### §5.2 SSE event taxonomy
+### §5.1a SSE response headers (Cloudflare-safe contract)
 
-| Event | Body shape |
-|-------|------------|
-| `:` (comment) | every 15 s — heartbeat / keep-alive |
-| `event: mcp.tool_call` + `data: {round, tool, args}` | bridge initiated tool call |
-| `event: mcp.tool_result` + `data: {round, tool, success, bytes}` | tool returned |
-| (default `event: message`) `data: {choices:[{delta:{content:...}}]}` | model token delta — final round only |
-| `data: {choices:[{finish_reason:...}]}` | terminal |
-| `data: [DONE]` | OpenAI compat sentinel |
+Per [Cloudflare SSE community guidance](https://community.cloudflare.com/t/are-server-sent-events-sse-supported-or-will-they-trigger-http-524-timeouts/499621) and [SmartScope SSE timeout mitigation 2026](https://smartscope.blog/en/Infrastructure/sse-timeout-mitigation-cloudflare-alb/), the response **must** carry these exact headers to bypass intermediary buffering and prevent 524:
 
-### §5.3 Acceptance criteria
+```rust
+.header("content-type", "text/event-stream")
+.header("cache-control", "no-cache, no-transform")
+.header("connection", "keep-alive")
+.header("x-accel-buffering", "no")          // disables nginx + envoy + Cloudflare buffering
+```
 
-- [ ] `curl --max-time 600 -N -H 'Cookie: ...' -H 'Accept: text/event-stream' POST /v1/chat/completions` with `stream:false` and an MCP-tool-using prompt returns 200 + `Content-Type: text/event-stream`
-- [ ] Heartbeat comment lines appear at ≤ 30 s interval throughout the loop
-- [ ] Cloudflare 524 not observed (run live on `veronex-api-dev.verobee.com` with 200K cold model)
-- [ ] Final event contains a fully-formed `choices[0].message.content` (legacy aggregation works)
-- [ ] Existing non-MCP path (`stream:false` no MCP bridge) **unchanged**
+`x-accel-buffering: no` is mandatory — without it, Cloudflare and Cilium-Envoy in our cluster buffer SSE bodies even with `text/event-stream` set. (`tower_http::CompressionLayer` is also incompatible — already excluded from the `/v1/chat/completions` route, verified via `grep -nE "compression" crates/veronex/src/infrastructure/inbound/http/router.rs`.)
 
-### §5.4 Tests
+### §5.1b axum SSE + KeepAlive integration
 
-Unit:
-- `mcp_ollama_chat_stream_emits_heartbeat_when_idle` — wiremock ollama returning slow response; assert `:` lines on the wire.
-- `mcp_ollama_chat_stream_serialises_round_boundaries` — bridge mock emits 3 rounds; assert `mcp.tool_call`/`mcp.tool_result` event ordering.
-- `mcp_ollama_chat_stream_emits_done_sentinel_at_end` — assert final `[DONE]` line.
-- `non_mcp_chat_completions_unchanged` — regression — when `should_intercept()` returns false, response is single JSON body (existing assertion).
+Per [axum::response::sse::KeepAlive docs](https://docs.rs/axum/latest/axum/response/sse/struct.KeepAlive.html):
 
-Integration: pre-existing `test/scripts/e2e/openai-compat.sh` extended with `--mcp-stream` flag.
+```rust
+use axum::response::sse::{Event, KeepAlive, Sse};
+use std::time::Duration;
+use crate::domain::constants::SSE_KEEP_ALIVE;   // existing 15 s
+
+let stream = ReceiverStream::new(rx).map(|event| Ok::<_, Infallible>(match event {
+    RunLoopEvent::McpToolCall { round, tool, args } => Event::default()
+        .event("mcp.tool_call")
+        .json_data(json!({"round": round, "tool": tool, "args": args}))?,
+    RunLoopEvent::McpToolResult { round, tool, success, bytes } => Event::default()
+        .event("mcp.tool_result")
+        .json_data(json!({"round": round, "tool": tool, "success": success, "bytes": bytes}))?,
+    RunLoopEvent::ChatChunk(chunk) => Event::default()
+        .json_data(chunk)?,                     // serializes `CompletionChunk`
+    RunLoopEvent::Done => Event::default().data("[DONE]"),
+    RunLoopEvent::Error(err) => Event::default()
+        .event("error")
+        .json_data(json!({"error": {"message": sanitize_sse_error(&err)}}))?,
+}));
+
+Sse::new(stream)
+    .keep_alive(
+        KeepAlive::new()
+            .interval(SSE_KEEP_ALIVE)           // 15s — matches existing dashboard SSE
+            .event(Event::default().event("ping").data("0")),  // explicit event, not bare comment, per stricter intermediaries
+    )
+```
+
+Why `.event("ping").data("0")` over default empty comment: per [Cloudflare buffering thread](https://community.cloudflare.com/t/cloudflare-buffering-sse-streams/506921) some intermediaries strip empty comment lines; an explicit (named, payloaded) keep-alive event survives those.
+
+### §5.1c OpenAI `chat.completion.chunk` for tool_calls — exact shape
+
+Verified against the [OpenAI Chat Completions streaming events reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events):
+
+```json
+// Round 0 — model decides to call a tool. Arguments arrive incrementally.
+data: {"id":"chatcmpl-mcp-...","object":"chat.completion.chunk","created":1777372231,
+       "model":"qwen3-coder-next-200k:latest","system_fingerprint":"fp_veronex",
+       "choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[
+         {"index":0,"id":"call_abc","type":"function","function":{"name":"mcp_..._web_search"}}
+       ]},"finish_reason":null}]}\n\n
+data: {"id":"...","object":"chat.completion.chunk",...,
+       "choices":[{"index":0,"delta":{"tool_calls":[
+         {"index":0,"function":{"arguments":"{\"query\":"}}
+       ]},"finish_reason":null}]}\n\n
+data: {"id":"...","object":"chat.completion.chunk",...,
+       "choices":[{"index":0,"delta":{"tool_calls":[
+         {"index":0,"function":{"arguments":"\"micron stock today\"}"}}
+       ]},"finish_reason":null}]}\n\n
+data: {"id":"...","object":"chat.completion.chunk",...,
+       "choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n
+
+// veronex emits the bridge progress events between rounds (NOT in OpenAI spec — namespaced)
+event: mcp.tool_call
+data: {"round":0,"tool":"mcp_..._web_search","server_id":"019d84f4-...","args":{"query":"micron stock today"}}\n\n
+event: mcp.tool_result
+data: {"round":0,"tool":"mcp_..._web_search","success":true,"bytes":2486}\n\n
+
+// Final round — model emits the answer. Standard OpenAI content delta chunks.
+data: {"id":"...","choices":[{"index":0,"delta":{"content":"오늘 마이크론(MU)은 "},"finish_reason":null}]}\n\n
+data: {"id":"...","choices":[{"index":0,"delta":{"content":"$XX.XX 입니다..."},"finish_reason":null}]}\n\n
+data: {"id":"...","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n
+
+// `stream_options: { include_usage: true }` adds usage on the final chunk
+data: {"id":"...","choices":[],"usage":{"prompt_tokens":250,"completion_tokens":83,"total_tokens":333}}\n\n
+
+data: [DONE]\n\n
+```
+
+Key rules:
+- `chat.completion.chunk` events are emitted as **default `event: message`** (no `event:` line) per OpenAI compat.
+- Veronex-specific `event: mcp.tool_call` / `mcp.tool_result` are **named** events — OpenAI clients ignoring named events still get a fully-functional stream from the unnamed `data:` lines.
+- `finish_reason` values per OpenAI spec: `"stop" | "length" | "tool_calls" | "content_filter" | "function_call"` (last is deprecated). veronex emits `"tool_calls"` mid-loop (round end) and `"stop"` at final-round end.
+- `[DONE]` sentinel terminates the stream — clients should close the connection on receipt.
+
+### §5.1d `RunLoopEvent` exact enum
+
+```rust
+// crates/veronex/src/infrastructure/outbound/mcp/events.rs
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RunLoopEvent {
+    /// Standard OpenAI chat.completion.chunk — emitted as anonymous SSE event.
+    ChatChunk(crate::infrastructure::inbound::http::openai_sse_types::CompletionChunk),
+
+    /// Veronex-namespaced — emitted as `event: mcp.tool_call`.
+    McpToolCall {
+        round: u8,
+        tool: String,
+        server_id: uuid::Uuid,
+        args: serde_json::Value,
+    },
+
+    /// `event: mcp.tool_result`.
+    McpToolResult {
+        round: u8,
+        tool: String,
+        success: bool,
+        bytes: usize,
+        cache_hit: bool,
+        latency_ms: u64,
+    },
+
+    /// `event: error` — final terminal event for failures mid-stream.
+    /// Stream still closes with `[DONE]` after.
+    Error(String),
+
+    /// `data: [DONE]` — terminator.
+    Done,
+}
+```
+
+### §5.1e Mid-stream error semantics
+
+Once the response started (HTTP 200 + headers flushed), HTTP status cannot be changed. Per [OpenAI streaming guide](https://developers.openai.com/api/docs/guides/streaming-responses), errors after stream start are reported as a **named `error` event** then `[DONE]`:
+
+```
+event: error
+data: {"error":{"message":"<sanitized via sanitize_sse_error()>","code":"provider_error"}}\n\n
+data: [DONE]\n\n
+```
+
+`sanitize_sse_error()` from `policies/patterns/http.md` §SSE Error Sanitization is mandatory — strips DB/network internals, escapes CR/LF, truncates 200 chars.
+
+### §5.1f Backpressure & channel sizing
+
+`tokio::sync::mpsc::channel::<RunLoopEvent>(BRIDGE_TO_SSE_CHANNEL_CAPACITY)` where `BRIDGE_TO_SSE_CHANNEL_CAPACITY = 64`. Rationale:
+- Per-round events: 1 ChatChunk per token (typical 50–200 tokens) + 1 McpToolCall + 1 McpToolResult.
+- 64 buffers ~30 s of token output without bridge stalling.
+- If client is slow and channel fills → bridge `send().await` applies natural backpressure (no drop). This is intentional — bridge runs at most one round at a time, so backpressure on bridge = cooperative pacing; ollama keep_alive ensures the model stays warm.
+- **No drop policy** — every event is significant.
+
+`tokio::sync::mpsc` (bounded) over `broadcast::channel` because there is exactly **one consumer** (the SSE response stream) per request.
+
+### §5.1g Cancel propagation — connection drop → bridge halt
+
+`Sse::keep_alive` returns a stream that, when dropped, closes the receiver. Bridge's `send().await` then returns `Err(SendError)`; `run_loop_streaming` interprets this as cancel and exits its inner round loop. Tier B handles the partial S3 persist on this exit.
+
+```rust
+// In run_loop_streaming:
+if let Err(_) = tx.send(RunLoopEvent::ChatChunk(chunk)).await {
+    // Receiver dropped — client disconnected. Stop processing further rounds.
+    return BridgeOutcome::ClientDisconnect { rounds_completed, last_state };
+}
+```
+
+### §5.2 Acceptance criteria
+
+- [ ] `curl --max-time 600 -N -H 'Cookie: ...' -H 'Accept: text/event-stream' POST /v1/chat/completions` with `stream:false` body and an MCP-tool-using prompt returns 200 + `Content-Type: text/event-stream`
+- [ ] Response headers include `x-accel-buffering: no`, `cache-control: no-cache, no-transform`
+- [ ] Heartbeat `event: ping` lines appear at ≤ 20 s interval throughout a 200 s+ run
+- [ ] Cloudflare 524 not observed against `veronex-api-dev.verobee.com` (live verify per §9, scenario 1)
+- [ ] Final stream sequence terminates with `data: [DONE]\n\n`
+- [ ] OpenAI Python SDK `client.chat.completions.create(..., stream=True)` consumes our stream — verified via `pip install openai && python -c "..."` (acceptance script in `test/scripts/e2e/openai-compat-mcp.sh`)
+- [ ] Existing non-MCP path (`stream:false`, no MCP bridge) **unchanged** (regression test)
+- [ ] Bridge cancel-on-disconnect → run_loop_streaming returns `ClientDisconnect` outcome within ≤ 1 s
+
+### §5.3 Tests
+
+Unit (in `crates/veronex/src/infrastructure/outbound/mcp/bridge.rs::tests`):
+- `run_loop_streaming_emits_chat_chunk_events` — wiremock provider; assert `RunLoopEvent::ChatChunk` ordering matches token stream.
+- `run_loop_streaming_emits_mcp_tool_call_then_result_per_round` — assert event ordering for one tool-using round.
+- `run_loop_streaming_emits_done_sentinel_on_max_rounds` — assert `[DONE]` after MAX_ROUNDS exhausted.
+- `run_loop_streaming_emits_error_event_then_done_on_provider_error` — assert error then DONE; client never observes a non-200 status mid-stream.
+- `run_loop_streaming_returns_client_disconnect_on_send_failure` — drop receiver mid-stream; assert bridge returns `ClientDisconnect` quickly.
+
+Unit (in `openai_handlers.rs::tests`):
+- `mcp_ollama_chat_stream_sets_x_accel_buffering_header` — response header assertion.
+- `mcp_ollama_chat_stream_keepalive_interval_15s` — manipulate tokio time; assert `event: ping` cadence.
+- `mcp_ollama_chat_stream_invokes_persist_on_disconnect` — Tier B integration.
+
+Integration: `test/scripts/e2e/openai-compat-mcp.sh` (NEW) — runs against dev cluster, asserts:
+- exit 0 within 600 s
+- response includes `event: mcp.tool_call`
+- final non-empty `delta.content`
+- `[DONE]` last
+- Cloudflare 524 not observed
 
 ---
 
 ## §6 Tier B — Cancel-resilient finalize_job (S3 always written)
 
-> Goal: cancel path writes S3 ConversationRecord with whatever was accumulated. Preserves CDD invariant "S3 = SSOT for conversation".
-> Estimate: ~120 LoC. Branch: `fix/finalize-on-cancel`. Independent of Tier A — can ship first.
+> Goal: every job terminal exit writes S3 ConversationRecord with whatever was accumulated. Preserves CDD invariant "S3 = SSOT for conversation" per `inference/job-lifecycle.md`.
+> Estimate: ~150 LoC. Branch: `fix/finalize-on-cancel`. Independent of Tier A — recommended to ship first.
 
-### §6.1 Files to modify
+### §6.1 All terminal exit paths — full enumeration
 
-| File | Action |
-| ---- | ------ |
-| `crates/veronex/src/application/use_cases/inference/runner.rs` | Extract S3-write portion of `finalize_job` into reusable helper `persist_conversation_record(...) -> Option<()>`; call from cancel branch |
-| `crates/veronex/src/application/use_cases/inference/runner.rs` | Same helper called from "ownership lost" branch (currently line 245-247) |
-| `crates/veronex/src/application/ports/outbound/message_store.rs` | (review) verify trait already supports the partial-record case; no change expected |
-| `docs/llm/inference/job-lifecycle.md` | clarify S3 write is per-job-terminal (any path that ends the job — completion, cancel, ownership-lost) |
+A "terminal exit" is any code path that ends a `run_job` invocation. Each must call `persist_conversation_record` exactly once. Verified via `grep -nE "return Ok\\(None\\)|return Ok\\(Some|return Err" crates/veronex/src/application/use_cases/inference/runner.rs`:
 
-### §6.2 `persist_conversation_record` signature
+| # | Path | File:line (current `develop` after #98) | Existing terminal action | Tier B addition |
+|---|------|-----------------------------------------|--------------------------|-----------------|
+| T1 | Cancel before dispatch (entry status==Cancelled) | `runner.rs::run_job` early branch | DECR pending; return Ok(None) | call `persist` (will skip — no tokens yet — but contract uniform) |
+| T2 | Cancel during stream (entry.status==Cancelled in stream loop) | `runner.rs::run_job` mid-loop | DECR running; return Ok(None) | **call `persist` before return** |
+| T3 | Cancel via cancel_notify (biased select! arm) | `runner.rs::run_job` cancel branch | DECR running; schedule_cleanup; return Ok(None) | **call `persist` before return** |
+| T4 | Ownership lost (instance_id mismatch) | `runner.rs::finalize_job` line 245 | schedule_cleanup; return None | call `persist` before return (stream may have collected tokens) |
+| T5 | Provider stream Err (item is Err in stream loop) | `runner.rs::run_job` Err arm | mark failed; return Err | **call `persist` before return** |
+| T6 | Lifecycle failed (Phase 1 ensure_ready failed, PR #93) | `runner.rs::run_job` lifecycle Err arm (line ~512–533) | fail_with_reason("lifecycle_failed"); return Ok(None) | call `persist` (will skip — no tokens yet) |
+| T7 | Normal completion | `runner.rs::finalize_job` happy path | UPDATE completed; existing S3 write | refactor to call helper (byte-identical content) |
+| T8 | Queue-side cancellation | `queue_maintenance.rs::queue_wait_cancel` | cancel + UPDATE failed; never enters run_job | NO action (job never ran — no `ts` exists) |
+| T9 | Lease-expired re-enqueue cap (`lease_expired_max_attempts`) | `queue_maintenance.rs::processing_reaper` | UPDATE failed | NO action (queue-side, no `ts`) |
+
+Total: T2/T3/T5 are the **critical missing-write paths** that produced the user's "저장된 결과 없음" symptom. T1/T6/T7/T8/T9 are either no-tokens-collected or already correct. T4 is defensive.
+
+### §6.2 `persist_conversation_record` — exact signature & idempotency
 
 ```rust
+// crates/veronex/src/application/use_cases/inference/runner.rs
+//
+// Called from every T-path in §6.1 that has access to `ts`. Idempotent:
+// the per-job `persisted_to_s3` AtomicBool guards against double-write
+// when both finalize_job and cancel paths race.
+
+#[allow(clippy::too_many_arguments)]
 async fn persist_conversation_record(
     message_store: &Option<Arc<dyn MessageStore>>,
+    persisted_flag: &AtomicBool,                  // per-job, lives in JobEntry
     job: &InferenceJob,
     ts: &TokenStreamState,
     original_messages: &Option<serde_json::Value>,
     original_prompt: &str,
 ) {
-    let Some(store) = message_store else { return };
-    if ts.text.is_empty() && ts.tool_calls.is_empty() {
-        // No useful state captured — skip the write.
+    // Idempotent guard — only the first caller writes. compare_exchange
+    // succeeds exactly once even under concurrent calls from cancel +
+    // finalize racing across run_job's biased select! → cancel arm vs
+    // stream arm completing.
+    if persisted_flag.compare_exchange(false, true,
+            Ordering::AcqRel, Ordering::Acquire).is_err() {
         return;
     }
+
+    let Some(store) = message_store else { return };
+
+    // Skip the write when the record would be empty. T1/T6 land here.
+    if ts.text.is_empty() && ts.tool_calls.is_empty() {
+        return;
+    }
+
     let record = ConversationRecord {
         prompt: original_prompt.to_owned(),
         messages: original_messages.clone(),
@@ -244,31 +440,94 @@ async fn persist_conversation_record(
         result: (!ts.text.is_empty())
             .then_some(strip_think_blocks(ts.text.clone())),
     };
+
     let owner_id = job.account_id.or(job.api_key_id).unwrap_or(job.id.0);
+
     if let Err(e) = store.put_conversation(&owner_id, &job.id.0, &record).await {
-        tracing::warn!(%job.id.0, "S3 conversation persist failed: {e}");
+        // Best-effort — DB row's metadata (status/tokens/has_tool_calls)
+        // is already correct via the normal cancel/finalize paths;
+        // missing S3 is a soft failure surfaced via tracing only.
+        tracing::warn!(
+            job_id = %job.id.0,
+            owner_id = %owner_id,
+            "S3 conversation persist failed: {e}"
+        );
+    } else {
+        tracing::debug!(
+            job_id = %job.id.0,
+            owner_id = %owner_id,
+            text_len = ts.text.len(),
+            tool_calls = ts.tool_calls.len(),
+            "S3 conversation persisted"
+        );
     }
 }
 ```
 
-`finalize_job` and `cancel_branch` both call this helper before their respective DB-side terminal updates. Idempotency: S3 PUT overwrites by key; if both paths fire (race), last write wins — same content.
+### §6.2a `JobEntry::persisted_to_s3` field
+
+```rust
+// application/use_cases/inference/mod.rs::JobEntry
+pub(crate) struct JobEntry {
+    // ... existing fields ...
+    /// Set true exactly once when `persist_conversation_record` performs
+    /// the S3 PUT for this job. Prevents double-write across racing
+    /// finalize_job ↔ cancel paths inside run_job's biased select!.
+    pub persisted_to_s3: Arc<AtomicBool>,           // NEW
+}
+```
+
+Persists only in memory; no DB column. `Arc` so the helper can be called with a borrow that survives drop of the DashMap entry (cancel branch drops the entry guard before persist).
+
+### §6.2b Order-of-operations contract
+
+For each cancel-path (T2/T3):
+
+```
+1. entry.status = JobStatus::Cancelled            (already done by use_case::cancel)
+2. drop(entry)                                     (release DashMap shard)
+3. decr_running(&valkey).await                     (counter bookkeeping)
+4. persist_conversation_record(...).await          (NEW — Tier B)
+5. schedule_cleanup(&jobs, uuid, ...)              (60 s deferred remove from DashMap)
+6. return Ok(None)
+```
+
+For T7 (normal `finalize_job` happy path):
+```
+1. mark entry done = true; status = Completed
+2. result_text / tool_calls / metrics computed from `ts`
+3. persist_conversation_record(...).await          (refactored to use helper)
+4. job_repo.finalize(...).await                    (DB UPDATE)
+5. broadcast_event(Completed); observability emit
+```
+
+S3 write happens BEFORE DB UPDATE in both paths so DB never advertises "completed" for a job whose conversation is missing.
 
 ### §6.3 Acceptance criteria
 
-- [ ] Cancel mid-stream during MCP loop → S3 ConversationRecord exists with the partial tokens (verified via `mc cat veronex-conversations/{owner}/{date}/{job_id}.json.zst`)
-- [ ] DB `failure_reason='lifecycle_failed'` (cancel-path) jobs surface their accumulated state in `/v1/dashboard/jobs/{id}` instead of "(no result stored)"
-- [ ] Cancel BEFORE any token (queue cancel, lifecycle pre-stream-tokens cancel) → no S3 write (record would be useless)
-- [ ] Existing happy-path `finalize_job` byte-identical (extracted helper, not rewritten logic)
+- [ ] T2/T3/T5 paths: cancel mid-stream during MCP loop → S3 ConversationRecord exists with partial tokens (verified via gitea/garage `mc cat veronex-conversations/{owner}/{date}/{job_id}.json.zst`)
+- [ ] T7 happy-path: byte-identical S3 record content vs pre-Tier-B (regression test diffs serialized record bytes)
+- [ ] `JobEntry::persisted_to_s3` Atomic guard: parallel injected cancel + finalize_complete on the same job → exactly **one** S3 PUT (assert via mock store call count)
+- [ ] T1/T6/T8/T9: no S3 write (assert mock store not called when ts is empty / job never ran)
+- [ ] DB rows from `failure_reason='lifecycle_failed'` (cancel-path-derived) surface their accumulated state in `GET /v1/dashboard/jobs/{id}` instead of "(no result stored)"
+- [ ] DashMap shard guard not held across `await` in any modified path (cargo-lints clippy::await_holding_lock)
 
 ### §6.4 Tests
 
-- `cancel_after_first_tool_call_persists_to_s3` — mock provider emits one tool_call token, then test injects cancel; assert mock S3 received `put_conversation` with `tool_calls.is_some()`.
-- `cancel_before_any_token_skips_s3` — assert mock S3 not called.
-- `finalize_job_call_path_unchanged` — regression on existing happy-path.
+Unit (in `application/use_cases/inference/runner.rs::tests`):
+- `cancel_mid_stream_persists_partial_tool_calls_to_s3` — provider mock emits one tool_call token, inject cancel via `cancel_notify`; assert mock `MessageStore.put_conversation` called once with `tool_calls.is_some()` and `result.is_none()`.
+- `cancel_after_partial_text_persists_text_to_s3` — assert `result = Some("partial...")`.
+- `cancel_before_any_token_skips_s3_write` — assert mock store **not** called.
+- `parallel_cancel_and_finalize_writes_s3_exactly_once` — race the two paths via `tokio::join!`; assert mock store call count == 1.
+- `finalize_job_happy_path_persists_unchanged` — diff serialized `ConversationRecord` byte stream vs pre-Tier-B golden file.
+- `lifecycle_failed_path_skips_s3_write_when_no_tokens` — Tier-C lifecycle error returns Ok(None) before stream_tokens; assert no S3 write.
+- `provider_stream_error_persists_partial_state` — provider returns Err mid-stream; assert S3 has tokens emitted before the error.
+
+Integration: `test/scripts/e2e/cancel-persist.sh` — submits a 200K MCP request, kills curl after 30 s, then queries `/v1/dashboard/jobs/{id}` and asserts non-empty tool_calls section.
 
 ### §6.5 Resume note
 
-Independent of Tier A. Recommended to land first since it has zero cross-cutting impact and unblocks UI display of partial / cancelled conversations regardless of streaming-first work.
+Independent of Tier A. Recommended to land first — zero cross-cutting impact, unblocks UI display of partial / cancelled conversations regardless of streaming-first work, and benefits all existing failure modes (T2/T3/T5 today silently lose data on every disconnect even without MCP).
 
 ---
 
@@ -280,16 +539,101 @@ Independent of Tier A. Recommended to land first since it has zero cross-cutting
 
 | File | Action |
 | ---- | ------ |
-| `web/app/api-test/components/...` | replace fetch-with-`stream:false` → SSE consumer (EventSource or fetch + getReader) |
-| `web/app/api-test/components/...` | add tool-call progress timeline UI |
-| `web/lib/api/chat-completion.ts` (or similar) | new `streamChatCompletion(req, handlers)` helper |
+| `web/lib/sse.ts` (existing) | reuse — extend if needed for named events (`mcp.tool_call`, `mcp.tool_result`) |
+| `web/lib/api/chat-completion.ts` (NEW or existing) | `streamChatCompletion(req, handlers, abortSignal): Promise<AggregatedResponse>` helper |
+| `web/app/api-test/components/test-form.tsx` (or similar) | replace `fetch + json` → `streamChatCompletion`; pipe events into existing result panel + add tool-call timeline |
+| `web/app/api-test/components/tool-call-timeline.tsx` (NEW) | accordion-style component showing each `mcp.tool_call` round, success/fail badge, optional result preview |
+
+### §7.1a Auth — `fetch + ReadableStream`, not `EventSource`
+
+Browser `EventSource` API limitations (verified standard, MDN):
+- No custom headers (no `Authorization: Bearer ...`)
+- No request body — GET-only
+- Cookie-only auth works **only** with `withCredentials: true` and same-origin or CORS-permitted
+
+Veronex uses `Authorization: Bearer <jwt>` for the test panel (verified via `grep -r "veronex_access_token" web/lib/`). Therefore: **`fetch` + `Response.body.getReader()` text-stream parser is mandatory**. Pattern (already exists in `web/lib/sse.ts`):
+
+```typescript
+// web/lib/api/chat-completion.ts (new)
+export async function streamChatCompletion(
+  req: ChatCompletionRequest,
+  handlers: {
+    onChatChunk: (c: ChatCompletionChunk) => void;
+    onMcpToolCall: (e: McpToolCallEvent) => void;
+    onMcpToolResult: (e: McpToolResultEvent) => void;
+    onError: (msg: string) => void;
+    onDone: () => void;
+  },
+  abort: AbortSignal,
+): Promise<AggregatedResponse> {
+  const resp = await fetch('/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+      // Cookie auth via SameSite=Strict — no explicit header
+    },
+    credentials: 'include',
+    body: JSON.stringify(req),
+    signal: abort,
+  });
+
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  const aggregated: AggregatedResponse = { content: '', tool_calls: [] };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    // Parse SSE events delimited by \n\n
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const raw = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const evt = parseSseEvent(raw);
+      if (evt.event === 'mcp.tool_call') handlers.onMcpToolCall(JSON.parse(evt.data));
+      else if (evt.event === 'mcp.tool_result') handlers.onMcpToolResult(JSON.parse(evt.data));
+      else if (evt.event === 'error') handlers.onError(JSON.parse(evt.data).error.message);
+      else if (evt.event === 'ping') { /* keep-alive */ }
+      else if (evt.data === '[DONE]') { handlers.onDone(); return aggregated; }
+      else {
+        const chunk: ChatCompletionChunk = JSON.parse(evt.data);
+        handlers.onChatChunk(chunk);
+        const delta = chunk.choices?.[0]?.delta;
+        if (delta?.content) aggregated.content += delta.content;
+        if (delta?.tool_calls) mergeToolCallsDelta(aggregated.tool_calls, delta.tool_calls);
+      }
+    }
+  }
+  return aggregated;
+}
+```
+
+`mergeToolCallsDelta` handles OpenAI's incremental `arguments` chunks (concat across deltas keyed by `tool_calls[].index`), matching §5.1c shape exactly.
+
+### §7.1b Cancel UX
+
+Cancel button → `abortController.abort()` → `fetch` aborts → server-side connection drop → bridge stops (§5.1g) → Tier B persists partial state. UI then re-fetches `GET /v1/dashboard/jobs/{id}` to display whatever was saved (tool_calls panel surfaces if `result_text=null`).
 
 ### §7.2 Acceptance criteria
 
-- [ ] Test panel sends MCP-enabled request → progress steps (tool calls, tool results, content stream) render live
-- [ ] Final result text displays as soon as last delta arrives
-- [ ] User can cancel mid-loop via UI button → request aborts via SSE close → backend (Tier B) still persists what it has
-- [ ] Token / latency / cost summary unchanged in final state
+- [ ] Test panel sends MCP-enabled request → tool-call timeline renders each round live; content panel populates on final-round delta
+- [ ] Cloudflare 524 not observed via browser DevTools network panel for runs > 100 s
+- [ ] User cancel button → request aborts within 1 s → reload of detail view shows `tool_calls` section (Tier B persisted)
+- [ ] Token / latency / cost summary unchanged in final state — read from same DB row as before
+- [ ] Lighthouse / no console errors during streaming
+- [ ] Existing non-MCP requests (no test panel MCP toggle) **unchanged** — if non-stream JSON behavior preserved, tests in `web/app/api-test/__tests__` pass
+
+### §7.3 Tests
+
+- Storybook: tool-call-timeline component with mocked event sequence
+- `web/lib/api/__tests__/chat-completion.test.ts` — unit-test parsing of mixed SSE event types; assert AggregatedResponse correctness on incremental tool-call deltas
+- Cypress / Playwright e2e (existing harness) — extend `test-panel.spec.ts` to assert tool-call timeline + final content render
 
 ---
 
@@ -327,7 +671,60 @@ Mark §0 row `[x] done` only after all four pass.
 
 ---
 
-## §10 Risks & Mitigations
+## §10 Cross-cutting concerns
+
+### §10.1 Observability — tracing spans + metrics
+
+| Span name | Where | Fields |
+|-----------|-------|--------|
+| `mcp.run_loop_streaming` | bridge — outer | `model`, `account_id`, `caller_kind`, `rounds_target_max=5` |
+| `mcp.run_loop_streaming.round` | bridge — per round | `round`, `tool_count`, `had_text`, `outcome` |
+| `mcp.sse_stream` | openai_handlers | `events_sent`, `client_disconnect`, `total_duration_s`, `total_bytes` |
+
+| Metric (Prometheus, via existing OTel pipeline) | Type | Labels |
+|------------------------------------------------|------|--------|
+| `veronex_mcp_sse_events_total` | counter | `event_type` (chat_chunk / tool_call / tool_result / error / done) |
+| `veronex_mcp_sse_stream_duration_seconds` | histogram | `outcome` (done / client_disconnect / error / max_rounds) |
+| `veronex_mcp_sse_keepalive_total` | counter | (no labels — heartbeat firing rate) |
+| `veronex_persist_conversation_record_total` | counter | `path` (finalize / cancel / ownership_lost / provider_error), `outcome` (written / skipped_empty / s3_error) |
+
+### §10.2 Pubsub-relay / multi-pod considerations
+
+- Bridge `run_loop_streaming` runs **in-process** on the pod that received the HTTP request. No cross-pod state. SSE response stays on the same pod.
+- veronex's pubsub_relay (`pubsub-relay.md`) relays job-status broadcast events across pods for SSE dashboards — this SDD's per-request streaming is orthogonal (no relay needed).
+- k8s ingress affinity: NOT required (request-scoped state lives in the response future itself; no shared session).
+
+### §10.3 Concurrent SSE budget
+
+`SSE_MAX_CONNECTIONS=100` (`http/constants.rs`) is the global cap, gated by `try_acquire_sse()` + `SseDropGuard` (`flows/streaming.md`). MCP-stream requests share this budget. Estimate: 100 concurrent MCP loops × bounded mpsc(64) × ~1 KB/event = ~6 MB worst-case in-flight memory. Acceptable under existing pod limits (`api.resources.limits.memory=512Mi`).
+
+If volume requires lifting: add `MCP_SSE_MAX_CONNECTIONS` separate from dashboard SSE budget; not in scope for this SDD.
+
+### §10.4 HTTP/2 & HTTPRoute
+
+Cilium Gateway → veronex-dev-api uses HTTP/2 by default. SSE over HTTP/2 works ("event-stream" content-type prevents server push frame compression issues). Verified — existing `/v1/dashboard/jobs/stream` SSE endpoint runs over HTTP/2 in dev (`flows/streaming.md`).
+
+No new HTTPRoute changes needed. Cloudflare in front passes SSE through with the §5.1a headers set.
+
+### §10.5 End-to-end test plan
+
+| Script | Repo | Trigger |
+|--------|------|---------|
+| `test/scripts/e2e/openai-compat-mcp.sh` (NEW) | veronex | manual + CI on push to MCP-related paths |
+| `test/scripts/e2e/cancel-persist.sh` (NEW) | veronex | manual |
+| `test-panel.spec.ts` extension | veronex web/ | `npm run test:e2e` |
+
+Each script is **resume-safe**: header documents the SDD section being verified, exit code propagates to CI, run against `veronex-api-dev.verobee.com` with `test-3`/`test1234!` credentials (per project memory).
+
+### §10.6 Resilience to existing PR #98 patterns
+
+- PR #96 stall-fix invariants (`/api/ps` poller + sentinel-zero) untouched. Tier A path runs **after** Phase 1 (`ensure_ready`) regardless of streaming mode — no Phase 1/2 ordering change.
+- PR #98 archived SDD reference (`.specs/veronex/history/inference-lifecycle-sod.md`) is the SoD precedent — this SDD layers **on top**, not against.
+- `MCP_LIFECYCLE_PHASE` flag (Tier C of the lifecycle SoD) remains the gate for Phase 1; not changed.
+
+---
+
+## §11 Risks & Mitigations
 
 | Risk | Mitigation |
 |------|-----------|
@@ -339,11 +736,31 @@ Mark §0 row `[x] done` only after all four pass.
 
 ---
 
-## §11 References
+## §12 References
 
-- CDD: `docs/llm/inference/mcp.md` (intercept rules, ACL), `docs/llm/inference/job-lifecycle.md` (S3 ConversationRecord schema), `docs/llm/inference/job-api.md` (UI fetch contract)
-- Lifecycle SoD prior: `.specs/veronex/history/inference-lifecycle-sod.md`
-- Cloudflare 524 reference: https://developers.cloudflare.com/support/troubleshooting/cloudflare-errors/troubleshooting-cloudflare-5xx-errors/#error-524
-- OpenAI streaming reference: https://platform.openai.com/docs/api-reference/chat-streaming
-- ollama#8006 (client-disconnect aborts load): https://github.com/ollama/ollama/issues/8006
-- ADD workflow: `.add/feature-addition.md` step 5 → `.add/cdd-feedback.md`
+### CDD (internal SSOT — read before implementation)
+- `docs/llm/inference/mcp.md` — intercept rules, ACL, MCP loop semantics
+- `docs/llm/inference/job-lifecycle.md` — S3 ConversationRecord schema (the unchanged target of this SDD)
+- `docs/llm/inference/job-api.md` — UI fetch contract for `/v1/dashboard/jobs/{id}` + result_text vs tool_calls_json semantic
+- `docs/llm/inference/openai-compat-native.md` — shared `CompletionChunk`/`ChatCompletion` types
+- `docs/llm/flows/streaming.md` — existing SSE infrastructure (constants, helpers, drop guard) — **reuse, don't re-invent**
+- `docs/llm/policies/patterns/http.md` — `sanitize_sse_error()`, AppError → Problem Details
+- `docs/llm/flows/mcp.md` — MCP run_loop ASCII flow (will be updated in §8)
+
+### External best-practice references (verified via web search 2026-04-28)
+- [OpenAI Chat Completions streaming events reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) — chunk format, `tool_calls` deltas, `finish_reason` values
+- [OpenAI streaming guide](https://developers.openai.com/api/docs/guides/streaming-responses) — error mid-stream pattern (`event: error` then `[DONE]`)
+- [axum::response::sse::KeepAlive docs](https://docs.rs/axum/latest/axum/response/sse/struct.KeepAlive.html) — `interval()`, `event()`, default 15 s
+- [Cloudflare community — SSE buffering issue](https://community.cloudflare.com/t/cloudflare-buffering-sse-streams/506921) — `x-accel-buffering: no` header is mandatory
+- [Cloudflare community — SSE 524 timeouts](https://community.cloudflare.com/t/are-server-sent-events-sse-supported-or-will-they-trigger-http-524-timeouts/499621) — 30 s heartbeat avoids 100 s timeout
+- [SmartScope — SSE timeout mitigation 2026](https://smartscope.blog/en/Infrastructure/sse-timeout-mitigation-cloudflare-alb/) — keep-alive cadence + no-transform
+- [tower_http compression incompatible with SSE](https://github.com/tokio-rs/axum/discussions/2728) — verified our routes do not apply CompressionLayer to chat completions
+
+### Adjacent prior work
+- `.specs/veronex/history/inference-lifecycle-sod.md` — Phase 1/Phase 2 SoD (this SDD layers on top)
+- PR #90 — bridge phased timeouts (FIRST_TOKEN/STREAM_IDLE/ROUND_TOTAL); preserved as defense-in-depth
+- PR #96 — `/api/ps`-fed stall semantics (sentinel zero)
+
+### ADD workflow
+- `.add/feature-addition.md` (step 5 → `.add/cdd-feedback.md`)
+- `.add/doc-sync.md` (post-impl CDD divergence cleanup)
