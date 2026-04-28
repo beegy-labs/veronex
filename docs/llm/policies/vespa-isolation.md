@@ -26,8 +26,10 @@ Vespa Instance (shared)
 | Mechanism | Type | Rule |
 |-----------|------|------|
 | Schema | Physical | One schema per document type (mcp_tools, search_docs). Not for environment or service isolation. |
-| `environment` field | Logical | Stored as attribute. All queries must filter: `WHERE environment = "prod"`. |
-| `tenant_id` field | Logical | Stored as attribute. All queries must filter: `AND tenant_id = "default"`. |
+| `environment` field | Logical | Stored as `attribute`. All queries must filter: `WHERE environment contains "prod"`. |
+| `tenant_id` field | Logical | Stored as `attribute`. All queries must filter: `AND tenant_id contains "default"`. |
+
+> **YQL string-attribute filter**: Use `contains`, NOT `=`. YQL's `=` is a numeric range operator — feeding a hyphenated string value like `local-dev` makes the parser read `-` as a sign character and fails with `Illegal embedded sign character`. `contains` resolves to attribute equality at the filter rank for `attribute`-indexed string fields. See `crates/veronex-mcp/src/vector/vespa_client.rs::search` and the regression test `vespa_search_uses_contains_for_string_attributes`.
 
 ## When to Use Separate Vespa Instances
 
