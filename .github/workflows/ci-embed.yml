@@ -108,17 +108,73 @@ jobs:
             echo "export CARGO_INCREMENTAL=0"
           } > /tmp/sccache.env
 
-      - uses: docker/build-push-action@v5
+      # Direct `docker buildx build` (matches ci-rust.yml) with shell-level
+      # retry to survive transient gitea/Garage upload flakes. Past failure
+      # mode (run #25041854130, sha 71c430f): 7-min layer push to gitea →
+      # `error writing layer blob: failed to do request: Put .../blobs/uploads/...`
+      # → buildkit aborts the whole image push. Retrying succeeds because
+      # blobs are content-addressed: already-uploaded digests are skipped.
+      #
+      # Cache-to is run as a best-effort second pass: if image push succeeds
+      # but cache export fails, the image is still in registry — only the
+      # buildcache tag misses an update (next build pays for one extra
+      # `cargo chef cook` step but is otherwise unaffected).
+      - name: Build and push embed image
         if: steps.check_image.outputs.exists != 'true'
-        with:
-          context: .
-          file: ./crates/veronex-embed/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          secret-files: |
-            sccache_env=/tmp/sccache.env
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+        run: |
+          TAGS="${{ steps.meta.outputs.tags }}"
+          TAG_ARGS=""
+          IFS=',' read -ra T <<< "$TAGS"
+          for t in "${T[@]}"; do TAG_ARGS="$TAG_ARGS --tag $t"; done
+
+          BUILDCACHE_REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache"
+
+          push_with_retry() {
+            for attempt in 1 2 3; do
+              echo "::group::Build + push attempt $attempt (with cache-to)"
+              if docker buildx build \
+                --file ./crates/veronex-embed/Dockerfile \
+                $TAG_ARGS \
+                --secret id=sccache_env,src=/tmp/sccache.env \
+                --cache-from "type=registry,ref=${BUILDCACHE_REF}" \
+                --cache-to "type=registry,ref=${BUILDCACHE_REF},mode=max" \
+                --push \
+                .; then
+                echo "::endgroup::"
+                return 0
+              fi
+              echo "::endgroup::"
+              echo "::warning::attempt $attempt failed; backing off $((attempt * 30))s"
+              sleep $((attempt * 30))
+            done
+            return 1
+          }
+
+          push_image_only() {
+            echo "::group::Fallback — image push without cache-to"
+            docker buildx build \
+              --file ./crates/veronex-embed/Dockerfile \
+              $TAG_ARGS \
+              --secret id=sccache_env,src=/tmp/sccache.env \
+              --cache-from "type=registry,ref=${BUILDCACHE_REF}" \
+              --push \
+              .
+            local rc=$?
+            echo "::endgroup::"
+            return $rc
+          }
+
+          if push_with_retry; then
+            exit 0
+          fi
+
+          echo "::warning::push_with_retry exhausted — trying fallback (no cache-to)"
+          if push_image_only; then
+            echo "::warning::image pushed without cache export — buildcache stale, next build slower"
+            exit 0
+          fi
+          echo "::error::image push failed after retries + fallback"
+          exit 1
 
   deploy:
     name: Update GitOps
