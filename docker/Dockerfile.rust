@@ -7,15 +7,6 @@
 # syntax=docker/dockerfile:1.7
 FROM rust:1-alpine3.23 AS chef
 
-# Optional package-cache args (homelab CI). Empty defaults = upstream
-# crates.io behavior unchanged for external builders.
-#   CARGO_REPLACE_WITH=girok-cache  triggers source replacement
-#   CARGO_GIROK_INDEX=sparse+https://cargo.girok.dev/api/v1/crates/
-ARG CARGO_REPLACE_WITH=""
-ARG CARGO_GIROK_INDEX=""
-ENV CARGO_SOURCE_CRATES_IO_REPLACE_WITH=${CARGO_REPLACE_WITH}
-ENV CARGO_REGISTRIES_GIROK_CACHE_INDEX=${CARGO_GIROK_INDEX}
-
 # Superset of all crate build dependencies:
 #   musl-dev mold clang        — base toolchain + fast linker
 #   g++ cmake make perl        — rdkafka native build (consumer)

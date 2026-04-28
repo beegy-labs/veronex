@@ -18,6 +18,7 @@
 | Bug report / test failure | [`bug-fix.md`](bug-fix.md) |
 | DB migration / schema change | [`migration.md`](migration.md) |
 | Dependency version bump / CVE | [`dependency-upgrade.md`](dependency-upgrade.md) |
+| New Dockerfile / docker workflow / base-image change | [`dockerfile-authoring.md`](dockerfile-authoring.md) |
 | Best practices update / refactor alignment | [`best-practices.md`](best-practices.md) |
 | Doc alignment / CDD sync | [`doc-sync.md`](doc-sync.md) |
 | CDD feedback after task completion | → see [`best-practices.md`](best-practices.md) Part 1 |
@@ -98,6 +99,7 @@ Quick reference:
 | `bug-fix.md` | Bug diagnosis + fix workflow |
 | `migration.md` | DB schema migration workflow |
 | `dependency-upgrade.md` | Rust crate + npm upgrade workflow, status tables, migration notes |
+| `dockerfile-authoring.md` | Consumer-side Dockerfile rules — portable `FROM`, no mirror/cache wiring (platform-gitops owns it) |
 | `doc-sync.md` | CDD doc alignment workflow |
 | `cdd-feedback.md` | Post-task CDD feedback classification (operational vs. constitutional) |
 | `commit-fix.md` | Commit message CI failure recovery, rebase scripts |
