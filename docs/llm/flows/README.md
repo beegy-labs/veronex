@@ -1,6 +1,6 @@
 # Veronex — Logic Flow Reference
 
-> **Last Updated**: 2026-03-29
+> **Last Updated**: 2026-04-28
 > Code-level flowcharts for all major subsystems.
 > Each file documents one subsystem end-to-end with ASCII diagrams.
 
@@ -9,6 +9,7 @@
 | File | Subsystem |
 |------|-----------|
 | [inference.md](inference.md) | Inference request lifecycle — submit → queue → dispatch → stream |
+| [model-lifecycle.md](model-lifecycle.md) | Phase 1 (`ensure_ready`) ↔ Phase 2 (`stream_tokens`) SoD — `MCP_LIFECYCLE_PHASE` flag, `LoadInFlight` coalescing, state machine |
 | [job-event-pipeline.md](job-event-pipeline.md) | Job event pipeline — overall architecture, state transitions, repo call mapping |
 | [job-event-pipeline-steps.md](job-event-pipeline-steps.md) | Job event pipeline steps — submit, cancel, stream, run_job step diagrams |
 | [auth.md](auth.md) | Authentication — API Key & JWT session flows |

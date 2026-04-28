@@ -1,6 +1,6 @@
 # Inference Request Lifecycle
 
-> **Last Updated**: 2026-03-28
+> **Last Updated**: 2026-04-28
 
 ---
 
@@ -53,8 +53,15 @@ openai_handlers::chat_completions()
              ▼
        runner::run_job()
              │
-             ├── build Ollama /api/chat request
-             ├── POST to provider URL (streaming)
+             ├── [MCP_LIFECYCLE_PHASE=on]?            ← see flows/model-lifecycle.md
+             │     └── provider.ensure_ready(model)   ← Phase 1 — explicit load probe
+             │           ├── VramPool warm? → AlreadyLoaded
+             │           ├── Coalesced? → LoadCoalesced{waited_ms}
+             │           ├── Cold load → LoadCompleted (≤ LIFECYCLE_LOAD_TIMEOUT 600s)
+             │           └── Err(LifecycleError) → mark failed (failure_reason=lifecycle_failed)
+             │
+             ├── provider.stream_tokens(&job)         ← Phase 2 — inference
+             │     └── POST /api/chat or /api/generate (streaming)
              ├── emit tokens → broadcast_channel
              │     └── SSE handler consumes stream → Client
              ├── on completion: record prompt/completion tokens
@@ -88,6 +95,11 @@ Dispatch order: lowest score wins (ZRANGEBYSCORE)
 | `TIER_BONUS_PAID` | 300,000ms (300s) | `domain/constants.rs` |
 | `TIER_BONUS_STANDARD` | 100,000ms (100s) | `domain/constants.rs` |
 | Job cleanup TTL | 60s | `domain/constants.rs` |
+| `MCP_LIFECYCLE_PHASE_FLAG_ENV` | `MCP_LIFECYCLE_PHASE` | `domain/constants.rs` |
+| `MCP_LIFECYCLE_PHASE_DEFAULT` | `false` | `domain/constants.rs` |
+| `LIFECYCLE_LOAD_TIMEOUT` | 600s | `infrastructure/outbound/ollama/lifecycle.rs` |
+| `LIFECYCLE_STALL_INTERVAL` | 60s | `infrastructure/outbound/ollama/lifecycle.rs` |
+| `LIFECYCLE_KEEP_ALIVE` | `30m` | `infrastructure/outbound/ollama/lifecycle.rs` |
 
 ---
 
