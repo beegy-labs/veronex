@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -281,6 +282,78 @@ pub struct VisionAnalysis {
     pub analysis_tokens: u32,
 }
 
+// ── Model instance lifecycle (per-provider, per-model) ───────────────────────
+//
+// Tracked in VramPool (SSOT) and updated by ModelLifecyclePort adapters and
+// the sync_loop background task. State transitions are constrained to the
+// closure documented on `ModelInstanceState::can_transition_to`.
+//
+// SDD reference: `.specs/veronex/inference-lifecycle-sod.md`.
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ModelInstanceState {
+    NotLoaded,
+    Loading {
+        started_at: SystemTime,
+        last_progress_at: SystemTime,
+    },
+    Loaded {
+        loaded_at: SystemTime,
+        weight_bytes: u64,
+    },
+    Failed {
+        failed_at: SystemTime,
+        reason: String,
+        retry_after: SystemTime,
+    },
+    Evicted {
+        evicted_at: SystemTime,
+        reason: EvictionReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvictionReason {
+    /// ollama unloaded the model to make room for another.
+    VramPressure,
+    /// ollama TTL expired (low-power keep-alive policy).
+    KeepAliveExpired,
+    /// Explicit `evict()` call (operator action / model unenrollment).
+    Operator,
+    /// Cleanup after a load attempt failed.
+    LoadFailed,
+}
+
+impl ModelInstanceState {
+    /// Returns `true` when `self` may transition to `next` per the lifecycle
+    /// invariants. Callers MUST check this before persisting a new state.
+    ///
+    /// Allowed transitions:
+    /// ```text
+    /// NotLoaded → Loading | Failed
+    /// Loading   → Loaded  | Failed
+    /// Loaded    → Evicted              (must go via Evicted, not directly NotLoaded)
+    /// Failed    → Loading              (retry after retry_after)
+    /// Evicted   → NotLoaded | Loading
+    /// ```
+    pub fn can_transition_to(&self, next: &Self) -> bool {
+        use ModelInstanceState::*;
+        matches!(
+            (self, next),
+            (NotLoaded, Loading { .. })
+                | (NotLoaded, Failed { .. })
+                | (Loading { .. }, Loaded { .. })
+                | (Loading { .. }, Failed { .. })
+                | (Loaded { .. }, Evicted { .. })
+                | (Failed { .. }, Loading { .. })
+                | (Evicted { .. }, NotLoaded)
+                | (Evicted { .. }, Loading { .. })
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,5 +492,112 @@ mod tests {
     #[test]
     fn prompt_empty_rejected() {
         assert!(Prompt::new("").is_err());
+    }
+
+    // ── ModelInstanceState transitions ───────────────────────────────────
+
+    use std::time::{Duration, SystemTime};
+
+    fn now() -> SystemTime {
+        SystemTime::now()
+    }
+
+    #[test]
+    fn model_state_not_loaded_to_loading_allowed() {
+        let from = ModelInstanceState::NotLoaded;
+        let to = ModelInstanceState::Loading {
+            started_at: now(),
+            last_progress_at: now(),
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_loading_to_loaded_allowed() {
+        let from = ModelInstanceState::Loading {
+            started_at: now(),
+            last_progress_at: now(),
+        };
+        let to = ModelInstanceState::Loaded {
+            loaded_at: now(),
+            weight_bytes: 58 * 1024 * 1024 * 1024,
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_loaded_direct_to_not_loaded_forbidden() {
+        // Must go via Evicted — invariant prevents losing the eviction reason
+        let from = ModelInstanceState::Loaded {
+            loaded_at: now(),
+            weight_bytes: 0,
+        };
+        let to = ModelInstanceState::NotLoaded;
+        assert!(!from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_loaded_to_evicted_allowed() {
+        let from = ModelInstanceState::Loaded {
+            loaded_at: now(),
+            weight_bytes: 0,
+        };
+        let to = ModelInstanceState::Evicted {
+            evicted_at: now(),
+            reason: EvictionReason::KeepAliveExpired,
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_failed_to_loading_allowed_for_retry() {
+        let from = ModelInstanceState::Failed {
+            failed_at: now(),
+            reason: "stalled".into(),
+            retry_after: now() + Duration::from_secs(60),
+        };
+        let to = ModelInstanceState::Loading {
+            started_at: now(),
+            last_progress_at: now(),
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_evicted_to_loading_allowed() {
+        let from = ModelInstanceState::Evicted {
+            evicted_at: now(),
+            reason: EvictionReason::VramPressure,
+        };
+        let to = ModelInstanceState::Loading {
+            started_at: now(),
+            last_progress_at: now(),
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_serde_roundtrip_loaded() {
+        let s = ModelInstanceState::Loaded {
+            loaded_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
+            weight_bytes: 12_345_678,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: ModelInstanceState = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn eviction_reason_serde_each_variant() {
+        for r in [
+            EvictionReason::VramPressure,
+            EvictionReason::KeepAliveExpired,
+            EvictionReason::Operator,
+            EvictionReason::LoadFailed,
+        ] {
+            let json = serde_json::to_string(&r).unwrap();
+            let back: EvictionReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(r, back);
+        }
     }
 }
