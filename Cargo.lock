@@ -6251,6 +6251,7 @@ dependencies = [
  "ts-rs",
  "uuid",
  "veronex-mcp",
+ "wiremock",
  "workspace-hack",
  "zstd",
 ]
