@@ -146,6 +146,26 @@ Note: string attributes use `contains`, not `=` (= is for numeric fields).
 
 On any Vespa/embed error → falls back to `tool_cache.get_all()` (all registered tools, capped at `MAX_TOOLS_PER_REQUEST = 32`).
 
+### YQL Contract
+
+| Field | Operator | Reason |
+|-------|----------|--------|
+| `environment`, `tenant_id` (string attribute) | `contains` | YQL `=` is a numeric range op; hyphenated values (`local-dev`) trigger `Illegal embedded sign character` |
+| Selection language (DELETE) | `==` | Selection language uses `==` for both numeric and string |
+
+Regression test: `vespa_search_uses_contains_for_string_attributes` in `crates/veronex-mcp/src/vector/tests.rs`. Reverting to `=` makes wiremock body-match miss → test fails deterministically.
+
+### Verification (2026-04-28)
+
+End-to-end ReAct verified on `veronex-api-dev.verobee.com` after YQL fix (#88):
+
+| Property | Pre-fix | Post-fix |
+|----------|---------|----------|
+| `WARN McpVectorSelector: search failed` | every chat completion | none |
+| MCP rounds for single-tool query | 3 rounds (fallback select all 4) | 1 round (top-K vector match) |
+| Tool result citation | ignored — model hallucinated | quoted verbatim |
+| Missing-tool honesty | fabricated values | "데이터 없음" / refused |
+
 → `mcp-schema.md` — DB schema (mcp_servers, mcp_server_tools, mcp_key_access, mcp_loop_tool_calls)
 
 ---
