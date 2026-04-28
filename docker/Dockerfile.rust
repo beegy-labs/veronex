@@ -90,6 +90,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cp /app/target/ci/veronex-mcp /out/ && \
     cp /app/target/ci/veronex-consumer /out/ && \
     cp /app/target/ci/veronex-analytics /out/ && \
+    cp "$(find /app/target/ci/build -name geo.bin -path '*/veronex-mcp-*/out/*' | head -1)" /out/geo.bin && \
     sccache --show-stats
 
 # --- Runtime images (one per target) ---
@@ -110,6 +111,11 @@ FROM alpine:3.23 AS veronex-mcp
 RUN --mount=type=cache,target=/var/cache/apk apk add ca-certificates
 WORKDIR /app
 COPY --from=builder /out/veronex-mcp ./
+# geo.bin is read at first geo lookup. The build no longer embeds the
+# 10 MB blob via `include_bytes!` — see Tier 3 in
+# .specs/veronex/ci-build-optimization.md and rust-lang/rust#65818.
+COPY --from=builder /out/geo.bin /app/geo.bin
+ENV GEO_DATA_PATH=/app/geo.bin
 EXPOSE 3100
 CMD ["./veronex-mcp"]
 

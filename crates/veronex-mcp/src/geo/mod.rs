@@ -18,9 +18,29 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
-// ── Embedded data ─────────────────────────────────────────────────────────────
+// ── Data source ───────────────────────────────────────────────────────────────
+//
+// `geo.bin` (~10 MB postcard+zstd) is read from disk at first access, NOT
+// embedded via `include_bytes!`. Reason: `include_bytes!` on a 10 MB blob
+// inflates the .rodata section of every binary that links the
+// veronex-mcp lib AND adds 100–200 MB to the compiler's RAM usage during
+// monomorphization (rust-lang/rust#65818). With the runner pod limited
+// to 4 GB RAM, this matters.
+//
+// Lookup order:
+//   1. `GEO_DATA_PATH` env var (production: set by Dockerfile / Helm)
+//   2. `GEO_DATA_BUILD_PATH` const (set by build.rs to OUT_DIR/geo.bin —
+//      stable for `cargo run` / `cargo test` from the workspace root)
 
-static GEO_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/geo.bin"));
+const GEO_DATA_BUILD_PATH: &str = env!("GEO_DATA_BUILD_PATH");
+
+fn read_geo_bytes() -> Result<Vec<u8>, GeoError> {
+    let path = std::env::var("GEO_DATA_PATH")
+        .unwrap_or_else(|_| GEO_DATA_BUILD_PATH.to_string());
+    std::fs::read(&path).map_err(|e| {
+        GeoError::Init(format!("read {} ({}); set GEO_DATA_PATH to override", path, e))
+    })
+}
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
@@ -82,7 +102,10 @@ static INDEX: OnceLock<GeoIndex> = OnceLock::new();
 
 fn get_index() -> &'static GeoIndex {
     INDEX.get_or_init(|| {
-        let decompressed = zstd::decode_all(GEO_DATA).expect("veronex-geo: decompression failed");
+        let bytes = read_geo_bytes()
+            .unwrap_or_else(|e| panic!("veronex-geo: {e}"));
+        let decompressed = zstd::decode_all(bytes.as_slice())
+            .expect("veronex-geo: decompression failed");
         let data: GeoData =
             postcard::from_bytes(&decompressed).expect("veronex-geo: deserialization failed");
 
