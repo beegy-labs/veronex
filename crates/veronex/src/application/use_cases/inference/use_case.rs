@@ -262,6 +262,7 @@ impl InferenceUseCaseImpl {
                 assigned_provider_id: None,
                 vision_analysis: None,
                 compression_handle: self.compression_handle.clone(),
+                persisted_to_s3: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             });
             // Re-enqueue to ZSET with emergency priority (recovered jobs get highest priority)
             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -379,6 +380,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             assigned_provider_id: None,
             vision_analysis,
             compression_handle: self.compression_handle.clone(),
+            persisted_to_s3: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
 
         let uuid = job_id.0;

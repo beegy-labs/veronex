@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::Instrument;
 
 use anyhow::Result;
@@ -108,6 +109,109 @@ impl Default for TokenStreamState {
     }
 }
 
+// ── Cancel-resilient S3 persist helper ─────────────────────────────────────
+//
+// SDD: `.specs/veronex/inference-mcp-streaming-first.md` §6.
+//
+// CDD invariant (`docs/llm/inference/job-lifecycle.md`): S3 ConversationRecord
+// is the SSOT for `result` / `messages` / `tool_calls`. Pre-Tier-B, only the
+// happy-path `finalize_job` wrote to S3 — cancel / stream-error paths
+// silently dropped accumulated state, leaving DB rows with
+// `has_tool_calls=true` but no S3 record (UI: "저장된 결과 없음").
+//
+// This helper closes that leak. It is called from every terminal exit path
+// in `run_job` that has access to a `TokenStreamState` (T2 / T3 / T5 per
+// SDD §6.1). The `persisted_to_s3` AtomicBool guard ensures exactly-once
+// write across racing finalize_job ↔ cancel paths.
+//
+// MCP-loop jobs are skipped — bridge owns their S3 write per the existing
+// per-conversation append-turns architecture (see
+// `bridge.rs::run_loop` post-loop block). Tier-B applies symmetric fix
+// there: bridge gates were `if !content.is_empty()` (skipped writes when
+// only tool_calls were captured); now `|| !all_mcp_tool_calls.is_empty()`.
+
+/// Append-turn S3 write for the partial state in `ts`. Idempotent via the
+/// `persisted_to_s3` guard. Best-effort: errors logged at `warn`, do not
+/// propagate (DB row's metadata is the authoritative status).
+#[allow(clippy::too_many_arguments)]
+async fn persist_partial_conversation(
+    message_store: &Option<Arc<dyn MessageStore>>,
+    persisted_flag: &AtomicBool,
+    job: &InferenceJob,
+    ts: &TokenStreamState,
+    original_messages: &Option<serde_json::Value>,
+    original_prompt: &str,
+) {
+    // Idempotent guard — only the first caller proceeds.
+    if persisted_flag
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    // MCP-loop jobs: bridge writes a single combined turn at end of loop.
+    // Skip here to avoid a duplicate per-round turn entry.
+    if job.mcp_loop_id.is_some() {
+        return;
+    }
+
+    let Some(store) = message_store else { return };
+
+    // Skip when no useful state captured (T1: pre-stream cancel; T6:
+    // lifecycle_failed before any token).
+    if ts.text.is_empty() && ts.tool_calls.is_empty() {
+        return;
+    }
+
+    let owner_id = job.account_id.or(job.api_key_id).unwrap_or(job.id.0);
+    let date = job.created_at.date_naive();
+    let s3_key = job.conversation_id.unwrap_or(job.id.0);
+
+    let mut record = match store.get_conversation(owner_id, date, s3_key).await {
+        Ok(Some(r)) => r,
+        _ => ConversationRecord::new(),
+    };
+
+    let result_text = (!ts.text.is_empty())
+        .then(|| strip_think_blocks(ts.text.clone()));
+    let tool_calls_val = (!ts.tool_calls.is_empty())
+        .then(|| serde_json::Value::Array(ts.tool_calls.clone()));
+
+    use crate::application::ports::outbound::message_store::{
+        ConversationTurn, TurnRecord,
+    };
+    record.turns.push(ConversationTurn::Regular(TurnRecord {
+        job_id: job.id.0,
+        prompt: original_prompt.to_owned(),
+        messages: original_messages.clone(),
+        tool_calls: tool_calls_val,
+        result: result_text,
+        model_name: Some(job.model_name.as_str().to_string()),
+        created_at: job.created_at.to_rfc3339(),
+        compressed: None,
+        vision_analysis: None,
+    }));
+
+    if let Err(e) = store
+        .put_conversation(owner_id, date, s3_key, &record)
+        .await
+    {
+        tracing::warn!(
+            job_id = %job.id.0,
+            owner_id = %owner_id,
+            "S3 partial conversation persist failed: {e}"
+        );
+    } else {
+        tracing::debug!(
+            job_id = %job.id.0,
+            text_len = ts.text.len(),
+            tool_calls = ts.tool_calls.len(),
+            "S3 partial conversation persisted (cancel/error path)"
+        );
+    }
+}
+
 // ── Stream error handler ────────────────────────────────────────────────────
 
 /// Handle a provider stream error: persist failure, emit observability, refund TPM.
@@ -118,14 +222,26 @@ async fn handle_stream_error(
     job_repo: &dyn JobRepository,
     observability: &Option<Arc<dyn ObservabilityPort>>,
     valkey: &Option<Arc<dyn ValkeyPort>>,
+    message_store: &Option<Arc<dyn MessageStore>>,
     uuid: Uuid,
     started_at: chrono::DateTime<chrono::Utc>,
     api_key_id: Option<Uuid>,
     tpm_minute: Option<i64>,
     ts: &TokenStreamState,
     error: &anyhow::Error,
+    original_messages: &Option<serde_json::Value>,
+    original_prompt: &str,
 ) {
     let msg = error.to_string();
+
+    // T5 (provider stream error): persist whatever tokens were captured before
+    // the error. Helper is idempotent + skips MCP-loop jobs.
+    let persisted_flag = jobs.get(&uuid).map(|e| e.persisted_to_s3.clone());
+    if let Some(flag) = persisted_flag {
+        persist_partial_conversation(
+            message_store, &flag, job, ts, original_messages, original_prompt,
+        ).await;
+    }
 
     if let Some(mut entry) = jobs.get_mut(&uuid) {
         entry.status = JobStatus::Failed;
@@ -248,7 +364,17 @@ async fn finalize_job(
 
     // Write turn to S3 ConversationRecord (per-conversation key, append to turns array).
     // MCP loop jobs skip this — the bridge writes a single complete turn after all rounds.
-    if let Some(store) = message_store {
+    //
+    // SDD §6.2: idempotent guard `persisted_to_s3` prevents this happy-path write
+    // from racing the cancel/error helpers (`persist_partial_conversation`).
+    let happy_path_persisted_flag = jobs.get(&uuid).map(|e| e.persisted_to_s3.clone());
+    let should_write_happy_path = match &happy_path_persisted_flag {
+        Some(flag) => flag
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok(),
+        None => true, // entry vanished — write defensively, the runner is the authoritative writer
+    };
+    if should_write_happy_path && let Some(store) = message_store {
         if job.mcp_loop_id.is_none() {
             let owner_id = job.account_id
                 .or(job.api_key_id)
@@ -558,6 +684,15 @@ pub(super) async fn run_job(
             biased;
             _ = cancel_notify.notified() => {
                 tracing::info!(%uuid, "job cancelled — dropping stream");
+                // T3 — cancel via cancel_notify. Persist whatever was
+                // accumulated so far per SDD §6.1.
+                let persisted_flag = jobs.get(&uuid).map(|e| e.persisted_to_s3.clone());
+                if let Some(flag) = persisted_flag {
+                    persist_partial_conversation(
+                        &message_store, &flag, &job, &ts,
+                        &original_messages, &original_prompt,
+                    ).await;
+                }
                 // running → cancelled: DECR running
                 decr_running(&valkey).await;
                 schedule_cleanup(&jobs, uuid, JOB_CLEANUP_DELAY);
@@ -574,7 +709,14 @@ pub(super) async fn run_job(
         };
 
         if entry.status == JobStatus::Cancelled {
+            // T2 — cancel observed via in-memory status (set by use_case::cancel
+            // racing against the running stream). Persist + exit per SDD §6.1.
+            let persisted_flag = entry.persisted_to_s3.clone();
             drop(entry);
+            persist_partial_conversation(
+                &message_store, &persisted_flag, &job, &ts,
+                &original_messages, &original_prompt,
+            ).await;
             // running → cancelled: DECR running
             decr_running(&valkey).await;
             return Ok(None);
@@ -653,9 +795,12 @@ pub(super) async fn run_job(
             }
             Err(e) => {
                 drop(entry);
+                // T5 — provider stream error mid-stream. handle_stream_error
+                // now also persists partial state to S3 (SDD §6.1).
                 handle_stream_error(
                     &jobs, &mut job, job_repo.as_ref(), &observability, &valkey,
-                    uuid, started_at, api_key_id, tpm_minute, &ts, &e,
+                    &message_store, uuid, started_at, api_key_id, tpm_minute,
+                    &ts, &e, &original_messages, &original_prompt,
                 ).await;
                 return Err(e);
             }

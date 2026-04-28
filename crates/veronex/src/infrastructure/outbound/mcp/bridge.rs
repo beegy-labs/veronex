@@ -417,7 +417,14 @@ impl McpBridgeAdapter {
 
             // Write single complete turn to S3: tool_calls from all rounds + final result.
             // Runner skips S3 for mcp_loop jobs, so this is the only S3 write.
-            if !content.is_empty() {
+            //
+            // Tier-B (SDD `.specs/veronex/inference-mcp-streaming-first.md` §6):
+            // also write when only `all_mcp_tool_calls` were captured (no final
+            // text yet). Pre-Tier-B gate `if !content.is_empty()` silently
+            // dropped the entire conversation when the loop was cancelled
+            // mid-round (client disconnect via Cloudflare 524 → CancelOnDrop)
+            // — UI surfaced this as "저장된 결과 없음".
+            if !content.is_empty() || !all_mcp_tool_calls.is_empty() {
                 if let Some(ref store) = state.message_store {
                     let owner_id = caller.account_id()
                         .or(caller.api_key_id())
@@ -435,13 +442,15 @@ impl McpBridgeAdapter {
                         Some(serde_json::Value::Array(all_mcp_tool_calls))
                     };
 
+                    let result_val = if content.is_empty() { None } else { Some(content.clone()) };
+
                     record.turns.push(crate::application::ports::outbound::message_store::ConversationTurn::Regular(
                         crate::application::ports::outbound::message_store::TurnRecord {
                             job_id: fid.0,
                             prompt: extract_last_user_prompt(&messages),
                             messages: Some(serde_json::Value::Array(messages.clone())),
                             tool_calls: tool_calls_val,
-                            result: Some(content.clone()),
+                            result: result_val,
                             model_name: Some(model.clone()),
                             created_at: chrono::Utc::now().to_rfc3339(),
                             compressed: None,
