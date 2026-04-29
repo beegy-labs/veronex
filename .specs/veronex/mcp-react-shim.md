@@ -424,6 +424,29 @@ The shim's value: enables tool-calling for **the long tail of mid-size models th
 
 If `infrastructure/outbound/ollama/capability.rs` doesn't exist: Tier A. If `react_prompt.rs` / `react_parser.rs` don't exist: Tier B/C. If `run_loop_react` doesn't exist in `bridge.rs`: Tier D. If §8 PASS conditions unverified: live verify pending.
 
+---
+
+## §12 Close-out workflow (`.add` framework)
+
+After all implementation tiers (A/B/C/D/E) commit + cargo test green, follow `.add` to land cleanly:
+
+| Step | What | Reference |
+|------|------|-----------|
+| 1 | Implementation PR(s) — each Tier in its own PR for review clarity | `.add/feature-addition.md` |
+| 2 | Wait for image build + ArgoCD sync to dev | gitops |
+| 3 | Run §8 live verify matrix (PASS conditions L1–L8 + §8.3 native-no-regression) | this SDD §8 |
+| 4 | If §8 fails → return to relevant tier (do NOT mark `[x]` in §0) | resume rule §11 |
+| 5 | If §8 passes → run `.add/cdd-feedback.md` classification — this is **Operational + Reference** (new gateway pattern + new API behavior contract) | `.add/cdd-feedback.md` |
+| 6 | Update `docs/llm/inference/mcp.md` per §9.1, `docs/llm/inference/lab-features.md` per §9.2 | this SDD §9 |
+| 7 | Run `.add/doc-sync.md` divergence audit — verify no doc still claims "MCP requires native tool_calls" | `.add/doc-sync.md` |
+| 8 | Archive SDD: `git mv .specs/veronex/mcp-react-shim.md .specs/veronex/history/` | convention |
+| 9 | Update `2026-Q2.md` row S18 status to `complete (#PR list, live-verify dev YYYY-MM-DD)` and adjust path to `.specs/veronex/history/` | scope hygiene |
+| 10 | All §0 boxes checked; SDD cycle closed | — |
+
+**Archive trigger**: every `[ ]` in §0 must be `[x]` AND the live-verify §8 results must be appended verbatim into a §10.5 (or equivalent) results section. Don't archive on partial verification — set §0 row to "[ ] in progress" with branch/PR pointer until conditions hold.
+
+**Special note for this SDD**: live verify §8 must include the **negative case** (§8.3 — native model unchanged) before close-out. ReAct shim must not regress the native path.
+
 ## Sources
 
 - [Ollama Tool Calling — official docs](https://docs.ollama.com/capabilities/tool-calling)

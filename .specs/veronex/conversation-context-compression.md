@@ -270,6 +270,27 @@ None planned. If post-deploy observation shows accuracy degradation on specific 
 
 If `tiktoken_rs` not in `Cargo.toml`: start at Tier B. If hardcoded `configured_ctx = 32_768` still present: Tier A. If `bridge::run_loop` doesn't call `prune_to_budget`: Tier C. If §8 PASS conditions unverified: live verify pending.
 
+---
+
+## §12 Close-out workflow (`.add` framework)
+
+After all implementation tiers (A/B/C/D/E) commit + cargo test green, follow `.add` to land cleanly:
+
+| Step | What | Reference |
+|------|------|-----------|
+| 1 | Implementation PR(s) — each Tier in its own PR for review clarity | `.add/feature-addition.md` |
+| 2 | Wait for image build + ArgoCD sync to dev | gitops |
+| 3 | Run §8 live verify matrix (PASS conditions L1–L6) | this SDD §8 |
+| 4 | If §8 fails → return to relevant tier (do NOT mark `[x]` in §0) | resume rule §11 |
+| 5 | If §8 passes → run `.add/cdd-feedback.md` classification | `.add/cdd-feedback.md` |
+| 6 | Update `docs/llm/inference/context-compression.md` per §9 (Reference type — API/contract change) | this SDD §9 |
+| 7 | Run `.add/doc-sync.md` divergence audit on the touched docs | `.add/doc-sync.md` |
+| 8 | Archive SDD: `git mv .specs/veronex/conversation-context-compression.md .specs/veronex/history/` | convention |
+| 9 | Update `2026-Q2.md` row S17 status to `complete (#PR list, live-verify dev YYYY-MM-DD)` and adjust path to `.specs/veronex/history/` | scope hygiene |
+| 10 | All §0 boxes checked; SDD cycle closed | — |
+
+**Archive trigger**: every `[ ]` in §0 must be `[x]` AND the live-verify §8 results must be appended verbatim into a §10.5 (or equivalent) results section. Don't archive on partial verification — set §0 row to "[ ] in progress" with branch/PR pointer until conditions hold.
+
 ## Sources
 
 - [tiktoken-rs](https://github.com/zurawiki/tiktoken-rs)
