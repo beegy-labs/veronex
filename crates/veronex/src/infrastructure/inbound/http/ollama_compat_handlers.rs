@@ -423,7 +423,17 @@ pub async fn chat(
                 lab5.compression_model.clone().unwrap_or_else(|| "qwen2.5:3b".to_string()),
                 lab5.compression_timeout_secs as u64,
             ) {
-                let configured_ctx = 32_768u32; // fallback; real value looked up during inference
+                // Resolve configured_ctx from model_vram_profiles (S17 Tier A);
+                // fall back to the legacy 32_768 default if no row exists.
+                // SDD: `.specs/veronex/conversation-context-compression.md` §3.
+                let configured_ctx = state
+                    .capacity_repo
+                    .min_configured_ctx_for_model(&req.model)
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|&c| c >= 4096)
+                    .unwrap_or(32_768);
                 let input_budget = (configured_ctx as f32 * lab5.context_budget_ratio * 0.5) as u32;
                 if let Some(compressed_prompt) = context_compressor::compress_input_inline(
                     &prompt,

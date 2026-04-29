@@ -82,6 +82,12 @@ mod tests {
         async fn has_unprofiled_selected_models(&self) -> Result<bool> {
             Ok(false)
         }
+        async fn min_configured_ctx_for_model(&self, _: &str) -> Result<Option<u32>> {
+            Ok(self
+                .entry
+                .as_ref()
+                .map(|e| e.configured_ctx.max(0) as u32))
+        }
     }
 
     fn make_entry(configured_ctx: i32) -> ModelVramProfileEntry {

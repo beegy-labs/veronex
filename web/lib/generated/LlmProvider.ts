@@ -2,7 +2,7 @@
 import type { LlmProviderStatus } from "./LlmProviderStatus";
 import type { ProviderType } from "./ProviderType";
 
-export type LlmProvider = { id: string, name: string, provider_type: ProviderType, url: string, api_key_encrypted: string | null, is_active: boolean, 
+export type LlmProvider = { id: string, name: string, provider_type: ProviderType, url: string, api_key_encrypted: string | null, 
 /**
  * GPU VRAM capacity in MiB (manual). 0 = unknown → treat as unlimited for dispatch.
  */

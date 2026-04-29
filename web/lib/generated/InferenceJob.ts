@@ -124,8 +124,8 @@ messages_hash: string | null,
 messages_prefix_hash: string | null, 
 /**
  * Machine-readable failure cause (G16). Set when status=Failed.
- * Values: queue_full, no_eligible_provider, thermal_hard_gate, drain_forced,
- *         queue_wait_exceeded, provider_error, token_budget_exceeded
+ * Values: queue_full, no_eligible_provider, queue_wait_exceeded, provider_error,
+ *         token_budget_exceeded, lease_expired_max_attempts, lease_expired_reenqueue_failed
  */
 failure_reason: string | null, 
 /**
