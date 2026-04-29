@@ -409,7 +409,7 @@ impl McpBridgeAdapter {
 
         // Loop-wide bookkeeping: token rollup + intermediate-job cleanup.
         //
-        // SDD `.specs/veronex/inference-mcp-per-round-persist.md` §5: bridge no
+        // SDD `.specs/veronex/history/inference-mcp-per-round-persist.md` §5: bridge no
         // longer writes S3 — the runner persists each round's `TurnRecord`
         // keyed by that round's `job_id` so the dashboard's per-job_id filter
         // resolves correctly. Bridge keeps loop-wide token totals (only place

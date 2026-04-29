@@ -54,6 +54,6 @@ pub trait ModelCapacityRepository: Send + Sync {
     /// Returns true if any selected provider/model pair has no `model_vram_profiles`
     /// row yet. The capacity analyzer's demand gate uses this to bypass idle-skip
     /// when a freshly-selected model still needs an initial probe.
-    /// SDD: `.specs/veronex/inference-mcp-per-round-persist.md` §6.
+    /// SDD: `.specs/veronex/history/inference-mcp-per-round-persist.md` §6.
     async fn has_unprofiled_selected_models(&self) -> Result<bool>;
 }

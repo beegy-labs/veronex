@@ -165,7 +165,7 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 
 Written by `finalize_job()` (happy path) **OR** `persist_partial_conversation()` (cancel / stream-error / lifecycle-failed paths) using zstd-3 compression (~1.2 KB / record). Read on-demand by the admin detail view (one S3 GET per click). `owner_id = account_id ?? api_key_id ?? job_id`.
 
-Per-job idempotency is enforced via `JobEntry::persisted_to_s3: Arc<AtomicBool>` — `compare_exchange(false, true)` ensures exactly-one S3 PUT across racing finalize ↔ cancel paths inside `run_job`'s biased `select!`. Runner is the single S3 writer for every job, including MCP-loop rounds — each round produces its own `TurnRecord` keyed by that round's `job_id`, so `GET /v1/dashboard/jobs/{id}` resolves the right turn directly. Bridge orchestrates the loop and updates loop-wide token rollups in Postgres but no longer writes S3 (SDD `.specs/veronex/inference-mcp-per-round-persist.md` §3).
+Per-job idempotency is enforced via `JobEntry::persisted_to_s3: Arc<AtomicBool>` — `compare_exchange(false, true)` ensures exactly-one S3 PUT across racing finalize ↔ cancel paths inside `run_job`'s biased `select!`. Runner is the single S3 writer for every job, including MCP-loop rounds — each round produces its own `TurnRecord` keyed by that round's `job_id`, so `GET /v1/dashboard/jobs/{id}` resolves the right turn directly. Bridge orchestrates the loop and updates loop-wide token rollups in Postgres but no longer writes S3 (SDD `.specs/veronex/history/inference-mcp-per-round-persist.md` §3).
 
 > `tps` = `completion_tokens / (latency_ms - ttft_ms) * 1000` (computed in API, not stored)
 

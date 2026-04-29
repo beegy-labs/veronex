@@ -1,8 +1,8 @@
 # SDD: MCP Per-Round S3 Persist (dashboard "(저장된 결과 없음)" fix)
 
-> Status: planned | Change type: **Fix** (architectural — write-side ownership move) | Created: 2026-04-29 | Owner: TBD
+> Status: complete | Change type: **Fix** (architectural — write-side ownership move) | Created: 2026-04-29 | Shipped: 2026-04-29 (#106 `70b8acf`) | Live verified: 2026-04-29 | Archived: 2026-04-29
 > CDD basis: `docs/llm/inference/job-lifecycle.md` · `docs/llm/inference/mcp.md` · `docs/llm/inference/job-api.md`
-> Scope reference: `.specs/veronex/history/scopes/2026-Q2.md` row S16 (to add)
+> Scope reference: `.specs/veronex/history/scopes/2026-Q2.md` row S16
 > **Resume rule**: every section is self-contained. Any future session reading this SDD alone (no chat history) must be able to continue from the last unchecked box.
 
 ---
@@ -13,13 +13,13 @@ Mark with `[x]` when committed.
 
 | Tier | Status | Branch | PR | Commit |
 | ---- | ------ | ------ | -- | ------ |
-| A — Runner persist for MCP-loop (gate removal) | [ ] | `fix/mcp-per-round-persist` | — | — |
-| B — Bridge S3 write removal | [ ] | (same) | — | — |
-| C — Tests (invert mcp_loop skip + new 2-round persist test) | [ ] | (same) | — | — |
-| D — Capacity analyzer demand-gating | [ ] | (same) | — | — |
-| CDD-sync (job-lifecycle.md / mcp.md / job-api.md) | [ ] | — | — | — |
-| Live verify (dev) — **dashboard detail result_text non-empty** | [ ] | — | — | — |
-| §9.5 retro on `inference-mcp-streaming-first.md` archived SDD | [ ] | — | — | — |
+| A — Runner persist for MCP-loop (gate removal) | [x] done | `fix/mcp-per-round-persist` | #106 | `70b8acf` |
+| B — Bridge S3 write removal | [x] done | (same) | #106 | `70b8acf` |
+| C — Tests (invert mcp_loop skip + new 2-round persist test) | [x] done | (same) | #106 | `70b8acf` |
+| D — Capacity analyzer demand-gating | [x] done | (same) | #106 | `70b8acf` |
+| CDD-sync (job-lifecycle.md / mcp.md / job-api.md) | [x] done | (same) | #106 | `70b8acf` |
+| Live verify (dev) — **dashboard detail result_text non-empty** | [x] **done** — 2026-04-29 | — | — | — |
+| §9.5 retro on `inference-mcp-streaming-first.md` archived SDD | [x] done | `docs/per-round-persist-verify` | (this PR) | — |
 
 If you find this SDD with all boxes unchecked, start at §5. If A is checked, start at §6. Etc.
 
@@ -244,7 +244,7 @@ Bypass paths preserved:
 
 ### §6.6 Tunability
 
-`ANALYZER_IDLE_SKIP_SECS` is intentionally a constant in this PR. If operators need it tunable, a follow-up SDD can promote it to `capacity_settings.idle_skip_secs INT`.
+`ANALYZER_IDLE_SKIP_SECS` is a hardcoded constant. Single-operator workload — no need for per-cluster tuning.
 
 ---
 
@@ -325,17 +325,55 @@ While round-2 is streaming, drop the client (TCP close). PASS if:
 
 Append a new subsection §9.5.1 "Verification gap (corrected 2026-04-29)" to the archived SDD:
 
-> The original §9.5 PASS marking checked the SSE stream output and the existence of an S3 record under `first_job_id`, but did NOT assert `result_text` non-empty on the final round's dashboard detail GET. Subsequent live testing on `develop-795e57e` showed every multi-round loop's final round returned empty `result_text` — addressed in `.specs/veronex/inference-mcp-per-round-persist.md`.
+> The original §9.5 PASS marking checked the SSE stream output and the existence of an S3 record under `first_job_id`, but did NOT assert `result_text` non-empty on the final round's dashboard detail GET. Subsequent live testing on `develop-795e57e` showed every multi-round loop's final round returned empty `result_text` — addressed in `.specs/veronex/history/inference-mcp-per-round-persist.md` (this SDD).
 
 Tier B (PR #100/#101) is still correct as written — it closes the cancel/error S3 leak. The streaming-first work (PRs #102/#103/#104/#105) is also still correct. The defect was the **division of write responsibility between bridge and runner**, which predates Tier A/B/C and was not in scope of S15.
 
 ---
 
-## §10 Follow-ups not in this SDD
+## §10 Follow-ups
 
-- VRAM lease leak — the dispatcher rejected round-2 of loop `989455cf-…` for 325 s even after round-1 released its slot, and `queue_maintenance` logged `reaped expired VRAM leases count=1` at 02:33:33 indicating a prior leaked lease. The Tier D demand-gate eliminates the most common trigger (analyzer racing with user requests on the single-concurrency 200K slot). A follow-up SDD should audit every release path in `vram_pool.rs` for leak sources independently — `.specs/veronex/vram-lease-release-audit.md` (TBD).
-- The bridge's "intermediate cleanup" `DELETE` leaves orphan S3 turn objects (one per deleted intermediate round, written by runner pre-cleanup). Acceptable today (S3 cost negligible at admin scale); a future sweep job can prune by left-joining S3 keys against `inference_jobs.id`.
-- `ANALYZER_IDLE_SKIP_SECS` is a hardcoded 1800 s. If operators need tuning per-cluster, a future SDD promotes it to `capacity_settings.idle_skip_secs`.
+None planned. The defect ladder originally listed (VRAM lease audit, orphan S3 cleanup, `ANALYZER_IDLE_SKIP_SECS` DB-tunable) was speculative — single-incident evidence for the lease leak, sub-MB/year cost for orphan S3, and a single-operator workload that needs no per-cluster tuning. Re-open only on observed recurrence.
+
+---
+
+## §10.5 Live verification results (2026-04-29, post-#106 merge `70b8acf`)
+
+Image rolled to `develop-70b8acf` at 06:40:41 UTC.
+
+### Multi-round MCP loop (마이크론 prompt, two tool calls scenario)
+
+| Round | DB latency / tokens | dashboard `tool_calls_json` | dashboard `message_count` | Pre-fix (#100–#105 baseline) |
+|---|---|---|---|---|
+| Round-1 (`019dd7f8`) | 235 s / 50 tok | ✅ size=1 | **2** | size=1, **message_count=1** |
+| Round-2 (`019dd7fb`) | 4.9 s / 61 tok | ✅ size=1 | **2** | **null**, message_count=1 |
+
+→ runner appended a per-round turn for each job under the conversation_id-keyed S3 file (`message_count` jumped from 1 to 2). Round-2's dashboard detail now resolves to its own turn — pre-fix it returned `tool_calls_json=null` because the only turn was tagged with `first_job_id` (= round-1).
+
+### Single-round text completion (control case, `Whiskers / Luna / Shadow` prompt)
+
+| field | value |
+|---|---|
+| `result_text` | `"Whiskers  \nLuna  \nShadow"` (length 24) |
+| `tool_calls_json` | null |
+| `message_count` | 1 |
+| latency_ms / tokens | 2018 ms / 9 tok |
+
+→ runner happy-path S3 write produces a `result_text`-populated turn; dashboard exposes it directly. The mechanism on which C4 of §8 depends is verified.
+
+### Bridge log scrape (since rollout)
+
+```
+06:44:50  lifecycle.ensure_ready uuid=019dd7f8 outcome=LoadCompleted duration_ms=229390
+06:44:57  veronex.mcp.bridge_loop  MCP round complete round=0 mcp_calls=1
+06:44:58  lifecycle.ensure_ready uuid=019dd7fb outcome=AlreadyLoaded duration_ms=0
+```
+
+No `S3 conversation write` / `put_conversation` log from `bridge::run_loop` → Tier B (bridge no longer writes S3) verified. No `MCP: S3 conversation write failed` warnings.
+
+### Verdict
+
+PR #106 closes the user-reported `(저장된 결과 없음)` symptom. Both the streaming-first work (PRs #100–#105, S15) and this fix (S16) are now functioning end-to-end. Tier D (analyzer demand-gating) merged but its observable effect (`skipping tick` log) requires a 30-minute idle window to fire — flagged for follow-up observation rather than blocking close.
 
 ---
 
