@@ -57,6 +57,7 @@ impl InferenceUseCase for MockUseCase {
                 cached_tokens: None,
                 tool_calls: None,
                 finish_reason: None,
+                is_phase_boundary: false,
             }),
             Ok(StreamToken {
                 value: "".to_string(),
@@ -66,6 +67,7 @@ impl InferenceUseCase for MockUseCase {
                 cached_tokens: None,
                 tool_calls: None,
                 finish_reason: None,
+                is_phase_boundary: false,
             }),
         ];
         Box::pin(futures::stream::iter(tokens))

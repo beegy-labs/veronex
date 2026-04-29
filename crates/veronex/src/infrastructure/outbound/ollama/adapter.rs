@@ -441,6 +441,7 @@ impl OllamaAdapter {
                         } else {
                             None
                         },
+                        is_phase_boundary: false,
                     };
 
                     if chunk.done {
@@ -628,6 +629,7 @@ impl OllamaAdapter {
                                     cached_tokens: None,
                                     tool_calls: Some(tc.clone()),
                                     finish_reason: None,
+                                    is_phase_boundary: false,
                                 };
                             }
 
@@ -652,6 +654,7 @@ impl OllamaAdapter {
                             } else {
                                 None
                             },
+                            is_phase_boundary: false,
                         };
                     }
 

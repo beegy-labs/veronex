@@ -625,6 +625,18 @@ pub(super) async fn run_job(
                     duration_ms = lifecycle_started.elapsed().as_millis() as u64,
                     "lifecycle.ensure_ready"
                 );
+                // Phase 1 → Phase 2 boundary: emit a sentinel token so the
+                // bridge `collect_round` can switch from `LIFECYCLE_TIMEOUT`
+                // (cold-load slack) to `TOKEN_FIRST_TIMEOUT` (Phase 2 first
+                // token countdown). Carries no content; not forwarded to
+                // SSE clients.
+                // SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3.
+                if let Some(mut entry) = jobs.get_mut(&uuid) {
+                    entry.tokens.push(StreamToken::phase_boundary());
+                    let notify = entry.notify.clone();
+                    drop(entry);
+                    notify.notify_one();
+                }
             }
             Err(e) => {
                 tracing::warn!(
