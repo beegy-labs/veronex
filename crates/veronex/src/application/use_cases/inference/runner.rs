@@ -125,7 +125,7 @@ impl Default for TokenStreamState {
 // write across racing finalize_job ↔ cancel paths.
 //
 // Runner is the single S3 writer for every job, including MCP-loop rounds.
-// SDD `.specs/veronex/inference-mcp-per-round-persist.md` §3 — bridge no
+// SDD `.specs/veronex/history/inference-mcp-per-round-persist.md` §3 — bridge no
 // longer writes S3; each round produces its own dashboard-addressable turn
 // keyed by that round's `job_id` so the per-job_id filter in
 // `dashboard_queries::build_job_detail` finds the right turn.
@@ -360,7 +360,7 @@ async fn finalize_job(
     // Runner is the single S3 writer — including MCP-loop rounds. Each round
     // produces its own dashboard-addressable turn keyed by `job_id`.
     //
-    // SDD `.specs/veronex/inference-mcp-per-round-persist.md` §3 — bridge no
+    // SDD `.specs/veronex/history/inference-mcp-per-round-persist.md` §3 — bridge no
     // longer writes S3. The idempotent `persisted_to_s3` guard prevents this
     // happy-path write from racing the cancel/error helpers
     // (`persist_partial_conversation`).
@@ -1173,7 +1173,7 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_loop_jobs_persist_per_round() {
-        // SDD `.specs/veronex/inference-mcp-per-round-persist.md` §3:
+        // SDD `.specs/veronex/history/inference-mcp-per-round-persist.md` §3:
         // Runner is the single S3 writer for every job, including MCP-loop
         // rounds. Each round writes a turn tagged with that round's `job_id`
         // so the dashboard's per-job_id filter

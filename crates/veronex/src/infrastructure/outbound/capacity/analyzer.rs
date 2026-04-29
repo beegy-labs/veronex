@@ -1292,7 +1292,7 @@ pub async fn run_sync_loop(
             // selected model is unprofiled — a freshly added model still needs
             // its first probe even before any user traffic.
             //
-            // SDD: `.specs/veronex/inference-mcp-per-round-persist.md` §6.
+            // SDD: `.specs/veronex/history/inference-mcp-per-round-persist.md` §6.
             // Rationale: pre-fix the analyzer probed every `sync_interval_secs`
             // regardless of demand, occupying the same Ollama provider's
             // single-concurrency slots that user MCP rounds need. Combined with

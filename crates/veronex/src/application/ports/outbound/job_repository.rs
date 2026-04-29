@@ -84,6 +84,6 @@ pub trait JobRepository: Send + Sync {
     /// (`source IN ('api','test')`) job's `created_at`. `None` if no such row
     /// exists. Used by the capacity analyzer's demand gate to skip ticks when
     /// the cluster has been idle from real user traffic.
-    /// SDD: `.specs/veronex/inference-mcp-per-round-persist.md` §6.
+    /// SDD: `.specs/veronex/history/inference-mcp-per-round-persist.md` §6.
     async fn seconds_since_last_user_job(&self) -> Result<Option<i64>>;
 }

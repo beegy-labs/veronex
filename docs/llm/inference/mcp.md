@@ -168,9 +168,9 @@ Implementation:
 | Response is constructed BEFORE bridge completes | `mcp_ollama_chat` spawns `bridge.run_loop` on `tokio::spawn`; SSE stream awaits result via `tokio::sync::oneshot`. axum flushes 200 + headers + first heartbeat within ms of the request |
 | OpenAI-compat shape | `chat.completion.chunk` events with `delta.content` / `delta.tool_calls`; final `[DONE]` sentinel |
 | Cancel-on-disconnect | spawned bridge task runs to completion (best-effort detached); `runner::persist_partial_conversation` writes partial state to S3 for each affected round |
-| S3 ConversationRecord | Runner writes one `TurnRecord` per round, keyed by that round's `job_id` (`conversations/{owner_id}/{conversation_id}.json.zst` is the conversation-scoped append target). Bridge no longer writes S3 — only updates loop-wide token totals on `first_job_id` and deletes intermediate-round DB rows. SDD: `.specs/veronex/inference-mcp-per-round-persist.md` §3. |
+| S3 ConversationRecord | Runner writes one `TurnRecord` per round, keyed by that round's `job_id` (`conversations/{owner_id}/{conversation_id}.json.zst` is the conversation-scoped append target). Bridge no longer writes S3 — only updates loop-wide token totals on `first_job_id` and deletes intermediate-round DB rows. SDD: `.specs/veronex/history/inference-mcp-per-round-persist.md` §3. |
 
-Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens. Note: §9.5 of the streaming-first SDD recorded this as PASS based on SSE output only; the dashboard detail GET's `result_text` non-empty assertion was added in `.specs/veronex/inference-mcp-per-round-persist.md` §8.
+Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens. Note: §9.5 of the streaming-first SDD recorded this as PASS based on SSE output only; the dashboard detail GET's `result_text` non-empty assertion was added in `.specs/veronex/history/inference-mcp-per-round-persist.md` §8.
 
 ### Phase 1 Lifecycle / Phase 2 Inference
 

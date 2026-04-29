@@ -1,8 +1,8 @@
 # SDD: MCP Per-Round S3 Persist (dashboard "(저장된 결과 없음)" fix)
 
-> Status: planned | Change type: **Fix** (architectural — write-side ownership move) | Created: 2026-04-29 | Owner: TBD
+> Status: complete | Change type: **Fix** (architectural — write-side ownership move) | Created: 2026-04-29 | Shipped: 2026-04-29 (#106 `70b8acf`) | Live verified: 2026-04-29 | Archived: 2026-04-29
 > CDD basis: `docs/llm/inference/job-lifecycle.md` · `docs/llm/inference/mcp.md` · `docs/llm/inference/job-api.md`
-> Scope reference: `.specs/veronex/history/scopes/2026-Q2.md` row S16 (to add)
+> Scope reference: `.specs/veronex/history/scopes/2026-Q2.md` row S16
 > **Resume rule**: every section is self-contained. Any future session reading this SDD alone (no chat history) must be able to continue from the last unchecked box.
 
 ---
@@ -325,7 +325,7 @@ While round-2 is streaming, drop the client (TCP close). PASS if:
 
 Append a new subsection §9.5.1 "Verification gap (corrected 2026-04-29)" to the archived SDD:
 
-> The original §9.5 PASS marking checked the SSE stream output and the existence of an S3 record under `first_job_id`, but did NOT assert `result_text` non-empty on the final round's dashboard detail GET. Subsequent live testing on `develop-795e57e` showed every multi-round loop's final round returned empty `result_text` — addressed in `.specs/veronex/inference-mcp-per-round-persist.md`.
+> The original §9.5 PASS marking checked the SSE stream output and the existence of an S3 record under `first_job_id`, but did NOT assert `result_text` non-empty on the final round's dashboard detail GET. Subsequent live testing on `develop-795e57e` showed every multi-round loop's final round returned empty `result_text` — addressed in `.specs/veronex/history/inference-mcp-per-round-persist.md` (this SDD).
 
 Tier B (PR #100/#101) is still correct as written — it closes the cancel/error S3 leak. The streaming-first work (PRs #102/#103/#104/#105) is also still correct. The defect was the **division of write responsibility between bridge and runner**, which predates Tier A/B/C and was not in scope of S15.
 

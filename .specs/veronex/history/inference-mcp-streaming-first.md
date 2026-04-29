@@ -753,7 +753,7 @@ admits the round-1 case (tool-only round legitimately empties
 `result_text`), masking the round-2 failure. Future verify scripts
 must assert `result_text` non-empty on the final-text round directly.
 
-Closed by: `.specs/veronex/inference-mcp-per-round-persist.md` (PR #106,
+Closed by: `.specs/veronex/history/inference-mcp-per-round-persist.md` (PR #106,
 commit `70b8acf`). Runner became the single S3 writer for every job,
 including MCP-loop rounds; bridge stopped writing S3. Each round now
 appends its own `TurnRecord` keyed by that round's `job_id` so the
