@@ -726,6 +726,40 @@ the header is honoured upstream by nginx/envoy but Cloudflare's edge
 may rewrite/strip headers — what matters at runtime is that data
 flows continuously, which the heartbeat guarantees.
 
+### §9.5.1 Verification gap (corrected 2026-04-29)
+
+The acceptance grid above and the `final round completion_tokens=195`
+row marked PASS based on **the SSE stream output and the existence of
+some S3 record under `first_job_id`**. It did NOT assert
+`result_text` non-empty on the FINAL round's `GET /v1/dashboard/jobs/{id}`
+response.
+
+Subsequent live testing on the same `develop-795e57e` image revealed
+that every multi-round MCP loop's final round returned
+`result_text=""` + `tool_calls_json=null` + `message_count=1` from
+that endpoint — the same UI symptom this SDD was trying to close.
+Root cause: bridge tagged its single post-loop S3 write with
+`first_job_id`, leaving every other round invisible to the
+dashboard's per-job_id turn filter
+(`dashboard_queries::build_job_detail`). Tier A streaming-first
+(PR #103) additionally caused the streaming fast-path to exit before
+`collect_round()`, so even round-1's bridge-written turn had
+`result=None`.
+
+This is not a regression of Tier A/B/C; the defect predates this
+SDD. The §9.5 verify script's check
+`has_content = result_text.strip() != '' or tool_calls_json is not None`
+admits the round-1 case (tool-only round legitimately empties
+`result_text`), masking the round-2 failure. Future verify scripts
+must assert `result_text` non-empty on the final-text round directly.
+
+Closed by: `.specs/veronex/inference-mcp-per-round-persist.md` (PR #106,
+commit `70b8acf`). Runner became the single S3 writer for every job,
+including MCP-loop rounds; bridge stopped writing S3. Each round now
+appends its own `TurnRecord` keyed by that round's `job_id` so the
+dashboard's per-job_id filter resolves correctly. Live verified
+2026-04-29 — see §10.5 of the per-round-persist SDD.
+
 ---
 
 ## §10 Cross-cutting concerns
