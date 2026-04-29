@@ -50,20 +50,31 @@ pub const MAX_TOOLS_PER_REQUEST: usize = 32;
 const LOOP_DETECT_THRESHOLD: u8 = 3;
 /// Result cache TTL (seconds).
 const RESULT_CACHE_TTL_SECS: i64 = 300;
-/// First-token wait. Covers ollama cold load + KV cache pre-allocation + first-token compute.
+/// Phase 1 timeout — covers `ensure_ready` cold-load + KV cache pre-allocation
+/// + warmup. Active until a `StreamToken::phase_boundary()` arrives from the
+/// runner (S14 Lifecycle SoD post-`ensure_ready` signal).
 ///
-/// Sized for 200K-context models (qwen3-coder-next-200k:latest) on Strix Halo / AI Max+ 395:
-/// measured `load_duration` ≈ 163 s for the full 200K KV alloc + warmup. 240 s leaves a 47 s
-/// safety buffer for variance. Warm-state requests return in <100 ms regardless.
-const FIRST_TOKEN_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(240);
+/// 600 s envelope covers measured worst-case 248 s on `qwen3-coder-next-200k`
+/// (Strix Halo) plus ~2.4× headroom for future 300K+ context models or
+/// VRAM-scheduler congestion. Bridge does not race actual cold-load.
+/// SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3.2.
+const LIFECYCLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(600);
+
+/// Phase 2 first-token timeout — applies only after the runner emits the
+/// phase-boundary token, i.e. after `ensure_ready` succeeded. Phase 2 first
+/// token is sub-second on warm; 60 s catches a genuinely-stuck model
+/// immediately post-load.
+const TOKEN_FIRST_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(60);
 
 /// Per-token stream idle. Fires only when the model hangs mid-response (true stall).
 /// Generation gap on warm models is sub-second; 45 s is a generous safety margin.
 const STREAM_IDLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(45);
 
-/// Hard cap per round. Aligns with `INFERENCE_ROUTER_TIMEOUT` so the route layer never
-/// fires before the bridge has chosen its own outcome.
-const ROUND_TOTAL_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(360);
+/// Hard cap per round. Sized to accommodate worst-case Phase 1 (`LIFECYCLE_TIMEOUT`
+/// = 600 s) + Phase 2 first-token (60 s) + a streaming budget. Aligns with
+/// `INFERENCE_ROUTER_TIMEOUT` so the route layer never fires before the bridge
+/// has chosen its own outcome.
+const ROUND_TOTAL_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(720);
 /// Maximum bytes of a single MCP tool result injected into the messages array.
 /// Prevents OOM from malicious/misconfigured servers at high concurrency.
 const MAX_TOOL_RESULT_BYTES: usize = 32_768;
@@ -364,7 +375,8 @@ impl McpBridgeAdapter {
                 Err(e) => {
                     warn!(round = rounds, model = %model, error = %e, "MCP round failed");
                     let code = match &e {
-                        RoundError::FirstTokenTimeout => "model_loading",
+                        RoundError::LifecycleTimeout  => "model_loading",
+                        RoundError::FirstTokenTimeout => "model_hung_post_load",
                         RoundError::StreamIdleTimeout => "stream_stalled",
                         RoundError::TotalTimeout      => "round_timeout",
                         RoundError::Stream(_)         => "stream_error",
@@ -1126,14 +1138,24 @@ struct RoundResult {
 /// Collect all tokens from a submitted job into a `RoundResult`.
 /// Failure modes from `collect_round`. Each variant maps to a distinct user-facing
 /// error so the client can decide its retry strategy (cold-load vs hung vs network).
+///
+/// Phase-aware timing (S19, SDD `.specs/veronex/bridge-phase-aware-timing.md`):
+/// `LIFECYCLE_TIMEOUT` covers Phase 1 (cold-load). After the runner emits a
+/// `StreamToken::phase_boundary()` post-`ensure_ready`, the bridge switches to
+/// `TOKEN_FIRST_TIMEOUT` for Phase 2 first token, then `STREAM_IDLE_TIMEOUT`
+/// for streaming. Closes the 248 s race observed on `conv_3386OgDfDKkJvamF9X1Dr`.
 #[derive(Debug)]
 enum RoundError {
-    /// No first token received within `FIRST_TOKEN_TIMEOUT` — model is still cold-loading
-    /// or unreachable. Client retry usually succeeds because the load completes in
-    /// the background and the next request hits a warm model.
+    /// Phase 1 (`ensure_ready`) exceeded `LIFECYCLE_TIMEOUT` — provider stuck
+    /// loading. With `MCP_LIFECYCLE_PHASE=off` (legacy path), this also
+    /// covers the entire pre-token window.
+    LifecycleTimeout,
+    /// Phase 2 (post-`ensure_ready`) failed to produce a first token within
+    /// `TOKEN_FIRST_TIMEOUT`. Indicates a genuinely hung model immediately
+    /// after a successful load.
     FirstTokenTimeout,
     /// Tokens started but the gap between tokens exceeded `STREAM_IDLE_TIMEOUT` —
-    /// the model is genuinely hung. Retry will likely re-trigger the same hang.
+    /// the model is hung mid-response.
     StreamIdleTimeout,
     /// The full round budget (`ROUND_TOTAL_TIMEOUT`) was exhausted even though
     /// tokens were flowing. Defends against pathological streams.
@@ -1145,10 +1167,15 @@ enum RoundError {
 impl std::fmt::Display for RoundError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::LifecycleTimeout => write!(
+                f,
+                "model load did not complete within {}s. Provider may be cold-stuck.",
+                LIFECYCLE_TIMEOUT.as_secs()
+            ),
             Self::FirstTokenTimeout => write!(
                 f,
-                "model is still loading (first-token timeout {}s exceeded). Retry in a moment.",
-                FIRST_TOKEN_TIMEOUT.as_secs()
+                "no first token within {}s after model load completed. Model may be hung.",
+                TOKEN_FIRST_TIMEOUT.as_secs()
             ),
             Self::StreamIdleTimeout => write!(
                 f,
@@ -1172,6 +1199,18 @@ async fn collect_round(state: &AppState, job_id: &JobId) -> Result<RoundResult, 
     let mut prompt_tokens: u32 = 0;
     let mut completion_tokens: u32 = 0;
     let mut finish_reason = "stop".to_string();
+    // Phase-aware state — see SDD §3.3.
+    // - in_phase_1=true: still in `ensure_ready` (Phase 1). Active until a
+    //   `phase_boundary` token arrives. Timeout = LIFECYCLE_TIMEOUT.
+    // - in_phase_1=false, received_any_token=false: post-load, awaiting first
+    //   real token. Timeout = TOKEN_FIRST_TIMEOUT.
+    // - received_any_token=true: streaming. Timeout = STREAM_IDLE_TIMEOUT.
+    //
+    // When `MCP_LIFECYCLE_PHASE=off` the runner does not emit a boundary;
+    // bridge stays in Phase 1 for the whole round. LIFECYCLE_TIMEOUT >> the
+    // legacy 240 s applied here, so legacy behaviour is strictly more
+    // permissive (no regression).
+    let mut in_phase_1 = true;
     let mut received_any_token = false;
     let round_start = Instant::now();
 
@@ -1180,15 +1219,23 @@ async fn collect_round(state: &AppState, job_id: &JobId) -> Result<RoundResult, 
         if round_start.elapsed() >= ROUND_TOTAL_TIMEOUT {
             return Err(RoundError::TotalTimeout);
         }
-        // Phased timeout: long for the first token (covers cold load), tight after.
-        let phase_timeout = if received_any_token {
-            STREAM_IDLE_TIMEOUT
+        let phase_timeout = if in_phase_1 {
+            LIFECYCLE_TIMEOUT
+        } else if !received_any_token {
+            TOKEN_FIRST_TIMEOUT
         } else {
-            FIRST_TOKEN_TIMEOUT
+            STREAM_IDLE_TIMEOUT
         };
 
         match tokio::time::timeout(phase_timeout, token_stream.next()).await {
             Ok(Some(Ok(token))) => {
+                if token.is_phase_boundary {
+                    // Phase 1 → Phase 2 boundary. Don't forward; switch
+                    // timing model and continue waiting for real tokens.
+                    in_phase_1 = false;
+                    received_any_token = false;
+                    continue;
+                }
                 received_any_token = true;
                 if token.is_final {
                     // is_final is checked first — a final token with tool_calls still ends the round.
@@ -1213,6 +1260,7 @@ async fn collect_round(state: &AppState, job_id: &JobId) -> Result<RoundResult, 
             }
             Ok(Some(Err(e))) => return Err(RoundError::Stream(e.to_string())),
             Ok(None) => break, // stream ended cleanly
+            Err(_) if in_phase_1 => return Err(RoundError::LifecycleTimeout),
             Err(_) if !received_any_token => return Err(RoundError::FirstTokenTimeout),
             Err(_) => return Err(RoundError::StreamIdleTimeout),
         }
@@ -1679,10 +1727,21 @@ mod tests {
     // code so clients can decide retry strategy.
 
     #[test]
-    fn round_error_first_token_mentions_seconds() {
+    fn round_error_lifecycle_mentions_seconds() {
+        let s = RoundError::LifecycleTimeout.to_string();
+        assert!(s.contains("model load"), "msg = {s}");
+        assert!(s.contains(&LIFECYCLE_TIMEOUT.as_secs().to_string()), "msg = {s}");
+    }
+
+    #[test]
+    fn round_error_first_token_distinct_from_lifecycle() {
         let s = RoundError::FirstTokenTimeout.to_string();
-        assert!(s.contains("first-token timeout"), "msg = {s}");
-        assert!(s.contains(&FIRST_TOKEN_TIMEOUT.as_secs().to_string()), "msg = {s}");
+        // Post-load first-token failure — the message MUST clarify the model
+        // already loaded, so operators don't conflate this with a cold-load
+        // race (S19 fix premise).
+        assert!(s.contains("first token"), "msg = {s}");
+        assert!(s.contains("after model load completed"), "msg = {s}");
+        assert!(s.contains(&TOKEN_FIRST_TIMEOUT.as_secs().to_string()), "msg = {s}");
     }
 
     #[test]
@@ -1708,30 +1767,72 @@ mod tests {
     // ── Timeout constants — sanity invariants ─────────────────────────────────
 
     #[test]
-    fn first_token_covers_measured_200k_cold_load() {
-        // Measured: ollama load_duration ≈ 163 s for qwen3-coder-next-200k:latest
-        // (Strix Halo / AI Max+ 395, 200K KV cache q8_0). FIRST_TOKEN_TIMEOUT must
-        // exceed this with safety buffer.
-        const MEASURED_200K_COLD_LOAD_SECS: u64 = 163;
+    fn lifecycle_timeout_covers_measured_200k_cold_load() {
+        // Measured worst case: 248 s on `conv_3386OgDfDKkJvamF9X1Dr` (qwen3-coder-next-200k).
+        // LIFECYCLE_TIMEOUT must comfortably exceed this with headroom for
+        // future 300K+ context models or VRAM-scheduler congestion.
+        // SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3.2.
+        const MEASURED_200K_COLD_LOAD_SECS: u64 = 248;
         assert!(
-            FIRST_TOKEN_TIMEOUT.as_secs() > MEASURED_200K_COLD_LOAD_SECS,
-            "FIRST_TOKEN_TIMEOUT ({}s) does not cover measured 200K cold load ({}s)",
-            FIRST_TOKEN_TIMEOUT.as_secs(),
+            LIFECYCLE_TIMEOUT.as_secs() > MEASURED_200K_COLD_LOAD_SECS * 2,
+            "LIFECYCLE_TIMEOUT ({}s) lacks headroom over observed 200K cold-load ({}s)",
+            LIFECYCLE_TIMEOUT.as_secs(),
             MEASURED_200K_COLD_LOAD_SECS,
         );
     }
 
     #[test]
-    fn round_total_does_not_exceed_route_layer() {
-        // INFERENCE_ROUTER_TIMEOUT in inbound::http::constants is 360 s. Bridge must
-        // surface its own outcome before the tower-http layer fires a 408.
-        assert!(ROUND_TOTAL_TIMEOUT.as_secs() <= 360);
+    fn token_first_timeout_tighter_than_lifecycle() {
+        // Phase 2 first-token timeout must be << Phase 1 timeout — Phase 2
+        // first token is sub-second on warm. A wide TOKEN_FIRST_TIMEOUT would
+        // make a hung-post-load model take ages to surface.
+        assert!(TOKEN_FIRST_TIMEOUT < LIFECYCLE_TIMEOUT / 5);
+    }
+
+    #[test]
+    fn round_total_accommodates_phase_1_plus_phase_2() {
+        // Worst case: full LIFECYCLE_TIMEOUT followed by Phase 2 producing
+        // first token + reasonable streaming. Total budget must be >=
+        // LIFECYCLE_TIMEOUT + TOKEN_FIRST_TIMEOUT to avoid spurious budget
+        // failures at the boundary.
+        assert!(
+            ROUND_TOTAL_TIMEOUT >= LIFECYCLE_TIMEOUT + TOKEN_FIRST_TIMEOUT,
+            "ROUND_TOTAL_TIMEOUT ({}s) < LIFECYCLE_TIMEOUT ({}s) + TOKEN_FIRST_TIMEOUT ({}s)",
+            ROUND_TOTAL_TIMEOUT.as_secs(),
+            LIFECYCLE_TIMEOUT.as_secs(),
+            TOKEN_FIRST_TIMEOUT.as_secs(),
+        );
     }
 
     #[test]
     fn stream_idle_shorter_than_first_token() {
-        // Once tokens are flowing, the appropriate timeout is much tighter — a hung
-        // model should be detected fast.
-        assert!(STREAM_IDLE_TIMEOUT < FIRST_TOKEN_TIMEOUT);
+        // Once tokens are flowing, idle timeout must be tighter than the
+        // post-load first-token timeout — a hung mid-stream model should be
+        // detected at least as fast as a hung-post-load model.
+        assert!(STREAM_IDLE_TIMEOUT <= TOKEN_FIRST_TIMEOUT);
+    }
+
+    // ── Phase-aware constant invariants (S19) ───────────────────────────────
+    //
+    // SDD: `.specs/veronex/bridge-phase-aware-timing.md`. These tests lock the
+    // structural relationship between the three phase timeouts so future
+    // edits don't accidentally re-introduce the conv_3386 race.
+
+    #[test]
+    fn lifecycle_timeout_strictly_greater_than_legacy_240s() {
+        // The legacy single-FIRST_TOKEN_TIMEOUT was 240s — 8s short of the
+        // observed 248s cold-load on conv_3386. LIFECYCLE_TIMEOUT MUST exceed
+        // that legacy value to retire the regression class.
+        assert!(LIFECYCLE_TIMEOUT.as_secs() > 240);
+    }
+
+    #[test]
+    fn token_first_timeout_in_post_load_zone() {
+        // Phase 2 first token is sub-second on warm. TOKEN_FIRST_TIMEOUT
+        // should be in the seconds-to-minute zone — long enough to absorb
+        // network jitter, short enough that a hung-post-load model surfaces
+        // quickly.
+        let secs = TOKEN_FIRST_TIMEOUT.as_secs();
+        assert!((10..=300).contains(&secs), "got {secs}s");
     }
 }

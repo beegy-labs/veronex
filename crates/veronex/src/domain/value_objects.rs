@@ -190,14 +190,54 @@ pub struct StreamToken {
     /// Finish reason from the provider ("stop", "length", "tool_calls").
     /// Only set on the final token. `None` for intermediate tokens.
     pub finish_reason: Option<String>,
+    /// Phase 1 → Phase 2 boundary signal. Carries no content; not forwarded
+    /// to clients. Bridge consumers use this to switch from
+    /// `LIFECYCLE_TIMEOUT` (load) to `TOKEN_FIRST_TIMEOUT` (Phase 2 first
+    /// token). Emitted by `runner::run_job` after `ensure_ready` succeeds
+    /// when `MCP_LIFECYCLE_PHASE=on`. SDD:
+    /// `.specs/veronex/bridge-phase-aware-timing.md` §3.
+    pub is_phase_boundary: bool,
 }
 
 impl StreamToken {
     pub fn text(value: String) -> Self {
-        Self { value, is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None, finish_reason: None }
+        Self {
+            value,
+            is_final: false,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            tool_calls: None,
+            finish_reason: None,
+            is_phase_boundary: false,
+        }
     }
     pub fn done() -> Self {
-        Self { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None, finish_reason: None }
+        Self {
+            value: String::new(),
+            is_final: true,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            tool_calls: None,
+            finish_reason: None,
+            is_phase_boundary: false,
+        }
+    }
+    /// Phase 1 → Phase 2 boundary signal. Bridge `collect_round` switches
+    /// from `LIFECYCLE_TIMEOUT` to `TOKEN_FIRST_TIMEOUT` on receipt.
+    /// SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3.
+    pub fn phase_boundary() -> Self {
+        Self {
+            value: String::new(),
+            is_final: false,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            tool_calls: None,
+            finish_reason: None,
+            is_phase_boundary: true,
+        }
     }
 }
 
@@ -358,6 +398,38 @@ impl ModelInstanceState {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    // ── StreamToken — phase boundary (S19) ───────────────────────────────────
+    //
+    // SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3. The phase
+    // boundary token is the contract between runner (post-`ensure_ready`)
+    // and bridge (`collect_round` timing-mode switch).
+
+    #[test]
+    fn stream_token_phase_boundary_constructor() {
+        let t = StreamToken::phase_boundary();
+        assert!(t.is_phase_boundary, "phase_boundary() must set the flag");
+        assert!(!t.is_final, "phase_boundary is not a terminal token");
+        assert!(t.value.is_empty(), "phase_boundary carries no content");
+        assert!(t.tool_calls.is_none());
+        assert!(t.finish_reason.is_none());
+        assert!(t.prompt_tokens.is_none());
+        assert!(t.completion_tokens.is_none());
+        assert!(t.cached_tokens.is_none());
+    }
+
+    #[test]
+    fn stream_token_text_not_phase_boundary() {
+        let t = StreamToken::text("hello".into());
+        assert!(!t.is_phase_boundary, "text() must NOT set is_phase_boundary");
+    }
+
+    #[test]
+    fn stream_token_done_not_phase_boundary() {
+        let t = StreamToken::done();
+        assert!(!t.is_phase_boundary, "done() must NOT set is_phase_boundary");
+        assert!(t.is_final);
+    }
 
     // ── Username ─────────────────────────────────────────────────────────
 

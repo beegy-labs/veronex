@@ -326,9 +326,9 @@ impl InferenceProviderPort for GeminiAdapter {
                     // Emit a dedicated token for tool calls (empty text) so run_job
                     // can store them in tool_calls_json independently of result_text.
                     if let Some(ref tc) = tool_calls {
-                        yield StreamToken { value: String::new(), is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: Some(tc.clone()), finish_reason: None };
+                        yield StreamToken { value: String::new(), is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: Some(tc.clone()), finish_reason: None, is_phase_boundary: false };
                     }
-                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason };
+                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason, is_phase_boundary: false };
 
                     if done {
                         return;
@@ -348,7 +348,7 @@ impl InferenceProviderPort for GeminiAdapter {
                         let text = extract_text(&parsed.candidates);
                         let (prompt_tokens, completion_tokens, cached_tokens) = extract_usage(&parsed);
                         let finish_reason = Some(map_finish_reason(&parsed.candidates).as_str().to_string());
-                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason };
+                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason, is_phase_boundary: false };
                         return;
                     }
             }
