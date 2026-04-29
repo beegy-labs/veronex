@@ -726,13 +726,38 @@ async fn collect_completion(
 /// server-side, and re-submits until the model produces a final text response.
 ///
 /// The final response is streamed (or collected) identically to `ollama_chat_proxy`.
+/// MCP-routed chat completions handler — **streaming-first by contract**.
+///
+/// SDD: `.specs/veronex/inference-mcp-streaming-first.md` §5.
+///
+/// Multi-round agentic MCP loops have unbounded variance (each round ≈ 30 s,
+/// up to MAX_ROUNDS=5 → up to ~150 s). Cloudflare's 100 s origin idle-timeout
+/// means a `stream:false` HTTP request that returns a single bundled body will
+/// hit 524 errors for any non-trivial tool-using prompt — this matches the
+/// live-verified user symptom on 2026-04-28 (200K-context model, "마이크론
+/// 주가" prompt → CF 524 → CancelOnDrop fires AFTER bridge dropped → S3 record
+/// never written → UI shows "저장된 결과 없음").
+///
+/// Tier A fix: when `should_intercept()` selects this handler, the response is
+/// **always** SSE regardless of the client's `stream` field. Existing
+/// `sse_response()` infrastructure attaches `X-Accel-Buffering: no` plus
+/// `KeepAlive::new().interval(SSE_KEEP_ALIVE)` (15 s heartbeat) which keep
+/// Cloudflare / Cilium-Envoy connections alive throughout the loop's variance
+/// window. Per the SDD §3.1 contract, clients sending `stream:false` to an
+/// MCP-enabled key receive an SSE-framed response; non-MCP requests still
+/// honour the `stream` field unchanged.
 async fn mcp_ollama_chat(
     state: AppState,
     caller: InferCaller,
     req: ChatCompletionRequest,
     conversation_id: Option<uuid::Uuid>,
-    stream: bool,
+    _stream: bool,
 ) -> Response {
+    // Tier A — SDD §3.1: MCP-routed responses are always SSE. We override the
+    // client's `stream` value at the entry of the MCP path; the rest of the
+    // handler treats `stream = true` unconditionally.
+    let stream = true;
+
     // Load previous conversation + generate conversation_id
     let mut req = req;
     let body_cid = req.conversation_id.as_deref().and_then(super::inference_helpers::decode_conversation_id);
@@ -843,75 +868,62 @@ async fn mcp_ollama_chat(
         return with_conversation_id(sse, conversation_id.as_ref());
     }
 
-    // ── Stream=true but MCP collected: wrap content in SSE ───────────────────
-    // MCP bridge always collects round 0; if no tool calls were made the loop
-    // exits without a final_job_id. When the caller requested streaming we must
-    // still return an SSE response, otherwise the client receives raw JSON that
-    // it cannot parse as SSE events.
-    if stream {
-        use std::convert::Infallible;
-        let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple()).into();
-        let model_s: Arc<str> = model.clone().into();
-        let created = chrono::Utc::now().timestamp();
-        let mut events: Vec<Event> = Vec::new();
+    // ── SSE response — round-0 short-circuit (no tool calls reached) ─────────
+    //
+    // MCP bridge always collects round 0; if the model emitted text directly
+    // and no tool calls were issued, the loop exits without a `final_job_id`.
+    // We synthesise OpenAI-compatible SSE chunks from `loop_result` aggregated
+    // state and pipe through `sse_response()` so Cloudflare-safe headers +
+    // 15 s heartbeat apply uniformly with the streamed-final-round path.
+    //
+    // SDD §3.1 — MCP path is streaming-first by contract.
+    use std::convert::Infallible;
+    let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple()).into();
+    let model_s: Arc<str> = model.into();
+    let created = chrono::Utc::now().timestamp();
+    let mut events: Vec<Event> = Vec::new();
 
-        if !loop_result.content.is_empty() {
-            let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model_s.to_string()), loop_result.content.clone());
+    if !loop_result.content.is_empty() {
+        let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model_s.to_string()), loop_result.content.clone());
+        events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+    }
+    if !loop_result.tool_calls.is_empty() {
+        let openai_calls: Vec<serde_json::Value> = loop_result.tool_calls.iter().enumerate()
+            .filter(|(_, c)| validate_tool_call(c))
+            .map(|(i, c)| convert_tool_call(i, c))
+            .collect();
+        if !openai_calls.is_empty() {
+            let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model_s.to_string()), openai_calls);
             events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
         }
-        if !loop_result.tool_calls.is_empty() {
-            let openai_calls: Vec<serde_json::Value> = loop_result.tool_calls.iter().enumerate()
-                .filter(|(_, c)| validate_tool_call(c))
-                .map(|(i, c)| convert_tool_call(i, c))
-                .collect();
-            if !openai_calls.is_empty() {
-                let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model_s.to_string()), openai_calls);
-                events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
-            }
-        }
-        let reason = loop_result.finish_reason.as_str();
-        let finish = CompletionChunk::finish(chunk_id.to_string(), created, Some(model_s.to_string()), reason);
-        events.push(Event::default().data(serde_json::to_string(&finish).unwrap_or_default()));
+    }
+    let reason = loop_result.finish_reason.as_str();
+    let finish = CompletionChunk::finish(chunk_id.to_string(), created, Some(model_s.to_string()), reason);
+    events.push(Event::default().data(serde_json::to_string(&finish).unwrap_or_default()));
 
-        let sse: SseStream = Box::pin(
-            futures::stream::iter(events.into_iter().map(Ok::<_, Infallible>))
-                .chain(futures::stream::once(async { Ok(Event::default().data("[DONE]")) }))
+    if include_usage {
+        let pt = loop_result.prompt_tokens;
+        let ct = loop_result.completion_tokens;
+        let usage_chunk = CompletionChunk::usage_only(
+            chunk_id.to_string(),
+            created,
+            Some(model_s.to_string()),
+            UsageInfo {
+                prompt_tokens: pt,
+                completion_tokens: ct,
+                total_tokens: pt + ct,
+                prompt_tokens_details: PromptTokensDetails::default(),
+                completion_tokens_details: CompletionTokensDetails::default(),
+            },
         );
-        return with_conversation_id(sse_response(sse), conversation_id.as_ref());
+        events.push(Event::default().data(serde_json::to_string(&usage_chunk).unwrap_or_default()));
     }
 
-    // ── Non-streaming response ─────────────────────────────────────────────────
-    let chunk_id = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple());
-    let created = chrono::Utc::now().timestamp();
-    let total_tokens = loop_result.prompt_tokens + loop_result.completion_tokens;
-
-    Json(ChatCompletion {
-        id: chunk_id,
-        object: "chat.completion",
-        created,
-        model,
-        service_tier: SERVICE_TIER_DEFAULT,
-        choices: vec![CompletionChoice {
-            index: 0,
-            message: CompletionMessage {
-                role: "assistant",
-                content: if loop_result.content.is_empty() { None } else { Some(loop_result.content) },
-                tool_calls: if loop_result.tool_calls.is_empty() { None } else { Some(loop_result.tool_calls) },
-                refusal: None,
-            },
-            finish_reason: loop_result.finish_reason,
-        }],
-        usage: UsageInfo {
-            prompt_tokens: loop_result.prompt_tokens,
-            completion_tokens: loop_result.completion_tokens,
-            total_tokens,
-            prompt_tokens_details: PromptTokensDetails::default(),
-            completion_tokens_details: CompletionTokensDetails::default(),
-        },
-        system_fingerprint: SYSTEM_FINGERPRINT,
-        conversation_id: conversation_id.as_ref().map(super::inference_helpers::to_public_id),
-        conversation_renewed: false,
-    }).into_response()
+    let sse: SseStream = Box::pin(
+        futures::stream::iter(events.into_iter().map(Ok::<_, Infallible>))
+            .chain(futures::stream::once(async { Ok(Event::default().data("[DONE]")) }))
+    );
+    with_conversation_id(sse_response(sse), conversation_id.as_ref())
 }
 
 // ── Conversation context loading ─────────────────────────────────────────────
