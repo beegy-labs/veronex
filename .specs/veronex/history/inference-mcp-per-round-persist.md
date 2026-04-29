@@ -282,7 +282,7 @@ This time the PASS condition includes the dashboard detail GET. The §9.5 verify
 
 - Image: must be the new SHA built from `fix/mcp-per-round-persist`
 - API endpoint: `https://veronex-api-dev.verobee.com`
-- Auth: `test-3` / `test1234!` (Bearer cookie)
+- Auth: `test-3` / `$E2E_DEFAULT_PASSWORD` (Bearer cookie; password sourced from `test/scripts/e2e/_lib.sh _E2E_DEFAULT` — never write plaintext credentials into SDD/CDD/commits)
 
 ### §8.2 Scenario — 2-round MCP loop (web_search trigger)
 

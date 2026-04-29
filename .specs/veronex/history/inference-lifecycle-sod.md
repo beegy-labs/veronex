@@ -760,7 +760,7 @@ Run these in order. Mark each [x] when verified.
 KUBECTL_NS=app-veronex
 TOKEN=$(curl -s -X POST https://veronex-api-dev.verobee.com/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"test-3","password":"test1234!"}' -i \
+  -d "{\"username\":\"test-3\",\"password\":\"$E2E_DEFAULT_PASSWORD\"}" -i \
   | grep -i 'set-cookie: veronex_access_token=' | head -1 \
   | sed -E 's/.*veronex_access_token=([^;]+);.*/\1/')
 
