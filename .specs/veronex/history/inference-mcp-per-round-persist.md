@@ -244,7 +244,7 @@ Bypass paths preserved:
 
 ### §6.6 Tunability
 
-`ANALYZER_IDLE_SKIP_SECS` is intentionally a constant in this PR. If operators need it tunable, a follow-up SDD can promote it to `capacity_settings.idle_skip_secs INT`.
+`ANALYZER_IDLE_SKIP_SECS` is a hardcoded constant. Single-operator workload — no need for per-cluster tuning.
 
 ---
 
@@ -331,11 +331,9 @@ Tier B (PR #100/#101) is still correct as written — it closes the cancel/error
 
 ---
 
-## §10 Follow-ups not in this SDD
+## §10 Follow-ups
 
-- VRAM lease leak — the dispatcher rejected round-2 of loop `989455cf-…` for 325 s even after round-1 released its slot, and `queue_maintenance` logged `reaped expired VRAM leases count=1` at 02:33:33 indicating a prior leaked lease. The Tier D demand-gate eliminates the most common trigger (analyzer racing with user requests on the single-concurrency 200K slot). A follow-up SDD should audit every release path in `vram_pool.rs` for leak sources independently — `.specs/veronex/vram-lease-release-audit.md` (TBD).
-- The bridge's "intermediate cleanup" `DELETE` leaves orphan S3 turn objects (one per deleted intermediate round, written by runner pre-cleanup). Acceptable today (S3 cost negligible at admin scale); a future sweep job can prune by left-joining S3 keys against `inference_jobs.id`.
-- `ANALYZER_IDLE_SKIP_SECS` is a hardcoded 1800 s. If operators need tuning per-cluster, a future SDD promotes it to `capacity_settings.idle_skip_secs`.
+None planned. The defect ladder originally listed (VRAM lease audit, orphan S3 cleanup, `ANALYZER_IDLE_SKIP_SECS` DB-tunable) was speculative — single-incident evidence for the lease leak, sub-MB/year cost for orphan S3, and a single-operator workload that needs no per-cluster tuning. Re-open only on observed recurrence.
 
 ---
 
