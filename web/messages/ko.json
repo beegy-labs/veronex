@@ -775,6 +775,7 @@
     "syncLabel": "동기화",
     "stop": "중단",
     "runAgain": "다시 실행",
+    "toolsUsed": "사용된 도구",
     "retryInTest": "테스트에서 재시도",
     "runningAs": "실행자",
     "runner": "실행자",
