@@ -1,6 +1,6 @@
 //! Token counter + context budget gate.
 //!
-//! SDD: `.specs/veronex/conversation-context-compression.md` §4 (Tier B).
+//! SDD: `.specs/veronex/history/conversation-context-compression.md` §4 (Tier B).
 //!
 //! Used by the pre-flight pruner (Tier C) to decide whether the accumulated
 //! `messages[]` array fits under the model's effective budget before calling

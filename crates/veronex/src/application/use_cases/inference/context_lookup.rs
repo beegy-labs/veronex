@@ -1,6 +1,6 @@
 //! Per-model context size resolution.
 //!
-//! SDD: `.specs/veronex/conversation-context-compression.md` §3 (Tier A).
+//! SDD: `.specs/veronex/history/conversation-context-compression.md` §3 (Tier A).
 //!
 //! Replaces hardcoded `configured_ctx = 32_768u32` fallback in inline
 //! compression budget calculations. Sources the value from

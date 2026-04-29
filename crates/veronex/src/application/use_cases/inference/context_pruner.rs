@@ -1,6 +1,6 @@
 //! Context pre-flight pruner — DCP-style trim before LLM submission.
 //!
-//! SDD: `.specs/veronex/conversation-context-compression.md` §5 (Tier C).
+//! SDD: `.specs/veronex/history/conversation-context-compression.md` §5 (Tier C).
 //!
 //! Algorithm: drop oldest non-system, non-recent-K messages until the
 //! `messages[]` array fits under the budget. Insert a single placeholder

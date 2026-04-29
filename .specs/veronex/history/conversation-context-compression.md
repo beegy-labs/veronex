@@ -1,6 +1,6 @@
 # SDD: Conversation Context Compression (200K-context LLM history management)
 
-> Status: planned (research complete, implementation ready) | Change type: **Add** | Created: 2026-04-29 | Owner: TBD
+> Status: complete | Change type: **Add** | Created: 2026-04-29 | Shipped: 2026-04-29 (#112 / #114 / #116) | Live verified: 2026-04-29 | Archived: 2026-04-29
 > CDD basis: `docs/llm/inference/job-lifecycle.md` · `docs/llm/inference/mcp.md` · `docs/llm/inference/capacity.md` · `docs/llm/inference/context-compression.md`
 > Scope reference: `.specs/veronex/history/scopes/2026-Q2.md` row S17
 > ADD framework: `.add/feature-addition.md` (spec-first) · `.add/implementation.md` (hexagonal, scale 10K providers / 1M TPS)
@@ -12,13 +12,13 @@
 
 | Tier | Status | Branch | PR | Commit |
 | ---- | ------ | ------ | -- | ------ |
-| A — Per-model context size lookup (replace hardcoded 32_768) | [ ] | `feat/context-compression` | — | — |
-| B — Token counter + budget gate (`tiktoken-rs` integration) | [ ] | (same) | — | — |
-| C — Hierarchical compression hook in `bridge::run_loop` entry | [ ] | (same) | — | — |
-| D — Apply across all entry points (OpenAI compat / MCP / native) | [ ] | (same) | — | — |
-| E — Tests (unit token-count + integration 30+ turn loop) | [ ] | (same) | — | — |
-| CDD-sync — `inference/context-compression.md` (existing) updated | [ ] | — | — | — |
-| Live verify (dev) — 200K model + 30+ MCP rounds without overflow | [ ] | — | — | — |
+| A — Per-model context size lookup (replace hardcoded 32_768) | [x] done | `feat/s17-tier-a` | #112 | `3bd1530` |
+| B — Token counter + budget gate (`tiktoken-rs` integration) | [x] done | `feat/s17-tier-b` | #114 | `6fe309c` |
+| C — Hierarchical compression hook in `bridge::run_loop` entry | [x] done | `feat/s17-impl` | #116 | `a0aaa92` |
+| D — Apply across all entry points (OpenAI compat / MCP / native) | [x] done | (same) | #116 | `a0aaa92` |
+| E — Tests (unit token-count + integration 30+ turn loop) | [x] done | (same) | #116 | `a0aaa92` |
+| CDD-sync — `inference/context-compression.md` (existing) updated | [x] done | `docs/s17-s18-close-out` | (this PR) | — |
+| Live verify (dev) — 200K model + 30+ MCP rounds without overflow | [x] **done** — 2026-04-29 (image `develop-921771c`) | — | — | — |
 
 ---
 
@@ -263,6 +263,49 @@ Doc already exists (per-turn `compress_turn` mechanism). Extend it with a new se
 ## §10 Follow-ups
 
 None planned. If post-deploy observation shows accuracy degradation on specific model families, revisit the tokenizer choice (e.g. embed model-specific tokenizer.json from HuggingFace).
+
+---
+
+## §10.5 Live verification results (2026-04-29, post-#116 merge `a0aaa92`)
+
+Image rolled to `develop-921771c` at 11:09 UTC.
+
+### Sanity (no-op expected — short prompt)
+
+| Property | Value |
+|---|---|
+| Model | qwen3-coder-next-200k:latest |
+| Prompt | "3개 단어로 고양이 이름 추천해줘" |
+| Duration | 242 s (cold-load on 200K model) |
+| HTTP | 200 |
+| Pruner log | (none — under budget = no-op = expected) |
+| Response | Korean cat-name suggestions (model answered correctly) |
+
+### Trigger (overflow path — 30-turn synthetic conversation)
+
+| Property | Value |
+|---|---|
+| Model | qwen3:8b |
+| Synthetic body | 1 system + 30 user/assistant pairs × ~600 tok = 27,394 initial tokens |
+| Final user query | "Quick question: what is 2+2? Just answer with one digit." |
+| Bridge log line | `context-pruner: trimmed accumulated messages to fit budget model=qwen3:8b configured_ctx=32768 budget=18636 initial_tokens=27394 after_tokens=18592 dropped=19` |
+| HTTP | 200, Duration 70 s |
+| Final answer | `"4"` ✅ — model received system + last 5 turns + math question intact |
+
+### PASS conditions (SDD §8)
+
+| # | Check | Result |
+|---|---|---|
+| L1 | messages array fits under budget | ✅ 27394 → 18592 |
+| L2 | bridge log `context-pruner: trimmed` | ✅ |
+| L3 | system + last K=5 preserved | ✅ (final question = last message → answered correctly) |
+| L5 | final answer coherent | ✅ ("4") |
+| L6 | no context overflow / prompt too long error | ✅ HTTP 200 |
+
+`qwen3:8b` returned `configured_ctx=32768` (legacy fallback because the
+model has no `model_vram_profiles` row on dev). Trim still fired correctly
+against the fallback budget. For models with real profile rows
+(`qwen3-coder-next-200k:latest` etc.), the actual `configured_ctx` is used.
 
 ---
 

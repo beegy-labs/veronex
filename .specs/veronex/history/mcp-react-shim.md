@@ -420,6 +420,44 @@ The shim's value: enables tool-calling for **the long tail of mid-size models th
 
 ---
 
+## §10.5 Live verification results (2026-04-29, post-#118 merge `81c8f57`)
+
+Image rolled to `develop-81c8f57` at 12:33 UTC. Two scenarios run.
+
+### Test 1 — `qwen3:8b` (ReAct routing fires; model output reflects 8B agentic limit)
+
+| Property | Value |
+|---|---|
+| Model | `qwen3:8b` (heuristic → non-native) |
+| Prompt | "오늘 마이크론 주가 알려줘" |
+| Bridge log | `MCP: routing to ReAct shim (non-native tool_calls model) model=qwen3:8b` ✅ |
+| Action emitted | 0 (model emitted English plain text, no `Action:` block) |
+| Duration | 10 s |
+| Outcome | Infrastructure path verified; model-capability limit confirmed (per §10) |
+
+### Test 2 — `qwen3-coder-next-200k:latest` (regression: native path unchanged)
+
+| Property | Value |
+|---|---|
+| Model | `qwen3-coder-next-200k:latest` (heuristic → native) |
+| ReAct routing log | (none — heuristic correctly routed to native) ✅ |
+| Bridge log | `MCP round complete round=0 mcp_calls=1` ✅ |
+| Native `tool_calls` | `web_search` invoked natively (1 round) |
+| Outcome | Native path behavior identical to pre-S18 |
+
+### PASS conditions (SDD §8)
+
+| # | Check | Result |
+|---|---|---|
+| L1 | `is_native_tool_calling_model("qwen3:8b")` returns false → ReAct path | ✅ |
+| L2 | bridge log contains `MCP: routing to ReAct shim` | ✅ |
+| L3-7 | qwen3:8b emits Action and triggers tool execution | ❌ — model itself ignored prompt (per §10 honest limitation; not infrastructure failure) |
+| §8.3 | Native model unaffected by S18 changes | ✅ |
+
+The ReAct shim is **infrastructurally correct**: capability detection routes the request to `run_loop_react`, system prompt is injected, parser is wired, `execute_calls` reuses native machinery. The 8B model's failure to emit `Action:` blocks is the SDD §10 honest limitation. Real value zone: mid-size long tail (Mistral-7B-Instruct-v0.2, Hermes/Nous fine-tunes etc.) — those models are not yet registered on the dev cluster, so a substantive end-to-end ReAct verification remains pending future model deployment.
+
+---
+
 ## §11 Resume rule recap
 
 If `infrastructure/outbound/ollama/capability.rs` doesn't exist: Tier A. If `react_prompt.rs` / `react_parser.rs` don't exist: Tier B/C. If `run_loop_react` doesn't exist in `bridge.rs`: Tier D. If §8 PASS conditions unverified: live verify pending.
