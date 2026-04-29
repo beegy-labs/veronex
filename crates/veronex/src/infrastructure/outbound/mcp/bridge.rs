@@ -167,6 +167,43 @@ impl McpBridgeAdapter {
                 (None, MAX_ROUNDS, None)
             };
 
+        // ── Pre-flight context budget gate (S17 Tier C/D) ────────────────────
+        //
+        // Trim accumulated `messages[]` to fit the model's context window
+        // before any further processing. Resolves the budget from the
+        // smallest configured_ctx among providers serving this model so the
+        // dispatcher can schedule onto any of them without overflow.
+        // DCP invariant (SDD §5.3): in-memory only — S3 ConversationRecord
+        // is never modified by pruning.
+        // SDD: `.specs/veronex/conversation-context-compression.md` §5/§6.
+        {
+            use crate::application::use_cases::inference::{context_budget, context_pruner};
+            let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+            let configured_ctx = state
+                .capacity_repo
+                .min_configured_ctx_for_model(&model)
+                .await
+                .ok()
+                .flatten()
+                .filter(|&c| c >= 4096)
+                .unwrap_or(32_768);
+            let budget = context_budget::budget_for_context(configured_ctx, lab.context_budget_ratio);
+            let (trimmed, report) =
+                context_pruner::prune_to_budget(&messages, budget, context_pruner::DEFAULT_PRESERVE_RECENT);
+            if !report.is_no_op() {
+                tracing::info!(
+                    model = %model,
+                    configured_ctx,
+                    budget,
+                    initial_tokens = report.initial,
+                    after_tokens = report.budget_after,
+                    dropped = report.dropped,
+                    "context-pruner: trimmed accumulated messages to fit budget"
+                );
+                messages = trimmed;
+            }
+        }
+
         // ── Build the tool list (vector selection or fallback get_all) ───────────
         //
         // When McpVectorSelector is available: embed the last user message and
