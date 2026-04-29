@@ -73,6 +73,11 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 time = { version = "0.3.47", features = ["formatting"] }
 
+# Token counter for context-budget pre-flight (S17 — context compression)
+# cl100k_base provides ±10% accurate counts for non-OpenAI models
+# (Qwen / Llama family) when paired with a conservative budget ratio.
+tiktoken-rs = "0.6"
+
 # MCP protocol client
 veronex-mcp = { path = "../veronex-mcp" }
 

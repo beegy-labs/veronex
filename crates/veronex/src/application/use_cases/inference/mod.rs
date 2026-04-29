@@ -1,5 +1,6 @@
 pub(crate) mod compression_router;
 pub mod context_assembler;
+pub(crate) mod context_budget;
 pub(crate) mod context_compressor;
 pub(crate) mod context_lookup;
 pub mod session_handoff;
