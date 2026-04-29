@@ -1,6 +1,6 @@
 # SDD: Bridge Phase-Aware Timing (single-timer race fix)
 
-> Status: planned | Change type: **Fix** (architectural — Phase 1/2 separation visible to bridge) | Created: 2026-04-29 | Owner: TBD
+> Status: implementation complete | Change type: **Fix** (architectural — Phase 1/2 separation visible to bridge) | Created: 2026-04-29 | Shipped: in PR #120 | Live verify: pending dev rollout
 > CDD basis: `docs/llm/inference/job-lifecycle.md` · `docs/llm/inference/mcp.md` · S14 `inference-lifecycle-sod.md` (architectural lineage)
 > Scope reference: `.specs/veronex/history/scopes/2026-Q2.md` row S19 (to add)
 
@@ -8,14 +8,14 @@
 
 ## §0 Quick-resume State
 
-| Tier | Status |
-| ---- | ------ |
-| A — `StreamToken.is_phase_boundary` field + `phase_boundary()` constructor | [ ] |
-| B — Runner emits boundary token after `ensure_ready` | [ ] |
-| C — Bridge `collect_round` phase-aware timer + new constants | [ ] |
-| D — Tests (StreamToken + collect_round phase transitions) | [ ] |
-| CDD-sync (`mcp.md` Phase 1/2 timing table + `job-lifecycle.md`) | [ ] |
-| Live verify (dev) — `qwen3-coder-next-200k:latest` cold-load → tool round → final answer | [ ] |
+| Tier | Status | PR | Commit |
+| ---- | ------ | -- | ------ |
+| A — `StreamToken.is_phase_boundary` field + `phase_boundary()` constructor | [x] done | #120 | `bbf823c` |
+| B — Runner emits boundary token after `ensure_ready` | [x] done | #120 | `bbf823c` |
+| C — Bridge `collect_round` phase-aware timer + new constants | [x] done | #120 | `bbf823c` |
+| D — Tests (StreamToken + collect_round phase transitions) | [x] done | #120 | `bbf823c` |
+| CDD-sync (`mcp.md` Phase-aware timing row + `job-lifecycle.md` post-`ensure_ready` boundary) | [x] done | #120 | (this commit) |
+| Live verify (dev) — `qwen3-coder-next-200k:latest` cold-load → tool round → final answer | [ ] pending | — | — |
 
 ---
 

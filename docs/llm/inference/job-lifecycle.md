@@ -118,6 +118,7 @@ Client → inference route → submit(prompt, model, ...) → Pending → ZADD q
 queue_dispatcher_loop (ZRANGE peek → Rust scoring → Lua ZREM claim → ZADD queue:active score=deadline_ms):
   → keepalive task renews lease every 30s → run_job():
        Phase 1 (MCP_LIFECYCLE_PHASE=on): provider.ensure_ready(model)  ← see flows/model-lifecycle.md
+       │  └ on success: emit StreamToken::phase_boundary() into JobEntry.tokens (S19 — bridge timing signal)
        Phase 2: provider.stream_tokens(&job)
   → Completed: finalize() writes metrics to Postgres + ConversationRecord to S3
   → ObservabilityPort → veronex-analytics → OTel → Redpanda → ClickHouse
@@ -126,6 +127,15 @@ queue_dispatcher_loop (ZRANGE peek → Rust scoring → Lua ZREM claim → ZADD 
 Phase 1 fails → `failure_reason = "lifecycle_failed"`, no Phase 2 attempt,
 running counter decremented, schedule_cleanup fires. Flag default `false`
 preserves pre-Tier-C behaviour (implicit auto-load via `stream_tokens`).
+
+**Bridge consumer phase awareness** (S19): `bridge::collect_round` uses three
+distinct timeouts gated by the phase-boundary token: `LIFECYCLE_TIMEOUT=600s`
+during Phase 1, `TOKEN_FIRST_TIMEOUT=60s` for Phase 2 first token,
+`STREAM_IDLE_TIMEOUT=45s` for mid-stream. Replaces a single 240 s timer that
+raced 200K cold-loads (`conv_3386OgDfDKkJvamF9X1Dr` was 8 s short of
+completion). When `MCP_LIFECYCLE_PHASE=off`, runner emits no boundary; bridge
+stays in Phase 1 mode for the whole round (single 600 s). SDD:
+`.specs/veronex/bridge-phase-aware-timing.md`.
 
 ## Entity
 
