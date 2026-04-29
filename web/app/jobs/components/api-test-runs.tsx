@@ -124,6 +124,27 @@ export const ApiTestRuns = memo(function ApiTestRuns({
             </div>
           )}
 
+          {/* MCP tool-call timeline (SDD §7) — append-only as the SSE stream
+              progresses. Surfaced even after `status === 'done'` so users can
+              audit which tools were used. */}
+          {activeRun.toolCalls.length > 0 && (
+            <div className="rounded-md border border-border bg-muted/10 p-2 space-y-1">
+              <div className="text-xs font-semibold text-muted-foreground tracking-wide">
+                {t('test.toolsUsed')}
+              </div>
+              <ol className="space-y-1 list-none">
+                {activeRun.toolCalls.map((tc, i) => (
+                  <li key={`${tc.name}-${i}`} className="flex items-center gap-2 text-xs">
+                    <span className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-primary/10 text-primary text-[10px] font-mono">
+                      {i + 1}
+                    </span>
+                    <code className="font-mono">{tc.name}</code>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
           {/* Output */}
           {(activeRun.text.length > 0 || activeRun.status === 'streaming') && (
             <div className="relative rounded-md border border-border bg-muted/20 p-3 min-h-[64px] group/output">

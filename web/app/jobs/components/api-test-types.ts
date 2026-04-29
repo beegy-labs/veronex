@@ -14,6 +14,15 @@ export type ProviderOption = { value: string; label: string; isGemini: boolean }
 export type StreamStatus = 'idle' | 'streaming' | 'done' | 'error'
 export type Endpoint = '/v1/chat/completions' | '/api/chat' | '/api/generate' | '/v1beta/models'
 
+/// One MCP tool invocation observed during streaming.
+/// SDD: `.specs/veronex/inference-mcp-streaming-first.md` §7.
+export interface McpToolCall {
+  /// Tool function name (e.g. "mcp_..._web_search")
+  name: string
+  /// Server-side timestamp when first observed (ms since epoch).
+  startedAt: number
+}
+
 export interface Run {
   id: number
   prompt: string
@@ -25,10 +34,14 @@ export interface Run {
   text: string
   errorMsg: string
   images?: string[]  // raw base64 (no data URL prefix)
+  /// Tool calls observed in the SSE stream — append-only timeline rendered
+  /// above the result text panel. Empty for non-MCP runs.
+  toolCalls: McpToolCall[]
 }
 
 export type RunAction =
   | { type: 'APPEND'; id: number; token: string }
+  | { type: 'TOOL_CALL'; id: number; name: string }
   | { type: 'SET_STATUS'; id: number; status: StreamStatus; errorMsg?: string }
   | { type: 'ADD'; run: Run }
   | { type: 'REMOVE'; id: number }
@@ -43,6 +56,19 @@ export function runsReducer(state: Run[], action: RunAction): Run[] {
       return state.map((r) =>
         r.id === action.id ? { ...r, text: r.text + action.token } : r
       )
+    case 'TOOL_CALL':
+      return state.map((r) => {
+        if (r.id !== action.id) return r
+        // Idempotent: drop duplicate consecutive entries (OpenAI streams
+        // tool_call name once on the first delta and arguments incrementally
+        // after — only the name event is timeline-relevant).
+        const last = r.toolCalls[r.toolCalls.length - 1]
+        if (last && last.name === action.name) return r
+        return {
+          ...r,
+          toolCalls: [...r.toolCalls, { name: action.name, startedAt: Date.now() }],
+        }
+      })
     case 'SET_STATUS':
       return state.map((r) =>
         r.id === action.id

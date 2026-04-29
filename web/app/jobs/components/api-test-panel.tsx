@@ -228,10 +228,21 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
           const chunk: OpenAIChunk = JSON.parse(data)
           if (chunk.error?.message) throw new Error(chunk.error.message)
           if (chunk.id && !jobIdRef.current) {
-            jobIdRef.current = chunk.id.replace('chatcmpl-', '')
+            jobIdRef.current = chunk.id.replace('chatcmpl-', '').replace('mcp-', '')
           }
-          const content = chunk.choices?.[0]?.delta?.content
-          if (content) dispatch({ type: 'APPEND', id: runId, token: content })
+          const delta = chunk.choices?.[0]?.delta
+          if (delta?.content) {
+            dispatch({ type: 'APPEND', id: runId, token: delta.content })
+          }
+          // SDD §7 — surface MCP tool calls as a live timeline. Tool name
+          // arrives once on the first delta of a given tool_call; subsequent
+          // deltas carry only `arguments` chunks. The reducer dedupes by name.
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const name = tc.function?.name
+              if (name) dispatch({ type: 'TOOL_CALL', id: runId, name })
+            }
+          }
         } catch (err) {
           if (err instanceof SyntaxError) continue
           throw err
@@ -498,6 +509,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       text: '',
       errorMsg: '',
       images: p.images,
+      toolCalls: [],
     }
     dispatch({ type: 'ADD', run: newRun })
     setActiveRunId(runId)

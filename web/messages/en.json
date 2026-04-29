@@ -775,6 +775,7 @@
     "syncLabel": "Sync",
     "stop": "Stop",
     "runAgain": "Run Again",
+    "toolsUsed": "Tools Used",
     "retryInTest": "Retry in Test",
     "runningAs": "Running as",
     "runner": "Runner",
