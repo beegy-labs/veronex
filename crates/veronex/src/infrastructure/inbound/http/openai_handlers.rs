@@ -7,7 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::StreamExt;
 use serde::Deserialize;
-use tracing::instrument;
+use tracing::{instrument, Instrument};
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::enums::{ApiFormat, FinishReason, ProviderType};
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_CHAT_MESSAGES, MAX_TOKENS_CEILING, PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
@@ -732,20 +732,31 @@ async fn collect_completion(
 ///
 /// Multi-round agentic MCP loops have unbounded variance (each round ≈ 30 s,
 /// up to MAX_ROUNDS=5 → up to ~150 s). Cloudflare's 100 s origin idle-timeout
-/// means a `stream:false` HTTP request that returns a single bundled body will
-/// hit 524 errors for any non-trivial tool-using prompt — this matches the
-/// live-verified user symptom on 2026-04-28 (200K-context model, "마이크론
-/// 주가" prompt → CF 524 → CancelOnDrop fires AFTER bridge dropped → S3 record
-/// never written → UI shows "저장된 결과 없음").
+/// means a non-streaming HTTP request that awaits the whole loop before
+/// returning will hit 524 for any non-trivial tool-using prompt — verified
+/// live on 2026-04-28 (200K-context model, "마이크론 주가" → CF 524 →
+/// CancelOnDrop fires after bridge dropped → S3 record never written → UI
+/// shows "저장된 결과 없음").
 ///
-/// Tier A fix: when `should_intercept()` selects this handler, the response is
-/// **always** SSE regardless of the client's `stream` field. Existing
-/// `sse_response()` infrastructure attaches `X-Accel-Buffering: no` plus
-/// `KeepAlive::new().interval(SSE_KEEP_ALIVE)` (15 s heartbeat) which keep
-/// Cloudflare / Cilium-Envoy connections alive throughout the loop's variance
-/// window. Per the SDD §3.1 contract, clients sending `stream:false` to an
-/// MCP-enabled key receive an SSE-framed response; non-MCP requests still
-/// honour the `stream` field unchanged.
+/// Tier A fix — **two layers**:
+///
+/// 1. Response is **always** SSE regardless of the client's `stream` field
+///    (per SDD §3.1 contract). Existing `sse_response()` attaches
+///    `X-Accel-Buffering: no` + `KeepAlive::new().interval(SSE_KEEP_ALIVE)`
+///    so the connection stays alive through 524 timeouts.
+///
+/// 2. **The bridge runs in a spawned task** (`tokio::spawn`). The handler
+///    returns the SSE Response *before* awaiting the loop, so axum starts
+///    flushing status + headers + first heartbeat within milliseconds of
+///    the client request. Without this, awaiting `bridge.run_loop` to
+///    completion (~150 s for tool-using prompts) blocks Response
+///    construction and 524 still fires.
+///
+/// Cancel-on-disconnect: when the client TCP drops, the SSE stream is
+/// dropped, the receiver closes, and the spawned bridge task notices via
+/// `tokio::sync::oneshot` send error or by the `state.use_case.stream(fid)`
+/// `CancelOnDrop` wrapper inside `build_sse_response`. Tier B (PR #100) then
+/// persists whatever was accumulated to S3.
 async fn mcp_ollama_chat(
     state: AppState,
     caller: InferCaller,
@@ -753,12 +764,8 @@ async fn mcp_ollama_chat(
     conversation_id: Option<uuid::Uuid>,
     _stream: bool,
 ) -> Response {
-    // Tier A — SDD §3.1: MCP-routed responses are always SSE. We override the
-    // client's `stream` value at the entry of the MCP path; the rest of the
-    // handler treats `stream = true` unconditionally.
-    let stream = true;
-
-    // Load previous conversation + generate conversation_id
+    // Load previous conversation + generate conversation_id (synchronous,
+    // < 50 ms in practice — no need to defer behind the SSE response).
     let mut req = req;
     let body_cid = req.conversation_id.as_deref().and_then(super::inference_helpers::decode_conversation_id);
     let (conversation_id, _session_renewed) = match load_conversation_context(&state, &caller, body_cid.or(conversation_id), &mut req.messages, &req.model).await {
@@ -769,160 +776,166 @@ async fn mcp_ollama_chat(
     let ollama_messages: Vec<serde_json::Value> =
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
 
-    let orchestrator_model = req.model.clone();
     let model = req.model.clone();
+    let orchestrator_model = req.model.clone();
     let include_usage = req.stream_options.as_ref()
         .and_then(|o| o.include_usage)
         .unwrap_or(false);
 
     // Defensive: mcp_bridge is Some here because should_intercept() returned true,
     // but we avoid expect() in a hot path per patterns.md.
-    let bridge = match state.mcp_bridge.as_ref() {
-        Some(b) => b,
-        None => return (
+    if state.mcp_bridge.is_none() {
+        return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": {"message": "MCP bridge not configured", "type": "server_error"}})),
-        ).into_response(),
-    };
+        ).into_response();
+    }
 
-    let loop_result = bridge.run_loop(
-        &state,
-        &caller,
-        orchestrator_model,
-        ollama_messages,
-        req.tools,
-        stream,
-        conversation_id.clone(),
-        req.stop,
-        req.seed,
-        req.response_format,
-        req.frequency_penalty,
-        req.presence_penalty,
-    ).await;
+    // Spawn bridge.run_loop so the handler can return its SSE Response
+    // immediately. The oneshot lets the SSE stream below await the bridge
+    // result without blocking the handler itself.
+    let (bridge_done_tx, bridge_done_rx) = tokio::sync::oneshot::channel::<Option<crate::infrastructure::outbound::mcp::bridge::McpLoopResult>>();
 
-    let loop_result = match loop_result {
-        Some(r) => r,
-        None => {
-            return (
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": {"message": "MCP loop failed to start", "type": "server_error"}})),
-            ).into_response();
-        }
-    };
+    {
+        let state = state.clone();
+        let caller = caller.clone();
+        let conversation_id = conversation_id;
+        let tools = req.tools.clone();
+        let stop = req.stop.clone();
+        let seed = req.seed;
+        let response_format = req.response_format.clone();
+        let frequency_penalty = req.frequency_penalty;
+        let presence_penalty = req.presence_penalty;
+        tokio::spawn(async move {
+            // SAFETY: mcp_bridge presence checked just above this spawn.
+            let bridge = state.mcp_bridge.as_ref().expect("mcp_bridge checked above");
+            let result = bridge.run_loop(
+                &state, &caller, orchestrator_model, ollama_messages, tools,
+                /* want_stream */ true, conversation_id, stop, seed,
+                response_format, frequency_penalty, presence_penalty,
+            ).await;
+            // Receiver may already be dropped (client disconnected). Discard
+            // the Err — the bridge task ran to completion regardless, and
+            // Tier B has already persisted to S3 from inside bridge.run_loop.
+            let _ = bridge_done_tx.send(result);
+        }.instrument(tracing::info_span!("veronex.mcp.bridge_loop")));
+    }
 
-    // ── Streaming final round ─────────────────────────────────────────────────
-    // When the bridge returned a job_id instead of collected content, pipe it
-    // through the standard SSE path — identical to `ollama_chat_proxy`.
-    if let Some(final_job_id) = loop_result.final_job_id {
-        let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", final_job_id.0).into();
-        let model: Arc<str> = model.into();
-        let created = chrono::Utc::now().timestamp();
-        let mut saw_tool_calls = false;
+    // Build the SSE event stream that defers to the bridge result. The
+    // Response constructed below opens immediately; KeepAlive emits
+    // heartbeats while the stream awaits the bridge's oneshot.
+    use std::convert::Infallible;
+    let chunk_id_seed: Arc<str> = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple()).into();
+    let model_for_stream: Arc<str> = model.clone().into();
+    let state_for_stream = state.clone();
+    let created = chrono::Utc::now().timestamp();
 
-        let sse = build_sse_response(&state, final_job_id, true, move |result| {
-            match result {
-                Ok(token) if token.tool_calls.is_some() => {
-                    saw_tool_calls = true;
-                    let calls = token.tool_calls.as_ref()
-                        .and_then(|v| v.as_array())
-                        .cloned()
-                        .unwrap_or_default();
-                    let openai_calls: Vec<serde_json::Value> = calls.iter().enumerate()
-                        .filter(|(_, c)| validate_tool_call(c))
-                        .map(|(i, c)| convert_tool_call(i, c))
-                        .collect();
-                    let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model.to_string()), openai_calls);
-                    vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
-                }
-                Ok(token) if token.is_final => {
-                    let reason = token.finish_reason.as_deref()
-                        .unwrap_or(if saw_tool_calls { "tool_calls" } else { FinishReason::Stop.as_str() });
-                    let finish_chunk = CompletionChunk::finish(chunk_id.to_string(), created, Some(model.to_string()), reason);
-                    let finish_event = Event::default().data(serde_json::to_string(&finish_chunk).unwrap_or_default());
-                    if include_usage {
-                        let pt = token.prompt_tokens.unwrap_or(0);
-                        let ct = token.completion_tokens.unwrap_or(0);
-                        let usage_chunk = CompletionChunk::usage_only(chunk_id.to_string(), created, Some(model.to_string()), UsageInfo {
-                            prompt_tokens: pt,
-                            completion_tokens: ct,
-                            total_tokens: pt + ct,
-                            prompt_tokens_details: PromptTokensDetails::default(),
-                            completion_tokens_details: CompletionTokensDetails::default(),
-                        });
-                        vec![finish_event, Event::default().data(serde_json::to_string(&usage_chunk).unwrap_or_default())]
-                    } else {
-                        vec![finish_event]
+    let sse_stream = async_stream::stream! {
+        let loop_result = match bridge_done_rx.await {
+            Ok(Some(r)) => r,
+            Ok(None) | Err(_) => {
+                let err = serde_json::json!({"error": {"message": "MCP loop failed to start", "type": "server_error"}});
+                yield Ok::<_, Infallible>(Event::default().event("error").data(serde_json::to_string(&err).unwrap_or_default()));
+                yield Ok(Event::default().data("[DONE]"));
+                return;
+            }
+        };
+
+        // ── Final round delegated to streamed inference job ──────────────
+        if let Some(final_job_id) = loop_result.final_job_id {
+            let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", final_job_id.0).into();
+            let model: Arc<str> = model_for_stream.clone();
+            let mut saw_tool_calls = false;
+
+            let mut token_stream = state_for_stream.use_case.stream(&final_job_id);
+            while let Some(result) = token_stream.next().await {
+                match result {
+                    Ok(token) if token.tool_calls.is_some() => {
+                        saw_tool_calls = true;
+                        let calls = token.tool_calls.as_ref()
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let openai_calls: Vec<serde_json::Value> = calls.iter().enumerate()
+                            .filter(|(_, c)| validate_tool_call(c))
+                            .map(|(i, c)| convert_tool_call(i, c))
+                            .collect();
+                        let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model.to_string()), openai_calls);
+                        yield Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+                    }
+                    Ok(token) if token.is_final => {
+                        let reason = token.finish_reason.as_deref()
+                            .unwrap_or(if saw_tool_calls { "tool_calls" } else { FinishReason::Stop.as_str() });
+                        let finish_chunk = CompletionChunk::finish(chunk_id.to_string(), created, Some(model.to_string()), reason);
+                        yield Ok(Event::default().data(serde_json::to_string(&finish_chunk).unwrap_or_default()));
+                        if include_usage {
+                            let pt = token.prompt_tokens.unwrap_or(0);
+                            let ct = token.completion_tokens.unwrap_or(0);
+                            let usage_chunk = CompletionChunk::usage_only(chunk_id.to_string(), created, Some(model.to_string()), UsageInfo {
+                                prompt_tokens: pt,
+                                completion_tokens: ct,
+                                total_tokens: pt + ct,
+                                prompt_tokens_details: PromptTokensDetails::default(),
+                                completion_tokens_details: CompletionTokensDetails::default(),
+                            });
+                            yield Ok(Event::default().data(serde_json::to_string(&usage_chunk).unwrap_or_default()));
+                        }
+                    }
+                    Ok(token) => {
+                        if !token.value.is_empty() {
+                            let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model.to_string()), token.value);
+                            yield Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+                        }
+                    }
+                    Err(e) => {
+                        let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
+                        yield Ok(Event::default().event("error").data(serde_json::to_string(&err).unwrap_or_default()));
                     }
                 }
-                Ok(token) => {
-                    if token.value.is_empty() { return vec![]; }
-                    let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model.to_string()), token.value);
-                    vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
-                }
-                Err(e) => {
-                    let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
-                    vec![Event::default().data(serde_json::to_string(&err).unwrap_or_default())]
-                }
             }
-        });
-        return with_conversation_id(sse, conversation_id.as_ref());
-    }
-
-    // ── SSE response — round-0 short-circuit (no tool calls reached) ─────────
-    //
-    // MCP bridge always collects round 0; if the model emitted text directly
-    // and no tool calls were issued, the loop exits without a `final_job_id`.
-    // We synthesise OpenAI-compatible SSE chunks from `loop_result` aggregated
-    // state and pipe through `sse_response()` so Cloudflare-safe headers +
-    // 15 s heartbeat apply uniformly with the streamed-final-round path.
-    //
-    // SDD §3.1 — MCP path is streaming-first by contract.
-    use std::convert::Infallible;
-    let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple()).into();
-    let model_s: Arc<str> = model.into();
-    let created = chrono::Utc::now().timestamp();
-    let mut events: Vec<Event> = Vec::new();
-
-    if !loop_result.content.is_empty() {
-        let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model_s.to_string()), loop_result.content.clone());
-        events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
-    }
-    if !loop_result.tool_calls.is_empty() {
-        let openai_calls: Vec<serde_json::Value> = loop_result.tool_calls.iter().enumerate()
-            .filter(|(_, c)| validate_tool_call(c))
-            .map(|(i, c)| convert_tool_call(i, c))
-            .collect();
-        if !openai_calls.is_empty() {
-            let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model_s.to_string()), openai_calls);
-            events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+            yield Ok(Event::default().data("[DONE]"));
+            return;
         }
-    }
-    let reason = loop_result.finish_reason.as_str();
-    let finish = CompletionChunk::finish(chunk_id.to_string(), created, Some(model_s.to_string()), reason);
-    events.push(Event::default().data(serde_json::to_string(&finish).unwrap_or_default()));
 
-    if include_usage {
-        let pt = loop_result.prompt_tokens;
-        let ct = loop_result.completion_tokens;
-        let usage_chunk = CompletionChunk::usage_only(
-            chunk_id.to_string(),
-            created,
-            Some(model_s.to_string()),
-            UsageInfo {
-                prompt_tokens: pt,
-                completion_tokens: ct,
-                total_tokens: pt + ct,
-                prompt_tokens_details: PromptTokensDetails::default(),
-                completion_tokens_details: CompletionTokensDetails::default(),
-            },
-        );
-        events.push(Event::default().data(serde_json::to_string(&usage_chunk).unwrap_or_default()));
-    }
+        // ── Round 0 short-circuit (model emitted text without tool calls) ──
+        if !loop_result.content.is_empty() {
+            let chunk = CompletionChunk::content(chunk_id_seed.to_string(), created, Some(model_for_stream.to_string()), loop_result.content.clone());
+            yield Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+        }
+        if !loop_result.tool_calls.is_empty() {
+            let openai_calls: Vec<serde_json::Value> = loop_result.tool_calls.iter().enumerate()
+                .filter(|(_, c)| validate_tool_call(c))
+                .map(|(i, c)| convert_tool_call(i, c))
+                .collect();
+            if !openai_calls.is_empty() {
+                let chunk = CompletionChunk::tool_calls(chunk_id_seed.to_string(), created, Some(model_for_stream.to_string()), openai_calls);
+                yield Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+            }
+        }
+        let reason = loop_result.finish_reason.as_str();
+        let finish = CompletionChunk::finish(chunk_id_seed.to_string(), created, Some(model_for_stream.to_string()), reason);
+        yield Ok(Event::default().data(serde_json::to_string(&finish).unwrap_or_default()));
 
-    let sse: SseStream = Box::pin(
-        futures::stream::iter(events.into_iter().map(Ok::<_, Infallible>))
-            .chain(futures::stream::once(async { Ok(Event::default().data("[DONE]")) }))
-    );
+        if include_usage {
+            let pt = loop_result.prompt_tokens;
+            let ct = loop_result.completion_tokens;
+            let usage_chunk = CompletionChunk::usage_only(
+                chunk_id_seed.to_string(), created, Some(model_for_stream.to_string()),
+                UsageInfo {
+                    prompt_tokens: pt,
+                    completion_tokens: ct,
+                    total_tokens: pt + ct,
+                    prompt_tokens_details: PromptTokensDetails::default(),
+                    completion_tokens_details: CompletionTokensDetails::default(),
+                },
+            );
+            yield Ok(Event::default().data(serde_json::to_string(&usage_chunk).unwrap_or_default()));
+        }
+
+        yield Ok(Event::default().data("[DONE]"));
+    };
+
+    let sse: SseStream = Box::pin(sse_stream);
     with_conversation_id(sse_response(sse), conversation_id.as_ref())
 }
 
