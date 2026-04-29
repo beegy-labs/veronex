@@ -44,6 +44,6 @@ pub(crate) struct JobEntry {
     /// performs the S3 PUT for this job. Prevents double-write across
     /// racing finalize_job ↔ cancel paths inside `run_job`'s biased
     /// select! (cancel arm wins vs stream arm completing).
-    /// SDD: `.specs/veronex/inference-mcp-streaming-first.md` §6.2a.
+    /// SDD: `.specs/veronex/history/inference-mcp-streaming-first.md` §6.2a.
     pub persisted_to_s3: Arc<AtomicBool>,
 }

@@ -11,11 +11,13 @@
 
 | Tier | Status | Branch | PR | Commit |
 | ---- | ------ | ------ | -- | ------ |
-| A — MCP entry forces SSE streaming + heartbeat | [ ] not started | `feat/mcp-streaming-first` (TBD) | — | — |
-| B — Cancel-resilient finalize_job (always write S3) | [ ] not started | `fix/finalize-on-cancel` (TBD) | — | — |
-| C — Test panel UI: stream-first + tool-call progress | [ ] not started | `feat/test-panel-stream` (TBD, web/) | — | — |
-| CDD-sync (post C) | [ ] blocked on A+B | `docs/cdd-mcp-streaming` (TBD) | — | — |
-| Live verify (dev) | [ ] blocked on CDD-sync | dev cluster + test-3 user | — | — |
+| B — Cancel-resilient persist (always write S3) | [x] done | `fix/finalize-on-cancel` | #100 | `a210b8b` |
+| B-tests — `persist_partial_conversation` unit tests | [x] done | `test/tier-b-persist-conversation` | #101 | `ea179a3` |
+| A — MCP entry forces SSE streaming + heartbeat | [x] done | `feat/mcp-streaming-first` | #102 | `806dabc` |
+| A-spawn — Handler returns SSE Response immediately (spawn bridge) | [x] done | `feat/test-panel-stream` (Rust hotfix on same branch name) | #103 | `82f3ff3` |
+| C — Test panel UI: tool-call timeline | [x] done | `feat/test-panel-tool-call-progress` | #104 | `e3cc641` |
+| Live verify (dev) | [x] **done** — 2026-04-29 | — | platform-gitops sync | — |
+| CDD-sync (post all) | [ ] in progress | `chore/mcp-streaming-cdd-sync` | TBD | TBD |
 
 ---
 
@@ -668,6 +670,61 @@ Run on `veronex-api-dev.verobee.com` with `test-3` user, 200K-context model.
 | 4 | Non-MCP raw chat (no MCP key) | Single JSON response when `stream:false`, SSE when `stream:true` (unchanged) |
 
 Mark §0 row `[x] done` only after all four pass.
+
+---
+
+## §9.5 Live Verification Results (2026-04-29)
+
+End-to-end run on `veronex-api-dev.verobee.com` after all four tiers
+deployed (image `develop-82f3ff3` for api/mcp/agent/analytics/consumer,
+`develop-e3cc641` for web). User-reported prompt verbatim:
+"금일 마이크론 주가에대해 알려줘" with `"stream":false` (the exact
+shape the test panel sent before).
+
+### Acceptance grid
+
+| § | Criterion | Observed | Verdict |
+|---|-----------|----------|---------|
+| §5.2 | HTTP 200 + `content-type: text/event-stream` | `HTTP/2 200`, `content-type: text/event-stream` | ✅ |
+| §5.2 | No Cloudflare 524 for 200 s+ runs | request held alive 240,860 ms (4 min) | ✅ |
+| §5.2 | Heartbeat ≤ 20 s during silent phase | colon-comment heartbeats appear repeatedly during cold-load before first content chunk | ✅ |
+| §5.2 | Stream terminates with `data: [DONE]\n\n` | `[DONE]` count = 1 | ✅ |
+| §5.2 | OpenAI-compat `chat.completion.chunk` shape | 182 data events, all valid `chatcmpl-mcp-...` chunks with `delta.content` | ✅ |
+| §6.3 | Bridge S3 write reaches post-loop block | `MCP round complete round=0 mcp_calls=1` logged from spawned bridge task; cold-load `LoadCompleted{duration_ms: 221433}` | ✅ |
+| §6.3 | Job DB rows reflect successful completion | both round-jobs `status=completed`, final round `completion_tokens=195` (the Korean answer) | ✅ |
+| §7.2 | Test panel UI consumes SSE without code change | `iterSseLines` was already streaming-aware; Tier C added tool-call timeline rendering | ✅ |
+| §10.6 | No regression on Tier B / lifecycle SoD | lifecycle.ensure_ready outcome=AlreadyLoaded duration_ms=0 on warm round; no Stalled / LifecycleError observed | ✅ |
+
+### Observed timeline (stream:false MCP request)
+
+```
+T=0       client POST  /v1/chat/completions stream:false
+T+50ms    handler returns SSE Response (axum flushes 200 + headers)
+T+50ms    KeepAlive begins emitting `:` comment heartbeats every 15 s
+T+50ms    bridge.run_loop spawned in background
+T+50ms..  intermediate rounds (web_search tool call ~15 s)
+T+15s     round 0 complete: mcp_calls=1
+T+15s..   final round inference_job dispatched
+T+15s..236s  cold-load: lifecycle.ensure_ready blocks ~221 s
+            (LoadCompleted{duration_ms: 221433})
+T+236s..  final round emits 195 tokens of Korean text via SSE
+T+240s    [DONE] sentinel; client closes
+```
+
+Cloudflare's 100 s idle-timeout never trips because heartbeats flow
+continuously from `T+50 ms`. Pre-Tier-A this same prompt produced
+524 + empty S3 record + UI "저장된 결과 없음".
+
+### Caveat
+
+`X-Accel-Buffering: no` header set by `sse_response()` did not appear
+in the curl-observed response headers — Cloudflare appears to strip
+it on the response edge. Despite that, the stream did NOT buffer
+(content arrived chunk-by-chunk during the test). This is consistent
+with [Cloudflare community thread on SSE buffering](https://community.cloudflare.com/t/cloudflare-buffering-sse-streams/506921):
+the header is honoured upstream by nginx/envoy but Cloudflare's edge
+may rewrite/strip headers — what matters at runtime is that data
+flows continuously, which the heartbeat guarantees.
 
 ---
 

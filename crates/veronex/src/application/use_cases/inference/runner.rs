@@ -111,7 +111,7 @@ impl Default for TokenStreamState {
 
 // ── Cancel-resilient S3 persist helper ─────────────────────────────────────
 //
-// SDD: `.specs/veronex/inference-mcp-streaming-first.md` §6.
+// SDD: `.specs/veronex/history/inference-mcp-streaming-first.md` §6.
 //
 // CDD invariant (`docs/llm/inference/job-lifecycle.md`): S3 ConversationRecord
 // is the SSOT for `result` / `messages` / `tool_calls`. Pre-Tier-B, only the
@@ -917,7 +917,7 @@ mod tests {
 
     // ── Tier B — persist_partial_conversation ───────────────────────────────
     //
-    // SDD §6.4: `.specs/veronex/inference-mcp-streaming-first.md`. These tests
+    // SDD §6.4: `.specs/veronex/history/inference-mcp-streaming-first.md`. These tests
     // lock the cancel-resilient S3 write contract — every code path that exits
     // `run_job` with accumulated tokens must have its `ts` flushed to S3
     // ConversationRecord (CDD-defined SSOT) exactly once, racing-safe.

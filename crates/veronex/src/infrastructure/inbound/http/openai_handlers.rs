@@ -728,7 +728,7 @@ async fn collect_completion(
 /// The final response is streamed (or collected) identically to `ollama_chat_proxy`.
 /// MCP-routed chat completions handler — **streaming-first by contract**.
 ///
-/// SDD: `.specs/veronex/inference-mcp-streaming-first.md` §5.
+/// SDD: `.specs/veronex/history/inference-mcp-streaming-first.md` §5.
 ///
 /// Multi-round agentic MCP loops have unbounded variance (each round ≈ 30 s,
 /// up to MAX_ROUNDS=5 → up to ~150 s). Cloudflare's 100 s origin idle-timeout
