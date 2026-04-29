@@ -805,7 +805,7 @@ No new HTTPRoute changes needed. Cloudflare in front passes SSE through with the
 | `test/scripts/e2e/cancel-persist.sh` (NEW) | veronex | manual |
 | `test-panel.spec.ts` extension | veronex web/ | `npm run test:e2e` |
 
-Each script is **resume-safe**: header documents the SDD section being verified, exit code propagates to CI, run against `veronex-api-dev.verobee.com` with `test-3`/`test1234!` credentials (per project memory).
+Each script is **resume-safe**: header documents the SDD section being verified, exit code propagates to CI, run against `veronex-api-dev.verobee.com` with the `test-3` account; password is sourced from `test/scripts/e2e/_lib.sh _E2E_DEFAULT` (never write plaintext credentials into SDD/CDD/commits).
 
 ### §10.6 Resilience to existing PR #98 patterns
 
