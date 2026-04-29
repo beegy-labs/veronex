@@ -241,7 +241,34 @@ impl McpBridgeAdapter {
             }
             all_tools.push(tool);
         }
-        let tools_json = if all_tools.is_empty() { None } else { Some(all_tools) };
+        let tools_json = if all_tools.is_empty() { None } else { Some(all_tools.clone()) };
+
+        // ── Capability gate — route to ReAct shim when the model does not ────
+        // natively emit `tool_calls` (vision-shim mirror; SDD: mcp-react-shim §6).
+        // For v1 we use a name-pattern heuristic; future enhancement: cache
+        // results from Ollama `/api/show` template inspection.
+        if !all_tools.is_empty()
+            && !crate::infrastructure::outbound::ollama::capability::heuristic_supports_native(&model)
+        {
+            info!(model = %model, "MCP: routing to ReAct shim (non-native tool_calls model)");
+            return self
+                .run_loop_react(
+                    state,
+                    caller,
+                    model,
+                    messages,
+                    all_tools,
+                    conversation_id,
+                    stop,
+                    seed,
+                    response_format,
+                    frequency_penalty,
+                    presence_penalty,
+                    allowed_servers,
+                    max_rounds,
+                )
+                .await;
+        }
 
         // ── Loop ID — groups all rounds into one traceable unit ───────────────
         let mcp_loop_id = Uuid::new_v4();
@@ -484,6 +511,248 @@ impl McpBridgeAdapter {
             finish_reason,
             rounds,
             final_job_id,
+        })
+    }
+
+    // ── ReAct shim path ────────────────────────────────────────────────────────
+    //
+    // Mirror of `run_loop` for models without native `tool_calls`. Injects a
+    // ReAct system prompt teaching the Thought/Action/Action Input/Observation
+    // format, submits jobs WITHOUT tools, parses the model's text output for
+    // Action blocks, executes via `execute_calls`, and feeds Observations back
+    // as user messages.
+    //
+    // SDD: `.specs/veronex/mcp-react-shim.md` §6 (Tier D).
+    #[allow(clippy::too_many_arguments)]
+    async fn run_loop_react(
+        &self,
+        state: &AppState,
+        caller: &InferCaller,
+        model: String,
+        mut messages: Vec<Value>,
+        all_tools: Vec<Value>,
+        conversation_id: Option<uuid::Uuid>,
+        stop: Option<Value>,
+        seed: Option<u32>,
+        response_format: Option<Value>,
+        frequency_penalty: Option<f64>,
+        presence_penalty: Option<f64>,
+        allowed_servers: Option<Arc<HashSet<Uuid>>>,
+        max_rounds: u8,
+    ) -> Option<McpLoopResult> {
+        // Build ReAct system prompt; `None` means no tools — caller already
+        // verified all_tools.is_empty() == false, so this should always succeed.
+        let react_system = match super::react_prompt::build_react_system_prompt(&all_tools) {
+            Some(p) => p,
+            None => return None,
+        };
+
+        // Inject the system prompt at index 0 (before any user messages).
+        messages.insert(0, serde_json::json!({"role": "system", "content": react_system}));
+
+        let mcp_loop_id = Uuid::new_v4();
+        let mut total_prompt_tokens: u32 = 0;
+        let mut total_completion_tokens: u32 = 0;
+        let mut content = String::new();
+        let mut rounds: u8 = 0;
+        let mut first_job_id: Option<JobId> = None;
+        let mut intermediate_job_ids: Vec<Uuid> = Vec::new();
+        let mut call_sig_counts: HashMap<(String, String), u8> = HashMap::new();
+
+        let tenant_id = caller.account_id().map(|id| id.to_string()).unwrap_or_default();
+
+        for round in 0..max_rounds {
+            // ── Submit job WITHOUT tools (text-only — model gets tools as text) ─
+            let prompt = extract_last_user_prompt(&messages);
+            let job_id = match state.use_case.submit(SubmitJobRequest {
+                prompt,
+                model_name: model.clone(),
+                provider_type: ProviderType::Ollama,
+                gemini_tier: None,
+                api_key_id: caller.api_key_id(),
+                account_id: caller.account_id(),
+                source: caller.source(),
+                api_format: ApiFormat::OpenaiCompat,
+                messages: Some(Value::Array(messages.clone())),
+                tools: None,
+                request_path: Some("/v1/chat/completions".to_string()),
+                conversation_id,
+                key_tier: caller.key_tier(),
+                images: None,
+                stop: stop.clone(),
+                seed,
+                response_format: response_format.clone(),
+                frequency_penalty,
+                presence_penalty,
+                mcp_loop_id: Some(mcp_loop_id),
+                max_tokens: None,
+                vision_analysis: None,
+            }).await {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!("MCP ReAct: submit failed on round {round}: {e}");
+                    return None;
+                }
+            };
+
+            if first_job_id.is_none() {
+                first_job_id = Some(job_id.clone());
+            } else {
+                intermediate_job_ids.push(job_id.0);
+            }
+
+            // ── Collect text-only response ────────────────────────────────────
+            let round_result = match collect_round(state, &job_id).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(round, error = ?e, "ReAct round failed");
+                    return Some(McpLoopResult {
+                        content: format!("Error: ReAct round {round} failed ({e:?})"),
+                        tool_calls: Vec::new(),
+                        prompt_tokens: total_prompt_tokens,
+                        completion_tokens: total_completion_tokens,
+                        finish_reason: "error".into(),
+                        rounds: round,
+                        final_job_id: None,
+                    });
+                }
+            };
+            total_prompt_tokens = total_prompt_tokens.saturating_add(round_result.prompt_tokens);
+            total_completion_tokens = total_completion_tokens.saturating_add(round_result.completion_tokens);
+            rounds = round + 1;
+
+            // ── Feed text through ReAct parser ────────────────────────────────
+            let mut parser = super::react_parser::ReActParser::new();
+            let mut events = parser.feed(&round_result.content);
+            events.extend(parser.finish());
+
+            let mut found_action_this_round = false;
+            let mut should_break = false;
+            for event in events {
+                match event {
+                    super::react_parser::ReActEvent::Action { name, args } => {
+                        found_action_this_round = true;
+
+                        // Loop detection — same Action / args repeated
+                        let args_str = serde_json::to_string(&args).unwrap_or_default();
+                        let sig = (name.clone(), quick_args_hash(&args_str));
+                        let count = call_sig_counts.entry(sig).or_insert(0);
+                        *count += 1;
+                        if *count >= LOOP_DETECT_THRESHOLD {
+                            warn!(name = %name, "ReAct: loop detected — same call repeated");
+                            content = format!(
+                                "(Loop detected: '{}' called {} times. Stopping.)",
+                                name, count
+                            );
+                            should_break = true;
+                            break;
+                        }
+
+                        // Build OpenAI-format tool_call for execute_calls
+                        let tc_value = serde_json::json!({
+                            "function": {
+                                "name": name,
+                                "arguments": args_str
+                            }
+                        });
+
+                        // Execute (reuses native path machinery)
+                        let results = self
+                            .execute_calls(
+                                state,
+                                &[tc_value],
+                                caller.api_key_id(),
+                                tenant_id.clone(),
+                                rounds - 1,
+                                mcp_loop_id,
+                                job_id.0,
+                                allowed_servers.clone(),
+                            )
+                            .await;
+
+                        // Append assistant Action + user Observation back into messages
+                        let serialized_action =
+                            format!("Action: {}\nAction Input: {}", name, args_str);
+                        messages.push(serde_json::json!({
+                            "role": "assistant",
+                            "content": serialized_action
+                        }));
+                        let mut observation = results
+                            .first()
+                            .map(|(t, _)| t.clone())
+                            .unwrap_or_else(|| "(no result)".to_string());
+                        truncate_at_char_boundary(&mut observation, MAX_TOOL_RESULT_BYTES);
+                        messages.push(serde_json::json!({
+                            "role": "user",
+                            "content": format!("Observation: {observation}")
+                        }));
+
+                        info!(round, name = %name, "ReAct: Action executed");
+                        // Process at most one Action per round (constraint
+                        // declared in the system prompt).
+                        break;
+                    }
+                    super::react_parser::ReActEvent::Final(text) => {
+                        content = text;
+                        should_break = true;
+                        break;
+                    }
+                    super::react_parser::ReActEvent::Text(text) => {
+                        content.push_str(&text);
+                    }
+                    super::react_parser::ReActEvent::ParseError(msg) => {
+                        warn!(error = %msg, "ReAct: parse error — fail-open");
+                        content = round_result.content.clone();
+                        should_break = true;
+                        break;
+                    }
+                }
+            }
+
+            if should_break {
+                break;
+            }
+            if !found_action_this_round {
+                // No Action and no Final — model just emitted text without a
+                // recognized marker. Fail-open: use whatever was emitted as
+                // the final content.
+                if content.is_empty() {
+                    content = round_result.content;
+                }
+                break;
+            }
+        }
+
+        // ── Cleanup intermediate jobs + roll up token counts onto first_job_id ─
+        if let Some(ref fid) = first_job_id {
+            let pg = &state.pg_pool;
+            let _ = sqlx::query(
+                "UPDATE inference_jobs SET prompt_tokens = $1, completion_tokens = $2 WHERE id = $3",
+            )
+            .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
+            .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
+            .bind(fid.0)
+            .execute(pg)
+            .await
+            .map_err(|e| warn!(job_id = %fid.0, error = %e, "ReAct: failed to update job tokens"));
+
+            if !intermediate_job_ids.is_empty() {
+                let _ = sqlx::query("DELETE FROM inference_jobs WHERE id = ANY($1)")
+                    .bind(&intermediate_job_ids)
+                    .execute(pg)
+                    .await
+                    .map_err(|e| warn!(error = %e, "ReAct: failed to cleanup intermediate jobs"));
+            }
+        }
+
+        Some(McpLoopResult {
+            content,
+            tool_calls: Vec::new(),
+            prompt_tokens: total_prompt_tokens,
+            completion_tokens: total_completion_tokens,
+            finish_reason: "stop".into(),
+            rounds,
+            final_job_id: None,
         })
     }
 
