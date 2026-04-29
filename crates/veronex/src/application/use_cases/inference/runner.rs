@@ -124,11 +124,11 @@ impl Default for TokenStreamState {
 // SDD §6.1). The `persisted_to_s3` AtomicBool guard ensures exactly-once
 // write across racing finalize_job ↔ cancel paths.
 //
-// MCP-loop jobs are skipped — bridge owns their S3 write per the existing
-// per-conversation append-turns architecture (see
-// `bridge.rs::run_loop` post-loop block). Tier-B applies symmetric fix
-// there: bridge gates were `if !content.is_empty()` (skipped writes when
-// only tool_calls were captured); now `|| !all_mcp_tool_calls.is_empty()`.
+// Runner is the single S3 writer for every job, including MCP-loop rounds.
+// SDD `.specs/veronex/inference-mcp-per-round-persist.md` §3 — bridge no
+// longer writes S3; each round produces its own dashboard-addressable turn
+// keyed by that round's `job_id` so the per-job_id filter in
+// `dashboard_queries::build_job_detail` finds the right turn.
 
 /// Append-turn S3 write for the partial state in `ts`. Idempotent via the
 /// `persisted_to_s3` guard. Best-effort: errors logged at `warn`, do not
@@ -147,12 +147,6 @@ async fn persist_partial_conversation(
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        return;
-    }
-
-    // MCP-loop jobs: bridge writes a single combined turn at end of loop.
-    // Skip here to avoid a duplicate per-round turn entry.
-    if job.mcp_loop_id.is_some() {
         return;
     }
 
@@ -363,10 +357,13 @@ async fn finalize_job(
     }
 
     // Write turn to S3 ConversationRecord (per-conversation key, append to turns array).
-    // MCP loop jobs skip this — the bridge writes a single complete turn after all rounds.
+    // Runner is the single S3 writer — including MCP-loop rounds. Each round
+    // produces its own dashboard-addressable turn keyed by `job_id`.
     //
-    // SDD §6.2: idempotent guard `persisted_to_s3` prevents this happy-path write
-    // from racing the cancel/error helpers (`persist_partial_conversation`).
+    // SDD `.specs/veronex/inference-mcp-per-round-persist.md` §3 — bridge no
+    // longer writes S3. The idempotent `persisted_to_s3` guard prevents this
+    // happy-path write from racing the cancel/error helpers
+    // (`persist_partial_conversation`).
     let happy_path_persisted_flag = jobs.get(&uuid).map(|e| e.persisted_to_s3.clone());
     let should_write_happy_path = match &happy_path_persisted_flag {
         Some(flag) => flag
@@ -375,73 +372,71 @@ async fn finalize_job(
         None => true, // entry vanished — write defensively, the runner is the authoritative writer
     };
     if should_write_happy_path && let Some(store) = message_store {
-        if job.mcp_loop_id.is_none() {
-            let owner_id = job.account_id
-                .or(job.api_key_id)
-                .unwrap_or(uuid);
-            let date = job.created_at.date_naive();
-            let s3_key = job.conversation_id.unwrap_or(uuid);
+        let owner_id = job.account_id
+            .or(job.api_key_id)
+            .unwrap_or(uuid);
+        let date = job.created_at.date_naive();
+        let s3_key = job.conversation_id.unwrap_or(uuid);
 
-            // Read existing record (if any), append this turn
-            let mut record = store.get_conversation(owner_id, date, s3_key).await
-                .ok().flatten()
-                .unwrap_or_else(ConversationRecord::new);
+        // Read existing record (if any), append this turn
+        let mut record = store.get_conversation(owner_id, date, s3_key).await
+            .ok().flatten()
+            .unwrap_or_else(ConversationRecord::new);
 
-            // Read vision_analysis from in-memory JobEntry (set at submit time).
-            let vision_analysis = jobs.get(&uuid).and_then(|e| e.vision_analysis.clone());
+        // Read vision_analysis from in-memory JobEntry (set at submit time).
+        let vision_analysis = jobs.get(&uuid).and_then(|e| e.vision_analysis.clone());
 
-            use crate::application::ports::outbound::message_store::{ConversationTurn, TurnRecord as TR};
-            record.turns.push(ConversationTurn::Regular(TR {
-                job_id: uuid,
-                prompt: original_prompt,
-                messages: original_messages,
-                tool_calls: tool_calls_json.clone(),
-                result: result_text.clone(),
-                model_name: Some(job.model_name.as_str().to_string()),
-                created_at: job.created_at.to_rfc3339(),
-                compressed: None,
-                vision_analysis,
-            }));
+        use crate::application::ports::outbound::message_store::{ConversationTurn, TurnRecord as TR};
+        record.turns.push(ConversationTurn::Regular(TR {
+            job_id: uuid,
+            prompt: original_prompt,
+            messages: original_messages,
+            tool_calls: tool_calls_json.clone(),
+            result: result_text.clone(),
+            model_name: Some(job.model_name.as_str().to_string()),
+            created_at: job.created_at.to_rfc3339(),
+            compressed: None,
+            vision_analysis,
+        }));
 
-            if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
-                tracing::warn!(job_id = %uuid, "S3 conversation write failed (non-fatal): {e}");
-            } else if let (Some(conv_id), Some(vk)) = (job.conversation_id, valkey) {
-                // Cache the updated record in Valkey (TTL 300 s) so the next read
-                // hits cache instead of S3. Compression re-write (Phase 3) will DEL
-                // to force a fresh load after the compressed turn is written back.
-                const CONV_CACHE_TTL_SECS: i64 = 300;
-                let cache_key = crate::domain::constants::conversation_record_key(conv_id);
-                if let Ok(json) = serde_json::to_string(&record) {
-                    if let Err(e) = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await {
-                        tracing::warn!(error = %e, "runner: failed to cache conversation record");
-                    }
+        if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
+            tracing::warn!(job_id = %uuid, "S3 conversation write failed (non-fatal): {e}");
+        } else if let (Some(conv_id), Some(vk)) = (job.conversation_id, valkey) {
+            // Cache the updated record in Valkey (TTL 300 s) so the next read
+            // hits cache instead of S3. Compression re-write (Phase 3) will DEL
+            // to force a fresh load after the compressed turn is written back.
+            const CONV_CACHE_TTL_SECS: i64 = 300;
+            let cache_key = crate::domain::constants::conversation_record_key(conv_id);
+            if let Ok(json) = serde_json::to_string(&record) {
+                if let Err(e) = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await {
+                    tracing::warn!(error = %e, "runner: failed to cache conversation record");
                 }
+            }
 
-                // Phase 3: spawn per-turn compression (async, non-blocking).
-                // Only runs when compression is enabled in lab settings.
-                if let Some(handle) = jobs.get(&uuid).and_then(|e| e.compression_handle.clone()) {
-                    let store_arc = store.clone();
-                    let valkey_arc = Some(vk.clone());
-                    tokio::spawn(
-                        async move {
-                            let lab = handle.lab_settings.get().await.unwrap_or_default();
-                            if !lab.context_compression_enabled {
-                                return;
-                            }
-                            let route = compression_router::decide(handle.registry.as_ref(), &lab).await;
-                            let model = lab.compression_model.clone()
-                                .unwrap_or_else(|| "qwen2.5:3b".to_string());
-                            let timeout = lab.compression_timeout_secs as u64;
-                            if let Some(params) = route.into_params(model, timeout) {
-                                context_compressor::compress_turn(
-                                    &params, uuid, owner_id, date, conv_id,
-                                    store_arc, valkey_arc,
-                                ).await;
-                            }
+            // Phase 3: spawn per-turn compression (async, non-blocking).
+            // Only runs when compression is enabled in lab settings.
+            if let Some(handle) = jobs.get(&uuid).and_then(|e| e.compression_handle.clone()) {
+                let store_arc = store.clone();
+                let valkey_arc = Some(vk.clone());
+                tokio::spawn(
+                    async move {
+                        let lab = handle.lab_settings.get().await.unwrap_or_default();
+                        if !lab.context_compression_enabled {
+                            return;
                         }
-                        .instrument(tracing::info_span!("veronex.inference.runner.spawn")),
-                    );
-                }
+                        let route = compression_router::decide(handle.registry.as_ref(), &lab).await;
+                        let model = lab.compression_model.clone()
+                            .unwrap_or_else(|| "qwen2.5:3b".to_string());
+                        let timeout = lab.compression_timeout_secs as u64;
+                        if let Some(params) = route.into_params(model, timeout) {
+                            context_compressor::compress_turn(
+                                &params, uuid, owner_id, date, conv_id,
+                                store_arc, valkey_arc,
+                            ).await;
+                        }
+                    }
+                    .instrument(tracing::info_span!("veronex.inference.runner.spawn")),
+                );
             }
         }
     }
@@ -1177,21 +1172,66 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_loop_jobs_skip_runner_persist() {
-        // Bridge owns S3 write for MCP-loop jobs. Runner-side helper must
-        // skip them entirely so we don't get a duplicate per-round turn.
+    async fn mcp_loop_jobs_persist_per_round() {
+        // SDD `.specs/veronex/inference-mcp-per-round-persist.md` §3:
+        // Runner is the single S3 writer for every job, including MCP-loop
+        // rounds. Each round writes a turn tagged with that round's `job_id`
+        // so the dashboard's per-job_id filter
+        // (`dashboard_queries::build_job_detail`) finds the right turn.
+        // Pre-fix: runner skipped MCP-loop jobs and bridge wrote ONE turn under
+        // `first_job_id`, leaving every other round invisible to the dashboard
+        // (UI: "(저장된 결과 없음)").
         let mock = Arc::new(MockMessageStore::new());
         let store: Arc<dyn MessageStore> = mock.clone();
         let job = make_job(Some(Uuid::now_v7())); // MCP loop
         let mut ts = TokenStreamState::default();
-        ts.text.push_str("some text");
+        ts.text.push_str("final round answer");
         let f = flag();
 
         persist_partial_conversation(
-            &Some(store), &f, &job, &ts, &None, "test",
+            &Some(store), &f, &job, &ts, &None, "test prompt",
         ).await;
 
-        assert_eq!(mock.put_count(), 0, "MCP-loop jobs must not be written by runner");
+        assert_eq!(mock.put_count(), 1, "MCP-loop rounds must each persist their own turn");
+        let rec = mock.last_record().unwrap();
+        let turn = match &rec.turns[0] {
+            ConversationTurn::Regular(t) => t,
+            _ => panic!("expected Regular turn"),
+        };
+        assert_eq!(turn.job_id, job.id.0, "turn must be tagged with this round's job_id");
+        assert_eq!(turn.result.as_deref(), Some("final round answer"));
+    }
+
+    #[tokio::test]
+    async fn mcp_loop_two_round_simulation_persists_both_turns() {
+        // Simulate the full 2-round MCP loop: round-1 emits tool_calls only,
+        // round-2 emits final text. Each round goes through the runner's
+        // persist helper. After both rounds, the conversation S3 record should
+        // contain TWO turns, each tagged with its round's job_id.
+        // This locks the SDD §6.2 contract: "S3 has 2 turns, each tagged with
+        // the right job_id, round-1 tool_calls populated + result=None,
+        // round-2 result populated + tool_calls=None".
+        let mock = Arc::new(MockMessageStore::new());
+        let store: Arc<dyn MessageStore> = mock.clone();
+        let mcp_loop_id = Uuid::now_v7();
+
+        // Round 1: tool call, no text.
+        let round1 = make_job(Some(mcp_loop_id));
+        let mut ts1 = TokenStreamState::default();
+        ts1.tool_calls.push(serde_json::json!({"name":"web_search","args":{"q":"micron"}}));
+        persist_partial_conversation(
+            &Some(store.clone()), &flag(), &round1, &ts1, &None, "p",
+        ).await;
+
+        // Round 2: final answer text, no tool calls.
+        let round2 = make_job(Some(mcp_loop_id));
+        let mut ts2 = TokenStreamState::default();
+        ts2.text.push_str("final answer");
+        persist_partial_conversation(
+            &Some(store), &flag(), &round2, &ts2, &None, "p",
+        ).await;
+
+        assert_eq!(mock.put_count(), 2, "both rounds must persist independently");
     }
 
     /// `TokenStreamState` is not `Clone`; `tokio::join` requires owned values

@@ -1,6 +1,6 @@
 # SDD: CI Build Optimization (residual tiers)
 
-> Status: partial-complete | Created: 2026-04-28 | Last updated: 2026-04-28
+> Status: archived (Tier 1+2+3 shipped, Tier 4 dropped, Tier 5 wait-and-see) | Created: 2026-04-28 | Archived: 2026-04-29
 
 ## Status Snapshot
 

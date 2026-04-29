@@ -1284,6 +1284,43 @@ pub async fn run_sync_loop(
             if elapsed_secs < settings.sync_interval_secs as i64 {
                 continue;
             }
+
+            // ── Demand gate ───────────────────────────────────────────────────
+            // Skip the periodic tick when the cluster has been idle from real
+            // user traffic AND every selected model already has a profile row.
+            // Manual triggers always bypass. Bypass also when at least one
+            // selected model is unprofiled — a freshly added model still needs
+            // its first probe even before any user traffic.
+            //
+            // SDD: `.specs/veronex/inference-mcp-per-round-persist.md` §6.
+            // Rationale: pre-fix the analyzer probed every `sync_interval_secs`
+            // regardless of demand, occupying the same Ollama provider's
+            // single-concurrency slots that user MCP rounds need. Combined with
+            // the homelab low-power policy ("idle 시 unload"), unconditional
+            // ticks waste energy AND race user requests for VRAM.
+            const ANALYZER_IDLE_SKIP_SECS: i64 = 1800; // 30 min of no real traffic
+            let user_idle_secs: i64 = if let Some(repo) = job_repo.as_ref() {
+                repo.seconds_since_last_user_job()
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(i64::MAX)
+            } else {
+                i64::MAX
+            };
+            if user_idle_secs > ANALYZER_IDLE_SKIP_SECS {
+                let has_unprofiled = capacity_repo
+                    .has_unprofiled_selected_models()
+                    .await
+                    .unwrap_or(false);
+                if !has_unprofiled {
+                    tracing::debug!(
+                        idle_secs = user_idle_secs,
+                        "analyzer: skipping tick (no recent user traffic, all selected models profiled)"
+                    );
+                    continue;
+                }
+            }
         }
 
         let Ok(_permit) = sync_lock.clone().acquire_owned().await else {

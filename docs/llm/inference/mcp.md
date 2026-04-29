@@ -167,9 +167,10 @@ Implementation:
 | Heartbeat | `axum::response::sse::KeepAlive::new().interval(SSE_KEEP_ALIVE)` (15 s) |
 | Response is constructed BEFORE bridge completes | `mcp_ollama_chat` spawns `bridge.run_loop` on `tokio::spawn`; SSE stream awaits result via `tokio::sync::oneshot`. axum flushes 200 + headers + first heartbeat within ms of the request |
 | OpenAI-compat shape | `chat.completion.chunk` events with `delta.content` / `delta.tool_calls`; final `[DONE]` sentinel |
-| Cancel-on-disconnect | spawned bridge task runs to completion (best-effort detached); Tier B (`runner::persist_partial_conversation`) writes partial state to S3 |
+| Cancel-on-disconnect | spawned bridge task runs to completion (best-effort detached); `runner::persist_partial_conversation` writes partial state to S3 for each affected round |
+| S3 ConversationRecord | Runner writes one `TurnRecord` per round, keyed by that round's `job_id` (`conversations/{owner_id}/{conversation_id}.json.zst` is the conversation-scoped append target). Bridge no longer writes S3 — only updates loop-wide token totals on `first_job_id` and deletes intermediate-round DB rows. SDD: `.specs/veronex/inference-mcp-per-round-persist.md` §3. |
 
-Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens.
+Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens. Note: §9.5 of the streaming-first SDD recorded this as PASS based on SSE output only; the dashboard detail GET's `result_text` non-empty assertion was added in `.specs/veronex/inference-mcp-per-round-persist.md` §8.
 
 ### Phase 1 Lifecycle / Phase 2 Inference
 
@@ -242,7 +243,8 @@ to decouple MCP delegation from the broader `settings_manage` /
 |--------|------|-------------|
 | `GET` | `/v1/mcp/servers` | List all servers (online status + tool count) |
 | `POST` | `/v1/mcp/servers` | Register a new MCP server |
-| `PATCH` | `/v1/mcp/servers/{id}` | Update name / URL / enabled |
+| `POST` | `/v1/mcp/servers/verify` | Probe `{url}/health` (5 s timeout) — pre-register connectivity check |
+| `PATCH` | `/v1/mcp/servers/{id}` | Update name / slug / URL / enabled — slug change reconnects session and renames `mcp_{slug}_{tool}` |
 | `DELETE` | `/v1/mcp/servers/{id}` | Remove server + cascade tools + access rows |
 | `GET` | `/v1/mcp/stats` | Per-server, per-tool call stats (ClickHouse; `?hours=N`) |
 | `GET` | `/v1/mcp/targets` | Agent discovery — enabled servers `[{id, url}]` |
