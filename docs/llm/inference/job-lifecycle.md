@@ -163,7 +163,9 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `tool_calls` | `Option<Value>` | all tool/function calls emitted (MCP + OpenAI function calls) |
 | `result` | `Option<String>` | final text output |
 
-Written once at `finalize_job()` using zstd-3 compression (~1.2 KB / record). Read on-demand by the admin detail view (one S3 GET per click). `owner_id = account_id ?? api_key_id ?? job_id`.
+Written by `finalize_job()` (happy path) **OR** `persist_partial_conversation()` (cancel / stream-error / lifecycle-failed paths) using zstd-3 compression (~1.2 KB / record). Read on-demand by the admin detail view (one S3 GET per click). `owner_id = account_id ?? api_key_id ?? job_id`.
+
+Per-job idempotency is enforced via `JobEntry::persisted_to_s3: Arc<AtomicBool>` — `compare_exchange(false, true)` ensures exactly-one S3 PUT across racing finalize ↔ cancel paths inside `run_job`'s biased `select!`. MCP-loop jobs (`mcp_loop_id.is_some()`) skip the runner-side persist — bridge owns those via the post-loop write block in `bridge::run_loop` (gate: `!content.is_empty() || !all_mcp_tool_calls.is_empty()`, so partial tool-call state is preserved even if the loop exits early).
 
 > `tps` = `completion_tokens / (latency_ms - ttft_ms) * 1000` (computed in API, not stored)
 

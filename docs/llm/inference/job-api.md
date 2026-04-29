@@ -134,6 +134,8 @@ pub struct JobDetail {
 > **S3 read on detail**: `GET /v1/dashboard/jobs/{id}` fetches the `ConversationRecord` from S3 (`conversations/{owner_id}/{date}/{job_id}.json.zst`) on each request. ~20–50ms latency, acceptable at admin scale. If S3 is unavailable, `prompt` falls back to `prompt_preview` and content fields return `None`.
 
 > **`result_text` vs `tool_calls_json`**: When a model responds with function calls (agentic loop turn), `result_text = None` and `tool_calls_json` is populated. The UI renders a Tool Calls section in these cases instead of showing "(no result stored)".
+>
+> Cancel / stream-error paths preserve whatever was accumulated: `runner::run_job` calls `persist_partial_conversation` before returning `Ok(None)`, so a cancelled job that emitted only `tool_calls` (or only partial text) still yields a `tool_calls_json` (or `result_text`) on this endpoint. MCP-loop jobs follow the same contract via `bridge::run_loop`'s post-loop write — the gate `!content.is_empty() || !all_mcp_tool_calls.is_empty()` admits partial-loop S3 writes when the bridge ran rounds before being interrupted. Pre-Tier-B (PR #100) these paths silently dropped state and the UI showed "(no result stored)".
 
 > **`estimated_cost_usd`**: Computed via a LATERAL JOIN on `model_pricing`. Ollama always returns `0.0` (self-hosted = no cost). Gemini returns the actual cost per 1M tokens x token counts. `NULL` means no pricing row found (unknown provider or no seed data). See `docs/llm/inference/model-pricing.md`.
 

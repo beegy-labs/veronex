@@ -155,6 +155,22 @@ On any Vespa/embed error → falls back to `tool_cache.get_all()` (all registere
 
 Regression test: `vespa_search_uses_contains_for_string_attributes` in `crates/veronex-mcp/src/vector/tests.rs`. Reverting to `=` makes wiremock body-match miss → test fails deterministically.
 
+### Response framing — server-driven SSE for MCP-routed requests
+
+When `should_intercept()` selects the MCP path (`openai_handlers.rs::chat_completions`), the response is **always** Server-Sent Events regardless of the client's `stream` field. Multi-round agentic loops have unbounded variance (each round ~30 s × up to `MAX_ROUNDS=5`); a single bundled HTTP body cannot fit under Cloudflare's 100 s origin idle-timeout. Server-driven SSE keeps the connection alive via 15 s `KeepAlive` heartbeats throughout the loop's variance window.
+
+Implementation:
+
+| Concern | Mechanism |
+|---------|-----------|
+| Headers | `sse_response()` (`handlers.rs`) attaches `Content-Type: text/event-stream`, `Cache-Control: no-cache, no-transform`, `Connection: keep-alive`, `X-Accel-Buffering: no` |
+| Heartbeat | `axum::response::sse::KeepAlive::new().interval(SSE_KEEP_ALIVE)` (15 s) |
+| Response is constructed BEFORE bridge completes | `mcp_ollama_chat` spawns `bridge.run_loop` on `tokio::spawn`; SSE stream awaits result via `tokio::sync::oneshot`. axum flushes 200 + headers + first heartbeat within ms of the request |
+| OpenAI-compat shape | `chat.completion.chunk` events with `delta.content` / `delta.tool_calls`; final `[DONE]` sentinel |
+| Cancel-on-disconnect | spawned bridge task runs to completion (best-effort detached); Tier B (`runner::persist_partial_conversation`) writes partial state to S3 |
+
+Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens.
+
 ### Phase 1 Lifecycle / Phase 2 Inference
 
 Behind feature flag `MCP_LIFECYCLE_PHASE` (default `false`), `runner::run_job`

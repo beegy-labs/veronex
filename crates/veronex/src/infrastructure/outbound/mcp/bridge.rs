@@ -418,7 +418,7 @@ impl McpBridgeAdapter {
             // Write single complete turn to S3: tool_calls from all rounds + final result.
             // Runner skips S3 for mcp_loop jobs, so this is the only S3 write.
             //
-            // Tier-B (SDD `.specs/veronex/inference-mcp-streaming-first.md` §6):
+            // Tier-B (SDD `.specs/veronex/history/inference-mcp-streaming-first.md` §6):
             // also write when only `all_mcp_tool_calls` were captured (no final
             // text yet). Pre-Tier-B gate `if !content.is_empty()` silently
             // dropped the entire conversation when the loop was cancelled
