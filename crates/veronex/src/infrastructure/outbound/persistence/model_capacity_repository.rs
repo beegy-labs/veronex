@@ -184,6 +184,28 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
             }
         }))
     }
+
+    async fn has_unprofiled_selected_models(&self) -> Result<bool> {
+        // Returns true when any (provider_id, model_name) pair in
+        // `provider_selected_models` lacks a row in `model_vram_profiles`.
+        // The analyzer uses this to bypass the demand-skip gate so a freshly
+        // selected model still gets its first probe even before any user
+        // traffic arrives.
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM provider_selected_models psm
+                 LEFT JOIN model_vram_profiles mvp
+                   ON mvp.provider_id = psm.provider_id
+                  AND mvp.model_name  = psm.model_name
+                 WHERE mvp.model_name IS NULL
+             )",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to check for unprofiled selected models")?;
+        Ok(exists)
+    }
 }
 
 // ── Internal row type for sqlx ────────────────────────────────────────────────

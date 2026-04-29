@@ -271,6 +271,7 @@ impl crate::application::ports::outbound::model_capacity_repository::ModelCapaci
     async fn list_by_provider(&self, _: uuid::Uuid) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(vec![]) }
     async fn list_by_providers(&self, _: &[uuid::Uuid]) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(vec![]) }
     async fn compute_throughput_stats(&self, _: uuid::Uuid, _: &str, _: u32) -> Result<Option<crate::application::ports::outbound::model_capacity_repository::ThroughputStats>> { Ok(None) }
+    async fn has_unprofiled_selected_models(&self) -> Result<bool> { Ok(false) }
 }
 
 pub(crate) struct MockCapacitySettingsRepo;

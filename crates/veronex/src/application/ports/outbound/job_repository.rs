@@ -79,4 +79,11 @@ pub trait JobRepository: Send + Sync {
     /// Return all jobs currently in Pending or Running state, ordered by created_at ASC.
     /// Used on startup to recover jobs that were in-flight when the server last stopped.
     async fn list_pending(&self) -> Result<Vec<InferenceJob>>;
+
+    /// Returns seconds elapsed since the most recent non-analyzer
+    /// (`source IN ('api','test')`) job's `created_at`. `None` if no such row
+    /// exists. Used by the capacity analyzer's demand gate to skip ticks when
+    /// the cluster has been idle from real user traffic.
+    /// SDD: `.specs/veronex/inference-mcp-per-round-persist.md` §6.
+    async fn seconds_since_last_user_job(&self) -> Result<Option<i64>>;
 }

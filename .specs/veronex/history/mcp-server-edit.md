@@ -1,6 +1,6 @@
 # SDD: MCP Server Edit (name, slug, url)
 
-> Status: active | Created: 2026-04-13
+> Status: complete | Created: 2026-04-13 | Shipped: 2026-04-13 (#54 `9b6758a`)
 
 ## Problem
 

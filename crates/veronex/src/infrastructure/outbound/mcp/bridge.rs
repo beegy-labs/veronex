@@ -215,7 +215,6 @@ impl McpBridgeAdapter {
         let mut finish_reason = "stop".to_string();
         let mut content = String::new();
         let mut final_tool_calls: Vec<Value> = Vec::new();
-        let mut all_mcp_tool_calls: Vec<Value> = Vec::new();
         let mut rounds: u8 = 0;
         let mut final_job_id: Option<JobId> = None;
 
@@ -369,9 +368,6 @@ impl McpBridgeAdapter {
                 break;
             }
 
-            // ── Collect tool_calls for S3 record ──────────────────────────────
-            all_mcp_tool_calls.extend(mcp_calls.iter().cloned());
-
             // ── Append assistant message with tool_calls ───────────────────────
             messages.push(serde_json::json!({
                 "role": "assistant",
@@ -411,78 +407,25 @@ impl McpBridgeAdapter {
             info!(round, mcp_calls = mcp_calls.len(), "MCP round complete");
         }
 
-        // Persist final result to S3 + cleanup intermediate jobs
+        // Loop-wide bookkeeping: token rollup + intermediate-job cleanup.
+        //
+        // SDD `.specs/veronex/inference-mcp-per-round-persist.md` §5: bridge no
+        // longer writes S3 — the runner persists each round's `TurnRecord`
+        // keyed by that round's `job_id` so the dashboard's per-job_id filter
+        // resolves correctly. Bridge keeps loop-wide token totals (only place
+        // with the cross-round sum) and intermediate-job DB cleanup.
         if let Some(ref fid) = first_job_id {
             let pg = &state.pg_pool;
 
-            // Write single complete turn to S3: tool_calls from all rounds + final result.
-            // Runner skips S3 for mcp_loop jobs, so this is the only S3 write.
-            //
-            // Tier-B (SDD `.specs/veronex/history/inference-mcp-streaming-first.md` §6):
-            // also write when only `all_mcp_tool_calls` were captured (no final
-            // text yet). Pre-Tier-B gate `if !content.is_empty()` silently
-            // dropped the entire conversation when the loop was cancelled
-            // mid-round (client disconnect via Cloudflare 524 → CancelOnDrop)
-            // — UI surfaced this as "저장된 결과 없음".
-            if !content.is_empty() || !all_mcp_tool_calls.is_empty() {
-                if let Some(ref store) = state.message_store {
-                    let owner_id = caller.account_id()
-                        .or(caller.api_key_id())
-                        .unwrap_or(fid.0);
-                    let date = chrono::Utc::now().date_naive();
-                    let s3_key = conversation_id.unwrap_or(fid.0);
-
-                    let mut record = store.get_conversation(owner_id, date, s3_key).await
-                        .ok().flatten()
-                        .unwrap_or_else(crate::application::ports::outbound::message_store::ConversationRecord::new);
-
-                    let tool_calls_val = if all_mcp_tool_calls.is_empty() {
-                        None
-                    } else {
-                        Some(serde_json::Value::Array(all_mcp_tool_calls))
-                    };
-
-                    let result_val = if content.is_empty() { None } else { Some(content.clone()) };
-
-                    record.turns.push(crate::application::ports::outbound::message_store::ConversationTurn::Regular(
-                        crate::application::ports::outbound::message_store::TurnRecord {
-                            job_id: fid.0,
-                            prompt: extract_last_user_prompt(&messages),
-                            messages: Some(serde_json::Value::Array(messages.clone())),
-                            tool_calls: tool_calls_val,
-                            result: result_val,
-                            model_name: Some(model.clone()),
-                            created_at: chrono::Utc::now().to_rfc3339(),
-                            compressed: None,
-                            vision_analysis: None,
-                        }
-                    ));
-
-                    if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
-                        warn!(job_id = %fid.0, error = %e, "MCP: S3 conversation write failed");
-                    } else if let Some(conv_id) = conversation_id {
-                        // Invalidate cached conversation detail
-                        if let Some(ref pool) = state.valkey_pool {
-                            use fred::prelude::*;
-                            let cache_key = format!("conv_s3:{}", conv_id);
-                            if let Err(e) = pool.del::<i64, _>(cache_key).await {
-                                tracing::warn!(error = %e, "Valkey DEL conversation cache failed");
-                            }
-                        }
-                    }
-                }
-
-                // Update DB: tokens only — result lives in S3, fetched on demand
-                let _ = sqlx::query(
-                    "UPDATE inference_jobs SET prompt_tokens = $1, completion_tokens = $2 WHERE id = $3"
-                )
-                .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
-                .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
-                .bind(fid.0)
-                .execute(pg)
-                .await
-                .map_err(|e| warn!(job_id = %fid.0, error = %e, "MCP: failed to update job tokens"));
-            }
+            let _ = sqlx::query(
+                "UPDATE inference_jobs SET prompt_tokens = $1, completion_tokens = $2 WHERE id = $3"
+            )
+            .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
+            .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
+            .bind(fid.0)
+            .execute(pg)
+            .await
+            .map_err(|e| warn!(job_id = %fid.0, error = %e, "MCP: failed to update job tokens"));
 
             // Remove intermediate round jobs — dashboard shows only the first job
             if !intermediate_job_ids.is_empty() {
