@@ -63,6 +63,6 @@ pub trait ModelCapacityRepository: Send + Sync {
     /// budget must fit even on the smallest-ctx provider that may be
     /// selected. Filters values below the 4096 sanity floor; `None` when
     /// no row exists.
-    /// SDD: `.specs/veronex/conversation-context-compression.md` §3.
+    /// SDD: `.specs/veronex/history/conversation-context-compression.md` §3.
     async fn min_configured_ctx_for_model(&self, model: &str) -> Result<Option<u32>>;
 }

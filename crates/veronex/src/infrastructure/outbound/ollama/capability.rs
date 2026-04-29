@@ -1,6 +1,6 @@
 //! Per-model capability detection for Ollama-served models.
 //!
-//! SDD: `.specs/veronex/mcp-react-shim.md` §3 (Tier A).
+//! SDD: `.specs/veronex/history/mcp-react-shim.md` §3 (Tier A).
 //!
 //! Sources truth from Ollama's own `/api/show` template — the same signal
 //! Ollama uses internally to validate the `tools` request field. Avoids a

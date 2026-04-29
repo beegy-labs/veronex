@@ -175,7 +175,7 @@ impl McpBridgeAdapter {
         // dispatcher can schedule onto any of them without overflow.
         // DCP invariant (SDD §5.3): in-memory only — S3 ConversationRecord
         // is never modified by pruning.
-        // SDD: `.specs/veronex/conversation-context-compression.md` §5/§6.
+        // SDD: `.specs/veronex/history/conversation-context-compression.md` §5/§6.
         {
             use crate::application::use_cases::inference::{context_budget, context_pruner};
             let lab = state.lab_settings_repo.get().await.unwrap_or_default();
@@ -522,7 +522,7 @@ impl McpBridgeAdapter {
     // Action blocks, executes via `execute_calls`, and feeds Observations back
     // as user messages.
     //
-    // SDD: `.specs/veronex/mcp-react-shim.md` §6 (Tier D).
+    // SDD: `.specs/veronex/history/mcp-react-shim.md` §6 (Tier D).
     #[allow(clippy::too_many_arguments)]
     async fn run_loop_react(
         &self,

@@ -190,7 +190,7 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
         // must fit even on the smallest-ctx provider that the dispatcher
         // might select. Uses the partial-index hint
         // `WHERE configured_ctx >= 4096` to skip corrupt / unprobed rows.
-        // SDD: `.specs/veronex/conversation-context-compression.md` §3.
+        // SDD: `.specs/veronex/history/conversation-context-compression.md` §3.
         let min: Option<i64> = sqlx::query_scalar(
             "SELECT MIN(configured_ctx)::int8
              FROM model_vram_profiles

@@ -1,6 +1,6 @@
 //! ReAct shim — system prompt + tool descriptor renderer.
 //!
-//! SDD: `.specs/veronex/mcp-react-shim.md` §4 (Tier B).
+//! SDD: `.specs/veronex/history/mcp-react-shim.md` §4 (Tier B).
 //!
 //! Used by the ReAct path in `bridge.rs::run_loop_react` (Tier D) when the
 //! underlying model lacks native `tool_calls` support. Mirrors the vision

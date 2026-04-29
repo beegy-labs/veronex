@@ -51,6 +51,27 @@ Decides how to compress each completed turn. Code: `compression_router.rs`.
 
 ---
 
+## Pre-flight Pruning (gateway-side context budget gate)
+
+**Trigger**: every LLM submission goes through `bridge::run_loop`'s entry, which resolves the model's effective budget and trims older messages if the accumulated array exceeds it.
+
+| Step | Mechanism |
+|---|---|
+| Resolve ctx | `ModelCapacityRepository::min_configured_ctx_for_model(model)` — returns the smallest `configured_ctx` across all serving providers (most conservative). Falls back to `32_768` if no profile row exists. |
+| Compute budget | `context_budget::budget_for_context(ctx, ratio)` — `ctx × lab_settings.context_budget_ratio` (default 0.60), minus a 1024-tok safety margin for cl100k_base ±10% drift on Qwen/Llama tokenizers. |
+| Token count | `context_budget::count_messages_tokens(messages)` — `tiktoken-rs` `cl100k_base` over role + content + 4-tok per-message scaffolding + 2 priming. |
+| Trim | `context_pruner::prune_to_budget(messages, budget, recent_k)` — drops oldest non-system messages until under budget; preserves system + last `recent_k` (=5) verbatim; inserts ONE placeholder system message marking the omission. |
+
+**DCP invariant**: pruning is in-memory only. The S3 ConversationRecord is **never** modified — every original turn is retained for dashboard / audit / replay.
+
+**Behavior on overflow**: pre-fix this ladder didn't exist (`configured_ctx = 32_768u32` hardcoded in `ollama_compat_handlers.rs`). Long MCP loops (30+ rounds) would grow `messages[]` unbounded → context overflow at provider level. Post-fix: bridge log emits structured event `context-pruner: trimmed accumulated messages to fit budget {model, configured_ctx, budget, initial_tokens, after_tokens, dropped}` whenever trim fires.
+
+**Live verified 2026-04-29** (image `develop-921771c`): synthetic 30-turn `qwen3:8b` conversation (27,394 initial tokens; budget 18,636) trimmed to 18,592 tokens, 19 messages dropped; model answered the final user query correctly (system + last 5 turns preserved).
+
+SDD: `.specs/veronex/history/conversation-context-compression.md`.
+
+---
+
 ## Per-Turn Compression
 
 Code: `context_compressor::compress_turn()` — `application/use_cases/inference/context_compressor.rs`

@@ -425,7 +425,7 @@ pub async fn chat(
             ) {
                 // Resolve configured_ctx from model_vram_profiles (S17 Tier A);
                 // fall back to the legacy 32_768 default if no row exists.
-                // SDD: `.specs/veronex/conversation-context-compression.md` §3.
+                // SDD: `.specs/veronex/history/conversation-context-compression.md` §3.
                 let configured_ctx = state
                     .capacity_repo
                     .min_configured_ctx_for_model(&req.model)

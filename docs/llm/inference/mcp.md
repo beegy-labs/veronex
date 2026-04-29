@@ -172,6 +172,29 @@ Implementation:
 
 Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens. Note: §9.5 of the streaming-first SDD recorded this as PASS based on SSE output only; the dashboard detail GET's `result_text` non-empty assertion was added in `.specs/veronex/history/inference-mcp-per-round-persist.md` §8.
 
+### Shim path — ReAct fallback for non-native models
+
+The veronex gateway pattern (vision shim is the canonical example: `inference_helpers.rs::analyze_images_for_context`) provides capability adapters so any underlying Ollama model can use a feature regardless of native fine-tuning. The MCP equivalent is the **ReAct shim**:
+
+| Stage | Mechanism |
+|---|---|
+| Capability gate | `ollama::capability::heuristic_supports_native(model)` — known native-tool-calling families (Qwen3-Coder, Qwen2.5-Instruct/Coder, Llama 3.1+, Mistral-instruct-v0.3+, Hermes/Nous, Command-R, Gemma 4) → native path. Default unknown → ReAct path. Future: cache `/api/show` template inspection. |
+| System prompt | `mcp::react_prompt::build_react_system_prompt(tools)` — locked `Thought:` / `Action:` / `Action Input:` / `Observation:` / `Final Answer:` template injected at `messages[0]`. Tools rendered as markdown bullets with name + description + JSON schema. |
+| Submission | Job submitted WITHOUT `tools` field — model receives the catalog as system text, not native fine-tune scaffolding. |
+| Output parser | `mcp::react_parser::ReActParser` — stream-aware state machine. Bracket-counting JSON extractor (string-aware escape tracking) handles multi-line / nested-JSON Action Input. Fail-opens to `Final` on parse error or empty trailing text. |
+| Action execution | Reuses the native path's `execute_calls` machinery — circuit breaker, ACL, result cache, analytics, observability spans all apply uniformly. |
+| Observation feedback | Tool result appended back into `messages[]` as `{"role":"user","content":"Observation: ..."}` along with the assistant's serialized `Action:` line. |
+| Loop detection | Same `(name, args_hash)` × `LOOP_DETECT_THRESHOLD` rule as native — terminates ReAct loop on repeated identical calls. |
+| Termination | `Final Answer:` payload becomes `McpLoopResult.content`. Token totals roll up to `first_job_id`; intermediate-round DB rows cleaned up identically to native. |
+
+**Honest limitation** (per SDD §10): the shim is an infrastructure hook, not a model-capability lift. 8B-parameter agents routinely ignore both native `tool_calls` AND ReAct text patterns when prompts get complex (per Medium / Qwen team docs). Real value: mid-size long tail (Mistral-7B-Instruct-v0.2, Llama 3 base, community fine-tunes that emit text patterns reliably but lack native tool_calls fine-tuning).
+
+**Live verified 2026-04-29** (image `develop-81c8f57`):
+- `qwen3:8b` request → routed to ReAct shim (log: `MCP: routing to ReAct shim (non-native tool_calls model)`); model itself ignored the prompt and returned plain text — confirmed model-capability limit, infrastructure intact.
+- `qwen3-coder-next-200k:latest` → native path unchanged (no ReAct routing log; `MCP round complete round=0 mcp_calls=1` confirmed `web_search` invoked).
+
+SDD: `.specs/veronex/history/mcp-react-shim.md`.
+
 ### Phase 1 Lifecycle / Phase 2 Inference
 
 Behind feature flag `MCP_LIFECYCLE_PHASE` (default `false`), `runner::run_job`

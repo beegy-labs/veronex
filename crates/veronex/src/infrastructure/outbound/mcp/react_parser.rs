@@ -1,6 +1,6 @@
 //! ReAct shim — stream-aware Action / Final Answer parser.
 //!
-//! SDD: `.specs/veronex/mcp-react-shim.md` §5 (Tier C).
+//! SDD: `.specs/veronex/history/mcp-react-shim.md` §5 (Tier C).
 //!
 //! Consumes a model's text stream chunk-by-chunk and emits structured
 //! events: tool calls extracted as `Action { name, args }`, final answer
