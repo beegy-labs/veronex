@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
 import { CopyButton } from '@/components/copy-button'
 import { renderWithMermaid } from '@/components/mermaid-block'
+import { TurnInternals } from '@/components/turn-internals'
 import { MAX_CONV_SESSIONS } from './api-test-types'
 import type { ConversationMessage, ConversationSession, StreamStatus } from './api-test-types'
 
@@ -205,6 +206,20 @@ export const ApiTestConversation = memo(function ApiTestConversation({
                   <div className="rounded-2xl rounded-tl-sm px-3 py-2 bg-muted text-foreground text-sm font-mono leading-relaxed">
                     {renderWithMermaid(msg.content, false)}
                   </div>
+                  {/* SDD §3 Tier A — when this turn invoked MCP tools, surface
+                      the per-round audit (args/results/latency) below the
+                      bubble. The user runs the test panel on the same browser
+                      session that owns the conversation, so the convId is
+                      always present here. */}
+                  {msg.jobId && msg.hasMcpTools && activeSession?.conversationId && (
+                    <div className="mt-1 px-1">
+                      <TurnInternals
+                        convId={activeSession.conversationId}
+                        jobId={msg.jobId}
+                        defaultOpen
+                      />
+                    </div>
+                  )}
                   <div className="absolute top-1 right-1 opacity-0 group-hover/msg:opacity-100 transition-opacity">
                     <CopyButton text={msg.content} />
                   </div>

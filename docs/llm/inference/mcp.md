@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol) Integration
 
-> SSOT | **Last Updated**: 2026-04-28
+> SSOT | **Last Updated**: 2026-04-30
 
 Veronex acts as an **MCP client** — it connects to external MCP servers and
 executes their tools on behalf of LLM inference loops.
@@ -247,7 +247,34 @@ End-to-end ReAct verified on `veronex-api-dev.verobee.com` after YQL fix (#88):
 | Concurrent calls | `buffered(8)` — max 8 tool calls in-flight per round |
 | Max tools per request | `MAX_TOOLS_PER_REQUEST = 32` — context window cap |
 | Loop detection | Same `(tool, args_hash)` ×3 triggers early break |
+| Convergence boundary | At `round == MAX_ROUNDS - 1`, if `rounds > 0` and no text content yet, `run_loop` injects a system message constraining the model to text-only output. Pattern: LangGraph `recursion_limit` + boundary prompt; OpenAI Agents SDK `tool_choice="none"` escalation. Without it, models that prefer tool-calling can exhaust the round budget on distinct args (which bypass loop detection) and never produce a final answer. |
 | Session self-heal | `reconcile_mcp_sessions()` reconnects missing sessions every 25 s — see Session Lifecycle |
+
+---
+
+## Audit exposure
+
+Every MCP tool invocation inside `run_loop()` is persisted to
+`mcp_loop_tool_calls` (CDD `inference/mcp-schema.md`) by
+`bridge::batch_insert_tool_calls`. The audit row carries `args_json`,
+`result_text`, `outcome`, `cache_hit`, `latency_ms`, and `result_bytes`.
+
+**Read-side projection** — `GET /v1/conversations/{id}/turns/{job_id}/internals`
+returns the per-turn audit as a `tool_calls` array, joined with `mcp_servers`
+to expose `server_slug`. Ordered by `loop_round ASC, created_at ASC`. Empty
+when no MCP tools were invoked. Schema: `inference/job-api.md`.
+
+UI usage — `/jobs` test panel renders the chain inline below the assistant
+bubble for any turn that emitted MCP tool_calls (assistant message carries
+`hasMcpTools` flag set during SSE consumption). The conversation modal renders
+a compact badge (`{count} MCP call(s)`) under the same panel pattern.
+
+This guarantees the user can always see the tool chain (input → result →
+latency → outcome), even when the model exhausts `MAX_ROUNDS` without
+producing a final text answer (degenerate case kept observable per the
+convergence-boundary design above).
+
+SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
 
 ---
 

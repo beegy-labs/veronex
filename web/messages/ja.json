@@ -129,7 +129,7 @@
     "source": "ソース",
     "createdAt": "作成日時",
     "internals": "内部データ",
-    "internalsEmpty": "このターンには圧縮またはVisionデータがありません。",
+    "internalsEmpty": "このターンには圧縮・Vision・MCPツールのデータがありません。",
     "compressedBadge": "圧縮済み ({original}→{compressed} tok, {model})",
     "visionBadge": "Vision: {model} ({imageCount}枚, {tokens} tok)",
     "compression": "圧縮",
@@ -141,6 +141,14 @@
     "visionModel": "モデル",
     "imageCount": "画像数",
     "analysisTokens": "トークン",
+    "toolCalls": "MCPツール呼び出し",
+    "toolCallsBadge": "MCP呼び出し {count}件",
+    "toolCallsRound": "ラウンド {round}",
+    "toolCallsLatency": "{ms}ms",
+    "toolCallsCacheHit": "キャッシュ",
+    "toolCallsArgs": "引数",
+    "toolCallsResult": "結果",
+    "toolCallsNoResult": "(結果なし)",
     "backToList": "会話一覧へ戻る"
   },
   "overview": {

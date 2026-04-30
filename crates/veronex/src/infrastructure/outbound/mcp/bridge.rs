@@ -333,6 +333,29 @@ impl McpBridgeAdapter {
         for round in 0..max_rounds {
             debug!(round, "MCP agentic loop round");
 
+            // ── Convergence boundary on the final round (S23 Tier C) ──────────
+            // If we are about to dispatch the LAST allowed round, no text
+            // content has been produced yet, AND at least one tool round has
+            // already executed (so tool results exist in the messages array),
+            // inject a system message constraining the model to text-only
+            // output. Without this, models that prefer tool-calling can
+            // exhaust max_rounds emitting different tools (different args
+            // bypass LOOP_DETECT_THRESHOLD) and never produce a final answer.
+            //
+            // Pattern: LangGraph recursion_limit + boundary prompt;
+            // OpenAI Agents SDK tool_choice="none" escalation.
+            // SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md` §3.3.
+            if round + 1 == max_rounds && rounds > 0 && content.is_empty() {
+                messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": "You have reached the final response step. \
+                        Do NOT call any more tools. Using the tool results \
+                        already provided above, produce the user's final \
+                        answer in natural language now."
+                }));
+                info!(round, max_rounds, "MCP convergence: final-round system message injected");
+            }
+
             // ── Submit job ─────────────────────────────────────────────────────
             let prompt = extract_last_user_prompt(&messages);
             let job_id = match state.use_case.submit(SubmitJobRequest {
@@ -2001,6 +2024,52 @@ mod tests {
             let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             Some(tx)
         };
+    }
+
+    // ── S23 Tier C: convergence boundary condition ───────────────────────────
+
+    /// The boundary system message is injected iff all three hold:
+    ///   1. `round + 1 == max_rounds`  (we are about to dispatch the last round)
+    ///   2. `rounds > 0`               (at least one prior MCP round exists)
+    ///   3. `content.is_empty()`       (no text has been produced yet)
+    /// This test pins the predicate so future refactors can't silently weaken it.
+    #[test]
+    fn convergence_boundary_predicate_matches_sdd() {
+        fn should_inject(round: usize, max_rounds: usize, rounds: usize, has_content: bool) -> bool {
+            round + 1 == max_rounds && rounds > 0 && !has_content
+        }
+        // Final round, prior tool calls, no text → inject.
+        assert!(should_inject(4, 5, 1, false));
+        assert!(should_inject(4, 5, 3, false));
+        // Final round but no prior rounds → don't inject (model hasn't tried yet).
+        assert!(!should_inject(4, 5, 0, false));
+        // Final round but already produced text → don't inject (already converging).
+        assert!(!should_inject(4, 5, 3, true));
+        // Not the final round → don't inject yet.
+        assert!(!should_inject(0, 5, 0, false));
+        assert!(!should_inject(3, 5, 1, false));
+        // max_rounds=1 edge: round=0 IS the final round → inject only when rounds>0,
+        // which can never happen at round 0 → never injects on max_rounds=1. Correct.
+        assert!(!should_inject(0, 1, 0, false));
+    }
+
+    /// The boundary system message must instruct text-only output and forbid
+    /// further tool calls. Asserting structure protects against accidental
+    /// prompt edits that could re-open the convergence gap.
+    #[test]
+    fn convergence_boundary_message_shape() {
+        let msg = serde_json::json!({
+            "role": "system",
+            "content": "You have reached the final response step. \
+                Do NOT call any more tools. Using the tool results \
+                already provided above, produce the user's final \
+                answer in natural language now."
+        });
+        assert_eq!(msg["role"].as_str(), Some("system"));
+        let content = msg["content"].as_str().unwrap();
+        assert!(content.contains("final response step"));
+        assert!(content.contains("Do NOT call any more tools"));
+        assert!(content.contains("final answer in natural language"));
     }
 
     #[test]

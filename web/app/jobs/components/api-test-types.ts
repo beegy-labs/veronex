@@ -87,6 +87,21 @@ export interface ConversationMessage {
   content: string
   images?: string[] // base64, user messages only
   model?: string    // model used for this turn (assistant messages only)
+  /**
+   * Job UUID extracted from SSE chunk id (`chatcmpl-mcp-<uuid>`). Set on
+   * assistant messages after the stream completes; used by the conversation
+   * UI to fetch the per-turn MCP tool-call audit via
+   * `GET /v1/conversations/{id}/turns/{job_id}/internals`. SDD:
+   * `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
+   */
+  jobId?: string
+  /**
+   * True when this turn invoked any MCP tool. Drives the inline
+   * `<ToolCallTimeline>` reveal in the conversation UI. Even when the model
+   * never produced text, this flag lets the UI show the user what the system
+   * actually did (search queries, results, latency).
+   */
+  hasMcpTools?: boolean
 }
 
 export interface ConversationSession {
