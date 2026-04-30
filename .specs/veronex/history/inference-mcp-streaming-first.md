@@ -855,3 +855,17 @@ Each script is **resume-safe**: header documents the SDD section being verified,
 ### ADD workflow
 - `.add/feature-addition.md` (step 5 → `.add/cdd-feedback.md`)
 - `.add/doc-sync.md` (post-impl CDD divergence cleanup)
+
+---
+
+## §10 Post-mortem footnote (added 2026-04-30)
+
+**§1 premise invalidated.** This SDD's §1 named Cloudflare Edge's ~100 s origin idle-read timeout as the sole driving constraint for the streaming-first contract — specifically the round-level fast-path (`run_loop` skips collection of round N+1 when `rounds > 0` and hands the runner job_id directly to the SSE writer). With **platform-gitops PRs #598/#599/#600 (merged 2026-04-30)** the inference path no longer transits Cloudflare:
+
+- `veronex-api-dev.girok.dev` is a DNS-only CNAME → `home-gw.girok.dev` (DDNS A) → home router NAT 443 → `cilium-gateway-web-gateway` (192.168.1.251)
+- Cilium HTTPRoute applies per-rule `timeouts.{request,backendRequest}: 1800s` (Gateway API v1.1)
+- CF Edge / CF Tunnel are out of the path; the 100 s constraint is gone
+
+**S20 (`.specs/veronex/bridge-mcp-loop-correctness.md`) removed the fast-path** for correctness: live verify on dev (2026-04-30) showed a model (`qwen3-coder-next-200k:latest`) emitting a second tool_call in round N+1, which the fast-path streamed directly to the client with `finish_reason=stop`, bypassing MCP detection and producing a silent failure. Industry agentic-loop frameworks (LangGraph, OpenAI Agents SDK) do not use such a bypass; round-level synchronous collection is canonical. Token-by-token streaming UX is preserved by a stream-tap pattern (`collect_round` forwards content tokens of text rounds to the caller's SSE channel as they arrive; tool-call rounds remain silent on the tap).
+
+The rest of this SDD's contract — SSE framing of the response regardless of `stream:false`, 15 s `KeepAlive` heartbeats during processing, runner-side per-round S3 persistence — remains in effect.
