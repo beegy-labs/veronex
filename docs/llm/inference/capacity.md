@@ -55,14 +55,19 @@ POST /v1/servers (register provider)
 | **Unknown** | `0` | Concurrency-headroom score — `available_vram_mb` returns `(max_concurrent - active) * 1_024 MB` (min 1); routing still works, delegates enforcement to Ollama |
 | **Known** | `> 0` | Strict reservation — available VRAM checked before every dispatch |
 
-`total_mb` is set by the 30s sync loop from node-exporter DRM metrics or APU `mem_available_mb`. DB column `weight_estimated: bool` tracks whether per-model weight was measured or estimated, but is not consulted at dispatch time.
+`total_mb` is set by the 30s sync loop. DB column `weight_estimated: bool` tracks whether per-model weight was measured or estimated, but is not consulted at dispatch time.
 
-**VRAM total**:
+**VRAM total — priority order** (SSOT precedence; SDD `.specs/veronex/vram-total-ssot-priority-restoration.md` §3.1):
 
-Determined directly from hardware metrics — no estimation multiplier:
-- **node-exporter DRM** (`node_drm_memory_vram_total_bytes` / `vram_size_bytes`): exact value
-- **APU**: `mem_available_mb` from node-exporter (unified memory)
-- **Unknown** (no node-exporter): pass-through mode until first observation
+| # | Source | Used when |
+|---|--------|-----------|
+| 1 | **`llm_providers.total_vram_mb`** (operator-registered, `vram_total_source = manual`) | `> 0` — declared envelope, takes precedence over auto-detection |
+| 2 | **agent-pushed mirror** (`veronex-agent` discovery label `total_vram_mb`) | provider DB value 0 but agent has value (analyzer cache miss / staleness window) |
+| 3 | **node-exporter DRM** (`node_drm_memory_vram_total_bytes` / `vram_size_bytes`) | unset operator + agent → pass-through; non-APU host |
+| 4 | **APU** (`mem_available_mb` from node-exporter, unified memory) | unset operator + agent → pass-through; AMD APU detected (`drm > 0 && mem_avail > drm × 2`) |
+| 5 | **Unknown** (no source) | `total_mb = 0` → vram_pool delegates capacity to Ollama (request still dispatches) |
+
+The operator-registered value is the **declared envelope**: AIMD `max_concurrent`, `safety_permil` (auto +50 on OOM, decay −10/cycle), and Ollama's own OOM rejection together provide dynamic correction within the envelope. Inverted priority (auto-detect over operator value) was a regression introduced in commit `4891fbc` and reverted in this SDD.
 
 ---
 

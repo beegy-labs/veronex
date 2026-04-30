@@ -201,6 +201,90 @@ mod tests {
     use crate::application::ports::outbound::model_capacity_repository::ThroughputStats;
     use proptest::prelude::*;
 
+    // ── S22 VRAM total SSOT priority — see SDD §5 ─────────────────────────────
+
+    #[test]
+    fn vram_total_priority_operator_value_wins_over_agent_and_hw() {
+        // Operator registered 117_760 MB. Agent / DRM / mem_available all
+        // present and lower — operator value MUST win (CDD L699 "confirmed").
+        let total = resolve_vram_total_mb(
+            117_760,            // provider DB
+            Some(117_760),      // agent mirror
+            1024,               // DRM dedicated (APU)
+            60_000,             // mem_available (APU)
+            "amd",
+        );
+        assert_eq!(total, 117_760, "operator-registered SSOT must win over auto-detected values");
+    }
+
+    #[test]
+    fn vram_total_priority_apu_passthrough_when_operator_unset() {
+        // Operator value 0 (unset). APU host: DRM=1024, mem_avail=60000.
+        // → APU branch returns mem_available_mb (auto-detect).
+        let total = resolve_vram_total_mb(
+            0,                  // provider DB unset
+            None,               // no agent mirror
+            1024,               // DRM dedicated
+            60_000,             // mem_available
+            "amd",
+        );
+        assert_eq!(total, 60_000, "APU pass-through must use mem_available_mb when operator unset");
+    }
+
+    #[test]
+    fn vram_total_priority_dedicated_gpu_passthrough_when_operator_unset() {
+        // Operator value 0. Non-APU host (e.g. discrete NVIDIA): DRM=24576.
+        // → uses DRM directly.
+        let total = resolve_vram_total_mb(
+            0,
+            None,
+            24_576,
+            32_000,
+            "nvidia",
+        );
+        assert_eq!(total, 24_576, "non-APU pass-through must use DRM dedicated value");
+    }
+
+    #[test]
+    fn vram_total_priority_returns_zero_when_everything_unset() {
+        // No operator value, no agent, no hw metrics → 0 (pass-through to
+        // ollama enforcement via vram_pool::try_reserve total=0 branch).
+        let total = resolve_vram_total_mb(0, None, 0, 0, "");
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn vram_total_priority_agent_used_when_operator_zero_but_agent_has_value() {
+        // Operator value 0 but agent has it (rare — agent's discovery label
+        // can briefly carry a value before provider DB sync). Agent wins
+        // over auto-detect; this guards the staleness window.
+        let total = resolve_vram_total_mb(
+            0,
+            Some(117_760),
+            1024,
+            60_000,
+            "amd",
+        );
+        assert_eq!(total, 117_760, "agent-pushed mirror used when operator=0 and agent has value");
+    }
+
+    #[test]
+    fn vram_total_priority_regression_guard_drm_must_not_override_operator() {
+        // Sentinel against `4891fbc` regression: hw.vram_total_mb (DRM) must
+        // NOT take precedence over a non-zero operator value, even on APU
+        // where DRM reads 1024 MB.
+        let total = resolve_vram_total_mb(
+            117_760,            // operator
+            Some(60_000),       // agent (different value — operator still wins)
+            1024,               // DRM dedicated — must NOT win
+            60_000,             // mem_available — must NOT win
+            "amd",
+        );
+        assert_eq!(total, 117_760);
+        // Negative test: if the priority chain is ever inverted, this would
+        // return 1024 (DRM) or 60_000 (APU mem_available) instead.
+    }
+
     fn make_arch(layers: u32, kv_heads: u32, head_dim: u32, max_ctx: u32, cfg_ctx: u32) -> ModelArchProfile {
         ModelArchProfile { num_layers: layers, num_kv_heads: kv_heads, head_dim: head_dim, max_ctx: max_ctx, configured_ctx: cfg_ctx }
     }
@@ -612,6 +696,35 @@ Respond ONLY with valid JSON:
     Ok(serde_json::from_str(raw).unwrap_or_default())
 }
 
+// ── VRAM total source-of-truth priority ─────────────────────────────────────
+//
+// Priority order (CDD `docs/llm/inference/capacity.md` L699 — "confirmed total
+// VRAM (0 = unknown → pass-through)"; SDD `vram-total-ssot-priority-restoration.md`):
+//
+//   1. operator-registered `provider_total_vram_mb` (declared envelope, SSOT)
+//   2. agent-pushed mirror (`agent_total_vram_mb`)
+//   3. pass-through auto-detect: APU `mem_available_mb` (if AMD APU with
+//      DRM dedicated < 50% of system RAM), else DRM dedicated `drm_vram_mb`
+//
+// Returning 0 (everything unset) is acceptable — `vram_pool::try_reserve`
+// treats `total = 0` as pass-through and delegates capacity to ollama.
+fn resolve_vram_total_mb(
+    provider_total_vram_mb: i64,
+    agent_total_vram_mb: Option<u64>,
+    drm_vram_mb: u64,
+    mem_available_mb: u64,
+    gpu_vendor: &str,
+) -> u64 {
+    if provider_total_vram_mb > 0 {
+        return provider_total_vram_mb as u64;
+    }
+    if let Some(v) = agent_total_vram_mb.filter(|&v| v > 0) {
+        return v;
+    }
+    let is_apu = gpu_vendor == "amd" && drm_vram_mb > 0 && mem_available_mb > drm_vram_mb * 2;
+    if is_apu { mem_available_mb } else { drm_vram_mb }
+}
+
 // ── Per-provider unified sync ────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -729,30 +842,34 @@ pub async fn sync_provider(
     } else {
         None
     };
-    let drm_vram_mb = hw.as_ref().map(|h| h.vram_total_mb as u64)
-        .filter(|&v| v > 0)
-        .unwrap_or_else(|| {
-            // Prefer agent-reported total_vram_mb (from discovery labels / provider DB),
-            // fall back to provider DB field directly.
-            agent_total_vram_mb.filter(|&v| v > 0).unwrap_or({
-                if provider_total_vram_mb > 0 { provider_total_vram_mb as u64 } else { 0 }
-            })
-        });
-
-    // APU / unified-memory detection: AMD Ryzen AI (iGPU) and similar APUs report only
-    // the dedicated BIOS-allocated VRAM via DRM (e.g. 1024 MiB), while Ollama transparently
-    // uses shared system RAM. Use mem_available_mb from node-exporter as the real capacity.
+    // Priority chain for `vram_total_mb` — see SDD
+    // `.specs/veronex/vram-total-ssot-priority-restoration.md` §3.1 and CDD
+    // `docs/llm/inference/capacity.md` L699 ("confirmed total VRAM (0 = unknown
+    // → pass-through)").
+    //
+    // 1st: operator-registered value in `llm_providers.total_vram_mb` (SSOT —
+    //      the operator declared envelope; AIMD + safety_permil + ollama OOM
+    //      handle dynamic correction within this envelope).
+    // 2nd: agent-pushed mirror (same DB value, refreshed via discovery labels;
+    //      covers analyzer cache-miss races).
+    // 3rd: pass-through auto-detect (DRM dedicated, or APU unified-memory via
+    //      node-exporter `mem_available_mb`) — used only when operator left
+    //      the value unset (registration without explicit total).
+    //
+    // The previous chain (regression in commit `4891fbc`) put DRM 1st which
+    // silently overrode operator intent on APU hosts (DRM = 1024 MiB → APU
+    // branch fed transient `mem_available_mb` to vram_pool, blocking dispatch
+    // when other tenants used system RAM).
     let mem_available_mb = hw.as_ref().map(|h| h.mem_available_mb as u64).unwrap_or(0u64);
-    let is_apu = hw.as_ref().is_some_and(|h| {
-        h.gpu_vendor == "amd" && drm_vram_mb > 0 && mem_available_mb > drm_vram_mb * 2
-    });
-    let vram_total_mb = if is_apu {
-        // APU unified memory: use node-exporter mem_available_mb as total VRAM.
-        // safety_permil in VramPool.compute_available() handles the buffer.
-        mem_available_mb
-    } else {
-        drm_vram_mb
-    };
+    let drm_vram_mb_raw = hw.as_ref().map(|h| h.vram_total_mb as u64).unwrap_or(0);
+    let gpu_vendor = hw.as_ref().map(|h| h.gpu_vendor.as_str()).unwrap_or("");
+    let vram_total_mb = resolve_vram_total_mb(
+        provider_total_vram_mb,
+        agent_total_vram_mb,
+        drm_vram_mb_raw,
+        mem_available_mb,
+        gpu_vendor,
+    );
 
     let temp_c = hw.as_ref().map(|h| h.max_temp_c());
 
@@ -764,6 +881,10 @@ pub async fn sync_provider(
 
     // APU mem drift: if mem_available_mb changed >15% from last observed value,
     // reset AIMD learning epoch for all loaded models to prevent stale baselines.
+    // APU detection here matches `resolve_vram_total_mb`'s pass-through branch
+    // (kept independent so drift tracking runs even when the operator-registered
+    // total takes priority over auto-detect).
+    let is_apu = gpu_vendor == "amd" && drm_vram_mb_raw > 0 && mem_available_mb > drm_vram_mb_raw * 2;
     if is_apu && mem_available_mb > 0 {
         let last = vram_pool.last_mem_available_mb(provider_id);
         if last > 0 {
