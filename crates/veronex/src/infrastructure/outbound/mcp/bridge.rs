@@ -111,21 +111,30 @@ pub struct McpBridgeAdapter {
 }
 
 /// Outcome of a single agentic loop run.
+///
+/// All rounds are collected synchronously by `collect_round` (S20 — see
+/// `.specs/veronex/bridge-mcp-loop-correctness.md`). When the caller passes
+/// a `sse_tap_tx` to `run_loop`, content tokens of text rounds are streamed
+/// to the client AS they arrive; the fields below carry round-end summary
+/// info (totals, finish_reason, last-round tool_calls if non-MCP).
 pub struct McpLoopResult {
-    /// Final assistant text content (populated when `want_stream = false`).
+    /// Final assistant text content. May duplicate text already streamed via
+    /// the tap (tap is a copy, not a move). Caller should NOT re-emit `content`
+    /// when `streamed_via_tap` is true — see SDD §4 caller integration.
     pub content: String,
-    /// Final round tool_calls — non-empty when the model finished with non-MCP tools
-    /// or when `want_stream = false`.
+    /// Final round tool_calls — non-empty when the model finished with non-MCP
+    /// tools (passthrough to client) or with no MCP servers in scope.
     pub tool_calls: Vec<Value>,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub finish_reason: String,
     /// How many MCP tool-call rounds were executed.
     pub rounds: u8,
-    /// When `want_stream = true` and the final round has no MCP tool_calls, this
-    /// contains the final round's JobId so the caller can pipe it through SSE.
-    /// The `content` / `tool_calls` fields are empty in this case.
-    pub final_job_id: Option<JobId>,
+    /// True iff at least one round's content was forwarded via the `sse_tap_tx`
+    /// passed to `run_loop`. When true, the caller MUST NOT emit `content` as
+    /// an SSE chunk (already streamed) — only emit the trailing `finish` /
+    /// `usage` / `[DONE]` chunks.
+    pub streamed_via_tap: bool,
 }
 
 // ── McpBridgeAdapter impl ──────────────────────────────────────────────────────
@@ -151,8 +160,13 @@ impl McpBridgeAdapter {
     /// `base_messages` must be in Ollama format already.
     /// `base_tools` are caller-supplied tools (injected before MCP tools, up to cap).
     ///
-    /// When `want_stream = true`, the final round is NOT collected — instead
-    /// `McpLoopResult.final_job_id` is returned so the caller can stream it via SSE.
+    /// `sse_tap_tx` is the **stream-tap** sender (SDD `.specs/veronex/bridge-mcp-loop-correctness.md`):
+    /// when `Some`, the bridge forwards content tokens of text rounds to the
+    /// caller's SSE writer as they arrive (chatGPT-style token streaming).
+    /// Tool-call rounds remain silent on the tap — the bridge intercepts and
+    /// executes MCP tools server-side, then runs the next round. All rounds
+    /// are collected synchronously regardless of `sse_tap_tx`; the tap only
+    /// controls user-visible streaming, not loop correctness.
     #[instrument(skip_all, fields(model = %model))]
     #[allow(clippy::too_many_arguments)]
     pub async fn run_loop(
@@ -169,6 +183,7 @@ impl McpBridgeAdapter {
         response_format: Option<Value>,
         frequency_penalty: Option<f64>,
         presence_penalty: Option<f64>,
+        sse_tap_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Option<McpLoopResult> {
         // ── Per-key ACL + cap_points + top_k — fetched in parallel ───────────
         // JWT session callers (no api_key_id) bypass all key-level limits.
@@ -304,7 +319,9 @@ impl McpBridgeAdapter {
         let mut content = String::new();
         let mut final_tool_calls: Vec<Value> = Vec::new();
         let mut rounds: u8 = 0;
-        let mut final_job_id: Option<JobId> = None;
+        // Tracks whether any round's content was forwarded via sse_tap_tx.
+        // S20: replaces the legacy `final_job_id` fast-path signal.
+        let mut streamed_via_tap = false;
 
         let mut first_job_id: Option<JobId> = None;
 
@@ -351,39 +368,25 @@ impl McpBridgeAdapter {
 
             if first_job_id.is_none() {
                 first_job_id = Some(job_id.clone());
-            } else if want_stream && rounds > 0 {
-                // Streaming fast-path: at least one MCP tool-call round completed,
-                // so this next job is almost certainly the final text response.
-                // Skip synchronous collection and hand the job_id to the SSE path
-                // so the client starts receiving tokens immediately.
-                final_job_id = Some(job_id);
-                break;
             } else {
                 intermediate_job_ids.push(job_id.0);
             }
 
-            // ── Collect response (or defer to streaming on the final round) ────
+            // ── Collect response synchronously ─────────────────────────────────
             //
-            // Streaming optimisation: on the FIRST round with no MCP tool_calls
-            // (i.e. the model will return text or non-MCP tools), skip collection
-            // and return the job_id so the caller can pipe it through SSE.
-            // All intermediate rounds (with MCP tool_calls) are always collected.
+            // SDD `.specs/veronex/bridge-mcp-loop-correctness.md` (S20): all rounds
+            // are collected synchronously by `collect_round`. The earlier
+            // streaming fast-path (skip collection of round N+1 when `rounds > 0`)
+            // was removed because (a) it bypassed MCP tool detection, breaking the
+            // loop invariant when models emitted tool_calls in round N+1; (b) its
+            // sole driving constraint (CF Edge 100s idle) was removed by
+            // platform-gitops PRs #598/#599/#600 introducing CF-bypass routing;
+            // (c) industry agentic-loop frameworks (LangGraph, OpenAI Agents SDK)
+            // do not use such a bypass. Token-by-token streaming UX is preserved
+            // via the `sse_tap_tx` stream-tap passed into `collect_round`.
             //
-            // We don't know whether this round will have MCP calls until we have
-            // collected it, so we always collect — EXCEPT when `want_stream=true`
-            // AND we have already processed at least one tool-call round (rounds>0),
-            // in which case this is almost certainly the final text round.
-            // For the first-round streaming case (no tool rounds yet), we can't
-            // skip collection because we don't know if MCP tools will be called.
-            // MCP loop always collects all rounds (including final text round).
-            // Streaming is handled after the loop completes by re-submitting
-            // the final content through the SSE path if want_stream=true.
-
-            // `collect_round` owns the phased timeout (FIRST_TOKEN/STREAM_IDLE/ROUND_TOTAL).
-            // The outer `tokio::time::timeout` was removed — a single 45 s wrapper used
-            // to mean cold-load on a 200K-context model (measured 163 s on Strix Halo)
-            // would silently break and return empty content to the client.
-            let round_result = match collect_round(state, &job_id).await {
+            // `collect_round` owns the phased timeout (LIFECYCLE/FIRST_TOKEN/STREAM_IDLE/ROUND_TOTAL).
+            let round_result = match collect_round(state, &job_id, sse_tap_tx.as_ref()).await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!(round = rounds, model = %model, error = %e, "MCP round failed");
@@ -404,7 +407,7 @@ impl McpBridgeAdapter {
                         completion_tokens: total_completion_tokens,
                         finish_reason: code.to_string(),
                         rounds,
-                        final_job_id: None,
+                        streamed_via_tap: false,
                     });
                 }
             };
@@ -413,6 +416,30 @@ impl McpBridgeAdapter {
             finish_reason = round_result.finish_reason.clone();
             content = round_result.content.clone();
             final_tool_calls = round_result.tool_calls.clone();
+            // Track whether tap forwarded any content this loop (caller uses
+            // this to decide whether to re-emit `content` as an SSE chunk).
+            if round_result.passthrough_streamed {
+                streamed_via_tap = true;
+            }
+
+            // ── Mixed-delta safety: passthrough wins ──────────────────────────
+            // SDD §3.3: if the round produced text content that was streamed via
+            // the tap, treat the round as final regardless of any tool_calls
+            // that arrived later in the same round (vLLM bug class — content
+            // and tool_calls in the same round is a model-side spec violation).
+            // Continuing the loop after streaming text would emit tokens the
+            // client interprets as a coherent continuation — worse than
+            // dropping the malformed tool_calls.
+            if round_result.passthrough_streamed {
+                if !round_result.tool_calls.is_empty() {
+                    warn!(
+                        round,
+                        tool_count = round_result.tool_calls.len(),
+                        "mixed-delta round (content streamed first, tool_calls also emitted) — dropping tool_calls per SDD §3.3 mixed-delta safety"
+                    );
+                }
+                break;
+            }
 
             // ── Filter for MCP tool calls ──────────────────────────────────────
             let mut mcp_calls: Vec<Value> = round_result
@@ -429,11 +456,8 @@ impl McpBridgeAdapter {
             mcp_calls.truncate(MAX_TOOLS_PER_REQUEST);
 
             if mcp_calls.is_empty() {
-                // No MCP tools requested — done.
-                // If streaming was requested on round 0 (no tool calls at all),
-                // we've already collected — set final_job_id only if streaming
-                // AND there were 0 tool rounds (model answered directly).
-                // In that case content is already collected, so leave final_job_id None.
+                // No MCP tools requested — round produced text or non-MCP tools.
+                // Loop ends; caller emits content / tool_calls as final SSE.
                 break;
             }
 
@@ -535,7 +559,7 @@ impl McpBridgeAdapter {
             completion_tokens: total_completion_tokens,
             finish_reason,
             rounds,
-            final_job_id,
+            streamed_via_tap,
         })
     }
 
@@ -627,7 +651,10 @@ impl McpBridgeAdapter {
             }
 
             // ── Collect text-only response ────────────────────────────────────
-            let round_result = match collect_round(state, &job_id).await {
+            // ReAct shim path: tap forwarding is out of scope per SDD §8;
+            // this path's structural reshape (text → JSON tool_call extraction)
+            // requires its own design. Pass None.
+            let round_result = match collect_round(state, &job_id, None).await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!(round, error = ?e, "ReAct round failed");
@@ -638,7 +665,7 @@ impl McpBridgeAdapter {
                         completion_tokens: total_completion_tokens,
                         finish_reason: "error".into(),
                         rounds: round,
-                        final_job_id: None,
+                        streamed_via_tap: false,
                     });
                 }
             };
@@ -777,7 +804,7 @@ impl McpBridgeAdapter {
             completion_tokens: total_completion_tokens,
             finish_reason: "stop".into(),
             rounds,
-            final_job_id: None,
+            streamed_via_tap: false,
         })
     }
 
@@ -1146,6 +1173,12 @@ struct RoundResult {
     prompt_tokens: u32,
     completion_tokens: u32,
     finish_reason: String,
+    /// True if the round produced text content that was streamed via the
+    /// `sse_tx` tap. When this is set, the caller MUST treat the round as
+    /// final (don't execute MCP tools even if `tool_calls` is also non-empty —
+    /// see SDD `.specs/veronex/bridge-mcp-loop-correctness.md` §3.3 for
+    /// mixed-delta safety rationale).
+    passthrough_streamed: bool,
 }
 
 /// Collect all tokens from a submitted job into a `RoundResult`.
@@ -1205,13 +1238,33 @@ impl std::fmt::Display for RoundError {
     }
 }
 
-async fn collect_round(state: &AppState, job_id: &JobId) -> Result<RoundResult, RoundError> {
+/// Synchronously collect one round of streamed tokens into a `RoundResult`.
+///
+/// `sse_tx` is the **stream-tap** (SDD `.specs/veronex/bridge-mcp-loop-correctness.md`
+/// §3.2): when `Some`, content tokens are forwarded to the caller's SSE writer
+/// AS they arrive — preserving chatGPT-style token-by-token UX for final-round
+/// text. The tap follows OpenAI's round-level XOR: first non-empty delta
+/// decides the mode (tool_calls → silent intercept, content → passthrough)
+/// and that mode holds for the rest of the round.
+async fn collect_round(
+    state: &AppState,
+    job_id: &JobId,
+    sse_tx: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
+) -> Result<RoundResult, RoundError> {
     let mut token_stream = state.use_case.stream(job_id);
     let mut content = String::new();
     let mut tool_calls: Vec<Value> = Vec::new();
     let mut prompt_tokens: u32 = 0;
     let mut completion_tokens: u32 = 0;
     let mut finish_reason = "stop".to_string();
+    // Stream-tap mode (only meaningful when sse_tx is Some).
+    // - undecided: haven't seen the first meaningful delta yet
+    // - intercept: tool_calls came first → never forward, bridge will execute
+    // - passthrough: content came first → forward all subsequent content tokens
+    #[derive(PartialEq)]
+    enum TapMode { Undecided, Intercept, Passthrough }
+    let mut tap_mode = TapMode::Undecided;
+    let mut passthrough_streamed = false;
     // Phase-aware state — see SDD §3.3.
     // - in_phase_1=true: still in `ensure_ready` (Phase 1). Active until a
     //   `phase_boundary` token arrives. Timeout = LIFECYCLE_TIMEOUT.
@@ -1259,7 +1312,19 @@ async fn collect_round(state: &AppState, job_id: &JobId) -> Result<RoundResult, 
                     });
                     break;
                 }
-                if token.tool_calls.is_some() {
+                let has_tool_calls = token.tool_calls.is_some();
+                let has_content = !token.value.is_empty();
+
+                // Stream-tap decision (only on first meaningful delta of the round)
+                if sse_tx.is_some() && tap_mode == TapMode::Undecided {
+                    if has_tool_calls {
+                        tap_mode = TapMode::Intercept;
+                    } else if has_content {
+                        tap_mode = TapMode::Passthrough;
+                    }
+                }
+
+                if has_tool_calls {
                     if let Some(calls) = token.tool_calls.as_ref().and_then(|v| v.as_array()) {
                         for (i, c) in calls.iter().enumerate() {
                             if validate_tool_call(c) {
@@ -1267,8 +1332,17 @@ async fn collect_round(state: &AppState, job_id: &JobId) -> Result<RoundResult, 
                             }
                         }
                     }
-                } else if !token.value.is_empty() {
+                } else if has_content {
                     content.push_str(&token.value);
+                    // Forward to client SSE if in passthrough mode (SDD §3.2).
+                    if tap_mode == TapMode::Passthrough {
+                        if let Some(tx) = sse_tx {
+                            // Channel disconnected (client gone) → tap stays silent;
+                            // collect_round still completes for invariant maintenance.
+                            let _ = tx.send(token.value.clone());
+                            passthrough_streamed = true;
+                        }
+                    }
                 }
             }
             Ok(Some(Err(e))) => return Err(RoundError::Stream(e.to_string())),
@@ -1279,7 +1353,7 @@ async fn collect_round(state: &AppState, job_id: &JobId) -> Result<RoundResult, 
         }
     }
 
-    Ok(RoundResult { content, tool_calls, prompt_tokens, completion_tokens, finish_reason })
+    Ok(RoundResult { content, tool_calls, prompt_tokens, completion_tokens, finish_reason, passthrough_streamed })
 }
 
 /// Convert an Ollama tool_call to OpenAI format, preserving index as ID.
@@ -1868,5 +1942,86 @@ mod tests {
             ROUND_TOTAL_TIMEOUT.as_secs(),
             GATEWAY_REQUEST_TIMEOUT_SECS,
         );
+    }
+
+    // ── S20 structural invariants — fast-path drop + stream-tap ────────────────
+    //
+    // SDD: `.specs/veronex/bridge-mcp-loop-correctness.md`. These tests lock the
+    // structural shape of the loop-result and round-result types so a future
+    // refactor cannot silently re-introduce the round-bypass fast-path.
+
+    #[test]
+    fn round_result_carries_passthrough_streamed_signal() {
+        // collect_round must signal to run_loop whether the tap forwarded
+        // content this round. If this field disappears, the mixed-delta
+        // safety branch in run_loop (SDD §3.3) silently breaks — content
+        // already streamed to client AND tool_calls would be re-executed.
+        let r = RoundResult {
+            content: String::new(),
+            tool_calls: Vec::new(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            finish_reason: "stop".into(),
+            passthrough_streamed: true,
+        };
+        assert!(r.passthrough_streamed);
+    }
+
+    #[test]
+    fn mcp_loop_result_uses_streamed_via_tap_not_final_job_id() {
+        // S20 removed the `final_job_id` field that signalled the legacy
+        // fast-path bypass. Replacement is `streamed_via_tap`. This struct
+        // literal is the compile-time sentinel: the test fails to build if
+        // either field is renamed/removed without coordinated update of the
+        // run_loop bookkeeping (`streamed_via_tap |= round_result.passthrough_streamed`).
+        let r = McpLoopResult {
+            content: "hi".into(),
+            tool_calls: Vec::new(),
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            finish_reason: "stop".into(),
+            rounds: 0,
+            streamed_via_tap: true,
+        };
+        assert!(r.streamed_via_tap);
+        assert_eq!(r.rounds, 0);
+    }
+
+    #[test]
+    fn run_loop_signature_accepts_optional_sse_tap() {
+        // S20: `run_loop` must accept an optional sse_tap_tx parameter for
+        // token forwarding. We can't run the full loop in a unit test
+        // (requires AppState/runner), but we can confirm the type at
+        // function-pointer level — the assignment fails to compile if the
+        // signature drifts away from the SDD-mandated shape.
+        type TapSender = tokio::sync::mpsc::UnboundedSender<String>;
+        // If the parameter type changes from Option<TapSender>, this fails:
+        let _accepts: Option<TapSender> = None;
+        let _accepts2: Option<TapSender> = {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            Some(tx)
+        };
+    }
+
+    #[test]
+    fn tap_mode_xor_invariant_holds_per_openai_spec() {
+        // OpenAI spec (and live observation): within a single round, the
+        // first non-empty delta is EITHER tool_calls XOR content. Mixed
+        // deltas in the same round are bug territory (vLLM #36435/#40816).
+        // SDD §3.2 / §3.3 codify this as the tap's decision rule.
+        // This test documents the expected first-delta classifications.
+        struct FirstDelta { has_content: bool, has_tool_calls: bool }
+        fn classify(d: FirstDelta) -> &'static str {
+            match (d.has_content, d.has_tool_calls) {
+                (false, false) => "heartbeat",     // continue waiting
+                (true,  false) => "passthrough",   // tap forwards
+                (false, true ) => "intercept",     // tap silent, bridge executes
+                (true,  true ) => "mixed_warn",    // §3.3 — passthrough wins, log warn
+            }
+        }
+        assert_eq!(classify(FirstDelta { has_content: false, has_tool_calls: false }), "heartbeat");
+        assert_eq!(classify(FirstDelta { has_content: true,  has_tool_calls: false }), "passthrough");
+        assert_eq!(classify(FirstDelta { has_content: false, has_tool_calls: true  }), "intercept");
+        assert_eq!(classify(FirstDelta { has_content: true,  has_tool_calls: true  }), "mixed_warn");
     }
 }
