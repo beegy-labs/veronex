@@ -42,29 +42,46 @@ fn stream_tokens(&self, job: &InferenceJob) -> Pin<Box<dyn Stream<...>>> {
 
 ## Context Length (`num_ctx`) per Request
 
-Every Ollama request includes `options.num_ctx` derived from `model_effective_num_ctx(model_name)`:
+**Sync is the SSOT**. `capacity::analyzer` parses each model's Modelfile via `/api/show` and stores the `PARAMETER num_ctx` value in:
+
+- Postgres `model_capacity.configured_ctx`
+- Valkey `ollama_model_ctx(provider_id, model)` (TTL 600 s, hot-path cache)
+
+**Every request to ollama (Phase 1 lifecycle probe AND Phase 2 inference) MUST send the same `options.num_ctx`** resolved through the same lookup chain:
 
 ```rust
+pub async fn resolve_num_ctx(pool, provider_id, model) -> u32 {
+    lookup_ctx(pool, provider_id, model)        // 1. Valkey (sync SSOT)
+        .await
+        .unwrap_or_else(|| model_effective_num_ctx(model))   // 2. fabricate fallback
+}
+
+// fabricate values MUST match what sync would store for that model
 fn model_effective_num_ctx(model: &str) -> u32 {
   let m = model.to_lowercase();
-  if m.contains("200k")                     { return 204_800; }
+  if m.contains("200k")                     { return 200_000; }   // Modelfile 200000
   if m.contains("128k")                     { return 131_072; }
-  if m.contains("1m")                       { return 131_072; } // 1M models: 128K practical limit
+  if m.contains("1m")                       { return 131_072; }
   if m.contains("72b") || m.contains("70b") { return  32_768; }
-  32_768 // default for 7B-32B models
+  32_768
 }
 ```
 
-This per-request override ensures each model uses its natural context window regardless of the global `OLLAMA_CONTEXT_LENGTH` env var on the Ollama server.
+**Why one-source matters — single runner per model**:
 
-**Why this matters**: Without `options.num_ctx`, all models fall back to `OLLAMA_CONTEXT_LENGTH` (e.g. `8192`). A 128K model receiving a 24K-token conversation gets silently truncated, producing incomplete answers and triggering retry storms.
+ollama's scheduler (`OLLAMA_NUM_PARALLEL=1`) treats the **same model with different `KvSize`** as separate runner subprocesses. If Phase 1 probe sends a different `num_ctx` than Phase 2 chat, ollama spawns a **second cold-load** for the second `KvSize`. This breaks the "model loaded once, AIMD-tuned concurrent jobs" invariant of the queue+dispatcher design (`docs/llm/inference/capacity.md`, `docs/llm/providers/ollama-allocation.md`). Verified 2026-04-30 on dev: 220 + 232 s instead of 220 s.
 
-**Dual protection** (belt + suspenders):
+The fabricate fallback exists for the cold-start window before the analyzer's first sync. Its values MUST equal what sync would return — drift between fabricate (e.g. `204_800`) and Modelfile (`200_000`) reproduces the double-runner problem within a single request when one path hits Valkey and the other misses.
 
-| Layer | Mechanism |
-|-------|-----------|
-| GitOps | `OLLAMA_CONTEXT_LENGTH: 204800` on Ollama StatefulSet (global floor) |
-| Veronex | `options.num_ctx` per request (model-specific override) |
+**Layered protection**:
+
+| Layer | Mechanism | Role |
+|-------|-----------|------|
+| GitOps | `OLLAMA_CONTEXT_LENGTH: 204800` on Ollama StatefulSet | Server-wide floor (used only when client sends no `num_ctx`) |
+| Veronex sync (SSOT) | `capacity::analyzer` → Valkey `ollama_model_ctx` | Canonical per-model value from `/api/show` Modelfile |
+| Veronex fabricate (fallback) | `model_effective_num_ctx` name-pattern | Cold-start guess; values aligned to Modelfile conventions |
+
+SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md`.
 
 ---
 

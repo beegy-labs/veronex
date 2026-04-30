@@ -7,6 +7,13 @@
 //!   1. invoke `ensure_ready(model)` and wait for Ok
 //!   2. then proceed to `InferenceProviderPort::stream_tokens` / `infer`
 //!
+//! Implementations MUST resolve `num_ctx` internally from the same SSOT the
+//! inference path uses (Valkey `ollama_model_ctx` cache → fabricate fallback)
+//! and send it to the provider. ollama's scheduler treats the same model with
+//! different `KvSize` (== num_ctx) as separate runner subprocesses
+//! (`OLLAMA_NUM_PARALLEL=1`); a Phase 1 / Phase 2 mismatch triggers a second
+//! cold-load. SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md`.
+//!
 //! Implementations MUST coalesce concurrent same-model calls within a single
 //! provider (idempotent in-flight dedup) and update the VramPool SSOT on
 //! load completion / failure.
@@ -22,6 +29,13 @@ use crate::domain::value_objects::{EvictionReason, ModelInstanceState};
 pub trait ModelLifecyclePort: Send + Sync {
     /// Postcondition: returns Ok ⇒ the model is in `Loaded` state on this provider.
     /// The caller may proceed to `stream_tokens` immediately on Ok.
+    ///
+    /// **Implementation contract**: ollama-backed impls MUST resolve `num_ctx`
+    /// from the same source the inference port uses (sync SSOT → fabricate
+    /// fallback) and include `options.num_ctx` in the probe body. A Phase 1 /
+    /// Phase 2 mismatch causes ollama to spawn a second runner subprocess for
+    /// the same model (verified 2026-04-30: 220 + 232 s instead of 220 s).
+    /// SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md`.
     ///
     /// Concurrent same-model calls coalesce on a per-(provider, model) in-flight
     /// slot; only one HTTP probe runs and the rest receive a `LoadCoalesced`

@@ -237,10 +237,17 @@ async fn query_loaded_models(
 
 /// Run a zero-token probe against ollama to load `model` into VRAM.
 ///
-/// Sends `POST /api/generate {prompt:"", num_predict:0, keep_alive}`. ollama
-/// auto-loads the model and returns 200 when load completes. The probe HTTP
+/// Sends `POST /api/generate {prompt:"", num_predict:0, keep_alive, options.num_ctx}`.
+/// ollama auto-loads the model and returns 200 when load completes. The probe HTTP
 /// request itself sets `reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)` as the upper
 /// bound on a single attempt.
+///
+/// `num_ctx` MUST equal the value the inference port (`OllamaAdapter::stream_chat`)
+/// will send for this model. Otherwise ollama treats the chat request as a
+/// different runner config and spawns a second runner subprocess for the same
+/// model — verified 2026-04-30 on dev (qwen3-coder-next-200k: probe sent no
+/// num_ctx → Modelfile 200_000 used; chat sent 204_800 → second 232 s cold-load).
+/// SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md`.
 ///
 /// Returns `Ok(elapsed_ms)` on success, mapped error on failure.
 pub(super) async fn probe_load(
@@ -248,6 +255,7 @@ pub(super) async fn probe_load(
     base_url: &str,
     model: &str,
     keep_alive: &str,
+    num_ctx: u32,
 ) -> Result<u64, LifecycleError> {
     let url = format!("{}/api/generate", base_url.trim_end_matches('/'));
     let started = Instant::now();
@@ -258,6 +266,7 @@ pub(super) async fn probe_load(
             "prompt": "",
             "num_predict": 0,
             "keep_alive": keep_alive,
+            "options": { "num_ctx": num_ctx },
         }))
         .timeout(LIFECYCLE_LOAD_TIMEOUT)
         .send()
@@ -279,16 +288,21 @@ pub(super) async fn probe_load(
 /// detection, observability log, and hard cap. Returns the final outcome
 /// (caller stores it in `slot.result`).
 ///
+/// `num_ctx` is the SSOT-resolved context size; the probe sends it in
+/// `options.num_ctx` so ollama loads the runner with the same `KvSize` the
+/// inference port will request.
+///
 /// See module-level docs for the design rationale.
 pub(super) async fn run_probe_with_stall(
     client: &reqwest::Client,
     base_url: &str,
     model: &str,
+    num_ctx: u32,
     slot: &LoadInFlight,
 ) -> Result<LifecycleOutcome, LifecycleError> {
     // ── (1) Canonical success/error path — probe response decides. ──
     let probe_fut = async {
-        let elapsed = probe_load(client, base_url, model, LIFECYCLE_KEEP_ALIVE).await?;
+        let elapsed = probe_load(client, base_url, model, LIFECYCLE_KEEP_ALIVE, num_ctx).await?;
         slot.record_progress(); // belt-and-suspenders even if poller already fired
         Ok::<LifecycleOutcome, LifecycleError>(LifecycleOutcome::LoadCompleted {
             duration_ms: elapsed,
@@ -449,7 +463,7 @@ mod tests {
         let server = MockServer::start().await;
         ok_after(&server, 50).await;
         let client = reqwest::Client::new();
-        let elapsed = probe_load(&client, &server.uri(), "any", "30m")
+        let elapsed = probe_load(&client, &server.uri(), "any", "30m", 32_768)
             .await
             .unwrap();
         assert!(elapsed >= 40, "elapsed_ms = {elapsed}");
@@ -460,7 +474,7 @@ mod tests {
         let server = MockServer::start().await;
         fail_with(&server, 502).await;
         let client = reqwest::Client::new();
-        let r = probe_load(&client, &server.uri(), "any", "30m").await;
+        let r = probe_load(&client, &server.uri(), "any", "30m", 32_768).await;
         assert!(matches!(r, Err(LifecycleError::ProviderError(_))));
     }
 
@@ -471,7 +485,7 @@ mod tests {
         ps_returns(&server, &["any"]).await;
         let client = reqwest::Client::new();
         let slot = LoadInFlight::new();
-        let r = run_probe_with_stall(&client, &server.uri(), "any", &slot)
+        let r = run_probe_with_stall(&client, &server.uri(), "any", 32_768, &slot)
             .await
             .unwrap();
         match r {
@@ -495,7 +509,7 @@ mod tests {
         let slot = LoadInFlight::new();
         let r = tokio::time::timeout(
             Duration::from_secs(15),
-            run_probe_with_stall(&client, &server.uri(), "any", &slot),
+            run_probe_with_stall(&client, &server.uri(), "any", 32_768, &slot),
         )
         .await
         .expect("must not exceed test timeout")
@@ -568,7 +582,7 @@ mod tests {
         let slot = LoadInFlight::new();
         let r = tokio::time::timeout(
             Duration::from_secs(15),
-            run_probe_with_stall(&client, &server.uri(), "any", &slot),
+            run_probe_with_stall(&client, &server.uri(), "any", 32_768, &slot),
         )
         .await
         .expect("must not exceed test timeout")

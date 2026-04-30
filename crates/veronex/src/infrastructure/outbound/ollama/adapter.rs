@@ -42,24 +42,32 @@ pub struct OllamaAdapter {
 
 /// Derive the effective `num_ctx` to send to Ollama based on the model name.
 ///
-/// Ollama uses `OLLAMA_CONTEXT_LENGTH` as the global default, but the per-request
-/// `options.num_ctx` takes precedence and lets each model use its natural window:
+/// **Sync is the SSOT** — the canonical value comes from `capacity::analyzer`
+/// parsing `/api/show` (Modelfile `PARAMETER num_ctx`) into Valkey via
+/// `lookup_ctx`. This fabricate is the cold-start fallback only, used when
+/// the Valkey cache has not yet been populated. Returned values MUST equal
+/// what sync would return for the same model — otherwise lifecycle Phase 1
+/// (cache miss → fabricate) and inference Phase 2 (cache hit → sync) drift,
+/// triggering a second ollama runner subprocess for the same model.
+/// SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md` §3.5.
 ///
-/// - Models with "128k" / "200k" in their name get the matching context.
-/// - Large models (70B+) are capped at 32K to keep KV cache manageable.
-/// - Everything else defaults to 32K, which is well under the 200K global
-///   env var and avoids over-allocating KV cache for small models.
-fn model_effective_num_ctx(model: &str) -> u32 {
+/// - "200k" → **200_000** (matches Modelfile `PARAMETER num_ctx 200000`,
+///   verified against `qwen3-coder-next-200k:latest /api/show`)
+/// - "128k" → **131_072** (= 128 × 1024; standard Modelfile convention)
+/// - "1m" → **131_072** (1M models: 128K practical limit on this hardware)
+/// - 70B+ → 32_768 (KV cache budget cap)
+/// - default → 32_768 (sensible for 7B–32B models)
+pub(crate) fn model_effective_num_ctx(model: &str) -> u32 {
     let m = model.to_lowercase();
-    if m.contains("200k")                        { return 204_800; }
+    if m.contains("200k")                        { return 200_000; }
     if m.contains("128k")                        { return 131_072; }
-    if m.contains("1m")                          { return 131_072; } // 1M models: 128K practical limit
+    if m.contains("1m")                          { return 131_072; }
     if m.contains("72b") || m.contains("70b")    { return  32_768; }
-    32_768 // sensible default for 7B–32B models
+    32_768
 }
 
 /// Resolve `configured_ctx` from Valkey.  Returns `None` on any cache miss or error.
-async fn lookup_ctx(pool: &fred::clients::Pool, provider_id: uuid::Uuid, model: &str) -> Option<u32> {
+pub(crate) async fn lookup_ctx(pool: &fred::clients::Pool, provider_id: uuid::Uuid, model: &str) -> Option<u32> {
     use fred::prelude::*;
     let key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(provider_id, model);
     let raw: Option<String> = pool.get(&key).await.ok()?;
@@ -67,6 +75,24 @@ async fn lookup_ctx(pool: &fred::clients::Pool, provider_id: uuid::Uuid, model: 
     serde_json::from_str::<serde_json::Value>(&json).ok()
         .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
         .map(|n| n as u32)
+}
+
+/// Resolve effective `num_ctx` for a model: Valkey sync SSOT first, fabricate
+/// fallback. Used by both the lifecycle port (Phase 1) and the inference port
+/// (Phase 2) so probe and chat send the same `KvSize` to ollama.
+///
+/// SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md` §3.4.
+pub async fn resolve_num_ctx(
+    pool: Option<&fred::clients::Pool>,
+    provider_id: uuid::Uuid,
+    model: &str,
+) -> u32 {
+    if let Some(p) = pool {
+        if let Some(n) = lookup_ctx(p, provider_id, model).await {
+            return n;
+        }
+    }
+    model_effective_num_ctx(model)
 }
 
 
@@ -158,11 +184,17 @@ impl ModelLifecyclePort for OllamaAdapter {
                 .map(|_| LifecycleOutcome::LoadCoalesced { waited_ms });
         }
 
-        // 3. Acquire slot, drive probe with concurrent stall detection.
+        // 3. Resolve num_ctx from the same SSOT the inference port uses (Valkey
+        //    cache → fabricate fallback). MUST be identical to what stream_chat
+        //    will send, otherwise ollama spawns a second runner with different
+        //    KvSize for the same model. SDD §3.4.
+        let num_ctx = resolve_num_ctx(self.valkey.as_ref(), self.provider_id, model).await;
+
+        // 4. Acquire slot, drive probe with concurrent stall detection.
         let slot = Arc::new(LoadInFlight::new());
         self.in_flight_loads
             .insert(model.to_string(), slot.clone());
-        let result = run_probe_with_stall(&self.client, &self.base_url, model, &slot).await;
+        let result = run_probe_with_stall(&self.client, &self.base_url, model, num_ctx, &slot).await;
 
         // 4. Notify waiters (set + remove are idempotent — first writer wins).
         let _ = slot.result.set(result.clone());
@@ -672,8 +704,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_effective_num_ctx_200k() {
-        assert_eq!(model_effective_num_ctx("gemma-200k"), 204_800);
+    fn model_effective_num_ctx_200k_matches_modelfile_value() {
+        // S21: fabricate values MUST equal what sync stores for that model.
+        // qwen3-coder-next-200k:latest Modelfile has `PARAMETER num_ctx 200000`,
+        // verified via /api/show (2026-04-30). Drift to 204_800 (= 200×1024)
+        // would put fabricate and sync on different runners → double cold-load.
+        // SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md` §3.5.
+        assert_eq!(model_effective_num_ctx("gemma-200k"), 200_000);
+        assert_eq!(model_effective_num_ctx("qwen3-coder-next-200k:latest"), 200_000);
     }
 
     #[test]
