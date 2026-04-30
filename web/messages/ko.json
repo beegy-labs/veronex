@@ -784,6 +784,7 @@
     "stop": "중단",
     "runAgain": "다시 실행",
     "toolsUsed": "사용된 도구",
+    "toolOnlyTurn": "도구만 호출된 턴 (모델이 텍스트 답변 없이 MCP 도구만 사용)",
     "retryInTest": "테스트에서 재시도",
     "runningAs": "실행자",
     "runner": "실행자",

@@ -784,6 +784,7 @@
     "stop": "停止",
     "runAgain": "再実行",
     "toolsUsed": "使用ツール",
+    "toolOnlyTurn": "ツールのみのターン（モデルがテキスト応答なしでMCPツールを呼び出し）",
     "retryInTest": "テストで再実行",
     "runningAs": "実行者",
     "runner": "実行者",

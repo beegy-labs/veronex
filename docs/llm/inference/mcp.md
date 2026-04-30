@@ -254,25 +254,37 @@ End-to-end ReAct verified on `veronex-api-dev.verobee.com` after YQL fix (#88):
 
 ## Audit exposure
 
-Every MCP tool invocation inside `run_loop()` is persisted to
-`mcp_loop_tool_calls` (CDD `inference/mcp-schema.md`) by
-`bridge::batch_insert_tool_calls`. The audit row carries `args_json`,
-`result_text`, `outcome`, `cache_hit`, `latency_ms`, and `result_bytes`.
+Two independent storages capture different aspects of an MCP turn.
+**S3 is the SSOT for what the user sees** in the conversation chain; PG is
+supplementary execution audit.
 
-**Read-side projection** — `GET /v1/conversations/{id}/turns/{job_id}/internals`
-returns the per-turn audit as a `tool_calls` array, joined with `mcp_servers`
-to expose `server_slug`. Ordered by `loop_round ASC, created_at ASC`. Empty
-when no MCP tools were invoked. Schema: `inference/job-api.md`.
+| Storage | Key | What it carries | Writer |
+|---|---|---|---|
+| S3 `ConversationRecord.turns[]` | `(owner_id, conversation_id)` per-round | Model output: `tool_calls_json` (each round's emitted tool_calls — name + args), `result_text` (final text round). One `TurnRecord` per bridge round. | Runner (`run_job`), per-round; SDD `inference-mcp-per-round-persist.md` |
+| PG `mcp_loop_tool_calls` | `(mcp_loop_id, job_id, loop_round)` per-tool | Tool execution audit: `args_json`, `result_text` (server response), `outcome`, `cache_hit`, `latency_ms`, `result_bytes`. | Bridge (`batch_insert_tool_calls`), per round. CDD `inference/mcp-schema.md`. |
 
-UI usage — `/jobs` test panel renders the chain inline below the assistant
-bubble for any turn that emitted MCP tool_calls (assistant message carries
-`hasMcpTools` flag set during SSE consumption). The conversation modal renders
-a compact badge (`{count} MCP call(s)`) under the same panel pattern.
+UI consumption split:
 
-This guarantees the user can always see the tool chain (input → result →
-latency → outcome), even when the model exhausts `MAX_ROUNDS` without
-producing a final text answer (degenerate case kept observable per the
-convergence-boundary design above).
+- **Primary chain (`/jobs` test panel inline render)** — when a turn invoked
+  MCP tools, the assistant bubble inlines the model's emitted tool_calls
+  (name + args) sourced from the S3 `turn.tool_calls` field on the
+  conversation detail (`GET /v1/conversations/{id}`). The frontend reads
+  this *after the SSE stream completes* — it cannot derive the per-round
+  `job_id` from the SSE `chunk.id` (that is a synthetic stream identifier,
+  `chatcmpl-mcp-{uuid_v4}`, unrelated to any DB row), so it fetches the
+  conversation detail and pins to the newest turn. Tool-only turns (no
+  text) render an explicit "tool-only turn" hint instead of "(no result)".
+- **Supplementary execution audit (lazy panel)** — `GET /v1/conversations/{id}/turns/{job_id}/internals`
+  returns `tool_calls: ToolCallDetail[]` joined from `mcp_loop_tool_calls`
+  with `mcp_servers` for `server_slug` (ordered `loop_round ASC, created_at ASC`,
+  empty when no MCP tools ran). Schema: `inference/job-api.md`. The
+  `<TurnInternals>` component fetches lazily on user expand. The
+  conversation list modal shows a `{count} MCP call(s)` badge from the
+  same response.
+
+This split guarantees the chain stays visible even when the convergence
+boundary fails to elicit a final text answer — the user sees what tools
+ran (S3) plus, on demand, how each one performed (PG).
 
 SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
 

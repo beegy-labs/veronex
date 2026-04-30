@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useReducer, useMemo, useCallback, useEffec
 import { useQuery } from '@tanstack/react-query'
 import { isLoggedIn, getAuthUser } from '@/lib/auth'
 import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
+import { api } from '@/lib/api'
 import type { RetryParams, ConversationDetail } from '@/lib/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
@@ -383,7 +384,6 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     }
 
     let fullText = ''
-    let jobId: string | undefined
     let hasMcpTools = false
     try {
       const resp = await fetch(`${BASE}${ep}`, {
@@ -419,13 +419,6 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
             try {
               const chunk: OpenAIChunk = JSON.parse(data)
               if (chunk.error?.message) throw new Error(chunk.error.message)
-              if (chunk.id && !jobId) {
-                // Server emits `chatcmpl-mcp-<uuid>` on MCP-bridge runs and
-                // `chatcmpl-<uuid>` on direct passthrough. Strip both prefixes
-                // so the audit GET (`/turns/{job_id}/internals`) sees a bare
-                // UUID. SDD §3 Tier A.
-                jobId = chunk.id.replace('chatcmpl-', '').replace('mcp-', '')
-              }
               const delta = chunk.choices?.[0]?.delta
               const content = delta?.content
               if (content) {
@@ -452,16 +445,52 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         }
       }
 
+      // Resolve the new turn's true job_id from S3 ConversationRecord. The
+      // SSE chunk.id is a synthetic stream identifier (`chatcmpl-mcp-<v4>`),
+      // not the inference_jobs row id, so we can't derive `job_id` from it
+      // (S23 v1 mistake — caused 404 on the `/internals` lazy-fetch and the
+      // test-panel "Failed to load data" symptom). Instead read the turn list
+      // from the conversation detail and pick the newest turn — that is the
+      // round we just persisted.
+      let resolvedJobId: string | undefined
+      let inlineToolCalls: ConversationMessage['toolCalls']
+      const finalConvId = (() => {
+        const row = (conversationSessions.find((s) => s.id === sid)
+          ?? (sid === activeConvSessionId ? activeConvSession : undefined))
+        return row?.conversationId
+      })()
+      if (hasMcpTools && finalConvId) {
+        try {
+          const detail = await api.conversation(finalConvId)
+          const lastTurn = detail.turns[detail.turns.length - 1]
+          if (lastTurn) {
+            resolvedJobId = lastTurn.job_id
+            const tcRaw = lastTurn.tool_calls
+            if (Array.isArray(tcRaw) && tcRaw.length > 0) {
+              const collected: { name: string; arguments: unknown }[] = []
+              for (const tc of tcRaw) {
+                const name = tc?.function?.name
+                if (!name) continue
+                collected.push({ name, arguments: tc.function?.arguments ?? null })
+              }
+              if (collected.length > 0) inlineToolCalls = collected
+            }
+          }
+        } catch {
+          // Soft-fail: the message still renders, just without the tool chain inline.
+        }
+      }
+
       setConversationSessions((prev) => prev.map((s) =>
         s.id === sid
-          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model, jobId, hasMcpTools }], streamingText: '', status: 'idle', mcpToolCall: undefined }
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model, jobId: resolvedJobId, hasMcpTools, toolCalls: inlineToolCalls }], streamingText: '', status: 'idle', mcpToolCall: undefined }
           : s
       ))
       onTurnComplete?.()
     } catch (err) {
       setConversationSessions((prev) => prev.map((s) =>
         s.id === sid
-          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model, jobId, hasMcpTools }], streamingText: '', status: 'error', errorMsg: err instanceof Error ? err.message : t('common.unknownError'), mcpToolCall: undefined }
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model, hasMcpTools }], streamingText: '', status: 'error', errorMsg: err instanceof Error ? err.message : t('common.unknownError'), mcpToolCall: undefined }
           : s
       ))
       onTurnComplete?.()
