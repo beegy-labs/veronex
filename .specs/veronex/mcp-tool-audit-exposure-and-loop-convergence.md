@@ -16,7 +16,8 @@
 | D — Tests: tool audit fetch + loop-convergence invariant + integration | [x] | #126 | 8cfa00b |
 | CDD-sync — S3 vs PG split documented in `mcp.md` § Audit exposure | [x] v1 → [x] v2 | #126 / #127 | 8cfa00b / TBD |
 | Live verify — L2 boundary log + L5 audit endpoint surfacing | [x] (L2/L5 dev) | n/a | live 2026-04-30 |
-| Live verify — L6 UI inline tool chain renders without "load failed" | [ ] (v2 hotfix #127 pending) | — | — |
+| Live verify — L6 UI inline tool chain renders without "load failed" | [x] (v2 verified) | #127 | 5e812e1 |
+| Live verify — L3 forced convergence on degenerate qwen3-coder runs | [ ] (v3 hotfix #128 pending) | — | — |
 
 ---
 
@@ -157,31 +158,64 @@ Modification to `bridge::run_loop`:
 
 ```rust
 for round in 0..max_rounds {
-    // ── New §3.3 — convergence boundary on the final round ────────────────
-    // If we are about to dispatch the LAST allowed round and the loop has
-    // produced no text yet, inject a system message that constrains the
-    // model to text-only output using the tool results already accumulated.
-    // Pattern: LangGraph recursion_limit + boundary prompt; OpenAI Agents
-    // SDK tool_choice="none" escalation.
-    if round == max_rounds - 1 && content.is_empty() && rounds > 0 {
+    // ── §3.3 convergence boundary on the final round ──────────────────────
+    // (1) inject a system message instructing text-only output, AND
+    // (2) omit the `tools` schema from the final-round submit.
+    // Both are required for Ollama-served tool-eager models.
+    let convergence_boundary = round + 1 == max_rounds && rounds > 0 && content.is_empty();
+    if convergence_boundary {
         messages.push(serde_json::json!({
             "role": "system",
             "content": "You have reached the final response step. \
-                Do NOT call any more tools. Using the tool results above, \
-                produce the user's final answer in natural language now."
+                Tools are no longer available. Using the tool results \
+                already provided above, produce the user's final answer \
+                in natural language now."
         }));
-        info!(round, "MCP convergence: final-round system message injected");
+        info!(round, "MCP convergence: tools omitted + system message injected");
     }
     // ── /Tier C ────────────────────────────────────────────────────────
 
-    let job_id = match state.use_case.submit(SubmitJobRequest { ... }).await { ... };
-    // ... rest unchanged
+    let job_id = match state.use_case.submit(SubmitJobRequest {
+        // ...
+        tools: if convergence_boundary { None } else { tools_json.clone().map(Value::Array) },
+        // ...
+    }).await { ... };
 }
 ```
 
+Why **both** halves are required (Ollama-specific):
+
+The OpenAI canonical mechanism for forcing a textual reply when tools are
+bound is `tool_choice="none"` — schemas stay in the prompt but the
+decoder is constrained to emit a regular `assistant` message. **Ollama's
+OpenAI-compat endpoint silently drops `tool_choice`** (Ollama
+[issue #8421](https://github.com/ollama/ollama/issues/8421) — collaborator
+`rick-github` confirms; reproducer in same thread:
+`tool_choice={"type":"function","function":{"name":"submit_review"}}`
+ignored, model returned `tool_calls=None`). The open feature request
+[#11171](https://github.com/ollama/ollama/issues/11171) tracks the gap.
+Until upstream fixes it, the only reliable way to suppress tool emission
+on Ollama is to **remove the tool schemas from the request**. The
+accumulated tool *results* (`role:"tool"` entries) remain in the
+messages array, so the model still has full context to synthesize.
+
+A system message alone is empirically insufficient on tool-eager models
+([QwenLM/Qwen3-Coder issue #475](https://github.com/QwenLM/Qwen3-Coder/issues/475)
+documents distinct failure modes — model omits `<tool_call>` tag after
+text response, etc.). This is veronex's **MCP integration layer**'s
+responsibility per CDD `inference/mcp.md` "Veronex acts as an MCP client
+on behalf of LLM inference loops" — backend gateway compensating for
+runtime-level capability gaps is in scope.
+
 Effect:
-- After the boundary system message, the next (last) round is the model's final chance. Most instruction-tuned models honor "no more tools" + "produce answer now".
-- If the model still emits tool_calls (degenerate case), the loop ends at `max_rounds` with whatever the last round produced; the bridge's `streamed_via_tap` (S20) plus the new `tool_calls` audit (Tier A) means the UI still shows the full chain — the user is informed of the failure mode rather than seeing a silent "결과 없음".
+- On the boundary round the model has zero callable tools and an explicit
+  text-only directive. It must emit text or trivially nothing; in practice
+  the accumulated tool results give it enough material to synthesize.
+- If a degenerate model still emits a malformed `<tool_call>` token
+  pattern despite no schemas (very unlikely), the loop ends at
+  `max_rounds` with whatever was produced; the Tier A audit (PG
+  `mcp_loop_tool_calls`) plus the S3 chain remain visible to the user —
+  no silent "결과 없음".
 
 ### §3.4 Why this is "complete" (no compromise)
 
@@ -259,6 +293,51 @@ Effect:
 - Per-server MCP tool result truncation policy in audit response — current full `result_text` exposure (TEXT column) is fine for dashboard view.
 - Streaming `tool_calls` field in real-time during the bridge loop (server-push to UI mid-stream) — current model: UI fetches internals after turn completes. Real-time streaming is a separate UX SDD.
 - Dedicated UI to inspect `mcp_loop_tool_calls` rows globally (cross-conversation analytics) — separate dashboard SDD.
+
+---
+
+## §11 v2 → v3 fix (PR #128)
+
+Live verification on dev surfaced that v1's convergence boundary (system
+message inject only, tools schema unchanged) **does not actually force
+convergence** on qwen3-coder-next-200k served via Ollama. Bridge log
+showed the boundary line at `round=4`, but `round=4` then emitted yet
+another `mcp_calls=1` — the model ignored the system directive and
+called another tool.
+
+Root cause investigation (web-verified, see references below):
+
+1. **OpenAI Agents SDK `tool_choice="none"` escalation** — claimed in
+   v1 SDD as the industry pattern. **This is a hallucination.** The
+   actual SDK ([source](https://raw.githubusercontent.com/openai/openai-agents-python/main/src/agents/run.py))
+   raises `MaxTurnsExceeded` and does not modify `tool_choice` ever.
+   Issue [#844](https://github.com/openai/openai-agents-python/issues/844)
+   shows a community workaround that explicitly removes tools — also
+   reports the model "mostly ignores" a system-message-only directive.
+2. **LangGraph recursion_limit + boundary prompt** — also claimed in v1
+   SDD. **Also a hallucination.** LangGraph
+   ([errors.py](https://raw.githubusercontent.com/langchain-ai/langgraph/main/libs/langgraph/langgraph/errors.py))
+   raises `GraphRecursionError`. No boundary prompt is injected.
+3. **Ollama `tool_choice` support** — Ollama's OpenAI-compat endpoint
+   silently drops the field (issue #8421/#7778; open feature request
+   #11171). Even if the bridge sent `tool_choice="none"`, the model
+   would not see it.
+
+Fix (this PR):
+
+- bridge.rs convergence boundary now **omits the `tools` schema** on
+  the final round — `tools: if convergence_boundary { None } else
+  { tools_json.clone() }`. Combined with the (rewritten, stronger)
+  system message, the model has nothing callable and must emit text.
+- New unit test `convergence_boundary_omits_tools` pins the predicate.
+- SDD §3.3 rewritten with correct citations; CDD `inference/mcp.md` and
+  `flows/mcp.md` rows updated to drop the hallucinated patterns and
+  reference Ollama issue numbers as the actual constraint.
+
+This is in scope for veronex's MCP integration layer — per CDD
+`inference/mcp.md`: "Veronex acts as an MCP client on behalf of LLM
+inference loops". Compensating for `tool_choice` gaps in Ollama IS the
+gateway's job; that is precisely why `bridge::run_loop` exists.
 
 ---
 

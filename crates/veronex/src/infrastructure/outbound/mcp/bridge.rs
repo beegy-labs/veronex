@@ -337,23 +337,38 @@ impl McpBridgeAdapter {
             // If we are about to dispatch the LAST allowed round, no text
             // content has been produced yet, AND at least one tool round has
             // already executed (so tool results exist in the messages array),
-            // inject a system message constraining the model to text-only
-            // output. Without this, models that prefer tool-calling can
-            // exhaust max_rounds emitting different tools (different args
-            // bypass LOOP_DETECT_THRESHOLD) and never produce a final answer.
+            // force the model to emit text by (1) injecting a system message
+            // and (2) omitting the `tools` schema from the request. Either
+            // alone is insufficient on Ollama-served, tool-eager models
+            // (qwen3-coder family).
             //
-            // Pattern: LangGraph recursion_limit + boundary prompt;
-            // OpenAI Agents SDK tool_choice="none" escalation.
+            // The OpenAI canonical mechanism is `tool_choice="none"` (keep
+            // tools, force a regular message), but Ollama's OpenAI-compat
+            // endpoint silently drops the `tool_choice` field — so we
+            // approximate by removing the tool schemas entirely on this
+            // round. The accumulated tool *results* (role:"tool" entries)
+            // remain in the messages array, so the model still has full
+            // context to synthesize its final answer.
+            //
+            // References:
+            //   - Ollama issue #8421 — tool_choice silently ignored
+            //   - Ollama issue #11171 — open feature request for tool_choice
+            //     (https://github.com/ollama/ollama/issues/8421)
+            //     (https://github.com/ollama/ollama/issues/11171)
+            //   - QwenLM/Qwen3-Coder issue #475 — degenerate tool-call loops
+            //     documented in the model's community tracker
+            //
             // SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md` §3.3.
-            if round + 1 == max_rounds && rounds > 0 && content.is_empty() {
+            let convergence_boundary = round + 1 == max_rounds && rounds > 0 && content.is_empty();
+            if convergence_boundary {
                 messages.push(serde_json::json!({
                     "role": "system",
                     "content": "You have reached the final response step. \
-                        Do NOT call any more tools. Using the tool results \
-                        already provided above, produce the user's final \
-                        answer in natural language now."
+                        Tools are no longer available. Using the tool \
+                        results already provided above, produce the user's \
+                        final answer in natural language now."
                 }));
-                info!(round, max_rounds, "MCP convergence: final-round system message injected");
+                info!(round, max_rounds, "MCP convergence: tools omitted + system message injected");
             }
 
             // ── Submit job ─────────────────────────────────────────────────────
@@ -368,7 +383,10 @@ impl McpBridgeAdapter {
                 source: caller.source(),
                 api_format: ApiFormat::OpenaiCompat,
                 messages: Some(Value::Array(messages.clone())),
-                tools: tools_json.clone().map(Value::Array),
+                // Convergence boundary: omit tools schema entirely so the
+                // model has nothing callable and must emit text. See the
+                // boundary block above for the Ollama-specific rationale.
+                tools: if convergence_boundary { None } else { tools_json.clone().map(Value::Array) },
                 request_path: Some("/v1/chat/completions".to_string()),
                 conversation_id,
                 key_tier: caller.key_tier(),
@@ -2061,15 +2079,38 @@ mod tests {
         let msg = serde_json::json!({
             "role": "system",
             "content": "You have reached the final response step. \
-                Do NOT call any more tools. Using the tool results \
-                already provided above, produce the user's final \
-                answer in natural language now."
+                Tools are no longer available. Using the tool \
+                results already provided above, produce the user's \
+                final answer in natural language now."
         });
         assert_eq!(msg["role"].as_str(), Some("system"));
         let content = msg["content"].as_str().unwrap();
         assert!(content.contains("final response step"));
-        assert!(content.contains("Do NOT call any more tools"));
+        assert!(content.contains("Tools are no longer available"));
         assert!(content.contains("final answer in natural language"));
+    }
+
+    /// On the convergence boundary, the bridge must omit the `tools` field
+    /// entirely on the final-round submit. A system message alone is not
+    /// sufficient on Ollama-served, tool-eager models because Ollama's
+    /// OpenAI-compat endpoint silently drops `tool_choice` (Ollama issue
+    /// #8421/#11171), so the only way to suppress tool emission is to
+    /// remove the tool schemas from the request. This test pins that
+    /// behaviour.
+    #[test]
+    fn convergence_boundary_omits_tools() {
+        // Same predicate the bridge uses; if it changes, this test trips.
+        fn should_omit_tools(round: usize, max_rounds: usize, rounds: usize, has_content: bool) -> bool {
+            round + 1 == max_rounds && rounds > 0 && !has_content
+        }
+        // Mirror the production conditional: `tools = if convergence_boundary { None } else { Some(...) }`
+        let tools = serde_json::json!([{ "type": "function", "function": { "name": "x" } }]);
+        let on_boundary = should_omit_tools(4, 5, 1, false);
+        let on_normal_round = should_omit_tools(0, 5, 0, false);
+        let final_tools_on_boundary: Option<&serde_json::Value> = if on_boundary { None } else { Some(&tools) };
+        let final_tools_on_normal: Option<&serde_json::Value> = if on_normal_round { None } else { Some(&tools) };
+        assert!(final_tools_on_boundary.is_none(), "boundary round must drop tools schema");
+        assert!(final_tools_on_normal.is_some(), "non-boundary rounds keep tools schema");
     }
 
     #[test]

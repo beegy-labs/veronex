@@ -247,7 +247,7 @@ End-to-end ReAct verified on `veronex-api-dev.verobee.com` after YQL fix (#88):
 | Concurrent calls | `buffered(8)` — max 8 tool calls in-flight per round |
 | Max tools per request | `MAX_TOOLS_PER_REQUEST = 32` — context window cap |
 | Loop detection | Same `(tool, args_hash)` ×3 triggers early break |
-| Convergence boundary | At `round == MAX_ROUNDS - 1`, if `rounds > 0` and no text content yet, `run_loop` injects a system message constraining the model to text-only output. Pattern: LangGraph `recursion_limit` + boundary prompt; OpenAI Agents SDK `tool_choice="none"` escalation. Without it, models that prefer tool-calling can exhaust the round budget on distinct args (which bypass loop detection) and never produce a final answer. |
+| Convergence boundary | At `round + 1 == MAX_ROUNDS`, if `rounds > 0` and no text content yet, `run_loop` (a) injects a system message instructing text-only output AND (b) **omits the `tools` schema** from that final-round submit. Both halves are required because Ollama's OpenAI-compat endpoint silently drops `tool_choice` (Ollama issue [#8421](https://github.com/ollama/ollama/issues/8421), open request [#11171](https://github.com/ollama/ollama/issues/11171)) — removing schemas entirely is the only reliable way to suppress tool emission on Ollama. The system-message-only variant fails on tool-eager models like qwen3-coder (Qwen [#475](https://github.com/QwenLM/Qwen3-Coder/issues/475)). Tool *results* (`role:"tool"`) remain in the messages array so the model can still synthesize. |
 | Session self-heal | `reconcile_mcp_sessions()` reconnects missing sessions every 25 s — see Session Lifecycle |
 
 ---
