@@ -203,7 +203,7 @@ function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }
       {open && (
         <div className="mt-1 space-y-1">
           {isFetching && <span className="text-[10px] text-muted-foreground">{t('common.loading')}</span>}
-          {data && !data.compressed && !data.vision_analysis && (
+          {data && !data.compressed && !data.vision_analysis && (!data.tool_calls || data.tool_calls.length === 0) && (
             <span className="text-[10px] text-muted-foreground/60">{t('conversations.internalsEmpty')}</span>
           )}
           {data?.compressed && (
@@ -222,6 +222,11 @@ function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }
                 imageCount: data.vision_analysis.image_count,
                 tokens: data.vision_analysis.analysis_tokens,
               })}
+            </span>
+          )}
+          {data && data.tool_calls && data.tool_calls.length > 0 && (
+            <span className="inline-flex items-center gap-1 rounded bg-status-info-fg/10 px-1.5 py-0.5 text-[10px] font-mono text-status-info-fg">
+              {t('conversations.toolCallsBadge', { count: data.tool_calls.length })}
             </span>
           )}
         </div>

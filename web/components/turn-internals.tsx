@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Eye, Zap, Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Eye, Zap, Loader2, Wrench } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { turnInternalsQuery } from '@/lib/queries/conversations'
 import { fmtCompact } from '@/lib/chart-theme'
@@ -10,15 +10,18 @@ import { fmtCompact } from '@/lib/chart-theme'
 interface TurnInternalsProps {
   convId: string
   jobId: string
+  /** Open by default — used by the test panel where the user just ran a turn. */
+  defaultOpen?: boolean
 }
 
-export function TurnInternals({ convId, jobId }: TurnInternalsProps) {
+export function TurnInternals({ convId, jobId, defaultOpen = false }: TurnInternalsProps) {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
 
   const { data, isLoading, isError } = useQuery(turnInternalsQuery(convId, jobId, open))
 
-  const hasData = data && (data.compressed || data.vision_analysis)
+  const hasToolCalls = !!(data && data.tool_calls && data.tool_calls.length > 0)
+  const hasData = data && (data.compressed || data.vision_analysis || hasToolCalls)
 
   return (
     <div className="mt-1">
@@ -81,6 +84,77 @@ export function TurnInternals({ convId, jobId }: TurnInternalsProps) {
               </div>
               <div className="pl-4 mt-1 p-2 rounded bg-muted text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
                 {data.vision_analysis.analysis}
+              </div>
+            </div>
+          )}
+
+          {hasToolCalls && (
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-xs font-medium">
+                <Wrench className="h-3 w-3 text-status-info-fg" />
+                {t('conversations.toolCalls')}
+                <span className="text-muted-foreground/60 font-mono text-[10px]">
+                  ({t('conversations.toolCallsBadge', { count: data!.tool_calls.length })})
+                </span>
+              </div>
+              <div className="pl-4 space-y-1.5">
+                {data!.tool_calls.map((tc, i) => (
+                  <div
+                    key={`tc-${tc.round}-${i}-${tc.namespaced_name}`}
+                    className="rounded border border-border/50 bg-muted/30 px-2 py-1.5 text-[11px] font-mono"
+                  >
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-muted-foreground/70">
+                        {t('conversations.toolCallsRound', { round: tc.round })}
+                      </span>
+                      <code className="font-semibold text-foreground">{tc.namespaced_name}</code>
+                      <span
+                        className={
+                          tc.outcome === 'success'
+                            ? 'text-status-success-fg'
+                            : tc.outcome === 'cache_hit'
+                              ? 'text-accent-power'
+                              : 'text-status-error-fg'
+                        }
+                      >
+                        {tc.outcome}
+                      </span>
+                      {tc.cache_hit && (
+                        <span className="text-accent-power text-[10px]">
+                          {t('conversations.toolCallsCacheHit')}
+                        </span>
+                      )}
+                      {tc.latency_ms != null && (
+                        <span className="text-muted-foreground/60 ml-auto">
+                          {t('conversations.toolCallsLatency', { ms: tc.latency_ms })}
+                        </span>
+                      )}
+                    </div>
+                    {tc.args !== null && tc.args !== undefined && (
+                      <details className="mt-1">
+                        <summary className="text-muted-foreground/60 cursor-pointer text-[10px] select-none">
+                          {t('conversations.toolCallsArgs')}
+                        </summary>
+                        <pre className="mt-1 p-1 rounded bg-background text-[10px] leading-snug whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
+                          {typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args, null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                    <details className="mt-1">
+                      <summary className="text-muted-foreground/60 cursor-pointer text-[10px] select-none">
+                        {t('conversations.toolCallsResult')}
+                        {tc.result_bytes != null && (
+                          <span className="ml-1 text-muted-foreground/40">
+                            ({fmtCompact(tc.result_bytes)} B)
+                          </span>
+                        )}
+                      </summary>
+                      <pre className="mt-1 p-1 rounded bg-background text-[10px] leading-snug whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+                        {tc.result_text ?? t('conversations.toolCallsNoResult')}
+                      </pre>
+                    </details>
+                  </div>
+                ))}
               </div>
             </div>
           )}

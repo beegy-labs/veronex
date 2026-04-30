@@ -383,6 +383,8 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     }
 
     let fullText = ''
+    let jobId: string | undefined
+    let hasMcpTools = false
     try {
       const resp = await fetch(`${BASE}${ep}`, {
         method: 'POST',
@@ -417,6 +419,13 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
             try {
               const chunk: OpenAIChunk = JSON.parse(data)
               if (chunk.error?.message) throw new Error(chunk.error.message)
+              if (chunk.id && !jobId) {
+                // Server emits `chatcmpl-mcp-<uuid>` on MCP-bridge runs and
+                // `chatcmpl-<uuid>` on direct passthrough. Strip both prefixes
+                // so the audit GET (`/turns/{job_id}/internals`) sees a bare
+                // UUID. SDD §3 Tier A.
+                jobId = chunk.id.replace('chatcmpl-', '').replace('mcp-', '')
+              }
               const delta = chunk.choices?.[0]?.delta
               const content = delta?.content
               if (content) {
@@ -427,6 +436,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
               } else if (delta?.tool_calls) {
                 const toolName = delta.tool_calls[0]?.function?.name
                 if (toolName) {
+                  hasMcpTools = true
                   setConversationSessions((prev) => prev.map((s) =>
                     s.id === sid ? { ...s, mcpToolCall: toolName } : s
                   ))
@@ -444,14 +454,14 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
 
       setConversationSessions((prev) => prev.map((s) =>
         s.id === sid
-          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'idle', mcpToolCall: undefined }
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model, jobId, hasMcpTools }], streamingText: '', status: 'idle', mcpToolCall: undefined }
           : s
       ))
       onTurnComplete?.()
     } catch (err) {
       setConversationSessions((prev) => prev.map((s) =>
         s.id === sid
-          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model }], streamingText: '', status: 'error', errorMsg: err instanceof Error ? err.message : t('common.unknownError'), mcpToolCall: undefined }
+          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model, jobId, hasMcpTools }], streamingText: '', status: 'error', errorMsg: err instanceof Error ? err.message : t('common.unknownError'), mcpToolCall: undefined }
           : s
       ))
       onTurnComplete?.()

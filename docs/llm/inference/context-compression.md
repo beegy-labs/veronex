@@ -169,7 +169,7 @@ Non-streaming `ChatCompletion` and Ollama `/api/chat` responses include:
 
 ## Frontend
 
-`TurnInternals` component (`web/components/turn-internals.tsx`) — collapsible panel per turn showing compression stats and vision analysis. Lazy-fetches via `GET /v1/dashboard/conversations/{id}/turns/{job_id}/internals`.
+`TurnInternals` component (`web/components/turn-internals.tsx`) — collapsible panel per turn showing compression stats, vision analysis, **and MCP tool-call audit** (`tool_calls` array, when the turn invoked any MCP tool — name/args/result/outcome/latency per round). Lazy-fetches via `GET /v1/dashboard/conversations/{id}/turns/{job_id}/internals`. MCP audit shape and source documented in `inference/mcp.md` § Audit exposure; SDD `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
 
 Context warning badge — `api-test-form.tsx` `getMultiturnWarnings()` fires `context_too_large` when estimated conversation tokens exceed 85% of model's `max_ctx`. Uses real `max_ctx` from API when profiled, heuristic fallback otherwise.
 

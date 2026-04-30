@@ -39,6 +39,12 @@ run_loop(state, caller, model, messages, base_tools, want_stream)
   │
   └── 3. Loop (max MAX_ROUNDS=5):
         │
+        ├── [round + 1 == max_rounds && rounds > 0 && content.is_empty()]?
+        │     └── inject system message: "final response step — do NOT call
+        │         any more tools — produce final answer using prior results"
+        │         (S23 convergence boundary; pattern: LangGraph recursion_limit
+        │          + boundary prompt; OpenAI Agents SDK tool_choice="none")
+        │
         ├── submit job (use_case.submit)    ← enqueues to inference queue
         │
         ├── [want_stream && rounds > 0]?
@@ -141,6 +147,7 @@ JWT session    │  None                   │  All active servers accessible
 |-----------|-------|----------|
 | Max rounds | 5 | Hard loop limit |
 | Loop detect threshold | 3 | Same (tool, args_hash) ×3 → break |
+| Convergence boundary | last round | At `round + 1 == max_rounds`, if `rounds > 0` and no text yet → inject system message constraining model to text-only output (S23). Prevents distinct-args round exhaustion without final answer. |
 | First-token timeout | 240s | `FIRST_TOKEN_TIMEOUT` — covers 200K-context cold load (PR #90) |
 | Stream-idle timeout | 45s | `STREAM_IDLE_TIMEOUT` — token-to-token gap on warm model |
 | Round total timeout | 360s | `ROUND_TOTAL_TIMEOUT` — aligned with `INFERENCE_ROUTER_TIMEOUT` |
@@ -153,6 +160,30 @@ JWT session    │  None                   │  All active servers accessible
 > `MCP_LIFECYCLE_PHASE=on`, Phase 1 (`ensure_ready`) absorbs cold-load timing
 > as its own observable span (see `flows/model-lifecycle.md`); the bridge
 > phased timeouts remain as defense-in-depth.
+
+---
+
+## Audit read-side
+
+`batch_insert_tool_calls` writes every executed tool to `mcp_loop_tool_calls`
+(CDD `inference/mcp-schema.md`). Read-side projection:
+
+```
+GET /v1/conversations/{id}/turns/{job_id}/internals
+  └── conversation_handlers::get_turn_internals
+        ├── load S3 ConversationRecord → compressed + vision_analysis
+        └── SELECT … FROM mcp_loop_tool_calls t
+              LEFT JOIN mcp_servers s ON s.id = t.server_id
+              WHERE t.job_id = $1
+              ORDER BY t.loop_round ASC, t.created_at ASC
+            → tool_calls: [{round, server_slug, tool_name, namespaced_name,
+                            args, result_text, outcome, cache_hit,
+                            latency_ms, result_bytes, created_at}, …]
+```
+
+UI: `web/components/turn-internals.tsx` renders the timeline below each
+assistant bubble in the test panel. Empty array when no MCP tools were
+invoked. SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
 
 ---
 

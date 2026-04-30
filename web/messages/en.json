@@ -129,7 +129,7 @@
     "source": "Source",
     "createdAt": "Created",
     "internals": "Internals",
-    "internalsEmpty": "No compression or vision data for this turn.",
+    "internalsEmpty": "No compression, vision, or MCP tool data for this turn.",
     "compressedBadge": "Compressed ({original}→{compressed} tok, {model})",
     "visionBadge": "Vision: {model} ({imageCount} img, {tokens} tok)",
     "compression": "Compression",
@@ -141,6 +141,14 @@
     "visionModel": "Model",
     "imageCount": "Images",
     "analysisTokens": "Tokens",
+    "toolCalls": "MCP Tool Calls",
+    "toolCallsBadge": "{count} MCP call(s)",
+    "toolCallsRound": "Round {round}",
+    "toolCallsLatency": "{ms}ms",
+    "toolCallsCacheHit": "cache",
+    "toolCallsArgs": "args",
+    "toolCallsResult": "result",
+    "toolCallsNoResult": "(no result)",
     "backToList": "Back to conversations"
   },
   "overview": {

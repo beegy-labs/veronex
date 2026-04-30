@@ -699,6 +699,26 @@ export interface ConversationDetail extends ConversationSummary {
   turns: ConversationTurn[]
 }
 
+/**
+ * Per-turn MCP tool-call audit entry.
+ *
+ * Source: PG `mcp_loop_tool_calls` joined with `mcp_servers` for `server_slug`.
+ * SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
+ */
+export interface ToolCallDetail {
+  round: number
+  server_slug: string
+  tool_name: string
+  namespaced_name: string
+  args: unknown
+  result_text: string | null
+  outcome: 'success' | 'error' | 'timeout' | 'cache_hit' | 'circuit_open' | string
+  cache_hit: boolean
+  latency_ms: number | null
+  result_bytes: number | null
+  created_at: string
+}
+
 export interface TurnInternals {
   job_id: string
   compressed?: {
@@ -713,6 +733,12 @@ export interface TurnInternals {
     image_count: number
     analysis_tokens: number
   } | null
+  /**
+   * Per-tool MCP execution audit for this turn (S23). Empty array when no
+   * MCP tools were invoked. Ordered by execution sequence (loop_round, then
+   * created_at).
+   */
+  tool_calls: ToolCallDetail[]
 }
 
 export interface AuditEvent {
