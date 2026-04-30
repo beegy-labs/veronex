@@ -58,7 +58,14 @@ runner::run_job (post-VRAM reserve, pre-stream_tokens)
         │
         ├── 3. Probe (leader only) — concurrent observers via tokio::select!
         │     ┌── probe_fut       POST /api/generate { num_predict:0,
-        │     │                                        keep_alive:"30m" }
+        │     │                                        keep_alive:"30m",
+        │     │                                        options:{num_ctx} }
+        │     │                     num_ctx resolved from sync SSOT (Valkey
+        │     │                     ollama_model_ctx → fabricate fallback) —
+        │     │                     MUST equal what stream_chat will send
+        │     │                     (otherwise ollama spawns a second runner
+        │     │                     subprocess for the same model — see
+        │     │                     `providers/ollama-impl.md` §"Context Length")
         │     │                     reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)
         │     │                     wins on success → LoadCompleted{duration_ms}
         │     │                     wins on error   → ProviderError
