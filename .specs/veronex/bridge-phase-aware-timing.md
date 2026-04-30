@@ -1,6 +1,6 @@
 # SDD: Bridge Phase-Aware Timing (single-timer race fix)
 
-> Status: implementation complete | Change type: **Fix** (architectural — Phase 1/2 separation visible to bridge) | Created: 2026-04-29 | Shipped: in PR #120 | Live verify: pending dev rollout
+> Status: implementation complete | Change type: **Fix** (architectural — Phase 1/2 separation visible to bridge) | Created: 2026-04-29 | Shipped: in PR #120 + S19.1 hotfix (this PR) | Live verify: re-running after S19.1
 > CDD basis: `docs/llm/inference/job-lifecycle.md` · `docs/llm/inference/mcp.md` · S14 `inference-lifecycle-sod.md` (architectural lineage)
 > Scope reference: `.specs/veronex/history/scopes/2026-Q2.md` row S19 (to add)
 
@@ -14,8 +14,10 @@
 | B — Runner emits boundary token after `ensure_ready` | [x] done | #120 | `bbf823c` |
 | C — Bridge `collect_round` phase-aware timer + new constants | [x] done | #120 | `bbf823c` |
 | D — Tests (StreamToken + collect_round phase transitions) | [x] done | #120 | `bbf823c` |
-| CDD-sync (`mcp.md` Phase-aware timing row + `job-lifecycle.md` post-`ensure_ready` boundary) | [x] done | #120 | (this commit) |
-| Live verify (dev) — `qwen3-coder-next-200k:latest` cold-load → tool round → final answer | [ ] pending | — | — |
+| CDD-sync (`mcp.md` Phase-aware timing row + `job-lifecycle.md` post-`ensure_ready` boundary) | [x] done | #120 | (#120 follow-up) |
+| **S19.1 — TOKEN_FIRST_TIMEOUT 60→300s + ROUND_TOTAL_TIMEOUT 720→1500s + gateway-bound invariant** | [x] done | this PR | (this commit) |
+| **CF-bypass infra for long-stream path** (platform-gitops PR #598/#599/#600/#601) | [x] done | platform-gitops | — |
+| Live verify (dev) — re-run after S19.1 image rollout | [ ] pending | — | — |
 
 ---
 
@@ -52,14 +54,29 @@ The `StreamToken` channel is the canonical "current job state" channel between r
 | B. Extend `JobStatus` enum (`Loading` / `Ready`) | Rejected — domain-enum ripple touches DB schema + every match arm |
 | C. Separate lifecycle event channel (tokio broadcast) | Rejected — new abstraction without proportional benefit |
 
-### §3.2 New constants (replace `FIRST_TOKEN_TIMEOUT = 240 s`)
+### §3.2 Phase-aware constants (final, post-S19.1)
 
 | Const | Value | Phase | Rationale |
 |---|---|---|---|
 | `LIFECYCLE_TIMEOUT` | **600 s** | Phase 1 | 200K cold-load measured ≤ 250 s. 600 s = ~2.4× headroom for future 300K+ models or congested VRAM scheduler. Does not race actual cold-load. |
-| `TOKEN_FIRST_TIMEOUT` | **60 s** | Phase 2 first token | Phase 2 first token is sub-second on warm; 60 s catches a genuinely-stuck model immediately after Phase 1 success. |
-| `STREAM_IDLE_TIMEOUT` | **45 s** | Phase 2 streaming | Existing constant, unchanged. |
-| `ROUND_TOTAL_TIMEOUT` | **720 s** | round-wide cap | Bumped from 360 s — must accommodate worst-case `LIFECYCLE_TIMEOUT (600)` + `STREAM_IDLE_TIMEOUT × N`. |
+| `TOKEN_FIRST_TIMEOUT` | **300 s** | Phase 2 first token | Originally 60 s — live verify on `qwen3-coder-next-200k:latest` showed `model_hung_post_load` firing during prefill on a 200K-context session with ~5K MCP-injected prompt tokens. Phase 2 first token is **NOT** sub-second when prefill is large. 300 s clears observed prefill with ~2× headroom for 300K-context futures. |
+| `STREAM_IDLE_TIMEOUT` | **45 s** | Phase 2 streaming | Per-token gap on warm models is sub-second. Unchanged. |
+| `ROUND_TOTAL_TIMEOUT` | **1500 s** | round-wide cap | = 600 (Phase 1) + 300 (Phase 2 first token) + 600 streaming budget. Must be **strictly less** than the upstream Cilium HTTPRoute `timeouts.request` (1800 s set in platform-gitops `cilium-gateway-values.yaml#veronex-api-direct-dev-route`) — bridge always chooses its own outcome before the route layer fires. Locked by `tests::round_total_under_gateway_request_timeout`. |
+
+#### Two-layer timeout architecture (S19.1)
+
+The end-to-end stream is bounded by two timers in series:
+
+```
+Client ── 1800s ──── Cilium HTTPRoute (timeouts.request = 1800s, platform-gitops)
+                           │
+                           └─→ Bridge round (ROUND_TOTAL_TIMEOUT = 1500s)
+                                       │
+                                       ├─ Phase 1: LIFECYCLE_TIMEOUT = 600s
+                                       └─ Phase 2: TOKEN_FIRST_TIMEOUT = 300s, then STREAM_IDLE_TIMEOUT = 45s
+```
+
+Invariant `ROUND_TOTAL_TIMEOUT < gateway_request_timeout` ensures the bridge's named `RoundError` variant always surfaces before the gateway returns a generic 5xx. CF Edge / CF Tunnel (100 s idle) is **out of this picture** — the streaming path uses CF-bypass `*.girok.dev` direct-route. See `.add/domain-integration.md` (this repo) and `.add/add-direct-domain.md` (platform-gitops).
 
 ### §3.3 Algorithm (collect_round)
 
@@ -127,7 +144,7 @@ When `MCP_LIFECYCLE_PHASE` is OFF (legacy path), runner does not emit a boundary
 |---|---|
 | L1 | bridge log `lifecycle.ensure_ready outcome=LoadCompleted duration_ms=N` emits within ~250 s |
 | L2 | bridge does NOT emit `model is still loading` warning during the cold-load window |
-| L3 | After Phase 1 completes, first token arrives within `TOKEN_FIRST_TIMEOUT` (60 s) — measured by elapsed since boundary log |
+| L3 | After Phase 1 completes, first token arrives within `TOKEN_FIRST_TIMEOUT` (300 s) — measured by elapsed since boundary log |
 | L4 | Round-0 completes (tool_call produced) — same observable as today, but reliable instead of racing |
 | L5 | Round-1 (final text) submitted, completes, `result_text` populated in S3 |
 | L6 | Conversation detail GET returns non-null `result` |
