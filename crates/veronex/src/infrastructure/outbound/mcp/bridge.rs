@@ -61,20 +61,33 @@ const RESULT_CACHE_TTL_SECS: i64 = 300;
 const LIFECYCLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(600);
 
 /// Phase 2 first-token timeout — applies only after the runner emits the
-/// phase-boundary token, i.e. after `ensure_ready` succeeded. Phase 2 first
-/// token is sub-second on warm; 60 s catches a genuinely-stuck model
-/// immediately post-load.
-const TOKEN_FIRST_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(60);
+/// phase-boundary token, i.e. after `ensure_ready` succeeded. Originally 60 s
+/// (S19), bumped to 300 s after live verify on `qwen3-coder-next-200k:latest`
+/// observed `model_hung_post_load` firing during prefill on a 200K-context
+/// session with ~5K MCP-injected prompt tokens — Phase 2 first token is NOT
+/// sub-second when prefill is large. 300 s covers measured worst case with
+/// ~2× headroom for 300K-context futures.
+/// SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3.2.
+const TOKEN_FIRST_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(300);
 
 /// Per-token stream idle. Fires only when the model hangs mid-response (true stall).
 /// Generation gap on warm models is sub-second; 45 s is a generous safety margin.
 const STREAM_IDLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(45);
 
-/// Hard cap per round. Sized to accommodate worst-case Phase 1 (`LIFECYCLE_TIMEOUT`
-/// = 600 s) + Phase 2 first-token (60 s) + a streaming budget. Aligns with
-/// `INFERENCE_ROUTER_TIMEOUT` so the route layer never fires before the bridge
-/// has chosen its own outcome.
-const ROUND_TOTAL_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(720);
+/// Hard cap per round. Must be ≥ `LIFECYCLE_TIMEOUT` + `TOKEN_FIRST_TIMEOUT` plus
+/// a streaming budget, AND ≤ the upstream Cilium HTTPRoute `timeouts.request`
+/// (1800 s, set in platform-gitops `cilium-gateway-values.yaml` for the
+/// `veronex-api-direct-dev-route`). 1500 s = 600 (Phase 1) + 300 (Phase 2 first
+/// token) + 600 streaming budget, leaving 300 s headroom under the gateway cap
+/// so the bridge always chooses its own outcome before the route layer fires.
+/// Invariants enforced by `tests::timeout_invariants`.
+const ROUND_TOTAL_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(1500);
+
+/// Upstream gateway request-timeout that the bridge round budget must stay under.
+/// Mirrors `timeouts.request: 1800s` set on Cilium HTTPRoute in platform-gitops.
+/// Used solely as a compile-time invariant target — not consumed at runtime.
+#[cfg(test)]
+const GATEWAY_REQUEST_TIMEOUT_SECS: u64 = 1800;
 /// Maximum bytes of a single MCP tool result injected into the messages array.
 /// Prevents OOM from malicious/misconfigured servers at high concurrency.
 const MAX_TOOL_RESULT_BYTES: usize = 32_768;
@@ -1783,10 +1796,12 @@ mod tests {
 
     #[test]
     fn token_first_timeout_tighter_than_lifecycle() {
-        // Phase 2 first-token timeout must be << Phase 1 timeout — Phase 2
-        // first token is sub-second on warm. A wide TOKEN_FIRST_TIMEOUT would
-        // make a hung-post-load model take ages to surface.
-        assert!(TOKEN_FIRST_TIMEOUT < LIFECYCLE_TIMEOUT / 5);
+        // Phase 2 first-token timeout must be strictly less than Phase 1
+        // timeout — a hung-post-load model must surface faster than the
+        // worst-case cold-load. Note: Phase 2 first token is NOT sub-second
+        // when prefill is large (200K context + MCP-injected prompt can take
+        // ~minutes), so the ratio is not as tight as it was pre-S19.1.
+        assert!(TOKEN_FIRST_TIMEOUT < LIFECYCLE_TIMEOUT);
     }
 
     #[test]
@@ -1828,11 +1843,30 @@ mod tests {
 
     #[test]
     fn token_first_timeout_in_post_load_zone() {
-        // Phase 2 first token is sub-second on warm. TOKEN_FIRST_TIMEOUT
-        // should be in the seconds-to-minute zone — long enough to absorb
-        // network jitter, short enough that a hung-post-load model surfaces
-        // quickly.
+        // Phase 2 first-token timeout must absorb prefill on the largest
+        // context the bridge serves (200K + MCP prompt ≈ 5K tokens), but not
+        // so wide that a hung-post-load model takes ages to surface. The
+        // 30s..=600s envelope reflects the live S19.1 measurement: 60s was
+        // too tight (model_hung_post_load fired during prefill); 300s clears
+        // observed prefill with ~2× headroom.
         let secs = TOKEN_FIRST_TIMEOUT.as_secs();
-        assert!((10..=300).contains(&secs), "got {secs}s");
+        assert!((30..=600).contains(&secs), "got {secs}s");
+    }
+
+    #[test]
+    fn round_total_under_gateway_request_timeout() {
+        // The bridge's hard cap MUST be strictly less than the upstream
+        // Cilium HTTPRoute `timeouts.request` so the bridge always chooses
+        // its own outcome (RoundError variant with a clean error code)
+        // before the gateway truncates with a generic 5xx. Gateway side is
+        // set in platform-gitops `cilium-gateway-values.yaml` for the
+        // veronex-api-direct-dev-route. If the gateway constant changes,
+        // both sides must move in lockstep.
+        assert!(
+            ROUND_TOTAL_TIMEOUT.as_secs() < GATEWAY_REQUEST_TIMEOUT_SECS,
+            "ROUND_TOTAL_TIMEOUT ({}s) must be < gateway request timeout ({}s)",
+            ROUND_TOTAL_TIMEOUT.as_secs(),
+            GATEWAY_REQUEST_TIMEOUT_SECS,
+        );
     }
 }
