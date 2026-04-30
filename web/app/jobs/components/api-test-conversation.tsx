@@ -204,19 +204,41 @@ export const ApiTestConversation = memo(function ApiTestConversation({
                     </div>
                   )}
                   <div className="rounded-2xl rounded-tl-sm px-3 py-2 bg-muted text-foreground text-sm font-mono leading-relaxed">
-                    {renderWithMermaid(msg.content, false)}
+                    {msg.content
+                      ? renderWithMermaid(msg.content, false)
+                      : msg.hasMcpTools
+                        ? <span className="text-xs text-muted-foreground/70 italic">{t('test.toolOnlyTurn')}</span>
+                        : renderWithMermaid(msg.content, false)}
                   </div>
-                  {/* SDD §3 Tier A — when this turn invoked MCP tools, surface
-                      the per-round audit (args/results/latency) below the
-                      bubble. The user runs the test panel on the same browser
-                      session that owns the conversation, so the convId is
-                      always present here. */}
+                  {/* SDD §3 Tier B — show the model's emitted tool_calls
+                      inline (S3 TurnRecord-sourced, populated after the SSE
+                      stream completes). Renders even when content is empty,
+                      so tool-only turns are no longer "결과 없음". */}
+                  {msg.toolCalls && msg.toolCalls.length > 0 && (
+                    <div className="mt-1.5 space-y-1">
+                      {msg.toolCalls.map((tc, j) => (
+                        <div key={`tc-${j}-${tc.name}`} className="rounded border border-border/60 bg-background px-2 py-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <Wrench className="h-3 w-3 text-status-info-fg shrink-0" />
+                            <code className="text-[11px] font-mono font-semibold text-status-info-fg break-all">{tc.name}</code>
+                          </div>
+                          {tc.arguments != null && (
+                            <pre className="text-[10px] font-mono text-foreground/60 mt-1 whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
+                              {typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments, null, 2)}
+                            </pre>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* PG audit (latency / cache_hit / outcome). Lazy — user
+                      clicks to expand. Key off jobId being a real persisted
+                      job_id (resolved from S3 turn list, not chunk.id). */}
                   {msg.jobId && msg.hasMcpTools && activeSession?.conversationId && (
                     <div className="mt-1 px-1">
                       <TurnInternals
                         convId={activeSession.conversationId}
                         jobId={msg.jobId}
-                        defaultOpen
                       />
                     </div>
                   )}

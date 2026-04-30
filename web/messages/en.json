@@ -784,6 +784,7 @@
     "stop": "Stop",
     "runAgain": "Run Again",
     "toolsUsed": "Tools Used",
+    "toolOnlyTurn": "tool-only turn (model invoked MCP tools without producing text)",
     "retryInTest": "Retry in Test",
     "runningAs": "Running as",
     "runner": "Runner",

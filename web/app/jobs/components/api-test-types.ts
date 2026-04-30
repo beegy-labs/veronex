@@ -102,6 +102,13 @@ export interface ConversationMessage {
    * actually did (search queries, results, latency).
    */
   hasMcpTools?: boolean
+  /**
+   * Model-emitted tool_calls captured from the S3 TurnRecord after the
+   * stream completes. Renders inline below the assistant bubble so the
+   * user sees the chain (tool name + args) for tool-only turns.
+   * SDD `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
+   */
+  toolCalls?: { name: string; arguments: unknown }[]
 }
 
 export interface ConversationSession {

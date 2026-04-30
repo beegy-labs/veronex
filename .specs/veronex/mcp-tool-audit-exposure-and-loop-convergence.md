@@ -10,12 +10,13 @@
 
 | Tier | Status | PR | Commit |
 | ---- | ------ | -- | ------ |
-| A — `TurnInternalsResponse` extended with `tool_calls` field, populated by JOIN against `mcp_loop_tool_calls` | [x] | TBD | TBD |
-| B — UI `api-test-conversation` displays per-round tool_calls (name/args/result/outcome/latency) | [x] | TBD | TBD |
-| C — `bridge::run_loop` injects boundary system message at `round == max_rounds-1` if no text yet, forcing final answer | [x] | TBD | TBD |
-| D — Tests: tool audit fetch + loop-convergence invariant + integration | [x] | TBD | TBD |
-| CDD-sync — `mcp.md` (audit exposure + convergence) + `flows/mcp.md` (run_loop step) + `context-compression.md` (TurnInternals tool_calls) | [x] | TBD | TBD |
-| Live verify — same SK하이닉스 / 마이크론 prompt produces final text + UI shows tool result chain | [ ] | — | — |
+| A — `TurnInternalsResponse` extended with `tool_calls` field, populated by JOIN against `mcp_loop_tool_calls` | [x] | #126 | 8cfa00b |
+| B — UI `api-test-conversation` displays per-round tool_calls (name/args/result/outcome/latency) | [x] v1 (broken) → [x] v2 | #126 / #127 | 8cfa00b / TBD |
+| C — `bridge::run_loop` injects boundary system message at `round == max_rounds-1` if no text yet, forcing final answer | [x] (live-verified L2) | #126 | 8cfa00b |
+| D — Tests: tool audit fetch + loop-convergence invariant + integration | [x] | #126 | 8cfa00b |
+| CDD-sync — S3 vs PG split documented in `mcp.md` § Audit exposure | [x] v1 → [x] v2 | #126 / #127 | 8cfa00b / TBD |
+| Live verify — L2 boundary log + L5 audit endpoint surfacing | [x] (L2/L5 dev) | n/a | live 2026-04-30 |
+| Live verify — L6 UI inline tool chain renders without "load failed" | [ ] (v2 hotfix #127 pending) | — | — |
 
 ---
 
@@ -258,6 +259,52 @@ Effect:
 - Per-server MCP tool result truncation policy in audit response — current full `result_text` exposure (TEXT column) is fine for dashboard view.
 - Streaming `tool_calls` field in real-time during the bridge loop (server-push to UI mid-stream) — current model: UI fetches internals after turn completes. Real-time streaming is a separate UX SDD.
 - Dedicated UI to inspect `mcp_loop_tool_calls` rows globally (cross-conversation analytics) — separate dashboard SDD.
+
+---
+
+## §10 v1 → v2 hotfix (PR #127)
+
+After live verification on dev `develop-8cfa00b`, the test panel still
+showed "load failed" for tool-only turns. Root cause:
+
+- v1 derived the assistant message's `jobId` from the SSE `chunk.id`
+  (`chatcmpl-mcp-<uuid>`). But that `<uuid>` is a synthetic stream
+  identifier minted in `openai_handlers.rs:834` via `Uuid::new_v4()` —
+  NOT the inference_jobs row id. The `<TurnInternals>` component then
+  hit `/v1/conversations/{id}/turns/{wrong_uuid}/internals` and got 404
+  → React Query `isError` → UI rendered `common.error` ("Failed to load
+  data" / "데이터를 불러오지 못했습니다") — perceived by the user as
+  "load failed".
+
+- The architectural assumption was also wrong: I treated PG
+  `mcp_loop_tool_calls` as the primary source for the user-visible
+  tool chain, when the SSOT for turn output (model-emitted tool_calls)
+  is **S3 `ConversationRecord.turns[].tool_calls_json`** — the same
+  storage used by `/v1/dashboard/jobs/{id}` for "(Tool Calls)" rendering.
+
+v2 fix:
+
+- After the SSE stream ends and `hasMcpTools` is true, the test panel
+  fetches `/v1/conversations/{convId}` and reads the **newest turn**
+  from the response. That turn's real `job_id` (from S3 TurnRecord) is
+  stored on the `ConversationMessage`; its `tool_calls` array is also
+  stored as `toolCalls` for inline rendering.
+- The assistant bubble now renders the S3-sourced tool_calls (name + args)
+  inline, mirroring the pattern in `conversation-list.tsx`. Tool-only
+  turns get an explicit "tool-only turn" hint where text would be.
+- `<TurnInternals>` (PG audit panel) is rendered **lazily** — no
+  `defaultOpen`. User clicks to expand and only then does the PG fetch
+  fire. With a real `job_id`, the response is 200 (even if tool_calls
+  is empty for late rounds — see §10.1).
+
+### §10.1 Pre-existing PG persistence gap (separate scope)
+
+Live verification surfaced an unrelated gap: when the bridge runs N
+rounds, only round 0's `mcp_loop_tool_calls` rows get persisted; rounds
+1..N-1 silently fail their `batch_insert_tool_calls` (no error log).
+Same pattern in S22 repro data (`conv_338X2C...`) → predates S23.
+Tracked separately as a follow-up SDD (S24); does NOT block this PR
+because S3 turn data (the user-visible chain via v2) is unaffected.
 
 ---
 
