@@ -25,6 +25,20 @@ BEGIN
             FOREIGN KEY (provider_id) REFERENCES llm_providers(id) ON DELETE SET NULL;
     END IF;
 END$$;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.referential_constraints
+         WHERE constraint_name = 'mcp_loop_tool_calls_job_id_fkey'
+           AND delete_rule != 'SET NULL'
+    ) THEN
+        ALTER TABLE mcp_loop_tool_calls DROP CONSTRAINT mcp_loop_tool_calls_job_id_fkey;
+        ALTER TABLE mcp_loop_tool_calls ALTER COLUMN job_id DROP NOT NULL;
+        ALTER TABLE mcp_loop_tool_calls
+            ADD CONSTRAINT mcp_loop_tool_calls_job_id_fkey
+            FOREIGN KEY (job_id) REFERENCES inference_jobs(id) ON DELETE SET NULL;
+    END IF;
+END$$;
 
 -- ── Accounts ──────────────────────────────────────────────────────────────────
 
@@ -488,7 +502,7 @@ CREATE INDEX idx_mcp_key_access_key ON mcp_key_access(api_key_id) WHERE is_allow
 CREATE TABLE mcp_loop_tool_calls (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     mcp_loop_id     UUID        NOT NULL,
-    job_id          UUID        NOT NULL REFERENCES inference_jobs(id) ON DELETE CASCADE,
+    job_id          UUID        REFERENCES inference_jobs(id) ON DELETE SET NULL,
     loop_round      SMALLINT    NOT NULL,
     server_id       UUID        NOT NULL,
     tool_name       TEXT        NOT NULL,
