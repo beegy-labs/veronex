@@ -31,12 +31,22 @@ pub const SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
 /// too many open SSE streams. Exceeding this returns HTTP 429.
 pub const SSE_MAX_CONNECTIONS: u32 = 100;
 
-/// Hard timeout for SSE streams (5 minutes).
+/// Hard timeout for SSE streams (28 minutes 20 seconds).
 ///
 /// Force-closes zombie SSE connections that neither complete nor disconnect.
-/// Vision models (e.g. qwen3-vl:8b) may require 60–120 s for cold-start model
-/// loading plus image processing, so 300 s provides sufficient headroom.
-pub const SSE_TIMEOUT: Duration = Duration::from_secs(300);
+/// Sized to cover the longest MCP-routed request the bridge can produce:
+///   - phase-aware lifecycle (200k cold load worst-case ≈ 600 s)
+///   - up to `MAX_ROUNDS=5` rounds, each capped by `ROUND_TOTAL_TIMEOUT=1500 s`
+///     (per `docs/llm/inference/mcp.md`)
+///   - one optional synthesis round (S24) on top, same per-round budget
+///
+/// Held strictly below the upstream Cilium gateway HTTPRoute timeout
+/// (`timeouts.request=1800 s`, see `.add/domain-integration.md`) so the SSE
+/// wrapper closes the stream cleanly before the gateway 504s the request.
+/// Locking the relationship as `SSE_TIMEOUT < gateway.timeouts.request` is
+/// required: if SSE_TIMEOUT > gateway timeout, the client sees an opaque
+/// 504 instead of a clean `event: error data: stream timeout`.
+pub const SSE_TIMEOUT: Duration = Duration::from_secs(1700);
 
 // ── Input validation ──────────────────────────────────────────────────────────
 
@@ -90,16 +100,18 @@ pub const MODELS_CACHE_TTL: i64 = 3600;
 /// Timeout for the JWT-authenticated admin router (30 s).
 ///
 /// Applies to all non-inference, non-streaming endpoints. Inference routes
-/// use `SSE_TIMEOUT` (3 min) instead.
+/// use `SSE_TIMEOUT` (≈28 min) for streaming and `INFERENCE_ROUTER_TIMEOUT`
+/// (≈30 min) for non-streaming.
 pub const JWT_ROUTER_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Timeout for the inference/API router (360 s).
+/// Timeout for the inference/API router (1750 s ≈ 29 min).
 ///
 /// Covers non-streaming inference requests (synchronous chat completions,
-/// embeddings, Ollama passthrough). Set higher than `SSE_TIMEOUT` (300 s)
-/// so SSE streams are killed by their own inner timeout first; this timeout
-/// only fires on hung non-streaming requests.
-pub const INFERENCE_ROUTER_TIMEOUT: Duration = Duration::from_secs(360);
+/// embeddings, Ollama passthrough). Set strictly higher than `SSE_TIMEOUT`
+/// (1700 s) so SSE streams are killed by their own inner timeout first;
+/// this only fires on hung non-streaming requests. Held under Cilium
+/// gateway `timeouts.request=1800 s`.
+pub const INFERENCE_ROUTER_TIMEOUT: Duration = Duration::from_secs(1750);
 
 /// Timeout for the dashboard queue-depth Valkey fetch (3 s).
 ///
@@ -149,3 +161,62 @@ pub const MAX_PAGE: i64 = 10_000;
 pub const ERR_DATABASE: &str = "database error";
 pub const ERR_MODEL_INVALID: &str = "model name invalid or too long";
 pub const ERR_PROMPT_TOO_LARGE: &str = "content exceeds maximum length of 1MB";
+
+// ── Timeout invariants ──────────────────────────────────────────────────────
+//
+// SSE_TIMEOUT and INFERENCE_ROUTER_TIMEOUT must stay coordinated with the
+// Cilium gateway HTTPRoute timeout (1800s) and the bridge ROUND_TOTAL_TIMEOUT
+// (1500s, in `bridge.rs`). A regression in any of these would cause the user
+// to see an opaque 504 mid-stream instead of a clean SSE error.
+
+#[cfg(test)]
+mod timeout_invariants {
+    use super::*;
+
+    /// Cilium HTTPRoute `timeouts.request` cap from platform-gitops
+    /// `clusters/home/values/cilium-gateway-values.yaml`.
+    const CILIUM_GATEWAY_TIMEOUT: Duration = Duration::from_secs(1800);
+
+    /// Worst-case bridge round budget. Mirrors `bridge::ROUND_TOTAL_TIMEOUT`.
+    /// Pinned here independently so a regression in either constant is caught.
+    const BRIDGE_ROUND_TOTAL_TIMEOUT: Duration = Duration::from_secs(1500);
+
+    #[test]
+    fn sse_timeout_under_cilium_gateway() {
+        assert!(
+            SSE_TIMEOUT < CILIUM_GATEWAY_TIMEOUT,
+            "SSE_TIMEOUT ({:?}) must be < Cilium gateway timeout ({:?}) — \
+             otherwise the client sees an opaque 504 instead of a clean SSE error",
+            SSE_TIMEOUT, CILIUM_GATEWAY_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn sse_timeout_covers_one_full_bridge_round() {
+        assert!(
+            SSE_TIMEOUT >= BRIDGE_ROUND_TOTAL_TIMEOUT,
+            "SSE_TIMEOUT ({:?}) must cover at least ROUND_TOTAL_TIMEOUT ({:?}) \
+             so a single legitimate slow MCP round doesn't trip the SSE wrapper",
+            SSE_TIMEOUT, BRIDGE_ROUND_TOTAL_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn inference_router_timeout_under_cilium_gateway() {
+        assert!(
+            INFERENCE_ROUTER_TIMEOUT < CILIUM_GATEWAY_TIMEOUT,
+            "INFERENCE_ROUTER_TIMEOUT ({:?}) must be < Cilium gateway timeout ({:?})",
+            INFERENCE_ROUTER_TIMEOUT, CILIUM_GATEWAY_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn inference_router_timeout_above_sse_timeout() {
+        assert!(
+            INFERENCE_ROUTER_TIMEOUT > SSE_TIMEOUT,
+            "INFERENCE_ROUTER_TIMEOUT ({:?}) must be > SSE_TIMEOUT ({:?}) — \
+             SSE wrapper is the inner timeout for streaming, router is the outer fallback",
+            INFERENCE_ROUTER_TIMEOUT, SSE_TIMEOUT
+        );
+    }
+}
