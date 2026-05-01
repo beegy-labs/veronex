@@ -816,12 +816,13 @@ impl McpBridgeAdapter {
             parse_forced_action, schema_to_response_format, ForcedAction,
         };
 
-        // Build forced-JSON system prompt + schema. `None` means no usable tools —
-        // caller already verified all_tools.is_empty() == false, so this should
-        // always succeed.
+        // System prompt is round-invariant. Schema is round-aware (see in-loop
+        // construction below): on round 0 we omit the `final` branch so the
+        // model is logit-masked into calling a tool; once at least one tool
+        // result is in context, the `final` branch is allowed and the model
+        // can answer. Defends against weak models (qwen3:8b, llama3:7b) that
+        // emit "I don't have access to real-time data" without trying a tool.
         let system_prompt = build_forced_json_system_prompt(&all_tools)?;
-        let schema = build_forced_json_schema(&all_tools)?;
-        let forced_response_format = Some(schema_to_response_format(schema));
 
         // Inject the system prompt at index 0 (before any user messages).
         messages.insert(0, serde_json::json!({"role": "system", "content": system_prompt}));
@@ -839,6 +840,21 @@ impl McpBridgeAdapter {
         let tenant_id = caller.account_id().map(|id| id.to_string()).unwrap_or_default();
 
         for round in 0..max_rounds {
+            // ── Round-aware schema: gate the `final` branch ──────────────────
+            // Round 0 (no tool results yet): allow_final=false → model has no
+            // logit space to emit `{"action":"final",...}`, so it MUST pick a
+            // tool branch. Once any tool has been called, allow_final=true and
+            // the model can either keep gathering or terminate.
+            let allow_final = !all_mcp_tool_calls.is_empty();
+            let schema = match build_forced_json_schema(&all_tools, allow_final) {
+                Some(s) => s,
+                None => {
+                    warn!("MCP forced-JSON: schema construction failed on round {round}");
+                    return None;
+                }
+            };
+            let forced_response_format = Some(schema_to_response_format(schema));
+
             // ── Submit job WITHOUT native `tools[]` but WITH forced JSON format ─
             // The schema is the gateway's tool-dispatch contract; native tools[]
             // would be a no-op on non-supporting models and could conflict with
@@ -861,7 +877,7 @@ impl McpBridgeAdapter {
                 images: None,
                 stop: stop.clone(),
                 seed,
-                response_format: forced_response_format.clone(),
+                response_format: forced_response_format,
                 frequency_penalty,
                 presence_penalty,
                 mcp_loop_id: Some(mcp_loop_id),
