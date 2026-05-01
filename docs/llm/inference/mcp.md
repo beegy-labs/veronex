@@ -161,6 +161,8 @@ When `should_intercept()` selects the MCP path (`openai_handlers.rs::chat_comple
 
 Long-stream public access uses CF-bypass direct hostname (`*.girok.dev` DNS-only CNAME → `home-gw.girok.dev` → `cilium-gateway-web-gateway` with HTTPRoute `timeouts.request=1800s`); see `.add/domain-integration.md`. The legacy CF-proxied path (`*.verobee.com`, 100 s edge idle) is no longer the primary inference route.
 
+The SSE wrapper in `infrastructure/inbound/http/handlers.rs::with_sse_timeout` enforces `SSE_TIMEOUT=1700s` — strictly less than the Cilium gateway 1800s — so the client always sees a clean `event: error data: stream timeout` rather than an opaque gateway 504. `INFERENCE_ROUTER_TIMEOUT=1750s` covers non-streaming requests and is held above SSE_TIMEOUT so streaming uses its inner wrapper first. The 1700s headroom accommodates worst-case multi-round MCP loops (`MAX_ROUNDS=5 × ROUND_TOTAL_TIMEOUT=1500s` per round, capped to a single full round in practice for any one client wait) plus the optional S24 synthesis round on top. Invariants pinned by `infrastructure::inbound::http::constants::timeout_invariants` tests.
+
 Implementation:
 
 | Concern | Mechanism |

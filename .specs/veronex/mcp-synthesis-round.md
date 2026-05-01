@@ -10,12 +10,13 @@
 
 | Tier | Status | PR | Commit |
 | ---- | ------ | -- | ------ |
-| A — `extract_tool_results` helper: walk messages, collect `role:"tool"` entries, format as plain text | [ ] | — | — |
-| B — `synthesis_round` helper: fresh `[system, user, system-with-results]` messages, `tools: None`, dispatch via `state.use_case.submit` + `collect_round` (token streaming via `sse_tap_tx`) | [ ] | — | — |
-| C — `run_loop` integration: after the for-loop, if `content.is_empty()` and `rounds > 0`, invoke synthesis; replace returned `content` with synthesis output | [ ] | — | — |
-| D — Tests: helper unit tests + invariant pin (synthesis fires iff degenerate after S23 boundary) | [ ] | — | — |
-| CDD-sync — `mcp.md` (synthesis round subsection) + `flows/mcp.md` (run_loop diagram + protections row) | [ ] | — | — |
-| Live verify — degenerate-trigger prompt produces final text via synthesis round | [ ] | — | — |
+| A — `extract_tool_results` helper: walk messages, collect `role:"tool"` entries, format as plain text | [x] | #129 | dc540c9 |
+| B — `synthesis_round` helper: fresh `[system, user, system-with-results]` messages, `tools: None`, dispatch via `state.use_case.submit` + `collect_round` (token streaming via `sse_tap_tx`) | [x] | #129 | dc540c9 |
+| C — `run_loop` integration: after the for-loop, if `content.is_empty()` and `rounds > 0`, invoke synthesis; replace returned `content` with synthesis output | [x] | #129 | dc540c9 |
+| D — Tests: helper unit tests + invariant pin (synthesis fires iff degenerate after S23 boundary) | [x] | #129 | dc540c9 |
+| CDD-sync — `mcp.md` (synthesis round subsection) + `flows/mcp.md` (run_loop diagram + protections row) | [x] | #129 | dc540c9 |
+| Live verify — L1/L2/L3/L4 — synthesis dispatched, succeeded, 3115-char text content persisted to S3 as 6th turn | [x] (live-verified 2026-05-01) | n/a | conv_338rqmFdyh9mGUVQbqiNU |
+| L5 follow-up — `SSE_TIMEOUT=300s` was tripping mid-stream on long synth runs; bumped to 1700s (under Cilium 1800s) | [x] | TBD | TBD |
 
 ---
 
