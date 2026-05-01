@@ -1589,14 +1589,23 @@ fn extract_tool_results(messages: &[Value]) -> Option<String> {
 ///
 /// SDD: `.specs/veronex/mcp-synthesis-round.md` §3.2.
 fn build_synthesis_messages(original_prompt: &str, tool_results_text: &str) -> Vec<Value> {
+    let date_anchor = crate::infrastructure::inbound::http::inference_helpers::build_current_datetime_system_text();
     vec![
+        serde_json::json!({
+            "role": "system",
+            "content": date_anchor,
+        }),
         serde_json::json!({
             "role": "system",
             "content": "You are answering the user's question. \
                 Tools have already been used to gather the information \
                 you need. Do NOT call any tools. Using the tool results \
                 provided below, produce a complete, well-structured \
-                answer to the user's question in their original language."
+                answer to the user's question in their original language. \
+                Honor the date constraints in the system message above — \
+                every \"today\" / \"recent\" / \"현재\" / \"최근\" in your \
+                response refers to the current date listed there, not to \
+                your training cutoff."
         }),
         serde_json::json!({
             "role": "user",
@@ -2337,17 +2346,22 @@ mod tests {
     #[test]
     fn build_synthesis_messages_has_no_tool_calls_or_assistant_history() {
         let msgs = build_synthesis_messages("question", "results");
-        assert_eq!(msgs.len(), 3);
-        assert_eq!(msgs[0]["role"], "system");
-        assert_eq!(msgs[1]["role"], "user");
-        assert_eq!(msgs[1]["content"], "question");
-        assert_eq!(msgs[2]["role"], "system");
+        // 4 entries: date-anchor system, directive system, user prompt, tool-results system.
+        assert_eq!(msgs.len(), 4);
+        assert_eq!(msgs[0]["role"], "system"); // date anchor
+        assert_eq!(msgs[1]["role"], "system"); // directive (no tools)
+        assert_eq!(msgs[2]["role"], "user");
+        assert_eq!(msgs[2]["content"], "question");
+        assert_eq!(msgs[3]["role"], "system"); // tool results
         // Crucial: zero assistant.tool_calls entries — the whole point of S24.
         assert!(msgs.iter().all(|m| m["role"].as_str() != Some("assistant")));
         assert!(msgs.iter().all(|m| !m["tool_calls"].is_array()));
-        // Sanity: the directive forbids tool calls.
-        let directive = msgs[0]["content"].as_str().unwrap();
+        // Sanity: the directive forbids tool calls AND honors the date anchor.
+        let date_anchor = msgs[0]["content"].as_str().unwrap();
+        assert!(date_anchor.contains("Today is"), "date anchor present: {date_anchor}");
+        let directive = msgs[1]["content"].as_str().unwrap();
         assert!(directive.contains("Do NOT call any tools"));
+        assert!(directive.contains("date constraints"), "directive references date anchor: {directive}");
     }
 
     /// Synthesis fires iff: loop exited with no text content AND at least one
