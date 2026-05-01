@@ -286,6 +286,7 @@
     "noJobsFound": "No jobs found.",
     "noError": "(no error message)",
     "noResult": "(no result stored)",
+    "toolOnlyTurnHint": "(tool-only turn — see the tool call above; the model produced no text in this round)",
     "processing": "(processing…)",
     "toolCalls": "Tool Calls",
     "agentToolCall": "The model responded with a tool call — no text output was generated.",

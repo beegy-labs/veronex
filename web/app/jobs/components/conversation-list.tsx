@@ -299,7 +299,20 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
                       ))}
                     </div>
                   )}
-                  <p className="text-sm whitespace-pre-wrap">{turn.result || `(${t('jobs.noResult')})`}</p>
+                  {/* Render result body only when meaningful:
+                      - has result text → show it (text rounds + S24 synthesis)
+                      - empty result + has tool_calls → tool block above is the
+                        content; show a small "(tool-only turn)" hint instead of
+                        the misleading "(저장된 결과 없음)" that would imply data loss
+                      - empty result + no tool_calls → genuinely empty (cancel /
+                        error / pre-stream) — show "(저장된 결과 없음)" */}
+                  {turn.result ? (
+                    <p className="text-sm whitespace-pre-wrap">{turn.result}</p>
+                  ) : (turn.tool_calls && Array.isArray(turn.tool_calls) && turn.tool_calls.length > 0) ? (
+                    <p className="text-[11px] italic text-muted-foreground/70">{t('jobs.toolOnlyTurnHint')}</p>
+                  ) : (
+                    <p className="text-sm whitespace-pre-wrap text-muted-foreground/60">({t('jobs.noResult')})</p>
+                  )}
                   <TurnInternalsPanel convId={id} jobId={turn.job_id} />
                 </div>
                 {i < data.turns.length - 1 && <hr className="border-border" />}
