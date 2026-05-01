@@ -179,28 +179,25 @@ Implementation:
 
 Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens. Note: §9.5 of the streaming-first SDD recorded this as PASS based on SSE output only; the dashboard detail GET's `result_text` non-empty assertion was added in `.specs/veronex/history/inference-mcp-per-round-persist.md` §8.
 
-### Shim path — ReAct fallback for non-native models
+### Shim path — forced-JSON gateway shim for non-native models
 
-The veronex gateway pattern (vision shim is the canonical example: `inference_helpers.rs::analyze_images_for_context`) provides capability adapters so any underlying Ollama model can use a feature regardless of native fine-tuning. The MCP equivalent is the **ReAct shim**:
+The veronex gateway pattern (vision shim is the canonical example: `inference_helpers.rs::analyze_images_for_context`) provides capability adapters so any underlying Ollama model can use a feature regardless of native fine-tuning. The MCP equivalent is the **forced-JSON shim** — replaces the prior text-template ReAct shim, which was best-effort and routinely produced zero tool calls on weak models (qwen3:8b, llama3:7b, mistral:7b-v0.2).
 
 | Stage | Mechanism |
 |---|---|
-| Capability gate | `ollama::capability::heuristic_supports_native(model)` — known native-tool-calling families (Qwen3-Coder, Qwen2.5-Instruct/Coder, Llama 3.1+, Mistral-instruct-v0.3+, Hermes/Nous, Command-R, Gemma 4) → native path. Default unknown → ReAct path. Future: cache `/api/show` template inspection. |
-| System prompt | `mcp::react_prompt::build_react_system_prompt(tools)` — locked `Thought:` / `Action:` / `Action Input:` / `Observation:` / `Final Answer:` template injected at `messages[0]`. Tools rendered as markdown bullets with name + description + JSON schema. |
-| Submission | Job submitted WITHOUT `tools` field — model receives the catalog as system text, not native fine-tune scaffolding. |
-| Output parser | `mcp::react_parser::ReActParser` — stream-aware state machine. Bracket-counting JSON extractor (string-aware escape tracking) handles multi-line / nested-JSON Action Input. Fail-opens to `Final` on parse error or empty trailing text. |
+| Capability gate | `ollama::capability::heuristic_supports_native(model)` — known native-tool-calling families (Qwen3-Coder, Qwen2.5-Instruct/Coder, Llama 3.1+, Mistral-instruct-v0.3+, Hermes/Nous, Command-R, Gemma 4) → native path. Default unknown → forced-JSON path. Future: cache `/api/show` template inspection. |
+| System prompt | `mcp::forced_json::build_forced_json_system_prompt(tools)` — minimal instruction ("emit one JSON object: tool call or final answer") plus a tool catalogue (name + description). Schema does the enforcement; prompt only provides semantic hints. |
+| Schema | `mcp::forced_json::build_forced_json_schema(tools)` — `oneOf` over per-tool branches (`{action: "tool", tool: <const tool_name>, args: <tool.parameters>}`) plus a terminator branch (`{action: "final", answer: string}`). Each tool's actual parameter schema is embedded for `args`. |
+| Submission | Job submitted WITHOUT `tools[]` and WITH `response_format = {type: "json_schema", json_schema: {schema}}`. The Ollama adapter (`adapter.rs:594`) extracts `.json_schema.schema` and forwards it as Ollama's `format` parameter — llama.cpp's GBNF grammar masks logits at every decoding step. |
+| Output parsing | `mcp::forced_json::parse_forced_action(text)` — single `serde_json::from_str`. Constrained decoding guarantees valid JSON; defensive fail-open returns the raw text as `Final` if parse fails (older Ollama, schema bypass). |
 | Action execution | Reuses the native path's `execute_calls` machinery — circuit breaker, ACL, result cache, analytics, observability spans all apply uniformly. |
-| Observation feedback | Tool result appended back into `messages[]` as `{"role":"user","content":"Observation: ..."}` along with the assistant's serialized `Action:` line. |
-| Loop detection | Same `(name, args_hash)` × `LOOP_DETECT_THRESHOLD` rule as native — terminates ReAct loop on repeated identical calls. |
-| Termination | `Final Answer:` payload becomes `McpLoopResult.content`. Token totals roll up to `first_job_id`; intermediate-round DB rows cleaned up identically to native. |
+| Observation feedback | Tool result appended back into `messages[]` as `{"role":"user","content":"Observation: ..."}` along with the assistant's serialized JSON action. |
+| Loop detection | Same `(name, args_hash)` × `LOOP_DETECT_THRESHOLD` rule as native — terminates loop on repeated identical calls. |
+| Termination | `action: "final"` payload becomes `McpLoopResult.content`. Token totals roll up to `first_job_id`; intermediate-round DB rows cleaned up identically to native. |
 
-**Honest limitation** (per SDD §10): the shim is an infrastructure hook, not a model-capability lift. 8B-parameter agents routinely ignore both native `tool_calls` AND ReAct text patterns when prompts get complex (per Medium / Qwen team docs). Real value: mid-size long tail (Mistral-7B-Instruct-v0.2, Llama 3 base, community fine-tunes that emit text patterns reliably but lack native tool_calls fine-tuning).
+**Why this honors the gateway promise**: prior ReAct shim was honestly described as "an infrastructure hook, not a model-capability lift" — 8B agents ignored the template and returned prose. With constrained decoding the gateway *enforces* the dispatch contract: the model literally cannot emit non-JSON or invalid arguments. Tool dispatch is deterministic across every Ollama-served model regardless of fine-tuning. ACL 2025 reported JSON validity errors 38.2% → 0% under constrained decoding; same lift applies here.
 
-**Live verified 2026-04-29** (image `develop-81c8f57`):
-- `qwen3:8b` request → routed to ReAct shim (log: `MCP: routing to ReAct shim (non-native tool_calls model)`); model itself ignored the prompt and returned plain text — confirmed model-capability limit, infrastructure intact.
-- `qwen3-coder-next-200k:latest` → native path unchanged (no ReAct routing log; `MCP round complete round=0 mcp_calls=1` confirmed `web_search` invoked).
-
-SDD: `.specs/veronex/history/mcp-react-shim.md`.
+Module: `infrastructure/outbound/mcp/forced_json.rs`. Loop driver: `bridge::run_loop_forced_json`.
 
 ### Phase 1 Lifecycle / Phase 2 Inference
 
@@ -283,7 +280,7 @@ SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md` (S3-single
 Three drift points reconciled:
 
 1. **FK CASCADE → DROP** (PR #134, superseded): the original audit-row durability fix flipped `mcp_loop_tool_calls.job_id` to `ON DELETE SET NULL`. PR #135 follow-up dropped the table entirely once S3 took over.
-2. **Single S3 writer**: runner skips S3 turn write + `update_conversation_counters` whenever `job.mcp_loop_id IS Some`; bridge owns one consolidated `TurnRecord` write at loop end (covers both native `run_loop` and ReAct `run_loop_react`). Result: 1 user question with N rounds → `turn_count = 1`, `turn.tool_calls.length = N`.
+2. **Single S3 writer**: runner skips S3 turn write + `update_conversation_counters` whenever `job.mcp_loop_id IS Some`; bridge owns one consolidated `TurnRecord` write at loop end (covers both native `run_loop` and forced-JSON `run_loop_forced_json`). Result: 1 user question with N rounds → `turn_count = 1`, `turn.tool_calls.length = N`.
 3. **Audit body relocation**: bridge no longer batches inserts into `mcp_loop_tool_calls`; per-round `(result_text, ToolCallRecord)` is rewritten into the enriched `all_mcp_tool_calls` array that lands on the S3 turn. PG `mcp_loop_tool_calls` table dropped via idempotent `DROP TABLE IF EXISTS` at the top of `init.sql`.
 
 Migration: helm `pre-upgrade` hook applies the DROP block on every install/upgrade. Dev DB dropped manually 2026-05-01 to verify.

@@ -145,7 +145,7 @@ When Ollama first loads a model into VRAM it emits an intermediate chunk with `d
 
 The adapter does NOT set Ollama's `think` field on any request. Reasoning /
 thinking behavior is a property of the Ollama model's own template — letting
-Ollama decide per model keeps veronex's ReAct loop provider-agnostic and
+Ollama decide per model keeps veronex's MCP loop provider-agnostic and
 avoids forcing a global policy that mis-fits some models
 (e.g. `qwen3-coder` rejects `think:true` with HTTP 400; `qwen3` produces
 empty output with `think:false` + large tool context).

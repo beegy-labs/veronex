@@ -116,8 +116,13 @@ const DEFAULT_BUFFER_MB: u32 = 512;
 const DEFAULT_SAFETY_PERMIL: u32 = 100;
 /// Safety margin increase on OOM (permil). 50 = 5%.
 const OOM_SAFETY_BUMP_PERMIL: u32 = 50;
-/// Safety margin decay per stable APU sync cycle (permil). 10 = 1%.
-const SAFETY_DECAY_PERMIL: u32 = 10;
+/// Safety margin decay per stable sync cycle (permil). 50 = 5%.
+/// Symmetric with `OOM_SAFETY_BUMP_PERMIL` so a single transient OOM bump is
+/// recovered after one stable cycle. With sync_interval_secs=300 (5 min) and
+/// the previous value (10‰) a bump from 100 → 500 took ~3.5 hours to recover,
+/// effectively never. Symmetric decay matches the conservative bump policy
+/// while ensuring the system returns to baseline once pressure clears.
+const SAFETY_DECAY_PERMIL: u32 = 50;
 
 /// Maps provider_id → ProviderVramState.
 ///
@@ -331,10 +336,20 @@ impl VramPoolPort for VramPool {
             };
 
             if available < kv_mb as i64 {
-                // Not enough VRAM — bump safety factor for next time.
-                let cur_safety = state.safety_permil.load(Ordering::Acquire);
-                let new_safety = (cur_safety + OOM_SAFETY_BUMP_PERMIL).min(500);
-                state.safety_permil.store(new_safety, Ordering::Release);
+                // Bump safety_permil ONLY on actual KV-OOM during loaded usage —
+                // i.e. an already-loaded model's runtime KV demand exceeded budget.
+                // Skip bump when the rejection comes from `weight_cost` (model not
+                // yet loaded): that is a structural admission decision driven by
+                // declarative weight + currently-loaded set, not a memory-pressure
+                // signal. Bumping here creates an asymmetric feedback loop: each
+                // structural rejection inflates safety, the inflated safety blocks
+                // the *next* admission of the same model, retries pile bumps, and
+                // safety hits the 500-permil cap where the model can never load.
+                if !need_load_weight {
+                    let cur_safety = state.safety_permil.load(Ordering::Acquire);
+                    let new_safety = (cur_safety + OOM_SAFETY_BUMP_PERMIL).min(500);
+                    state.safety_permil.store(new_safety, Ordering::Release);
+                }
                 return None;
             }
 
@@ -1075,6 +1090,44 @@ mod tests {
         let state = pool.providers.get(&pid).unwrap();
         let safety = state.safety_permil.load(Ordering::Acquire);
         assert!(safety > DEFAULT_SAFETY_PERMIL, "safety_permil should increase on OOM: {safety}");
+    }
+
+    #[test]
+    fn safety_permil_does_not_bump_on_weight_load_rejection() {
+        // Structural rejection: a not-yet-loaded model can't fit alongside the
+        // currently loaded set. This is NOT memory pressure on a running model
+        // — it is an admission decision based on declarative weights. Bumping
+        // safety here previously created an asymmetric feedback loop where each
+        // user retry pushed the cap to 500‰ and the model could never load.
+        let pool = VramPool::new();
+        let pid = Uuid::now_v7();
+        pool.set_total_vram(pid, 100_000);
+        // Currently loaded model — small footprint so the new model's *weight*
+        // is what blows the budget, not other-model load.
+        pool.mark_model_loaded(pid, "small", 5_000);
+        // Register a profile for the new model with a weight that exceeds the
+        // available envelope.
+        pool.set_model_profile(pid, "huge_unloaded", crate::application::ports::outbound::concurrency_port::ModelVramProfile {
+            weight_mb: 95_000,
+            weight_estimated: false,
+            kv_per_request_mb: 32,
+            num_layers: 0,
+            num_kv_heads: 0,
+            head_dim: 0,
+            configured_ctx: 0,
+            failure_count: 0,
+            llm_concern: None,
+            llm_reason: None,
+        });
+
+        let safety_before = pool.providers.get(&pid).unwrap().safety_permil.load(Ordering::Acquire);
+        let permit = pool.try_reserve(pid, "huge_unloaded");
+        assert!(permit.is_none(), "weight-load rejection expected");
+        let safety_after = pool.providers.get(&pid).unwrap().safety_permil.load(Ordering::Acquire);
+        assert_eq!(
+            safety_before, safety_after,
+            "weight-load rejection must not bump safety_permil (got {safety_before} → {safety_after})"
+        );
     }
 
     #[test]

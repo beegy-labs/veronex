@@ -67,7 +67,7 @@ POST /v1/servers (register provider)
 | 4 | **APU** (`mem_available_mb` from node-exporter, unified memory) | unset operator + agent → pass-through; AMD APU detected (`drm > 0 && mem_avail > drm × 2`) |
 | 5 | **Unknown** (no source) | `total_mb = 0` → vram_pool delegates capacity to Ollama (request still dispatches) |
 
-The operator-registered value is the **declared envelope**: AIMD `max_concurrent`, `safety_permil` (auto +50 on OOM, decay −10/cycle), and Ollama's own OOM rejection together provide dynamic correction within the envelope. Inverted priority (auto-detect over operator value) was a regression introduced in commit `4891fbc` and reverted in this SDD.
+The operator-registered value is the **declared envelope**: AIMD `max_concurrent`, `safety_permil` (auto +50 on real KV-OOM, decay −50/cycle on every provider), and Ollama's own OOM rejection together provide dynamic correction within the envelope. Inverted priority (auto-detect over operator value) was a regression introduced in commit `4891fbc` and reverted in this SDD.
 
 ---
 
@@ -504,19 +504,22 @@ total_mb = mem_available_mb × (1 - safety_permil / 1000)
 | Constant | Value | Meaning |
 |----------|-------|---------|
 | `DEFAULT_SAFETY_PERMIL` | 100 | Initial / minimum margin (10%) |
-| `OOM_SAFETY_BUMP_PERMIL` | 50 | +5% per OOM event |
-| `SAFETY_DECAY_PERMIL` | 10 | −1% per stable cycle (APU only) |
+| `OOM_SAFETY_BUMP_PERMIL` | 50 | +5% per actual KV-OOM on a loaded model |
+| `SAFETY_DECAY_PERMIL` | 50 | −5% per stable sync cycle (every provider type) |
 
 ### safety_permil Rules
 
 | Event | Change | Range |
 |-------|--------|-------|
-| OOM detected (try_reserve fail or Ollama 429) | `+50` (OOM_SAFETY_BUMP_PERMIL) | up to 500 (50%) |
-| 30s sync loop, no OOM (stable) — **APU only** | `-10` (SAFETY_DECAY_PERMIL) | down to 100 (10%) |
+| KV-OOM on already-loaded model (`try_reserve` rejected with `need_load_weight=false`) | `+50` (OOM_SAFETY_BUMP_PERMIL) | up to 500 (50%) |
+| Weight-load rejection (model not yet loaded — structural) | **no change** — bumping here is a feedback-loop bug fixed in PR #136 | — |
+| Successful sync cycle (any provider) | `-50` (SAFETY_DECAY_PERMIL), saturates at default | down to 100 (10%) |
 
-**Recovery asymmetry is intentional**: `+50` recovery takes 5 cycles (150s) at `-10/30s`. Combined with AIMD `max_concurrent` recovery at `+1/30s`, this creates a ~150s low-utilization window after OOM. OOM can halt the entire service, so safety over speed is the correct trade-off.
+**Symmetric bump and decay**: a transient OOM bumps safety once, the next stable cycle reverts it. Previously bump (+50) and decay (−10) were asymmetric AND decay only fired on APUs, so dedicated-GPU providers monotonically pushed safety to the 500 cap with no recovery path — once stuck, large models could never load alongside any other model. Symmetric values + universal decay close that loop.
 
-**OOM dual correction**: On OOM, both `safety_permil +50` (shrinks available VRAM ceiling) and `max_concurrent ×3/4` (AIMD multiplicative decrease) apply simultaneously. The two paths are independent — AIMD optimizes throughput, `try_reserve + safety_permil` ensures memory safety.
+**Bump only on real OOM**: the bump skips when rejection comes from `weight_cost` (the model isn't loaded yet — admission decision based on declarative weight + currently-loaded set). Bumping there created the user-retry feedback loop: each retry of "qwen3-coder-next-200k:latest doesn't fit alongside qwen3:8b" added 50‰ until the cap; recovery never came because the structural cause persisted. Now the bump signals only memory pressure on actively-running models.
+
+**OOM dual correction**: On a real KV-OOM, both `safety_permil +50` (shrinks available VRAM ceiling) and `max_concurrent ×3/4` (AIMD multiplicative decrease) apply simultaneously. The two paths are independent — AIMD optimizes throughput, `try_reserve + safety_permil` ensures memory safety.
 
 ---
 
