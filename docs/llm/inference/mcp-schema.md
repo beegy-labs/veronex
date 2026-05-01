@@ -43,11 +43,14 @@ CREATE TABLE mcp_key_access (
     PRIMARY KEY (api_key_id, server_id)
 );
 
--- Audit log for every tool call in an agentic loop
+-- Audit log for every tool call in an agentic loop.
+-- job_id uses ON DELETE SET NULL because the bridge deletes intermediate
+-- per-round inference_jobs after the loop completes (only the head job is
+-- kept). CASCADE would wipe rounds 1..N-1's audit rows.
 CREATE TABLE mcp_loop_tool_calls (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     mcp_loop_id     UUID        NOT NULL,
-    job_id          UUID        NOT NULL REFERENCES inference_jobs(id) ON DELETE CASCADE,
+    job_id          UUID        REFERENCES inference_jobs(id) ON DELETE SET NULL,
     loop_round      SMALLINT    NOT NULL,
     server_id       UUID        NOT NULL,
     tool_name       TEXT        NOT NULL,
