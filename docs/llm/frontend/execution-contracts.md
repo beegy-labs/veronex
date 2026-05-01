@@ -1,6 +1,28 @@
 # Frontend Execution Contracts
 
-> LLM-enforced domain contracts | **Last Updated**: 2026-03-30
+> LLM-enforced domain contracts | **Last Updated**: 2026-05-01
+
+## 0. HTML Cache-Control Override (build-output policy)
+
+`web/next.config.ts` ships an `async headers()` override that sets
+`Cache-Control: no-store, must-revalidate` on every response that is NOT
+a content-hashed static asset (matches `^/((?!_next/static|_next/image|favicon).*)`).
+
+**Why this exists**: Default Next.js prerender output emits
+`Cache-Control: s-maxage=31536000` on the HTML, which Cloudflare honors
+as a 1-year edge cache. Each new deploy lands in the cluster but the old
+HTML keeps pointing browsers at old chunk-hash filenames — every web fix
+goes invisible until the edge cache is manually purged. Verified live
+2026-05-01 against `https://veronex-dev.verobee.com/jobs` (`x-nextjs-cache:
+HIT`, `cache-control: s-maxage=31536000`, multi-PR fix appeared deployed
+at the pod but did not reach users until manual CF purge).
+
+**Do not remove**: removing this override re-introduces the silent-stale
+deploy class. JS/CSS bundles under `/_next/static/*` are content-hashed
+and immutable — they're explicitly excluded from the rule and continue
+to use Next.js's own long-cache headers. Net cost is ~5–50ms per
+navigation for the HTML fetch from origin; for an auth-gated SaaS where
+every page is user-specific, prerendered-static caching never had value.
 
 ## 1. Feature Folder Structure
 
