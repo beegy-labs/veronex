@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 
 use crate::application::ports::outbound::message_store::{CompressedTurn, MessageStore};
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
-use crate::domain::constants::conversation_record_key;
+use crate::infrastructure::outbound::valkey_keys as vk_keys;
 
 use super::compression_router::CompressParams;
 
@@ -65,7 +65,7 @@ async fn try_compress(
     store: &Arc<dyn MessageStore>,
     valkey: &Option<Arc<dyn ValkeyPort>>,
 ) -> Result<()> {
-    let cache_key = conversation_record_key(conversation_id);
+    let cache_key = vk_keys::conversation_record(conversation_id);
 
     // 1. Load ConversationRecord — Valkey first, S3 fallback
     let record_opt: Option<crate::application::ports::outbound::message_store::ConversationRecord> =

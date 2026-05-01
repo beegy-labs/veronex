@@ -73,15 +73,16 @@ use serde::Deserialize;
 use tokio::sync::{Notify, OnceCell};
 
 use crate::application::ports::outbound::model_lifecycle::LifecycleOutcome;
+use crate::domain::constants::MCP_LIFECYCLE_LOAD_TIMEOUT;
 use crate::domain::errors::LifecycleError;
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-/// Hard cap on a single load attempt. Must exceed ollama's longest cold load
-/// path. Measured for `qwen3-coder-next-200k:latest` on AI Max+ 395 / ROCm 7.2:
-/// `load_duration` = 163,671 ms. 600 s leaves headroom for 1M-context models;
-/// override per provider via future capacity-repo lookup if needed.
-pub(super) const LIFECYCLE_LOAD_TIMEOUT: Duration = Duration::from_secs(600);
+/// Hard cap on a single load attempt. SSOT lives in
+/// [`crate::domain::constants::MCP_LIFECYCLE_LOAD_TIMEOUT`] — coupled with
+/// `mcp::bridge` Phase-1 wait. See domain/constants.rs for rationale (200K
+/// cold-load measurement + 1M-context headroom).
+pub(super) const LIFECYCLE_LOAD_TIMEOUT: Duration = MCP_LIFECYCLE_LOAD_TIMEOUT;
 
 /// Maximum gap between observed progress updates (driven by `/api/ps` poller)
 /// before the slot is poisoned. Semantics: "model loaded per /api/ps but the

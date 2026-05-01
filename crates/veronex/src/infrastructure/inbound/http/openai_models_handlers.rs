@@ -7,6 +7,7 @@ use chrono::Utc;
 use serde::Serialize;
 use tracing::instrument;
 
+use super::constants::PROVIDER_OLLAMA;
 use super::error::AppError;
 use super::state::AppState;
 
@@ -44,7 +45,7 @@ pub async fn list_models(State(state): State<AppState>) -> Result<Response, AppE
                 id: name,
                 object: "model",
                 created: now,
-                owned_by: "ollama".to_string(),
+                owned_by: PROVIDER_OLLAMA.to_string(),
             });
         }
     }
@@ -84,7 +85,7 @@ pub async fn get_model(
                 id: model_id,
                 object: "model",
                 created: now,
-                owned_by: "ollama".to_string(),
+                owned_by: PROVIDER_OLLAMA.to_string(),
             }).into_response());
         }
     }

@@ -945,7 +945,7 @@ pub async fn sync_provider(
             let demand: u64 = if let Some(pool) = valkey_pool {
                 use fred::prelude::*;
                 let v: Result<Option<String>, _> =
-                    pool.get(&crate::domain::constants::demand_key(name)).await;
+                    pool.get(&crate::infrastructure::outbound::valkey_keys::demand_counter(name)).await;
                 v.ok().flatten().and_then(|s| s.parse().ok()).unwrap_or(0)
             } else {
                 0

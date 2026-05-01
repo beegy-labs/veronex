@@ -19,9 +19,12 @@ use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegis
 use crate::application::ports::outbound::thermal_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
-use crate::domain::constants::demand_key;
+use crate::domain::constants::{
+    PRELOAD_LOCK_TTL_SECS, SCALEOUT_DECISION_TTL_SECS,
+};
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{ProviderType, ThrottleLevel};
+use crate::infrastructure::outbound::valkey_keys as vk_keys;
 
 /// Placement planner loop interval.
 const PLANNER_INTERVAL: Duration = Duration::from_secs(5);
@@ -40,20 +43,6 @@ const TRANSITION_GUARD_SECS: u64 = 30;
 
 /// Scale-Out hold-down duration (seconds).
 const SCALE_OUT_HOLDDOWN_SECS: u64 = 60;
-
-/// Preload lock TTL in Valkey (seconds).
-const PRELOAD_LOCK_TTL: i64 = 180;
-
-/// Scale-Out decision lock TTL in Valkey (seconds).
-const SCALEOUT_DECISION_TTL: i64 = 30;
-
-fn preload_lock_key(model: &str, provider_id: Uuid) -> String {
-    crate::domain::constants::preload_lock_key(model, provider_id)
-}
-
-fn scaleout_decision_key(model: &str) -> String {
-    crate::domain::constants::scaleout_decision_key(model)
-}
 
 /// Returns true if demand exceeds eligible capacity threshold (80%).
 pub(crate) fn is_scale_out_needed(demand: u64, eligible_capacity: u32) -> bool {
@@ -169,7 +158,7 @@ async fn planner_tick(
     {
         let futs: Vec<_> = all_models.iter()
             .map(|model| {
-                let key = demand_key(model);
+                let key = vk_keys::demand_counter(model);
                 let model = model.clone();
                 let valkey = valkey.clone();
                 async move {
@@ -347,18 +336,18 @@ async fn planner_tick(
         };
 
         // Multi-instance dedup: Scale-Out decision lock
-        let decision_key = scaleout_decision_key(model);
+        let decision_key = vk_keys::scaleout_decision(model);
         match valkey.kv_get(&decision_key).await {
             Ok(Some(_)) => continue, // another replica is handling this model
             _ => {}
         }
         // Acquire decision lock (NX)
-        if valkey.kv_set(&decision_key, instance_id, SCALEOUT_DECISION_TTL, false).await.is_err() {
+        if valkey.kv_set(&decision_key, instance_id, SCALEOUT_DECISION_TTL_SECS, false).await.is_err() {
             continue;
         }
 
         // Preload lock (NX): prevent duplicate preload of same model+server
-        let preload_key = preload_lock_key(model, server.id);
+        let preload_key = vk_keys::preload_lock(model, server.id);
         match valkey.kv_get(&preload_key).await {
             Ok(Some(_)) => {
                 if let Err(e) = valkey.kv_del(&decision_key).await {
@@ -368,7 +357,7 @@ async fn planner_tick(
             }
             _ => {}
         }
-        if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL, false).await.is_err() {
+        if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL_SECS, false).await.is_err() {
             if let Err(e) = valkey.kv_del(&decision_key).await {
                 tracing::warn!(error = %e, "placement: failed to release decision lock on preload conflict");
             }
@@ -461,12 +450,12 @@ async fn planner_tick(
             }
 
             // Preload lock
-            let preload_key = preload_lock_key(model, p.id);
+            let preload_key = vk_keys::preload_lock(model, p.id);
             match valkey.kv_get(&preload_key).await {
                 Ok(Some(_)) => continue,
                 _ => {}
             }
-            if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL, false).await.is_err() {
+            if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL_SECS, false).await.is_err() {
                 continue;
             }
 

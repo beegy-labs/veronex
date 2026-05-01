@@ -471,6 +471,45 @@ mod tests {
         assert_eq!(demand_counter("llama3:8b"), "veronex:demand:llama3:8b");
     }
 
+    /// job_owner key format — pinned for cross-instance ownership lookup.
+    #[test]
+    fn job_owner_format_no_prefix() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            job_owner(id),
+            "veronex:job:owner:00000000-0000-0000-0000-000000000000",
+        );
+    }
+
+    /// ratelimit_tpm key format — embeds key_id and minute epoch.
+    #[test]
+    fn ratelimit_tpm_format_no_prefix() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            ratelimit_tpm(id, 1_710_600_000),
+            "veronex:ratelimit:tpm:00000000-0000-0000-0000-000000000000:1710600000",
+        );
+    }
+
+    /// preload_lock key format — embeds model and provider_id.
+    #[test]
+    fn preload_lock_format_no_prefix() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            preload_lock("qwen3:8b", id),
+            "veronex:preloading:qwen3:8b:00000000-0000-0000-0000-000000000000",
+        );
+    }
+
+    /// scaleout_decision key format — embeds the model name.
+    #[test]
+    fn scaleout_decision_format_no_prefix() {
+        assert_eq!(
+            scaleout_decision("llama3:70b"),
+            "veronex:scaleout:llama3:70b",
+        );
+    }
+
     /// pubsub_cancel_prefix must be a strict prefix of pubsub_cancel(job_id).
     #[test]
     fn cancel_channel_prefix_matches_cancel_channel() {

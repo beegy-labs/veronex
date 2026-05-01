@@ -36,6 +36,7 @@ use crate::domain::constants::{
     MAX_QUEUE_SIZE, MAX_QUEUE_PER_MODEL,
     TIER_BONUS_PAID, TIER_BONUS_STANDARD, TIER_BONUS_TEST,
 };
+use crate::infrastructure::outbound::valkey_keys as vk_keys;
 
 use super::JobEntry;
 use super::dispatcher::{queue_dispatcher_loop, spawn_job_direct};
@@ -260,11 +261,11 @@ impl InferenceUseCaseImpl {
             if job.status == JobStatus::Running {
                 // Check if another node currently owns this job.
                 // Skip only if the other node is still alive (heartbeat present).
-                let owner_key = crate::domain::constants::job_owner_key(uuid);
+                let owner_key = vk_keys::job_owner(uuid);
                 if let Ok(Some(owner)) = valkey.kv_get(&owner_key).await
                     && owner != self.instance_id.as_ref()
                 {
-                    let hb_key = crate::domain::constants::heartbeat_key(&owner);
+                    let hb_key = vk_keys::heartbeat(&owner);
                     // owner_alive: fail-closed (true) if Valkey error
                     let owner_alive = valkey.kv_get(&hb_key).await.unwrap_or(Some(String::new())).is_some();
                     if owner_alive {

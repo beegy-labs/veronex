@@ -20,6 +20,7 @@ use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
 use super::audit_helpers::emit_audit;
+use super::constants::{PROVIDER_GEMINI, PROVIDER_OLLAMA};
 use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
 use super::handlers::{SseStream, try_acquire_sse, ListPageParams};
@@ -534,7 +535,7 @@ async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<Stri
 
     // ── Ollama: read from already-synced ollama_model_repo (no HTTP) ───
     if let Ok(models) = state.ollama_model_repo.list_all().await && !models.is_empty() {
-        result.insert("ollama".to_string(), models);
+        result.insert(PROVIDER_OLLAMA.to_string(), models);
     }
 
     // ── Gemini: show models only when lab feature is enabled ──
@@ -558,7 +559,7 @@ async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<Stri
         }
 
         if !gemini_models.is_empty() {
-            result.insert("gemini".to_string(), gemini_models);
+            result.insert(PROVIDER_GEMINI.to_string(), gemini_models);
         }
     }
 

@@ -546,7 +546,7 @@ pub(super) async fn queue_dispatcher_loop(
                 e.assigned_provider_id = Some(pid);
             }
 
-            let owner_key = crate::domain::constants::job_owner_key(uuid);
+            let owner_key = vk_keys::job_owner(uuid);
             if let Err(e) = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await {
                 tracing::warn!(%uuid, key = %owner_key, error = %e, "dispatcher: failed to set job owner key");
             }
