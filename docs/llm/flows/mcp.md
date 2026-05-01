@@ -219,7 +219,8 @@ invoked. SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
 
 | File | Purpose |
 |------|---------|
-| `infrastructure/outbound/mcp/bridge.rs` | `McpBridgeAdapter` — full ReAct loop |
+| `infrastructure/outbound/mcp/bridge.rs` | `McpBridgeAdapter` — native + forced-JSON loops |
+| `infrastructure/outbound/mcp/forced_json.rs` | Forced-JSON gateway shim (schema, parser) for non-native-tool-calling models |
 | `infrastructure/inbound/http/openai_handlers.rs` | Entry, `should_intercept()`, `mcp_ollama_chat()` |
 | `infrastructure/inbound/http/mcp_handlers.rs` | MCP server CRUD, `discover_and_persist_tools()` |
 | `infrastructure/inbound/http/key_mcp_access_handlers.rs` | ACL management REST API |

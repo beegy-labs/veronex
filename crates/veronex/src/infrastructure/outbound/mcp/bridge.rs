@@ -282,16 +282,19 @@ impl McpBridgeAdapter {
         }
         let tools_json = if all_tools.is_empty() { None } else { Some(all_tools.clone()) };
 
-        // ── Capability gate — route to ReAct shim when the model does not ────
-        // natively emit `tool_calls` (vision-shim mirror; SDD: mcp-react-shim §6).
-        // For v1 we use a name-pattern heuristic; future enhancement: cache
-        // results from Ollama `/api/show` template inspection.
+        // ── Capability gate — route to forced-JSON gateway shim when the model
+        // does not natively emit `tool_calls`. The shim leverages Ollama's
+        // `format` parameter (constrained decoding via GBNF grammar) so weak
+        // models (qwen3:8b, llama3:7b, etc.) can drive MCP deterministically.
+        // The schema is a `oneOf` covering every available tool plus a `final`
+        // terminator — the model's logits are masked at every token to produce
+        // grammar-valid output, so tool dispatch is no longer best-effort.
         if !all_tools.is_empty()
             && !crate::infrastructure::outbound::ollama::capability::heuristic_supports_native(&model)
         {
-            info!(model = %model, "MCP: routing to ReAct shim (non-native tool_calls model)");
+            info!(model = %model, "MCP: routing to forced-JSON shim (non-native tool_calls model)");
             return self
-                .run_loop_react(
+                .run_loop_forced_json(
                     state,
                     caller,
                     model,
@@ -761,17 +764,21 @@ impl McpBridgeAdapter {
         })
     }
 
-    // ── ReAct shim path ────────────────────────────────────────────────────────
+    // ── Forced-JSON shim path ──────────────────────────────────────────────────
     //
     // Mirror of `run_loop` for models without native `tool_calls`. Injects a
-    // ReAct system prompt teaching the Thought/Action/Action Input/Observation
-    // format, submits jobs WITHOUT tools, parses the model's text output for
-    // Action blocks, executes via `execute_calls`, and feeds Observations back
-    // as user messages.
+    // minimal system prompt + tool catalogue, builds an `oneOf` JSON-Schema
+    // covering every available tool plus a `final` terminator, and forwards
+    // the schema as Ollama's `format` parameter. Constrained decoding (GBNF
+    // grammar) guarantees the model's output is always a valid JSON object
+    // matching one of the branches — so even tool-incapable models like
+    // qwen3:8b can drive MCP deterministically. Replaces the prior text-template
+    // ReAct shim, which depended on the model voluntarily following the format
+    // and frequently produced zero tool calls on weak models.
     //
-    // SDD: `.specs/veronex/history/mcp-react-shim.md` §6 (Tier D).
+    // Schema / parser: `super::forced_json`.
     #[allow(clippy::too_many_arguments)]
-    async fn run_loop_react(
+    async fn run_loop_forced_json(
         &self,
         state: &AppState,
         caller: &InferCaller,
@@ -781,21 +788,26 @@ impl McpBridgeAdapter {
         conversation_id: Option<uuid::Uuid>,
         stop: Option<Value>,
         seed: Option<u32>,
-        response_format: Option<Value>,
+        _user_response_format: Option<Value>,
         frequency_penalty: Option<f64>,
         presence_penalty: Option<f64>,
         allowed_servers: Option<Arc<HashSet<Uuid>>>,
         max_rounds: u8,
     ) -> Option<McpLoopResult> {
-        // Build ReAct system prompt; `None` means no tools — caller already
-        // verified all_tools.is_empty() == false, so this should always succeed.
-        let react_system = match super::react_prompt::build_react_system_prompt(&all_tools) {
-            Some(p) => p,
-            None => return None,
+        use super::forced_json::{
+            build_forced_json_schema, build_forced_json_system_prompt,
+            parse_forced_action, schema_to_response_format, ForcedAction,
         };
 
+        // Build forced-JSON system prompt + schema. `None` means no usable tools —
+        // caller already verified all_tools.is_empty() == false, so this should
+        // always succeed.
+        let system_prompt = build_forced_json_system_prompt(&all_tools)?;
+        let schema = build_forced_json_schema(&all_tools)?;
+        let forced_response_format = Some(schema_to_response_format(schema));
+
         // Inject the system prompt at index 0 (before any user messages).
-        messages.insert(0, serde_json::json!({"role": "system", "content": react_system}));
+        messages.insert(0, serde_json::json!({"role": "system", "content": system_prompt}));
 
         let mcp_loop_id = Uuid::new_v4();
         let mut total_prompt_tokens: u32 = 0;
@@ -805,14 +817,15 @@ impl McpBridgeAdapter {
         let mut first_job_id: Option<JobId> = None;
         let mut intermediate_job_ids: Vec<Uuid> = Vec::new();
         let mut call_sig_counts: HashMap<(String, String), u8> = HashMap::new();
-        // Aggregated MCP tool calls across every ReAct Action — persisted on
-        // the consolidated S3 turn at loop end (mirrors run_loop's policy).
         let mut all_mcp_tool_calls: Vec<Value> = Vec::new();
 
         let tenant_id = caller.account_id().map(|id| id.to_string()).unwrap_or_default();
 
         for round in 0..max_rounds {
-            // ── Submit job WITHOUT tools (text-only — model gets tools as text) ─
+            // ── Submit job WITHOUT native `tools[]` but WITH forced JSON format ─
+            // The schema is the gateway's tool-dispatch contract; native tools[]
+            // would be a no-op on non-supporting models and could conflict with
+            // the constrained-decoding format on supporting ones.
             let prompt = extract_last_user_prompt(&messages);
             let job_id = match state.use_case.submit(SubmitJobRequest {
                 prompt,
@@ -831,7 +844,7 @@ impl McpBridgeAdapter {
                 images: None,
                 stop: stop.clone(),
                 seed,
-                response_format: response_format.clone(),
+                response_format: forced_response_format.clone(),
                 frequency_penalty,
                 presence_penalty,
                 mcp_loop_id: Some(mcp_loop_id),
@@ -840,7 +853,7 @@ impl McpBridgeAdapter {
             }).await {
                 Ok(id) => id,
                 Err(e) => {
-                    warn!("MCP ReAct: submit failed on round {round}: {e}");
+                    warn!("MCP forced-JSON: submit failed on round {round}: {e}");
                     return None;
                 }
             };
@@ -851,16 +864,16 @@ impl McpBridgeAdapter {
                 intermediate_job_ids.push(job_id.0);
             }
 
-            // ── Collect text-only response ────────────────────────────────────
-            // ReAct shim path: tap forwarding is out of scope per SDD §8;
-            // this path's structural reshape (text → JSON tool_call extraction)
-            // requires its own design. Pass None.
+            // ── Collect grammar-constrained JSON response ─────────────────────
+            // No SSE tap: per-round output is a structural JSON object intended
+            // for tool-dispatch, not for end-user streaming. Final-answer text
+            // is emitted by the caller after the loop terminates.
             let round_result = match collect_round(state, &job_id, None).await {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!(round, error = ?e, "ReAct round failed");
+                    warn!(round, error = ?e, "forced-JSON round failed");
                     return Some(McpLoopResult {
-                        content: format!("Error: ReAct round {round} failed ({e:?})"),
+                        content: format!("Error: round {round} failed ({e:?})"),
                         tool_calls: Vec::new(),
                         prompt_tokens: total_prompt_tokens,
                         completion_tokens: total_completion_tokens,
@@ -874,119 +887,80 @@ impl McpBridgeAdapter {
             total_completion_tokens = total_completion_tokens.saturating_add(round_result.completion_tokens);
             rounds = round + 1;
 
-            // ── Feed text through ReAct parser ────────────────────────────────
-            let mut parser = super::react_parser::ReActParser::new();
-            let mut events = parser.feed(&round_result.content);
-            events.extend(parser.finish());
+            // ── Parse the model's JSON action ─────────────────────────────────
+            match parse_forced_action(&round_result.content) {
+                ForcedAction::Tool { name, args } => {
+                    let args_str = serde_json::to_string(&args).unwrap_or_default();
+                    let sig = (name.clone(), quick_args_hash(&args_str));
+                    let count = call_sig_counts.entry(sig).or_insert(0);
+                    *count += 1;
+                    if *count >= LOOP_DETECT_THRESHOLD {
+                        warn!(name = %name, "forced-JSON: loop detected — same call repeated");
+                        content = format!(
+                            "(Loop detected: '{}' called {} times. Stopping.)",
+                            name, count
+                        );
+                        break;
+                    }
 
-            let mut found_action_this_round = false;
-            let mut should_break = false;
-            for event in events {
-                match event {
-                    super::react_parser::ReActEvent::Action { name, args } => {
-                        found_action_this_round = true;
+                    let tc_value = serde_json::json!({
+                        "function": { "name": &name, "arguments": &args_str }
+                    });
 
-                        // Loop detection — same Action / args repeated
-                        let args_str = serde_json::to_string(&args).unwrap_or_default();
-                        let sig = (name.clone(), quick_args_hash(&args_str));
-                        let count = call_sig_counts.entry(sig).or_insert(0);
-                        *count += 1;
-                        if *count >= LOOP_DETECT_THRESHOLD {
-                            warn!(name = %name, "ReAct: loop detected — same call repeated");
-                            content = format!(
-                                "(Loop detected: '{}' called {} times. Stopping.)",
-                                name, count
-                            );
-                            should_break = true;
-                            break;
-                        }
+                    let results = self
+                        .execute_calls(
+                            state,
+                            &[tc_value],
+                            caller.api_key_id(),
+                            tenant_id.clone(),
+                            rounds - 1,
+                            mcp_loop_id,
+                            job_id.0,
+                            allowed_servers.clone(),
+                        )
+                        .await;
 
-                        // Build OpenAI-format tool_call for execute_calls
-                        let tc_value = serde_json::json!({
-                            "function": {
-                                "name": name,
-                                "arguments": args_str
-                            }
-                        });
+                    // Echo the model's tool selection back as an assistant
+                    // message and the result as a user observation so the
+                    // next round sees the full reasoning trace.
+                    let serialized_action = serde_json::json!({
+                        "action": "tool", "tool": &name, "args": args
+                    }).to_string();
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": serialized_action
+                    }));
+                    let (observation_text, rec_opt): (String, Option<&ToolCallRecord>) = results
+                        .first()
+                        .map(|(t, r)| (t.clone(), Some(r)))
+                        .unwrap_or_else(|| ("(no result)".to_string(), None));
+                    let mut observation = observation_text.clone();
+                    truncate_at_char_boundary(&mut observation, MAX_TOOL_RESULT_BYTES);
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": format!("Observation: {observation}")
+                    }));
 
-                        // Execute (reuses native path machinery)
-                        let results = self
-                            .execute_calls(
-                                state,
-                                &[tc_value],
-                                caller.api_key_id(),
-                                tenant_id.clone(),
-                                rounds - 1,
-                                mcp_loop_id,
-                                job_id.0,
-                                allowed_servers.clone(),
-                            )
-                            .await;
-
-                        // Append assistant Action + user Observation back into messages
-                        let serialized_action =
-                            format!("Action: {}\nAction Input: {}", name, args_str);
-                        messages.push(serde_json::json!({
-                            "role": "assistant",
-                            "content": serialized_action
+                    if let Some(rec) = rec_opt {
+                        all_mcp_tool_calls.push(serde_json::json!({
+                            "function": { "name": &name, "arguments": &args_str },
+                            "round": rec.loop_round,
+                            "server_slug": server_slug_from_namespaced(&rec.namespaced_name),
+                            "result": observation_text,
+                            "outcome": &rec.outcome,
+                            "cache_hit": rec.cache_hit,
+                            "latency_ms": rec.latency_ms,
+                            "result_bytes": rec.result_bytes,
                         }));
-                        let (observation_text, rec_opt): (String, Option<&ToolCallRecord>) = results
-                            .first()
-                            .map(|(t, r)| (t.clone(), Some(r)))
-                            .unwrap_or_else(|| ("(no result)".to_string(), None));
-                        let mut observation = observation_text.clone();
-                        truncate_at_char_boundary(&mut observation, MAX_TOOL_RESULT_BYTES);
-                        messages.push(serde_json::json!({
-                            "role": "user",
-                            "content": format!("Observation: {observation}")
-                        }));
+                    }
 
-                        if let Some(rec) = rec_opt {
-                            all_mcp_tool_calls.push(serde_json::json!({
-                                "function": { "name": &name, "arguments": &args_str },
-                                "round": rec.loop_round,
-                                "server_slug": server_slug_from_namespaced(&rec.namespaced_name),
-                                "result": observation_text,
-                                "outcome": &rec.outcome,
-                                "cache_hit": rec.cache_hit,
-                                "latency_ms": rec.latency_ms,
-                                "result_bytes": rec.result_bytes,
-                            }));
-                        }
-
-                        info!(round, name = %name, "ReAct: Action executed");
-                        // Process at most one Action per round (constraint
-                        // declared in the system prompt).
-                        break;
-                    }
-                    super::react_parser::ReActEvent::Final(text) => {
-                        content = text;
-                        should_break = true;
-                        break;
-                    }
-                    super::react_parser::ReActEvent::Text(text) => {
-                        content.push_str(&text);
-                    }
-                    super::react_parser::ReActEvent::ParseError(msg) => {
-                        warn!(error = %msg, "ReAct: parse error — fail-open");
-                        content = round_result.content.clone();
-                        should_break = true;
-                        break;
-                    }
+                    info!(round, name = %name, "forced-JSON: tool executed");
+                    // Continue loop — next round will see the observation.
                 }
-            }
-
-            if should_break {
-                break;
-            }
-            if !found_action_this_round {
-                // No Action and no Final — model just emitted text without a
-                // recognized marker. Fail-open: use whatever was emitted as
-                // the final content.
-                if content.is_empty() {
-                    content = round_result.content;
+                ForcedAction::Final { answer } => {
+                    content = answer;
+                    break;
                 }
-                break;
             }
         }
 

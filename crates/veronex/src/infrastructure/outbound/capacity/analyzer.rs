@@ -879,6 +879,14 @@ pub async fn sync_provider(
     // of score_and_claim before try_reserve is ever attempted.
     vram_pool.set_total_vram(provider_id, vram_total_mb);
 
+    // Stable sync: gradually recover safety margin (undo OOM bumps).
+    // Runs every successful sync cycle on every provider type — not gated on APU.
+    // Previously this only fired inside the `is_apu && mem_available_mb > 0`
+    // branch below, which left non-APU providers (dedicated GPU like ollama-1.kr1)
+    // with zero recovery path: every transient OOM monotonically pushed
+    // safety_permil up to the 500-permil cap with no way back to baseline.
+    vram_pool.decay_safety_permil(provider_id);
+
     // APU mem drift: if mem_available_mb changed >15% from last observed value,
     // reset AIMD learning epoch for all loaded models to prevent stale baselines.
     // APU detection here matches `resolve_vram_total_mb`'s pass-through branch
@@ -902,22 +910,20 @@ pub async fn sync_provider(
                     vram_pool.set_baseline_tps(provider_id, &model_name, 0);
                     vram_pool.set_baseline_p95_ms(provider_id, &model_name, 0);
                 }
-            } else {
-                // Stable sync: gradually recover safety margin (undo OOM bumps).
-                vram_pool.decay_safety_permil(provider_id);
             }
-            // Persist safety_permil after any change (OOM bump or decay).
-            let current_permil = vram_pool.safety_permil(provider_id) as i32;
-            let budget = crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudget {
-                provider_id,
-                safety_permil: current_permil,
-                vram_total_source: "node_exporter".to_string(),
-                kv_cache_type: "q8_0".to_string(),
-            };
-            vram_budget_repo.upsert(&budget).await.ok();
         }
         vram_pool.set_last_mem_available_mb(provider_id, mem_available_mb as u32);
     }
+
+    // Persist safety_permil after any change (OOM bump or decay).
+    let current_permil = vram_pool.safety_permil(provider_id) as i32;
+    let budget = crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudget {
+        provider_id,
+        safety_permil: current_permil,
+        vram_total_source: "node_exporter".to_string(),
+        kv_cache_type: "q8_0".to_string(),
+    };
+    vram_budget_repo.upsert(&budget).await.ok();
 
     // ── Governor: reset dispatch_blocked and governor_cap for all loaded models ──
     for name in vram_pool.loaded_model_names(provider_id) {
