@@ -114,14 +114,26 @@ async fn synthesis_round(
     mcp_loop_id: Uuid,
     conversation_id: Option<ConversationId>,
 ) -> Result<RoundResult, RoundError> {
+    // Layered date anchor: the synthesis round builds a FRESH messages
+    // array, so the original `inject_current_datetime` system message at
+    // messages[0] of the user's request never reaches it. Re-injecting
+    // here closes the drift gap that the convergence-boundary fix (#138)
+    // could not — convergence reinforcement only fires on the in-loop
+    // final round, not on this fallback dispatch.
+    let date_anchor = build_current_datetime_system_text();
     let synth_messages = vec![
+        serde_json::json!({"role": "system", "content": date_anchor}),
         serde_json::json!({
             "role": "system",
             "content": "You are answering the user's question. \
                 Tools have already been used to gather the information \
                 you need. Do NOT call any tools. Using the tool results \
                 provided below, produce a complete, well-structured \
-                answer to the user's question in their original language."
+                answer to the user's question in their original language. \
+                Honor the date constraints in the system message above — \
+                every \"today\" / \"recent\" / \"현재\" / \"최근\" in your \
+                response refers to the current date listed there, not to \
+                your training cutoff."
         }),
         serde_json::json!({
             "role": "user",
