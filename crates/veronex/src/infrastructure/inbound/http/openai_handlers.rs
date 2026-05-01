@@ -113,6 +113,24 @@ impl ChatMessage {
         }
     }
 
+    /// Build a plain-text system message — used by gateway shims that need
+    /// to inject orientation context (e.g. current date) into the conversation
+    /// before dispatch.
+    pub fn new_system(text: String) -> Self {
+        Self {
+            role: "system".to_string(),
+            content: Some(MessageContent::Text(text)),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            images: None,
+        }
+    }
+
+    pub fn role(&self) -> &str {
+        &self.role
+    }
+
     /// Convert to Ollama `/api/chat` message JSON.
     ///
     /// Key difference: OpenAI `tool_calls[].function.arguments` is a **JSON-encoded string**;
@@ -327,6 +345,12 @@ pub async fn chat_completions(
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": {"message": msg, "type": "invalid_request_error"}}))).into_response();
         }
     }
+
+    // Date-injection gateway shim: prepend a system message with the current
+    // UTC datetime so weak / older models can't fall back to their
+    // training-cutoff prior when the user asks about "today" / "오늘" /
+    // "금일". Applies to every model and every dispatch path uniformly.
+    super::inference_helpers::inject_current_datetime(&mut req.messages);
 
     // conversation_id: body field takes precedence over header
     let conversation_id = req.conversation_id.as_deref()
