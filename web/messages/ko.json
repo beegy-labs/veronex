@@ -286,6 +286,7 @@
     "noJobsFound": "작업이 없습니다.",
     "noError": "(오류 메시지 없음)",
     "noResult": "(저장된 결과 없음)",
+    "toolOnlyTurnHint": "(도구만 호출된 턴 — 위 도구 호출 참조. 이 라운드에서 모델은 텍스트를 생성하지 않았습니다)",
     "processing": "(처리 중…)",
     "toolCalls": "도구 호출",
     "agentToolCall": "모델이 도구 호출로 응답했습니다 — 텍스트 출력이 생성되지 않았습니다.",
