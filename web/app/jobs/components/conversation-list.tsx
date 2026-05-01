@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { conversationsQuery, conversationDetailQuery, turnInternalsQuery } from '@/lib/queries'
 import type { ConversationTurn, ConversationDetail } from '@/lib/types'
 import { useTranslation } from '@/i18n'
@@ -341,7 +343,37 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
                       - empty result + no tool_calls → genuinely empty (cancel /
                         error / pre-stream) — show "(저장된 결과 없음)" */}
                   {turn.result ? (
-                    <p className="text-sm whitespace-pre-wrap">{turn.result}</p>
+                    <div className="text-sm leading-relaxed break-words space-y-2 [&_p]:my-2 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          h1: ({ children }) => <h1 className="text-base font-bold mt-3 mb-2">{children}</h1>,
+                          h2: ({ children }) => <h2 className="text-sm font-bold mt-3 mb-1.5">{children}</h2>,
+                          h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-1">{children}</h3>,
+                          h4: ({ children }) => <h4 className="text-sm font-semibold mt-2 mb-1">{children}</h4>,
+                          ul: ({ children }) => <ul className="list-disc list-outside ml-5 my-2 space-y-1">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal list-outside ml-5 my-2 space-y-1">{children}</ol>,
+                          li: ({ children }) => <li className="text-sm">{children}</li>,
+                          a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline break-all">{children}</a>,
+                          code: ({ className, children }) => {
+                            const isBlock = /language-/.test(className ?? '')
+                            return isBlock
+                              ? <code className="block bg-muted/60 px-2 py-1.5 rounded font-mono text-[12px] my-2 overflow-x-auto whitespace-pre">{children}</code>
+                              : <code className="bg-muted/60 px-1 py-0.5 rounded font-mono text-[12px]">{children}</code>
+                          },
+                          pre: ({ children }) => <pre className="bg-muted/60 p-2 rounded font-mono text-[12px] my-2 overflow-x-auto">{children}</pre>,
+                          blockquote: ({ children }) => <blockquote className="border-l-2 border-border pl-3 italic text-muted-foreground my-2">{children}</blockquote>,
+                          table: ({ children }) => <table className="border-collapse text-[12px] my-2">{children}</table>,
+                          th: ({ children }) => <th className="border border-border px-2 py-1 bg-muted/40 font-semibold">{children}</th>,
+                          td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
+                          hr: () => <hr className="my-3 border-border" />,
+                          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                          em: ({ children }) => <em className="italic">{children}</em>,
+                        }}
+                      >
+                        {turn.result}
+                      </ReactMarkdown>
+                    </div>
                   ) : (turn.tool_calls && Array.isArray(turn.tool_calls) && turn.tool_calls.length > 0) ? (
                     <p className="text-[11px] italic text-muted-foreground/70">{t('jobs.toolOnlyTurnHint')}</p>
                   ) : (
