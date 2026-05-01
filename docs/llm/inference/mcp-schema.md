@@ -43,26 +43,12 @@ CREATE TABLE mcp_key_access (
     PRIMARY KEY (api_key_id, server_id)
 );
 
--- Audit log for every tool call in an agentic loop.
--- job_id uses ON DELETE SET NULL because the bridge deletes intermediate
--- per-round inference_jobs after the loop completes (only the head job is
--- kept). CASCADE would wipe rounds 1..N-1's audit rows.
-CREATE TABLE mcp_loop_tool_calls (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    mcp_loop_id     UUID        NOT NULL,
-    job_id          UUID        REFERENCES inference_jobs(id) ON DELETE SET NULL,
-    loop_round      SMALLINT    NOT NULL,
-    server_id       UUID        NOT NULL,
-    tool_name       TEXT        NOT NULL,
-    namespaced_name TEXT        NOT NULL,
-    args_json       JSONB       NOT NULL,
-    result_text     TEXT,
-    outcome         TEXT        NOT NULL,  -- success|error|timeout|cache_hit|circuit_open
-    cache_hit       BOOLEAN     NOT NULL DEFAULT false,
-    latency_ms      INT,
-    result_bytes    INT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+-- mcp_loop_tool_calls table retired 2026-05-01.
+-- Per-tool audit (args, result body, outcome, cache_hit, latency, server_slug)
+-- now lives in S3 `ConversationRecord.turns[].tool_calls[]` (see
+-- `inference/mcp.md` § "Audit exposure"). Analytics aggregates continue to
+-- flow into ClickHouse `mcp_tool_calls` via `fire_mcp_ingest`. Idempotent
+-- migration: `DROP TABLE IF EXISTS mcp_loop_tool_calls` at top of init.sql.
 
 -- Global MCP settings singleton (id always = 1)
 CREATE TABLE mcp_settings (

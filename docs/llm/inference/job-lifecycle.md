@@ -1,6 +1,6 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-04-28
+> SSOT | **Last Updated**: 2026-05-01
 
 ## Task Guide
 
@@ -109,6 +109,12 @@ pub const MAX_QUEUE_PER_MODEL: u64 = 2_000;    // per-model cap → 429
 - `recover_pending_jobs()` re-enqueues to ZSET with emergency priority on startup.
 - On cancel: Lua atomic ZREM + DECR demand + HDEL side hashes.
 - On no-provider (VRAM blocked): job stays in ZSET (not removed), dispatcher retries next loop.
+
+### Dispatcher resilience (PR #133, 2026-05-01)
+
+`queue_dispatcher_loop` is wrapped in a panic supervisor in `inference::use_case`. The inner future is driven inside `AssertUnwindSafe(...).catch_unwind()`; on panic the supervisor logs the payload and reschedules with exponential backoff (500 ms → 30 s ceiling, reset on clean exit). Without this wrapper a single panic in scoring/claim killed the dispatcher task silently for the lifetime of the pod, leaving every queued job stuck (observed as `model load did not complete within 600s` user-facing errors despite no provider being touched).
+
+`score_and_claim` (in `dispatcher.rs`) now records a `(provider_id, reason)` tuple for every candidate it skips and emits one `tracing::info!` line tagged `dispatch: no provider claimed (all candidates rejected)` when nothing is claimable. Reasons exposed: `no_vram_avail`, `circuit_breaker_open`, `thermal_hard`, `thermal_cooldown`, `thermal_soft_busy`, `try_reserve_none`. This collapses prior silent-`return None` paths into a single observable signal.
 
 ## Job Lifecycle
 

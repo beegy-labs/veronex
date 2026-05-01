@@ -357,13 +357,16 @@ async fn finalize_job(
     }
 
     // Write turn to S3 ConversationRecord (per-conversation key, append to turns array).
-    // Runner is the single S3 writer — including MCP-loop rounds. Each round
-    // produces its own dashboard-addressable turn keyed by `job_id`.
     //
-    // SDD `.specs/veronex/history/inference-mcp-per-round-persist.md` §3 — bridge no
-    // longer writes S3. The idempotent `persisted_to_s3` guard prevents this
-    // happy-path write from racing the cancel/error helpers
-    // (`persist_partial_conversation`).
+    // Single-writer policy: for non-MCP jobs the runner writes the turn here.
+    // For MCP-loop jobs (`job.mcp_loop_id.is_some()`) the bridge owns the
+    // consolidated write at loop end (`bridge.rs::run_loop` after the round
+    // for-loop), so the runner skips both the S3 write AND the conversation
+    // counter increment further down — otherwise N agentic rounds would yield
+    // N S3 turns + N counter increments for one logical user question.
+    //
+    // The idempotent `persisted_to_s3` guard prevents this happy-path write
+    // from racing the cancel/error helpers (`persist_partial_conversation`).
     let happy_path_persisted_flag = jobs.get(&uuid).map(|e| e.persisted_to_s3.clone());
     let should_write_happy_path = match &happy_path_persisted_flag {
         Some(flag) => flag
@@ -371,7 +374,8 @@ async fn finalize_job(
             .is_ok(),
         None => true, // entry vanished — write defensively, the runner is the authoritative writer
     };
-    if should_write_happy_path && let Some(store) = message_store {
+    let is_mcp_loop_job = job.mcp_loop_id.is_some();
+    if should_write_happy_path && let Some(store) = message_store && !is_mcp_loop_job {
         let owner_id = job.account_id
             .or(job.api_key_id)
             .unwrap_or(uuid);
@@ -477,8 +481,10 @@ async fn finalize_job(
         tracing::warn!(job_id = %uuid, "failed to finalize job in DB: {e}");
     }
 
-    // Update conversation counters
-    if let Some(conv_id) = &job.conversation_id {
+    // Update conversation counters — skip for MCP-loop rounds; the bridge
+    // increments turn_count once at loop end via the same repo call so that
+    // a single user question with N agentic rounds resolves to turn_count = 1.
+    if let Some(conv_id) = &job.conversation_id && !is_mcp_loop_job {
         let pt = job.prompt_tokens.unwrap_or(0);
         let ct = job.completion_tokens.unwrap_or(0);
         if let Err(e) = job_repo.update_conversation_counters(conv_id, pt, ct, job.model_name.as_str()).await {

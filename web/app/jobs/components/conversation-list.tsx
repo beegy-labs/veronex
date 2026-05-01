@@ -19,6 +19,22 @@ import { SOURCE_STYLES } from '@/lib/constants'
 
 const PAGE_SIZE = 30
 
+/** Per-turn MCP tool_call shape persisted in S3 ConversationRecord. The
+ *  bridge enriches the OpenAI tool_call invocation with execution-side
+ *  metadata (`result`, `outcome`, `latency_ms`, `cache_hit`, etc.) before
+ *  appending to `turn.tool_calls[]`. PG `mcp_loop_tool_calls` was retired
+ *  2026-05-01 in favour of this single S3 source. */
+interface McpToolCallInline {
+  function?: { name?: string; arguments?: string }
+  round?: number
+  server_slug?: string
+  result?: string
+  outcome?: string
+  cache_hit?: boolean
+  latency_ms?: number
+  result_bytes?: number
+}
+
 interface ConversationListProps {
   onContinue?: (detail: ConversationDetail) => void
 }
@@ -184,10 +200,15 @@ export function ConversationList({ onContinue }: ConversationListProps) {
   )
 }
 
+/** Per-turn metadata pills (compression / vision). MCP tool detail moved
+ *  inline into the assistant bubble — `turn.tool_calls[]` already carries
+ *  `result`, `outcome`, `latency_ms`, `cache_hit`, `server_slug` from S3. */
 function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }) {
   const [open, setOpen] = useState(false)
   const { t } = useTranslation()
   const { data, isFetching } = useQuery(turnInternalsQuery(convId, jobId, open))
+
+  const hasMetadata = !!(data?.compressed || data?.vision_analysis)
 
   return (
     <div className="mt-1.5">
@@ -201,9 +222,9 @@ function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }
       </button>
 
       {open && (
-        <div className="mt-1 space-y-1">
+        <div className="mt-1 space-y-1.5">
           {isFetching && <span className="text-[10px] text-muted-foreground">{t('common.loading')}</span>}
-          {data && !data.compressed && !data.vision_analysis && (!data.tool_calls || data.tool_calls.length === 0) && (
+          {data && !hasMetadata && (
             <span className="text-[10px] text-muted-foreground/60">{t('conversations.internalsEmpty')}</span>
           )}
           {data?.compressed && (
@@ -224,11 +245,6 @@ function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }
               })}
             </span>
           )}
-          {data && data.tool_calls && data.tool_calls.length > 0 && (
-            <span className="inline-flex items-center gap-1 rounded bg-status-info-fg/10 px-1.5 py-0.5 text-[10px] font-mono text-status-info-fg">
-              {t('conversations.toolCallsBadge', { count: data.tool_calls.length })}
-            </span>
-          )}
         </div>
       )}
     </div>
@@ -247,11 +263,18 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
             <MessageSquare className="h-4 w-4" />
             {data?.title || id}
           </DialogTitle>
-          {data && (
+          {data && (() => {
+            const totalMcpCalls = data.turns.reduce((acc: number, t: ConversationTurn) => {
+              const tcs = (t.tool_calls && Array.isArray(t.tool_calls)) ? t.tool_calls.length : 0
+              return acc + tcs
+            }, 0)
+            return (
             <div className="flex items-center justify-between mt-1">
               <p className="text-xs text-muted-foreground">
                 <span className={`inline-block px-1.5 py-0.5 rounded font-mono mr-2 ${SOURCE_STYLES[data.source] ?? SOURCE_STYLES.api}`}>{data.source}</span>
-                {data.model_name} · {data.turn_count} {t('jobs.turnCount')} · {fmtNumber(data.total_prompt_tokens + data.total_completion_tokens)} {t('common.tokensUnit')}
+                {data.model_name} · {data.turn_count} {t('jobs.turnCount')}
+                {totalMcpCalls > 0 && <> · {t('conversations.mcpCallsBadge', { count: totalMcpCalls })}</>}
+                {' · '}{fmtNumber(data.total_prompt_tokens + data.total_completion_tokens)} {t('common.tokensUnit')}
               </p>
               {onContinue && (
                 <Button type="button" size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={() => onContinue(data)}>
@@ -260,7 +283,8 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
                 </Button>
               )}
             </div>
-          )}
+            )
+          })()}
         </DialogHeader>
 
         {isLoading && <p className="text-muted-foreground py-8 text-center">{t('common.loading')}</p>}
@@ -284,16 +308,26 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
                   </div>
                   {turn.tool_calls && Array.isArray(turn.tool_calls) && turn.tool_calls.length > 0 && (
                     <div className="mb-2 space-y-1">
-                      {turn.tool_calls.map((tc: { function?: { name?: string; arguments?: string } }, j: number) => (
+                      {turn.tool_calls.map((tc: McpToolCallInline, j: number) => (
                         <div key={`tool-${j}-${tc.function?.name ?? ''}`} className="rounded border border-border bg-muted/30 px-2 py-1.5">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <Wrench className="h-3 w-3 text-status-info-fg shrink-0" />
                             <code className="text-[11px] font-mono font-semibold text-status-info-fg">{tc.function?.name ?? 'unknown'}</code>
+                            {typeof tc.round === 'number' && <span className="text-[10px] font-mono text-muted-foreground/70">round {tc.round}</span>}
+                            {tc.outcome && <span className={`text-[10px] font-mono px-1 rounded ${tc.outcome === 'success' || tc.outcome === 'cache_hit' ? 'bg-status-ok-fg/15 text-status-ok-fg' : 'bg-status-error-fg/15 text-status-error-fg'}`}>{tc.outcome}</span>}
+                            {tc.cache_hit && <span className="text-[10px] font-mono px-1 rounded bg-primary/15 text-primary">cache</span>}
+                            {typeof tc.latency_ms === 'number' && <span className="text-[10px] font-mono text-muted-foreground/60">{tc.latency_ms}ms</span>}
                           </div>
                           {tc.function?.arguments && (
                             <pre className="text-[10px] font-mono text-foreground/60 mt-1 whitespace-pre-wrap break-words max-h-20 overflow-y-auto">
                               {typeof tc.function.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function.arguments, null, 2)}
                             </pre>
+                          )}
+                          {tc.result && (
+                            <details className="mt-1">
+                              <summary className="text-[10px] text-muted-foreground/70 cursor-pointer hover:text-muted-foreground">{t('conversations.toolResult')}</summary>
+                              <pre className="text-[10px] font-mono text-foreground/70 mt-1 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{tc.result}</pre>
+                            </details>
                           )}
                         </div>
                       ))}

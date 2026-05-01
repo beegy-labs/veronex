@@ -149,6 +149,8 @@
     "toolCallsArgs": "args",
     "toolCallsResult": "result",
     "toolCallsNoResult": "(no result)",
+    "toolResult": "show result",
+    "mcpCallsBadge": "MCP {count}",
     "backToList": "Back to conversations"
   },
   "overview": {
