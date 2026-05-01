@@ -318,6 +318,10 @@ impl McpBridgeAdapter {
         let mut finish_reason = "stop".to_string();
         let mut content = String::new();
         let mut final_tool_calls: Vec<Value> = Vec::new();
+        // All MCP tool_calls emitted across every round. Persisted on the
+        // single consolidated S3 turn at loop end so the UI can render
+        // "MCP {N}회" from `turn.tool_calls.length`.
+        let mut all_mcp_tool_calls: Vec<Value> = Vec::new();
         let mut rounds: u8 = 0;
         // Tracks whether any round's content was forwarded via sse_tap_tx.
         // S20: replaces the legacy `final_job_id` fast-path signal.
@@ -535,19 +539,30 @@ impl McpBridgeAdapter {
                 .unwrap_or_default();
             let exec_results = self.execute_calls(state, &mcp_calls, caller.api_key_id(), tenant_id, round + 1, mcp_loop_id, job_id.0, allowed_servers.clone()).await;
 
-            // Batch-insert all tool call records for this round in one query.
-            let db_rows: Vec<&ToolCallRecord> = exec_results.iter().map(|(_, r)| r).collect();
-            batch_insert_tool_calls(&state.pg_pool, mcp_loop_id, job_id.0, &db_rows).await;
-
-            for (tc, (result_text, _)) in mcp_calls.iter().zip(exec_results.into_iter()) {
+            // Enrich each tool_call with its execution result + audit metadata
+            // and stash for the consolidated S3 turn record. PG audit storage
+            // (`mcp_loop_tool_calls`) was retired 2026-05-01 — S3 is the SSOT
+            // for the conversation chain and ClickHouse retains the analytics
+            // signal via `fire_mcp_ingest`.
+            for (tc, (result_text, rec)) in mcp_calls.iter().zip(exec_results.into_iter()) {
                 let call_id = tc["id"].as_str().unwrap_or("call_0");
                 let tool_name = tc["function"]["name"].as_str().unwrap_or("");
                 messages.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": call_id,
                     "name": tool_name,
-                    "content": result_text
+                    "content": &result_text
                 }));
+
+                let mut enriched = tc.clone();
+                enriched["round"] = serde_json::json!(rec.loop_round);
+                enriched["server_slug"] = serde_json::json!(server_slug_from_namespaced(&rec.namespaced_name));
+                enriched["result"] = serde_json::Value::String(result_text);
+                enriched["outcome"] = serde_json::json!(rec.outcome);
+                enriched["cache_hit"] = serde_json::json!(rec.cache_hit);
+                enriched["latency_ms"] = serde_json::json!(rec.latency_ms);
+                enriched["result_bytes"] = serde_json::json!(rec.result_bytes);
+                all_mcp_tool_calls.push(enriched);
             }
 
             // ── Context window pruning ─────────────────────────────────────────
@@ -633,13 +648,16 @@ impl McpBridgeAdapter {
             }
         }
 
-        // Loop-wide bookkeeping: token rollup + intermediate-job cleanup.
+        // Loop-wide bookkeeping: token rollup + intermediate-job cleanup
+        //   + ONE S3 turn + ONE conversation-counter increment.
         //
-        // SDD `.specs/veronex/history/inference-mcp-per-round-persist.md` §5: bridge no
-        // longer writes S3 — the runner persists each round's `TurnRecord`
-        // keyed by that round's `job_id` so the dashboard's per-job_id filter
-        // resolves correctly. Bridge keeps loop-wide token totals (only place
-        // with the cross-round sum) and intermediate-job DB cleanup.
+        // Single-writer policy (revised 2026-05-01): runner skips S3 +
+        // counters when `job.mcp_loop_id IS Some` (see `runner.rs::run_job`).
+        // Bridge persists exactly one consolidated `TurnRecord` for the
+        // entire loop and bumps `conversations.turn_count` by 1, so a user
+        // question with N agentic rounds maps to one logical turn carrying
+        // every round's `tool_calls` array (UI surfaces "MCP {N}회" from the
+        // turn's `tool_calls.len()`).
         if let Some(ref fid) = first_job_id {
             let pg = &state.pg_pool;
 
@@ -662,6 +680,73 @@ impl McpBridgeAdapter {
                 .execute(pg)
                 .await
                 .map_err(|e| warn!(error = %e, "MCP: failed to cleanup intermediate jobs"));
+            }
+
+            // Bridge-owned S3 turn write (single writer for MCP loops).
+            if let Some(ref store) = state.message_store {
+                let owner_id = caller.account_id()
+                    .or(caller.api_key_id())
+                    .unwrap_or(fid.0);
+                let s3_key = conversation_id.unwrap_or(fid.0);
+                let date = chrono::Utc::now().date_naive();
+                let mut record = store.get_conversation(owner_id, date, s3_key).await
+                    .ok().flatten()
+                    .unwrap_or_else(crate::application::ports::outbound::message_store::ConversationRecord::new);
+
+                let tool_calls_val = if all_mcp_tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::Value::Array(all_mcp_tool_calls.clone()))
+                };
+                let result_text = if content.is_empty() { None } else { Some(content.clone()) };
+
+                record.turns.push(crate::application::ports::outbound::message_store::ConversationTurn::Regular(
+                    crate::application::ports::outbound::message_store::TurnRecord {
+                        job_id: fid.0,
+                        prompt: extract_last_user_prompt(&messages),
+                        messages: Some(serde_json::Value::Array(messages.clone())),
+                        tool_calls: tool_calls_val,
+                        result: result_text,
+                        model_name: Some(model.clone()),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                        compressed: None,
+                        vision_analysis: None,
+                    }
+                ));
+
+                if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
+                    warn!(job_id = %fid.0, error = %e, "MCP: bridge S3 turn write failed");
+                } else if let Some(conv_id) = conversation_id {
+                    if let Some(ref pool) = state.valkey_pool {
+                        use fred::prelude::*;
+                        let cache_key = crate::domain::constants::conversation_record_key(conv_id);
+                        if let Err(e) = pool.del::<i64, _>(cache_key).await {
+                            tracing::warn!(error = %e, "MCP: valkey DEL conversation cache failed");
+                        }
+                    }
+                }
+            }
+
+            // Bump turn_count by 1 for the entire loop (runner skipped this
+            // for every mcp-loop round, so this is the sole increment).
+            // Mirrors `PostgresJobRepository::update_conversation_counters`.
+            if let Some(conv_id) = conversation_id {
+                let _ = sqlx::query(
+                    "UPDATE conversations \
+                        SET turn_count = turn_count + 1, \
+                            total_prompt_tokens = total_prompt_tokens + $1, \
+                            total_completion_tokens = total_completion_tokens + $2, \
+                            model_name = COALESCE(model_name, $3), \
+                            updated_at = now() \
+                      WHERE id = $4"
+                )
+                .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
+                .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
+                .bind(&model)
+                .bind(conv_id)
+                .execute(pg)
+                .await
+                .map_err(|e| warn!(conversation_id = %conv_id, error = %e, "MCP: turn_count increment failed"));
             }
         }
 
@@ -720,6 +805,9 @@ impl McpBridgeAdapter {
         let mut first_job_id: Option<JobId> = None;
         let mut intermediate_job_ids: Vec<Uuid> = Vec::new();
         let mut call_sig_counts: HashMap<(String, String), u8> = HashMap::new();
+        // Aggregated MCP tool calls across every ReAct Action — persisted on
+        // the consolidated S3 turn at loop end (mirrors run_loop's policy).
+        let mut all_mcp_tool_calls: Vec<Value> = Vec::new();
 
         let tenant_id = caller.account_id().map(|id| id.to_string()).unwrap_or_default();
 
@@ -842,15 +930,29 @@ impl McpBridgeAdapter {
                             "role": "assistant",
                             "content": serialized_action
                         }));
-                        let mut observation = results
+                        let (observation_text, rec_opt): (String, Option<&ToolCallRecord>) = results
                             .first()
-                            .map(|(t, _)| t.clone())
-                            .unwrap_or_else(|| "(no result)".to_string());
+                            .map(|(t, r)| (t.clone(), Some(r)))
+                            .unwrap_or_else(|| ("(no result)".to_string(), None));
+                        let mut observation = observation_text.clone();
                         truncate_at_char_boundary(&mut observation, MAX_TOOL_RESULT_BYTES);
                         messages.push(serde_json::json!({
                             "role": "user",
                             "content": format!("Observation: {observation}")
                         }));
+
+                        if let Some(rec) = rec_opt {
+                            all_mcp_tool_calls.push(serde_json::json!({
+                                "function": { "name": &name, "arguments": &args_str },
+                                "round": rec.loop_round,
+                                "server_slug": server_slug_from_namespaced(&rec.namespaced_name),
+                                "result": observation_text,
+                                "outcome": &rec.outcome,
+                                "cache_hit": rec.cache_hit,
+                                "latency_ms": rec.latency_ms,
+                                "result_bytes": rec.result_bytes,
+                            }));
+                        }
 
                         info!(round, name = %name, "ReAct: Action executed");
                         // Process at most one Action per round (constraint
@@ -888,7 +990,8 @@ impl McpBridgeAdapter {
             }
         }
 
-        // ── Cleanup intermediate jobs + roll up token counts onto first_job_id ─
+        // ── Cleanup intermediate jobs + roll up token counts onto first_job_id
+        // + bridge-owned consolidated S3 turn write + turn_count bump ───────
         if let Some(ref fid) = first_job_id {
             let pg = &state.pg_pool;
             let _ = sqlx::query(
@@ -907,6 +1010,66 @@ impl McpBridgeAdapter {
                     .execute(pg)
                     .await
                     .map_err(|e| warn!(error = %e, "ReAct: failed to cleanup intermediate jobs"));
+            }
+
+            if let Some(ref store) = state.message_store {
+                let owner_id = caller.account_id().or(caller.api_key_id()).unwrap_or(fid.0);
+                let s3_key = conversation_id.unwrap_or(fid.0);
+                let date = chrono::Utc::now().date_naive();
+                let mut record = store.get_conversation(owner_id, date, s3_key).await
+                    .ok().flatten()
+                    .unwrap_or_else(crate::application::ports::outbound::message_store::ConversationRecord::new);
+
+                let tool_calls_val = if all_mcp_tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::Value::Array(all_mcp_tool_calls.clone()))
+                };
+                let result_text = if content.is_empty() { None } else { Some(content.clone()) };
+
+                record.turns.push(crate::application::ports::outbound::message_store::ConversationTurn::Regular(
+                    crate::application::ports::outbound::message_store::TurnRecord {
+                        job_id: fid.0,
+                        prompt: extract_last_user_prompt(&messages),
+                        messages: Some(serde_json::Value::Array(messages.clone())),
+                        tool_calls: tool_calls_val,
+                        result: result_text,
+                        model_name: Some(model.clone()),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                        compressed: None,
+                        vision_analysis: None,
+                    }
+                ));
+                if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
+                    warn!(job_id = %fid.0, error = %e, "ReAct: bridge S3 turn write failed");
+                } else if let Some(conv_id) = conversation_id {
+                    if let Some(ref pool) = state.valkey_pool {
+                        use fred::prelude::*;
+                        let cache_key = crate::domain::constants::conversation_record_key(conv_id);
+                        if let Err(e) = pool.del::<i64, _>(cache_key).await {
+                            tracing::warn!(error = %e, "ReAct: valkey DEL conversation cache failed");
+                        }
+                    }
+                }
+            }
+
+            if let Some(conv_id) = conversation_id {
+                let _ = sqlx::query(
+                    "UPDATE conversations \
+                        SET turn_count = turn_count + 1, \
+                            total_prompt_tokens = total_prompt_tokens + $1, \
+                            total_completion_tokens = total_completion_tokens + $2, \
+                            model_name = COALESCE(model_name, $3), \
+                            updated_at = now() \
+                      WHERE id = $4"
+                )
+                .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
+                .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
+                .bind(&model)
+                .bind(conv_id)
+                .execute(pg)
+                .await
+                .map_err(|e| warn!(conversation_id = %conv_id, error = %e, "ReAct: turn_count increment failed"));
             }
         }
 
@@ -961,7 +1124,7 @@ impl McpBridgeAdapter {
         api_key_id: Option<Uuid>,
         tenant_id: String,
         loop_round: u8,
-        mcp_loop_id: Uuid,
+        _mcp_loop_id: Uuid,
         triggering_job_id: Uuid,
         allowed_servers: Option<&HashSet<Uuid>>,
     ) -> (String, ToolCallRecord) {
@@ -976,7 +1139,7 @@ impl McpBridgeAdapter {
             None => {
                 warn!(tool = %namespaced, "MCP: no server mapping");
                 let text = serde_json::json!({"error": "unknown tool", "tool": namespaced}).to_string();
-                let rec = ToolCallRecord::error(mcp_loop_id, triggering_job_id, loop_round, Uuid::nil(), "unknown", namespaced, &args, "unknown_tool");
+                let rec = ToolCallRecord::error(namespaced, "unknown_tool", loop_round);
                 return (text, rec);
             }
         };
@@ -984,7 +1147,7 @@ impl McpBridgeAdapter {
         // ── ACL check ──────────────────────────────────────────────────────────
         if allowed_servers.is_some_and(|a| !a.contains(&server_id)) {
             warn!(tool = %namespaced, server = %server_id, "MCP ACL: access denied for this key");
-            let rec = ToolCallRecord::error(mcp_loop_id, triggering_job_id, loop_round, server_id, namespaced, namespaced, &args, "acl_denied");
+            let rec = ToolCallRecord::error(namespaced, "acl_denied", loop_round);
             return ("{\"error\": \"MCP server access denied\"}".into(), rec);
         }
 
@@ -994,7 +1157,7 @@ impl McpBridgeAdapter {
             let slug = server_slug_from_namespaced(namespaced);
             let rname = raw_tool_name(namespaced);
             self.fire_mcp_ingest(triggering_job_id, api_key_id, tenant_id.clone(), server_id, slug.to_string(), rname.to_string(), namespaced.to_string(), "circuit_open", false, 0, 0, 0, loop_round);
-            let rec = ToolCallRecord::error(mcp_loop_id, triggering_job_id, loop_round, server_id, rname, namespaced, &args, "circuit_open");
+            let rec = ToolCallRecord::error(namespaced, "circuit_open", loop_round);
             return ("{\"error\": \"MCP server temporarily unavailable (circuit open)\"}".into(), rec);
         }
 
@@ -1021,14 +1184,8 @@ impl McpBridgeAdapter {
                 let bytes = text.len() as u32;
                 self.fire_mcp_ingest(triggering_job_id, api_key_id, tenant_id.clone(), server_id, server_slug.to_string(), raw_name.to_string(), namespaced.to_string(), "cache_hit", true, 0, bytes, 0, loop_round);
                 let rec = ToolCallRecord {
-                    mcp_loop_id,
-                    job_id: triggering_job_id,
                     loop_round,
-                    server_id,
-                    tool_name: raw_name.to_string(),
                     namespaced_name: namespaced.to_string(),
-                    args_json: args.clone(),
-                    result_text: Some(text.clone()),
                     outcome: "cache_hit".to_string(),
                     cache_hit: true,
                     latency_ms: 0,
@@ -1051,7 +1208,7 @@ impl McpBridgeAdapter {
 
         let latency_ms = started.elapsed().as_millis() as u32;
 
-        let (text, outcome, result_for_db) = match result {
+        let (text, outcome) = match result {
             Ok(Ok(tool_result)) => {
                 let is_err = tool_result.is_error;
                 if is_err {
@@ -1070,8 +1227,7 @@ impl McpBridgeAdapter {
                     truncate_at_char_boundary(&mut text, MAX_TOOL_RESULT_BYTES);
                 }
                 let outcome = if is_err { "error" } else { "success" };
-                let db_text = if is_err { None } else { Some(text.clone()) };
-                (text, outcome, db_text)
+                (text, outcome)
             }
             Ok(Err(e)) => {
                 self.circuit_breaker.record_failure(server_id);
@@ -1082,12 +1238,12 @@ impl McpBridgeAdapter {
                 let causes: Vec<String> = e.chain().map(|c| c.to_string()).collect();
                 warn!(tool = %namespaced, error = %e, causes = ?causes, "MCP tool call error");
                 // Do not forward internal error details to LLM context — already logged above
-                ("{\"error\": \"MCP tool call failed\"}".into(), "error", None)
+                ("{\"error\": \"MCP tool call failed\"}".into(), "error")
             }
             Err(_elapsed) => {
                 self.circuit_breaker.record_failure(server_id);
                 warn!(tool = %namespaced, "MCP tool call timed out");
-                ("{\"error\": \"MCP tool call timed out\"}".into(), "timeout", None)
+                ("{\"error\": \"MCP tool call timed out\"}".into(), "timeout")
             }
         };
 
@@ -1095,14 +1251,8 @@ impl McpBridgeAdapter {
         self.fire_mcp_ingest(triggering_job_id, api_key_id, tenant_id, server_id, server_slug.to_string(), raw_name.to_string(), namespaced.to_string(), outcome, false, latency_ms, bytes, 1, loop_round);
 
         let rec = ToolCallRecord {
-            mcp_loop_id,
-            job_id: triggering_job_id,
             loop_round,
-            server_id,
-            tool_name: raw_name.to_string(),
             namespaced_name: namespaced.to_string(),
-            args_json: args.clone(),
-            result_text: result_for_db,
             outcome: outcome.to_string(),
             cache_hit: false,
             latency_ms: latency_ms as i32,
@@ -1115,16 +1265,13 @@ impl McpBridgeAdapter {
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
-/// Data for one tool call row — collected during execution, batch-inserted after the round.
+/// Per-tool execution metadata returned alongside the result text. Used by
+/// `run_loop` / `run_loop_react` to enrich the OpenAI tool_call invocation
+/// before it lands on the consolidated S3 turn record. PG audit storage was
+/// retired 2026-05-01 — this struct is purely an in-memory passthrough.
 struct ToolCallRecord {
-    mcp_loop_id: Uuid,
-    job_id: Uuid,
     loop_round: u8,
-    server_id: Uuid,
-    tool_name: String,
     namespaced_name: String,
-    args_json: Value,
-    result_text: Option<String>,
     outcome: String,
     cache_hit: bool,
     latency_ms: i32,
@@ -1132,97 +1279,16 @@ struct ToolCallRecord {
 }
 
 impl ToolCallRecord {
-    #[allow(clippy::too_many_arguments)]
-    fn error(
-        mcp_loop_id: Uuid,
-        job_id: Uuid,
-        loop_round: u8,
-        server_id: Uuid,
-        tool_name: &str,
-        namespaced_name: &str,
-        args: &Value,
-        outcome: &str,
-    ) -> Self {
+    fn error(namespaced_name: &str, outcome: &str, loop_round: u8) -> Self {
         Self {
-            mcp_loop_id,
-            job_id,
             loop_round,
-            server_id,
-            tool_name: tool_name.to_string(),
             namespaced_name: namespaced_name.to_string(),
-            args_json: args.clone(),
-            result_text: None,
             outcome: outcome.to_string(),
             cache_hit: false,
             latency_ms: 0,
             result_bytes: 0,
         }
     }
-}
-
-/// Batch INSERT all tool call records for a round in a single multi-row statement.
-/// Falls back to a no-op on empty input. Errors are logged, not propagated.
-async fn batch_insert_tool_calls(pg_pool: &sqlx::PgPool, mcp_loop_id: Uuid, job_id: Uuid, rows: &[&ToolCallRecord]) {
-    if rows.is_empty() {
-        return;
-    }
-
-    // Build parallel arrays for unnest — avoids dynamic SQL generation and
-    // is safe against injection (all values are typed, not interpolated).
-    let mut loop_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
-    let mut job_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
-    let mut rounds: Vec<i16> = Vec::with_capacity(rows.len());
-    let mut server_ids: Vec<Uuid> = Vec::with_capacity(rows.len());
-    let mut tool_names: Vec<&str> = Vec::with_capacity(rows.len());
-    let mut ns_names: Vec<&str> = Vec::with_capacity(rows.len());
-    let mut args_jsons: Vec<&Value> = Vec::with_capacity(rows.len());
-    let mut result_texts: Vec<Option<&str>> = Vec::with_capacity(rows.len());
-    let mut outcomes: Vec<&str> = Vec::with_capacity(rows.len());
-    let mut cache_hits: Vec<bool> = Vec::with_capacity(rows.len());
-    let mut latencies: Vec<i32> = Vec::with_capacity(rows.len());
-    let mut result_bytes: Vec<i32> = Vec::with_capacity(rows.len());
-
-    for r in rows {
-        loop_ids.push(r.mcp_loop_id);
-        job_ids.push(r.job_id);
-        rounds.push(r.loop_round as i16);
-        server_ids.push(r.server_id);
-        tool_names.push(&r.tool_name);
-        ns_names.push(&r.namespaced_name);
-        args_jsons.push(&r.args_json);
-        result_texts.push(r.result_text.as_deref());
-        outcomes.push(&r.outcome);
-        cache_hits.push(r.cache_hit);
-        latencies.push(r.latency_ms);
-        result_bytes.push(r.result_bytes);
-    }
-
-    // Unused params mcp_loop_id/job_id kept in signature for callsite clarity.
-    let _ = (mcp_loop_id, job_id);
-
-    let _ = sqlx::query(
-        "INSERT INTO mcp_loop_tool_calls \
-         (mcp_loop_id, job_id, loop_round, server_id, tool_name, namespaced_name, \
-          args_json, result_text, outcome, cache_hit, latency_ms, result_bytes) \
-         SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::smallint[], $4::uuid[], \
-          $5::text[], $6::text[], $7::jsonb[], $8::text[], $9::text[], \
-          $10::bool[], $11::int[], $12::int[])"
-    )
-    .bind(&loop_ids)
-    .bind(&job_ids)
-    .bind(&rounds)
-    .bind(&server_ids)
-    .bind(&tool_names)
-    .bind(&ns_names)
-    .bind(&args_jsons)
-    .bind(&result_texts)
-    .bind(&outcomes)
-    .bind(&cache_hits)
-    .bind(&latencies)
-    .bind(&result_bytes)
-    .execute(pg_pool)
-    .await
-    .map_err(|e| warn!(error = %e, n = rows.len(), "mcp_loop_tool_calls batch insert failed"));
 }
 
 /// Context window pruning: keep the last `keep_rounds` rounds of tool messages verbatim.

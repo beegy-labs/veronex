@@ -149,6 +149,8 @@
     "toolCallsArgs": "인자",
     "toolCallsResult": "결과",
     "toolCallsNoResult": "(결과 없음)",
+    "toolResult": "결과 펼치기",
+    "mcpCallsBadge": "MCP {count}회",
     "backToList": "대화 목록으로"
   },
   "overview": {

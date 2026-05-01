@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol) Integration
 
-> SSOT | **Last Updated**: 2026-04-30
+> SSOT | **Last Updated**: 2026-05-01
 
 Veronex acts as an **MCP client** — it connects to external MCP servers and
 executes their tools on behalf of LLM inference loops.
@@ -174,7 +174,7 @@ Implementation:
 | Round-level synchronous collection (S20) | All rounds — including the final text round — go through `collect_round` synchronously. The legacy streaming fast-path (skip collection of round N+1 when `rounds > 0` and stream the runner job directly) was dropped because (1) it bypassed MCP detection on round N+1, breaking the loop invariant when a model emitted another tool_call, (2) its sole driving constraint (CF Edge 100 s idle) was removed by platform-gitops PRs #598/#599/#600 (CF-bypass routing). SDD: `.specs/veronex/bridge-mcp-loop-correctness.md`. |
 | Token-by-token UX preserved (S20 stream-tap) | `collect_round` accepts an optional `sse_tx: UnboundedSender<String>`. On the first non-empty delta of a round: tool_calls → silent intercept (bridge executes MCP tool, runs next round); content → passthrough mode (forward this and subsequent content tokens to the SSE writer). OpenAI spec round-level XOR ensures the first delta classifies the entire round. Mixed-delta rounds (vLLM bug class — content first, tool_call later) → passthrough wins, tool_calls dropped with `warn!` log per SDD §3.3. |
 | Cancel-on-disconnect | spawned bridge task runs to completion (best-effort detached); `runner::persist_partial_conversation` writes partial state to S3 for each affected round |
-| S3 ConversationRecord | Runner writes one `TurnRecord` per round, keyed by that round's `job_id` (`conversations/{owner_id}/{conversation_id}.json.zst` is the conversation-scoped append target). Bridge no longer writes S3 — only updates loop-wide token totals on `first_job_id` and deletes intermediate-round DB rows. SDD: `.specs/veronex/history/inference-mcp-per-round-persist.md` §3. |
+| S3 ConversationRecord | **Bridge is the sole writer for MCP loops** (revised 2026-05-01). Runner skips S3 writes + `update_conversation_counters` whenever `job.mcp_loop_id IS Some`; bridge persists exactly one consolidated `TurnRecord` (with `tool_calls` = every round's emitted MCP calls, `result` = final text) at loop end and bumps `conversations.turn_count` by 1. One user question with N agentic rounds therefore maps to one logical turn. UI surfaces "MCP {N}회" from the head turn's `tool_calls.length`. Per-round persistence (the prior policy from `.specs/veronex/history/inference-mcp-per-round-persist.md`) yielded `turn_count = N` for one question and is no longer in effect. |
 | Phase-aware timing (S19 + S19.1) | `bridge::collect_round` uses three distinct timeouts gated by a `StreamToken::phase_boundary()` sentinel emitted by `runner` after `ensure_ready` succeeds: `LIFECYCLE_TIMEOUT=600s` (Phase 1 cold-load slack — ~2.4× the observed 248 s worst case on `qwen3-coder-next-200k:latest`), `TOKEN_FIRST_TIMEOUT=300s` (Phase 2 first token after load — bumped from 60s in S19.1 after live verify showed 60s too tight for 200K-context prefill + ~5K MCP prompt tokens; first token is **not** sub-second when prefill is large), `STREAM_IDLE_TIMEOUT=45s` (mid-stream idle), `ROUND_TOTAL_TIMEOUT=1500s` (round cap, locked strictly less than upstream Cilium HTTPRoute `timeouts.request=1800s` by `tests::round_total_under_gateway_request_timeout`). RoundError variants `LifecycleTimeout` / `FirstTokenTimeout` distinguish cold-stuck vs hung-post-load for retry decisions. `MCP_LIFECYCLE_PHASE=off` legacy path: no boundary emitted → bridge stays Phase 1 the whole round, single 600 s applies. Long-stream public access uses CF-bypass direct hostname (`*.girok.dev`) — see `.add/domain-integration.md`. SDD: `.specs/veronex/bridge-phase-aware-timing.md`. |
 
 Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens. Note: §9.5 of the streaming-first SDD recorded this as PASS based on SSE output only; the dashboard detail GET's `result_text` non-empty assertion was added in `.specs/veronex/history/inference-mcp-per-round-persist.md` §8.
@@ -257,39 +257,36 @@ End-to-end ReAct verified on `veronex-api-dev.verobee.com` after YQL fix (#88):
 
 ## Audit exposure
 
-Two independent storages capture different aspects of an MCP turn.
-**S3 is the SSOT for what the user sees** in the conversation chain; PG is
-supplementary execution audit.
+**S3 is the single source for the conversation chain — including per-tool execution audit.** PG carries no per-tool audit body anymore; ClickHouse retains analytics aggregates via `fire_mcp_ingest`.
 
-| Storage | Key | What it carries | Writer |
-|---|---|---|---|
-| S3 `ConversationRecord.turns[]` | `(owner_id, conversation_id)` per-round | Model output: `tool_calls_json` (each round's emitted tool_calls — name + args), `result_text` (final text round). One `TurnRecord` per bridge round. | Runner (`run_job`), per-round; SDD `inference-mcp-per-round-persist.md` |
-| PG `mcp_loop_tool_calls` | `(mcp_loop_id, job_id, loop_round)` per-tool | Tool execution audit: `args_json`, `result_text` (server response), `outcome`, `cache_hit`, `latency_ms`, `result_bytes`. | Bridge (`batch_insert_tool_calls`), per round. CDD `inference/mcp-schema.md`. |
+| Storage | What it carries | Writer |
+|---|---|---|
+| **S3** `ConversationRecord.turns[]` | One `TurnRecord` per logical user question. `tool_calls[]` is an enriched array — every round's `{function:{name, arguments}, round, server_slug, result, outcome, cache_hit, latency_ms, result_bytes}`. `result` is the MCP server's response body (capped at `MAX_TOOL_RESULT_BYTES = 32 KB`). | Bridge (single-writer for MCP loops, see `bridge.rs::run_loop` end block). Runner skips S3 + `update_conversation_counters` whenever `job.mcp_loop_id IS Some`. |
+| **ClickHouse** `mcp_tool_calls` | Per-tool analytics signal (call count, success rate, latency, cache hit ratio, bytes). Drives `/v1/mcp/stats` and the dashboard cards. | Bridge → `fire_mcp_ingest` → `veronex-analytics` → CH (unchanged). |
+| **PG** `mcp_loop_tool_calls` | **Retired 2026-05-01.** Was duplicating 32 KB result bodies under PGLZ when zstd in S3 compresses ~3× better, plus 220 B per-row overhead × three indexes. UI cut over to S3 single-fetch — endpoint `GET /v1/conversations/{id}/turns/{job_id}/internals` no longer carries `tool_calls` (returns empty array for backwards-compatible TS clients). | — |
 
-UI consumption split:
+UI consumption (single fetch):
 
-- **Primary chain (`/jobs` test panel inline render)** — when a turn invoked
-  MCP tools, the assistant bubble inlines the model's emitted tool_calls
-  (name + args) sourced from the S3 `turn.tool_calls` field on the
-  conversation detail (`GET /v1/conversations/{id}`). The frontend reads
-  this *after the SSE stream completes* — it cannot derive the per-round
-  `job_id` from the SSE `chunk.id` (that is a synthetic stream identifier,
-  `chatcmpl-mcp-{uuid_v4}`, unrelated to any DB row), so it fetches the
-  conversation detail and pins to the newest turn. Tool-only turns (no
-  text) render an explicit "tool-only turn" hint instead of "(no result)".
-- **Supplementary execution audit (lazy panel)** — `GET /v1/conversations/{id}/turns/{job_id}/internals`
-  returns `tool_calls: ToolCallDetail[]` joined from `mcp_loop_tool_calls`
-  with `mcp_servers` for `server_slug` (ordered `loop_round ASC, created_at ASC`,
-  empty when no MCP tools ran). Schema: `inference/job-api.md`. The
-  `<TurnInternals>` component fetches lazily on user expand. The
-  conversation list modal shows a `{count} MCP call(s)` badge from the
-  same response.
+- **Primary chain** — `GET /v1/conversations/{id}` reads the S3 record. Each `turns[].tool_calls[]` entry renders inline in the assistant bubble: tool name, round, outcome pill, latency, args, and a `<details>` block for the full `result` body.
+- Conversation header shows `{turn_count} 턴 · MCP {count}회 · …`, where `count = sum(turn.tool_calls.length)`.
+- `<TurnInternalsPanel>` lazy expand still surfaces compression / vision metadata badges (compressed turn summaries, vision analysis token usage).
 
-This split guarantees the chain stays visible even when the convergence
-boundary fails to elicit a final text answer — the user sees what tools
-ran (S3) plus, on demand, how each one performed (PG).
+Why split into S3 + CH (no PG)?
+1. S3 zstd ratio (3–5× JSON) beats PG TOAST PGLZ (~2× text); inter-document compression on the conversation file shares dictionary between rounds → ~30 KB compressed for 5 rounds × 32 KB raw vs ~85 KB on PG disk + indexes.
+2. CH already owns aggregations (cardinality, percentiles, time-series); PG audit was duplicating the rare per-row lookup case.
+3. UI gets one round trip (`/v1/conversations/{id}`) instead of two (`+ /internals` for tool body) — Valkey-cached for 300 s.
 
-SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
+SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md` (S3-single-source revision).
+
+### Single-writer policy + audit consolidation (PR #134/#135, 2026-05-01)
+
+Three drift points reconciled:
+
+1. **FK CASCADE → DROP** (PR #134, superseded): the original audit-row durability fix flipped `mcp_loop_tool_calls.job_id` to `ON DELETE SET NULL`. PR #135 follow-up dropped the table entirely once S3 took over.
+2. **Single S3 writer**: runner skips S3 turn write + `update_conversation_counters` whenever `job.mcp_loop_id IS Some`; bridge owns one consolidated `TurnRecord` write at loop end (covers both native `run_loop` and ReAct `run_loop_react`). Result: 1 user question with N rounds → `turn_count = 1`, `turn.tool_calls.length = N`.
+3. **Audit body relocation**: bridge no longer batches inserts into `mcp_loop_tool_calls`; per-round `(result_text, ToolCallRecord)` is rewritten into the enriched `all_mcp_tool_calls` array that lands on the S3 turn. PG `mcp_loop_tool_calls` table dropped via idempotent `DROP TABLE IF EXISTS` at the top of `init.sql`.
+
+Migration: helm `pre-upgrade` hook applies the DROP block on every install/upgrade. Dev DB dropped manually 2026-05-01 to verify.
 
 ---
 

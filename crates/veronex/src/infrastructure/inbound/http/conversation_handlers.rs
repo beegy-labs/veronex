@@ -368,54 +368,16 @@ pub async fn get_turn_internals(
         analysis_tokens: v.analysis_tokens,
     });
 
-    // ── MCP tool-call audit for this turn ───────────────────────────────────
-    //
-    // Joins `mcp_loop_tool_calls` (CDD `inference/mcp-schema.md` — args_json,
-    // result_text, outcome, cache_hit, latency_ms) with `mcp_servers` to
-    // expose `server_slug`. Ordered by loop_round, created_at so the UI can
-    // render the tool chain in execution order. Empty when no MCP tools ran.
-    // SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md` §3.1.
-    use sqlx::Row as _;
-    let tool_call_rows = sqlx::query(
-        "SELECT t.loop_round, t.tool_name, t.namespaced_name, t.args_json, \
-                t.result_text, t.outcome, t.cache_hit, t.latency_ms, \
-                t.result_bytes, t.created_at, \
-                COALESCE(s.slug, '') AS server_slug \
-         FROM mcp_loop_tool_calls t \
-         LEFT JOIN mcp_servers s ON s.id = t.server_id \
-         WHERE t.job_id = $1 \
-         ORDER BY t.loop_round ASC, t.created_at ASC"
-    )
-    .bind(job_uuid)
-    .fetch_all(&state.pg_pool)
-    .await
-    .unwrap_or_else(|e| {
-        tracing::warn!(error = %e, %job_uuid, "get_turn_internals: tool_calls fetch failed");
-        Vec::new()
-    });
-
-    let tool_calls: Vec<ToolCallDetail> = tool_call_rows
-        .into_iter()
-        .map(|r| ToolCallDetail {
-            round:           r.get("loop_round"),
-            server_slug:     r.get("server_slug"),
-            tool_name:       r.get("tool_name"),
-            namespaced_name: r.get("namespaced_name"),
-            args:            r.try_get::<serde_json::Value, _>("args_json").unwrap_or(serde_json::Value::Null),
-            result_text:     r.get("result_text"),
-            outcome:         r.get("outcome"),
-            cache_hit:       r.get("cache_hit"),
-            latency_ms:      r.get("latency_ms"),
-            result_bytes:    r.get("result_bytes"),
-            created_at:      r.get("created_at"),
-        })
-        .collect();
-
+    // MCP tool-call audit moved to S3 `ConversationRecord.turns[].tool_calls[]`
+    // (see `bridge.rs::run_loop` consolidated turn write). The conversation
+    // detail GET surfaces every round's args + result + outcome inline, so
+    // this endpoint no longer carries `tool_calls`. Field retained as an
+    // empty array for backwards-compatible TS clients.
     (StatusCode::OK, Json(TurnInternalsResponse {
         job_id: job_uuid.to_string(),
         compressed,
         vision_analysis,
-        tool_calls,
+        tool_calls: Vec::new(),
     })).into_response()
 }
 

@@ -25,20 +25,13 @@ BEGIN
             FOREIGN KEY (provider_id) REFERENCES llm_providers(id) ON DELETE SET NULL;
     END IF;
 END$$;
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.referential_constraints
-         WHERE constraint_name = 'mcp_loop_tool_calls_job_id_fkey'
-           AND delete_rule != 'SET NULL'
-    ) THEN
-        ALTER TABLE mcp_loop_tool_calls DROP CONSTRAINT mcp_loop_tool_calls_job_id_fkey;
-        ALTER TABLE mcp_loop_tool_calls ALTER COLUMN job_id DROP NOT NULL;
-        ALTER TABLE mcp_loop_tool_calls
-            ADD CONSTRAINT mcp_loop_tool_calls_job_id_fkey
-            FOREIGN KEY (job_id) REFERENCES inference_jobs(id) ON DELETE SET NULL;
-    END IF;
-END$$;
+-- mcp_loop_tool_calls retired 2026-05-01: per-tool audit moved to S3
+-- ConversationRecord (single source for the conversation chain) and
+-- ClickHouse (`mcp_tool_calls` for analytics/stats). Keeping the row
+-- in PG was duplicating 32KB-capped result bodies under PGLZ when zstd
+-- in S3 compresses them ~3x better, plus the per-row 220B overhead +
+-- three indexes were unused after the UI cut over to S3.
+DROP TABLE IF EXISTS mcp_loop_tool_calls;
 
 -- ── Accounts ──────────────────────────────────────────────────────────────────
 
@@ -497,28 +490,10 @@ CREATE TABLE mcp_key_access (
 
 CREATE INDEX idx_mcp_key_access_key ON mcp_key_access(api_key_id) WHERE is_allowed = true;
 
--- ── MCP Loop Tool Calls ───────────────────────────────────────────────────────
-
-CREATE TABLE mcp_loop_tool_calls (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    mcp_loop_id     UUID        NOT NULL,
-    job_id          UUID        REFERENCES inference_jobs(id) ON DELETE SET NULL,
-    loop_round      SMALLINT    NOT NULL,
-    server_id       UUID        NOT NULL,
-    tool_name       TEXT        NOT NULL,
-    namespaced_name TEXT        NOT NULL,
-    args_json       JSONB       NOT NULL,
-    result_text     TEXT,
-    outcome         TEXT        NOT NULL,
-    cache_hit       BOOLEAN     NOT NULL DEFAULT false,
-    latency_ms      INT,
-    result_bytes    INT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_mcp_loop_tool_calls_loop   ON mcp_loop_tool_calls(mcp_loop_id);
-CREATE INDEX idx_mcp_loop_tool_calls_job    ON mcp_loop_tool_calls(job_id);
-CREATE INDEX idx_mcp_loop_tool_calls_server ON mcp_loop_tool_calls(server_id, created_at DESC);
+-- mcp_loop_tool_calls table retired 2026-05-01 — see DROP block at top of file.
+-- Per-tool audit data now lives in S3 `ConversationRecord.turns[].tool_calls[]`
+-- (with `result`, `outcome`, `latency_ms`, `cache_hit`, `server_slug` fields),
+-- and analytics/stats keep flowing to ClickHouse via `fire_mcp_ingest`.
 
 -- ── Trigram indexes ───────────────────────────────────────────────────────────
 
