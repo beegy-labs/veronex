@@ -36,13 +36,22 @@
 
 use serde_json::{json, Value};
 
-/// Minimal system prompt — the schema does the heavy lifting via constrained
-/// decoding, so this is a hint not an enforcement vector.
+/// System prompt for the forced-JSON shim. Pushes tool-first behaviour to
+/// counter weaker models' training-cutoff disclaimers ("I don't have access
+/// to real-time data"). The schema does the bulk of enforcement via
+/// constrained decoding; this prompt is the semantic guide.
 pub const FORCED_JSON_SYSTEM_PROMPT: &str = "\
-You are an agent with access to tools. On each turn output exactly one JSON \
-object — either a tool call (`action=\"tool\"`) or a final answer \
-(`action=\"final\"`). Choose `final` once you have enough information to \
-answer the user.";
+You are an agent with access to tools. The available tools include \
+real-time web search, current weather, and current datetime — they DO have \
+access to live, up-to-the-minute data. \n\
+- For ANY question about current/recent/today's information (prices, news, \
+weather, time, market data, events), call a tool first. Do NOT respond with \
+\"I don't have access to real-time data\" — that statement is FALSE because \
+you have these tools.\n\
+- On each turn output exactly one JSON object — either a tool call \
+(`action=\"tool\"`) or a final answer (`action=\"final\"`).\n\
+- Choose `final` only after you have gathered enough information from tools \
+(or for trivial questions that genuinely need no lookup, e.g. arithmetic).";
 
 /// Extracted action from the model's JSON response.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,7 +69,14 @@ pub enum ForcedAction {
 /// forced-JSON path with no tools — it would degenerate to a `final`-only
 /// schema, which is just plain text generation).
 ///
-/// Schema layout (one branch per tool + one terminal branch):
+/// `allow_final` gates whether the terminal `{"action":"final","answer"}`
+/// branch is part of the schema. Caller passes `false` on the first round
+/// (forces the model to call a tool — defends against weak models that
+/// would otherwise emit "I don't have access to real-time data") and
+/// `true` once at least one tool result is in context.
+///
+/// Schema layout (one branch per tool, plus a terminal branch when
+/// `allow_final`):
 ///
 /// ```json
 /// {
@@ -78,7 +94,7 @@ pub enum ForcedAction {
 ///   ]
 /// }
 /// ```
-pub fn build_forced_json_schema(tools: &[Value]) -> Option<Value> {
+pub fn build_forced_json_schema(tools: &[Value], allow_final: bool) -> Option<Value> {
     if tools.is_empty() {
         return None;
     }
@@ -110,15 +126,17 @@ pub fn build_forced_json_schema(tools: &[Value]) -> Option<Value> {
     if branches.is_empty() {
         return None;
     }
-    branches.push(json!({
-        "type": "object",
-        "properties": {
-            "action": {"const": "final"},
-            "answer": {"type": "string"},
-        },
-        "required": ["action", "answer"],
-        "additionalProperties": false,
-    }));
+    if allow_final {
+        branches.push(json!({
+            "type": "object",
+            "properties": {
+                "action": {"const": "final"},
+                "answer": {"type": "string"},
+            },
+            "required": ["action", "answer"],
+            "additionalProperties": false,
+        }));
+    }
     Some(json!({"oneOf": branches}))
 }
 
@@ -234,13 +252,14 @@ mod tests {
 
     #[test]
     fn empty_tools_returns_none() {
-        assert!(build_forced_json_schema(&[]).is_none());
+        assert!(build_forced_json_schema(&[], true).is_none());
+        assert!(build_forced_json_schema(&[], false).is_none());
         assert!(build_forced_json_system_prompt(&[]).is_none());
     }
 
     #[test]
     fn schema_includes_one_branch_per_tool_plus_final() {
-        let schema = build_forced_json_schema(&[web_search(), calc()]).unwrap();
+        let schema = build_forced_json_schema(&[web_search(), calc()], true).unwrap();
         let one_of = schema.get("oneOf").unwrap().as_array().unwrap();
         // 2 tool branches + 1 final
         assert_eq!(one_of.len(), 3);
@@ -249,9 +268,24 @@ mod tests {
         assert_eq!(one_of[2]["properties"]["action"]["const"], "final");
     }
 
+    /// Round 0: `allow_final=false` removes the terminal branch so the model
+    /// has no logit space to emit `{"action":"final",...}` and MUST call a
+    /// tool. Defends against weak models that disclaim "I don't have access
+    /// to real-time data" before even trying a tool.
+    #[test]
+    fn schema_without_final_has_only_tool_branches() {
+        let schema = build_forced_json_schema(&[web_search(), calc()], false).unwrap();
+        let one_of = schema["oneOf"].as_array().unwrap();
+        assert_eq!(one_of.len(), 2, "no final branch when allow_final=false");
+        assert_eq!(one_of[0]["properties"]["tool"]["const"], "web_search");
+        assert_eq!(one_of[1]["properties"]["tool"]["const"], "calc");
+        // Confirm no branch advertises action=final
+        assert!(one_of.iter().all(|b| b["properties"]["action"]["const"] != "final"));
+    }
+
     #[test]
     fn schema_uses_tool_parameters_for_args() {
-        let schema = build_forced_json_schema(&[web_search()]).unwrap();
+        let schema = build_forced_json_schema(&[web_search()], true).unwrap();
         let args_schema = &schema["oneOf"][0]["properties"]["args"];
         assert_eq!(args_schema["properties"]["query"]["type"], "string");
         assert_eq!(args_schema["required"][0], "query");
@@ -260,7 +294,7 @@ mod tests {
     #[test]
     fn skips_tool_without_name() {
         let bad = json!({"type": "function", "function": {"description": "x"}});
-        let schema = build_forced_json_schema(&[bad, web_search()]).unwrap();
+        let schema = build_forced_json_schema(&[bad, web_search()], true).unwrap();
         let one_of = schema["oneOf"].as_array().unwrap();
         assert_eq!(one_of.len(), 2); // 1 tool (web_search) + 1 final
         assert_eq!(one_of[0]["properties"]["tool"]["const"], "web_search");
@@ -268,7 +302,7 @@ mod tests {
 
     #[test]
     fn schema_to_response_format_wraps_correctly() {
-        let schema = build_forced_json_schema(&[web_search()]).unwrap();
+        let schema = build_forced_json_schema(&[web_search()], true).unwrap();
         let rf = schema_to_response_format(schema.clone());
         assert_eq!(rf["type"], "json_schema");
         assert_eq!(rf["json_schema"]["schema"], schema);
@@ -338,7 +372,7 @@ mod tests {
     #[test]
     fn schema_with_no_parameters_uses_object_default() {
         let t = json!({"type": "function", "function": {"name": "noop", "description": "nothing"}});
-        let schema = build_forced_json_schema(&[t]).unwrap();
+        let schema = build_forced_json_schema(&[t], true).unwrap();
         // first branch is the tool, args defaulted to {"type": "object"}
         assert_eq!(schema["oneOf"][0]["properties"]["args"]["type"], "object");
     }
