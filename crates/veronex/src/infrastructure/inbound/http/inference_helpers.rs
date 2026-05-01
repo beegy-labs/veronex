@@ -294,18 +294,32 @@ pub fn extract_last_user_prompt(messages: &[serde_json::Value]) -> &str {
 
 /// Build the date-injection system message text.
 ///
-/// Format is intentionally factual + brief: one ISO-8601 datetime, day name,
-/// and a short note that anchors relative-time references in any language
-/// the supported models commonly handle. Costs ~30 tokens.
-fn build_current_datetime_system_text() -> String {
+/// Imperative tone with explicit output constraints. Informational phrasing
+/// ("Current date is X") is insufficient for code-tuned models like
+/// qwen3-coder, which retain learned narrative templates from their training
+/// cutoff and frame answers using "2024년 12월 / 2025년 1월" timelines even
+/// when their search queries correctly reference 2026. The directive form
+/// below combines (a) the absolute date, (b) explicit relative-time anchors
+/// for both en/ko, and (c) a hard rule against treating pre-current years as
+/// "recent". Costs ~80 tokens — still negligible against the model's full
+/// context budget.
+pub fn build_current_datetime_system_text() -> String {
     let now = chrono::Utc::now();
     let weekday = now.format("%A");
+    let date = now.format("%Y-%m-%d");
+    let iso = now.format("%Y-%m-%dT%H:%M:%SZ");
+    let year = now.format("%Y");
     format!(
-        "Current date and time: {} ({}, UTC). When the user uses relative \
-         time references like \"today\", \"now\", \"오늘\", \"금일\", \
-         \"yesterday\", \"this week\", resolve them against this datetime.",
-        now.format("%Y-%m-%dT%H:%M:%SZ"),
-        weekday
+        "**Today is {date} ({weekday}, UTC).** Current ISO timestamp: {iso}. \
+         Treat this as the absolute current date for the entire response.\n\
+         - All relative-time references (\"today\", \"now\", \"recent\", \"latest\", \
+         \"오늘\", \"금일\", \"현재\", \"최근\") resolve to {date}.\n\
+         - Do NOT frame, organize, or timestamp information using any year before \
+         {year} as the \"current\" or \"recent\" period — those are HISTORICAL only.\n\
+         - When discussing prices, events, trends, or market conditions: {year} is \
+         the present.\n\
+         - If your training data lacks {year} information for a topic, state that \
+         explicitly rather than substituting an earlier year as if it were now."
     )
 }
 
@@ -532,6 +546,20 @@ mod tests {
         assert!(has_weekday, "weekday present: {text}");
         // Anchors relative-time references for both english + korean
         assert!(text.contains("today") || text.contains("오늘"), "relative-time hint: {text}");
+    }
+
+    #[test]
+    fn build_text_uses_imperative_anti_anchor_phrasing() {
+        // The whole point of upgrading from "Current date is X" to this
+        // directive form is that purely informational system messages were
+        // ignored by code-tuned models (qwen3-coder reverted to "2024년 12월"
+        // narratives). The text must include both an absolute statement
+        // ("Today is") and an explicit prohibition against treating earlier
+        // years as "current".
+        let text = build_current_datetime_system_text();
+        assert!(text.contains("Today is"), "absolute statement: {text}");
+        assert!(text.to_lowercase().contains("historical"), "earlier years marked historical: {text}");
+        assert!(text.contains("HISTORICAL"), "uppercase emphasis on HISTORICAL: {text}");
     }
 
     #[test]

@@ -368,14 +368,31 @@ impl McpBridgeAdapter {
             // SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md` §3.3.
             let convergence_boundary = round + 1 == max_rounds && rounds > 0 && content.is_empty();
             if convergence_boundary {
+                // Re-anchor the date at synthesis time. The original
+                // `inject_current_datetime` system message at messages[0] is
+                // far from the generation point after several MCP rounds;
+                // its weight on the model's output template diminishes
+                // proportionally to context length. Re-injecting fresh,
+                // close to the final emission, counters narrative anchoring
+                // (qwen3-coder reverting to "2024년 12월" timelines despite
+                // its own search queries using current dates).
+                let date_anchor = crate::infrastructure::inbound::http::inference_helpers::build_current_datetime_system_text();
+                messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": date_anchor
+                }));
                 messages.push(serde_json::json!({
                     "role": "system",
                     "content": "You have reached the final response step. \
                         Tools are no longer available. Using the tool \
                         results already provided above, produce the user's \
-                        final answer in natural language now."
+                        final answer in natural language now. Honor the \
+                        date constraints in the system message just above \
+                        — every \"today\" / \"recent\" / \"현재\" / \"최근\" \
+                        in your response refers to the current date listed \
+                        there, not to your training cutoff."
                 }));
-                info!(round, max_rounds, "MCP convergence: tools omitted + system message injected");
+                info!(round, max_rounds, "MCP convergence: tools omitted + date anchor + final-step system injected");
             }
 
             // ── Submit job ─────────────────────────────────────────────────────
