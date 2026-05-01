@@ -561,6 +561,78 @@ impl McpBridgeAdapter {
             info!(round, mcp_calls = mcp_calls.len(), "MCP round complete");
         }
 
+        // ── S24 synthesis fallback ────────────────────────────────────────────
+        // After the round-loop exhausts, if the bridge produced no text content
+        // and at least one tool round executed, dispatch a synthesis round on a
+        // fresh messages array. This is the final guarantee that an inference
+        // request returns a textual answer even when Qwen3-Coder reproduces
+        // tool_call patterns from history (S23 boundary's tools-omission strips
+        // schemas but the model can still mimic prior assistant.tool_calls
+        // entries — QwenLM/Qwen3-Coder #475). The synthesis messages contain
+        // ONLY the user's question and the accumulated tool RESULTS (not
+        // tool_calls), so the model has no patterns to follow.
+        // SDD: `.specs/veronex/mcp-synthesis-round.md` §3.3.
+        if content.is_empty() && rounds > 0 {
+            if let Some(results_text) = extract_tool_results(&messages) {
+                let original_prompt = extract_last_user_prompt(&messages);
+                info!(
+                    rounds,
+                    results_bytes = results_text.len(),
+                    "MCP synthesis round: dispatching forced-text fallback"
+                );
+                let synth_messages = build_synthesis_messages(&original_prompt, &results_text);
+                let synth_submit = state.use_case.submit(SubmitJobRequest {
+                    prompt: original_prompt,
+                    model_name: model.clone(),
+                    provider_type: ProviderType::Ollama,
+                    gemini_tier: None,
+                    api_key_id: caller.api_key_id(),
+                    account_id: caller.account_id(),
+                    source: caller.source(),
+                    api_format: ApiFormat::OpenaiCompat,
+                    messages: Some(Value::Array(synth_messages)),
+                    tools: None,
+                    request_path: Some("/v1/chat/completions".to_string()),
+                    conversation_id,
+                    key_tier: caller.key_tier(),
+                    images: None,
+                    stop: stop.clone(),
+                    seed,
+                    response_format: response_format.clone(),
+                    frequency_penalty,
+                    presence_penalty,
+                    mcp_loop_id: Some(mcp_loop_id),
+                    max_tokens: None,
+                    vision_analysis: None,
+                }).await;
+
+                match synth_submit {
+                    Ok(synth_job_id) => {
+                        intermediate_job_ids.push(synth_job_id.0);
+                        match collect_round(state, &synth_job_id, sse_tap_tx.as_ref()).await {
+                            Ok(synth_result) => {
+                                total_prompt_tokens = total_prompt_tokens.saturating_add(synth_result.prompt_tokens);
+                                total_completion_tokens = total_completion_tokens.saturating_add(synth_result.completion_tokens);
+                                if synth_result.passthrough_streamed {
+                                    streamed_via_tap = true;
+                                }
+                                if !synth_result.content.is_empty() {
+                                    content = synth_result.content;
+                                    finish_reason = synth_result.finish_reason;
+                                    final_tool_calls.clear();
+                                    info!("MCP synthesis round: succeeded — text content emitted");
+                                } else {
+                                    warn!("MCP synthesis round: produced no text either; surfacing degenerate result");
+                                }
+                            }
+                            Err(e) => warn!(error = %e, "MCP synthesis round: collect_round failed"),
+                        }
+                    }
+                    Err(e) => warn!(error = %e, "MCP synthesis round: submit failed"),
+                }
+            }
+        }
+
         // Loop-wide bookkeeping: token rollup + intermediate-job cleanup.
         //
         // SDD `.specs/veronex/history/inference-mcp-per-round-persist.md` §5: bridge no
@@ -1426,6 +1498,60 @@ fn extract_last_user_prompt(messages: &[Value]) -> String {
         .to_string()
 }
 
+/// Walk the messages array and concatenate every `role:"tool"` entry's
+/// content into a single text block, suitable for injection as a
+/// synthesis-round system message. Returns `None` when no tool entries
+/// were found (caller skips the synthesis dispatch). Each entry is
+/// labelled with its index for the model's reading convenience.
+///
+/// SDD: `.specs/veronex/mcp-synthesis-round.md` §3.1.
+fn extract_tool_results(messages: &[Value]) -> Option<String> {
+    let mut parts = Vec::new();
+    for m in messages.iter() {
+        if m["role"].as_str() != Some("tool") {
+            continue;
+        }
+        if let Some(content) = m["content"].as_str() {
+            if !content.is_empty() {
+                let label = m["name"].as_str().unwrap_or("tool");
+                parts.push(format!("[{}] {}", label, content));
+            }
+        }
+    }
+    if parts.is_empty() { None } else { Some(parts.join("\n\n---\n\n")) }
+}
+
+/// Build the messages array for a synthesis round. Three entries:
+///   1. system — directive forbidding tool calls and demanding final text
+///   2. user — the original prompt
+///   3. system — the accumulated tool results as plain text
+///
+/// Critically, this contains NO `assistant.tool_calls` entries, so the
+/// model has no in-context pattern to mimic. Combined with the request's
+/// `tools: None`, the model has nothing callable and must emit text.
+///
+/// SDD: `.specs/veronex/mcp-synthesis-round.md` §3.2.
+fn build_synthesis_messages(original_prompt: &str, tool_results_text: &str) -> Vec<Value> {
+    vec![
+        serde_json::json!({
+            "role": "system",
+            "content": "You are answering the user's question. \
+                Tools have already been used to gather the information \
+                you need. Do NOT call any tools. Using the tool results \
+                provided below, produce a complete, well-structured \
+                answer to the user's question in their original language."
+        }),
+        serde_json::json!({
+            "role": "user",
+            "content": original_prompt,
+        }),
+        serde_json::json!({
+            "role": "system",
+            "content": format!("Tool results gathered:\n\n{}", tool_results_text),
+        }),
+    ]
+}
+
 /// Strip `mcp_{server}_` prefix → raw tool name as registered on the MCP server.
 ///
 /// Format: `mcp_{server_name}_{tool_name}`
@@ -2111,6 +2237,79 @@ mod tests {
         let final_tools_on_normal: Option<&serde_json::Value> = if on_normal_round { None } else { Some(&tools) };
         assert!(final_tools_on_boundary.is_none(), "boundary round must drop tools schema");
         assert!(final_tools_on_normal.is_some(), "non-boundary rounds keep tools schema");
+    }
+
+    // ── S24 synthesis-round helpers ─────────────────────────────────────────
+
+    #[test]
+    fn extract_tool_results_none_when_no_tool_messages() {
+        let msgs = vec![
+            serde_json::json!({"role": "user", "content": "hi"}),
+            serde_json::json!({"role": "assistant", "content": "hello"}),
+        ];
+        assert!(extract_tool_results(&msgs).is_none());
+    }
+
+    #[test]
+    fn extract_tool_results_concats_in_order() {
+        let msgs = vec![
+            serde_json::json!({"role": "user", "content": "ask"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "search", "content": "result A"}),
+            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "c1", "name": "search", "content": "result B"}),
+        ];
+        let out = extract_tool_results(&msgs).expect("two tool entries → Some");
+        assert!(out.contains("[search] result A"));
+        assert!(out.contains("[search] result B"));
+        // Order preserved: A appears before B.
+        assert!(out.find("result A").unwrap() < out.find("result B").unwrap());
+    }
+
+    #[test]
+    fn extract_tool_results_skips_empty_content() {
+        let msgs = vec![
+            serde_json::json!({"role": "tool", "name": "search", "content": ""}),
+            serde_json::json!({"role": "tool", "name": "search", "content": "real"}),
+        ];
+        let out = extract_tool_results(&msgs).expect("one non-empty entry");
+        assert!(out.contains("real"));
+        assert!(!out.contains("[search] \n"));
+    }
+
+    #[test]
+    fn build_synthesis_messages_has_no_tool_calls_or_assistant_history() {
+        let msgs = build_synthesis_messages("question", "results");
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(msgs[1]["content"], "question");
+        assert_eq!(msgs[2]["role"], "system");
+        // Crucial: zero assistant.tool_calls entries — the whole point of S24.
+        assert!(msgs.iter().all(|m| m["role"].as_str() != Some("assistant")));
+        assert!(msgs.iter().all(|m| !m["tool_calls"].is_array()));
+        // Sanity: the directive forbids tool calls.
+        let directive = msgs[0]["content"].as_str().unwrap();
+        assert!(directive.contains("Do NOT call any tools"));
+    }
+
+    /// Synthesis fires iff: loop exited with no text content AND at least one
+    /// tool round executed AND tool results exist. Pin the predicate here so
+    /// future refactors don't silently weaken the safety net.
+    #[test]
+    fn synthesis_dispatch_predicate_matches_sdd() {
+        fn should_synthesize(content_empty: bool, rounds: u8, has_tool_results: bool) -> bool {
+            content_empty && rounds > 0 && has_tool_results
+        }
+        // Fires: degenerate run with results.
+        assert!(should_synthesize(true, 5, true));
+        assert!(should_synthesize(true, 1, true));
+        // Skips: model already produced text.
+        assert!(!should_synthesize(false, 5, true));
+        // Skips: no tool rounds executed (nothing to synthesize from).
+        assert!(!should_synthesize(true, 0, true));
+        // Skips: tool rounds executed but results extraction returned None.
+        assert!(!should_synthesize(true, 5, false));
     }
 
     #[test]

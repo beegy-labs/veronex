@@ -77,6 +77,23 @@ run_loop(state, caller, model, messages, base_tools, want_stream)
         │         → bounds context window growth across deep loops
         │
         └── rounds += 1 → GOTO submit
+
+  └── 4. Synthesis fallback (S24, post-loop):
+        │
+        ├── [content.is_empty() && rounds > 0]?
+        │     └── extract_tool_results(messages)  (concat role:"tool" entries)
+        │           ├── None → no results, surface degenerate state
+        │           └── Some(text) → continue
+        │
+        ├── build_synthesis_messages(prompt, results)
+        │     → [system_directive, user_prompt, system_with_results]
+        │       (NO assistant.tool_calls history, NO tools schema)
+        │
+        ├── submit synthesis job  (tools=None, fresh messages)
+        │
+        └── collect_round → text content
+              ├── non-empty → replace `content`, clear `final_tool_calls`
+              └── still empty → fall through to degenerate result
 ```
 
 ---
@@ -150,6 +167,7 @@ JWT session    │  None                   │  All active servers accessible
 | Max rounds | 5 | Hard loop limit |
 | Loop detect threshold | 3 | Same (tool, args_hash) ×3 → break |
 | Convergence boundary | last round | At `round + 1 == max_rounds`, if `rounds > 0` and no text yet → (a) inject system message + (b) omit `tools` schema from the final-round submit. Ollama silently drops `tool_choice` (issue #8421/#11171), so schema-removal is the only reliable text-forcing knob. Tool results stay in messages so the model can synthesize. (S23) |
+| Synthesis round | post-loop | If the loop exhausts with no text content, dispatch one extra inference call on a fresh messages array `[system_directive, user_prompt, system_with_tool_results]` — no `assistant.tool_calls` history, no `tools` schema. Qwen3-Coder mimics prior tool_call patterns from history even with no schemas (Qwen #475); the synth round removes that signal entirely. Final guarantee that an MCP-routed inference returns text. (S24) |
 | First-token timeout | 240s | `FIRST_TOKEN_TIMEOUT` — covers 200K-context cold load (PR #90) |
 | Stream-idle timeout | 45s | `STREAM_IDLE_TIMEOUT` — token-to-token gap on warm model |
 | Round total timeout | 360s | `ROUND_TOTAL_TIMEOUT` — aligned with `INFERENCE_ROUTER_TIMEOUT` |
