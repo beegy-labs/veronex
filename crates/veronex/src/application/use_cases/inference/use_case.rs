@@ -180,6 +180,7 @@ impl InferenceUseCaseImpl {
         &self, shutdown: CancellationToken,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
         use futures::FutureExt as _;
+        use std::panic::AssertUnwindSafe;
         let Some(ref valkey) = self.valkey else {
             return futures::future::ready(()).boxed();
         };
@@ -200,11 +201,43 @@ impl InferenceUseCaseImpl {
         let msg_store = self.message_store.clone();
         let lifecycle_flag = self.mcp_lifecycle_phase_enabled;
         tracing::info!("multi-provider queue dispatcher started");
+        // Panic supervisor: a single panic inside queue_dispatcher_loop must not
+        // silently kill the dispatcher task — that produces hours of "no_eligible_provider"
+        // and 600s LIFECYCLE_TIMEOUT bridge errors with no observable cause.
+        // On panic we log + sleep with exponential backoff (capped 30s) and respawn.
         async move {
-            queue_dispatcher_loop(
-                jobs, registry, job_repo, msg_store, valkey, obs, mm, vram, thermal,
-                cb, pd, ev, iid, cn, omr, msr, gmsr, shutdown, lifecycle_flag,
-            ).await;
+            let mut backoff = std::time::Duration::from_millis(500);
+            loop {
+                if shutdown.is_cancelled() { break; }
+                let inner = queue_dispatcher_loop(
+                    jobs.clone(), registry.clone(), job_repo.clone(),
+                    msg_store.clone(), valkey.clone(), obs.clone(), mm.clone(),
+                    vram.clone(), thermal.clone(), cb.clone(), pd.clone(),
+                    ev.clone(), iid.clone(), cn.clone(),
+                    omr.clone(), msr.clone(), gmsr.clone(),
+                    shutdown.clone(), lifecycle_flag,
+                );
+                match AssertUnwindSafe(inner).catch_unwind().await {
+                    Ok(()) => {
+                        tracing::info!("queue dispatcher loop exited cleanly");
+                        break;
+                    }
+                    Err(panic_payload) => {
+                        let msg = panic_payload
+                            .downcast_ref::<&'static str>()
+                            .map(|s| (*s).to_string())
+                            .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+                        tracing::error!(
+                            panic_msg = %msg,
+                            backoff_ms = backoff.as_millis() as u64,
+                            "queue_dispatcher_loop panicked — restarting after backoff"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
+                    }
+                }
+            }
         }.boxed()
     }
 

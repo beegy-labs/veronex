@@ -174,34 +174,74 @@ fn score_and_claim(
         } else { b.1.cmp(&a.1) }
     });
 
-    scored.into_iter()
-        .filter(|(_, avail)| *avail > 0)
-        .find_map(|(provider, _)| {
-            if !cb.is_allowed(provider.id) { return None; }
-            match thermal.get_level(provider.id) {
-                ThrottleLevel::Hard | ThrottleLevel::Cooldown => return None,
-                ThrottleLevel::Soft if vram.provider_active_requests(provider.id) > 0 => return None,
-                ThrottleLevel::RampUp => {
-                    // Phase 8: Cooldown ramp-up — force max_concurrent=1 during RampUp.
-                    // AIMD loop will gradually increase back to normal.
-                    let current_mc = vram.max_concurrent(provider.id, model);
-                    if current_mc > 1 {
-                        // Save pre-Hard snapshot if not already saved
-                        if vram.pre_hard_max_concurrent(provider.id, model) == 0 {
-                            vram.set_pre_hard_max_concurrent(provider.id, model, current_mc);
-                        }
-                        vram.set_max_concurrent(provider.id, model, 1);
+    // Track each candidate's rejection reason. When score_and_claim returns None,
+    // we emit ONE info log with the full breakdown so silent dispatch stalls
+    // (the symptom that produced "model load did not complete within 600s") become
+    // immediately diagnosable from logs without bumping log level.
+    let mut rejections: Vec<(Uuid, &'static str)> = Vec::with_capacity(scored.len());
+    let mut claim: Option<(LlmProvider, VramPermit)> = None;
+
+    for (provider, avail) in scored {
+        if avail <= 0 {
+            rejections.push((provider.id, "no_vram_avail"));
+            continue;
+        }
+        if !cb.is_allowed(provider.id) {
+            rejections.push((provider.id, "circuit_breaker_open"));
+            continue;
+        }
+        match thermal.get_level(provider.id) {
+            ThrottleLevel::Hard => {
+                rejections.push((provider.id, "thermal_hard"));
+                continue;
+            }
+            ThrottleLevel::Cooldown => {
+                rejections.push((provider.id, "thermal_cooldown"));
+                continue;
+            }
+            ThrottleLevel::Soft if vram.provider_active_requests(provider.id) > 0 => {
+                rejections.push((provider.id, "thermal_soft_busy"));
+                continue;
+            }
+            ThrottleLevel::RampUp => {
+                // Phase 8: Cooldown ramp-up — force max_concurrent=1 during RampUp.
+                // AIMD loop will gradually increase back to normal.
+                let current_mc = vram.max_concurrent(provider.id, model);
+                if current_mc > 1 {
+                    // Save pre-Hard snapshot if not already saved
+                    if vram.pre_hard_max_concurrent(provider.id, model) == 0 {
+                        vram.set_pre_hard_max_concurrent(provider.id, model, current_mc);
                     }
+                    vram.set_max_concurrent(provider.id, model, 1);
                 }
-                _ => {}
             }
-            // Wake standby provider on demand (instant Scale-Out recovery)
-            if vram.is_standby(provider.id) {
-                vram.set_standby(provider.id, false);
-                tracing::info!(provider_id = %provider.id, %model, "dispatch: woke standby provider on demand");
+            _ => {}
+        }
+        // Wake standby provider on demand (instant Scale-Out recovery)
+        if vram.is_standby(provider.id) {
+            vram.set_standby(provider.id, false);
+            tracing::info!(provider_id = %provider.id, %model, "dispatch: woke standby provider on demand");
+        }
+        match vram.try_reserve(provider.id, model) {
+            Some(permit) => {
+                claim = Some((provider, permit));
+                break;
             }
-            vram.try_reserve(provider.id, model).map(|permit| (provider, permit))
-        })
+            None => {
+                rejections.push((provider.id, "try_reserve_none"));
+            }
+        }
+    }
+
+    if claim.is_none() && !rejections.is_empty() {
+        tracing::info!(
+            %model,
+            rejections = ?rejections,
+            "dispatch: no provider claimed (all candidates rejected)"
+        );
+    }
+
+    claim
 }
 
 // ── Fail job when no provider is available ────────────────────────────────────
