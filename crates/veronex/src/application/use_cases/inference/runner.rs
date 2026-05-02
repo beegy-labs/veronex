@@ -19,10 +19,9 @@ use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{FinishReason, JobStatus, ProviderType};
 use crate::domain::value_objects::{JobStatusEvent, StreamToken};
 use crate::domain::constants::{
-    JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS, MAX_TOKENS_PER_JOB,
-    OWNER_REFRESH_INTERVAL, OWNERSHIP_LOST_CLEANUP_DELAY,
+    conversation_record_key, job_owner_key, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
+    MAX_TOKENS_PER_JOB, OWNER_REFRESH_INTERVAL, OWNERSHIP_LOST_CLEANUP_DELAY,
 };
-use crate::infrastructure::outbound::valkey_keys as vk_keys;
 
 use super::JobEntry;
 use super::compression_router;
@@ -345,7 +344,7 @@ async fn finalize_job(
 
     // Ownership guard: prevent double-write if reaper re-enqueued
     if let Some(vk) = valkey {
-        let owner_key = vk_keys::job_owner(uuid);
+        let owner_key = job_owner_key(uuid);
         if let Ok(Some(id)) = vk.kv_get(&owner_key).await
             && id != instance_id.as_ref()
         {
@@ -411,7 +410,7 @@ async fn finalize_job(
             // hits cache instead of S3. Compression re-write (Phase 3) will DEL
             // to force a fresh load after the compressed turn is written back.
             const CONV_CACHE_TTL_SECS: i64 = 300;
-            let cache_key = vk_keys::conversation_record(conv_id);
+            let cache_key = conversation_record_key(conv_id);
             if let Ok(json) = serde_json::to_string(&record) {
                 if let Err(e) = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await {
                     tracing::warn!(error = %e, "runner: failed to cache conversation record");
@@ -799,7 +798,7 @@ pub(super) async fn run_job(
                 // Periodic owner TTL refresh
                 if ts.last_owner_refresh.elapsed() >= OWNER_REFRESH_INTERVAL {
                     if let Some(ref vk) = valkey {
-                        let key = vk_keys::job_owner(uuid);
+                        let key = job_owner_key(uuid);
                         if let Err(e) = vk.kv_set(&key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, true).await {
                             tracing::warn!(%uuid, error = %e, "runner: failed to refresh job owner TTL");
                         }

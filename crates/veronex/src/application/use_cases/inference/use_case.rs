@@ -32,11 +32,10 @@ use crate::domain::enums::{JobSource, JobStatus, KeyTier};
 use crate::domain::errors::DomainError;
 use crate::domain::value_objects::{JobId, JobStatusEvent, ModelName, Prompt, StreamToken};
 use crate::domain::constants::{
-    INITIAL_TOKEN_CAPACITY,
-    MAX_QUEUE_SIZE, MAX_QUEUE_PER_MODEL,
+    heartbeat_key, job_owner_key, INITIAL_TOKEN_CAPACITY,
+    MAX_QUEUE_SIZE, MAX_QUEUE_PER_MODEL, QUEUE_JOBS,
     TIER_BONUS_PAID, TIER_BONUS_STANDARD, TIER_BONUS_TEST,
 };
-use crate::infrastructure::outbound::valkey_keys as vk_keys;
 
 use super::JobEntry;
 use super::dispatcher::{queue_dispatcher_loop, spawn_job_direct};
@@ -247,7 +246,7 @@ impl InferenceUseCaseImpl {
 
         // Drain legacy QUEUE_JOBS list (jobs mis-routed there by old reaper code).
         // These are recovered via DB below; stale list entries are just discarded.
-        let legacy_drained = valkey.list_drain(&crate::infrastructure::outbound::valkey_keys::queue_jobs()).await.unwrap_or(0);
+        let legacy_drained = valkey.list_drain(QUEUE_JOBS).await.unwrap_or(0);
         if legacy_drained > 0 {
             tracing::info!(legacy_drained, "drained legacy QUEUE_JOBS list (will recover via DB)");
         }
@@ -261,11 +260,11 @@ impl InferenceUseCaseImpl {
             if job.status == JobStatus::Running {
                 // Check if another node currently owns this job.
                 // Skip only if the other node is still alive (heartbeat present).
-                let owner_key = vk_keys::job_owner(uuid);
+                let owner_key = job_owner_key(uuid);
                 if let Ok(Some(owner)) = valkey.kv_get(&owner_key).await
                     && owner != self.instance_id.as_ref()
                 {
-                    let hb_key = vk_keys::heartbeat(&owner);
+                    let hb_key = heartbeat_key(&owner);
                     // owner_alive: fail-closed (true) if Valkey error
                     let owner_alive = valkey.kv_get(&hb_key).await.unwrap_or(Some(String::new())).is_some();
                     if owner_alive {

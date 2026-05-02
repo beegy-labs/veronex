@@ -295,7 +295,7 @@ async fn queue_wait_cancel_pass(
                     tracing::warn!(%uuid, "failed to persist queue_wait_exceeded: {e}");
                 }
                 // pending → failed (queue_wait_exceeded): DECR pending
-                if let Err(e) = valkey.incr_by(&vk::jobs_pending_counter(), -1).await {
+                if let Err(e) = valkey.incr_by(crate::domain::constants::JOBS_PENDING_COUNTER_KEY, -1).await {
                     tracing::warn!("DECR pending counter failed: {e}");
                 }
                 cancelled += 1;
@@ -366,7 +366,7 @@ async fn processing_reaper_pass(
         };
         let job_id = crate::domain::value_objects::JobId(uuid);
 
-        let attempts_key = format!("{}:{}", vk::queue_active_attempts(), job_id_str);
+        let attempts_key = format!("{}:{}", crate::domain::constants::QUEUE_ACTIVE_ATTEMPTS, job_id_str);
         let attempts: u64 = valkey
             .kv_get(&attempts_key)
             .await

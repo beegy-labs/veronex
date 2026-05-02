@@ -20,11 +20,11 @@ use crate::application::ports::outbound::thermal_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::constants::{
+    demand_key, preload_lock_key, scaleout_decision_key,
     PRELOAD_LOCK_TTL_SECS, SCALEOUT_DECISION_TTL_SECS,
 };
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{ProviderType, ThrottleLevel};
-use crate::infrastructure::outbound::valkey_keys as vk_keys;
 
 /// Placement planner loop interval.
 const PLANNER_INTERVAL: Duration = Duration::from_secs(5);
@@ -158,7 +158,7 @@ async fn planner_tick(
     {
         let futs: Vec<_> = all_models.iter()
             .map(|model| {
-                let key = vk_keys::demand_counter(model);
+                let key = demand_key(model);
                 let model = model.clone();
                 let valkey = valkey.clone();
                 async move {
@@ -336,7 +336,7 @@ async fn planner_tick(
         };
 
         // Multi-instance dedup: Scale-Out decision lock
-        let decision_key = vk_keys::scaleout_decision(model);
+        let decision_key = scaleout_decision_key(model);
         match valkey.kv_get(&decision_key).await {
             Ok(Some(_)) => continue, // another replica is handling this model
             _ => {}
@@ -347,7 +347,7 @@ async fn planner_tick(
         }
 
         // Preload lock (NX): prevent duplicate preload of same model+server
-        let preload_key = vk_keys::preload_lock(model, server.id);
+        let preload_key = preload_lock_key(model, server.id);
         match valkey.kv_get(&preload_key).await {
             Ok(Some(_)) => {
                 if let Err(e) = valkey.kv_del(&decision_key).await {
@@ -450,7 +450,7 @@ async fn planner_tick(
             }
 
             // Preload lock
-            let preload_key = vk_keys::preload_lock(model, p.id);
+            let preload_key = preload_lock_key(model, p.id);
             match valkey.kv_get(&preload_key).await {
                 Ok(Some(_)) => continue,
                 _ => {}

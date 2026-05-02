@@ -293,14 +293,162 @@ pub const PENDING_JOB_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 /// Tick interval for the real-time FlowStats broadcast ticker.
 pub const STATS_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
-// ── Valkey key TTLs ────────────────────────────────────────────────────────
+// ── Valkey keys (canonical, unprefixed — SSOT) ─────────────────────────────
 //
-// Key constructors (job_owner, conversation_record, heartbeat, ratelimit_tpm,
-// preload_lock, scaleout_decision, …) live in
-// [`crate::infrastructure::outbound::valkey_keys`] — they are prefix-aware
-// (multi-tenancy via `VALKEY_KEY_PREFIX`) and therefore must be infrastructure
-// concerns. TTLs that are referenced by both the application and bootstrap
-// layers stay here as protocol-level domain constants.
+// Canonical key strings/constructors. The deployment-time `VALKEY_KEY_PREFIX`
+// is applied at the infrastructure boundary by `ValkeyAdapter` and by the
+// pk-aware shims in `infrastructure::outbound::valkey_keys`.
+//
+// Application code imports these directly (domain-only) and passes the
+// canonical key to `ValkeyPort`; the adapter prepends the prefix transparently.
+
+// String constants used as raw keys.
+pub const AGENT_INSTANCES_SET_KEY: &str = "veronex:agent:instances";
+pub const INSTANCES_SET_KEY: &str = "veronex:instances";
+pub const PUBSUB_JOB_EVENTS_KEY: &str = "veronex:pubsub:job_events";
+pub const PUBSUB_CANCEL_PATTERN_KEY: &str = "veronex:pubsub:cancel:*";
+pub const PUBSUB_CANCEL_PREFIX_KEY: &str = "veronex:pubsub:cancel:";
+pub const VRAM_LEASES_SCAN_PATTERN_KEY: &str = "veronex:vram_leases:*";
+pub const PROVIDERS_ONLINE_COUNTER_KEY: &str = "veronex:stats:providers:online";
+pub const JOBS_PENDING_COUNTER_KEY: &str = "veronex:stats:jobs:pending";
+pub const JOBS_RUNNING_COUNTER_KEY: &str = "veronex:stats:jobs:running";
+
+// Job lifecycle.
+pub fn job_owner_key(job_id: uuid::Uuid) -> String {
+    format!("veronex:job:owner:{job_id}")
+}
+pub fn stream_tokens_key(job_id: uuid::Uuid) -> String {
+    format!("veronex:stream:tokens:{job_id}")
+}
+pub fn pubsub_cancel_key(job_id: uuid::Uuid) -> String {
+    format!("veronex:pubsub:cancel:{job_id}")
+}
+
+// Conversation cache.
+pub fn conversation_record_key(conversation_id: uuid::Uuid) -> String {
+    format!("veronex:conv:{conversation_id}")
+}
+pub fn conv_s3_cache_key(conv_id: uuid::Uuid) -> String {
+    format!("conv_s3:{conv_id}")
+}
+
+// Instance / agent coordination.
+pub fn heartbeat_key(instance_id: &str) -> String {
+    format!("veronex:heartbeat:{instance_id}")
+}
+pub fn agent_heartbeat_key(hostname: &str) -> String {
+    format!("veronex:agent:hb:{hostname}")
+}
+pub fn slot_leases_key(provider_id: uuid::Uuid, model: &str) -> String {
+    format!("veronex:slot_leases:{provider_id}:{model}")
+}
+
+// Provider liveness / capacity.
+pub fn provider_heartbeat_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:provider:hb:{provider_id}")
+}
+pub fn provider_capacity_state_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:provider:{provider_id}:capacity_state")
+}
+pub fn provider_models_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:models:{provider_id}")
+}
+pub fn hw_metrics_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:hw:{provider_id}")
+}
+pub fn server_node_metrics_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:server_metrics:{server_id}")
+}
+pub fn thermal_throttle_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:throttle:{provider_id}")
+}
+
+// VRAM pool.
+pub fn vram_reserved_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:vram_reserved:{provider_id}")
+}
+pub fn vram_leases_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:vram_leases:{provider_id}")
+}
+
+// Demand / scaleout / preload.
+pub fn demand_key(model: &str) -> String {
+    format!("veronex:demand:{model}")
+}
+pub fn preload_lock_key(model: &str, provider_id: uuid::Uuid) -> String {
+    format!("veronex:preloading:{model}:{provider_id}")
+}
+pub fn scaleout_decision_key(model: &str) -> String {
+    format!("veronex:scaleout:{model}")
+}
+
+// Auth / sessions.
+pub fn revoked_jti_key(jti: uuid::Uuid) -> String {
+    format!("veronex:revoked:{jti}")
+}
+pub fn password_reset_key(token: &str) -> String {
+    format!("veronex:pwreset:{token}")
+}
+pub fn refresh_blocklist_key(hash: &str) -> String {
+    format!("veronex:refresh_used:{hash}")
+}
+pub fn login_attempts_key(ip: &str) -> String {
+    format!("veronex:login_attempts:{ip}")
+}
+
+// Rate limiting.
+pub fn ratelimit_rpm_key(key_id: uuid::Uuid) -> String {
+    format!("veronex:ratelimit:rpm:{key_id}")
+}
+pub fn ratelimit_tpm_key(key_id: uuid::Uuid, minute: i64) -> String {
+    format!("veronex:ratelimit:tpm:{key_id}:{minute}")
+}
+
+// Gemini per-key counters.
+pub fn gemini_rpm_key(provider_id: uuid::Uuid, model: &str, minute: i64) -> String {
+    format!("veronex:gemini:rpm:{provider_id}:{model}:{minute}")
+}
+pub fn gemini_rpd_key(provider_id: uuid::Uuid, model: &str, date: &str) -> String {
+    format!("veronex:gemini:rpd:{provider_id}:{model}:{date}")
+}
+
+// Ollama model context.
+pub fn ollama_model_ctx_key(provider_id: uuid::Uuid, model_name: &str) -> String {
+    format!("veronex:ollama:ctx:{provider_id}:{model_name}")
+}
+
+// Service health.
+pub fn service_health_key(instance_id: &str) -> String {
+    format!("veronex:svc:health:{instance_id}")
+}
+
+// MCP.
+pub fn mcp_tool_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:tools:{server_id}")
+}
+pub fn mcp_tool_lock_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:tools:lock:{server_id}")
+}
+pub fn mcp_heartbeat_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:heartbeat:{server_id}")
+}
+pub fn mcp_key_acl_key(api_key_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:acl:{api_key_id}")
+}
+pub fn mcp_key_cap_points_key(api_key_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:cap:{api_key_id}")
+}
+pub fn mcp_key_top_k_key(api_key_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:topk:{api_key_id}")
+}
+pub fn mcp_result_key(tool_name: &str, args_hash: &str) -> String {
+    format!("veronex:mcp:result:{tool_name}:{args_hash}")
+}
+pub fn mcp_tools_summary_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:tools_summary:{server_id}")
+}
+
+// ── Valkey key TTLs ────────────────────────────────────────────────────────
 
 /// TTL (seconds) for the preload lock — covers a typical cold-load window.
 pub const PRELOAD_LOCK_TTL_SECS: i64 = 180;
