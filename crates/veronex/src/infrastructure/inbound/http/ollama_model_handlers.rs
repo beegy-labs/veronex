@@ -5,7 +5,6 @@ use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::domain::enums::ProviderType;
 use crate::domain::value_objects::{JobId, ProviderId};
 use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;
 
@@ -131,7 +130,7 @@ pub async fn sync_all_providers(
         Ok(all) => {
             let ollama: Vec<_> = all
                 .into_iter()
-                .filter(|p| p.provider_type == ProviderType::Ollama)
+                .filter(|p| p.is_ollama())
                 .collect();
             ollama
         }
@@ -316,7 +315,7 @@ pub async fn pull_model(
 
     // Verify provider exists and is Ollama
     let provider = match state.provider_registry.get(provider_id).await {
-        Ok(Some(p)) if p.provider_type == ProviderType::Ollama => p,
+        Ok(Some(p)) if p.is_ollama() => p,
         Ok(Some(_)) => {
             return (
                 StatusCode::BAD_REQUEST,

@@ -71,13 +71,39 @@ return 1
 
 pub struct ValkeyAdapter {
     pool: Pool,
+    /// Pre-loaded Lua scripts. SHA1 is computed at construction; `warmup()`
+    /// uploads each script via `SCRIPT LOAD`, after which all subsequent
+    /// invocations send only the SHA1 via `EVALSHA`.
+    /// At target scale (1M TPS) this avoids resending the script body on
+    /// every queue enqueue / claim — a multi-100MB/s bandwidth win.
+    script_priority_pop: fred::types::scripts::Script,
+    script_zset_enqueue: fred::types::scripts::Script,
+    script_zset_claim: fred::types::scripts::Script,
+    script_zset_cancel: fred::types::scripts::Script,
 }
 
 impl ValkeyAdapter {
     pub fn new(pool: Pool) -> Self {
-        Self { pool }
+        use fred::types::scripts::Script;
+        Self {
+            pool,
+            script_priority_pop: Script::from_lua(LUA_PRIORITY_POP),
+            script_zset_enqueue: Script::from_lua(LUA_ZSET_ENQUEUE),
+            script_zset_claim: Script::from_lua(LUA_ZSET_CLAIM),
+            script_zset_cancel: Script::from_lua(LUA_ZSET_CANCEL),
+        }
     }
 
+    /// Upload all Lua scripts via `SCRIPT LOAD`. Called once at startup after
+    /// the pool is ready. `evalsha_with_reload` would also work but adds a
+    /// per-call branch; loading up-front keeps the hot path branch-free.
+    pub async fn warmup(&self) -> Result<()> {
+        self.script_priority_pop.load(self.pool.next()).await?;
+        self.script_zset_enqueue.load(self.pool.next()).await?;
+        self.script_zset_claim.load(self.pool.next()).await?;
+        self.script_zset_cancel.load(self.pool.next()).await?;
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -107,8 +133,8 @@ impl ValkeyPort for ValkeyAdapter {
         keys.push(pk(processing_key));
 
         let result: Option<String> = self
-            .pool
-            .eval(LUA_PRIORITY_POP, keys, Vec::<String>::new())
+            .script_priority_pop
+            .evalsha(&self.pool, keys, Vec::<String>::new())
             .await?;
         Ok(result)
     }
@@ -155,7 +181,7 @@ impl ValkeyPort for ValkeyAdapter {
             max_per_model.to_string(),
         ];
 
-        let result: i64 = self.pool.eval(LUA_ZSET_ENQUEUE, keys, args).await?;
+        let result: i64 = self.script_zset_enqueue.evalsha(&self.pool, keys, args).await?;
         if result == -1 {
             tracing::warn!(%job_id, %model, "per-model queue limit reached");
         }
@@ -190,7 +216,7 @@ impl ValkeyPort for ValkeyAdapter {
         ];
         let args = vec![job_id.to_string(), deadline_ms.to_string()];
 
-        let result: i64 = self.pool.eval(LUA_ZSET_CLAIM, keys, args).await?;
+        let result: i64 = self.script_zset_claim.evalsha(&self.pool, keys, args).await?;
         Ok(result == 1)
     }
 
@@ -205,7 +231,7 @@ impl ValkeyPort for ValkeyAdapter {
         ];
         let args = vec![job_id.to_string()];
 
-        let result: i64 = self.pool.eval(LUA_ZSET_CANCEL, keys, args).await?;
+        let result: i64 = self.script_zset_cancel.evalsha(&self.pool, keys, args).await?;
         Ok(result == 1)
     }
 

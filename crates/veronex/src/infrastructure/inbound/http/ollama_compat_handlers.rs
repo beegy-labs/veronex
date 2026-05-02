@@ -381,7 +381,7 @@ pub async fn chat(
                 use fred::prelude::*;
                 let providers = state.provider_registry.list_active().await.unwrap_or_default();
                 let mut found = None;
-                for p in providers.iter().filter(|p| p.provider_type == ProviderType::Ollama) {
+                for p in providers.iter().filter(|p| p.is_ollama()) {
                     let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, &req.model);
                     if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
                         if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
@@ -493,7 +493,7 @@ pub async fn chat(
                     use fred::prelude::*;
                     let providers = state.provider_registry.list_active().await.unwrap_or_default();
                     let mut found = None;
-                    for p in providers.iter().filter(|p| p.provider_type == ProviderType::Ollama) {
+                    for p in providers.iter().filter(|p| p.is_ollama()) {
                         let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, &req.model);
                         if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
                             if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
@@ -510,7 +510,7 @@ pub async fn chat(
                 // Session handoff
                 if session_handoff::should_handoff(&record, configured_ctx6, &lab6) {
                     let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    if let Some(provider) = providers.iter().find(|p| p.provider_type == ProviderType::Ollama) {
+                    if let Some(provider) = providers.iter().find(|p| p.is_ollama()) {
                         let summary_model = lab6.compression_model.clone().unwrap_or_else(|| req.model.clone());
                         if let Some((new_cid, master_summary)) = session_handoff::perform_handoff(
                             &record, cid, caller_owner, date, &summary_model,
@@ -898,7 +898,7 @@ async fn pick_ollama(state: &AppState) -> Result<LlmProvider, Response> {
 
     providers
         .into_iter()
-        .find(|b| b.provider_type == ProviderType::Ollama)
+        .find(|b| b.is_ollama())
         .ok_or_else(|| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,

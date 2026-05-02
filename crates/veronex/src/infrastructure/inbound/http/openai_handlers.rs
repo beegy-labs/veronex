@@ -1009,7 +1009,7 @@ async fn load_conversation_context(
                     use fred::prelude::*;
                     let providers = state.provider_registry.list_active().await.unwrap_or_default();
                     let mut found = None;
-                    for p in providers.iter().filter(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama) {
+                    for p in providers.iter().filter(|p| p.is_ollama()) {
                         let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, model_name);
                         if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
                             if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
@@ -1044,7 +1044,7 @@ async fn load_conversation_context(
                 // ── Session handoff check ─────────────────────────────────────
                 if session_handoff::should_handoff(&record, configured_ctx, &lab) {
                     let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    let ollama = providers.iter().find(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama);
+                    let ollama = providers.iter().find(|p| p.is_ollama());
                     if let Some(provider) = ollama {
                         let summary_model = lab.compression_model.clone()
                             .unwrap_or_else(|| model_name.to_string());

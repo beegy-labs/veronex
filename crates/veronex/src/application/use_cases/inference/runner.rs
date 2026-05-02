@@ -603,8 +603,11 @@ pub(super) async fn run_job(
     );
 
     // pending → running: DECR pending, INCR running (no DB write — finalize() handles all)
-    decr_pending(&valkey).await;
-    incr_running(&valkey).await;
+    // Two independent counter writes → fire concurrently to halve round-trip latency.
+    tokio::join!(
+        decr_pending(&valkey),
+        incr_running(&valkey),
+    );
 
     broadcast_event(&event_tx, &valkey, &instance_id, &JobStatusEvent {
         id: uuid.to_string(),

@@ -1699,95 +1699,70 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
     ids
 }
 
-/// Fetch mcp_cap_points for the given API key.
+/// Generic L1 (Valkey) + L2 (Postgres) cached lookup of an `Option<i16>`.
 ///
-/// L1: `veronex:mcp:cap:{key_id}` (Valkey, value as decimal string, TTL=60s).
-/// L2: DB fallback, result cached for next call.
-/// Returns `None` if key absent or cap is NULL (JWT session → use MAX_ROUNDS default).
-async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
+/// Both `fetch_mcp_cap_points` and `fetch_mcp_top_k` follow the identical
+/// shape: hit Valkey first, fall back to a single-row SQL `query_scalar`,
+/// repopulate the cache. The `"null"` string is the sentinel for "row
+/// exists but column is NULL" so a missing key vs an explicit NULL stay
+/// distinguishable.
+async fn cached_mcp_int_lookup(
+    state: &AppState,
+    vk_key: String,
+    sql: &'static str,
+    key_id: Uuid,
+    log_label: &'static str,
+) -> Option<i16> {
     use fred::prelude::*;
-    let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_cap_points(key_id);
 
-    // ── L1: Valkey ─────────────────────────────────────────────────────────────
     if let Some(ref pool) = state.valkey_pool
         && let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await
     {
-        // "null" sentinel = key exists but cap is NULL (no limit)
-        if cached == "null" {
-            return None;
-        }
-        if let Ok(v) = cached.parse::<u8>() {
-            return Some(v);
-        }
+        if cached == "null" { return None; }
+        if let Ok(v) = cached.parse::<i16>() { return Some(v); }
     }
 
-    // ── L2: DB ─────────────────────────────────────────────────────────────────
-    let result: Option<i16> = sqlx::query_scalar(
-        "SELECT mcp_cap_points FROM api_keys WHERE id = $1"
-    )
-    .bind(key_id)
-    .fetch_optional(&state.pg_pool)
-    .await
-    .ok()
-    .flatten();
+    let result: Option<i16> = sqlx::query_scalar(sql)
+        .bind(key_id)
+        .fetch_optional(&state.pg_pool)
+        .await
+        .ok()
+        .flatten();
 
-    // Populate cache — "null" sentinel for absent/NULL cap.
     if let Some(ref pool) = state.valkey_pool {
         let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
         if let Err(e) = pool
             .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(crate::domain::constants::MCP_KEY_CACHE_TTL_SECS)), None, false)
             .await
         {
-            tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate cap_points cache");
+            tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate {log_label} cache");
         }
     }
-
-    result.map(|v| v as u8)
+    result
 }
 
-/// Fetch the minimum top_k across granted MCP access rows for a key.
-///
-/// L1: `veronex:mcp:topk:{key_id}` (Valkey, value as decimal string, TTL=60s).
-/// L2: DB fallback, result cached.
-/// Returns `None` if all rows have NULL top_k (use global default).
+/// Fetch `mcp_cap_points` for the given API key. `None` when key is absent
+/// or the column is NULL (JWT session → use MAX_ROUNDS default).
+async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
+    cached_mcp_int_lookup(
+        state,
+        crate::infrastructure::outbound::valkey_keys::mcp_key_cap_points(key_id),
+        "SELECT mcp_cap_points FROM api_keys WHERE id = $1",
+        key_id,
+        "cap_points",
+    ).await.map(|v| v as u8)
+}
+
+/// Fetch the minimum `top_k` across granted MCP access rows for a key.
+/// `None` when all rows have NULL `top_k` (use global default).
 async fn fetch_mcp_top_k(state: &AppState, key_id: Uuid) -> Option<usize> {
-    use fred::prelude::*;
-    let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_top_k(key_id);
-
-    // ── L1: Valkey ─────────────────────────────────────────────────────────────
-    if let Some(ref pool) = state.valkey_pool
-        && let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await
-    {
-        if cached == "null" {
-            return None;
-        }
-        if let Ok(v) = cached.parse::<usize>() {
-            return Some(v);
-        }
-    }
-
-    // ── L2: DB ─────────────────────────────────────────────────────────────────
-    let result: Option<i16> = sqlx::query_scalar(
-        "SELECT MIN(top_k) FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true AND top_k IS NOT NULL"
-    )
-    .bind(key_id)
-    .fetch_optional(&state.pg_pool)
-    .await
-    .ok()
-    .flatten();
-
-    // Populate cache.
-    if let Some(ref pool) = state.valkey_pool {
-        let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
-        if let Err(e) = pool
-            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(crate::domain::constants::MCP_KEY_CACHE_TTL_SECS)), None, false)
-            .await
-        {
-            tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate top_k cache");
-        }
-    }
-
-    result.map(|v| v as usize)
+    cached_mcp_int_lookup(
+        state,
+        crate::infrastructure::outbound::valkey_keys::mcp_key_top_k(key_id),
+        "SELECT MIN(top_k) FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true AND top_k IS NOT NULL",
+        key_id,
+        "top_k",
+    ).await.map(|v| v as usize)
 }
 
 impl McpBridgeAdapter {

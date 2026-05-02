@@ -7,7 +7,6 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::domain::enums::ProviderType;
 use super::constants::ERR_MODEL_INVALID;
 use super::error::AppError;
 use super::inference_helpers::{validate_content_length, validate_model_name};
@@ -90,7 +89,7 @@ pub async fn create_embeddings(
         })?;
 
     let provider = providers.into_iter()
-        .find(|p| p.provider_type == ProviderType::Ollama)
+        .find(|p| p.is_ollama())
         .ok_or_else(|| AppError::ServiceUnavailable("no Ollama provider available for embeddings".into()))?;
 
     // SSRF prevention: validate the provider URL before making an outbound request.
