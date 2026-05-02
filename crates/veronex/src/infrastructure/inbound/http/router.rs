@@ -5,6 +5,7 @@ use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::compression::CompressionLayer;
+use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
@@ -386,6 +387,16 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
         .layer(DefaultBodyLimit::max(super::constants::JSON_BODY_LIMIT))
         .layer(cors)
         .layer(middleware::map_response(security_headers))
+        // Redact secrets from TraceLayer span fields. Layer order matters:
+        // SetSensitiveRequestHeadersLayer must be applied BEFORE (i.e. layer
+        // call comes AFTER, since tower wraps in reverse) TraceLayer so the
+        // headers are marked sensitive when the trace span captures them.
         .layer(TraceLayer::new_for_http())
+        .layer(SetSensitiveRequestHeadersLayer::new([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::COOKIE,
+            axum::http::header::PROXY_AUTHORIZATION,
+            axum::http::HeaderName::from_static("x-api-key"),
+        ]))
         .with_state(state)
 }

@@ -65,11 +65,19 @@ Global `Arc<AtomicU32>` counter in `AppState` tracks active SSE connections. Eac
 - Prevents zombie SSE connections that neither complete nor disconnect (e.g., crashed client behind a proxy that keeps TCP alive).
 - Applied to all SSE endpoints alongside the connection limiter.
 
-## Valkey Key Registry
+## Valkey Key Registry — two layers
 
-All keys defined in `infrastructure/outbound/valkey_keys.rs`.
+| Layer | Module | Caller |
+|-------|--------|--------|
+| Canonical (unprefixed) | `domain/constants.rs` — `*_key()` builder fns + `QUEUE_*` consts | application code (only domain import allowed) |
+| pk-aware shim | `infrastructure/outbound/valkey_keys.rs` — `pk(&domain::*_key())` | infrastructure that bypasses `ValkeyPort` and talks to fred directly |
 
-**Key prefix**: call `init_prefix(prefix)` once at startup (before any Valkey ops) to prepend a deployment-level namespace to every key. Default `""` = no prefix. Example: `init_prefix("prod:")` → `"prod:veronex:queue:zset"`. Runtime code always uses pk-aware functions (e.g. `queue_zset()`). Raw constants (e.g. `QUEUE_ZSET`) are retained for cross-boundary test format guards only.
+`ValkeyAdapter` applies `pk()` automatically inside every key-taking method
+(`kv_set`, `kv_get`, `kv_del`, `incr_by`, `queue_*`, `list_*`, `zset_claim`'s
+`processing_key` arg, …). So application passes canonical keys; the
+deployment-time `VALKEY_KEY_PREFIX` is enforced at the port boundary only.
+
+**Key prefix**: call `valkey_keys::init_prefix(prefix)` once at startup (before any Valkey ops) to prepend a deployment-level namespace to every key. Default `""` = no prefix. Example: `init_prefix("prod:")` → `"prod:veronex:queue:zset"`.
 
 | Key | Type | TTL | Purpose |
 |-----|------|-----|---------|
@@ -142,7 +150,7 @@ Domain and application-layer constants live in `domain/constants.rs`:
 | `OWNER_REFRESH_INTERVAL` | `60s` | Owner key refresh interval |
 | `INITIAL_TOKEN_CAPACITY` | `256` | Per-job token Vec initial capacity |
 
-HTTP-specific constants remain in `infrastructure/inbound/http/constants.rs` (SSE_*, MODELS_CACHE_TTL) with re-exports from `domain::constants` for convenience.
+HTTP-specific constants remain in `infrastructure/inbound/http/constants.rs` (SSE_*, INFERENCE_ROUTER_TIMEOUT, JWT_ROUTER_TIMEOUT, body limits) with re-exports from `domain::constants` for convenience. `MODELS_CACHE_TTL_SECS` lives in `domain/constants.rs` since the capacity analyzer also reaches it.
 
 ## Shared Handler Helpers
 

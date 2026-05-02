@@ -28,7 +28,7 @@ if !locked { return; }
 
 ### MCP Valkey Key Convention (Cross-Crate)
 
-`veronex-mcp` defines its own key strings locally (cross-crate OK, unlike `veronex` which must use `valkey_keys.rs`).
+`veronex-mcp` defines its own key strings locally (cross-crate OK, unlike `veronex` which must use canonical SSOT in `domain/constants.rs`, with `valkey_keys.rs` shims for direct-fred callers).
 All `veronex-mcp` keys use the `veronex:mcp:` namespace:
 
 | Key | TTL | Purpose |

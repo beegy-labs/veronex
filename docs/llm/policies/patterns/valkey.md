@@ -1,27 +1,48 @@
 # Code Patterns: Rust — Valkey (Redis-compatible) Patterns
 
-> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational
+> SSOT | **Last Updated**: 2026-05-02 | Classification: Operational
 > Parent index: [`../patterns.md`](../patterns.md)
 
-## Valkey Key Registry
+## Valkey Key Registry — two-layer SSOT
 
-All `veronex:*` key patterns MUST be defined in `infrastructure/outbound/valkey_keys.rs`.
-This is the single source of truth — never hardcode key strings elsewhere.
+| Layer | Module | Returns | Caller |
+|-------|--------|---------|--------|
+| Canonical | `domain/constants.rs` | unprefixed `veronex:...` strings + builder fns (`job_owner_key`, `conversation_record_key`, …) | application code (only domain import allowed) |
+| pk-aware shim | `infrastructure/outbound/valkey_keys.rs` | `pk(&domain::*_key())` | infrastructure that bypasses `ValkeyPort` and talks to fred directly |
 
-## Valkey Lua Eval
+`ValkeyAdapter` applies `pk()` automatically inside every key-taking method
+(`kv_set`/`kv_get`/`kv_del`/`incr_by`/`queue_*`/`list_*`/`zset_claim` …) so
+application code passes canonical keys and the deployment-time
+`VALKEY_KEY_PREFIX` stays an infrastructure-boundary concern.
 
-Multi-step Valkey ops must be atomic. Single `EVAL` instead of multiple round-trips.
+Never hardcode `"veronex:..."` strings outside these two modules.
+
+## Valkey Lua: SCRIPT LOAD + EVALSHA, not inline EVAL
+
+Multi-step Valkey ops must be atomic — use a single Lua script.
+At fleet scale (1M+ TPS) the script body must NOT travel on every call;
+load once at startup, send only the SHA1 thereafter.
 
 ```rust
-const RATE_LIMIT_SCRIPT: &str = r#"
+use fred::types::scripts::Script;
+
+const LUA_RATE_LIMIT: &str = r#"
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
 redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
 redis.call('EXPIRE', KEYS[1], 62)
 return redis.call('ZCARD', KEYS[1])
 "#;
-let count: u64 = pool.next()
-  .eval(RATE_LIMIT_SCRIPT, vec![key], vec![window_start, now_ms, member]).await?;
+
+// Build at construction; load once at startup via warmup().
+let script = Script::from_lua(LUA_RATE_LIMIT);
+script.load(pool.next()).await?;          // SCRIPT LOAD (boot)
+let count: u64 = script.evalsha(&pool, vec![key], vec![window_start, now_ms, member]).await?;
 ```
+
+Required Cargo features on `fred`: `i-scripts`, `sha-1`. See
+`infrastructure/outbound/valkey_adapter.rs` for the canonical pattern
+(`script_priority_pop`, `script_zset_enqueue`, `script_zset_claim`,
+`script_zset_cancel` + `warmup()`).
 
 ## Job Counters — Valkey INCR/DECR
 

@@ -49,9 +49,9 @@ Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
 | Component | Responsibility |
 |-----------|---------------|
 | `veronex-agent/src/heartbeat.rs` | `set_online(pool, provider_id, ttl_secs)` after each successful Ollama scrape |
-| `valkey_keys::provider_heartbeat(id)` | Key SSOT: `veronex:provider:hb:{uuid}` |
+| `domain::constants::provider_heartbeat_key(id)` | Canonical key: `veronex:provider:hb:{uuid}` (pk-aware shim: `valkey_keys::provider_heartbeat`) |
 | `health_checker.rs` | MGET all known heartbeat keys → one round-trip; missing key = offline |
-| `valkey_keys::PROVIDERS_ONLINE_COUNTER` | `INCR`/`DECR` atomically on status transitions → O(1) dashboard reads |
+| `domain::constants::PROVIDERS_ONLINE_COUNTER_KEY` | `INCR`/`DECR` atomically on status transitions → O(1) dashboard reads |
 
 ## Scale Guards — 10K+ Provider Patterns
 
