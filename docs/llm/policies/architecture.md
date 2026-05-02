@@ -52,7 +52,7 @@ crates/veronex/src/
 │       ├── s3/                 # S3ImageStore, S3MessageStore, WebP conversion
 │       ├── session_grouping.rs # Conversation session grouping (background loop)
 │       ├── queue_maintenance.rs # Queue reaper, orphan cleanup
-│       ├── valkey_keys.rs      # Valkey key patterns (infra-only helpers; queue names live in domain/constants.rs)
+│       ├── valkey_keys.rs      # pk-aware shims (init_prefix/pk + delegates) — canonical keys live in domain/constants.rs
 │       └── capacity/           # VramPool, DistributedVramPool, ThermalThrottleMap, CapacityAnalyzer
 │
 └── main.rs              # Composition root — wires all adapters

@@ -2,7 +2,6 @@ pub(crate) mod compression_router;
 pub mod context_assembler;
 pub(crate) mod context_budget;
 pub(crate) mod context_compressor;
-pub(crate) mod context_lookup;
 pub(crate) mod context_pruner;
 pub mod session_handoff;
 mod dispatcher;

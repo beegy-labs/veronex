@@ -103,11 +103,18 @@ pub async fn wire_repositories(
     let instance_id = &infra.instance_id;
 
     // ── Valkey port ────────────────────────────────────────────────
+    // SCRIPT LOAD all Lua scripts up-front so subsequent queue ops use the
+    // SHA1 (EVALSHA) and never re-send the script body — critical at the
+    // 1M TPS scale target (avoids ~200 MB/s of redundant traffic).
     let valkey_port: Option<Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>> =
-        valkey_pool.as_ref().map(|pool| {
-            Arc::new(ValkeyAdapter::new(pool.clone()))
-                as Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>
-        });
+        if let Some(pool) = valkey_pool.as_ref() {
+            let adapter = ValkeyAdapter::new(pool.clone());
+            adapter.warmup().await?;
+            Some(Arc::new(adapter)
+                as Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>)
+        } else {
+            None
+        };
 
     // ── Observability adapter ──────────────────────────────────────
     // Priority: OTLP direct (veronex → OTel Collector → Kafka → Redpanda → ClickHouse)

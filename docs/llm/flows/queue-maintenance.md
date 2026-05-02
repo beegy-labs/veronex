@@ -141,6 +141,6 @@ processing_reaper_pass():
 | File | Role |
 |------|------|
 | `crates/veronex/src/infrastructure/outbound/queue_maintenance.rs` | All three loops |
-| `crates/veronex/src/domain/constants.rs` | Timing/threshold constants |
+| `crates/veronex/src/domain/constants.rs` | Timing/threshold constants + canonical queue key constructors — SSOT |
 | `crates/veronex/src/bootstrap/background.rs` | Task spawn wiring |
-| `crates/veronex/src/infrastructure/outbound/valkey_keys.rs` | Queue key names |
+| `crates/veronex/src/infrastructure/outbound/valkey_keys.rs` | pk-aware shims for direct-fred callers |

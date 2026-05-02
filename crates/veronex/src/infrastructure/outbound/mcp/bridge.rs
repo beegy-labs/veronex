@@ -33,6 +33,10 @@ use veronex_mcp::{McpCircuitBreaker, McpResultCache, McpSessionManager, McpToolC
 
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::application::ports::outbound::analytics_repository::{AnalyticsRepository, McpToolCallEvent};
+use crate::domain::constants::{
+    MCP_LIFECYCLE_LOAD_TIMEOUT, MCP_ROUND_TOTAL_TIMEOUT, MCP_STREAM_IDLE_TIMEOUT,
+    MCP_TOKEN_FIRST_TIMEOUT,
+};
 use crate::domain::enums::{ApiFormat, ProviderType};
 use crate::domain::value_objects::JobId;
 use crate::infrastructure::inbound::http::inference_helpers::validate_tool_call;
@@ -52,36 +56,25 @@ const LOOP_DETECT_THRESHOLD: u8 = 3;
 const RESULT_CACHE_TTL_SECS: i64 = 300;
 /// Phase 1 timeout — covers `ensure_ready` cold-load + KV cache pre-allocation
 /// + warmup. Active until a `StreamToken::phase_boundary()` arrives from the
-/// runner (S14 Lifecycle SoD post-`ensure_ready` signal).
-///
-/// 600 s envelope covers measured worst-case 248 s on `qwen3-coder-next-200k`
-/// (Strix Halo) plus ~2.4× headroom for future 300K+ context models or
-/// VRAM-scheduler congestion. Bridge does not race actual cold-load.
-/// SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3.2.
-const LIFECYCLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(600);
+/// runner (S14 Lifecycle SoD post-`ensure_ready` signal). SSOT in
+/// [`crate::domain::constants::MCP_LIFECYCLE_LOAD_TIMEOUT`] — coupled with the
+/// `ollama::lifecycle` reqwest cold-load timeout (must stay equal).
+const LIFECYCLE_TIMEOUT: tokio::time::Duration = MCP_LIFECYCLE_LOAD_TIMEOUT;
 
 /// Phase 2 first-token timeout — applies only after the runner emits the
-/// phase-boundary token, i.e. after `ensure_ready` succeeded. Originally 60 s
-/// (S19), bumped to 300 s after live verify on `qwen3-coder-next-200k:latest`
-/// observed `model_hung_post_load` firing during prefill on a 200K-context
-/// session with ~5K MCP-injected prompt tokens — Phase 2 first token is NOT
-/// sub-second when prefill is large. 300 s covers measured worst case with
-/// ~2× headroom for 300K-context futures.
-/// SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3.2.
-const TOKEN_FIRST_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(300);
+/// phase-boundary token. SSOT in
+/// [`crate::domain::constants::MCP_TOKEN_FIRST_TIMEOUT`].
+const TOKEN_FIRST_TIMEOUT: tokio::time::Duration = MCP_TOKEN_FIRST_TIMEOUT;
 
-/// Per-token stream idle. Fires only when the model hangs mid-response (true stall).
-/// Generation gap on warm models is sub-second; 45 s is a generous safety margin.
-const STREAM_IDLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(45);
+/// Per-token stream idle. SSOT in
+/// [`crate::domain::constants::MCP_STREAM_IDLE_TIMEOUT`].
+const STREAM_IDLE_TIMEOUT: tokio::time::Duration = MCP_STREAM_IDLE_TIMEOUT;
 
-/// Hard cap per round. Must be ≥ `LIFECYCLE_TIMEOUT` + `TOKEN_FIRST_TIMEOUT` plus
-/// a streaming budget, AND ≤ the upstream Cilium HTTPRoute `timeouts.request`
-/// (1800 s, set in platform-gitops `cilium-gateway-values.yaml` for the
-/// `veronex-api-direct-dev-route`). 1500 s = 600 (Phase 1) + 300 (Phase 2 first
-/// token) + 600 streaming budget, leaving 300 s headroom under the gateway cap
-/// so the bridge always chooses its own outcome before the route layer fires.
-/// Invariants enforced by `tests::timeout_invariants`.
-const ROUND_TOTAL_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(1500);
+/// Hard cap per round. SSOT in
+/// [`crate::domain::constants::MCP_ROUND_TOTAL_TIMEOUT`]. Held under the
+/// upstream Cilium HTTPRoute `timeouts.request=1800 s`. Invariants enforced
+/// by `tests::timeout_invariants`.
+const ROUND_TOTAL_TIMEOUT: tokio::time::Duration = MCP_ROUND_TOTAL_TIMEOUT;
 
 /// Upstream gateway request-timeout that the bridge round budget must stay under.
 /// Mirrors `timeouts.request: 1800s` set on Cilium HTTPRoute in platform-gitops.
@@ -176,7 +169,6 @@ impl McpBridgeAdapter {
         model: String,
         mut messages: Vec<Value>,
         base_tools: Option<Vec<Value>>,
-        want_stream: bool,
         conversation_id: Option<uuid::Uuid>,
         stop: Option<Value>,
         seed: Option<u32>,
@@ -739,7 +731,7 @@ impl McpBridgeAdapter {
                 } else if let Some(conv_id) = conversation_id {
                     if let Some(ref pool) = state.valkey_pool {
                         use fred::prelude::*;
-                        let cache_key = crate::domain::constants::conversation_record_key(conv_id);
+                        let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(conv_id);
                         if let Err(e) = pool.del::<i64, _>(cache_key).await {
                             tracing::warn!(error = %e, "MCP: valkey DEL conversation cache failed");
                         }
@@ -1052,7 +1044,7 @@ impl McpBridgeAdapter {
                 } else if let Some(conv_id) = conversation_id {
                     if let Some(ref pool) = state.valkey_pool {
                         use fred::prelude::*;
-                        let cache_key = crate::domain::constants::conversation_record_key(conv_id);
+                        let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(conv_id);
                         if let Err(e) = pool.del::<i64, _>(cache_key).await {
                             tracing::warn!(error = %e, "ReAct: valkey DEL conversation cache failed");
                         }
@@ -1697,7 +1689,7 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
     // Populate cache — empty array is also cached (negative cache).
     if let Some(ref pool) = state.valkey_pool && let Ok(json) = serde_json::to_string(&ids) {
         if let Err(e) = pool
-            .set::<(), _, _>(&vk_key, json, Some(Expiration::EX(60)), None, false)
+            .set::<(), _, _>(&vk_key, json, Some(Expiration::EX(crate::domain::constants::MCP_KEY_CACHE_TTL_SECS)), None, false)
             .await
         {
             tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate acl cache");
@@ -1707,95 +1699,70 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
     ids
 }
 
-/// Fetch mcp_cap_points for the given API key.
+/// Generic L1 (Valkey) + L2 (Postgres) cached lookup of an `Option<i16>`.
 ///
-/// L1: `veronex:mcp:cap:{key_id}` (Valkey, value as decimal string, TTL=60s).
-/// L2: DB fallback, result cached for next call.
-/// Returns `None` if key absent or cap is NULL (JWT session → use MAX_ROUNDS default).
-async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
+/// Both `fetch_mcp_cap_points` and `fetch_mcp_top_k` follow the identical
+/// shape: hit Valkey first, fall back to a single-row SQL `query_scalar`,
+/// repopulate the cache. The `"null"` string is the sentinel for "row
+/// exists but column is NULL" so a missing key vs an explicit NULL stay
+/// distinguishable.
+async fn cached_mcp_int_lookup(
+    state: &AppState,
+    vk_key: String,
+    sql: &'static str,
+    key_id: Uuid,
+    log_label: &'static str,
+) -> Option<i16> {
     use fred::prelude::*;
-    let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_cap_points(key_id);
 
-    // ── L1: Valkey ─────────────────────────────────────────────────────────────
     if let Some(ref pool) = state.valkey_pool
         && let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await
     {
-        // "null" sentinel = key exists but cap is NULL (no limit)
-        if cached == "null" {
-            return None;
-        }
-        if let Ok(v) = cached.parse::<u8>() {
-            return Some(v);
-        }
+        if cached == "null" { return None; }
+        if let Ok(v) = cached.parse::<i16>() { return Some(v); }
     }
 
-    // ── L2: DB ─────────────────────────────────────────────────────────────────
-    let result: Option<i16> = sqlx::query_scalar(
-        "SELECT mcp_cap_points FROM api_keys WHERE id = $1"
-    )
-    .bind(key_id)
-    .fetch_optional(&state.pg_pool)
-    .await
-    .ok()
-    .flatten();
+    let result: Option<i16> = sqlx::query_scalar(sql)
+        .bind(key_id)
+        .fetch_optional(&state.pg_pool)
+        .await
+        .ok()
+        .flatten();
 
-    // Populate cache — "null" sentinel for absent/NULL cap.
     if let Some(ref pool) = state.valkey_pool {
         let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
         if let Err(e) = pool
-            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)
+            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(crate::domain::constants::MCP_KEY_CACHE_TTL_SECS)), None, false)
             .await
         {
-            tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate cap_points cache");
+            tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate {log_label} cache");
         }
     }
-
-    result.map(|v| v as u8)
+    result
 }
 
-/// Fetch the minimum top_k across granted MCP access rows for a key.
-///
-/// L1: `veronex:mcp:topk:{key_id}` (Valkey, value as decimal string, TTL=60s).
-/// L2: DB fallback, result cached.
-/// Returns `None` if all rows have NULL top_k (use global default).
+/// Fetch `mcp_cap_points` for the given API key. `None` when key is absent
+/// or the column is NULL (JWT session → use MAX_ROUNDS default).
+async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
+    cached_mcp_int_lookup(
+        state,
+        crate::infrastructure::outbound::valkey_keys::mcp_key_cap_points(key_id),
+        "SELECT mcp_cap_points FROM api_keys WHERE id = $1",
+        key_id,
+        "cap_points",
+    ).await.map(|v| v as u8)
+}
+
+/// Fetch the minimum `top_k` across granted MCP access rows for a key.
+/// `None` when all rows have NULL `top_k` (use global default).
 async fn fetch_mcp_top_k(state: &AppState, key_id: Uuid) -> Option<usize> {
-    use fred::prelude::*;
-    let vk_key = crate::infrastructure::outbound::valkey_keys::mcp_key_top_k(key_id);
-
-    // ── L1: Valkey ─────────────────────────────────────────────────────────────
-    if let Some(ref pool) = state.valkey_pool
-        && let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await
-    {
-        if cached == "null" {
-            return None;
-        }
-        if let Ok(v) = cached.parse::<usize>() {
-            return Some(v);
-        }
-    }
-
-    // ── L2: DB ─────────────────────────────────────────────────────────────────
-    let result: Option<i16> = sqlx::query_scalar(
-        "SELECT MIN(top_k) FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true AND top_k IS NOT NULL"
-    )
-    .bind(key_id)
-    .fetch_optional(&state.pg_pool)
-    .await
-    .ok()
-    .flatten();
-
-    // Populate cache.
-    if let Some(ref pool) = state.valkey_pool {
-        let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
-        if let Err(e) = pool
-            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)
-            .await
-        {
-            tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate top_k cache");
-        }
-    }
-
-    result.map(|v| v as usize)
+    cached_mcp_int_lookup(
+        state,
+        crate::infrastructure::outbound::valkey_keys::mcp_key_top_k(key_id),
+        "SELECT MIN(top_k) FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true AND top_k IS NOT NULL",
+        key_id,
+        "top_k",
+    ).await.map(|v| v as usize)
 }
 
 impl McpBridgeAdapter {

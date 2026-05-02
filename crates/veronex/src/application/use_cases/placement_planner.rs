@@ -19,9 +19,12 @@ use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegis
 use crate::application::ports::outbound::thermal_port::ThermalDrainPort;
 use crate::application::ports::outbound::thermal_port::ThermalPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
-use crate::domain::constants::demand_key;
+use crate::domain::constants::{
+    demand_key, preload_lock_key, scaleout_decision_key,
+    PRELOAD_LOCK_TTL_SECS, SCALEOUT_DECISION_TTL_SECS,
+};
 use crate::domain::entities::LlmProvider;
-use crate::domain::enums::{ProviderType, ThrottleLevel};
+use crate::domain::enums::ThrottleLevel;
 
 /// Placement planner loop interval.
 const PLANNER_INTERVAL: Duration = Duration::from_secs(5);
@@ -41,20 +44,6 @@ const TRANSITION_GUARD_SECS: u64 = 30;
 /// Scale-Out hold-down duration (seconds).
 const SCALE_OUT_HOLDDOWN_SECS: u64 = 60;
 
-/// Preload lock TTL in Valkey (seconds).
-const PRELOAD_LOCK_TTL: i64 = 180;
-
-/// Scale-Out decision lock TTL in Valkey (seconds).
-const SCALEOUT_DECISION_TTL: i64 = 30;
-
-fn preload_lock_key(model: &str, provider_id: Uuid) -> String {
-    crate::domain::constants::preload_lock_key(model, provider_id)
-}
-
-fn scaleout_decision_key(model: &str) -> String {
-    crate::domain::constants::scaleout_decision_key(model)
-}
-
 /// Returns true if demand exceeds eligible capacity threshold (80%).
 pub(crate) fn is_scale_out_needed(demand: u64, eligible_capacity: u32) -> bool {
     demand as f64 > eligible_capacity as f64 * SCALE_OUT_THRESHOLD
@@ -64,6 +53,21 @@ pub(crate) fn is_scale_out_needed(demand: u64, eligible_capacity: u32) -> bool {
 pub(crate) fn should_evict(idle_secs: u64, is_standby: bool) -> bool {
     let threshold = if is_standby { STANDBY_EVICT_IDLE_SECS } else { EVICT_IDLE_SECS };
     idle_secs >= threshold
+}
+
+/// Best-effort lock acquisition via GET + SET (no native NX in `ValkeyPort`).
+/// Returns `true` if this replica acquired the lock, `false` otherwise.
+/// Caller is responsible for `kv_del` on the cleanup path.
+async fn try_acquire_lock(
+    valkey: &dyn ValkeyPort,
+    key: &str,
+    value: &str,
+    ttl_secs: i64,
+) -> bool {
+    if matches!(valkey.kv_get(key).await, Ok(Some(_))) {
+        return false;
+    }
+    valkey.kv_set(key, value, ttl_secs, false).await.is_ok()
 }
 
 /// Run the placement planner loop.
@@ -137,7 +141,7 @@ async fn planner_tick(
     let all_providers = registry.list_all().await.unwrap_or_default();
     let ollama_providers: Vec<&LlmProvider> = all_providers
         .iter()
-        .filter(|p| p.provider_type == ProviderType::Ollama)
+        .filter(|p| p.is_ollama())
         .collect();
 
     if ollama_providers.is_empty() {
@@ -165,7 +169,7 @@ async fn planner_tick(
     }
 
     // Get demand for each model — parallel Valkey lookups
-    let mut model_demand: HashMap<String, u64> = HashMap::new();
+    let mut model_demand: HashMap<String, u64> = HashMap::with_capacity(all_models.len());
     {
         let futs: Vec<_> = all_models.iter()
             .map(|model| {
@@ -346,29 +350,13 @@ async fn planner_tick(
             continue; // No eligible server (single-server: no-op)
         };
 
-        // Multi-instance dedup: Scale-Out decision lock
+        // Multi-instance dedup: scaleout decision lock then preload lock.
         let decision_key = scaleout_decision_key(model);
-        match valkey.kv_get(&decision_key).await {
-            Ok(Some(_)) => continue, // another replica is handling this model
-            _ => {}
+        if !try_acquire_lock(valkey.as_ref(), &decision_key, instance_id, SCALEOUT_DECISION_TTL_SECS).await {
+            continue; // another replica is handling this model
         }
-        // Acquire decision lock (NX)
-        if valkey.kv_set(&decision_key, instance_id, SCALEOUT_DECISION_TTL, false).await.is_err() {
-            continue;
-        }
-
-        // Preload lock (NX): prevent duplicate preload of same model+server
         let preload_key = preload_lock_key(model, server.id);
-        match valkey.kv_get(&preload_key).await {
-            Ok(Some(_)) => {
-                if let Err(e) = valkey.kv_del(&decision_key).await {
-                    tracing::warn!(error = %e, "placement: failed to release decision lock");
-                }
-                continue;
-            }
-            _ => {}
-        }
-        if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL, false).await.is_err() {
+        if !try_acquire_lock(valkey.as_ref(), &preload_key, "1", PRELOAD_LOCK_TTL_SECS).await {
             if let Err(e) = valkey.kv_del(&decision_key).await {
                 tracing::warn!(error = %e, "placement: failed to release decision lock on preload conflict");
             }
@@ -460,13 +448,9 @@ async fn planner_tick(
                 continue;
             }
 
-            // Preload lock
+            // Preload lock — skip if another replica already preloading this (model, provider).
             let preload_key = preload_lock_key(model, p.id);
-            match valkey.kv_get(&preload_key).await {
-                Ok(Some(_)) => continue,
-                _ => {}
-            }
-            if valkey.kv_set(&preload_key, "1", PRELOAD_LOCK_TTL, false).await.is_err() {
+            if !try_acquire_lock(valkey.as_ref(), &preload_key, "1", PRELOAD_LOCK_TTL_SECS).await {
                 continue;
             }
 

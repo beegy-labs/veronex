@@ -57,6 +57,22 @@ fn validate_permissions(perms: &[String]) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Fetch the (name, is_system) pair for a role id; used by update + delete
+/// before mutating, both for the system-role guard and the audit-event name.
+async fn fetch_role_identity(
+    pool: &sqlx::PgPool,
+    rid: &RoleId,
+) -> Result<(String, bool), AppError> {
+    sqlx::query_as::<_, (String, bool)>(
+        "SELECT name, is_system FROM roles WHERE id = $1",
+    )
+    .bind(rid.0)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("get role: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("role {rid} not found")))
+}
+
 // ── GET /v1/roles ───────────────────────────────────────────────────────────
 
 pub async fn list_roles(
@@ -146,15 +162,7 @@ pub async fn update_role(
     State(state): State<AppState>,
     Json(req): Json<UpdateRoleRequest>,
 ) -> Result<StatusCode, AppError> {
-    let row = sqlx::query_as::<_, (String, bool)>(
-        "SELECT name, is_system FROM roles WHERE id = $1"
-    )
-    .bind(rid.0)
-    .fetch_optional(&state.pg_pool)
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("get role: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("role {rid} not found")))?;
-
+    let row = fetch_role_identity(&state.pg_pool, &rid).await?;
     if row.1 {
         return Err(AppError::Forbidden("system roles cannot be modified".into()));
     }
@@ -211,15 +219,7 @@ pub async fn delete_role(
     Path(rid): Path<RoleId>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, AppError> {
-    let row = sqlx::query_as::<_, (String, bool)>(
-        "SELECT name, is_system FROM roles WHERE id = $1"
-    )
-    .bind(rid.0)
-    .fetch_optional(&state.pg_pool)
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("get role: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("role {rid} not found")))?;
-
+    let row = fetch_role_identity(&state.pg_pool, &rid).await?;
     if row.1 {
         return Err(AppError::Forbidden("system roles cannot be deleted".into()));
     }

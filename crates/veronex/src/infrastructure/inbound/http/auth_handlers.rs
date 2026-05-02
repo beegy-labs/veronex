@@ -148,10 +148,6 @@ fn hash_token(raw: &str) -> String {
     hex::encode(h.finalize())
 }
 
-fn pwreset_key(token: &str) -> String {
-    valkey_keys::password_reset(token)
-}
-
 /// Add `jti` to the Valkey revocation blocklist with a TTL matching the token's
 /// remaining lifetime.  Fail-open: Valkey errors are non-fatal because JTI
 /// revocation is defense-in-depth — the session is already revoked in the
@@ -310,13 +306,13 @@ pub async fn login(
                 1
             });
             if count == 1 {
-                let _: bool = pool.expire(&key, 300, None).await.unwrap_or_else(|e| {
+                let _: bool = pool.expire(&key, crate::domain::constants::LOGIN_ATTEMPTS_WINDOW_SECS, None).await.unwrap_or_else(|e| {
                     tracing::warn!(ip, error = %e, "login rate-limit: expire failed, key may not expire");
                     false
                 });
             }
             if count > state.login_rate_limit as i64 {
-                return Err(AppError::TooManyRequests { retry_after: 300 });
+                return Err(AppError::TooManyRequests { retry_after: crate::domain::constants::LOGIN_ATTEMPTS_WINDOW_SECS as u64 });
             }
         }
     }
@@ -490,7 +486,7 @@ pub async fn reset_password(
         .ok_or_else(|| AppError::ServiceUnavailable("valkey not configured".into()))?;
 
     use fred::prelude::*;
-    let key = pwreset_key(&req.token);
+    let key = valkey_keys::password_reset(&req.token);
     // S1: Atomically get-and-delete to prevent token reuse race window
     let account_id_str: Option<String> =
         pool.getdel(&key).await

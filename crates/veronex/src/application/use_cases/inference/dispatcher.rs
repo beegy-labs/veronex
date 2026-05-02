@@ -23,13 +23,12 @@ use crate::domain::entities::{InferenceJob, LlmProvider};
 use crate::domain::enums::{JobStatus, KeyTier, ProviderType, ThrottleLevel};
 use crate::domain::value_objects::JobStatusEvent;
 use crate::domain::constants::{
-    GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
-    MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
-    QUEUE_POLL_INTERVAL,
+    job_owner_key, GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY,
+    JOB_OWNER_TTL_SECS, MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ACTIVE,
+    QUEUE_ERROR_BACKOFF, QUEUE_POLL_INTERVAL,
     LOCALITY_BONUS_MS, ZSET_PEEK_K, ZSET_PEEK_K_MAX,
     NO_PROVIDER_ATTEMPTS_PREFIX, MAX_NO_PROVIDER_ATTEMPTS,
 };
-use crate::infrastructure::outbound::valkey_keys as vk_keys;
 use crate::application::ports::outbound::concurrency_port::VramPermit;
 
 use super::JobEntry;
@@ -492,8 +491,7 @@ pub(super) async fn queue_dispatcher_loop(
                 }
 
                 // Exceeded retry limit — permanently fail.
-                let queue_active = vk_keys::queue_active();
-                let claimed = valkey.zset_claim(&job_id_str, &queue_active, model).await.unwrap_or(false);
+                let claimed = valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await.unwrap_or(false);
                 if claimed {
                     valkey.active_lease_remove(&job_id_str).await
                         .unwrap_or_else(|e| tracing::warn!(%uuid, error = %e, "dispatcher: active_lease_remove failed"));
@@ -523,8 +521,7 @@ pub(super) async fn queue_dispatcher_loop(
             };
 
             // Atomic ZSET claim (ZREM + ZADD active + DECR demand)
-            let queue_active = vk_keys::queue_active();
-            match valkey.zset_claim(&job_id_str, &queue_active, model).await {
+            match valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await {
                 Ok(true) => { /* claimed successfully */ }
                 Ok(false) => {
                     // Another instance already took it — release VRAM and try next
@@ -546,7 +543,7 @@ pub(super) async fn queue_dispatcher_loop(
                 e.assigned_provider_id = Some(pid);
             }
 
-            let owner_key = crate::domain::constants::job_owner_key(uuid);
+            let owner_key = job_owner_key(uuid);
             if let Err(e) = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await {
                 tracing::warn!(%uuid, key = %owner_key, error = %e, "dispatcher: failed to set job owner key");
             }

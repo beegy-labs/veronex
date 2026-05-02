@@ -236,6 +236,19 @@ pub struct LlmProvider {
     pub registered_at: DateTime<Utc>,
 }
 
+impl LlmProvider {
+    /// True for Ollama-typed providers. Used by handlers and helpers that
+    /// filter the registry list to local GPU hosts (vs. Gemini cloud).
+    pub fn is_ollama(&self) -> bool {
+        self.provider_type == ProviderType::Ollama
+    }
+
+    /// True for Gemini-typed providers (cloud).
+    pub fn is_gemini(&self) -> bool {
+        self.provider_type == ProviderType::Gemini
+    }
+}
+
 fn default_num_parallel() -> i16 {
     4
 }

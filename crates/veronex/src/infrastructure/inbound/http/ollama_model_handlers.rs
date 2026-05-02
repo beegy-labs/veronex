@@ -5,7 +5,6 @@ use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::domain::enums::ProviderType;
 use crate::domain::value_objects::{JobId, ProviderId};
 use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;
 
@@ -131,7 +130,7 @@ pub async fn sync_all_providers(
         Ok(all) => {
             let ollama: Vec<_> = all
                 .into_iter()
-                .filter(|p| p.provider_type == ProviderType::Ollama)
+                .filter(|p| p.is_ollama())
                 .collect();
             ollama
         }
@@ -167,83 +166,83 @@ pub async fn sync_all_providers(
     tokio::spawn(
         async move {
             let client = http_client;
-    
-            for provider in providers {
-                let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
-    
-                let result = async {
-                    let json: serde_json::Value = client
-                        .get(&url)
-                        .send()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("cannot reach ollama: {e}"))?
-                        .error_for_status()
-                        .map_err(|e| anyhow::anyhow!("ollama returned error: {e}"))?
-                        .json()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("failed to parse ollama response: {e}"))?;
-    
-                    let models: Vec<String> = json["models"]
-                        .as_array()
-                        .map_or(&[] as &[_], |v| v)
-                        .iter()
-                        .filter_map(|m| m["name"].as_str().map(String::from))
-                        .collect();
-    
-                    ollama_model_repo
-                        .sync_provider_models(provider.id, &models)
-                        .await?;
-    
-                    anyhow::Ok(models)
-                }
-                .await;
-    
-                let progress_entry = match result {
-                    Ok(models) => {
-                        // Upsert model selections (is_enabled defaults to true for new rows).
-                        if let Err(e) = model_selection_repo.upsert_models(provider.id, &models).await {
-                            tracing::warn!(provider_id = %provider.id, "upsert model selections failed (non-fatal): {e}");
+
+            // Fan out per-provider sync concurrently — at fleet scale this turns
+            // an O(N) sequential pull into one wall-clock RTT bounded by the
+            // slowest provider.
+            futures::future::join_all(providers.into_iter().map(|provider| {
+                let client = client.clone();
+                let ollama_model_repo = ollama_model_repo.clone();
+                let model_selection_repo = model_selection_repo.clone();
+                let ollama_sync_job_repo = ollama_sync_job_repo.clone();
+                async move {
+                    let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
+                    let result = async {
+                        let json: serde_json::Value = client
+                            .get(&url)
+                            .send()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("cannot reach ollama: {e}"))?
+                            .error_for_status()
+                            .map_err(|e| anyhow::anyhow!("ollama returned error: {e}"))?
+                            .json()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("failed to parse ollama response: {e}"))?;
+
+                        let models: Vec<String> = json["models"]
+                            .as_array()
+                            .map_or(&[] as &[_], |v| v)
+                            .iter()
+                            .filter_map(|m| m["name"].as_str().map(String::from))
+                            .collect();
+
+                        ollama_model_repo.sync_provider_models(provider.id, &models).await?;
+                        anyhow::Ok(models)
+                    }.await;
+
+                    let progress_entry = match result {
+                        Ok(models) => {
+                            if let Err(e) = model_selection_repo.upsert_models(provider.id, &models).await {
+                                tracing::warn!(provider_id = %provider.id, "upsert model selections failed (non-fatal): {e}");
+                            }
+                            tracing::info!(
+                                provider_id = %provider.id,
+                                name = %provider.name,
+                                count = models.len(),
+                                "ollama provider synced"
+                            );
+                            serde_json::json!({
+                                "provider_id": provider.id,
+                                "name": provider.name,
+                                "models": models,
+                                "error": null
+                            })
                         }
-                        tracing::info!(
-                            provider_id = %provider.id,
-                            name = %provider.name,
-                            count = models.len(),
-                            "ollama provider synced"
-                        );
-                        serde_json::json!({
-                            "provider_id": provider.id,
-                            "name": provider.name,
-                            "models": models,
-                            "error": null
-                        })
+                        Err(e) => {
+                            tracing::warn!(
+                                provider_id = %provider.id,
+                                name = %provider.name,
+                                "ollama provider sync failed: {e}"
+                            );
+                            serde_json::json!({
+                                "provider_id": provider.id,
+                                "name": provider.name,
+                                "models": [],
+                                "error": "sync failed"
+                            })
+                        }
+                    };
+
+                    if let Err(e) = ollama_sync_job_repo.update_progress(job_id, progress_entry).await {
+                        tracing::error!(%job_id, "failed to update sync job progress: {e}");
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            provider_id = %provider.id,
-                            name = %provider.name,
-                            "ollama provider sync failed: {e}"
-                        );
-                        serde_json::json!({
-                            "provider_id": provider.id,
-                            "name": provider.name,
-                            "models": [],
-                            "error": "sync failed"
-                        })
-                    }
-                };
-    
-                if let Err(e) = ollama_sync_job_repo
-                    .update_progress(job_id, progress_entry)
-                    .await
-                {
-                    tracing::error!(%job_id, "failed to update sync job progress: {e}");
                 }
-            }
-    
+            })).await;
+
             if let Err(e) = ollama_sync_job_repo.complete(job_id).await {
                 tracing::error!(%job_id, "failed to mark sync job completed: {e}");
             }
-    
+
             tracing::info!(%job_id, "ollama global sync completed");
         }
         .instrument(tracing::info_span!("veronex.ollama_model_handlers.spawn")),
@@ -316,7 +315,7 @@ pub async fn pull_model(
 
     // Verify provider exists and is Ollama
     let provider = match state.provider_registry.get(provider_id).await {
-        Ok(Some(p)) if p.provider_type == ProviderType::Ollama => p,
+        Ok(Some(p)) if p.is_ollama() => p,
         Ok(Some(_)) => {
             return (
                 StatusCode::BAD_REQUEST,

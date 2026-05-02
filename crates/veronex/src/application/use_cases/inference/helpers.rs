@@ -10,53 +10,28 @@ use crate::application::ports::outbound::valkey_port::ValkeyPort;
 use crate::domain::entities::InferenceJob;
 use crate::domain::enums::FinishReason;
 use crate::domain::value_objects::JobStatusEvent;
-use crate::domain::constants::TPM_ESTIMATED_TOKENS;
-
-use crate::infrastructure::outbound::valkey_keys as vk_keys;
+use crate::domain::constants::{
+    ratelimit_tpm_key, JOBS_PENDING_COUNTER_KEY, JOBS_RUNNING_COUNTER_KEY,
+    TPM_ESTIMATED_TOKENS,
+};
 
 use super::JobEntry;
 
 // ── Job counter helpers (fire-and-forget) ────────────────────────────────────
 
-/// Atomically increment the pending job counter in Valkey.
-pub(super) async fn incr_pending(valkey: &Option<Arc<dyn ValkeyPort>>) {
-    if let Some(vk) = valkey {
-        let key = vk_keys::jobs_pending_counter();
-        if let Err(e) = vk.incr_by(&key, 1).await {
-            tracing::warn!("INCR pending counter failed: {e}");
-        }
+/// Adjust a Valkey job-state counter; logs on failure, never panics.
+async fn adjust_counter(valkey: &Option<Arc<dyn ValkeyPort>>, key: &'static str, delta: i64) {
+    if let Some(vk) = valkey
+        && let Err(e) = vk.incr_by(key, delta).await
+    {
+        tracing::warn!(key, delta, "counter adjustment failed: {e}");
     }
 }
 
-/// Atomically decrement the pending job counter in Valkey.
-pub(super) async fn decr_pending(valkey: &Option<Arc<dyn ValkeyPort>>) {
-    if let Some(vk) = valkey {
-        let key = vk_keys::jobs_pending_counter();
-        if let Err(e) = vk.incr_by(&key, -1).await {
-            tracing::warn!("DECR pending counter failed: {e}");
-        }
-    }
-}
-
-/// Atomically increment the running job counter in Valkey.
-pub(super) async fn incr_running(valkey: &Option<Arc<dyn ValkeyPort>>) {
-    if let Some(vk) = valkey {
-        let key = vk_keys::jobs_running_counter();
-        if let Err(e) = vk.incr_by(&key, 1).await {
-            tracing::warn!("INCR running counter failed: {e}");
-        }
-    }
-}
-
-/// Atomically decrement the running job counter in Valkey.
-pub(super) async fn decr_running(valkey: &Option<Arc<dyn ValkeyPort>>) {
-    if let Some(vk) = valkey {
-        let key = vk_keys::jobs_running_counter();
-        if let Err(e) = vk.incr_by(&key, -1).await {
-            tracing::warn!("DECR running counter failed: {e}");
-        }
-    }
-}
+pub(super) async fn incr_pending(vk: &Option<Arc<dyn ValkeyPort>>) { adjust_counter(vk, JOBS_PENDING_COUNTER_KEY, 1).await; }
+pub(super) async fn decr_pending(vk: &Option<Arc<dyn ValkeyPort>>) { adjust_counter(vk, JOBS_PENDING_COUNTER_KEY, -1).await; }
+pub(super) async fn incr_running(vk: &Option<Arc<dyn ValkeyPort>>) { adjust_counter(vk, JOBS_RUNNING_COUNTER_KEY, 1).await; }
+pub(super) async fn decr_running(vk: &Option<Arc<dyn ValkeyPort>>) { adjust_counter(vk, JOBS_RUNNING_COUNTER_KEY, -1).await; }
 
 // ── Event broadcasting ──────────────────────────────────────────────────────
 
@@ -142,7 +117,7 @@ pub async fn record_tpm(
     }
 
     let minute = reservation_minute.unwrap_or_else(|| chrono::Utc::now().timestamp() / 60);
-    let key = crate::domain::constants::ratelimit_tpm_key(api_key_id, minute);
+    let key = ratelimit_tpm_key(api_key_id, minute);
     valkey.incr_by(&key, adjustment).await?;
     Ok(())
 }

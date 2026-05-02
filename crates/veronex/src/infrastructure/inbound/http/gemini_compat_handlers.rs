@@ -583,16 +583,19 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
         }
     };
 
-    // Collect enabled models across all Ollama providers (deduplicated)
+    // Collect enabled models across all Ollama providers (deduplicated).
+    // Concurrent fan-out so this stays one wall-clock RTT at scale.
+    let enabled_lists = futures::future::join_all(
+        providers.iter().filter(|p| p.is_ollama())
+            .map(|p| state.model_selection_repo.list_enabled(p.id)),
+    ).await;
+
     let mut seen = std::collections::HashSet::new();
     let mut model_names: Vec<String> = Vec::new();
-
-    for provider in providers.iter().filter(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama) {
-        if let Ok(enabled) = state.model_selection_repo.list_enabled(provider.id).await {
-            for name in enabled {
-                if seen.insert(name.clone()) {
-                    model_names.push(name);
-                }
+    for list in enabled_lists.into_iter().flatten() {
+        for name in list {
+            if seen.insert(name.clone()) {
+                model_names.push(name);
             }
         }
     }

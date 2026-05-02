@@ -19,8 +19,9 @@ use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{FinishReason, JobStatus, ProviderType};
 use crate::domain::value_objects::{JobStatusEvent, StreamToken};
 use crate::domain::constants::{
-    JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS, MAX_TOKENS_PER_JOB,
-    OWNER_REFRESH_INTERVAL, OWNERSHIP_LOST_CLEANUP_DELAY,
+    conversation_record_key, job_owner_key, CONV_CACHE_TTL_SECS, JOB_CLEANUP_DELAY,
+    JOB_OWNER_TTL_SECS, MAX_TOKENS_PER_JOB, OWNER_REFRESH_INTERVAL,
+    OWNERSHIP_LOST_CLEANUP_DELAY,
 };
 
 use super::JobEntry;
@@ -344,7 +345,7 @@ async fn finalize_job(
 
     // Ownership guard: prevent double-write if reaper re-enqueued
     if let Some(vk) = valkey {
-        let owner_key = crate::domain::constants::job_owner_key(uuid);
+        let owner_key = job_owner_key(uuid);
         if let Ok(Some(id)) = vk.kv_get(&owner_key).await
             && id != instance_id.as_ref()
         {
@@ -406,11 +407,10 @@ async fn finalize_job(
         if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
             tracing::warn!(job_id = %uuid, "S3 conversation write failed (non-fatal): {e}");
         } else if let (Some(conv_id), Some(vk)) = (job.conversation_id, valkey) {
-            // Cache the updated record in Valkey (TTL 300 s) so the next read
-            // hits cache instead of S3. Compression re-write (Phase 3) will DEL
-            // to force a fresh load after the compressed turn is written back.
-            const CONV_CACHE_TTL_SECS: i64 = 300;
-            let cache_key = crate::domain::constants::conversation_record_key(conv_id);
+            // Cache the updated record in Valkey so the next read hits cache
+            // instead of S3. Compression re-write (Phase 3) will DEL to force a
+            // fresh load after the compressed turn is written back.
+            let cache_key = conversation_record_key(conv_id);
             if let Ok(json) = serde_json::to_string(&record) {
                 if let Err(e) = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await {
                     tracing::warn!(error = %e, "runner: failed to cache conversation record");
@@ -603,8 +603,11 @@ pub(super) async fn run_job(
     );
 
     // pending → running: DECR pending, INCR running (no DB write — finalize() handles all)
-    decr_pending(&valkey).await;
-    incr_running(&valkey).await;
+    // Two independent counter writes → fire concurrently to halve round-trip latency.
+    tokio::join!(
+        decr_pending(&valkey),
+        incr_running(&valkey),
+    );
 
     broadcast_event(&event_tx, &valkey, &instance_id, &JobStatusEvent {
         id: uuid.to_string(),
@@ -798,7 +801,7 @@ pub(super) async fn run_job(
                 // Periodic owner TTL refresh
                 if ts.last_owner_refresh.elapsed() >= OWNER_REFRESH_INTERVAL {
                     if let Some(ref vk) = valkey {
-                        let key = crate::domain::constants::job_owner_key(uuid);
+                        let key = job_owner_key(uuid);
                         if let Err(e) = vk.kv_set(&key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, true).await {
                             tracing::warn!(%uuid, error = %e, "runner: failed to refresh job owner TTL");
                         }

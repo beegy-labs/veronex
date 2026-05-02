@@ -1,6 +1,6 @@
 # Code Patterns: Rust — sqlx & Database Patterns
 
-> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational
+> SSOT | **Last Updated**: 2026-05-02 | Classification: Operational
 > Parent index: [`../patterns.md`](../patterns.md)
 
 ## sqlx -- Compile-Time SQL
@@ -108,6 +108,16 @@ for id in &ids {
 | Aggregate / GROUP BY | Commensurate with distinct count (e.g. 8760 for hourly, 10 for statuses) |
 
 **Recurrence:** a 2026-04-07 audit found missing LIMITs in 10+ repositories (`account_repository`, `api_key_repository`, `provider_registry`, `gemini_policy_repository`, `session_repository`, `model_capacity_repository`, `gpu_server_registry`, `global_model_settings`, `ollama_model_repository`, `provider_model_selection`). Run the quarterly audit grep after adding any `fetch_all` query.
+
+## L1 (Valkey) + L2 (Postgres) Cached Lookup
+
+When two+ functions share "Valkey hit → return; miss → single-row SQL → repopulate", extract a generic helper. Canonical: `mcp::bridge::cached_mcp_int_lookup` (signature `(state, vk_key, sql, key_id, label) -> Option<i16>`). Callers become 1-line wrappers (`fetch_mcp_cap_points`, `fetch_mcp_top_k`).
+
+Sentinel for NULL: cache `"null"` string distinguishes "row exists, column NULL" from "row absent". Mutation paths must `kv_del` (not overwrite) on clear.
+
+## Batch MGET over collection
+
+Replace `for id in collection { pool.get(key(id)).await }` (N round-trips) with one `pool.mget(keys)` call (1 round-trip). Canonical: `inference_helpers::lookup_model_max_ctx` — collects `Vec<key>`, issues one `MGET`, then `find_map` preserves the first-match early-break semantics.
 
 ## Domain Enum Patterns
 

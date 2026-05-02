@@ -115,7 +115,9 @@ impl From<crate::domain::errors::DomainError> for AppError {
             DomainError::InvalidKey => Self::Unauthorized("invalid API key".into()),
             DomainError::Forbidden(msg) => Self::Forbidden(msg),
             DomainError::Conflict(msg) => Self::Conflict(msg),
-            DomainError::RateLimitExceeded(_) => Self::TooManyRequests { retry_after: 60 },
+            DomainError::RateLimitExceeded(_) => Self::TooManyRequests {
+                retry_after: crate::domain::constants::RATE_LIMIT_RETRY_AFTER_SECS,
+            },
             DomainError::ProviderUnavailable(msg) | DomainError::InferenceFailed(msg) => {
                 Self::ServiceUnavailable(msg)
             }

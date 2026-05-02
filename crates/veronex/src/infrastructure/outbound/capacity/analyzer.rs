@@ -803,7 +803,7 @@ pub async fn sync_provider(
         use fred::prelude::*;
         let cache_key = crate::infrastructure::outbound::valkey_keys::provider_models(provider_id);
         let json = serde_json::to_string(&model_names).unwrap_or_default();
-        let ttl = crate::infrastructure::inbound::http::constants::MODELS_CACHE_TTL;
+        let ttl = crate::domain::constants::MODELS_CACHE_TTL_SECS;
         pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await
             .unwrap_or_else(|e| tracing::warn!(error = %e, %cache_key, "Valkey SET provider_models cache failed"));
     }
@@ -938,22 +938,33 @@ pub async fn sync_provider(
     if governor_active {
         // Pass 1 — identify candidates: active_count > 0 OR demand_counter > 0.
         let loaded_names = vram_pool.loaded_model_names(provider_id);
-        let mut candidate_names: Vec<String> = Vec::new();
 
-        for name in &loaded_names {
-            let active = vram_pool.active_requests(provider_id, name);
-            let demand: u64 = if let Some(pool) = valkey_pool {
-                use fred::prelude::*;
-                let v: Result<Option<String>, _> =
-                    pool.get(&crate::domain::constants::demand_key(name)).await;
-                v.ok().flatten().and_then(|s| s.parse().ok()).unwrap_or(0)
+        // Single MGET batches all demand counters into one Valkey round-trip
+        // (was N sequential GETs per loaded model).
+        let demands: Vec<u64> = if let Some(pool) = valkey_pool {
+            use fred::prelude::*;
+            let keys: Vec<String> = loaded_names.iter()
+                .map(|n| crate::infrastructure::outbound::valkey_keys::demand_counter(n))
+                .collect();
+            if keys.is_empty() {
+                Vec::new()
             } else {
-                0
-            };
-            if active > 0 || demand > 0 {
-                candidate_names.push(name.clone());
+                let raw: Vec<Option<String>> = pool.mget(keys).await.unwrap_or_default();
+                raw.into_iter()
+                    .map(|opt| opt.and_then(|s| s.parse().ok()).unwrap_or(0))
+                    .collect()
             }
-        }
+        } else {
+            vec![0u64; loaded_names.len()]
+        };
+
+        let candidate_names: Vec<String> = loaded_names.iter()
+            .zip(demands.iter().chain(std::iter::repeat(&0u64)))
+            .filter(|(name, demand)| {
+                vram_pool.active_requests(provider_id, name) > 0 || **demand > 0
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
 
         // Pass 2 — batch-fetch oldest enqueue_at_ms per candidate model.
         // Uses QUEUE_MODEL_MAP (job_id → model) + QUEUE_ENQUEUE_AT (job_id → enqueue_at_ms)
@@ -1242,7 +1253,7 @@ pub async fn sync_provider(
                 "configured_ctx": arch.configured_ctx,
                 "max_ctx": arch.max_ctx,
             }).to_string();
-            pool.set(&ctx_key, ctx_json, Some(Expiration::EX(600)), None, false).await
+            pool.set(&ctx_key, ctx_json, Some(Expiration::EX(crate::domain::constants::OLLAMA_MODEL_CTX_TTL_SECS)), None, false).await
                 .unwrap_or_else(|e| tracing::warn!(error = %e, %ctx_key, "Valkey SET ctx cache failed"));
         }
 
@@ -1458,7 +1469,7 @@ pub async fn run_sync_loop(
         let all_providers = registry.list_all().await.unwrap_or_default();
         let ollama_providers: Vec<_> = all_providers
             .into_iter()
-            .filter(|p| p.provider_type == ProviderType::Ollama)
+            .filter(|p| p.is_ollama())
             .collect();
 
         use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};

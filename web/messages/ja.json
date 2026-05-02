@@ -149,6 +149,8 @@
     "toolCallsArgs": "引数",
     "toolCallsResult": "結果",
     "toolCallsNoResult": "(結果なし)",
+    "toolResult": "結果を表示",
+    "mcpCallsBadge": "MCP {{count}}回",
     "backToList": "会話一覧へ戻る"
   },
   "overview": {

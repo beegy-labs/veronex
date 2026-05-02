@@ -138,8 +138,12 @@ pub struct AppState {
     pub instance_id: Arc<str>,
     /// Maximum login attempts per IP per 5-minute window.
     /// `0` disables IP-based rate limiting (e.g. for E2E test environments).
-    /// Controlled via `LOGIN_RATE_LIMIT` env var (default: 10).
+    /// Sourced from `AppConfig::login_rate_limit` (env `LOGIN_RATE_LIMIT`, default: 10).
     pub login_rate_limit: u64,
+    /// Vision model used when an image-analysis request leaves the model
+    /// unspecified. Sourced from `AppConfig::vision_fallback_model`
+    /// (env `VISION_FALLBACK_MODEL`, default `qwen3-vl:8b`).
+    pub vision_fallback_model: Arc<str>,
     /// Redpanda metrics URL for high-watermark scraping (e.g. `http://redpanda:9644`).
     pub kafka_broker_admin_url: Option<Arc<str>>,
     /// ClickHouse HTTP base URL for pipeline stats queries.

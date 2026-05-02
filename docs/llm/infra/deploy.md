@@ -1,6 +1,6 @@
 # Infrastructure -- Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-04-11 (rev11: embed health probe added to health_checker + service health API)
+> SSOT | **Last Updated**: 2026-05-02 (rev12: AppConfig-routed env vars consolidated — LOGIN_RATE_LIMIT, VISION_FALLBACK_MODEL, VERONEX_INSTANCE_ID, VESPA_URL, MCP_VECTOR_TOP_K; AppState extended with `vision_fallback_model`, `instance_id`, MCP vector fields; canonical Valkey key SSOT moved to `domain/constants.rs`)
 
 ## Task Guide
 
@@ -79,9 +79,14 @@ CAPACITY_ANALYZER_OLLAMA_URL=http://localhost:11434
 SESSION_GROUPING_INTERVAL_SECS=86400 # session grouping loop interval (default: 86400 = 24h)
 ANALYTICS_URL=http://localhost:3003
 ANALYTICS_SECRET=<shared-secret>
-PG_POOL_MAX=10                       # PostgreSQL pool size (default: 10)
-VALKEY_POOL_SIZE=6                   # Valkey connection pool size (default: 6)
+PG_POOL_MAX=10                       # PostgreSQL pool size (default: 10) — read by AppConfig
+VALKEY_POOL_SIZE=6                   # Valkey connection pool size (default: 6) — read by AppConfig
 VALKEY_KEY_PREFIX=                   # optional: key namespace prefix (default: "" = no prefix). Example: "prod:" → "prod:veronex:queue:zset"
+LOGIN_RATE_LIMIT=10                  # max IP login attempts per 5-min window before 429 (default: 10) — AppConfig
+VISION_FALLBACK_MODEL=qwen3-vl:8b    # vision model when image-analysis request leaves model unspecified — AppConfig
+VERONEX_INSTANCE_ID=                 # optional pinned instance id (default: fresh UUIDv7 each boot) — AppConfig
+VESPA_URL=                           # optional Vespa endpoint for MCP vector retrieval — AppConfig
+MCP_VECTOR_TOP_K=16                  # MCP vector selector top-K (default: 16) — AppConfig
 
 # veronex-analytics (internal service)
 CLICKHOUSE_URL=http://localhost:8123
@@ -146,8 +151,9 @@ NEXT_PUBLIC_VERONEX_ADMIN_KEY=veronex-bootstrap-admin-key
 | `veronex:pubsub:cancel:{job_id}` | Pub/sub channel for cancellation signals |
 | `veronex:pubsub:cancel:*` | PSUBSCRIBE pattern for all cancel channels |
 
-> SSOT for all key patterns: `crates/veronex/src/infrastructure/outbound/valkey_keys.rs`
-> All patterns above assume no prefix (`VALKEY_KEY_PREFIX=""`). When a prefix is set, it is prepended to every key (e.g. `"prod:veronex:queue:zset"`).
+> Canonical (unprefixed) key constructors live in `crates/veronex/src/domain/constants.rs` (SSOT — application code imports from there).
+> `crates/veronex/src/infrastructure/outbound/valkey_keys.rs` provides pk-aware shims for direct-fred callers; `ValkeyAdapter` applies the prefix automatically inside every port method.
+> All patterns above assume no prefix (`VALKEY_KEY_PREFIX=""`). When set, it is prepended to every key (e.g. `"prod:veronex:queue:zset"`).
 
 ---
 
@@ -192,11 +198,12 @@ Categories of `Arc<dyn Port>` fields wired in `main.rs` composition root:
 |----------|------------|
 | Inference core | `use_case`, `job_repo`, `api_key_repo` |
 | Provider routing | `provider_registry`, `gpu_server_registry`, `ollama_model_repo`, `gemini_*` repos, `model_selection_repo` |
-| Auth / RBAC | `account_repo`, `session_repo`, `jwt_secret` |
+| Auth / RBAC | `account_repo`, `session_repo`, `jwt_secret`, `login_rate_limit` |
 | Observability | `audit_port`, `analytics_repo` |
 | Capacity / thermal | `vram_pool`, `thermal`, `vram_profile_repo`, `capacity_settings_repo`, `sync_trigger`, `analyzer_url` |
-| Lab features | `lab_settings_repo` |
-| Infra | `message_store` (Option, S3), `image_store` (Option, S3), `valkey_pool` (Option), `pg_pool` |
+| Lab features | `lab_settings_repo`, `vision_fallback_model: Arc<str>` |
+| MCP vector | `mcp_bridge`, `mcp_vector_selector`, `mcp_tool_indexer` |
+| Infra | `message_store` (Option, S3), `image_store` (Option, S3), `valkey_pool` (Option), `pg_pool`, `instance_id` |
 
 > Full port catalog with adapter mappings: `docs/llm/policies/architecture.md` -- Port Catalog.
 

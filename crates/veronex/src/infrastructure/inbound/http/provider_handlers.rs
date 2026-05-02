@@ -22,13 +22,9 @@ use super::gemini_helpers;
 use super::provider_validation::{parse_provider_type, validate_provider_url};
 use super::state::AppState;
 
-use super::constants::MODELS_CACHE_TTL;
+use crate::domain::constants::MODELS_CACHE_TTL_SECS as MODELS_CACHE_TTL;
 
 // ── Model cache helpers ─────────────────────────────────────────────────────────
-
-fn models_cache_key(id: Uuid) -> String {
-    valkey_keys::provider_models(id)
-}
 
 /// Fetch the list of available models directly from the provider (bypasses cache).
 ///
@@ -524,7 +520,7 @@ pub async fn list_provider_models(
         Err(e) => return e.into_response(),
     };
 
-    let cache_key = models_cache_key(id);
+    let cache_key = valkey_keys::provider_models(id);
 
     // ── Cache hit ────────────────────────────────────────────────────────────────
     if let Some(ref pool) = state.valkey_pool
@@ -582,7 +578,7 @@ pub async fn sync_provider_models(
 
     match fetch_models_live(&state.http_client, &provider).await {
         Ok(models) => {
-            let cache_key = models_cache_key(id);
+            let cache_key = valkey_keys::provider_models(id);
             if let Some(ref pool) = state.valkey_pool {
                 store_models_cache(pool, &cache_key, &models).await;
             }

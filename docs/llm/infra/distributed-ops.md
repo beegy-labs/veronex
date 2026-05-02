@@ -1,6 +1,6 @@
 # Distributed: Ops & Registry
 
-> SSOT | **Last Updated**: 2026-03-24 | Classification: Operational
+> SSOT | **Last Updated**: 2026-05-02 | Classification: Operational
 > Cross-instance pub/sub, TPM accounting, crash recovery, Valkey key registry, and wiring.
 
 ## Cross-Instance Pub/Sub
@@ -59,51 +59,44 @@ Global `Arc<AtomicU32>` counter in `AppState` tracks active SSE connections. Eac
 - Applied to all API-key-authenticated SSE endpoints: `/v1/inference/{id}/stream`, `/v1/jobs/{id}/stream`, `/v1/chat/completions` (streaming), `/v1beta/models/{path}` (Gemini streaming).
 
 ### Hard Timeout
-`with_sse_timeout()` wraps every SSE stream with a `SSE_TIMEOUT` (600s / 10 min) deadline:
+`with_sse_timeout()` wraps every SSE stream with a `SSE_TIMEOUT` (1700s ≈ 28 min) deadline. Strictly less than the upstream Cilium HTTPRoute `timeouts.request=1800s` so the client always sees a clean `event: error data: stream timeout` rather than an opaque gateway 504. Full timeout invariant chain (SSE / `INFERENCE_ROUTER_TIMEOUT` / `MCP_ROUND_TOTAL_TIMEOUT` / Cilium 1800s) → `inference/mcp.md § timeouts`.
 - Uses `async_stream::stream!` with `tokio::select!` + `sleep_until(deadline)`.
 - On timeout: sends `event: error` with `data: stream timeout`, then closes the stream.
 - Prevents zombie SSE connections that neither complete nor disconnect (e.g., crashed client behind a proxy that keeps TCP alive).
 - Applied to all SSE endpoints alongside the connection limiter.
 
-## Valkey Key Registry
+## Valkey Key Registry — two layers
 
-All keys defined in `infrastructure/outbound/valkey_keys.rs`.
+| Layer | Module | Caller |
+|-------|--------|--------|
+| Canonical (unprefixed) | `domain/constants.rs` — `*_key()` builder fns + `QUEUE_*` consts | application code (only domain import allowed) |
+| pk-aware shim | `infrastructure/outbound/valkey_keys.rs` — `pk(&domain::*_key())` | infrastructure that bypasses `ValkeyPort` and talks to fred directly |
 
-**Key prefix**: call `init_prefix(prefix)` once at startup (before any Valkey ops) to prepend a deployment-level namespace to every key. Default `""` = no prefix. Example: `init_prefix("prod:")` → `"prod:veronex:queue:zset"`. Runtime code always uses pk-aware functions (e.g. `queue_zset()`). Raw constants (e.g. `QUEUE_ZSET`) are retained for cross-boundary test format guards only.
+`ValkeyAdapter` applies `pk()` automatically inside every key-taking method
+(`kv_set`, `kv_get`, `kv_del`, `incr_by`, `queue_*`, `list_*`, `zset_claim`'s
+`processing_key` arg, …). So application passes canonical keys; the
+deployment-time `VALKEY_KEY_PREFIX` is enforced at the port boundary only.
 
-| Key | Type | TTL | Purpose |
-|-----|------|-----|---------|
-| `veronex:heartbeat:{iid}` | STRING | 30s | API instance liveness |
-| `veronex:svc:health:{iid}` | HASH | 60s | Per-instance service health probes (PG, Valkey, ClickHouse, S3) |
-| `veronex:agent:instances` | SET | - | Agent pod hostnames (SADD/SREM, dynamic replica count via SCARD) |
-| `veronex:agent:hb:{hostname}` | STRING | 180s | Agent pod liveness heartbeat |
-| `veronex:vram_reserved:{pid}` | HASH | - | Per-provider KV reservation totals (HINCRBY per acquire/release/reap) |
-| `veronex:vram_leases:{pid}` | ZSET | - | Per-provider lease tracking (score = expiry ts; reaper uses ZRANGEBYSCORE to recover crashed instance allocations) |
-| `veronex:queue:zset` | ZSET | - | Priority queue (score = `now_ms - tier_bonus`) |
-| `veronex:queue:processing` | LIST | - | Reliable queue processing set |
-| `veronex:queue:enqueue_at` | HASH | - | Side hash: `job_id → enqueue_at_ms` (promote_overdue) |
-| `veronex:queue:model` | HASH | - | Side hash: `job_id → model` (demand_resync) |
-| `veronex:demand:{model}` | STRING | - | Per-model queued job count (demand counter) |
-| `veronex:job:owner:{job_id}` | STRING | 300s | Which instance owns a running job |
-| `veronex:scaleout:{model}` | STRING | 30s | Scale-Out NX lock (Placement Planner dedup) |
-| `veronex:preloading:{model}:{pid}` | STRING | 180s | Preload NX lock (cross-instance dedup) |
-| `veronex:stream:tokens:{job_id}` | STREAM | 600s | Cross-instance token relay (XADD/XREAD) |
-| `veronex:pubsub:job_events` | PUB/SUB | - | Cross-instance job status events |
-| `veronex:pubsub:cancel:{job_id}` | PUB/SUB | - | Cross-instance cancel signals |
-| `veronex:throttle:{provider_id}` | STRING | 360s | Thermal Hard state persistence (set on Hard entry, deleted on Normal restore) |
+**Key prefix**: call `valkey_keys::init_prefix(prefix)` once at startup (before any Valkey ops) to prepend a deployment-level namespace to every key. Default `""` = no prefix. Example: `init_prefix("prod:")` → `"prod:veronex:queue:zset"`.
+
+> Full Valkey key catalog (30+ patterns) → `infra/deploy.md § Valkey Key Patterns`. This page focuses on the cross-instance distributed-coordination subset; `deploy.md` is the SSOT for the comprehensive list.
 
 ## Wiring (`main.rs`)
 
-1. Parse `AppConfig` from env vars.
-2. Call `valkey_keys::init_prefix(&config.valkey_key_prefix)` — must run before any Valkey ops.
-3. Generate `instance_id` at startup.
-4. Create `DistributedVramPool` when Valkey available, else `VramPool`.
-3. Pass `instance_id` to `InferenceUseCaseImpl`.
-4. Start job event subscriber (dedicated `SubscriberClient`).
-5. Start cancel subscriber (dedicated `SubscriberClient` with psubscribe).
-6. Start reaper loop (heartbeat + slot reap + queue reap).
-7. Initialize `sse_connections: Arc<AtomicU32>` in `AppState`.
-8. Start job sweeper (orphaned DashMap entry cleanup every 5 min).
+1. `init_tracing()` — must come first so subsequent log lines are captured (reads `OTEL_EXPORTER_OTLP_ENDPOINT` directly).
+2. Parse `AppConfig::from_env()` — every other env var lives here (single source).
+3. Call `valkey_keys::init_prefix(&config.valkey_key_prefix)` — must run before any Valkey op.
+4. Connect Postgres pool (`database::connect(&url, config.pg_pool_max)`).
+5. Connect Valkey pool when `VALKEY_URL` set; build `ValkeyAdapter::new(pool)` and call `adapter.warmup().await?` to `SCRIPT LOAD` all Lua scripts (priority pop / ZSET enqueue / claim / cancel) — subsequent calls use `EVALSHA`.
+6. Resolve `instance_id` (config field, default UUIDv7) — passed to `InferenceUseCaseImpl`.
+7. Create `DistributedVramPool` when Valkey available, else `VramPool`.
+8. Wire repositories + AppState (composition root).
+9. Start job event subscriber (dedicated `SubscriberClient`).
+10. Start cancel subscriber (dedicated `SubscriberClient` with psubscribe).
+11. Start reaper loop (heartbeat + slot reap + queue reap).
+12. Initialize `sse_connections: Arc<AtomicU32>` in `AppState`.
+13. Start job sweeper (orphaned DashMap entry cleanup every 5 min).
+14. Connect MCP servers concurrently (`session_mgr.connect` × N via `join_all`) and run initial tool discovery in parallel.
 
 ## Key Prefix (`VALKEY_KEY_PREFIX`)
 
@@ -126,23 +119,19 @@ When `VALKEY_URL` is not set:
 
 ## Constants Architecture
 
-Domain and application-layer constants live in `domain/constants.rs`:
+`domain/constants.rs` is the SSOT — for both timing/TTL constants and canonical (unprefixed) Valkey-key constructors. The file is grouped by concern (job lifecycle / MCP phase timeouts / cache TTLs / auth + rate limiting / placement). Read the source for current values; this doc lists only the categories so it stays compact.
 
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `GEMINI_TIER_FREE` | `"free"` | Gemini free-tier routing value |
-| `KEY_TIER_PAID` | `"paid"` | API key billing tier for paid keys |
-| `TPM_ESTIMATED_TOKENS` | `500` | Tokens reserved per request at admission |
-| `JOB_CLEANUP_DELAY` | `60s` | Deferred DashMap entry removal |
-| `OWNERSHIP_LOST_CLEANUP_DELAY` | `5s` | Fast cleanup when ownership lost |
-| `QUEUE_POLL_INTERVAL` | `500ms` | Empty-queue sleep interval |
-| `NO_PROVIDER_BACKOFF` | `2s` | No-provider re-queue backoff |
-| `QUEUE_ERROR_BACKOFF` | `1s` | Queue pop error backoff |
-| `JOB_OWNER_TTL_SECS` | `300` | Valkey owner key TTL |
-| `OWNER_REFRESH_INTERVAL` | `60s` | Owner key refresh interval |
-| `INITIAL_TOKEN_CAPACITY` | `256` | Per-job token Vec initial capacity |
+| Concern | Representative constants |
+|---------|--------------------------|
+| Job lifecycle / queue | `TPM_ESTIMATED_TOKENS`, `JOB_CLEANUP_DELAY`, `JOB_OWNER_TTL_SECS`, `LEASE_ATTEMPTS_TTL_SECS`, `INSTANCE_HEARTBEAT_TTL_SECS` |
+| MCP phase (coupled with `ollama::lifecycle`) | `MCP_LIFECYCLE_LOAD_TIMEOUT`, `MCP_TOKEN_FIRST_TIMEOUT`, `MCP_STREAM_IDLE_TIMEOUT`, `MCP_ROUND_TOTAL_TIMEOUT` |
+| Cache TTLs | `API_KEY_CACHE_TTL`, `LAB_SETTINGS_CACHE_TTL`, `CONV_CACHE_TTL_SECS`, `MCP_KEY_CACHE_TTL_SECS`, `MCP_TOOLS_SUMMARY_TTL_SECS`, `OLLAMA_MODEL_CTX_TTL_SECS`, `MODELS_CACHE_TTL_SECS`, `SERVICE_HEALTH_TTL_SECS` |
+| Auth / rate limiting | `PASSWORD_RESET_TTL_SECS`, `LOGIN_ATTEMPTS_WINDOW_SECS`, `RATE_LIMIT_RETRY_AFTER_SECS`, `KEY_TIER_PAID`, `GEMINI_TIER_FREE`, `API_KEY_PREFIX` |
+| Placement / scaleout | `PRELOAD_LOCK_TTL_SECS`, `SCALEOUT_DECISION_TTL_SECS` |
+| Valkey keys (canonical fns) | `job_owner_key`, `conversation_record_key`, `heartbeat_key`, `ratelimit_tpm_key`, `preload_lock_key`, `scaleout_decision_key`, `demand_key`, `mcp_*_key`, … |
+| Valkey keys (string consts) | `JOBS_PENDING_COUNTER_KEY`, `JOBS_RUNNING_COUNTER_KEY`, `PROVIDERS_ONLINE_COUNTER_KEY`, `INSTANCES_SET_KEY`, `AGENT_INSTANCES_SET_KEY`, `PUBSUB_*_KEY`, `VRAM_LEASES_SCAN_PATTERN_KEY` |
 
-HTTP-specific constants remain in `infrastructure/inbound/http/constants.rs` (SSE_*, MODELS_CACHE_TTL) with re-exports from `domain::constants` for convenience.
+HTTP-only constants stay in `infrastructure/inbound/http/constants.rs` (SSE_*, `INFERENCE_ROUTER_TIMEOUT`, `JWT_ROUTER_TIMEOUT`, body limits). Application code uses canonical key fns; `ValkeyAdapter` applies the deployment prefix automatically.
 
 ## Shared Handler Helpers
 

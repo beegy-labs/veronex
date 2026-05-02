@@ -96,9 +96,10 @@ grep -rn "\.truncate(" crates/ --include="*.rs"
 grep -rn "\.await\.unwrap_or\b\|let _.*\.await\|\.await\.ok()" crates/veronex/src/infrastructure/inbound/ --include="*.rs"
 # → each result must be checked: Valkey I/O must log at tracing::warn! on error
 
-# P2 — Valkey key hardcoding: all veronex:* keys via valkey_keys.rs only
-grep -rn '"veronex:' crates/veronex/src/ | grep -v valkey_keys
-# → expected: 0 results
+# P2 — Valkey key hardcoding: every veronex:* string lives in either
+# domain/constants.rs (canonical SSOT) or valkey_keys.rs (pk-aware shims).
+grep -rn '"veronex:' crates/veronex/src/ | grep -v "valkey_keys.rs\|domain/constants.rs"
+# → expected: 0 results outside test code
 
 # P2 — Magic Duration: all timeouts via named const
 grep -rn "Duration::from_secs([0-9]" crates/ --include="*.rs" | grep -v "const "

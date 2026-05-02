@@ -509,6 +509,7 @@ async fn ollama_chat_proxy(
             images.as_deref().unwrap_or(&[]),
             &prompt,
             lab.vision_model.as_deref(),
+            &state.vision_fallback_model,
         ).await;
         if let Some(ref va) = va {
             if let Some(last_user) = ollama_messages.iter_mut().rev()
@@ -840,7 +841,7 @@ async fn mcp_ollama_chat(
             let bridge = state.mcp_bridge.as_ref().expect("mcp_bridge checked above");
             let result = bridge.run_loop(
                 &state, &caller, orchestrator_model, ollama_messages, tools,
-                /* want_stream */ true, conversation_id, stop, seed,
+                conversation_id, stop, seed,
                 response_format, frequency_penalty, presence_penalty,
                 Some(tap_tx),
             ).await;
@@ -990,7 +991,7 @@ async fn load_conversation_context(
                                 if let Some(ref vk) = state.valkey_pool {
                                     use fred::prelude::*;
                                     if let Ok(json) = serde_json::to_string(&r) {
-                                        if let Err(e) = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(300)), None, false).await {
+                                        if let Err(e) = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(crate::domain::constants::CONV_CACHE_TTL_SECS)), None, false).await {
                                             tracing::warn!(key = %cache_key, error = %e, "openai: failed to warm conversation cache");
                                         }
                                     }
@@ -1004,25 +1005,8 @@ async fn load_conversation_context(
 
                 // ── Multi-turn eligibility gate ───────────────────────────────
                 let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-                let max_ctx: Option<u32> = if let Some(ref vk) = state.valkey_pool {
-                    use fred::prelude::*;
-                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    let mut found = None;
-                    for p in providers.iter().filter(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama) {
-                        let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, model_name);
-                        if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
-                            if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
-                                .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
-                            {
-                                found = Some(ctx as u32);
-                                break;
-                            }
-                        }
-                    }
-                    found
-                } else {
-                    None
-                };
+                let max_ctx: Option<u32> =
+                    super::inference_helpers::lookup_model_max_ctx(&state, model_name).await;
 
                 if let Err(e) = context_assembler::check_multiturn_eligibility(model_name, max_ctx, &lab) {
                     tracing::warn!(model = model_name, code = e.code(), "multi-turn eligibility check failed");
@@ -1043,13 +1027,13 @@ async fn load_conversation_context(
                 // ── Session handoff check ─────────────────────────────────────
                 if session_handoff::should_handoff(&record, configured_ctx, &lab) {
                     let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    let ollama = providers.iter().find(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama);
+                    let ollama = providers.iter().find(|p| p.is_ollama());
                     if let Some(provider) = ollama {
                         let summary_model = lab.compression_model.clone()
                             .unwrap_or_else(|| model_name.to_string());
                         let timeout = lab.compression_timeout_secs as u64;
                         if let Some((new_conv_id, master_summary)) = session_handoff::perform_handoff(
-                            &record, uuid, owner_id, date, &summary_model, &provider.url, timeout, store,
+                            &state.http_client, &record, uuid, owner_id, date, &summary_model, &provider.url, timeout, store,
                         ).await {
                             // Prepend master summary as first message; current input follows
                             let summary_msg = ChatMessage {

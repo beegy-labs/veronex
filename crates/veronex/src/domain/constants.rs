@@ -116,14 +116,6 @@ pub const QUEUE_ENQUEUE_AT: &str = "veronex:queue:enqueue_at";
 /// Side hash: job_id → model (for demand_resync).
 pub const QUEUE_MODEL_MAP: &str = "veronex:queue:model";
 
-/// Per-model demand counter prefix. Full key: `veronex:demand:{model}`.
-pub const DEMAND_PREFIX: &str = "veronex:demand:";
-
-/// Build the demand counter key for a model.
-pub fn demand_key(model: &str) -> String {
-    format!("{DEMAND_PREFIX}{model}")
-}
-
 /// Hard cap on ZSET queue size. Enqueue returns 429 when exceeded.
 pub const MAX_QUEUE_SIZE: u64 = 10_000;
 
@@ -221,6 +213,43 @@ pub const SERVICE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Periodic MCP tool-discovery refresh interval in the background task in main.rs.
 pub const MCP_TOOL_REFRESH_INTERVAL: Duration = Duration::from_secs(25);
 
+// ── MCP / Ollama lifecycle phase timeouts ────────────────────────────────────
+//
+// The Phase-1 cold-load timeout is observed in two layers and must stay
+// coupled or runtime races. Defined here as the single source of truth.
+//
+// - `ollama::lifecycle::probe_load` sets `reqwest::timeout(...)` to bound the
+//   cold-load HTTP request (200K-context measured ≈248 s on Strix Halo + ROCm).
+// - `mcp::bridge` uses the same value as the Phase-1 wait for the runner's
+//   `phase_boundary` token. If the bridge wait is shorter, the bridge fails the
+//   round before the load finishes; if longer, the bridge stalls past the load
+//   timeout.
+//
+// SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3.2.
+
+/// Phase-1 cold-load timeout (lifecycle reqwest + bridge phase wait).
+/// 600 s envelope covers measured worst-case 248 s on `qwen3-coder-next-200k`
+/// (Strix Halo) with ~2.4× headroom for future 300K+ context models or
+/// VRAM-scheduler congestion.
+pub const MCP_LIFECYCLE_LOAD_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Phase-2 first-token timeout — applies after `phase_boundary` arrives.
+/// Originally 60 s; bumped to 300 s after live verify on
+/// `qwen3-coder-next-200k:latest` observed Phase-2 first-token NOT being
+/// sub-second when prefill is large (200K-context + ~5K MCP-injected tokens).
+pub const MCP_TOKEN_FIRST_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Per-token stream idle. Fires only when the model hangs mid-response
+/// (true stall). Generation gap on warm models is sub-second; 45 s is a
+/// generous safety margin.
+pub const MCP_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Hard cap per MCP round. Must be ≥ `MCP_LIFECYCLE_LOAD_TIMEOUT` +
+/// `MCP_TOKEN_FIRST_TIMEOUT` plus a streaming budget, AND ≤ Cilium HTTPRoute
+/// `timeouts.request` (1800 s). 1500 s = 600 (Phase 1) + 300 (Phase 2 first
+/// token) + 600 streaming budget, leaving 300 s headroom under the gateway cap.
+pub const MCP_ROUND_TOTAL_TIMEOUT: Duration = Duration::from_secs(1500);
+
 // ── Cache TTL ──────────────────────────────────────────────────────────────
 
 /// TTL for per-provider HwMetrics in Valkey (seconds).
@@ -238,6 +267,18 @@ pub const MODEL_SELECTION_CACHE_TTL: Duration = Duration::from_secs(30);
 /// TTL for the CachingProviderRegistry in-memory snapshot.
 pub const PROVIDER_REGISTRY_CACHE_TTL: Duration = Duration::from_secs(5);
 
+/// TTL for the per-hash API key cache (hot path: every inference request).
+/// Mutations (revoke, deactivate, soft-delete, regenerate) call
+/// `invalidate_all()` so stale entries are evicted immediately on any admin
+/// operation. 60 s collapses repeated DB lookups for the same key into one
+/// hit per TTL period.
+pub const API_KEY_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// TTL for the lab settings cache. lab_settings is a single admin-only row
+/// updated rarely; `update()` calls `invalidate_all()` so new values are
+/// visible on the next request. 30 s balances freshness vs DB load.
+pub const LAB_SETTINGS_CACHE_TTL: Duration = Duration::from_secs(30);
+
 // ── Sync / sweep intervals ────────────────────────────────────────────────
 
 /// Base tick interval for the capacity analyzer sync loop.
@@ -252,37 +293,226 @@ pub const PENDING_JOB_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
 /// Tick interval for the real-time FlowStats broadcast ticker.
 pub const STATS_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
-// ── Valkey key constructors (used by application layer) ─────────────────
+// ── Valkey keys (canonical, unprefixed — SSOT) ─────────────────────────────
+//
+// Canonical key strings/constructors. The deployment-time `VALKEY_KEY_PREFIX`
+// is applied at the infrastructure boundary by `ValkeyAdapter` and by the
+// pk-aware shims in `infrastructure::outbound::valkey_keys`.
+//
+// Application code imports these directly (domain-only) and passes the
+// canonical key to `ValkeyPort`; the adapter prepends the prefix transparently.
 
-/// Job ownership key — tracks which instance owns a running job.
+// String constants used as raw keys.
+pub const AGENT_INSTANCES_SET_KEY: &str = "veronex:agent:instances";
+pub const INSTANCES_SET_KEY: &str = "veronex:instances";
+pub const PUBSUB_JOB_EVENTS_KEY: &str = "veronex:pubsub:job_events";
+pub const PUBSUB_CANCEL_PATTERN_KEY: &str = "veronex:pubsub:cancel:*";
+pub const PUBSUB_CANCEL_PREFIX_KEY: &str = "veronex:pubsub:cancel:";
+pub const VRAM_LEASES_SCAN_PATTERN_KEY: &str = "veronex:vram_leases:*";
+pub const PROVIDERS_ONLINE_COUNTER_KEY: &str = "veronex:stats:providers:online";
+pub const JOBS_PENDING_COUNTER_KEY: &str = "veronex:stats:jobs:pending";
+pub const JOBS_RUNNING_COUNTER_KEY: &str = "veronex:stats:jobs:running";
+
+// Job lifecycle.
 pub fn job_owner_key(job_id: uuid::Uuid) -> String {
     format!("veronex:job:owner:{job_id}")
 }
+pub fn stream_tokens_key(job_id: uuid::Uuid) -> String {
+    format!("veronex:stream:tokens:{job_id}")
+}
+pub fn pubsub_cancel_key(job_id: uuid::Uuid) -> String {
+    format!("veronex:pubsub:cancel:{job_id}")
+}
 
-/// Cached ConversationRecord key (zstd JSON, TTL 300s).
+// Conversation cache.
 pub fn conversation_record_key(conversation_id: uuid::Uuid) -> String {
     format!("veronex:conv:{conversation_id}")
 }
+pub fn conv_s3_cache_key(conv_id: uuid::Uuid) -> String {
+    format!("conv_s3:{conv_id}")
+}
 
-/// Instance heartbeat key — present (EX 30s) while the instance is alive.
+// Instance / agent coordination.
 pub fn heartbeat_key(instance_id: &str) -> String {
     format!("veronex:heartbeat:{instance_id}")
 }
+pub fn agent_heartbeat_key(hostname: &str) -> String {
+    format!("veronex:agent:hb:{hostname}")
+}
+pub fn slot_leases_key(provider_id: uuid::Uuid, model: &str) -> String {
+    format!("veronex:slot_leases:{provider_id}:{model}")
+}
 
-/// TPM (tokens per minute) counter key for an API key at a given minute epoch.
+// Provider liveness / capacity.
+pub fn provider_heartbeat_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:provider:hb:{provider_id}")
+}
+pub fn provider_capacity_state_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:provider:{provider_id}:capacity_state")
+}
+pub fn provider_models_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:models:{provider_id}")
+}
+pub fn hw_metrics_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:hw:{provider_id}")
+}
+pub fn server_node_metrics_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:server_metrics:{server_id}")
+}
+pub fn thermal_throttle_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:throttle:{provider_id}")
+}
+
+// VRAM pool.
+pub fn vram_reserved_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:vram_reserved:{provider_id}")
+}
+pub fn vram_leases_key(provider_id: uuid::Uuid) -> String {
+    format!("veronex:vram_leases:{provider_id}")
+}
+
+// Demand / scaleout / preload.
+pub fn demand_key(model: &str) -> String {
+    format!("veronex:demand:{model}")
+}
+pub fn preload_lock_key(model: &str, provider_id: uuid::Uuid) -> String {
+    format!("veronex:preloading:{model}:{provider_id}")
+}
+pub fn scaleout_decision_key(model: &str) -> String {
+    format!("veronex:scaleout:{model}")
+}
+
+// Auth / sessions.
+pub fn revoked_jti_key(jti: uuid::Uuid) -> String {
+    format!("veronex:revoked:{jti}")
+}
+pub fn password_reset_key(token: &str) -> String {
+    format!("veronex:pwreset:{token}")
+}
+pub fn refresh_blocklist_key(hash: &str) -> String {
+    format!("veronex:refresh_used:{hash}")
+}
+pub fn login_attempts_key(ip: &str) -> String {
+    format!("veronex:login_attempts:{ip}")
+}
+
+// Rate limiting.
+pub fn ratelimit_rpm_key(key_id: uuid::Uuid) -> String {
+    format!("veronex:ratelimit:rpm:{key_id}")
+}
 pub fn ratelimit_tpm_key(key_id: uuid::Uuid, minute: i64) -> String {
     format!("veronex:ratelimit:tpm:{key_id}:{minute}")
 }
 
-/// Lock key preventing duplicate preload requests for a (model, provider) pair.
-pub fn preload_lock_key(model: &str, provider_id: uuid::Uuid) -> String {
-    format!("veronex:preloading:{model}:{provider_id}")
+// Gemini per-key counters.
+pub fn gemini_rpm_key(provider_id: uuid::Uuid, model: &str, minute: i64) -> String {
+    format!("veronex:gemini:rpm:{provider_id}:{model}:{minute}")
+}
+pub fn gemini_rpd_key(provider_id: uuid::Uuid, model: &str, date: &str) -> String {
+    format!("veronex:gemini:rpd:{provider_id}:{model}:{date}")
 }
 
-/// Scale-out decision dedup key for a model.
-pub fn scaleout_decision_key(model: &str) -> String {
-    format!("veronex:scaleout:{model}")
+// Ollama model context.
+pub fn ollama_model_ctx_key(provider_id: uuid::Uuid, model_name: &str) -> String {
+    format!("veronex:ollama:ctx:{provider_id}:{model_name}")
 }
+
+// Service health.
+pub fn service_health_key(instance_id: &str) -> String {
+    format!("veronex:svc:health:{instance_id}")
+}
+
+// MCP.
+pub fn mcp_tool_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:tools:{server_id}")
+}
+pub fn mcp_tool_lock_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:tools:lock:{server_id}")
+}
+pub fn mcp_heartbeat_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:heartbeat:{server_id}")
+}
+pub fn mcp_key_acl_key(api_key_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:acl:{api_key_id}")
+}
+pub fn mcp_key_cap_points_key(api_key_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:cap:{api_key_id}")
+}
+pub fn mcp_key_top_k_key(api_key_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:topk:{api_key_id}")
+}
+pub fn mcp_result_key(tool_name: &str, args_hash: &str) -> String {
+    format!("veronex:mcp:result:{tool_name}:{args_hash}")
+}
+pub fn mcp_tools_summary_key(server_id: uuid::Uuid) -> String {
+    format!("veronex:mcp:tools_summary:{server_id}")
+}
+
+// ── Valkey key TTLs ────────────────────────────────────────────────────────
+
+/// TTL (seconds) for the preload lock — covers a typical cold-load window.
+pub const PRELOAD_LOCK_TTL_SECS: i64 = 180;
+
+/// TTL (seconds) for the scale-out decision dedup lock.
+pub const SCALEOUT_DECISION_TTL_SECS: i64 = 30;
+
+/// TTL (seconds) for conversation caches in Valkey — shared between the
+/// `veronex:conv:{conversation_id}` ConversationRecord cache (written by
+/// runner / mcp bridge) and the `conv_s3:{conv_id}` full-turn-detail cache
+/// (written by `fetch_conv_s3_cached` in conversation_handlers). Both must
+/// agree so cache invalidation after S3 re-writes stays consistent.
+pub const CONV_CACHE_TTL_SECS: i64 = 300;
+
+/// TTL (seconds) for the per-API-key MCP caches (`mcp:acl`, `mcp:cap`,
+/// `mcp:topk`). All three are invalidated explicitly on grant/revoke or key
+/// update, so 60 s is just an upper bound on stale-after-restart windows.
+pub const MCP_KEY_CACHE_TTL_SECS: i64 = 60;
+
+/// TTL (seconds) for the MCP per-server tools summary cache
+/// (`veronex:mcp:tools_summary:{server_id}`). Refreshed by the tool-discovery
+/// background task; the 1-hour TTL is the safety net.
+pub const MCP_TOOLS_SUMMARY_TTL_SECS: i64 = 3600;
+
+/// TTL (seconds) for the per-(provider, model) Ollama context window cache
+/// (`veronex:ollama:ctx:{provider_id}:{model_name}`). Written by the capacity
+/// analyzer after each DB upsert; read on the inference hot path.
+pub const OLLAMA_MODEL_CTX_TTL_SECS: i64 = 600;
+
+/// TTL (seconds) for the per-provider model list cache
+/// (`veronex:models:{provider_id}`). Mirrors the upstream Ollama `/api/tags`
+/// freshness budget. Used by both `provider_handlers` (HTTP) and the capacity
+/// analyzer (background sync), which is why it lives in domain rather than
+/// the HTTP-layer constants.
+pub const MODELS_CACHE_TTL_SECS: i64 = 3600;
+
+/// TTL (seconds) for the per-job lease-attempts counter
+/// (`veronex:queue:active:attempts:{job_id}`). 24 h gives ample window for
+/// max-retry decisions while preventing unbounded counter accumulation.
+pub const LEASE_ATTEMPTS_TTL_SECS: i64 = 86_400;
+
+/// TTL (seconds) for the per-instance heartbeat key
+/// (`veronex:heartbeat:{instance_id}`). 3× `REAPER_HEARTBEAT_INTERVAL` so a
+/// single missed refresh doesn't trigger reaper takeover.
+pub const INSTANCE_HEARTBEAT_TTL_SECS: i64 = 30;
+
+/// TTL (seconds) for the password-reset token (`veronex:pwreset:{token}`).
+/// 24 h matches the typical email-link expiry window.
+pub const PASSWORD_RESET_TTL_SECS: i64 = 86_400;
+
+/// Sliding window (seconds) for the per-IP login-attempts counter
+/// (`veronex:login_attempts:{ip}`). The same value is returned to the client
+/// in `Retry-After` when the rate limit trips, so both must stay aligned.
+pub const LOGIN_ATTEMPTS_WINDOW_SECS: i64 = 300;
+
+/// Default `Retry-After` (seconds) sent on 429 for generic rate-limit-exceeded
+/// errors that surface from the domain layer. The TPM/RPM rate limiter
+/// already returns a more specific value on its branch; this is the fallback.
+pub const RATE_LIMIT_RETRY_AFTER_SECS: u64 = 60;
+
+/// TTL (seconds) for the per-instance service-health HASH
+/// (`veronex:svc:health:{instance_id}`). 2× the health-check pass interval
+/// so a single missed pass does not auto-expire the key.
+pub const SERVICE_HEALTH_TTL_SECS: i64 = 60;
 
 // ── Thermal throttle ─────────────────────────────────────────────────────
 
@@ -358,49 +588,11 @@ mod tests {
         zset_score - locality_bonus - age_bonus
     }
 
-    // ── Fixed assertions (structural invariants) ─────────────────────────
-
-    #[test]
-    fn demand_key_format() {
-        assert_eq!(demand_key("llama3:70b"), "veronex:demand:llama3:70b");
-    }
-
-    #[test]
-    fn job_owner_key_format() {
-        let id = uuid::Uuid::nil();
-        assert_eq!(
-            job_owner_key(id),
-            "veronex:job:owner:00000000-0000-0000-0000-000000000000",
-        );
-    }
-
-    #[test]
-    fn ratelimit_tpm_key_format() {
-        let id = uuid::Uuid::nil();
-        assert_eq!(
-            ratelimit_tpm_key(id, 1_710_600_000),
-            "veronex:ratelimit:tpm:00000000-0000-0000-0000-000000000000:1710600000",
-        );
-    }
-
-    #[test]
-    fn preload_lock_key_format() {
-        let id = uuid::Uuid::nil();
-        assert_eq!(
-            preload_lock_key("qwen3:8b", id),
-            "veronex:preloading:qwen3:8b:00000000-0000-0000-0000-000000000000",
-        );
-    }
-
-    #[test]
-    fn scaleout_decision_key_format() {
-        assert_eq!(
-            scaleout_decision_key("llama3:70b"),
-            "veronex:scaleout:llama3:70b",
-        );
-    }
-
     // ── Property-based tests (proptest) ──────────────────────────────────
+    //
+    // Valkey key-format guards live alongside their constructors in
+    // `infrastructure::outbound::valkey_keys` (single source of truth for
+    // both the function and the format invariant).
 
     proptest! {
         /// Tier ordering invariant: for any timestamp,

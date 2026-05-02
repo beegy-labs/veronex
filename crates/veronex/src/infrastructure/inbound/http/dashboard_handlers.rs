@@ -20,6 +20,7 @@ use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
 use super::audit_helpers::emit_audit;
+use super::constants::{PROVIDER_GEMINI, PROVIDER_OLLAMA};
 use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
 use super::handlers::{SseStream, try_acquire_sse, ListPageParams};
@@ -425,7 +426,7 @@ pub async fn get_capacity(
         .provider_registry
         .list_page(&search, None, limit, offset)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
+        .map_err(AppError::Internal)?;
 
     let provider_ids: Vec<uuid::Uuid> = providers_page.iter().map(|p| p.id).collect();
     let all_entries = state
@@ -489,8 +490,11 @@ pub async fn get_capacity_cluster(
 pub async fn get_capacity_settings(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
-    let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
-    let available_models = fetch_all_provider_models(&state).await;
+    // Two independent fetches; run concurrently.
+    let (settings, available_models) = tokio::join!(
+        async { state.capacity_settings_repo.get().await.unwrap_or_default() },
+        fetch_all_provider_models(&state),
+    );
     Json(SyncSettingsResponse::from_settings(settings, available_models)).into_response()
 }
 
@@ -530,17 +534,14 @@ pub async fn patch_capacity_settings(
 // ── Helper: fetch models from all registered providers ────────────
 
 async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<String>> {
-    let mut result: HashMap<String, Vec<String>> = HashMap::new();
-
-    // ── Ollama: read from already-synced ollama_model_repo (no HTTP) ───
-    if let Ok(models) = state.ollama_model_repo.list_all().await && !models.is_empty() {
-        result.insert("ollama".to_string(), models);
-    }
-
-    // ── Gemini: show models only when lab feature is enabled ──
-    let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-    if lab.gemini_function_calling {
-        // Try DB first (synced models)
+    // Ollama list is independent of lab settings + Gemini fetch — race them
+    // concurrently to halve the wall-clock for this dashboard endpoint.
+    let ollama_fut = state.ollama_model_repo.list_all();
+    let gemini_fut = async {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        if !lab.gemini_function_calling {
+            return Vec::<String>::new();
+        }
         let mut gemini_models: Vec<String> = state.gemini_model_repo
             .list()
             .await
@@ -548,20 +549,24 @@ async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<Stri
             .into_iter()
             .map(|m| m.model_name)
             .collect();
-
-        // Fallback: fetch from Gemini API if DB is empty
         if gemini_models.is_empty()
             && let Ok(Some(api_key)) = state.gemini_sync_config_repo.get_api_key().await
             && let Ok(models) = super::gemini_helpers::fetch_gemini_models(&state.http_client, &api_key).await
         {
             gemini_models = models;
         }
+        gemini_models
+    };
 
-        if !gemini_models.is_empty() {
-            result.insert("gemini".to_string(), gemini_models);
-        }
+    let (ollama_result, gemini_models) = tokio::join!(ollama_fut, gemini_fut);
+
+    let mut result: HashMap<String, Vec<String>> = HashMap::new();
+    if let Ok(models) = ollama_result && !models.is_empty() {
+        result.insert(PROVIDER_OLLAMA.to_string(), models);
     }
-
+    if !gemini_models.is_empty() {
+        result.insert(PROVIDER_GEMINI.to_string(), gemini_models);
+    }
     result
 }
 

@@ -110,7 +110,7 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
         use fred::prelude::*;
         let conn: fred::clients::Client = pool.next().clone();
         let key = valkey_keys::mcp_tools_summary(server_id);
-        conn.set(&key, summary_json.to_string(), Some(Expiration::EX(3600)), None, false).await
+        conn.set(&key, summary_json.to_string(), Some(Expiration::EX(crate::domain::constants::MCP_TOOLS_SUMMARY_TTL_SECS)), None, false).await
             .unwrap_or_else(|e| tracing::warn!(error = %e, %key, "Valkey SET mcp_tools_summary failed"));
     }
 

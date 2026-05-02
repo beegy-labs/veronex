@@ -16,10 +16,9 @@ use super::error::AppError;
 use super::middleware::jwt_auth::{RequireAccountManage, RequireDashboardView};
 use super::state::AppState;
 use crate::application::ports::outbound::message_store::ConversationRecord;
+use crate::domain::constants::CONV_CACHE_TTL_SECS;
 use crate::domain::value_objects::{ConvId, JobId};
 use crate::infrastructure::outbound::valkey_keys::conv_s3_cache;
-
-const CONV_CACHE_TTL_SECS: i64 = 300; // 5 min
 
 /// Fetch ConversationRecord from Valkey cache; on miss, load from S3 and cache result.
 async fn fetch_conv_s3_cached(

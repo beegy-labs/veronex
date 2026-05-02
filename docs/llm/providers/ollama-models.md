@@ -70,7 +70,7 @@ CREATE TABLE ollama_sync_jobs (
 
 | Trait | Method | Returns |
 |-------|--------|---------|
-| `OllamaModelRepository` | `sync_provider_models(provider_id, &[String])` | `Result<()>` -- atomic DELETE + INSERT |
+| `OllamaModelRepository` | `sync_provider_models(provider_id, &[String])` | `Result<()>` -- atomic DELETE + single batched `INSERT ... SELECT FROM UNNEST($1::TEXT[])` (1 round-trip regardless of model count) |
 | | `list_all()` | `Result<Vec<String>>` -- legacy, prefer `list_with_counts` |
 | | `list_with_counts_page(search, limit, offset)` | `Result<(Vec<OllamaModelWithCount>, i64)>` -- paginated, ILIKE search |
 | | `providers_for_model(model_name)` | `Result<Vec<Uuid>>` -- used for routing |

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -8,11 +7,7 @@ use super::ttl_cache::TtlCache;
 use crate::application::ports::outbound::lab_settings_repository::{
     LabSettings, LabSettingsRepository, LabSettingsUpdate,
 };
-
-/// TTL for the lab settings cache.
-/// lab_settings is a single admin-only row updated rarely.
-/// 30 s balances freshness vs DB load.
-const LAB_SETTINGS_CACHE_TTL: Duration = Duration::from_secs(30);
+use crate::domain::constants::LAB_SETTINGS_CACHE_TTL;
 
 /// TTL-cache wrapper around any `LabSettingsRepository`.
 ///

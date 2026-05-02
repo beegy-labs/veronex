@@ -156,10 +156,10 @@ pub async fn list_accounts(
         .list_page(&search, limit, offset)
         .await?;
 
-    let mut result = Vec::with_capacity(accounts.len());
-    for a in accounts {
-        result.push(to_summary(a, &state.pg_pool).await?);
-    }
+    // Concurrent per-account role fetch — turns N round-trips into one wall-clock RTT.
+    let result: Vec<AccountSummary> = futures::future::try_join_all(
+        accounts.into_iter().map(|a| to_summary(a, &state.pg_pool)),
+    ).await?;
 
     Ok(Json(serde_json::json!({
         "accounts": result,
@@ -448,10 +448,11 @@ pub async fn revoke_all_account_sessions(
         .list_active(&aid.0)
         .await?;
     state.session_repo.revoke_all_for_account(&aid.0).await?;
-    // Add each JTI to the Valkey blocklist so JWTs are rejected immediately.
-    for session in &sessions {
-        super::auth_handlers::revoke_jti(&state, session.jti, session.expires_at).await;
-    }
+    // Add each JTI to the Valkey blocklist so JWTs are rejected immediately —
+    // concurrent fan-out (each revoke is independent fire-and-forget).
+    futures::future::join_all(
+        sessions.iter().map(|s| super::auth_handlers::revoke_jti(&state, s.jti, s.expires_at)),
+    ).await;
     emit_audit(&state, &claims, "delete", "session", &aid.to_string(), &format!("all_sessions:{aid}"),
         &format!("All active sessions for account {} force-revoked by admin ({} session(s) blocklisted)", aid, sessions.len())).await;
     Ok(StatusCode::NO_CONTENT)
@@ -476,7 +477,7 @@ pub async fn create_reset_link(
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
         let key = valkey_keys::password_reset(&token);
-        pool.set(key, aid.0.to_string(), Some(fred::types::Expiration::EX(24 * 3600)), None, false)
+        pool.set(key, aid.0.to_string(), Some(fred::types::Expiration::EX(crate::domain::constants::PASSWORD_RESET_TTL_SECS)), None, false)
             .await
             .unwrap_or_else(|e| tracing::warn!(error = %e, account_id = %aid, "create_reset_link: Valkey SET failed"));
     }

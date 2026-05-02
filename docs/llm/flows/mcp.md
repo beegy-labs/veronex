@@ -1,6 +1,6 @@
 # MCP Agentic Loop Flow
 
-> **Last Updated**: 2026-04-28
+> **Last Updated**: 2026-05-02
 
 ---
 
@@ -23,7 +23,8 @@ openai_handlers::chat_completions()
 ## `run_loop()` — Agentic Loop
 
 ```
-run_loop(state, caller, model, messages, base_tools, want_stream)
+run_loop(state, caller, model, messages, base_tools, conversation_id, stop, seed,
+         response_format, frequency_penalty, presence_penalty, sse_tap_tx)
   │
   ├── 1. Per-key ACL + cap_points + top_k — parallel via tokio::join!()
   │     API key → join!(fetch_mcp_acl, fetch_mcp_cap_points, fetch_mcp_top_k)
@@ -49,8 +50,9 @@ run_loop(state, caller, model, messages, base_tools, want_stream)
         │
         ├── submit job (use_case.submit)    ← enqueues to inference queue
         │
-        ├── [want_stream && rounds > 0]?
-        │     └── return final_job_id for SSE pipe (skip collect)
+        ├── [sse_tap_tx.is_some() && rounds > 0]?
+        │     └── tap text tokens straight into the SSE stream while still
+        │         running collect_round to drive the loop
         │
         ├── collect_round(job_id)           ← consume token stream
         │     └── RoundResult { content, tool_calls, tokens, finish_reason }

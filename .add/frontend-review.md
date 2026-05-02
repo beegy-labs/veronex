@@ -25,7 +25,7 @@ User requests frontend code review, optimization, design token audit, i18n audit
 
 ## Architecture Non-Goals (reject on sight)
 
-Do NOT propose or accept any of the following during review:
+Reject on sight:
 
 - New directories named `atoms/`, `molecules/`, `organisms/`, or `templates/`
 - Atomic Design vocabulary in file names, component names, or review comments

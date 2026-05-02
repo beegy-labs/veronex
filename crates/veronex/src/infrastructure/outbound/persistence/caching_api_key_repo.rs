@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -7,13 +6,9 @@ use uuid::Uuid;
 
 use super::ttl_cache::TtlCache;
 use crate::application::ports::outbound::api_key_repository::ApiKeyRepository;
+use crate::domain::constants::API_KEY_CACHE_TTL;
 use crate::domain::entities::ApiKey;
 use crate::domain::enums::KeyTier;
-
-/// TTL for the per-hash API key cache (hot path: every inference request).
-/// Mutations (revoke, deactivate, soft-delete, regenerate) call invalidate_all()
-/// so stale entries are evicted immediately on any admin operation.
-const API_KEY_CACHE_TTL: Duration = Duration::from_secs(60);
 
 /// TTL-cache wrapper around any `ApiKeyRepository`.
 ///
