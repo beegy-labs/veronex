@@ -109,61 +109,15 @@ for id in &ids {
 
 **Recurrence:** a 2026-04-07 audit found missing LIMITs in 10+ repositories (`account_repository`, `api_key_repository`, `provider_registry`, `gemini_policy_repository`, `session_repository`, `model_capacity_repository`, `gpu_server_registry`, `global_model_settings`, `ollama_model_repository`, `provider_model_selection`). Run the quarterly audit grep after adding any `fetch_all` query.
 
-## L1 (Valkey) + L2 (Postgres) Cached Lookup Pattern
+## L1 (Valkey) + L2 (Postgres) Cached Lookup
 
-When two or more functions share the shape "Valkey cache hit → return; cache miss → single-row SQL → repopulate cache", extract a generic helper instead of duplicating the body. Canonical example: `mcp::bridge::cached_mcp_int_lookup`.
+When two+ functions share "Valkey hit → return; miss → single-row SQL → repopulate", extract a generic helper. Canonical: `mcp::bridge::cached_mcp_int_lookup` (signature `(state, vk_key, sql, key_id, label) -> Option<i16>`). Callers become 1-line wrappers (`fetch_mcp_cap_points`, `fetch_mcp_top_k`).
 
-```rust
-async fn cached_mcp_int_lookup(
-    state: &AppState,
-    vk_key: String,
-    sql: &'static str,
-    key_id: Uuid,
-    log_label: &'static str,
-) -> Option<i16> {
-    if let Some(ref pool) = state.valkey_pool
-        && let Ok(Some(cached)) = pool.get::<Option<String>, _>(&vk_key).await
-    {
-        if cached == "null" { return None; }
-        if let Ok(v) = cached.parse::<i16>() { return Some(v); }
-    }
-    let result: Option<i16> = sqlx::query_scalar(sql)
-        .bind(key_id).fetch_optional(&state.pg_pool).await.ok().flatten();
-    if let Some(ref pool) = state.valkey_pool {
-        let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
-        let _ = pool.set::<(), _, _>(&vk_key, val,
-            Some(Expiration::EX(MCP_KEY_CACHE_TTL_SECS)), None, false).await;
-    }
-    result
-}
-
-// Callers become 1-line wrappers
-async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
-    cached_mcp_int_lookup(state, mcp_key_cap_points(key_id),
-        "SELECT mcp_cap_points FROM api_keys WHERE id = $1",
-        key_id, "cap_points").await.map(|v| v as u8)
-}
-```
-
-**Sentinel for NULL**: cache `"null"` string distinguishes "row exists but column is NULL" from "row absent". Required for invalidation correctness — mutation paths must `kv_del` not `kv_set` when clearing.
+Sentinel for NULL: cache `"null"` string distinguishes "row exists, column NULL" from "row absent". Mutation paths must `kv_del` (not overwrite) on clear.
 
 ## Batch MGET over collection
 
-Replace `for id in collection { pool.get(key(id)).await }` (N round-trips) with a single `pool.mget(keys)` call (1 round-trip). Canonical example: `inference_helpers::lookup_model_max_ctx`.
-
-```rust
-let keys: Vec<String> = providers.iter()
-    .filter(|p| p.is_ollama())
-    .map(|p| ollama_model_ctx(p.id, model_name))
-    .collect();
-let raw: Vec<Option<String>> = pool.mget(keys).await.ok()?;
-raw.iter().flatten()
-    .filter_map(|s| serde_json::from_str::<Value>(s).ok())
-    .find_map(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
-    .map(|n| n as u32)
-```
-
-`find_map` preserves "first match" early-break semantics; the MGET still issues exactly one round-trip regardless.
+Replace `for id in collection { pool.get(key(id)).await }` (N round-trips) with one `pool.mget(keys)` call (1 round-trip). Canonical: `inference_helpers::lookup_model_max_ctx` — collects `Vec<key>`, issues one `MGET`, then `find_map` preserves the first-match early-break semantics.
 
 ## Domain Enum Patterns
 

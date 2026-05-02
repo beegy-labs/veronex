@@ -73,16 +73,7 @@ Key rotation strategy for encrypted fields: planned (future). Current encryption
 
 ## Sensitive-Header Redaction (Tower Layer)
 
-`router.rs` wraps the global router with `tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer` **before** `TraceLayer::new_for_http()` so the trace span never captures plaintext credentials. Required tower-http feature: `sensitive-headers`.
-
-| Header | Source | Why |
-|--------|--------|-----|
-| `Authorization` | API-key + JWT | Bearer tokens — would be logged in cleartext at `RUST_LOG=tower_http=trace` otherwise |
-| `Cookie` | session JWT (`vnx_session`) + admin key | Session credentials |
-| `Proxy-Authorization` | upstream proxy auth | Same risk class |
-| `x-api-key` | OpenAI-compat API key alternative | Same risk class |
-
-Layer order (`patterns/middleware.md § Tower Layer Order`): `SetSensitiveRequestHeadersLayer` → `TraceLayer`. Reversed order leaks the headers into span fields.
+`router.rs` wraps `SetSensitiveRequestHeadersLayer` before `TraceLayer` so trace spans never capture credentials. Redacted: `Authorization`, `Cookie`, `Proxy-Authorization`, `x-api-key`. Required `tower-http` feature: `sensitive-headers`. Layer-order rationale: `patterns/middleware.md § Tower Layer Order`.
 
 ---
 

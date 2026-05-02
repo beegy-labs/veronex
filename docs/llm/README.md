@@ -193,55 +193,34 @@
 
 | Task | Read |
 |------|------|
-| Add new API endpoint | `policies/patterns.md` + relevant domain doc |
-| Add new Port + Adapter | `policies/patterns.md` + `policies/architecture.md` |
-| Error handling | `policies/patterns.md` (AppError pattern) |
-| Modify job tracking | `inference/job-lifecycle.md` + `inference/job-analytics.md` |
-| Model pricing | `inference/model-pricing.md` |
-| Gemini rate limits | `providers/gemini.md` |
-| Ollama streaming / context | `providers/ollama-impl.md` |
-| Ollama model sync | `providers/ollama-models.md` |
-| Gemini model sync | `providers/gemini-models.md` |
-| Add GPU server | `providers/hardware.md` |
-| Auth / JWT / session | `auth/jwt-sessions.md` + `research/security/auth.md` |
-| Account RBAC | `auth/jwt-sessions.md` + `frontend/pages/accounts.md` |
-| API keys / rate limiting | `auth/api-keys.md` + `frontend/pages/keys.md` |
-| Security (CORS, crypto) | `auth/security.md` |
-| VRAM pool / AIMD / thermal | `inference/capacity.md` + `flows/scheduler.md` + `flows/thermal.md` |
-| Lab feature flag | `inference/lab-features.md` |
-| Context compression / multi-turn / handoff | `inference/context-compression.md` + `flows/context-compression.md` |
-| MCP integration | `inference/mcp.md` + `flows/mcp.md` |
-| Vespa isolation / environment partitioning | `policies/vespa-isolation.md` |
-| Any subsystem logic / control flow | `flows/{subsystem}.md` |
-| veronex-mcp server / add a tool | `infra/crate-structure.md` (veronex-mcp Layout) |
-| OTel pipeline | `infra/otel-pipeline.md` + `infra/otel-pipeline-ops.md` + `research/infrastructure/observability.md` |
+| API endpoint / Port+Adapter / error handling | `policies/patterns.md` + `policies/architecture.md` |
+| Application constant / Valkey key (canonical SSOT) | `policies/architecture.md`; `domain/constants.rs` is SSOT |
+| Add a Lua script (SCRIPT LOAD + EVALSHA) | `policies/patterns/valkey.md` § SCRIPT LOAD + EVALSHA |
+| Parallelize per-N `.await` loop | `policies/patterns/async.md` § Fan-out per-N awaits |
+| L1 (Valkey) + L2 (Postgres) cached lookup | `policies/patterns/persistence.md` § L1+L2 Cached Lookup |
+| Best-effort coordination lock | `policies/patterns/scheduling.md` § Best-Effort Locks |
+| Adjust a Valkey counter | `policies/patterns/scheduling.md` § Counter Adjustment Helper |
+| Sensitive-header redaction | `auth/security.md` § Sensitive-Header Redaction + `policies/patterns/middleware.md` |
+| Job tracking / state machine | `inference/job-lifecycle.md` + `inference/job-analytics.md` |
+| Model pricing / Lab feature flag | `inference/model-pricing.md` / `inference/lab-features.md` |
+| Ollama / Gemini providers | `providers/{ollama,gemini}.md` + `-impl.md` + `-models.md` |
+| GPU server / hardware metrics / health | `providers/hardware.md` + `frontend/pages/health.md` |
+| Auth / JWT / RBAC / API keys | `auth/jwt-sessions.md` + `auth/api-keys.md` + `auth/security.md` |
+| VRAM pool / AIMD / thermal | `inference/capacity.md` + `flows/{scheduler,thermal}.md` |
+| Context compression / handoff | `inference/context-compression.md` + `flows/context-compression.md` |
+| MCP integration / agentic loop | `inference/mcp.md` + `flows/mcp.md` + `inference/mcp-schema.md` |
+| Subsystem control flow | `flows/{subsystem}.md` |
+| veronex-mcp / add a tool | `infra/crate-structure.md` (veronex-mcp Layout) |
+| OTel pipeline | `infra/otel-pipeline.md` + `infra/otel-pipeline-ops.md` |
 | Kubernetes / Helm / KEDA | `infra/deploy-helm.md` + `flows/agent.md` |
-| Service health monitoring | `providers/hardware.md` (§ Service Health Monitoring) + `frontend/pages/health.md` |
-| CORS config | `infra/deploy.md` (CORS_ALLOWED_ORIGINS) |
-| Design token / theme | `frontend/design-system.md` + `policies/patterns-frontend.md` |
-| Add i18n key | `frontend/design-system-i18n.md` + relevant `frontend/pages/*.md` |
-| Chart / tooltip | `frontend/charts.md` |
-| Modify overview/dashboard | `frontend/pages/overview.md` |
-| Modify servers UI | `frontend/pages/servers.md` |
-| Modify providers UI | `frontend/pages/providers.md` |
-| Modify jobs UI | `frontend/pages/jobs.md` |
-| Usage page / tabs | `frontend/pages/usage.md` |
-| Performance page | `frontend/pages/performance.md` |
-| Setup wizard | `frontend/pages/setup.md` |
-| Audit trail UI | `frontend/pages/audit.md` |
-| Queue depth | `inference/job-api.md` (Queue Depth section) |
-| Session grouping | `inference/session-grouping.md` + `frontend/pages/jobs.md` |
-| Job dashboard API | `inference/job-api.md` |
+| Deploy / env / CORS | `infra/deploy.md` |
+| Job dashboard / queue depth / session grouping | `inference/job-api.md` + `inference/session-grouping.md` |
+| Job state-transition / Redpanda pipeline | `infra/job-event-pipeline.md` + `flows/job-event-pipeline.md` |
+| Hot-path DB caching | `infra/hot-path-caching.md` |
+| Vespa isolation | `policies/vespa-isolation.md` |
+| Build / compile speed | `infra/build-optimization.md` |
 | Rust performance / allocator | `research/backend/rust-perf-2026.md` |
-| Hot-path DB optimization / caching strategy | `infra/hot-path-caching.md` |
-| Job state-transition writes / Redpanda pipeline | `infra/job-event-pipeline.md` + `flows/job-event-pipeline.md` |
-| Add application constant | `policies/architecture.md` — Domain constants live in `domain/constants.rs` |
-| Testing strategy / purity | `policies/testing-strategy.md` — layer responsibility, decision checklist |
-| Build / compile speed | `infra/build-optimization.md` — mold, hakari, cargo-chef, profiles |
-| Add a Valkey key | `policies/patterns/valkey.md` — two-layer SSOT (canonical in `domain/constants.rs`, pk-aware shim in `valkey_keys.rs`) |
-| Add a Lua script | `policies/patterns/valkey.md` § SCRIPT LOAD + EVALSHA — `Script::from_lua` in `valkey_adapter::warmup()` |
-| Parallelize a per-N awaits loop | `policies/patterns/async.md` § Fan-out per-N awaits — `join_all` / `tokio::join!` / MGET batch |
-| L1+L2 cached lookup | `policies/patterns/persistence.md` § L1 (Valkey) + L2 (Postgres) Cached Lookup |
-| Best-effort coordination lock | `policies/patterns/scheduling.md` § Best-Effort Locks — `try_acquire_lock` |
-| Adjust a Valkey counter | `policies/patterns/scheduling.md` § Counter Adjustment Helper — `adjust_counter` |
-| Sensitive-header redaction (Authorization / Cookie) | `auth/security.md` § Sensitive-Header Redaction + `policies/patterns/middleware.md` |
+| Testing strategy / purity | `policies/testing-strategy.md` |
+| Frontend design / tokens / i18n | `frontend/design-system.md` + `frontend/design-system-i18n.md` + `policies/patterns-frontend.md` |
+| Frontend page (overview/servers/providers/jobs/usage/performance/setup/audit/keys/health/accounts/api-test) | `frontend/pages/{name}.md` |
+| Charts / tooltip | `frontend/charts.md` |

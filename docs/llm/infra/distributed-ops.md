@@ -119,73 +119,19 @@ When `VALKEY_URL` is not set:
 
 ## Constants Architecture
 
-Domain and application-layer constants live in `domain/constants.rs` (SSOT). Grouped by concern:
+`domain/constants.rs` is the SSOT — for both timing/TTL constants and canonical (unprefixed) Valkey-key constructors. The file is grouped by concern (job lifecycle / MCP phase timeouts / cache TTLs / auth + rate limiting / placement). Read the source for current values; this doc lists only the categories so it stays compact.
 
-### Job lifecycle / queue
+| Concern | Representative constants |
+|---------|--------------------------|
+| Job lifecycle / queue | `TPM_ESTIMATED_TOKENS`, `JOB_CLEANUP_DELAY`, `JOB_OWNER_TTL_SECS`, `LEASE_ATTEMPTS_TTL_SECS`, `INSTANCE_HEARTBEAT_TTL_SECS` |
+| MCP phase (coupled with `ollama::lifecycle`) | `MCP_LIFECYCLE_LOAD_TIMEOUT`, `MCP_TOKEN_FIRST_TIMEOUT`, `MCP_STREAM_IDLE_TIMEOUT`, `MCP_ROUND_TOTAL_TIMEOUT` |
+| Cache TTLs | `API_KEY_CACHE_TTL`, `LAB_SETTINGS_CACHE_TTL`, `CONV_CACHE_TTL_SECS`, `MCP_KEY_CACHE_TTL_SECS`, `MCP_TOOLS_SUMMARY_TTL_SECS`, `OLLAMA_MODEL_CTX_TTL_SECS`, `MODELS_CACHE_TTL_SECS`, `SERVICE_HEALTH_TTL_SECS` |
+| Auth / rate limiting | `PASSWORD_RESET_TTL_SECS`, `LOGIN_ATTEMPTS_WINDOW_SECS`, `RATE_LIMIT_RETRY_AFTER_SECS`, `KEY_TIER_PAID`, `GEMINI_TIER_FREE`, `API_KEY_PREFIX` |
+| Placement / scaleout | `PRELOAD_LOCK_TTL_SECS`, `SCALEOUT_DECISION_TTL_SECS` |
+| Valkey keys (canonical fns) | `job_owner_key`, `conversation_record_key`, `heartbeat_key`, `ratelimit_tpm_key`, `preload_lock_key`, `scaleout_decision_key`, `demand_key`, `mcp_*_key`, … |
+| Valkey keys (string consts) | `JOBS_PENDING_COUNTER_KEY`, `JOBS_RUNNING_COUNTER_KEY`, `PROVIDERS_ONLINE_COUNTER_KEY`, `INSTANCES_SET_KEY`, `AGENT_INSTANCES_SET_KEY`, `PUBSUB_*_KEY`, `VRAM_LEASES_SCAN_PATTERN_KEY` |
 
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `TPM_ESTIMATED_TOKENS` | `500` | Tokens reserved per request at admission |
-| `JOB_CLEANUP_DELAY` | `60s` | Deferred DashMap entry removal |
-| `OWNERSHIP_LOST_CLEANUP_DELAY` | `5s` | Fast cleanup when ownership lost |
-| `QUEUE_POLL_INTERVAL` | `500ms` | Empty-queue sleep interval |
-| `NO_PROVIDER_BACKOFF` | `2s` | No-provider re-queue backoff |
-| `QUEUE_ERROR_BACKOFF` | `1s` | Queue pop error backoff |
-| `JOB_OWNER_TTL_SECS` | `300` | Valkey owner key TTL |
-| `OWNER_REFRESH_INTERVAL` | `60s` | Owner key refresh interval |
-| `INITIAL_TOKEN_CAPACITY` | `256` | Per-job token Vec initial capacity |
-| `LEASE_ATTEMPTS_TTL_SECS` | `86400` | Per-job lease-attempts counter TTL |
-| `INSTANCE_HEARTBEAT_TTL_SECS` | `30` | Per-instance heartbeat TTL (3× refresh) |
-
-### MCP / lifecycle phase timeouts (coupled across `bridge.rs` + `lifecycle.rs`)
-
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `MCP_LIFECYCLE_LOAD_TIMEOUT` | `600s` | Phase-1 cold-load (200K-context worst case) |
-| `MCP_TOKEN_FIRST_TIMEOUT` | `300s` | Phase-2 first-token after `phase_boundary` |
-| `MCP_STREAM_IDLE_TIMEOUT` | `45s` | Per-token stream-idle ceiling |
-| `MCP_ROUND_TOTAL_TIMEOUT` | `1500s` | Hard cap per MCP round (under Cilium 1800s) |
-| `MCP_TOOL_REFRESH_INTERVAL` | `25s` | Background tool-discovery refresh |
-
-### Cache TTLs
-
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `API_KEY_CACHE_TTL` | `60s` | Per-hash API key cache (hot path) |
-| `LAB_SETTINGS_CACHE_TTL` | `30s` | Lab settings single-row cache |
-| `MODEL_SELECTION_CACHE_TTL` | `30s` | Provider→enabled-models cache |
-| `OLLAMA_MODEL_CACHE_TTL` | `10s` | Per-provider model list cache |
-| `PROVIDER_REGISTRY_CACHE_TTL` | `5s` | In-memory registry snapshot |
-| `CONV_CACHE_TTL_SECS` | `300` | Conversation record + S3-detail cache |
-| `MCP_KEY_CACHE_TTL_SECS` | `60` | Per-API-key MCP caches (acl/cap/topk) |
-| `MCP_TOOLS_SUMMARY_TTL_SECS` | `3600` | MCP tools_summary cache |
-| `OLLAMA_MODEL_CTX_TTL_SECS` | `600` | Ollama per-(provider, model) context window |
-| `MODELS_CACHE_TTL_SECS` | `3600` | Per-provider model list (Valkey) |
-| `SERVICE_HEALTH_TTL_SECS` | `60` | Per-instance service-health HASH |
-
-### Auth / rate limiting
-
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `PASSWORD_RESET_TTL_SECS` | `86400` | Password-reset token (24h) |
-| `LOGIN_ATTEMPTS_WINDOW_SECS` | `300` | Per-IP login-attempts sliding window (also `Retry-After`) |
-| `RATE_LIMIT_RETRY_AFTER_SECS` | `60` | Default 429 fallback Retry-After |
-| `KEY_TIER_PAID` | `"paid"` | API key billing tier value |
-| `GEMINI_TIER_FREE` | `"free"` | Gemini free-tier routing value |
-| `API_KEY_PREFIX` | `"vnx_"` | Prefix for generated API key plaintexts |
-
-### Placement / scaleout
-
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `PRELOAD_LOCK_TTL_SECS` | `180` | Preload NX-lock TTL (cold-load window) |
-| `SCALEOUT_DECISION_TTL_SECS` | `30` | Scale-out decision dedup TTL |
-
-HTTP-specific constants remain in `infrastructure/inbound/http/constants.rs` (SSE_*, INFERENCE_ROUTER_TIMEOUT, JWT_ROUTER_TIMEOUT, body limits) with re-exports from `domain::constants` for convenience.
-
-### Canonical Valkey-key constructors / string consts (SSOT)
-
-`domain/constants.rs` also owns every canonical (unprefixed) Valkey key. Application code imports from here; `ValkeyAdapter` applies the deployment prefix automatically. Examples: `job_owner_key`, `conversation_record_key`, `heartbeat_key`, `ratelimit_tpm_key`, `preload_lock_key`, `scaleout_decision_key`, `demand_key`, `mcp_tool_key`, …; string consts: `JOBS_PENDING_COUNTER_KEY`, `JOBS_RUNNING_COUNTER_KEY`, `PROVIDERS_ONLINE_COUNTER_KEY`, `INSTANCES_SET_KEY`, `AGENT_INSTANCES_SET_KEY`, `PUBSUB_JOB_EVENTS_KEY`, `PUBSUB_CANCEL_PATTERN_KEY`, `PUBSUB_CANCEL_PREFIX_KEY`, `VRAM_LEASES_SCAN_PATTERN_KEY`.
+HTTP-only constants stay in `infrastructure/inbound/http/constants.rs` (SSE_*, `INFERENCE_ROUTER_TIMEOUT`, `JWT_ROUTER_TIMEOUT`, body limits). Application code uses canonical key fns; `ValkeyAdapter` applies the deployment prefix automatically.
 
 ## Shared Handler Helpers
 

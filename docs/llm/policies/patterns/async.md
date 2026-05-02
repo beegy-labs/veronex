@@ -113,43 +113,20 @@ impl<D: Digest> io::Write for HashWriter<D> {
 
 **`Vec::reserve()`** before extend: `accumulated.reserve(arr.len())` then `extend`.
 
-## Fan-out per-N awaits — `join_all` over collections
+## Fan-out per-N awaits
 
-`for x in collection { x.await }` produces O(N) wall-clock round-trips.
-At 10k-provider / 1M-TPS scale this is the single biggest source of
-dispatcher latency. Every loop whose iterations are independent must
-fan out via `futures::future::join_all` (or `JoinSet` when results are
-heterogeneous).
+`for x in collection { x.await }` produces O(N) wall-clock round-trips — biggest source of dispatcher latency at 10k-provider / 1M-TPS scale. Every loop with independent iterations must fan out.
 
-```rust
-// WRONG — N round-trips, sequential
-for b in candidates {
-    let avail = get_available_vram_mb(&b, valkey).await;
-    score(b, avail);
-}
+| Pattern | Use when | Replaces |
+|---------|----------|----------|
+| `futures::future::join_all` | homogeneous result collection | `for x in xs { results.push(f(x).await) }` |
+| `tokio::join!` | fixed pair of independent awaits | `a.await; b.await;` |
+| `pool.mget(keys)` (Valkey MGET) | every iteration is `pool.get(key)` | `for k in ks { pool.get(k).await }` |
+| `JoinSet` | heterogeneous results / cancellation needed | detached `tokio::spawn` accumulation |
 
-// CORRECT — one wall-clock round-trip
-use futures::future::join_all;
-let scored: Vec<_> = join_all(
-    candidates.into_iter().map(|b| async move {
-        let avail = get_available_vram_mb(&b, valkey).await;
-        (b, avail)
-    }),
-).await;
-```
+Permitted sequential `.await` (intentional, audit-allowed): ordered reaper logic, lazy migration, `notify.notified()`, bounded image batches (≤4), background loops already running under `JoinSet`.
 
-**MGET batch over collection** — when N awaits each are `valkey.kv_get(...)`,
-collapse to a single `pool.mget(keys)` round-trip (canonical examples in
-`analyzer.rs::sync_provider` demand counters and
-`inference_helpers::lookup_model_max_ctx`).
-
-**`tokio::join!` for fixed pairs** — independent counter pair / DB-fetch
-pair, e.g. `runner::run_job` post-dispatch
-`tokio::join!(decr_pending, incr_running)`.
-
-**Permitted exceptions** (sequential `.await` is intentional):
-ordered reaper logic, lazy migration paths, `notify.notified()`,
-bounded image batches (≤4), background `JoinSet` (already concurrent).
+Canonical examples: `provider_router::filter_by_model_selection` (join_all), `runner::run_job` decr_pending+incr_running (tokio::join!), `analyzer.rs` demand counters / `inference_helpers::lookup_model_max_ctx` (MGET).
 
 ## VramPool CAS Safety
 
@@ -224,86 +201,10 @@ A separate task counts broadcast events (`pending` -> incoming, terminal -> comp
 
 ## Lifecycle Port Pattern (Phase 1 ↔ Phase 2 SoD)
 
-Outbound ports for long-running side effects (model load that may exceed 160s
-on 200K-context models) split into two traits and combine via super-trait:
+For long-running side effects (model load > 160s on 200K-context), split outbound capabilities into `InferenceProviderPort` (infer / stream) and `ModelLifecyclePort` (ensure_ready / instance_state / evict), then combine via super-trait `LlmProviderPort` with a blanket impl. One concrete adapter implements both; cloud / no-VRAM adapters provide a no-op `ModelLifecyclePort` returning `LifecycleOutcome::AlreadyLoaded` immediately. Composition root holds `Arc<dyn LlmProviderPort>`.
 
-```rust
-#[async_trait]
-pub trait InferenceProviderPort: Send + Sync {
-    async fn infer(&self, job: &InferenceJob) -> Result<InferenceResult>;
-    fn stream_tokens(&self, job: &InferenceJob)
-        -> Pin<Box<dyn Stream<Item = Result<StreamToken>> + Send>>;
-}
+Concurrent `ensure_ready(model)` per `(provider, model)` coalesces on a `DashMap<String, Arc<LoadInFlight>>` slot: leader runs the probe under `tokio::select!` (probe future + `/api/ps` poller + stall detector + observability + hard cap); followers `Notify::notified().await` then read the `OnceCell` result. Errors typed as `LifecycleError` (LoadTimeout / Stalled / ProviderError / CircuitOpen / ResourcesExhausted) so the runner branches without string-matching.
 
-#[async_trait]
-pub trait ModelLifecyclePort: Send + Sync {
-    async fn ensure_ready(&self, model: &str)
-        -> Result<LifecycleOutcome, LifecycleError>;
-    async fn instance_state(&self, model: &str) -> ModelInstanceState;
-    async fn evict(&self, model: &str, reason: EvictionReason)
-        -> Result<(), LifecycleError>;
-}
-
-pub trait LlmProviderPort: InferenceProviderPort + ModelLifecyclePort {}
-impl<T> LlmProviderPort for T
-    where T: InferenceProviderPort + ModelLifecyclePort + ?Sized {}
-```
-
-Rules:
-- One adapter implements **both** ports — concrete type satisfies the super-trait
-  via the blanket impl. No double `Arc`.
-- Composition root holds `Arc<dyn LlmProviderPort>` so call sites dispatch
-  either super-trait method without owning two trait objects.
-- Cloud / no-VRAM adapters provide a no-op `ModelLifecyclePort` returning
-  `LifecycleOutcome::AlreadyLoaded` immediately.
-- Concurrent `ensure_ready(M)` per `(provider, model)` coalesces on a
-  `DashMap<String, Arc<LoadInFlight>>` slot:
-  - leader runs the probe + `tokio::select!` over (probe future, `/api/ps`
-    poller, stall detector, observability log, hard cap)
-  - followers `Notify::notified().await` then read a `OnceCell` for the result
-  - returns `LoadCompleted{duration_ms}` (leader) or `LoadCoalesced{waited_ms}` (follower)
-- Errors typed as `LifecycleError` (LoadTimeout / Stalled / ProviderError /
-  CircuitOpen / ResourcesExhausted) — the runner branches on cause without
-  string-matching `anyhow::Error`.
-
-### Sentinel-zero stall semantics — long-running probe pattern
-
-When the underlying probe is a **single request-response** with no streamed
-progress (e.g. ollama's `POST /api/generate`), the natural "wall-clock since
-slot creation" stall detector misfires on every long load. The fix:
-
-```rust
-pub struct LoadInFlight {
-    started_at: Instant,
-    last_progress_at: Arc<AtomicU64>,   // SENTINEL 0 = no progress yet
-    notify: Arc<Notify>,
-    result: OnceCell<...>,
-}
-
-// Stall future inside the leader's tokio::select!:
-let stall_fut = async {
-    let mut interval = tokio::time::interval(Duration::from_secs(5));
-    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    interval.tick().await; // skip immediate
-    loop {
-        interval.tick().await;
-        if slot.last_progress_at.load(Acquire) == 0 {
-            continue; // silent-load phase — no signal yet, NOT stalled
-        }
-        if gap_ms() >= STALL_INTERVAL_MS { return Stalled { ... } }
-    }
-};
-```
-
-A separate observer (e.g. `/api/ps` polling) is the **only** writer to
-`last_progress_at` until the probe completes. When the probe HTTP eventually
-returns, it does a belt-and-suspenders `record_progress()`. Critically, the
-probe is **never cancelled** by stall/hard-cap winning the select — closing
-the connection signals the upstream to abort the load (`ollama#8006`).
-
-`MissedTickBehavior::Delay` on all interval-driven arms guarantees ≥ interval
-spacing between consecutive ticks, even when an individual HTTP query takes
-close to the full interval — prevents cascading bursts on a struggling
-upstream.
+**Sentinel-zero stall** (single-shot probe with no streamed progress): `last_progress_at: Arc<AtomicU64>` initialised to `0` is the "no signal yet" sentinel. Stall arm in the leader's `select!` skips while the value is `0`; only a separate observer (e.g. `/api/ps` poller) writes the timestamp. The probe HTTP is **never cancelled** by stall/hard-cap winners — closing the connection aborts the upstream load (ollama#8006). Use `MissedTickBehavior::Delay` on every interval-driven arm to prevent cascading bursts.
 
 SDD: `.specs/veronex/history/inference-lifecycle-sod.md`. Flow: `flows/model-lifecycle.md`.
