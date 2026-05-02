@@ -938,22 +938,33 @@ pub async fn sync_provider(
     if governor_active {
         // Pass 1 — identify candidates: active_count > 0 OR demand_counter > 0.
         let loaded_names = vram_pool.loaded_model_names(provider_id);
-        let mut candidate_names: Vec<String> = Vec::new();
 
-        for name in &loaded_names {
-            let active = vram_pool.active_requests(provider_id, name);
-            let demand: u64 = if let Some(pool) = valkey_pool {
-                use fred::prelude::*;
-                let v: Result<Option<String>, _> =
-                    pool.get(&crate::infrastructure::outbound::valkey_keys::demand_counter(name)).await;
-                v.ok().flatten().and_then(|s| s.parse().ok()).unwrap_or(0)
+        // Single MGET batches all demand counters into one Valkey round-trip
+        // (was N sequential GETs per loaded model).
+        let demands: Vec<u64> = if let Some(pool) = valkey_pool {
+            use fred::prelude::*;
+            let keys: Vec<String> = loaded_names.iter()
+                .map(|n| crate::infrastructure::outbound::valkey_keys::demand_counter(n))
+                .collect();
+            if keys.is_empty() {
+                Vec::new()
             } else {
-                0
-            };
-            if active > 0 || demand > 0 {
-                candidate_names.push(name.clone());
+                let raw: Vec<Option<String>> = pool.mget(keys).await.unwrap_or_default();
+                raw.into_iter()
+                    .map(|opt| opt.and_then(|s| s.parse().ok()).unwrap_or(0))
+                    .collect()
             }
-        }
+        } else {
+            vec![0u64; loaded_names.len()]
+        };
+
+        let candidate_names: Vec<String> = loaded_names.iter()
+            .zip(demands.iter().chain(std::iter::repeat(&0u64)))
+            .filter(|(name, demand)| {
+                vram_pool.active_requests(provider_id, name) > 0 || **demand > 0
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
 
         // Pass 2 — batch-fetch oldest enqueue_at_ms per candidate model.
         // Uses QUEUE_MODEL_MAP (job_id → model) + QUEUE_ENQUEUE_AT (job_id → enqueue_at_ms)

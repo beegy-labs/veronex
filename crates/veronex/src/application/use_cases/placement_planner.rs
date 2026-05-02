@@ -169,7 +169,7 @@ async fn planner_tick(
     }
 
     // Get demand for each model — parallel Valkey lookups
-    let mut model_demand: HashMap<String, u64> = HashMap::new();
+    let mut model_demand: HashMap<String, u64> = HashMap::with_capacity(all_models.len());
     {
         let futs: Vec<_> = all_models.iter()
             .map(|model| {

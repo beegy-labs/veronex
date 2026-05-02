@@ -57,12 +57,19 @@ pub async fn get_service_health(
     let instance_ids: Vec<String> = pool.smembers(valkey_keys::instances_set()).await
         .unwrap_or_default();
 
+    // Fan out HGETALL across all instances concurrently — at scale this turns
+    // an O(N) wall-clock chain into one round-trip-time.
+    use futures::future::join_all;
+    let probe_results: Vec<HashMap<String, String>> = join_all(
+        instance_ids.iter().map(|iid| async {
+            pool.hgetall::<HashMap<String, String>, _>(valkey_keys::service_health(iid))
+                .await
+                .unwrap_or_default()
+        }),
+    ).await;
+
     let mut all_probes: HashMap<String, Vec<SvcProbeEntry>> = HashMap::new();
-    for iid in &instance_ids {
-        let entries: HashMap<String, String> = pool
-            .hgetall(valkey_keys::service_health(iid))
-            .await
-            .unwrap_or_default();
+    for entries in probe_results {
         for (svc_name, json) in entries {
             if let Ok(probe) = serde_json::from_str::<SvcProbeEntry>(&json) {
                 all_probes.entry(svc_name).or_default().push(probe);
@@ -91,11 +98,17 @@ pub async fn get_service_health(
     }).collect();
 
     // ── 2. API pods: check heartbeat TTL ──────────────────────────
+    // Concurrent TTL probes — same parallelisation as the probe fan-out above.
+    let api_ttls: Vec<i64> = join_all(
+        instance_ids.iter().map(|iid| async {
+            pool.ttl::<i64, _>(valkey_keys::heartbeat(iid)).await.unwrap_or(-2)
+        }),
+    ).await;
+
     let api_pods: Vec<PodStatus> = {
         let mut pods = Vec::with_capacity(instance_ids.len());
         let now_ms = chrono::Utc::now().timestamp_millis();
-        for iid in &instance_ids {
-            let ttl: i64 = pool.ttl(valkey_keys::heartbeat(iid)).await.unwrap_or(-2);
+        for (iid, ttl) in instance_ids.iter().zip(api_ttls) {
             if ttl <= 0 {
                 let _: Result<(), _> = pool
                     .srem(valkey_keys::instances_set(), iid.as_str())
@@ -118,12 +131,16 @@ pub async fn get_service_health(
         .await
         .unwrap_or_default();
 
+    let agent_ttls: Vec<i64> = join_all(
+        agent_ids.iter().map(|h| async {
+            pool.ttl::<i64, _>(valkey_keys::agent_heartbeat(h)).await.unwrap_or(-2)
+        }),
+    ).await;
+
     let agent_pods: Vec<PodStatus> = {
         let mut pods = Vec::with_capacity(agent_ids.len());
         let now_ms = chrono::Utc::now().timestamp_millis();
-        for hostname in &agent_ids {
-            let hb_key = valkey_keys::agent_heartbeat(hostname);
-            let ttl: i64 = pool.ttl(&hb_key).await.unwrap_or(-2);
+        for (hostname, ttl) in agent_ids.iter().zip(agent_ttls) {
             if ttl <= 0 {
                 let _: Result<(), _> = pool
                     .srem(valkey_keys::agent_instances_set(), hostname.as_str())

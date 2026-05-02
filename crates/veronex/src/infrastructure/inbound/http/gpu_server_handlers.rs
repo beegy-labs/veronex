@@ -330,13 +330,16 @@ pub async fn get_server_metrics_batch(
         })
         .collect();
 
-    let mut result = std::collections::HashMap::with_capacity(ids.len());
-    for id in ids {
-        let metrics = hw_metrics::load_node_metrics(pool, id)
-            .await
-            .unwrap_or_default();
-        result.insert(GpuServerId::from_uuid(id).to_string(), metrics);
-    }
+    // Fan out per-server metric loads concurrently — ~100 ids cap × N RTT becomes one RTT.
+    let metrics_vec = futures::future::join_all(
+        ids.iter().map(|id| async move {
+            hw_metrics::load_node_metrics(pool, *id).await.unwrap_or_default()
+        }),
+    ).await;
+
+    let result: std::collections::HashMap<String, _> = ids.into_iter().zip(metrics_vec)
+        .map(|(id, metrics)| (GpuServerId::from_uuid(id).to_string(), metrics))
+        .collect();
 
     Ok(Json(result))
 }

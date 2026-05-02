@@ -154,11 +154,13 @@ async fn async_main() -> Result<()> {
         .fetch_all(&pg_pool)
         .await
         .unwrap_or_default();
-        for s in servers {
+        // Connect to every enabled MCP server concurrently — startup wall-clock
+        // becomes max(per-server) instead of sum.
+        futures::future::join_all(servers.iter().map(|s| async {
             if let Err(e) = session_mgr.connect(s.id, &s.slug, &s.url, s.timeout_secs as u16).await {
                 tracing::warn!(id = %s.id, error = %e, "MCP startup connect failed");
             }
-        }
+        })).await;
         Some(Arc::new(bridge))
     } else {
         None
@@ -237,10 +239,14 @@ async fn async_main() -> Result<()> {
         tokio::spawn(
             async move {
                 use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
-                // Initial discovery on startup
-                for server_id in state_clone.mcp_bridge.as_ref().map(|b| b.session_manager.server_ids()).unwrap_or_default() {
-                    discover_tools_startup(&state_clone, server_id).await;
-                }
+                // Initial discovery on startup — fan out so the boot wall-clock
+                // is dominated by the slowest MCP server, not their sum.
+                let server_ids = state_clone.mcp_bridge.as_ref()
+                    .map(|b| b.session_manager.server_ids())
+                    .unwrap_or_default();
+                futures::future::join_all(
+                    server_ids.into_iter().map(|sid| discover_tools_startup(&state_clone, sid)),
+                ).await;
                 // Periodic refresh + missing-session reconnect
                 let mut interval = tokio::time::interval(MCP_TOOL_REFRESH_INTERVAL);
                 interval.tick().await; // skip the immediate tick

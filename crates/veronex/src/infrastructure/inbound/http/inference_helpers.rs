@@ -237,6 +237,37 @@ pub async fn analyze_images_for_context(
 ///
 /// Checks that the tool call has a well-formed `function.name` field with
 /// only safe characters. Rejects names with control characters or suspicious
+/// Look up the cached `configured_ctx` for `model_name` across all Ollama
+/// providers via a single Valkey `MGET` (one round-trip total). Returns the
+/// first non-zero value found.
+///
+/// SSOT for the multi-turn-handoff and dispatch-time context-window lookup —
+/// previously duplicated in `openai_handlers` and `ollama_compat_handlers`
+/// as a sequential `for ... .await` chain (O(N) round-trips at 10k-provider
+/// scale).
+pub async fn lookup_model_max_ctx(
+    state: &super::state::AppState,
+    model_name: &str,
+) -> Option<u32> {
+    use fred::prelude::*;
+    let pool = state.valkey_pool.as_ref()?;
+    let providers = state.provider_registry.list_active().await.ok()?;
+    let keys: Vec<String> = providers
+        .iter()
+        .filter(|p| p.is_ollama())
+        .map(|p| crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, model_name))
+        .collect();
+    if keys.is_empty() {
+        return None;
+    }
+    let raw: Vec<Option<String>> = pool.mget(keys).await.ok()?;
+    raw.iter()
+        .flatten()
+        .filter_map(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .find_map(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
+        .map(|n| n as u32)
+}
+
 /// patterns to prevent injection attacks (H4 security fix).
 pub fn validate_tool_call(call: &serde_json::Value) -> bool {
     let func = match call.get("function") {

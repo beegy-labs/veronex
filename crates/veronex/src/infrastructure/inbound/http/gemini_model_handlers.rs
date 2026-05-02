@@ -134,23 +134,24 @@ pub async fn sync_status(RequireProviderManage(claims): RequireProviderManage, S
         .filter(|p| matches!(p.provider_type, ProviderType::Gemini))
         .collect();
 
-    let mut results = Vec::with_capacity(gemini_active.len());
-
-    for provider in gemini_active {
-        let new_status = check_provider(&state.http_client, &provider).await;
-        let status_str = new_status.as_str().to_string();
-
-        if let Err(e) = state.provider_registry.update_status(provider.id, new_status).await {
-            tracing::warn!(provider_id = %provider.id, "gemini sync_status: failed to persist status: {e}");
-        }
-
-        results.push(GeminiStatusResult {
-            id: ProviderId::from_uuid(provider.id),
-            name: provider.name,
-            status: status_str,
-            error: None,
-        });
-    }
+    // Probe + persist every Gemini provider concurrently — wall-clock = max(per-provider).
+    let http = &state.http_client;
+    let registry = &state.provider_registry;
+    let results: Vec<GeminiStatusResult> = futures::future::join_all(
+        gemini_active.into_iter().map(|provider| async move {
+            let new_status = check_provider(http, &provider).await;
+            let status_str = new_status.as_str().to_string();
+            if let Err(e) = registry.update_status(provider.id, new_status).await {
+                tracing::warn!(provider_id = %provider.id, "gemini sync_status: failed to persist status: {e}");
+            }
+            GeminiStatusResult {
+                id: ProviderId::from_uuid(provider.id),
+                name: provider.name,
+                status: status_str,
+                error: None,
+            }
+        }),
+    ).await;
 
     tracing::info!(count = results.len(), "gemini status sync completed");
 

@@ -1005,25 +1005,8 @@ async fn load_conversation_context(
 
                 // ── Multi-turn eligibility gate ───────────────────────────────
                 let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-                let max_ctx: Option<u32> = if let Some(ref vk) = state.valkey_pool {
-                    use fred::prelude::*;
-                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    let mut found = None;
-                    for p in providers.iter().filter(|p| p.is_ollama()) {
-                        let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, model_name);
-                        if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
-                            if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
-                                .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
-                            {
-                                found = Some(ctx as u32);
-                                break;
-                            }
-                        }
-                    }
-                    found
-                } else {
-                    None
-                };
+                let max_ctx: Option<u32> =
+                    super::inference_helpers::lookup_model_max_ctx(&state, model_name).await;
 
                 if let Err(e) = context_assembler::check_multiturn_eligibility(model_name, max_ctx, &lab) {
                     tracing::warn!(model = model_name, code = e.code(), "multi-turn eligibility check failed");
@@ -1050,7 +1033,7 @@ async fn load_conversation_context(
                             .unwrap_or_else(|| model_name.to_string());
                         let timeout = lab.compression_timeout_secs as u64;
                         if let Some((new_conv_id, master_summary)) = session_handoff::perform_handoff(
-                            &record, uuid, owner_id, date, &summary_model, &provider.url, timeout, store,
+                            &state.http_client, &record, uuid, owner_id, date, &summary_model, &provider.url, timeout, store,
                         ).await {
                             // Prepend master summary as first message; current input follows
                             let summary_msg = ChatMessage {

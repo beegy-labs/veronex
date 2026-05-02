@@ -29,15 +29,14 @@ impl OllamaModelRepository for PostgresOllamaModelRepository {
         .execute(&mut *tx)
         .await?;
 
-        for name in model_names {
-            sqlx::query!(
-                r#"
-                INSERT INTO ollama_models (model_name, provider_id, synced_at)
-                VALUES ($1, $2, NOW())
-                "#,
-                name,
-                provider_id,
+        // Single batched INSERT via UNNEST — replaces N round-trips with 1.
+        if !model_names.is_empty() {
+            sqlx::query(
+                "INSERT INTO ollama_models (model_name, provider_id, synced_at) \
+                 SELECT name, $2, NOW() FROM UNNEST($1::TEXT[]) AS t(name)"
             )
+            .bind(model_names)
+            .bind(provider_id)
             .execute(&mut *tx)
             .await?;
         }
