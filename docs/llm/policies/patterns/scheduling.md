@@ -61,9 +61,52 @@ Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
 | `MAX_CONCURRENT_METRICS = 64` | `health_checker.rs` | Semaphore limits concurrent node-exporter polls |
 | `MAX_CONCURRENT_PROBES = 64` | `health_checker.rs` | Semaphore limits HTTP health probes (no-Valkey fallback) |
 | `pg_class.reltuples` | `dashboard_queries.rs` | O(1) total_jobs estimate instead of COUNT(*) |
-| `join_all` parallelism | `dispatcher.rs`, `placement_planner.rs` | Parallel Valkey/DB calls instead of sequential loops |
+| `join_all` parallelism | `dispatcher.rs`, `placement_planner.rs`, `provider_router.rs`, `infra_health_handlers.rs`, `account_handlers.rs`, `gemini_compat_handlers.rs`, `gemini_model_handlers.rs`, `ollama_model_handlers.rs`, `gpu_server_handlers.rs`, `main.rs` (MCP startup) | Concurrent fan-out for fleet-wide reads/writes |
+| `MGET batch` | `analyzer.rs` (demand counters), `inference_helpers::lookup_model_max_ctx` | Single round-trip across N keys |
+| `EVALSHA` Lua cache | `valkey_adapter.rs` (`warmup()` + 4 pre-loaded `Script`) | Sends SHA1 only, not script body |
 | `concurrent_http_probes()` | `health_checker.rs` | Bounded parallel HTTP for MGET fallback |
 | No-Valkey DB cache | `background.rs` | DB query every 10s (not 1s) when Valkey absent |
+
+## Best-Effort Locks — `try_acquire_lock`
+
+For coordination-style locks (placement-planner scaleout/preload dedup) where the legitimate worst case is "another replica got there first", a GET + SET probe is acceptable in lieu of a native NX op. Centralised in `placement_planner::try_acquire_lock` so the racy GET-then-SET pattern only exists once.
+
+```rust
+async fn try_acquire_lock(
+    valkey: &dyn ValkeyPort,
+    key: &str,
+    value: &str,
+    ttl_secs: i64,
+) -> bool {
+    if matches!(valkey.kv_get(key).await, Ok(Some(_))) { return false; }
+    valkey.kv_set(key, value, ttl_secs, false).await.is_ok()
+}
+```
+
+Caller is responsible for `kv_del` on the cleanup path. Do NOT use this for correctness-critical mutual exclusion (use a proper `SET NX` Lua + lease renewal instead — see queue lease pattern).
+
+## Counter Adjustment Helper
+
+Job-state counters (`JOBS_PENDING_COUNTER_KEY`, `JOBS_RUNNING_COUNTER_KEY`) are touched on every state transition. The 4 inc/dec sites collapse into a single helper + 1-line wrappers in `inference/helpers.rs`:
+
+```rust
+async fn adjust_counter(valkey: &Option<Arc<dyn ValkeyPort>>, key: &'static str, delta: i64) {
+    if let Some(vk) = valkey
+        && let Err(e) = vk.incr_by(key, delta).await
+    {
+        tracing::warn!(key, delta, "counter adjustment failed: {e}");
+    }
+}
+
+pub(super) async fn incr_pending(vk: &Option<Arc<dyn ValkeyPort>>) { adjust_counter(vk, JOBS_PENDING_COUNTER_KEY, 1).await; }
+pub(super) async fn decr_pending(vk: &Option<Arc<dyn ValkeyPort>>) { adjust_counter(vk, JOBS_PENDING_COUNTER_KEY, -1).await; }
+```
+
+When you need both adjustments (e.g. pending → running), fire concurrently:
+
+```rust
+tokio::join!(decr_pending(&valkey), incr_running(&valkey));
+```
 
 ## Orphan Sweeper — Agent-Side Crash Recovery
 

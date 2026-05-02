@@ -90,4 +90,5 @@ API pod liveness from `veronex:heartbeat:{id}` TTL. Agent pod liveness from prov
 |------|---------|
 | `health_checker.rs` | `check_and_store_services()` — probes + Valkey HASH write |
 | `dashboard_handlers.rs` | `get_service_health()` — merge + respond |
-| `valkey_keys.rs` | `service_health(instance_id)` key function |
+| `domain/constants.rs` | `service_health_key(instance_id)` canonical key + `SERVICE_HEALTH_TTL_SECS` |
+| `valkey_keys.rs` | `service_health(instance_id)` pk-aware shim for direct-fred callers |
