@@ -1,6 +1,6 @@
 # docs/llm — SSOT Index
 
-> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-03-28
+> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-05-02
 
 ## Policies (Cross-Cutting)
 
@@ -238,3 +238,10 @@
 | Add application constant | `policies/architecture.md` — Domain constants live in `domain/constants.rs` |
 | Testing strategy / purity | `policies/testing-strategy.md` — layer responsibility, decision checklist |
 | Build / compile speed | `infra/build-optimization.md` — mold, hakari, cargo-chef, profiles |
+| Add a Valkey key | `policies/patterns/valkey.md` — two-layer SSOT (canonical in `domain/constants.rs`, pk-aware shim in `valkey_keys.rs`) |
+| Add a Lua script | `policies/patterns/valkey.md` § SCRIPT LOAD + EVALSHA — `Script::from_lua` in `valkey_adapter::warmup()` |
+| Parallelize a per-N awaits loop | `policies/patterns/async.md` § Fan-out per-N awaits — `join_all` / `tokio::join!` / MGET batch |
+| L1+L2 cached lookup | `policies/patterns/persistence.md` § L1 (Valkey) + L2 (Postgres) Cached Lookup |
+| Best-effort coordination lock | `policies/patterns/scheduling.md` § Best-Effort Locks — `try_acquire_lock` |
+| Adjust a Valkey counter | `policies/patterns/scheduling.md` § Counter Adjustment Helper — `adjust_counter` |
+| Sensitive-header redaction (Authorization / Cookie) | `auth/security.md` § Sensitive-Header Redaction + `policies/patterns/middleware.md` |
