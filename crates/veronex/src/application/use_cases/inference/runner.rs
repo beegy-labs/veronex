@@ -19,8 +19,9 @@ use crate::domain::entities::InferenceJob;
 use crate::domain::enums::{FinishReason, JobStatus, ProviderType};
 use crate::domain::value_objects::{JobStatusEvent, StreamToken};
 use crate::domain::constants::{
-    conversation_record_key, job_owner_key, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
-    MAX_TOKENS_PER_JOB, OWNER_REFRESH_INTERVAL, OWNERSHIP_LOST_CLEANUP_DELAY,
+    conversation_record_key, job_owner_key, CONV_CACHE_TTL_SECS, JOB_CLEANUP_DELAY,
+    JOB_OWNER_TTL_SECS, MAX_TOKENS_PER_JOB, OWNER_REFRESH_INTERVAL,
+    OWNERSHIP_LOST_CLEANUP_DELAY,
 };
 
 use super::JobEntry;
@@ -406,10 +407,9 @@ async fn finalize_job(
         if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
             tracing::warn!(job_id = %uuid, "S3 conversation write failed (non-fatal): {e}");
         } else if let (Some(conv_id), Some(vk)) = (job.conversation_id, valkey) {
-            // Cache the updated record in Valkey (TTL 300 s) so the next read
-            // hits cache instead of S3. Compression re-write (Phase 3) will DEL
-            // to force a fresh load after the compressed turn is written back.
-            const CONV_CACHE_TTL_SECS: i64 = 300;
+            // Cache the updated record in Valkey so the next read hits cache
+            // instead of S3. Compression re-write (Phase 3) will DEL to force a
+            // fresh load after the compressed turn is written back.
             let cache_key = conversation_record_key(conv_id);
             if let Ok(json) = serde_json::to_string(&record) {
                 if let Err(e) = vk.kv_set(&cache_key, &json, CONV_CACHE_TTL_SECS, false).await {

@@ -11,15 +11,11 @@ const POOL_MAX_LIFETIME: Duration = Duration::from_secs(1800);
 
 /// Create a PostgreSQL connection pool from the given URL.
 ///
-/// Pool size is configurable via `PG_POOL_MAX` env var (default: 10).
-pub async fn connect(database_url: &str) -> Result<PgPool> {
+/// `max_conns` is sourced from `AppConfig::pg_pool_max` (env `PG_POOL_MAX`,
+/// default 10) so all env reads stay in `bootstrap::config`.
+pub async fn connect(database_url: &str, max_conns: u32) -> Result<PgPool> {
     use sqlx::postgres::PgConnectOptions;
     use std::str::FromStr;
-
-    let max_conns: u32 = std::env::var("PG_POOL_MAX")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
 
     // statement_cache_capacity is on PgConnectOptions, not PgPoolOptions.
     // 512 (up from default 100) reduces parse/plan overhead per connection.

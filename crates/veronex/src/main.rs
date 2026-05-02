@@ -54,7 +54,7 @@ async fn async_main() -> Result<()> {
     // ── PostgreSQL ─────────────────────────────────────────────────
     let masked_db_url = mask_database_url(&config.database_url);
     tracing::info!("connecting to postgres at {masked_db_url}");
-    let pg_pool = database::connect(&config.database_url).await?;
+    let pg_pool = database::connect(&config.database_url, config.pg_pool_max).await?;
     tracing::info!("postgres ready");
 
     // ── Valkey (optional) ──────────────────────────────────────────
@@ -62,11 +62,7 @@ async fn async_main() -> Result<()> {
         use fred::prelude::*;
         tracing::info!("connecting to valkey at {url}");
         let valkey_config = Config::from_url(url)?;
-        let valkey_pool_size: usize = std::env::var("VALKEY_POOL_SIZE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(6);
-        let pool = Pool::new(valkey_config, None, None, None, valkey_pool_size)?;
+        let pool = Pool::new(valkey_config, None, None, None, config.valkey_pool_size)?;
         pool.init().await?;
         tracing::info!("valkey ready");
         Some(pool)
@@ -76,10 +72,7 @@ async fn async_main() -> Result<()> {
     };
 
     // ── Infrastructure context ─────────────────────────────────────
-    let instance_id: Arc<str> = Arc::from(
-        std::env::var("VERONEX_INSTANCE_ID")
-            .unwrap_or_else(|_| uuid::Uuid::now_v7().to_string()),
-    );
+    let instance_id: Arc<str> = Arc::from(config.instance_id.as_str());
     tracing::info!(instance_id = %instance_id, "instance identity generated");
     let infra = bootstrap::InfraContext {
         valkey_pool,
@@ -112,12 +105,11 @@ async fn async_main() -> Result<()> {
     // ── Wire MCP vector selector (requires VESPA_URL + EMBED_URL) ─────
     let (mcp_vector_selector, mcp_tool_indexer) = {
         use veronex_mcp::vector::{EmbedClient, McpToolIndexer, McpVectorSelector, VespaClient};
-        match (std::env::var("VESPA_URL").ok(), std::env::var("EMBED_URL").ok()) {
+        match (config.vespa_url.as_ref(), config.embed_url.as_ref()) {
             (Some(vespa_url), Some(embed_url)) => {
-                let vespa = VespaClient::new(&vespa_url);
-                let embed = EmbedClient::new(&embed_url);
-                let top_k = std::env::var("MCP_VECTOR_TOP_K")
-                    .ok().and_then(|v| v.parse().ok()).unwrap_or(16usize);
+                let vespa = VespaClient::new(vespa_url);
+                let embed = EmbedClient::new(embed_url);
+                let top_k = config.mcp_vector_top_k;
                 let valkey_arc = valkey_pool.as_ref()
                     .map(|v| std::sync::Arc::new(v.clone()));
                 if let Some(valkey_arc) = valkey_arc {
@@ -216,10 +208,8 @@ async fn async_main() -> Result<()> {
         mcp_bridge,
         mcp_vector_selector,
         mcp_tool_indexer,
-        login_rate_limit: std::env::var("LOGIN_RATE_LIMIT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(10),
+        login_rate_limit: config.login_rate_limit as u64,
+        vision_fallback_model: Arc::from(config.vision_fallback_model.as_str()),
         instance_id,
         kafka_broker_admin_url: config.kafka_broker.as_ref().map(|broker| {
             // Convert kafka broker address to Redpanda admin URL.

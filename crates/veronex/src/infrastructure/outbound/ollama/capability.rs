@@ -27,8 +27,8 @@ pub struct OllamaCapability {
     /// (no need for the gateway's `analyze_images_for_context` shim).
     pub supports_vision: bool,
     /// Native context window per `model_info.*context_length`. 0 when
-    /// undeterminable; callers should fall back to
-    /// `application::use_cases::inference::context_lookup` (S17 Tier A).
+    /// undeterminable; callers should fall back to the per-provider
+    /// `ollama_model_ctx` Valkey cache populated by the capacity analyzer.
     pub configured_ctx: u32,
 }
 

@@ -53,7 +53,7 @@ fn is_system_message(m: &Value) -> bool {
 /// Trim `messages` to fit under `budget` tokens.
 ///
 /// Pure function — no I/O, no provider calls. Caller resolves the budget
-/// via `context_lookup` + `context_budget` before calling.
+/// via the `ollama_model_ctx` Valkey cache + `context_budget` before calling.
 ///
 /// Algorithm:
 /// 1. If `count_messages_tokens(messages) <= budget` → return clone unchanged.

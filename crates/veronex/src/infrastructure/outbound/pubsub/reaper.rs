@@ -137,7 +137,7 @@ pub async fn run_reaper_loop(
 async fn refresh_heartbeat(pool: &Pool, instance_id: &str) {
     let key = valkey_keys::heartbeat(instance_id);
     let result: Result<(), _> = pool
-        .set(&key, "1", Some(Expiration::EX(30)), None, false)
+        .set(&key, "1", Some(Expiration::EX(crate::domain::constants::INSTANCE_HEARTBEAT_TTL_SECS)), None, false)
         .await;
     if let Err(e) = result {
         tracing::warn!("heartbeat refresh failed: {e}");

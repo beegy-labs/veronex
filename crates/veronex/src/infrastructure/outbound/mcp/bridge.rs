@@ -169,7 +169,6 @@ impl McpBridgeAdapter {
         model: String,
         mut messages: Vec<Value>,
         base_tools: Option<Vec<Value>>,
-        want_stream: bool,
         conversation_id: Option<uuid::Uuid>,
         stop: Option<Value>,
         seed: Option<u32>,
@@ -1690,7 +1689,7 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
     // Populate cache — empty array is also cached (negative cache).
     if let Some(ref pool) = state.valkey_pool && let Ok(json) = serde_json::to_string(&ids) {
         if let Err(e) = pool
-            .set::<(), _, _>(&vk_key, json, Some(Expiration::EX(60)), None, false)
+            .set::<(), _, _>(&vk_key, json, Some(Expiration::EX(crate::domain::constants::MCP_KEY_CACHE_TTL_SECS)), None, false)
             .await
         {
             tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate acl cache");
@@ -1736,7 +1735,7 @@ async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
     if let Some(ref pool) = state.valkey_pool {
         let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
         if let Err(e) = pool
-            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)
+            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(crate::domain::constants::MCP_KEY_CACHE_TTL_SECS)), None, false)
             .await
         {
             tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate cap_points cache");
@@ -1781,7 +1780,7 @@ async fn fetch_mcp_top_k(state: &AppState, key_id: Uuid) -> Option<usize> {
     if let Some(ref pool) = state.valkey_pool {
         let val = result.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string());
         if let Err(e) = pool
-            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(60)), None, false)
+            .set::<(), _, _>(&vk_key, val, Some(Expiration::EX(crate::domain::constants::MCP_KEY_CACHE_TTL_SECS)), None, false)
             .await
         {
             tracing::warn!(key = %vk_key, error = %e, "mcp: failed to populate top_k cache");

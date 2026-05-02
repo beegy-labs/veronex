@@ -17,12 +17,10 @@ use crate::domain::constants::{
     OLLAMA_HEALTH_CHECK_TIMEOUT as OLLAMA_HEALTH_TIMEOUT,
     GEMINI_HEALTH_CHECK_TIMEOUT as GEMINI_HEALTH_TIMEOUT,
     SERVICE_PROBE_TIMEOUT,
+    SERVICE_HEALTH_TTL_SECS,
     THERMAL_HARD_COOLDOWN_SECS,
     THERMAL_THROTTLE_KEY_TTL_SECS,
 };
-
-/// TTL for per-instance service health HASH (2× health check interval).
-const SERVICE_HEALTH_TTL_SECS: i64 = 60;
 
 // ── Health check ───────────────────────────────────────────────────────────────
 

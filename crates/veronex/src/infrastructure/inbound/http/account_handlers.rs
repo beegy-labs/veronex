@@ -476,7 +476,7 @@ pub async fn create_reset_link(
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
         let key = valkey_keys::password_reset(&token);
-        pool.set(key, aid.0.to_string(), Some(fred::types::Expiration::EX(24 * 3600)), None, false)
+        pool.set(key, aid.0.to_string(), Some(fred::types::Expiration::EX(crate::domain::constants::PASSWORD_RESET_TTL_SECS)), None, false)
             .await
             .unwrap_or_else(|e| tracing::warn!(error = %e, account_id = %aid, "create_reset_link: Valkey SET failed"));
     }

@@ -509,6 +509,7 @@ async fn ollama_chat_proxy(
             images.as_deref().unwrap_or(&[]),
             &prompt,
             lab.vision_model.as_deref(),
+            &state.vision_fallback_model,
         ).await;
         if let Some(ref va) = va {
             if let Some(last_user) = ollama_messages.iter_mut().rev()
@@ -840,7 +841,7 @@ async fn mcp_ollama_chat(
             let bridge = state.mcp_bridge.as_ref().expect("mcp_bridge checked above");
             let result = bridge.run_loop(
                 &state, &caller, orchestrator_model, ollama_messages, tools,
-                /* want_stream */ true, conversation_id, stop, seed,
+                conversation_id, stop, seed,
                 response_format, frequency_penalty, presence_penalty,
                 Some(tap_tx),
             ).await;
@@ -990,7 +991,7 @@ async fn load_conversation_context(
                                 if let Some(ref vk) = state.valkey_pool {
                                     use fred::prelude::*;
                                     if let Ok(json) = serde_json::to_string(&r) {
-                                        if let Err(e) = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(300)), None, false).await {
+                                        if let Err(e) = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(crate::domain::constants::CONV_CACHE_TTL_SECS)), None, false).await {
                                             tracing::warn!(key = %cache_key, error = %e, "openai: failed to warm conversation cache");
                                         }
                                     }

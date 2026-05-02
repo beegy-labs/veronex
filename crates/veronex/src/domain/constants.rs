@@ -456,6 +456,64 @@ pub const PRELOAD_LOCK_TTL_SECS: i64 = 180;
 /// TTL (seconds) for the scale-out decision dedup lock.
 pub const SCALEOUT_DECISION_TTL_SECS: i64 = 30;
 
+/// TTL (seconds) for conversation caches in Valkey — shared between the
+/// `veronex:conv:{conversation_id}` ConversationRecord cache (written by
+/// runner / mcp bridge) and the `conv_s3:{conv_id}` full-turn-detail cache
+/// (written by `fetch_conv_s3_cached` in conversation_handlers). Both must
+/// agree so cache invalidation after S3 re-writes stays consistent.
+pub const CONV_CACHE_TTL_SECS: i64 = 300;
+
+/// TTL (seconds) for the per-API-key MCP caches (`mcp:acl`, `mcp:cap`,
+/// `mcp:topk`). All three are invalidated explicitly on grant/revoke or key
+/// update, so 60 s is just an upper bound on stale-after-restart windows.
+pub const MCP_KEY_CACHE_TTL_SECS: i64 = 60;
+
+/// TTL (seconds) for the MCP per-server tools summary cache
+/// (`veronex:mcp:tools_summary:{server_id}`). Refreshed by the tool-discovery
+/// background task; the 1-hour TTL is the safety net.
+pub const MCP_TOOLS_SUMMARY_TTL_SECS: i64 = 3600;
+
+/// TTL (seconds) for the per-(provider, model) Ollama context window cache
+/// (`veronex:ollama:ctx:{provider_id}:{model_name}`). Written by the capacity
+/// analyzer after each DB upsert; read on the inference hot path.
+pub const OLLAMA_MODEL_CTX_TTL_SECS: i64 = 600;
+
+/// TTL (seconds) for the per-provider model list cache
+/// (`veronex:models:{provider_id}`). Mirrors the upstream Ollama `/api/tags`
+/// freshness budget. Used by both `provider_handlers` (HTTP) and the capacity
+/// analyzer (background sync), which is why it lives in domain rather than
+/// the HTTP-layer constants.
+pub const MODELS_CACHE_TTL_SECS: i64 = 3600;
+
+/// TTL (seconds) for the per-job lease-attempts counter
+/// (`veronex:queue:active:attempts:{job_id}`). 24 h gives ample window for
+/// max-retry decisions while preventing unbounded counter accumulation.
+pub const LEASE_ATTEMPTS_TTL_SECS: i64 = 86_400;
+
+/// TTL (seconds) for the per-instance heartbeat key
+/// (`veronex:heartbeat:{instance_id}`). 3× `REAPER_HEARTBEAT_INTERVAL` so a
+/// single missed refresh doesn't trigger reaper takeover.
+pub const INSTANCE_HEARTBEAT_TTL_SECS: i64 = 30;
+
+/// TTL (seconds) for the password-reset token (`veronex:pwreset:{token}`).
+/// 24 h matches the typical email-link expiry window.
+pub const PASSWORD_RESET_TTL_SECS: i64 = 86_400;
+
+/// Sliding window (seconds) for the per-IP login-attempts counter
+/// (`veronex:login_attempts:{ip}`). The same value is returned to the client
+/// in `Retry-After` when the rate limit trips, so both must stay aligned.
+pub const LOGIN_ATTEMPTS_WINDOW_SECS: i64 = 300;
+
+/// Default `Retry-After` (seconds) sent on 429 for generic rate-limit-exceeded
+/// errors that surface from the domain layer. The TPM/RPM rate limiter
+/// already returns a more specific value on its branch; this is the fallback.
+pub const RATE_LIMIT_RETRY_AFTER_SECS: u64 = 60;
+
+/// TTL (seconds) for the per-instance service-health HASH
+/// (`veronex:svc:health:{instance_id}`). 2× the health-check pass interval
+/// so a single missed pass does not auto-expire the key.
+pub const SERVICE_HEALTH_TTL_SECS: i64 = 60;
+
 // ── Thermal throttle ─────────────────────────────────────────────────────
 
 /// Cooldown period (seconds) after hard thermal throttle is triggered.

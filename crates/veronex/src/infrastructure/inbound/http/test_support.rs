@@ -398,6 +398,7 @@ pub(crate) fn make_app() -> axum::Router {
         mcp_tool_indexer: None,
         instance_id: Arc::from("test-instance"),
         login_rate_limit: 0,
+        vision_fallback_model: Arc::from("qwen3-vl:8b"),
         kafka_broker_admin_url: None,
         clickhouse_http_url: None,
         clickhouse_user: None,

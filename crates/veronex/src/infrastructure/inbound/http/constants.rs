@@ -89,11 +89,8 @@ pub const ACCESS_TOKEN_MAX_AGE: u32 = 3600;
 pub const REFRESH_TOKEN_MAX_AGE: u32 = 604800;
 
 // ── Valkey / caching ─────────────────────────────────────────────────────────
-
-/// Valkey TTL (seconds) for the per-provider model list cache.
-///
-/// After this period a cache miss triggers a live fetch from the provider.
-pub const MODELS_CACHE_TTL: i64 = 3600;
+// Per-provider model list cache TTL is `crate::domain::constants::MODELS_CACHE_TTL_SECS`
+// — used by both the HTTP layer and the outbound capacity analyzer.
 
 // ── Timeout constants ────────────────────────────────────────────────────────
 

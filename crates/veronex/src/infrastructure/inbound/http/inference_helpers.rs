@@ -154,6 +154,7 @@ pub async fn analyze_images_for_context(
     images: &[String],
     user_prompt: &str,
     vision_model_override: Option<&str>,
+    vision_fallback_model: &str,
 ) -> Option<VisionAnalysis> {
     if images.is_empty() || is_vision_model(model_name) {
         return None;
@@ -161,8 +162,7 @@ pub async fn analyze_images_for_context(
 
     let vision_model = vision_model_override
         .map(|s| s.to_string())
-        .unwrap_or_else(|| std::env::var("VISION_FALLBACK_MODEL")
-            .unwrap_or_else(|_| "qwen3-vl:8b".to_string()));
+        .unwrap_or_else(|| vision_fallback_model.to_string());
 
     let providers = provider_registry.list_all().await.ok()?;
     let ollama_urls: Vec<String> = providers

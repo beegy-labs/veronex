@@ -227,6 +227,7 @@ pub async fn generate(
                 imgs,
                 &req.prompt,
                 lab.vision_model.as_deref(),
+                &state.vision_fallback_model,
             ).await {
                 req.prompt = format!("[Image Analysis]\n{}\n\n{}", va.analysis, req.prompt);
                 vision_analysis = Some(va);
@@ -478,7 +479,7 @@ pub async fn chat(
                             if let Some(ref vk) = state.valkey_pool {
                                 use fred::prelude::*;
                                 if let Ok(j) = serde_json::to_string(&r) {
-                                    vk.set(&cache_key, j, Some(fred::types::Expiration::EX(300)), None, false).await
+                                    vk.set(&cache_key, j, Some(fred::types::Expiration::EX(crate::domain::constants::CONV_CACHE_TTL_SECS)), None, false).await
                                         .unwrap_or_else(|e| tracing::warn!(error = %e, key = %cache_key, "Valkey SET conversation cache failed"));
                                 }
                             }
@@ -566,6 +567,7 @@ pub async fn chat(
                 imgs,
                 &prompt,
                 lab.vision_model.as_deref(),
+                &state.vision_fallback_model,
             ).await {
                 if let Some(last_user) = req.messages.iter_mut().rev()
                     .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))

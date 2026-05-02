@@ -393,7 +393,7 @@ async fn processing_reaper_pass(
             // Re-enqueue: remove from active, bump attempt counter, push back into ZSET
             valkey.active_lease_remove(job_id_str).await.ok();
             valkey
-                .kv_set(&attempts_key, &(attempts + 1).to_string(), 86400, false)
+                .kv_set(&attempts_key, &(attempts + 1).to_string(), crate::domain::constants::LEASE_ATTEMPTS_TTL_SECS, false)
                 .await
                 .ok();
 

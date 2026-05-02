@@ -426,7 +426,7 @@ pub async fn get_capacity(
         .provider_registry
         .list_page(&search, None, limit, offset)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
+        .map_err(AppError::Internal)?;
 
     let provider_ids: Vec<uuid::Uuid> = providers_page.iter().map(|p| p.id).collect();
     let all_entries = state
