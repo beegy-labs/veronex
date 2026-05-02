@@ -1,6 +1,6 @@
 # MCP Agentic Loop Flow
 
-> **Last Updated**: 2026-04-28
+> **Last Updated**: 2026-05-02
 
 ---
 

@@ -109,7 +109,7 @@ The validation script checks:
 
 **Problem**: Custom section too large, harder for LLM to parse
 
-**Solution**: Move to `docs/llm/architecture.md`, add summary table in custom section
+**Solution**: Move to `docs/llm/policies/architecture.md`, add summary table in custom section
 
 ### [N] Don't
 
@@ -137,7 +137,7 @@ We use React. Also we have some API endpoints.
 | Frontend | React              | 19.2    | See `.ai/apps/`      |
 | API      | GraphQL Federation | 2.9     | Gateway at port 4000 |
 
-**Full Documentation**: `docs/llm/architecture.md`
+**Full Documentation**: `docs/llm/policies/architecture.md`
 
 <!-- END: PROJECT CUSTOM -->
 ```

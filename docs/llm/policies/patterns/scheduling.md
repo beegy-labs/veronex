@@ -1,6 +1,6 @@
 # Code Patterns: Rust — Scheduling, Liveness & Scale
 
-> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational
+> SSOT | **Last Updated**: 2026-05-02 | Classification: Operational
 > Parent index: [`../patterns.md`](../patterns.md)
 
 ## Domain Services

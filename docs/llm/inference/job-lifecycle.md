@@ -134,17 +134,13 @@ Phase 1 fails → `failure_reason = "lifecycle_failed"`, no Phase 2 attempt,
 running counter decremented, schedule_cleanup fires. Flag default `false`
 preserves pre-Tier-C behaviour (implicit auto-load via `stream_tokens`).
 
-**Bridge consumer phase awareness** (S19 + S19.1): `bridge::collect_round` uses
-three distinct timeouts gated by the phase-boundary token. Canonical SSOT in
-`domain/constants.rs` (bridge.rs has matching local aliases that re-export):
-`MCP_LIFECYCLE_LOAD_TIMEOUT=600s` during Phase 1 (also drives the `reqwest`
-timeout in `ollama::lifecycle` so the two layers stay coupled),
-`MCP_TOKEN_FIRST_TIMEOUT=300s` for Phase 2 first token (bumped from 60s in
-S19.1 after live verify on 200K-context prefill),
-`MCP_STREAM_IDLE_TIMEOUT=45s` for mid-stream, `MCP_ROUND_TOTAL_TIMEOUT=1500s`
-hard cap per round. Replaces the legacy single 240 s timer that raced 200K
-cold-loads. When `MCP_LIFECYCLE_PHASE=off`, runner emits no boundary; bridge
-stays in Phase 1 mode for the whole round (single 600 s). SDD:
+**Bridge consumer phase awareness** (S19 + S19.1): `bridge::collect_round`
+uses four phase-aware timeouts (`MCP_LIFECYCLE_LOAD_TIMEOUT`,
+`MCP_TOKEN_FIRST_TIMEOUT`, `MCP_STREAM_IDLE_TIMEOUT`, `MCP_ROUND_TOTAL_TIMEOUT`)
+gated by the `phase_boundary` sentinel emitted by the runner. When
+`MCP_LIFECYCLE_PHASE=off`, runner emits no boundary; bridge stays Phase-1 the
+whole round (single 600 s). Full rationale + values + invariant tests →
+`inference/mcp.md § Phase-aware timing`. SDD:
 `.specs/veronex/bridge-phase-aware-timing.md`.
 
 ## Entity

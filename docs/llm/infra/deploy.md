@@ -1,6 +1,6 @@
 # Infrastructure -- Services, Ports & Env Vars
 
-> SSOT | **Last Updated**: 2026-04-11 (rev11: embed health probe added to health_checker + service health API)
+> SSOT | **Last Updated**: 2026-05-02 (rev12: AppConfig-routed env vars consolidated — LOGIN_RATE_LIMIT, VISION_FALLBACK_MODEL, VERONEX_INSTANCE_ID, VESPA_URL, MCP_VECTOR_TOP_K; AppState extended with `vision_fallback_model`, `instance_id`, MCP vector fields; canonical Valkey key SSOT moved to `domain/constants.rs`)
 
 ## Task Guide
 

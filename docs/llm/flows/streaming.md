@@ -99,7 +99,8 @@ every STATS_TICK_INTERVAL:
 | `STATS_TICK_INTERVAL` | 1s | `domain/constants.rs` |
 | `SSE_MAX_CONNECTIONS` | 100 | `http/constants.rs` |
 | `SSE_KEEP_ALIVE` | 15s | `http/constants.rs` |
-| `SSE_TIMEOUT` | 180s | `http/constants.rs` |
+| `SSE_TIMEOUT` | 1700s | `http/constants.rs` (held strictly below Cilium gateway 1800s; see `inference/mcp.md § timeouts`) |
+| `INFERENCE_ROUTER_TIMEOUT` | 1750s | `http/constants.rs` (non-streaming router fallback above SSE_TIMEOUT) |
 | broadcast job events cap | 256 | `bootstrap/background.rs` |
 | broadcast stats cap | 16 | `bootstrap/background.rs` |
 | Bucket window (req/s) | 10 buckets | `bootstrap/background.rs` |

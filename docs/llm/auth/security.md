@@ -1,6 +1,6 @@
 # Security
 
-> SSOT | **Last Updated**: 2026-03-28 (review fixes: fail-closed JWT, atomic refresh, AES-GCM, audit whitelist)
+> SSOT | **Last Updated**: 2026-05-02 (rev: SetSensitiveRequestHeadersLayer wrapping TraceLayer — Authorization / Cookie / X-API-Key / Proxy-Authorization redacted from trace spans)
 
 ## Authentication & Authorization
 

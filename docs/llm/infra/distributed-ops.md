@@ -1,6 +1,6 @@
 # Distributed: Ops & Registry
 
-> SSOT | **Last Updated**: 2026-03-24 | Classification: Operational
+> SSOT | **Last Updated**: 2026-05-02 | Classification: Operational
 > Cross-instance pub/sub, TPM accounting, crash recovery, Valkey key registry, and wiring.
 
 ## Cross-Instance Pub/Sub
@@ -59,7 +59,7 @@ Global `Arc<AtomicU32>` counter in `AppState` tracks active SSE connections. Eac
 - Applied to all API-key-authenticated SSE endpoints: `/v1/inference/{id}/stream`, `/v1/jobs/{id}/stream`, `/v1/chat/completions` (streaming), `/v1beta/models/{path}` (Gemini streaming).
 
 ### Hard Timeout
-`with_sse_timeout()` wraps every SSE stream with a `SSE_TIMEOUT` (600s / 10 min) deadline:
+`with_sse_timeout()` wraps every SSE stream with a `SSE_TIMEOUT` (1700s ≈ 28 min) deadline. Strictly less than the upstream Cilium HTTPRoute `timeouts.request=1800s` so the client always sees a clean `event: error data: stream timeout` rather than an opaque gateway 504. Full timeout invariant chain (SSE / `INFERENCE_ROUTER_TIMEOUT` / `MCP_ROUND_TOTAL_TIMEOUT` / Cilium 1800s) → `inference/mcp.md § timeouts`.
 - Uses `async_stream::stream!` with `tokio::select!` + `sleep_until(deadline)`.
 - On timeout: sends `event: error` with `data: stream timeout`, then closes the stream.
 - Prevents zombie SSE connections that neither complete nor disconnect (e.g., crashed client behind a proxy that keeps TCP alive).
@@ -79,26 +79,7 @@ deployment-time `VALKEY_KEY_PREFIX` is enforced at the port boundary only.
 
 **Key prefix**: call `valkey_keys::init_prefix(prefix)` once at startup (before any Valkey ops) to prepend a deployment-level namespace to every key. Default `""` = no prefix. Example: `init_prefix("prod:")` → `"prod:veronex:queue:zset"`.
 
-| Key | Type | TTL | Purpose |
-|-----|------|-----|---------|
-| `veronex:heartbeat:{iid}` | STRING | 30s | API instance liveness |
-| `veronex:svc:health:{iid}` | HASH | 60s | Per-instance service health probes (PG, Valkey, ClickHouse, S3) |
-| `veronex:agent:instances` | SET | - | Agent pod hostnames (SADD/SREM, dynamic replica count via SCARD) |
-| `veronex:agent:hb:{hostname}` | STRING | 180s | Agent pod liveness heartbeat |
-| `veronex:vram_reserved:{pid}` | HASH | - | Per-provider KV reservation totals (HINCRBY per acquire/release/reap) |
-| `veronex:vram_leases:{pid}` | ZSET | - | Per-provider lease tracking (score = expiry ts; reaper uses ZRANGEBYSCORE to recover crashed instance allocations) |
-| `veronex:queue:zset` | ZSET | - | Priority queue (score = `now_ms - tier_bonus`) |
-| `veronex:queue:processing` | LIST | - | Reliable queue processing set |
-| `veronex:queue:enqueue_at` | HASH | - | Side hash: `job_id → enqueue_at_ms` (promote_overdue) |
-| `veronex:queue:model` | HASH | - | Side hash: `job_id → model` (demand_resync) |
-| `veronex:demand:{model}` | STRING | - | Per-model queued job count (demand counter) |
-| `veronex:job:owner:{job_id}` | STRING | 300s | Which instance owns a running job |
-| `veronex:scaleout:{model}` | STRING | 30s | Scale-Out NX lock (Placement Planner dedup) |
-| `veronex:preloading:{model}:{pid}` | STRING | 180s | Preload NX lock (cross-instance dedup) |
-| `veronex:stream:tokens:{job_id}` | STREAM | 600s | Cross-instance token relay (XADD/XREAD) |
-| `veronex:pubsub:job_events` | PUB/SUB | - | Cross-instance job status events |
-| `veronex:pubsub:cancel:{job_id}` | PUB/SUB | - | Cross-instance cancel signals |
-| `veronex:throttle:{provider_id}` | STRING | 360s | Thermal Hard state persistence (set on Hard entry, deleted on Normal restore) |
+> Full Valkey key catalog (30+ patterns) → `infra/deploy.md § Valkey Key Patterns`. This page focuses on the cross-instance distributed-coordination subset; `deploy.md` is the SSOT for the comprehensive list.
 
 ## Wiring (`main.rs`)
 
