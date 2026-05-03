@@ -72,14 +72,14 @@ export default function JobTable({
                   ? <span title={job.conversation_id}>{truncateId(job.conversation_id)}</span>
                   : <span className="vds-opacity-40">—</span>}
               </TableCell>
-              <TableCell>{job.model_name}</TableCell>
+              <TableCell className="vds-max-w-[160px] vds-truncate" title={job.model_name}>{job.model_name}</TableCell>
               <TableCell className="vds-text-dim vds-capitalize">
                 {job.provider_type}
               </TableCell>
-              <TableCell className="vds-text-dim vds-text-sm">
+              <TableCell className="vds-text-dim vds-text-sm vds-max-w-[160px] vds-truncate" title={job.provider_name ?? undefined}>
                 {job.provider_name ?? <span className="vds-opacity-40">—</span>}
               </TableCell>
-              <TableCell className="vds-text-xs vds-text-primary/80">
+              <TableCell className="vds-text-xs vds-text-primary/80 vds-max-w-[160px] vds-truncate" title={(job.source === 'test' ? job.account_name : job.api_key_name) ?? undefined}>
                 {job.source === 'test'
                   ? (job.account_name ?? <span className="vds-text-dim">—</span>)
                   : (job.api_key_name ?? <span className="vds-text-dim">—</span>)}

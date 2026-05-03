@@ -72,7 +72,7 @@ export const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttr
       ref={ref}
       scope={scope}
       className={cn(
-        'vds-h-11 vds-px-4 vds-text-left vds-align-middle',
+        'vds-h-11 vds-px-4 vds-text-left vds-align-middle vds-whitespace-nowrap',
         'vds-font-500 vds-text-dim vds-text-xs vds-uppercase vds-tracking-wide',
         'first:vds-pl-6 last:vds-pr-6',
         className,
@@ -83,12 +83,18 @@ export const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttr
 )
 TableHead.displayName = 'TableHead'
 
+// `whitespace-nowrap` is the primitive default: tabular cells should never
+// break identifiers (qwen3:8b, remote-ollama, enum literals like analyzer)
+// mid-token. The outer DataTable already provides horizontal scroll when
+// content is wider than the viewport, so genuine overflow becomes a scroll
+// rather than a multi-line stack. Cells that must wrap (long-form text,
+// markdown bodies) can opt out by passing vds-whitespace-normal.
 export const TableCell = React.forwardRef<HTMLTableCellElement, React.TdHTMLAttributes<HTMLTableCellElement>>(
   ({ className, ...props }, ref) => (
     <td
       ref={ref}
       className={cn(
-        'vds-px-4 vds-py-3 vds-align-middle',
+        'vds-px-4 vds-py-3 vds-align-middle vds-whitespace-nowrap',
         'first:vds-pl-6 last:vds-pr-6',
         className,
       )}
